@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package skippy.kv.v1;
+
+// On-disk and wire representation of an L3 exact-state manifest and its packed
+// segment index. The container carries a magic prefix (see `manifest_codec`)
+// so a reader can tell a protobuf entry from a legacy JSON one without
+// guessing at the first byte.
+
+enum KeyKind {
+  KEY_KIND_WIRE_BLAKE3 = 0;
+  KEY_KIND_COMPOSITION_ROOT = 1;
+  KEY_KIND_ALIAS = 2;
+}
+
+enum CodecClass {
+  CODEC_CLASS_EXACT = 0;
+  CODEC_CLASS_LOSSY = 1;
+}
+
+message KvPayloadCodec {
+  string name = 1;
+  uint32 version = 2;
+}
+
+message KvCodecIdentity {
+  string name = 1;
+  uint32 version = 2;
+  CodecClass class = 3;
+  uint64 decoded_len = 4;
+  optional string calibration_digest = 5;
+}
+
+message KvSegment {
+  uint32 index = 1;
+  uint64 offset = 2;
+  uint64 bytes = 3;
+  // Raw 32-byte digest, not its hex spelling.
+  bytes digest = 4;
+  optional KvCodecIdentity codec_identity = 5;
+  optional string meta_json = 6;
+}
+
+message KvManifest {
+  uint32 version = 1;
+  KeyKind key_kind = 2;
+  string model_identity = 3;
+  string state_identity = 4;
+  string payload_kind = 5;
+  string payload_digest = 6;
+  optional string segmentation_id = 7;
+  optional KvPayloadCodec codec = 8;
+  uint64 total_bytes = 9;
+  uint64 kv_bytes = 10;
+  uint64 kv_decoded_bytes = 11;
+  uint64 recurrent_bytes = 12;
+  uint64 token_count = 13;
+  int32 continuation_token = 14;
+  optional string kv_desc_json = 15;
+  repeated int32 expected_tokens = 16;
+  repeated KvSegment segments = 17;
+}
+
+message KvPackedLocation {
+  bytes pack_digest = 1;
+  uint64 offset = 2;
+  uint64 bytes = 3;
+}
+
+// One entry per manifest segment position; an absent location means the
+// segment lives in the loose segment directory rather than a pack.
+message KvPackedEntry {
+  optional KvPackedLocation location = 1;
+}
+
+message KvPackedIndex {
+  uint32 version = 1;
+  string payload_digest = 2;
+  repeated KvPackedEntry entries = 3;
+}

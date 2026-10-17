@@ -26,12 +26,14 @@ pub use l2::{
     l2_cache_key,
 };
 pub use l3::{
-    CODEC_CACHEGEN_KV_ENVELOPE, CODEC_CACHEGEN_KV_ENVELOPE_VERSION, CODEC_NATIVE_KV_PAGE,
-    CODEC_NATIVE_KV_PAGE_VERSION, CODEC_RAW, CODEC_RAW_VERSION, CodecClass, GeometryBlock,
-    GeometryKind, HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, LEGACY_MANIFEST_VERSION,
-    LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION, MANIFEST_VERSION, ManifestPin, PayloadCodec,
-    PayloadGeometry, Reservation, SegmentCodecIdentity, SegmentHold, SegmentPut, StoreLimits,
-    StoreReconciliation, StoreUsage, StoredSegment, WriteRefusal, segment_digest,
+    AssembleStats, CODEC_CACHEGEN_KV_ENVELOPE, CODEC_CACHEGEN_KV_ENVELOPE_VERSION,
+    CODEC_NATIVE_KV_PAGE, CODEC_NATIVE_KV_PAGE_VERSION, CODEC_RAW, CODEC_RAW_VERSION, CodecClass,
+    GeometryBlock, GeometryKind, HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, KeyKind,
+    LEGACY_MANIFEST_VERSION, LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION, MANIFEST_VERSION, ManifestPin,
+    PayloadCodec, PayloadGeometry, Reservation, SegmentCodecIdentity, SegmentHold, SegmentPut,
+    StoreLimits, StoreReconciliation, StoreUsage, StoredSegment, WriteRefusal, composition_root,
+    decode_manifest_container, encode_manifest_container, fixed_segmentation_id,
+    geometry_segmentation_id, is_manifest_container, segment_digest,
 };
 pub use l3_remote::{
     FetchStats, KvFetchClient, serve_connection, serve_store, serve_store_with_timeout,

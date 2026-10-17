@@ -87,10 +87,11 @@ impl StageL2 {
         &self,
         namespace: &str,
         tokens: &[i32],
-        expected_payload_digest: &str,
+        source: &skippy_cache::HandoffManifest,
         payload: &skippy_cache::ExactStatePayload,
         extra: &ExactStateExtra,
     ) -> bool {
+        let expected_payload_digest = source.payload_digest.as_str();
         let key = self.cache_key(namespace, tokens);
         let kv_desc_json = extra
             .kv_desc
@@ -101,7 +102,7 @@ impl StageL2 {
             .admit_payload(
                 key,
                 tokens.len() as u64,
-                expected_payload_digest,
+                source,
                 payload,
                 kv_desc_json,
                 L2Origin::FromL3,
@@ -334,7 +335,7 @@ impl KvStageIntegration {
                         token_ids: identity.token_ids[..token_count as usize].to_vec(),
                         l3_fill_claim: None,
                         write_through_l3: false,
-                        l2_promotion_digest: None,
+                        l2_promotion: None,
                         l3_cost: None,
                         admission_credit,
                     }),
@@ -392,12 +393,22 @@ mod tests {
         }
     }
 
+    /// Legacy wire-digest source manifest for the promotion tests.
+    fn source_manifest(bytes: &[u8]) -> skippy_cache::HandoffManifest {
+        let mut manifest =
+            skippy_cache::HandoffManifest::new(String::new(), "full-state".to_string());
+        manifest.payload_digest = skippy_cache::segment_digest(bytes);
+        manifest.total_bytes = bytes.len() as u64;
+        manifest
+    }
+
     #[test]
     fn second_l3_fill_promotes_and_serves_the_located_prefix() {
         let l2 = StageL2::new(1 << 20, "model".to_string(), "state".to_string());
         let bytes = vec![7; 128];
         let digest = skippy_cache::segment_digest(&bytes);
-        let payload = skippy_cache::ExactStatePayload::full_state(bytes);
+        let payload = skippy_cache::ExactStatePayload::full_state(bytes.clone());
+        let source = source_manifest(&bytes);
         let identity = identity(vec![1, 2, 3, 4]);
         let location = location(3, digest.clone());
 
@@ -406,7 +417,7 @@ mod tests {
         assert!(l2.promote(
             &identity.namespace,
             &identity.token_ids[..3],
-            &digest,
+            &source,
             &payload,
             &ExactStateExtra { kv_desc: None },
         ));
@@ -431,13 +442,14 @@ mod tests {
     fn a_changed_durable_digest_invalidates_the_mirror() {
         let l2 = StageL2::new(1 << 20, "model".to_string(), "state".to_string());
         let bytes = vec![7; 128];
-        let digest = skippy_cache::segment_digest(&bytes);
-        let payload = skippy_cache::ExactStatePayload::full_state(bytes);
+        let _digest = skippy_cache::segment_digest(&bytes);
+        let payload = skippy_cache::ExactStatePayload::full_state(bytes.clone());
+        let source = source_manifest(&bytes);
         let identity = identity(vec![1, 2, 3]);
         assert!(l2.promote(
             &identity.namespace,
             &identity.token_ids,
-            &digest,
+            &source,
             &payload,
             &ExactStateExtra { kv_desc: None },
         ));

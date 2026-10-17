@@ -14,8 +14,9 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::l3::{
-    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadCodec,
-    PayloadGeometry, SegmentCodecIdentity, StoreLimits, StoreUsage, segment_digest,
+    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, KeyKind, MANIFEST_VERSION,
+    PayloadCodec, PayloadGeometry, SegmentCodecIdentity, StoreLimits, StoreUsage, composition_root,
+    fixed_segmentation_id, geometry_segmentation_id, segment_digest,
 };
 use crate::manager::{
     BenefitRestoreObservation, L3ActivitySnapshot, L3CacheManager, L3EffectiveStatus,
@@ -96,6 +97,9 @@ pub struct L3Location {
 
 /// A successful fill from the tier.
 pub struct L3Fill {
+    /// The manifest this payload was assembled from. L2 promotion verifies
+    /// slices against it instead of re-hashing the payload.
+    pub manifest: std::sync::Arc<HandoffManifest>,
     pub payload: ExactStatePayload,
     /// How many of the query's leading tokens the filled state covers — the
     /// length the entry was recorded at, which may be shorter than the
@@ -499,15 +503,12 @@ impl L3Tier {
             wire.extend_from_slice(&recurrent);
             wire
         };
-        let payload_digest = segment_digest(&wire);
-
         let mut manifest = HandoffManifest::new_for_model(
             self.model_identity.clone(),
             self.state_identity.clone(),
             payload.kind().as_str().to_string(),
         );
         manifest.total_bytes = wire.len() as u64;
-        manifest.payload_digest = payload_digest.clone();
         manifest.kv_bytes = kv_bytes;
         manifest.kv_decoded_bytes = kv_decoded_bytes;
         manifest.recurrent_bytes = recurrent_bytes;
@@ -629,6 +630,18 @@ impl L3Tier {
                 meta_json: (!cut.label.is_empty()).then(|| cut.label.clone()),
             })
             .collect();
+        // The key is a composition root over the segments, not a hash of the
+        // payload: every byte is bound by its segment digest, and the ordered
+        // list is bound here. This is what keeps the spill path from hashing
+        // the whole prefix again on every capture.
+        let segmentation = match geometry {
+            Some(geometry) => geometry_segmentation_id(geometry),
+            None => fixed_segmentation_id(self.segment_bytes as u64),
+        };
+        manifest.key_kind = KeyKind::CompositionRoot;
+        manifest.payload_digest = composition_root(&segmentation, &manifest.segments)?;
+        manifest.segmentation_id = Some(segmentation);
+        let payload_digest = manifest.payload_digest.clone();
         let exclusive_bytes = serde_json::to_vec(&manifest)
             .map(|bytes| bytes.len() as u64)
             .unwrap_or_default();
@@ -862,13 +875,15 @@ impl L3Tier {
             other => bail!("L3 manifest holds unknown payload kind {other}"),
         };
         let cachegen_kv = manifest.uses_cachegen_kv();
+        let manifest = std::sync::Arc::new(manifest);
         Ok(L3Fill {
             payload,
             token_count: manifest.token_count,
-            kv_desc_json: manifest.kv_desc_json,
+            kv_desc_json: manifest.kv_desc_json.clone(),
             payload_bytes,
             cachegen_kv,
             kv_decoded_bytes: manifest.kv_decoded_bytes,
+            manifest,
         })
     }
 
@@ -1756,10 +1771,10 @@ mod tests {
         let path = store
             .root()
             .join("manifests")
-            .join(format!("{digest}.json"));
+            .join(format!("{digest}.manifest"));
         let mut value: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).expect("read manifest"))
-                .expect("parse manifest");
+            serde_json::to_value(store.load_manifest(digest).expect("load manifest"))
+                .expect("serialize manifest");
         value["codec"] = serde_json::json!({ "name": name, "version": version });
         std::fs::write(&path, serde_json::to_vec(&value).expect("serialize"))
             .expect("write manifest");
