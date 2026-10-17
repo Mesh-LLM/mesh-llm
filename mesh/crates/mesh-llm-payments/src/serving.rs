@@ -22,7 +22,35 @@ use crate::wallet::{PaymentStatus, Transaction};
 /// a durable registry; money and debt stay in the ledger.
 const STANDING_CACHE: usize = 1024;
 
+/// How long admission waits for a buyer's in-flight final payments to land
+/// before counting them as strikes. Well inside the buyer's admission timeout.
+#[cfg(not(test))]
+const STRIKE_SETTLEMENT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(test)]
+const STRIKE_SETTLEMENT_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
+const STRIKE_SETTLEMENT_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
 impl PaymentService {
+    /// Unpaid final invoices for `buyer`, after giving ones still in flight a
+    /// short chance to settle. A buyer sending requests back to back pays each
+    /// final a second or two after its response, so the newest finals are
+    /// normally unpaid only because Lightning has not finished yet. Refusing
+    /// at that moment would turn ordinary sequential traffic into spurious
+    /// refusals. A buyer that really stopped paying is still refused once the
+    /// wait ends.
+    async fn settled_strikes(&self, buyer: &str) -> Result<u64> {
+        let deadline = tokio::time::Instant::now() + STRIKE_SETTLEMENT_WAIT;
+        loop {
+            let strikes = self.ledger.metered_unpaid_finals(buyer)?;
+            if strikes < crate::ledger::metered::STRIKE_LIMIT
+                || tokio::time::Instant::now() >= deadline
+            {
+                return Ok(strikes);
+            }
+            tokio::time::sleep(STRIKE_SETTLEMENT_POLL).await;
+        }
+    }
+
     /// Admit one request at the seller's current prices. Buyers at the strike
     /// limit are refused; buyers in good standing are admitted without a
     /// deposit and dispatch is claimed here; everyone else is quoted a deposit
@@ -47,7 +75,7 @@ impl PaymentService {
             self.ledger.pricing()?.get(&model) == Some(&pricing),
             "seller prices changed"
         );
-        let strikes = self.ledger.metered_unpaid_finals(&buyer)?;
+        let strikes = self.settled_strikes(&buyer).await?;
         if strikes >= crate::ledger::metered::STRIKE_LIMIT {
             return Ok(ServeAdmitResponse::Blocked {
                 reason: format!("buyer has {strikes} unpaid final invoices"),

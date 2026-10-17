@@ -289,6 +289,53 @@ async fn warm_peer_skips_deposits_with_finals_in_flight_until_strike_limit() {
 }
 
 #[tokio::test]
+async fn a_final_paid_while_admission_waits_is_not_a_strike() {
+    // Back-to-back requests: the newest finals are unpaid only because their
+    // Lightning payments are still in flight. Admission waits for them.
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = Arc::new(open(dir.path(), wallet.clone()));
+    let mut finals = Vec::new();
+    for n in 0..STRIKE_LIMIT {
+        let id = format!("s{n}");
+        service
+            .ledger
+            .metered_admit(&MeteredRequest {
+                id: &id,
+                peer: "peer",
+                pricing: &rates(),
+                require_deposit: false,
+            })
+            .unwrap();
+        finals.push(
+            service
+                .serve_settle(settle(&id, 100, 100))
+                .await
+                .unwrap()
+                .invoice
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        service.ledger.metered_unpaid_finals("peer").unwrap(),
+        STRIKE_LIMIT
+    );
+    let payer = {
+        let service = service.clone();
+        let hash = finals[0].payment_hash.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            service.ledger.mark_metered_received(&hash).unwrap();
+        })
+    };
+    assert!(!matches!(
+        service.serve_admit(admit("next", "peer")).await.unwrap(),
+        ServeAdmitResponse::Blocked { .. }
+    ));
+    payer.await.unwrap();
+}
+
+#[tokio::test]
 async fn three_unpaid_final_invoices_block_admission_until_one_is_paid() {
     let dir = tempfile::tempdir().unwrap();
     let wallet = Arc::new(MockWallet::default());
