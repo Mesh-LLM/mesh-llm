@@ -1,4 +1,4 @@
-From 2e386f249cbf55c85d762252e5ac698b9fc7a5a6 Mon Sep 17 00:00:00 2001
+From a6b585f108cb8601723ab6896dc9354a9e050fc0 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -55,13 +55,13 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/state.cpp                    | 1167 ++++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
- src/skippy/state_memory.cpp             |  116 +++
+ src/skippy/state_memory.cpp             |  139 +++
  src/skippy/state_memory.h               |   16 +
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  371 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16038 insertions(+)
+ 57 files changed, 16061 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -15506,10 +15506,10 @@ index 000000000..5bb6b779b
 +        std::string & error);
 diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
 new file mode 100644
-index 000000000..e271852ff
+index 000000000..fb3c2ca2f
 --- /dev/null
 +++ b/src/skippy/state_memory.cpp
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,139 @@
 +#include "skippy/state_memory.h"
 +#include "skippy/state.h"
 +#include "skippy/runtime_types.h"
@@ -15522,6 +15522,29 @@ index 000000000..e271852ff
 +#include "llama-graph.h"
 +#include "skippy/state_effects.h"
 +#include <typeinfo>
++#include <limits>
++
++bool skippy_session_has_resident_recurrent_prefix(const skippy_session * session, uint64_t token_count) {
++    if (!session || !session->ctx || !session->stage_model || token_count == 0 ||
++            token_count > static_cast<uint64_t>(std::numeric_limits<llama_pos>::max()) ||
++            token_count > static_cast<uint64_t>(session->n_past) ||
++            !(skippy_model_memory_cache_capabilities(session->stage_model) & SKIPPY_MEMORY_CACHE_KV_RECURRENT)) {
++        return false;
++    }
++    const auto memory = session->ctx->get_memory();
++    if (!skippy_memory_recurrent_adapter(memory)) {
++        return false;
++    }
++    llama_memory_t attention = skippy_memory_iswa_adapter(memory);
++    if (!attention) {
++        attention = skippy_memory_kv_adapter(memory);
++    }
++    // A pure recurrent lane has no attention component to retain. Interleaved
++    // attention reports the intersection of its component ranges. Requiring
++    // the full prefix deliberately declines shifted/sliding cache histories.
++    return !attention || (attention->seq_pos_min(session->seq_id) == 0 &&
++            attention->seq_pos_max(session->seq_id) >= static_cast<llama_pos>(token_count - 1));
++}
 +
 +llama_kv_cache * skippy_memory_kv_adapter(llama_memory_t memory) {
 +    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {

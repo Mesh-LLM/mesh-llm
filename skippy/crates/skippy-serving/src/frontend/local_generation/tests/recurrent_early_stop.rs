@@ -1,6 +1,6 @@
 use super::*;
 
-fn generate(
+pub(super) fn generate(
     backend: &StageOpenAiBackend,
     prompt: &[i32],
     stop_after: usize,

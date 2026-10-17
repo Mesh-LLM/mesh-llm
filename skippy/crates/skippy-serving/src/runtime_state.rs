@@ -21,6 +21,7 @@ mod frame_operations;
 mod lane_lifecycle;
 pub mod lifecycle;
 pub mod panic_recovery;
+mod resident_recurrent;
 mod restore_transaction;
 mod state_transfer;
 
@@ -67,6 +68,7 @@ pub struct RuntimeState {
     max_idle_sessions: Option<usize>,
     session_token_counts: BTreeMap<String, u64>,
     session_resident_prefixes: BTreeMap<String, ResidentLanePrefix>,
+    resident_recurrent_requests: BTreeSet<String>,
     session_lifecycle_observer: Option<Arc<dyn SessionLifecycleObserver>>,
     /// Sessions discarded by panic recovery whose requests have not cleaned
     /// up yet; see `panic_recovery`.
@@ -79,6 +81,7 @@ struct RuntimeLaneSession {
     index: usize,
     session: StageSession,
     resident_prefix: Option<ResidentLanePrefix>,
+    recurrent_prefixes: Vec<resident_recurrent::ResidentRecurrentCheckpoint>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -233,6 +236,7 @@ impl RuntimeState {
             session_token_counts: BTreeMap::new(),
             sessions_reset_by_panic: BTreeSet::new(),
             session_resident_prefixes: BTreeMap::new(),
+            resident_recurrent_requests: BTreeSet::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
             modelless_for_test: true,
@@ -387,6 +391,7 @@ fn runtime_from_loaded_model(
         session_token_counts: BTreeMap::new(),
         sessions_reset_by_panic: BTreeSet::new(),
         session_resident_prefixes: BTreeMap::new(),
+        resident_recurrent_requests: BTreeSet::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),
         #[cfg(test)]

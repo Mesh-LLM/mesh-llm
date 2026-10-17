@@ -101,10 +101,26 @@ impl StageOpenAiBackend {
         session_id: &str,
         ids: &crate::frontend::generation::InferenceGenerationIds,
     ) {
+        self.finish_local_generation_session(session_id, ids, false);
+    }
+
+    pub(super) fn finish_local_generation_session(
+        &self,
+        session_id: &str,
+        ids: &crate::frontend::generation::InferenceGenerationIds,
+        retain_recurrent: bool,
+    ) {
         let scheduler_session_id = session_id.to_string();
         if let Ok(outcome) =
             self.iteration_scheduler
                 .execute_runtime_timed("local-session-drop", move |runtime| {
+                    if retain_recurrent && runtime.park_resident_recurrent(&scheduler_session_id) {
+                        return Ok(crate::runtime_state::RuntimeSessionDropStats {
+                            preserved_resident_prefix: true,
+                            stats_after: runtime.session_stats(),
+                            ..Default::default()
+                        });
+                    }
                     runtime
                         .drop_session_timed(&scheduler_session_id)
                         .map_err(openai_backend_error)

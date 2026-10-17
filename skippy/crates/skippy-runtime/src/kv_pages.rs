@@ -470,6 +470,12 @@ impl StageSession {
         ensure_ok(status, error)
     }
 
+    /// Whether the live lane still covers a complete recurrent checkpoint.
+    pub fn has_resident_recurrent_prefix(&self, token_count: u64) -> bool {
+        // SAFETY: this session owns its native lane for the duration of the query.
+        unsafe { skippy_ffi::skippy_session_has_resident_recurrent_prefix(self.raw, token_count) }
+    }
+
     pub fn import_recurrent_state_for_token_count(
         &mut self,
         input: &[u8],
