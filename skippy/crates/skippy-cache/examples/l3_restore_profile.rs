@@ -228,7 +228,7 @@ fn run_layout(
     let manifest_load = load_started.elapsed();
     if manifest_count > 0 {
         println!(
-            "  json: {:.1} MiB manifests ({:.0} KiB each) + {:.1} MiB packed indexes; \
+            "  metadata: {:.1} MiB manifests ({:.0} KiB each) + {:.1} MiB packed indexes; \
              load_manifest {:.2} ms",
             manifest_bytes as f64 / (1024.0 * 1024.0),
             manifest_bytes as f64 / manifest_count as f64 / 1024.0,

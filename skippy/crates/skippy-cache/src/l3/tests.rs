@@ -111,9 +111,14 @@ fn packed_roundtrip_uses_one_physical_file_and_survives_reopen() {
         let manifest = commit_packed_payload(&store, &payload, 4096);
         assert_eq!(fs::read_dir(root.join(PACK_DIR)).unwrap().count(), 1);
         assert_eq!(fs::read_dir(root.join(SEGMENT_DIR)).unwrap().count(), 0);
-        let manifest_json = fs::read_to_string(store.manifest_path(&manifest.payload_digest))
+        let portable = store
+            .load_manifest(&manifest.payload_digest)
             .expect("read portable manifest");
-        assert!(!manifest_json.contains("pack_digest"));
+        assert!(
+            !serde_json::to_string(&portable)
+                .expect("serialize portable manifest")
+                .contains("pack_digest")
+        );
         assert_eq!(store.assemble(&manifest).expect("assemble"), payload);
         manifest
     };
@@ -658,12 +663,11 @@ fn manifest_stamps_explicit_raw_codec_and_round_trips() {
     assert_eq!(manifest.codec, Some(PayloadCodec::raw()));
 
     // The codec identity is written explicitly, not inferred at read time.
-    let manifest_json = fs::read_to_string(store.manifest_path(&manifest.payload_digest))
-        .expect("read manifest json");
-    let value: serde_json::Value =
-        serde_json::from_str(&manifest_json).expect("parse manifest json");
-    assert_eq!(value["codec"]["name"], CODEC_RAW);
-    assert_eq!(value["codec"]["version"], CODEC_RAW_VERSION);
+    let on_disk =
+        fs::read(store.manifest_path(&manifest.payload_digest)).expect("read manifest container");
+    assert!(super::manifest_codec::looks_binary(&on_disk));
+    let decoded = super::manifest_codec::decode_manifest(&on_disk).expect("decode manifest");
+    assert_eq!(decoded.codec, Some(PayloadCodec::raw()));
 
     let loaded = store
         .load_manifest(&manifest.payload_digest)
@@ -682,8 +686,7 @@ fn legacy_manifest_without_codec_field_reads_and_assembles_as_raw() {
     // Rewrite the on-disk manifest as an older build wrote it: the legacy
     // format version and no codec field.
     let path = store.manifest_path(&manifest.payload_digest);
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    let mut value: serde_json::Value = serde_json::to_value(&manifest).expect("serialize manifest");
     {
         let object = value.as_object_mut().expect("manifest object");
         object.insert(
@@ -821,7 +824,8 @@ fn codec_gate_does_not_mask_payload_corruption() {
 fn rewrite_on_disk_codec(store: &HandoffSegmentStore, digest: &str, name: &str, version: u32) {
     let path = store.manifest_path(digest);
     let mut value: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+        serde_json::to_value(store.load_manifest(digest).expect("load manifest"))
+            .expect("serialize manifest");
     value["codec"] = serde_json::json!({ "name": name, "version": version });
     fs::write(&path, serde_json::to_vec(&value).expect("serialize")).expect("write manifest");
 }
@@ -833,8 +837,12 @@ fn stripping_codec_from_current_version_rejects_but_legacy_v2_reads_as_raw() {
     let payload = vec![2u8; 8192];
     let manifest = commit_payload(&store, &payload, 4096);
     let path = store.manifest_path(&manifest.payload_digest);
-    let original: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    let original: serde_json::Value = serde_json::to_value(
+        store
+            .load_manifest(&manifest.payload_digest)
+            .expect("load manifest"),
+    )
+    .expect("serialize manifest");
     assert_eq!(original["version"], MANIFEST_VERSION);
 
     // Current version with the codec stripped: reject, never default to raw.
@@ -953,7 +961,8 @@ fn future_version_raw_manifest_is_refused_before_assembly() {
 fn rewrite_on_disk_as_v3(store: &HandoffSegmentStore, digest: &str) {
     let path = store.manifest_path(digest);
     let mut value: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+        serde_json::to_value(store.load_manifest(digest).expect("load manifest"))
+            .expect("serialize manifest");
     let object = value.as_object_mut().expect("manifest object");
     object.insert(
         "version".to_string(),
@@ -987,10 +996,10 @@ fn v4_manifest_stamps_per_segment_identity_and_round_trips() {
     );
 
     // The identity is written explicitly per segment, not inferred at read.
-    let manifest_json = fs::read_to_string(store.manifest_path(&manifest.payload_digest))
-        .expect("read manifest json");
-    let value: serde_json::Value =
-        serde_json::from_str(&manifest_json).expect("parse manifest json");
+    let on_disk =
+        fs::read(store.manifest_path(&manifest.payload_digest)).expect("read manifest container");
+    let decoded = super::manifest_codec::decode_manifest(&on_disk).expect("decode manifest");
+    let value = serde_json::to_value(&decoded).expect("serialize decoded manifest");
     for segment in value["segments"].as_array().expect("segment array") {
         assert_eq!(segment["codec_identity"]["name"], CODEC_RAW);
         assert_eq!(segment["codec_identity"]["version"], CODEC_RAW_VERSION);
@@ -1041,8 +1050,12 @@ fn stripping_identity_from_a_v4_segment_rejects_everywhere() {
     let payload = vec![12u8; 8192];
     let manifest = commit_payload(&store, &payload, 4096);
     let path = store.manifest_path(&manifest.payload_digest);
-    let original: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    let original: serde_json::Value = serde_json::to_value(
+        store
+            .load_manifest(&manifest.payload_digest)
+            .expect("load manifest"),
+    )
+    .expect("serialize manifest");
     assert_eq!(original["version"], MANIFEST_VERSION);
 
     // On-disk: a v4 manifest with one segment's identity stripped must never
@@ -1128,8 +1141,12 @@ fn v4_rejects_unsupported_segment_codecs_naming_the_segment() {
     // not the payload gate, is what rejects it.
     let reopened = HandoffSegmentStore::open(&root, 0).expect("reopen store");
     let path = reopened.manifest_path(&manifest.payload_digest);
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    let mut value: serde_json::Value = serde_json::to_value(
+        reopened
+            .load_manifest(&manifest.payload_digest)
+            .expect("load manifest"),
+    )
+    .expect("serialize manifest");
     value["segments"][0]["codec_identity"] = serde_json::json!({
         "name": "cachegen",
         "version": 1,
@@ -1330,4 +1347,147 @@ fn eviction_reuses_recorded_footprints_without_rereading_manifests() {
     assert!(freed > 0, "no bytes freed");
     assert!(!store.has_segment(&manifest.segments[0].digest));
     assert_eq!(store.managed_usage_bytes().expect("usage after"), 0);
+}
+
+#[test]
+fn binary_manifest_round_trips_every_field() {
+    let root = temp_root("binary-roundtrip");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..8192u32).map(|value| (value % 251) as u8).collect();
+    let manifest = commit_packed_payload(&store, &payload, 4096);
+    let bytes =
+        fs::read(store.existing_manifest_path(&manifest.payload_digest)).expect("read container");
+    assert!(super::manifest_codec::looks_binary(&bytes));
+
+    let decoded = super::manifest_codec::decode_manifest(&bytes).expect("decode");
+    assert_eq!(decoded.version, manifest.version);
+    assert_eq!(decoded.key_kind, manifest.key_kind);
+    assert_eq!(decoded.payload_digest, manifest.payload_digest);
+    assert_eq!(decoded.total_bytes, manifest.total_bytes);
+    assert_eq!(decoded.segmentation_id, manifest.segmentation_id);
+    assert_eq!(decoded.segments.len(), manifest.segments.len());
+    for (left, right) in decoded.segments.iter().zip(&manifest.segments) {
+        assert_eq!(left.index, right.index);
+        assert_eq!(left.offset, right.offset);
+        assert_eq!(left.bytes, right.bytes);
+        assert_eq!(left.digest, right.digest);
+        assert_eq!(left.codec_identity, right.codec_identity);
+    }
+    assert_eq!(store.assemble(&decoded).expect("assemble"), payload);
+}
+
+#[test]
+fn truncated_binary_manifest_fails_closed() {
+    let root = temp_root("binary-truncated");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..4096u32).map(|value| (value % 251) as u8).collect();
+    let manifest = commit_packed_payload(&store, &payload, 1024);
+    let bytes =
+        fs::read(store.existing_manifest_path(&manifest.payload_digest)).expect("read container");
+
+    for keep in [0, 3, 6, 7, 20, bytes.len() / 2, bytes.len() - 1] {
+        assert!(
+            super::manifest_codec::decode_manifest(&bytes[..keep]).is_err(),
+            "truncation at {keep} bytes must be rejected"
+        );
+    }
+    assert!(super::manifest_codec::decode_manifest(&bytes).is_ok());
+}
+
+#[test]
+fn binary_manifest_rejects_an_absurd_segment_count() {
+    let mut bytes = super::manifest_codec::MAGIC.to_vec();
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.push(super::manifest_codec::KIND_MANIFEST);
+    // version, key kind, four empty strings, no segmentation id, no codec,
+    // five counters, continuation token, no kv descriptor, no expected tokens,
+    // then a segment count of u32::MAX.
+    bytes.extend_from_slice(&MANIFEST_VERSION.to_le_bytes());
+    bytes.push(0);
+    for _ in 0..4 {
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+    }
+    bytes.push(0);
+    bytes.push(0);
+    for _ in 0..5 {
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+    }
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+    assert!(super::manifest_codec::decode_manifest(&bytes).is_err());
+}
+
+#[test]
+fn the_same_bytes_and_geometry_derive_the_same_root() {
+    let payload: Vec<u8> = (0..8192u32).map(|value| (value % 251) as u8).collect();
+    let geometry = PayloadGeometry {
+        blocks: vec![GeometryBlock {
+            stride: 1024,
+            kind: GeometryKind::Key,
+            layer: 0,
+            column: 0,
+        }],
+        rows: 8,
+        window_rows: 2,
+        tail_bytes: 0,
+    };
+    let segmentation = geometry_segmentation_id(&geometry);
+    let cuts = geometry.plan(1024);
+
+    let mut first: Vec<HandoffSegmentRef> = Vec::new();
+    let mut second: Vec<HandoffSegmentRef> = Vec::new();
+    for (index, (offset, len, label)) in cuts.iter().enumerate() {
+        let start = *offset as usize;
+        let bytes = &payload[start..start + *len as usize];
+        let segment = HandoffSegmentRef {
+            index: index as u32,
+            offset: *offset,
+            bytes: *len,
+            digest: segment_digest(bytes),
+            codec_identity: Some(SegmentCodecIdentity::raw(*len)),
+            meta_json: Some(label.clone()),
+        };
+        first.push(segment.clone());
+        second.push(segment);
+    }
+    assert_eq!(
+        composition_root(&segmentation, &first).expect("root"),
+        composition_root(&segmentation, &second).expect("root"),
+    );
+
+    // Order is part of the root: a reordered list must not collide.
+    let mut reordered = first.clone();
+    reordered.swap(0, 1);
+    assert_ne!(
+        composition_root(&segmentation, &first).expect("root"),
+        composition_root(&segmentation, &reordered).expect("root"),
+    );
+}
+
+#[test]
+fn wire_verification_catches_a_scattered_segment() {
+    let segments = vec![
+        HandoffSegmentRef {
+            index: 0,
+            offset: 0,
+            bytes: 4,
+            digest: segment_digest(b"aaaa"),
+            codec_identity: Some(SegmentCodecIdentity::raw(4)),
+            meta_json: None,
+        },
+        HandoffSegmentRef {
+            index: 1,
+            offset: 4,
+            bytes: 4,
+            digest: segment_digest(b"bbbb"),
+            codec_identity: Some(SegmentCodecIdentity::raw(4)),
+            meta_json: None,
+        },
+    ];
+    assert!(verify_segments_at_offsets(b"aaaabbbb", &segments).is_ok());
+    // The right bytes in the wrong order: every per-segment digest was valid
+    // when read, so only this check sees it.
+    assert!(verify_segments_at_offsets(b"bbbbaaaa", &segments).is_err());
 }

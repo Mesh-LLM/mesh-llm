@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fsinfo;
 
+mod manifest_codec;
 mod packed;
 use packed::{PACK_DIR, PACK_INDEX_DIR, PackedReadRequest, PackedSegmentStore};
 
@@ -1017,7 +1018,7 @@ impl HandoffSegmentStore {
 
         for key in self.list_manifests()? {
             if self.validate_committed_manifest(&key).is_err() {
-                self.quarantine(&self.manifest_path(&key))?;
+                self.quarantine(&self.existing_manifest_path(&key))?;
                 report.quarantined_manifests += 1;
             }
         }
@@ -1066,7 +1067,7 @@ impl HandoffSegmentStore {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error.into()),
             };
-            if digest.is_empty() || !self.manifest_path(&digest).is_file() {
+            if digest.is_empty() || !self.existing_manifest_path(&digest).is_file() {
                 match fs::remove_file(&path) {
                     Ok(()) => removed += 1,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1116,7 +1117,21 @@ impl HandoffSegmentStore {
     fn manifest_path(&self, payload_digest: &str) -> PathBuf {
         self.root
             .join(MANIFEST_DIR)
-            .join(format!("{payload_digest}.json"))
+            .join(format!("{payload_digest}.manifest"))
+    }
+
+    /// Where this key is actually stored: the current container, or the legacy
+    /// JSON file when only that exists. Writers always use [`Self::manifest_path`].
+    fn existing_manifest_path(&self, payload_digest: &str) -> PathBuf {
+        let current = self.manifest_path(payload_digest);
+        if current.is_file() {
+            return current;
+        }
+        let legacy = self
+            .root
+            .join(MANIFEST_DIR)
+            .join(format!("{payload_digest}.json"));
+        if legacy.is_file() { legacy } else { current }
     }
 
     fn namespace_dir(&self, namespace_key: &str) -> PathBuf {
@@ -1508,7 +1523,8 @@ impl HandoffSegmentStore {
         // thousands of segment refs, and eviction parses every manifest to
         // build its reference map. Indentation is pure cost on a file nobody
         // reads by hand.
-        let serialized = serde_json::to_vec(manifest).context("failed to serialize manifest")?;
+        let serialized =
+            manifest_codec::encode_manifest(manifest).context("failed to encode manifest")?;
         let segment_digests = manifest
             .segments
             .iter()
@@ -1564,11 +1580,11 @@ impl HandoffSegmentStore {
     /// failing a restore because recency could not be recorded would trade a
     /// working cache for a bookkeeping detail.
     pub fn touch_manifest(&self, payload_digest: &str) {
-        let _ = fsinfo::touch(&self.manifest_path(payload_digest));
+        let _ = fsinfo::touch(&self.existing_manifest_path(payload_digest));
     }
 
     pub fn load_manifest(&self, payload_digest: &str) -> Result<HandoffManifest> {
-        let bytes = fs::read(self.manifest_path(payload_digest))
+        let bytes = fs::read(self.existing_manifest_path(payload_digest))
             .with_context(|| format!("failed to read manifest {payload_digest}"))?;
         decode_manifest(payload_digest, &bytes)
     }
@@ -1579,7 +1595,12 @@ impl HandoffSegmentStore {
         for entry in fs::read_dir(self.root.join(MANIFEST_DIR))? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().is_none_or(|extension| extension != "json") {
+            // `.manifest` is the current container; `.json` entries are legacy
+            // v2-v4 manifests kept readable for one release.
+            if path
+                .extension()
+                .is_none_or(|extension| extension != "manifest" && extension != "json")
+            {
                 continue;
             }
             let Some(stem) = path
@@ -1665,7 +1686,7 @@ impl HandoffSegmentStore {
             // size it had when the footprint was recorded. A manifest that
             // was truncated or replaced must be re-read, so GC fails on it
             // instead of deleting state behind an unreadable entry.
-            let on_disk = fs::metadata(self.manifest_path(key))
+            let on_disk = fs::metadata(self.existing_manifest_path(key))
                 .map(|metadata| metadata.len())
                 .unwrap_or(0);
             if on_disk > 0 && on_disk == footprint.manifest_bytes {
@@ -1680,7 +1701,7 @@ impl HandoffSegmentStore {
         let locations = self
             .packed
             .load_manifest_index(key, manifest.segments.len())?;
-        let manifest_bytes = fs::metadata(self.manifest_path(key))
+        let manifest_bytes = fs::metadata(self.existing_manifest_path(key))
             .map(|metadata| metadata.len())
             .unwrap_or(0);
         let footprint = {
@@ -2035,7 +2056,7 @@ impl HandoffSegmentStore {
             if self.is_pinned(key) {
                 continue;
             }
-            let path = self.manifest_path(key);
+            let path = self.existing_manifest_path(key);
             match fs::remove_file(&path) {
                 Ok(()) => {
                     self.packed.remove_manifest_index(key)?;
@@ -2180,7 +2201,7 @@ impl HandoffSegmentStore {
             };
             let (key, footprint) = entries.remove(position);
             self.invalidate_usage();
-            fs::remove_file(self.manifest_path(&key))
+            fs::remove_file(self.existing_manifest_path(&key))
                 .with_context(|| format!("failed to evict manifest {key}"))?;
             let index_bytes = self.packed.remove_manifest_index(&key)?;
             self.evicted_manifests.fetch_add(1, Ordering::Relaxed);
@@ -2587,8 +2608,12 @@ fn validate_manifest_compatibility(manifest: &HandoffManifest) -> Result<()> {
 }
 
 fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest> {
-    let mut manifest: HandoffManifest =
-        serde_json::from_slice(bytes).context("malformed manifest")?;
+    let mut manifest: HandoffManifest = if manifest_codec::looks_binary(bytes) {
+        manifest_codec::decode_manifest(bytes).context("malformed binary manifest")?
+    } else {
+        // Legacy v2-v4 entries are JSON; keep reading them for one release.
+        serde_json::from_slice(bytes).context("malformed manifest")?
+    };
     match manifest.version {
         MANIFEST_VERSION => {
             // The current format must stamp both the payload codec and every

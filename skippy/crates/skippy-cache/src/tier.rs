@@ -1771,10 +1771,10 @@ mod tests {
         let path = store
             .root()
             .join("manifests")
-            .join(format!("{digest}.json"));
+            .join(format!("{digest}.manifest"));
         let mut value: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).expect("read manifest"))
-                .expect("parse manifest");
+            serde_json::to_value(store.load_manifest(digest).expect("load manifest"))
+                .expect("serialize manifest");
         value["codec"] = serde_json::json!({ "name": name, "version": version });
         std::fs::write(&path, serde_json::to_vec(&value).expect("serialize"))
             .expect("write manifest");

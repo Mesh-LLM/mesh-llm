@@ -266,13 +266,9 @@ impl PackedSegmentStore {
         if segments.iter().all(Option::is_none) {
             return Ok(None);
         }
-        serde_json::to_vec(&PackedManifestIndex {
-            version: PACK_INDEX_VERSION,
-            payload_digest: payload_digest.to_string(),
-            segments,
-        })
-        .context("failed to serialize packed manifest index")
-        .map(Some)
+        super::manifest_codec::encode_index(PACK_INDEX_VERSION, payload_digest, &segments)
+            .context("failed to encode packed manifest index")
+            .map(Some)
     }
 
     pub(super) fn publish_manifest_index(
@@ -298,15 +294,21 @@ impl PackedSegmentStore {
             }
             Err(error) => return Err(error.into()),
         };
-        let index: PackedManifestIndex =
-            serde_json::from_slice(&bytes).context("malformed packed manifest index")?;
-        if index.version != PACK_INDEX_VERSION
-            || index.payload_digest != payload_digest
-            || index.segments.len() != segment_count
+        let (version, indexed_digest, segments) = if super::manifest_codec::looks_binary(&bytes) {
+            super::manifest_codec::decode_index(&bytes)
+                .context("malformed packed manifest index")?
+        } else {
+            let legacy: PackedManifestIndex =
+                serde_json::from_slice(&bytes).context("malformed packed manifest index")?;
+            (legacy.version, legacy.payload_digest, legacy.segments)
+        };
+        if version != PACK_INDEX_VERSION
+            || indexed_digest != payload_digest
+            || segments.len() != segment_count
         {
             bail!("packed manifest index does not match manifest {payload_digest}");
         }
-        for location in index.segments.iter().flatten() {
+        for location in segments.iter().flatten() {
             if !is_digest(&location.pack_digest) || location.bytes == 0 {
                 bail!("packed manifest index contains an invalid location");
             }
@@ -315,7 +317,7 @@ impl PackedSegmentStore {
                 .checked_add(location.bytes)
                 .context("packed manifest index range overflows")?;
         }
-        Ok(index.segments)
+        Ok(segments)
     }
 
     pub(super) fn remove_manifest_index(&self, payload_digest: &str) -> Result<u64> {
