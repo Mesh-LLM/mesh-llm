@@ -60,6 +60,11 @@ const MAX_PENDING_PREDICTION_RETURN_SINKS: usize = 64;
 // so idle or unidentified connections cannot exhaust threads.
 const PREDICTION_RETURN_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PREDICTION_RETURN_CONNECTIONS: usize = 1024;
+// How often a reader idle between replies checks that its waiter still exists.
+// `unregister` also shuts the stream down, which wakes the read at once on
+// Unix; on Windows a shutdown does not wake a read blocked on another handle
+// to the socket, so this check is what releases a stalled peer there.
+const PREDICTION_RETURN_WAITER_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 pub(crate) struct PredictionReturnSinks {
@@ -350,6 +355,15 @@ impl PredictionReturnHub {
             return Ok(());
         }
         loop {
+            match self.wait_for_reply(key, &stream) {
+                // At the end of the stream `recv_reply` reports `UnexpectedEof`.
+                Ok(ReturnWait::Reply | ReturnWait::Closed) => {}
+                Ok(ReturnWait::WaiterEnded) => return Ok(()),
+                Err(error) => {
+                    let _ = sender.send(Err(error.to_string()));
+                    return Err(error).context("wait for direct prediction return");
+                }
+            }
             match recv_reply(&mut stream) {
                 Ok(reply) => {
                     if sender.send(Ok(reply)).is_err() {
@@ -369,6 +383,62 @@ impl PredictionReturnHub {
             }
         }
     }
+
+    /// Waits for the next reply to start. Only the wait between replies is
+    /// polled; a reply that has started is read without a timeout, so no
+    /// partial frame is dropped.
+    fn wait_for_reply(
+        &self,
+        key: PredictionReturnKey,
+        stream: &TcpStream,
+    ) -> io::Result<ReturnWait> {
+        // Darwin refuses any socket option once both directions are shut
+        // down, which `unregister` can do at any point. The waiter is removed
+        // before that shutdown, so a refusal without a waiter is its end.
+        let set_timeout = |timeout| match stream.set_read_timeout(timeout) {
+            Err(error) if self.has_waiter(key) => Err(error),
+            Err(_) => Ok(false),
+            Ok(()) => Ok(true),
+        };
+        if !set_timeout(Some(PREDICTION_RETURN_WAITER_POLL))? {
+            return Ok(ReturnWait::WaiterEnded);
+        }
+        let mut first = [0_u8; 1];
+        loop {
+            match stream.peek(&mut first) {
+                // Leave the timeout set: the read sees the end at once.
+                Ok(0) => return Ok(ReturnWait::Closed),
+                Ok(_) => break,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    if !self.has_waiter(key) {
+                        return Ok(ReturnWait::WaiterEnded);
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(if set_timeout(None)? {
+            ReturnWait::Reply
+        } else {
+            ReturnWait::WaiterEnded
+        })
+    }
+}
+
+/// What [`PredictionReturnHub::wait_for_reply`] found before the next reply.
+enum ReturnWait {
+    /// A reply has started and the read timeout is cleared for `recv_reply`.
+    Reply,
+    /// The peer, or `unregister`, closed the stream.
+    Closed,
+    /// The waiter ended while the stream was idle.
+    WaiterEnded,
 }
 
 /// Removes a stream handle recorded by [`PredictionReturnHub::track_stream`].
