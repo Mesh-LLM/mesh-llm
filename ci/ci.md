@@ -2002,8 +2002,12 @@ on immediate repeated requests without publication sleeps or retries.
 ## Jianyang AgentX
 
 The external Jianyang job inventory is now source-owned in
-[`skippy/evals/agentx/templates.yaml`](../skippy/evals/agentx/templates.yaml). Its `agentx` job runs paired
-llama.cpp/Skippy cells, with a small smoke profile and pinned upstream harness.
+[`skippy/evals/agentx/templates.yaml`](../skippy/evals/agentx/templates.yaml). Its four `agentx-{engine}-{profile}` templates run
+llama.cpp or Skippy with a smoke or full profile and pinned upstream harness.
+Each emits standard JY points through a real repository-template launch;
+engine and profile results have separate existing benchmark views.
+The four Q4_K_M model choices cover dense attention, hybrid dense, attention MoE
+and hybrid MoE, with distinct quantization-bearing result keys.
 JY builds and runs one source-labelled ARM64 CUDA Docker image on the Spark;
 both engines and the harness run inside it, with the host's NFS-backed `HF_HOME`
 bind-mounted at the same path and mounted JY artifacts,

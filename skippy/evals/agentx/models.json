@@ -1,31 +1,17 @@
 [
   {
-    "key": "qwen3-4b",
+    "key": "qwen3-4b-q4-k-m",
     "family": "dense",
     "repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
     "revision": "a06e946bb6b655725eafa393f4a9745d460374c9",
     "tokenizer": "Qwen/Qwen3-4B-Instruct-2507",
     "files": [
       {
-        "name": "Qwen3-4B-Instruct-2507-F16.gguf",
-        "sha256": "336228a2810f17724ecd6e9e2e40e8381eee81e886316fee311ade2899c31030"
+        "name": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"
       }
     ],
     "tokenizer_revision": "cdbee75f17c01a7cc42f958dc650907174af0554"
-  },
-  {
-    "key": "qwen3.5-4b",
-    "family": "hybrid-dense",
-    "repo": "unsloth/Qwen3.5-4B-GGUF",
-    "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
-    "tokenizer": "Qwen/Qwen3.5-4B",
-    "files": [
-      {
-        "name": "Qwen3.5-4B-BF16.gguf",
-        "sha256": "9e6e2841a75f503ccb330831832fd7861266e187e0dbf149a954219ccb8c197a"
-      }
-    ],
-    "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
   },
   {
     "key": "qwen3.5-4b-q4-k-m",
@@ -42,51 +28,29 @@
     "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
   },
   {
-    "key": "qwen3.5-9b",
-    "family": "hybrid-dense",
-    "repo": "unsloth/Qwen3.5-9B-GGUF",
-    "revision": "3885219b6810b007914f3a7950a8d1b469d598a5",
-    "tokenizer": "Qwen/Qwen3.5-9B",
-    "files": [
-      {
-        "name": "Qwen3.5-9B-BF16.gguf",
-        "sha256": "daebe40eeea7057c1cdf35ac56d13f507d8bf12171bbb7a6b6b0d3f05439159a"
-      }
-    ],
-    "tokenizer_revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
-  },
-  {
-    "key": "qwen3-coder-30b-a3b",
+    "key": "qwen3-coder-30b-a3b-q4-k-m",
     "family": "attention-moe",
     "repo": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
     "revision": "b17cb02dd882d5b6ab62fc777ad2995f19668350",
     "tokenizer": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "files": [
       {
-        "name": "BF16/Qwen3-Coder-30B-A3B-Instruct-BF16-00001-of-00002.gguf",
-        "sha256": "c432d5b64272ae30f0df02326619557a1994b034c40139c6e8d7dce928142845"
-      },
-      {
-        "name": "BF16/Qwen3-Coder-30B-A3B-Instruct-BF16-00002-of-00002.gguf",
-        "sha256": "cd36c4d1dc4be366aec7fa9597920e16adb7aed06c7e85ca857695b76ef11737"
+        "name": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+        "sha256": "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad"
       }
     ],
     "tokenizer_revision": "b2cff646eb4bb1d68355c01b18ae02e7cf42d120"
   },
   {
-    "key": "qwen3.5-35b-a3b",
+    "key": "qwen3.5-35b-a3b-q4-k-m",
     "family": "hybrid-moe",
     "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
     "revision": "bc014a17be43adabd7066b7a86075ff935c6a4e2",
     "tokenizer": "Qwen/Qwen3.5-35B-A3B",
     "files": [
       {
-        "name": "BF16/Qwen3.5-35B-A3B-BF16-00001-of-00002.gguf",
-        "sha256": "a1c3f36db01985d678bd46e976b62398d3814fcc2b26aee7cc78c857466b8bee"
-      },
-      {
-        "name": "BF16/Qwen3.5-35B-A3B-BF16-00002-of-00002.gguf",
-        "sha256": "13d69c9ee0fce7810ed9d383ed7fa5958d524c1136dfb4928453e8054f5d444e"
+        "name": "Qwen3.5-35B-A3B-Q4_K_M.gguf",
+        "sha256": "3b46d1066bc91cc2d613e3bc22ce691dd77e6f0d33c9060690d24ce6de494375"
       }
     ],
     "tokenizer_revision": "59d61f3ce65a6d9863b86d2e96597125219dc754"

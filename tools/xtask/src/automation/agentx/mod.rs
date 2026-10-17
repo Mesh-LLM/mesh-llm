@@ -38,6 +38,26 @@ impl Profile {
         }
     }
 }
+#[derive(Clone, Copy)]
+pub(super) enum Engine {
+    Llama,
+    Skippy,
+}
+impl Engine {
+    fn parse(value: &str) -> DynResult<Self> {
+        match value {
+            "llama" => Ok(Self::Llama),
+            "skippy" => Ok(Self::Skippy),
+            _ => Err("engine must be llama or skippy".into()),
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Llama => "llama",
+            Self::Skippy => "skippy",
+        }
+    }
+}
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct FilePin {
@@ -55,6 +75,11 @@ struct Model {
     tokenizer_revision: String,
     files: Vec<FilePin>,
 }
+impl Model {
+    fn registry_ref(&self) -> String {
+        format!("hf:{}@{}#{}", self.repo, self.revision, self.files[0].name)
+    }
+}
 #[derive(Deserialize, Serialize)]
 struct Prepared {
     root: PathBuf,
@@ -66,9 +91,10 @@ struct Prepared {
 }
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     const GRAMMAR: Grammar = Grammar {
-        usage: "cargo xtool automation agentx {container|run|worker} --model KEY --profile {smoke|benchmark} --output PATH | worker --input PATH --port PORT --concurrency N",
+        usage: "cargo xtool automation agentx {container|run} --engine {llama|skippy} --model KEY --profile {smoke|benchmark} --output PATH | worker --input PATH --port PORT --concurrency N",
         values: &[
             "--model",
+            "--engine",
             "--profile",
             "--output",
             "--input",
@@ -85,6 +111,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     }
     match parsed.positionals.as_slice() {
         [verb] if *verb == "container" => container::run(
+            Engine::parse(parsed.last("--engine").ok_or("missing engine")?)?,
             parsed.last("--model").ok_or("missing model")?,
             Profile::parse(parsed.last("--profile").ok_or("missing profile")?)?,
             PathBuf::from(parsed.last("--output").ok_or("missing output")?),
@@ -103,13 +130,14 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
                 return Err("output must be absolute".into());
             }
             std::fs::create_dir(&output)?;
+            let engine = Engine::parse(parsed.last("--engine").ok_or("missing engine")?)?;
             let prepared = inputs::prepare(
                 root,
                 output.clone(),
                 parsed.last("--model").ok_or("missing model")?,
                 profile,
             );
-            let result = prepared.and_then(|prepared| lifecycle::campaign(&prepared));
+            let result = prepared.and_then(|prepared| lifecycle::campaign(&prepared, engine));
             let archive = results::archive(&output);
             result?;
             archive

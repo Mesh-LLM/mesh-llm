@@ -18,7 +18,7 @@ pub(super) fn prepare(
     )?)?;
     let model = models
         .into_iter()
-        .find(|model| model.key == key)
+        .find(|model| model.key == key || model.registry_ref() == key)
         .ok_or("unknown AgentX model")?;
     let mut weights = None;
     for (index, file) in model.files.iter().enumerate() {

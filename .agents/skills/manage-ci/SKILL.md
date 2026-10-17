@@ -742,8 +742,10 @@ verified.
 
 `skippy/evals/agentx/templates.yaml` owns Jianyang repository jobs. AgentX orchestration belongs
 in typed Rust automation, with thin Just build/run recipes and a locked upstream
-harness environment under `skippy/evals/agentx`. Smoke results and local-corpus
-exports marked `submission_valid=false` must never enter performance history.
+harness environment under `skippy/evals/agentx`. Local-corpus `submission_valid=false` describes upstream leaderboard eligibility,
+not JY visibility. Emit standard JY serving points through registered repository
+templates. Separate engine and profile template keys prevent mixed-engine series
+and smoke/full comparisons. PR results remain provisional in JY's existing view.
 Benchmark engines and the harness execute inside the same ARM64 CUDA container
 on the JY-leased Spark. The host may build the image and lifecycle controller,
 but must not run benchmark cells natively. Record the immutable image ID and
@@ -752,6 +754,7 @@ standard HF cache reuse (never a separate weight download directory), mount
 JY artifacts, and remove the owned
 container on success, failure, timeout, and cancellation. An in-container hard
 deadline bounds work even if the host controller disappears.
-Migration of the live template-source registration follows review; preview runs
-use Jianyang's existing template renderer with immutable PR source, then submit
-the rendered specification so unrelated jobs keep their production default ref.
+Before the Mesh PR merges, register the AgentX blocks through a configuration-only
+change to the current template source, then sync and use `jy repos run` at the
+immutable PR source. Keep unrelated jobs and the production default ref intact.
+Move the source registration to Mesh after merge.

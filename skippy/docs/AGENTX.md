@@ -1,14 +1,15 @@
 # AgentX on Jianyang
 
-AgentX replaces the Jianyang `agentic-replay` job. The new `agentx` entry has
+AgentX replaces the Jianyang `agentic-replay` job. The new `agentx-{engine}-{profile}` entries have
 no legacy alias or old command-line compatibility. Its source is
 [the repository template](../evals/agentx/templates.yaml); the orchestration is Rust
 in `tools/xtask/src/automation/agentx`, with the upstream Python harness in a
 [locked external environment](../evals/agentx/pyproject.toml).
 
-One job owns one model. It runs unpatched llama.cpp, then standalone Skippy,
-sequentially on the same DGX Spark. Separate model jobs can occupy separate
-Sparks. Both engines and AgentX execute inside the same ARM64 CUDA Docker image,
+One job owns one model and one engine. Separate llama.cpp and Skippy templates
+record standard JY serving points without mixing engines into one concurrency
+series. Run each comparison sequentially on the same DGX Spark; separate model
+pairs can occupy separate Sparks. Smoke and full benchmark templates are separate. Both engines and AgentX execute inside the same ARM64 CUDA Docker image,
 built and launched on the JY-leased Spark. No benchmark cells run on the host.
 Each engine gets the identical verified GGUF shards; speculative decode
 is disabled, and both chat templates receive `enable_thinking=false`.
@@ -18,27 +19,27 @@ The baseline source is the exact commit in
 ## Run
 
 ```sh
-jy repos run mesh-llm agentx --ref pr:NUMBER --input model=qwen3.5-4b --input profile=smoke
-jy repos run mesh-llm agentx --ref pr:NUMBER --input model=qwen3.5-9b --input profile=smoke
-jy repos run mesh-llm agentx --ref pr:NUMBER --input model=qwen3.5-4b-q4-k-m --input profile=smoke
-jy repos run mesh-llm agentx --ref pr:NUMBER --input model=qwen3.5-4b-q4-k-m --input profile=benchmark
+jy repos run mesh-llm agentx-llama-smoke --ref pr:2463 --input 'model=hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'
+jy repos run mesh-llm agentx-skippy-smoke --ref pr:2463 --input 'model=hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'
+# After smoke acceptance, use agentx-llama-benchmark and agentx-skippy-benchmark.
 ```
 
-Register the immutable custom result schema once before dispatch:
+Results appear under [JY Benchmarks](https://pilot.jianyang.cloud/benchmarks),
+with an entry for each engine and profile. Select the model within the entry.
+PR runs appear as provisional results in the existing run table; default-branch
+runs populate its trend charts. Throughput, TTFT, inter-token latency and request
+latency use JY's standard result fields. Detailed exports and memory samples
+remain attached as `agentx.tar.gz`. No custom schema registration is needed.
 
-```sh
-jy schemas register agentx 1 skippy/evals/agentx/result.schema.json
-```
-
-After merging, move the existing repository registration's `templates_repo` to
-null and `templates_path` to `skippy/evals/agentx/templates.yaml`, then run
-`jy repos sync mesh-llm`. Sync replaces the installed set: unrelated existing
-jobs are included unchanged, and the old `agentic-replay` entry is absent.
-Before merging, render this validated template with Jianyang's existing
-`renderRepoJob` and the immutable PR SHA, then use `jy submit` on the rendered
-specification. Template sync reads GitHub's default branch, so changing the
-registration's default launch ref does not make a PR template available.
-Do not redirect the production registration to a PR branch.
+Before the Mesh PR merges, install these four template blocks in the current
+registered template source (`general-inference/jianyang`,
+`pilot/templates/mesh-llm.yaml`) through a configuration-only PR, then
+`jy repos sync mesh-llm`. Launch with `jy repos run`, which records the actual
+repository/template association. Ad hoc `jy submit` jobs do not populate these
+benchmark pages. Do not change the production default ref to a PR branch.
+After merging, move `templates_repo` to null and `templates_path` to
+`skippy/evals/agentx/templates.yaml`, then sync. That cutover replaces the old
+`agentic-replay` entry while preserving unrelated templates.
 
 The current Jianyang lab schema supports an eligible node list, not a GPU-type
 predicate. The template lists both registered Sparks (`spark-james`,
@@ -56,7 +57,7 @@ Docker through the repository's typed lifecycle controller.
 
 `just agentx-container-build` builds the image tagged by `JIANYANG_COMMIT`.
 The CUDA base is digest-pinned; Rust, Just, uv and the upstream harness are pinned.
-`just agentx MODEL PROFILE OUTPUT` requires the JY job environment and runs that
+`just agentx ENGINE MODEL PROFILE OUTPUT` requires the JY job environment and runs that
 image by immutable ID after checking its ARM64 architecture and source label.
 The image contains both compiled engines, native runtimes, and the harness.
 Build time is outside the measured cells.
@@ -82,11 +83,34 @@ verify every weight shard against [models.json](../evals/agentx/models.json).
 No projector is needed for these text-only traces. Tokenizers have independent
 immutable Hugging Face revisions.
 
-The explicit `qwen3.5-4b-q4-k-m` variant uses the existing NAS-cached
-`Qwen3.5-4B-Q4_K_M.gguf` at the same pinned revision. Its result names include
-the quantization, so these measurements remain distinct from the BF16 model.
-For a cache-only campaign, confirm that exact file is present before submitting
-the smoke, and submit the benchmark only after the smoke passes.
+## Q4 model matrix
+
+All PR comparisons use Q4_K_M weights. Model keys and result names include the
+quantization; previous F16/BF16 measurements are historical evidence, not members
+of this matrix. Each file is a single GGUF at the immutable revision and SHA-256
+in [models.json](../evals/agentx/models.json). Sizes below are decimal GB of
+weights, not peak runtime memory.
+
+| Category | Model key | GGUF file | GB |
+|---|---|---|---:|
+| Dense attention | `qwen3-4b-q4-k-m` | `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` | 2.50 |
+| Hybrid dense | `qwen3.5-4b-q4-k-m` | `Qwen3.5-4B-Q4_K_M.gguf` | 2.74 |
+| Attention MoE | `qwen3-coder-30b-a3b-q4-k-m` | `Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf` | 18.56 |
+| Hybrid MoE | `qwen3.5-35b-a3b-q4-k-m` | `Qwen3.5-35B-A3B-Q4_K_M.gguf` | 22.02 |
+
+Hybrid means Gated DeltaNet layers interleaved with full attention; dense versus
+MoE describes the feed-forward layers. The pinned upstream configs identify
+[Qwen3 4B](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/blob/cdbee75f17c01a7cc42f958dc650907174af0554/config.json)
+as dense, [Qwen3 Coder](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/blob/b2cff646eb4bb1d68355c01b18ae02e7cf42d120/config.json)
+as attention MoE, and the Qwen3.5
+[4B](https://huggingface.co/Qwen/Qwen3.5-4B/blob/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/config.json)
+and [35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B/blob/59d61f3ce65a6d9863b86d2e96597125219dc754/config.json)
+as hybrid dense and hybrid MoE respectively. These cover four architecture
+categories; comparisons are between engines on the same model, not a controlled
+architecture comparison across differently sized/trained models.
+
+For a cache-only campaign, confirm the exact pinned file is present before
+submitting the smoke, and submit the benchmark only after the smoke passes.
 
 ## Profiles and capacity
 
@@ -104,8 +128,8 @@ the smoke, and submit the benchmark only after the smoke passes.
 
 Offered agent concurrency is distinct from resident generation capacity.
 Subagents may also issue concurrent requests. Both servers queue into one
-resident slot, keeping the 16-bit dense and MoE models within Spark's memory
-budget. This is a fixed-capacity comparison, not a maximum-throughput claim.
+resident slot. Runtime memory includes the Q4 weights, F16 KV, recurrent state
+and workspaces. This is a fixed-capacity comparison, not a maximum-throughput claim.
 There is no context shortening, automatic weight quantization, or fallback on
 allocation failure. Other resident capacities require a separate campaign.
 Skippy's in-memory prefix retention target is explicitly 8 GiB, with disk
@@ -148,14 +172,16 @@ its stock local Weka loader and `--unsafe-override` with our independently
 verified corpus. **Both profiles retain `submission_valid=false`.** These are
 reproducible local comparisons, not InferenceX leaderboard submissions. Smoke
 also intentionally violates the minimum 900-second profiling duration. No
-Jianyang chart points or performance-history promotion are emitted. A future
-upstream revision-pinning facility can remove the corpus override; it must
-start a new comparison identity.
+claim is made that a smoke is steady-state performance. Local-corpus measurements
+are still valid inputs to our own JY benchmark views: upstream leaderboard
+eligibility does not suppress them. A future upstream revision-pinning facility
+must start a new harness identity.
 
-Jianyang stores the measurements as `custom.schema=agentx`, version `1`, with
-separate named cells such as `agentx/qwen3.5-4b/llama/smoke/c1` and
-`agentx/qwen3.5-4b/skippy/smoke/c1`. `points` stays empty so paired engines and
-invalid submission profiles cannot accidentally enter a shared throughput series.
+Jianyang receives standard `points` for the selected engine, with integer token
+totals and latency distributions in milliseconds. Smoke and full profiles have
+different template keys and harness fingerprints. Engine templates are separate
+because JY's existing chart series distinguish concurrency, not engine identity.
+Raw cell names remain `agentx/MODEL/ENGINE/PROFILE/cN`.
 
 ## Evidence and acceptance
 

@@ -1018,53 +1018,61 @@ templates:
       concurrency: ["${levels}"]
       duration_s: "${window_s}"
 
-  - key: agentx
-    name: AgentX — llama.cpp vs Skippy
+  - key: agentx-llama-smoke
+    name: AgentX — llama.cpp smoke
     group: Benchmarks
+    priority: 20
     env:
       # The registered Sparks' host HF_HOME, mounted at the same container path.
       HF_HOME: /mnt/lab/huggingface
+    models:
+      - ref: "${model}"
+        delivery: stream
     labels:
       model: "${model}"
-      profile: "${profile}"
+      profile: "smoke"
     flags:
       model: "${model}"
-      profile: "${profile}"
-      engines: llama,skippy
+      profile: "smoke"
+      engine: llama
       context_tokens: 262144
       generation_slots: 1
       batch_tokens: 2048
       microbatch_tokens: 512
       speculation: false
     description: >
-      ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engines use
+      ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engine templates use
       identical pinned GGUF weights and one 256k generation slot. Smoke uses
-      four complete traces and 60 measured seconds per engine; benchmark sweeps
+      four complete traces and 60 measured seconds per cell; benchmark sweeps
       1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
-      submission_valid=false and never enter performance history.
+      submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
+    report:
+      headline: throughput.output_tok_s
+    harness:
+      name: custom
+      version: agentx-1.0.7-local-smoke-1
+      trace:
+        kind: file
+        ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
+        sha256: e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef
+      seed: 42
+      warmup_requests: 1
+      concurrency: [1]
+      duration_s: 60
     build: |
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
-      cd "$JIANYANG_REPO_DIR"
+      cd ${repo_dir}
       sg docker -c 'just agentx-container-build'
     inputs:
       - key: model
         label: Model
         kind: choice
-        default: qwen3.5-4b
+        default: 'hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'
         choices:
-          - {label: Qwen3 4B dense F16, value: qwen3-4b}
-          - {label: Qwen3.5 4B hybrid BF16, value: qwen3.5-4b}
-          - {label: Qwen3.5 4B hybrid Q4_K_M, value: qwen3.5-4b-q4-k-m}
-          - {label: Qwen3.5 9B hybrid BF16, value: qwen3.5-9b}
-          - {label: Qwen3 Coder 30B-A3B MoE BF16, value: qwen3-coder-30b-a3b}
-          - {label: Qwen3.5 35B-A3B hybrid MoE BF16, value: qwen3.5-35b-a3b}
-      - key: profile
-        label: Profile
-        kind: choice
-        default: smoke
-        choices:
-          - {label: Smoke — four traces, value: smoke}
-          - {label: Benchmark — full ladder, value: benchmark}
+          - {label: Qwen3 4B dense Q4_K_M, value: 'hf:unsloth/Qwen3-4B-Instruct-2507-GGUF@a06e946bb6b655725eafa393f4a9745d460374c9#Qwen3-4B-Instruct-2507-Q4_K_M.gguf'}
+          - {label: Qwen3.5 4B hybrid Q4_K_M, value: 'hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'}
+          - {label: Qwen3 Coder 30B-A3B MoE Q4_K_M, value: 'hf:unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF@b17cb02dd882d5b6ab62fc777ad2995f19668350#Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf'}
+          - {label: Qwen3.5 35B-A3B hybrid MoE Q4_K_M, value: 'hf:unsloth/Qwen3.5-35B-A3B-GGUF@bc014a17be43adabd7066b7a86075ff935c6a4e2#Qwen3.5-35B-A3B-Q4_K_M.gguf'}
     target:
       executor: lab
       # JY currently rejects Ubuntu's display name for os: linux; the runner
@@ -1076,9 +1084,216 @@ templates:
       grace_s: 60
     command: |
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
-      cd "$JIANYANG_REPO_DIR"
+      cd ${repo_dir}
       mkdir -p "$PWD/.deps/agentx-runs"
-      sg docker -c 'just agentx "${model}" "${profile}" "$PWD/.deps/agentx-runs/$JIANYANG_RUN_ID"'
+      sg docker -c 'just agentx llama "${model}" "smoke" "$PWD/.deps/agentx-runs/$JIANYANG_RUN_ID"'
+  - key: agentx-llama-benchmark
+    name: AgentX — llama.cpp benchmark
+    group: Benchmarks
+    priority: 20
+    env:
+      # The registered Sparks' host HF_HOME, mounted at the same container path.
+      HF_HOME: /mnt/lab/huggingface
+    models:
+      - ref: "${model}"
+        delivery: stream
+    labels:
+      model: "${model}"
+      profile: "benchmark"
+    flags:
+      model: "${model}"
+      profile: "benchmark"
+      engine: llama
+      context_tokens: 262144
+      generation_slots: 1
+      batch_tokens: 2048
+      microbatch_tokens: 512
+      speculation: false
+    description: >
+      ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engine templates use
+      identical pinned GGUF weights and one 256k generation slot. Smoke uses
+      four complete traces and 60 measured seconds per cell; benchmark sweeps
+      1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
+      submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
+    report:
+      headline: throughput.output_tok_s
+    harness:
+      name: custom
+      version: agentx-1.0.7-local-benchmark-1
+      trace:
+        kind: file
+        ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
+        sha256: e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef
+      seed: 42
+      warmup_requests: 10
+      concurrency: [1, 2, 4, 8]
+      duration_s: 3600
+    build: |
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd ${repo_dir}
+      sg docker -c 'just agentx-container-build'
+    inputs:
+      - key: model
+        label: Model
+        kind: choice
+        default: 'hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'
+        choices:
+          - {label: Qwen3 4B dense Q4_K_M, value: 'hf:unsloth/Qwen3-4B-Instruct-2507-GGUF@a06e946bb6b655725eafa393f4a9745d460374c9#Qwen3-4B-Instruct-2507-Q4_K_M.gguf'}
+          - {label: Qwen3.5 4B hybrid Q4_K_M, value: 'hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'}
+          - {label: Qwen3 Coder 30B-A3B MoE Q4_K_M, value: 'hf:unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF@b17cb02dd882d5b6ab62fc777ad2995f19668350#Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf'}
+          - {label: Qwen3.5 35B-A3B hybrid MoE Q4_K_M, value: 'hf:unsloth/Qwen3.5-35B-A3B-GGUF@bc014a17be43adabd7066b7a86075ff935c6a4e2#Qwen3.5-35B-A3B-Q4_K_M.gguf'}
+    target:
+      executor: lab
+      # JY currently rejects Ubuntu's display name for os: linux; the runner
+      # validates Linux/aarch64/GB10 after placement on these registered Sparks.
+      nodes: [spark-james, spark-db08]
+    budget:
+      max_usd: 0
+      max_duration_s: 86400
+      grace_s: 60
+    command: |
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd ${repo_dir}
+      mkdir -p "$PWD/.deps/agentx-runs"
+      sg docker -c 'just agentx llama "${model}" "benchmark" "$PWD/.deps/agentx-runs/$JIANYANG_RUN_ID"'
+  - key: agentx-skippy-smoke
+    name: AgentX — Skippy smoke
+    group: Benchmarks
+    priority: 20
+    env:
+      # The registered Sparks' host HF_HOME, mounted at the same container path.
+      HF_HOME: /mnt/lab/huggingface
+    models:
+      - ref: "${model}"
+        delivery: stream
+    labels:
+      model: "${model}"
+      profile: "smoke"
+    flags:
+      model: "${model}"
+      profile: "smoke"
+      engine: skippy
+      context_tokens: 262144
+      generation_slots: 1
+      batch_tokens: 2048
+      microbatch_tokens: 512
+      speculation: false
+    description: >
+      ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engine templates use
+      identical pinned GGUF weights and one 256k generation slot. Smoke uses
+      four complete traces and 60 measured seconds per cell; benchmark sweeps
+      1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
+      submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
+    report:
+      headline: throughput.output_tok_s
+    harness:
+      name: custom
+      version: agentx-1.0.7-local-smoke-1
+      trace:
+        kind: file
+        ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
+        sha256: e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef
+      seed: 42
+      warmup_requests: 1
+      concurrency: [1]
+      duration_s: 60
+    build: |
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd ${repo_dir}
+      sg docker -c 'just agentx-container-build'
+    inputs:
+      - key: model
+        label: Model
+        kind: choice
+        default: 'hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'
+        choices:
+          - {label: Qwen3 4B dense Q4_K_M, value: 'hf:unsloth/Qwen3-4B-Instruct-2507-GGUF@a06e946bb6b655725eafa393f4a9745d460374c9#Qwen3-4B-Instruct-2507-Q4_K_M.gguf'}
+          - {label: Qwen3.5 4B hybrid Q4_K_M, value: 'hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'}
+          - {label: Qwen3 Coder 30B-A3B MoE Q4_K_M, value: 'hf:unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF@b17cb02dd882d5b6ab62fc777ad2995f19668350#Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf'}
+          - {label: Qwen3.5 35B-A3B hybrid MoE Q4_K_M, value: 'hf:unsloth/Qwen3.5-35B-A3B-GGUF@bc014a17be43adabd7066b7a86075ff935c6a4e2#Qwen3.5-35B-A3B-Q4_K_M.gguf'}
+    target:
+      executor: lab
+      # JY currently rejects Ubuntu's display name for os: linux; the runner
+      # validates Linux/aarch64/GB10 after placement on these registered Sparks.
+      nodes: [spark-james, spark-db08]
+    budget:
+      max_usd: 0
+      max_duration_s: 86400
+      grace_s: 60
+    command: |
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd ${repo_dir}
+      mkdir -p "$PWD/.deps/agentx-runs"
+      sg docker -c 'just agentx skippy "${model}" "smoke" "$PWD/.deps/agentx-runs/$JIANYANG_RUN_ID"'
+  - key: agentx-skippy-benchmark
+    name: AgentX — Skippy benchmark
+    group: Benchmarks
+    priority: 20
+    env:
+      # The registered Sparks' host HF_HOME, mounted at the same container path.
+      HF_HOME: /mnt/lab/huggingface
+    models:
+      - ref: "${model}"
+        delivery: stream
+    labels:
+      model: "${model}"
+      profile: "benchmark"
+    flags:
+      model: "${model}"
+      profile: "benchmark"
+      engine: skippy
+      context_tokens: 262144
+      generation_slots: 1
+      batch_tokens: 2048
+      microbatch_tokens: 512
+      speculation: false
+    description: >
+      ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engine templates use
+      identical pinned GGUF weights and one 256k generation slot. Smoke uses
+      four complete traces and 60 measured seconds per cell; benchmark sweeps
+      1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
+      submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
+    report:
+      headline: throughput.output_tok_s
+    harness:
+      name: custom
+      version: agentx-1.0.7-local-benchmark-1
+      trace:
+        kind: file
+        ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
+        sha256: e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef
+      seed: 42
+      warmup_requests: 10
+      concurrency: [1, 2, 4, 8]
+      duration_s: 3600
+    build: |
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd ${repo_dir}
+      sg docker -c 'just agentx-container-build'
+    inputs:
+      - key: model
+        label: Model
+        kind: choice
+        default: 'hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'
+        choices:
+          - {label: Qwen3 4B dense Q4_K_M, value: 'hf:unsloth/Qwen3-4B-Instruct-2507-GGUF@a06e946bb6b655725eafa393f4a9745d460374c9#Qwen3-4B-Instruct-2507-Q4_K_M.gguf'}
+          - {label: Qwen3.5 4B hybrid Q4_K_M, value: 'hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'}
+          - {label: Qwen3 Coder 30B-A3B MoE Q4_K_M, value: 'hf:unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF@b17cb02dd882d5b6ab62fc777ad2995f19668350#Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf'}
+          - {label: Qwen3.5 35B-A3B hybrid MoE Q4_K_M, value: 'hf:unsloth/Qwen3.5-35B-A3B-GGUF@bc014a17be43adabd7066b7a86075ff935c6a4e2#Qwen3.5-35B-A3B-Q4_K_M.gguf'}
+    target:
+      executor: lab
+      # JY currently rejects Ubuntu's display name for os: linux; the runner
+      # validates Linux/aarch64/GB10 after placement on these registered Sparks.
+      nodes: [spark-james, spark-db08]
+    budget:
+      max_usd: 0
+      max_duration_s: 86400
+      grace_s: 60
+    command: |
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd ${repo_dir}
+      mkdir -p "$PWD/.deps/agentx-runs"
+      sg docker -c 'just agentx skippy "${model}" "benchmark" "$PWD/.deps/agentx-runs/$JIANYANG_RUN_ID"'
   - key: split-2node
     name: Pipeline saturation (2-node split)
     group: Benchmarks

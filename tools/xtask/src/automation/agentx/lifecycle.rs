@@ -1,4 +1,4 @@
-use super::{Prepared, Profile, command, inputs, results, write};
+use super::{Engine, Prepared, Profile, command, inputs, results, write};
 use crate::{
     command::DynResult,
     process::{
@@ -9,26 +9,27 @@ use crate::{
 use serde_json::json;
 use std::time::Duration;
 
-pub(super) fn campaign(input: &Prepared) -> DynResult<()> {
+pub(super) fn campaign(input: &Prepared, engine: Engine) -> DynResult<()> {
     hardware(input)?;
     let mut cells = Vec::new();
+    let mut points = Vec::new();
+    let engine = engine.label();
     for &concurrency in input.profile.concurrencies() {
-        for engine in ["llama", "skippy"] {
-            inputs::recheck(input)?;
-            let directory = input.output.join(format!("{engine}-c{concurrency}"));
-            std::fs::create_dir(&directory)?;
-            let mut cell: Prepared = serde_json::from_value(serde_json::to_value(input)?)?;
-            cell.output = directory;
-            execute(&cell, engine, concurrency)?;
-            cells.push(results::read(&cell, engine, concurrency)?);
-            write(
-                &input.output.join("results.json"),
-                &json!({"profile":input.profile,"model":input.model,"cells":cells,"promote_to_performance_history":false}),
-            )?;
-        }
+        inputs::recheck(input)?;
+        let directory = input.output.join(format!("{engine}-c{concurrency}"));
+        std::fs::create_dir(&directory)?;
+        let mut cell: Prepared = serde_json::from_value(serde_json::to_value(input)?)?;
+        cell.output = directory;
+        execute(&cell, engine, concurrency)?;
+        cells.push(results::read(&cell, engine, concurrency)?);
+        points.push(results::point(&cell, concurrency)?);
+        write(
+            &input.output.join("results.json"),
+            &json!({"profile":input.profile,"model":input.model,"cells":cells}),
+        )?;
     }
     if let Some(path) = std::env::var_os("JIANYANG_RESULT_PATH") {
-        // No chart points: upstream local-corpus runs are explicitly not leaderboard submissions.
+        // Local measurements belong in JY; leaderboard eligibility is independent.
         use sha2::Digest;
         let model_digest = if input.model.files.len() == 1 {
             input.model.files[0].sha256.clone()
@@ -39,11 +40,11 @@ pub(super) fn campaign(input: &Prepared) -> DynResult<()> {
         };
         write(
             std::path::Path::new(&path),
-            &json!({"points":[],
-                "custom":{"schema":"agentx","version":"1","data":{
-                    "profile":input.profile,"model":input.model,"cells":cells,"promote_to_performance_history":false
-                }},
-                "provenance":{"stack_commit":std::env::var("JIANYANG_COMMIT")?,"model_package_sha256":model_digest}
+            &json!({"points":points,
+                "notes":[format!("AgentX local-corpus {} / {engine}; submission_valid=false refers to the upstream leaderboard. Full exports and memory measurements are in agentx.tar.gz.", input.profile.label())],
+                "provenance":{"stack_commit":std::env::var("JIANYANG_COMMIT")?,"stack_name":engine,
+                    "model_package_ref":input.model.registry_ref(),
+                    "model_package_sha256":model_digest}
             }),
         )?;
     }

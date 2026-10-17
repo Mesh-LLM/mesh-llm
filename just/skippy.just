@@ -259,8 +259,8 @@ agentx-build: agentx-setup
     cmake -S .deps/agentx-llama -B .deps/agentx-llama-build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=121 -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON
     cmake --build .deps/agentx-llama-build --config Release --target llama-server -j 8
 
-agentx model profile output:
-    just automation-run automation agentx container --model {{ quote(model) }} --profile {{ quote(profile) }} --output {{ quote(output) }}
+agentx engine model profile output:
+    just automation-run automation agentx container --engine {{ quote(engine) }} --model {{ quote(model) }} --profile {{ quote(profile) }} --output {{ quote(output) }}
 
 agentx-container-build:
     docker build --platform linux/arm64 --progress plain --build-arg SOURCE_COMMIT="$JIANYANG_COMMIT" --tag "mesh-agentx:$JIANYANG_COMMIT" --file skippy/evals/agentx/Dockerfile .

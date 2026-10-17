@@ -1,5 +1,5 @@
 //! Own the Docker daemon's container as well as its attached client process.
-use super::{Profile, command, write};
+use super::{Engine, Profile, command, write};
 use crate::{command::DynResult, process};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -14,10 +14,10 @@ struct Launch {
     seconds: u64,
 }
 
-pub(super) fn run(model: &str, profile: Profile, output: PathBuf) -> DynResult<()> {
+pub(super) fn run(engine: Engine, model: &str, profile: Profile, output: PathBuf) -> DynResult<()> {
     let launch = prepare(output)?;
     let image = inspect(&launch)?;
-    let args = create_args(&launch, &image, model, profile)?;
+    let args = create_args(&launch, &image, engine, model, profile)?;
     let spec = command::spec(&launch.root, "docker", &args)?;
     if let Err(error) = command::run(&spec, 60, &launch.output.join("container-create")) {
         // Creation can succeed at the daemon just as the attached client is cancelled.
@@ -143,6 +143,7 @@ fn mount(source: &Path, destination: &str) -> DynResult<String> {
 fn create_args(
     launch: &Launch,
     image: &str,
+    engine: Engine,
     model: &str,
     profile: Profile,
 ) -> DynResult<Vec<String>> {
@@ -188,6 +189,8 @@ fn create_args(
         "automation",
         "agentx",
         "run",
+        "--engine",
+        engine.label(),
         "--model",
         model,
         "--profile",
@@ -248,6 +251,31 @@ fn docker_limits(seconds: u64) -> process::Limits {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_engine_reaches_container_with_same_host_cache_mount() {
+        let launch = Launch {
+            root: "/repo".into(),
+            output: "/runs/one".into(),
+            artifacts: "/artifacts/one".into(),
+            hf_home: "/mnt/lab/huggingface".into(),
+            commit: "a".repeat(40),
+            name: "agentx-run_one".into(),
+            seconds: 600,
+        };
+        for engine in [Engine::Llama, Engine::Skippy] {
+            let args =
+                create_args(&launch, "sha256:test", engine, "model", Profile::Smoke).unwrap();
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["--engine", engine.label()])
+            );
+            assert!(args.windows(2).any(|pair| pair == ["--gpus", "all"]));
+            assert!(
+                args.iter().any(|arg| arg
+                    == "type=bind,source=/mnt/lab/huggingface,target=/mnt/lab/huggingface")
+            );
+        }
+    }
     #[test]
     fn rejects_ambiguous_identity_and_mounts() {
         assert!(validate_identity(&"a".repeat(40), "run_abc").is_ok());
