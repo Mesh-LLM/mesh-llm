@@ -43,8 +43,9 @@ pub(super) fn generate(
 fn recurrent_prompt_checkpoint_survives_early_stop() -> Result<()> {
     let (backend, _) = recurrent_test_backend("resume", "resume", 256, (32, 32), 8, 256)?;
     let prompt = (1..=64).collect::<Vec<_>>();
-    let (first, _) = generate(&backend, &prompt, 2)?;
-    assert_eq!(first.len(), 2);
+    // Stop after the hybrid path has handed decode back to the scheduler.
+    let (first, _) = generate(&backend, &prompt, 3)?;
+    assert_eq!(first.len(), 3);
     let kv = backend.kv.as_ref().unwrap();
     kv.wait_for_exact_state_captures_idle(Duration::from_secs(30))
         .map_err(anyhow::Error::msg)?;
@@ -55,7 +56,7 @@ fn recurrent_prompt_checkpoint_survives_early_stop() -> Result<()> {
     // exact checkpoint and reproduce the generated output.
     let (repeated, cached_tokens) = generate(&backend, &prompt, 8)?;
     assert!(cached_tokens > 0, "the prompt checkpoint must be reusable");
-    assert_eq!(repeated[..2], first);
+    assert_eq!(repeated[..3], first);
     let mut extended = prompt.clone();
     extended.extend_from_slice(&first);
     extended.push(7);

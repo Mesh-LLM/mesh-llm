@@ -24,14 +24,11 @@ impl StageOpenAiBackend {
         let resume_scheduler_decode = prompt_prefill_sample.is_some()
             && !state.stopped
             && state.decoded_tokens < request.max_tokens as usize
-            && !recurrent_checkpoint_required
             && self.linear_proposal_ingress.is_none()
             && self.draft.is_none()
             && !request.native_mtp_enabled
             && !state.generation_hooks_active;
-        // Recurrent requests keep the direct path: the resumed scheduler
-        // passed cache parity tests but did not improve the paired Spark smoke.
-        if resume_scheduler_decode {
+        if resume_scheduler_decode && !recurrent_checkpoint_required {
             return self.resume_prefilled_decode(
                 request,
                 session_id,
@@ -102,6 +99,19 @@ impl StageOpenAiBackend {
             }
             if control == TokenControl::Stop {
                 break;
+            }
+            if resume_scheduler_decode
+                && first_post_decode_checkpoint_attempted
+                && state.decoded_tokens < request.max_tokens as usize
+            {
+                return self.resume_prefilled_decode(
+                    request,
+                    session_id,
+                    &mut state,
+                    cache_stats,
+                    decode_timer,
+                    emit_token,
+                );
             }
         }
         let model_generation_elapsed =
