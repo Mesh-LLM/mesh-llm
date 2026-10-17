@@ -746,6 +746,10 @@ harness environment under `skippy/evals/agentx`. Local-corpus `submission_valid=
 not JY visibility. Emit standard JY serving points through registered repository
 templates. Separate engine and profile template keys prevent mixed-engine series
 and smoke/full comparisons. PR results remain provisional in JY's existing view.
+Concurrency sweeps must increase actual generation slots with offered sessions,
+preserve equal per-request context on both engines, and record both capacities.
+Smoke must exercise the concurrent path before full sweeps. Changes to serving
+capacity require a new harness version rather than mixing queue-only results.
 Benchmark engines and the harness execute inside the same ARM64 CUDA container
 on the JY-leased Spark. The host may build the image and lifecycle controller,
 but must not run benchmark cells natively. Record the immutable image ID and

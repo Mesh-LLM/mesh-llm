@@ -102,7 +102,8 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
         serde_json::from_slice(&std::fs::read(input.output.join("memory-summary.json"))?)?;
     let summary = json!({
         "name":format!("agentx/{}/{}/{}/c{}",input.model.key,engine,input.profile.label(),concurrency),
-        "engine":engine,"offered_sessions":concurrency,"generation_slots":1,
+        "engine":engine,"offered_sessions":concurrency,"generation_slots":concurrency,
+        "context_tokens":262144,"total_context_tokens":262144_u64 * u64::from(concurrency),
         "submission_valid":false,"request_count":metric(&export,"request_count")?,
         "output_tok_s":metric(&export,"output_token_throughput")?,
         "ttft":export["time_to_first_token"],"itl":export["inter_token_latency"],"e2e":export["request_latency"],

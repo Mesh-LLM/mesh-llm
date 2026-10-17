@@ -31,10 +31,11 @@ impl Profile {
         }
     }
     fn concurrencies(self) -> &'static [u32] {
-        if self == Self::Smoke {
-            &[1]
-        } else {
-            &[1, 2, 4, 8]
+        // Smoke must exercise the same concurrent serving path as full runs.
+        // Full 256k F16 contexts per slot must fit the 128 GiB Spark,
+        // including dense attention models. Higher capacities need qualification.
+        match self {
+            Self::Smoke | Self::Benchmark => &[1, 2],
         }
     }
 }

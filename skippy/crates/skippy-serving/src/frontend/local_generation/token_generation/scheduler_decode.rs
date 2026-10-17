@@ -27,10 +27,7 @@ impl StageOpenAiBackend {
             && self.linear_proposal_ingress.is_none()
             && self.draft.is_none()
             && !request.native_mtp_enabled
-            && !state.generation_hooks_active
-            // Recurrent handoff is qualified for single-slot execution. Use
-            // the hard limit because adaptive concurrency can grow mid-request.
-            && (!recurrent_checkpoint_required || self.generation_limit.hard_limit() == 1);
+            && !state.generation_hooks_active;
         if resume_scheduler_decode && !recurrent_checkpoint_required {
             return self.resume_prefilled_decode(
                 request,

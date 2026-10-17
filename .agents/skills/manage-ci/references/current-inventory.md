@@ -1763,6 +1763,8 @@ Split parity continues to use native planner evidence and binary stage servers.
 its `agentic-replay` entry with four `agentx-{engine}-{profile}` templates. Other entries are migrated unchanged.
 Its model choices are four pinned Q4_K_M cases: dense attention, hybrid dense,
 attention MoE and hybrid MoE; result keys include the quantization.
+Both profiles' harness version 2 sweeps one and two actual generation slots with
+262,144 context tokens per slot; version 1 varied only offered sessions.
 The benchmark executes in a source-labelled ARM64 CUDA Docker image on the
 leased Spark. JY's template owns image build and the Rust container lifecycle;
 there is no host-native benchmark fallback. The host's `HF_HOME` is mounted at

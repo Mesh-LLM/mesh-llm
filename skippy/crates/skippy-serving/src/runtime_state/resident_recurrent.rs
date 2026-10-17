@@ -18,10 +18,8 @@ pub(super) struct ResidentRecurrentCheckpoint {
 impl RuntimeState {
     /// Opt in only callers that own the successful park/error-reset lifecycle.
     pub(crate) fn enable_resident_recurrent_request(&mut self, session_id: &str) {
-        if self.lane_count == 1 {
-            self.resident_recurrent_requests
-                .insert(session_id.to_owned());
-        }
+        self.resident_recurrent_requests
+            .insert(session_id.to_owned());
     }
     /// Release idle resident checkpoints under memory pressure. Admission to
     /// lower tiers is best effort; a failed reset discards the native lane.
@@ -50,10 +48,9 @@ impl RuntimeState {
         cache: &KvStageIntegration,
         mut policy: ResidentRecurrentPolicy,
     ) -> Result<Option<(u64, u64, usize)>> {
-        // Single-lane retention cannot strand capacity needed by another active
-        // request. Multi-lane admission continues to use serialized snapshots.
-        if self.lane_count != 1
-            || self.max_idle_sessions == Some(0)
+        // Checkpoints retain only their owning lane's cells. Admission reuses
+        // or resets an idle lane before allocating its replacement request.
+        if self.max_idle_sessions == Some(0)
             || !self.resident_recurrent_requests.contains(session_id)
         {
             return Ok(None);
@@ -139,6 +136,12 @@ impl RuntimeState {
     /// Only successful, non-cancelled local generation may park a lane.
     /// Ordinary cleanup (including rollback and panic recovery) always resets.
     pub(crate) fn park_resident_recurrent(&mut self, session_id: &str) -> bool {
+        if self
+            .max_idle_sessions
+            .is_some_and(|limit| self.idle_sessions.len() >= limit)
+        {
+            return false;
+        }
         if !self
             .sessions
             .get(session_id)

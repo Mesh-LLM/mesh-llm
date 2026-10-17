@@ -117,24 +117,27 @@ submitting the smoke, and submit the benchmark only after the smoke passes.
 | Setting | Smoke | Benchmark |
 |---|---|---|
 | Parent traces | First 4, complete | All 393, complete |
-| Offered agent sessions | 1 | 1, 2, 4, 8 |
+| Offered agent sessions | 1, 2 | 1, 2 |
 | Measured time per engine / concurrency | 60 seconds | Upstream 3,600 seconds |
 | Warmup requests per lane | 1 | Upstream 10 |
 | Trajectory starting ratio | 0–0 | Upstream 0.25–0.75 |
 | Random seed | 42 | 42 |
-| Resident generation slots | 1 | 1 |
-| Context pool / KV precision | 262,144 / F16 | 262,144 / F16 |
+| Resident generation slots | Matches offered sessions | Matches offered sessions |
+| Context per slot / KV precision | 262,144 / F16 | 262,144 / F16 |
 | Logical batch / microbatch tokens | 2,048 / 512 | 2,048 / 512 |
 
-Offered agent concurrency is distinct from resident generation capacity.
-Subagents may also issue concurrent requests. Both servers queue into one
-resident slot. Runtime memory includes the Q4 weights, F16 KV, recurrent state
-and workspaces. This is a fixed-capacity comparison, not a maximum-throughput claim.
+Both profiles now increase actual generation capacity with offered concurrency.
+Subagents can still queue additional requests. llama.cpp receives an aggregate
+context pool of `262144 * slots`; Skippy receives 262144 per lane. Both retain
+the full context budget for every request. The initial Spark sweep is bounded
+to one and two slots, including for dense attention models; four and eight full
+F16 contexts need separate memory qualification on the 128 GiB machine.
 There is no context shortening, automatic weight quantization, or fallback on
-allocation failure. Other resident capacities require a separate campaign.
+allocation failure. Harness version 2 separates these measurements
+from version 1's single-slot queueing experiment.
 Skippy's in-memory prefix retention target is explicitly 8 GiB, with disk
 caching off; exact snapshots can exceed that target. llama-server retains its
-single slot's prompt cache. These cache policies are recorded in launch arguments.
+per-slot prompt caches. These cache policies are recorded in launch arguments.
 
 Large CUDA snapshot reads into pageable host memory use a reusable 64 MiB
 pinned staging buffer per physical GPU. Capture remains synchronous so later

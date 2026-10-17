@@ -5,9 +5,19 @@ pub(super) fn generate(
     prompt: &[i32],
     stop_after: usize,
 ) -> Result<(Vec<i32>, u32)> {
+    generate_after_first_token(backend, prompt, stop_after, "recurrent-resume", || Ok(()))
+}
+
+pub(super) fn generate_after_first_token(
+    backend: &StageOpenAiBackend,
+    prompt: &[i32],
+    stop_after: usize,
+    session: &str,
+    mut after_first: impl FnMut() -> skippy_inference_api::InferenceResult<()>,
+) -> Result<(Vec<i32>, u32)> {
     let ids = InferenceGenerationIds::new_with_trust(
         InferenceCacheHints::default(),
-        Some("recurrent-resume"),
+        Some(session),
         true,
         None,
     );
@@ -28,6 +38,9 @@ pub(super) fn generate(
         },
         |token| {
             output.push(token);
+            if output.len() == 1 {
+                after_first()?;
+            }
             Ok(if output.len() >= stop_after {
                 TokenControl::Stop
             } else {

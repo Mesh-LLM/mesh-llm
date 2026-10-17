@@ -28,6 +28,7 @@ use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
+mod recurrent_concurrency;
 mod recurrent_early_stop;
 mod recurrent_verification;
 mod resident_recurrent;
@@ -173,6 +174,26 @@ fn recurrent_test_backend(
     default_max_tokens: u32,
     token_budget: usize,
 ) -> Result<(StageOpenAiBackend, SpeculativeDecodeConfig)> {
+    recurrent_test_backend_with_lanes(
+        run_id,
+        backend_model_id,
+        ctx_size,
+        (batch_size, microbatch_size, 1),
+        default_max_tokens,
+        token_budget,
+        None,
+    )
+}
+
+fn recurrent_test_backend_with_lanes(
+    run_id: &str,
+    backend_model_id: &str,
+    ctx_size: usize,
+    (batch_size, microbatch_size, lanes): (u32, u32, u32),
+    default_max_tokens: u32,
+    token_budget: usize,
+    cache_idle_slots: Option<u32>,
+) -> Result<(StageOpenAiBackend, SpeculativeDecodeConfig)> {
     let model_path = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL").ok_or_else(|| {
         anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_MODEL is required for this ignored test")
     })?;
@@ -206,7 +227,7 @@ fn recurrent_test_backend(
         layer_end: layer_count,
         ctx_size: u32::try_from(ctx_size)
             .map_err(|error| anyhow::anyhow!("invalid recurrent test context size: {error}"))?,
-        lane_count: 1,
+        lane_count: lanes,
         n_batch: Some(batch_size),
         n_ubatch: Some(microbatch_size),
         n_gpu_layers: 0,
@@ -225,7 +246,7 @@ fn recurrent_test_backend(
         kv_offload: None,
         kv_unified: None,
         swa_full: None,
-        cache_idle_slots: None,
+        cache_idle_slots,
         resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {
@@ -254,8 +275,14 @@ fn recurrent_test_backend(
             .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
-    let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())?;
+    let iteration_scheduler = IterationScheduler::new(
+        runtime.clone(),
+        &config,
+        lanes as usize,
+        true,
+        None,
+        telemetry.clone(),
+    )?;
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         workload: Default::default(),
@@ -274,7 +301,7 @@ fn recurrent_test_backend(
         speculative: speculative.clone(),
         speculation_governor: None,
         runahead_governor: None,
-        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(lanes as usize)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
         generation_admission_timeout: std::time::Duration::from_secs(10),

@@ -70,9 +70,17 @@ fn hardware(input: &Prepared) -> DynResult<()> {
     }
     Ok(())
 }
-fn server(input: &Prepared, engine: &str, port: u16) -> DynResult<process::ProcessSpec> {
-    // One resident generation slot and one 256k pool on both engines. Offered
-    // agent sessions (including subagents) are queued independently of this capacity.
+fn server(
+    input: &Prepared,
+    engine: &str,
+    port: u16,
+    concurrency: u32,
+) -> DynResult<process::ProcessSpec> {
+    // llama divides its context pool among slots; Skippy takes a per-lane size.
+    // Keep the complete 256k trace budget for every request on both engines.
+    let total_context = 262144_u32
+        .checked_mul(concurrency)
+        .ok_or("context capacity overflow")?;
     let weights = input.weights.to_str().ok_or("weight path")?;
     let (binary, args) = if engine == "llama" {
         (
@@ -87,9 +95,9 @@ fn server(input: &Prepared, engine: &str, port: u16) -> DynResult<process::Proce
                 "--port",
                 &port.to_string(),
                 "--ctx-size",
-                "262144",
+                &total_context.to_string(),
                 "--parallel",
-                "1",
+                &concurrency.to_string(),
                 "--batch-size",
                 "2048",
                 "--ubatch-size",
@@ -121,7 +129,7 @@ fn server(input: &Prepared, engine: &str, port: u16) -> DynResult<process::Proce
                 "--ctx-size",
                 "262144",
                 "--generation-concurrency",
-                "1",
+                &concurrency.to_string(),
                 "--batch-size",
                 "2048",
                 "--microbatch-size",
@@ -172,7 +180,7 @@ fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynResult<()> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     write(&input.output.join("worker.json"), input)?;
-    let server = server(input, engine, port)?;
+    let server = server(input, engine, port, concurrency)?;
     write(
         &input.output.join("launch.json"),
         &launch_identity(input, &server, engine, concurrency)?,
@@ -271,7 +279,8 @@ fn launch_identity(
         "binary_sha256":crate::product::digest::file_sha256(&server.executable).map_err(|error|error.error)?,
         "runtime_tree_sha256":crate::product::digest::tree_sha256(&runtime).map_err(|error|error.error)?,
         "harness_lock_sha256":crate::product::digest::file_sha256(&input.root.join("skippy/evals/agentx/uv.lock")).map_err(|error|error.error)?,
-        "context_tokens":262144,"generation_slots":1,"offered_sessions":concurrency,
+        "context_tokens":262144,"total_context_tokens":262144_u64 * u64::from(concurrency),
+        "generation_slots":concurrency,"offered_sessions":concurrency,
         "batch_tokens":2048,"microbatch_tokens":512,
         "speculation":false,"dataset_sha256":inputs::DATA_SHA,
         "llama_upstream":std::fs::read_to_string(input.root.join("skippy/llama_cpp/upstream.txt"))?.trim()
@@ -366,7 +375,7 @@ mod tests {
             profile: Profile::Smoke,
         };
         for (engine, microbatch) in [("llama", "--ubatch-size"), ("skippy", "--microbatch-size")] {
-            let spec = server(&input, engine, 8080).unwrap();
+            let spec = server(&input, engine, 8080, 2).unwrap();
             let arguments: Vec<_> = spec
                 .arguments
                 .iter()
@@ -381,6 +390,17 @@ mod tests {
                     "{engine}: {pair:?}"
                 );
             }
+            let (slots, context) = if engine == "llama" {
+                ("--parallel", "524288")
+            } else {
+                ("--generation-concurrency", "262144")
+            };
+            assert!(arguments.windows(2).any(|args| args == [slots, "2"]));
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|args| args == ["--ctx-size", context])
+            );
         }
     }
 }
