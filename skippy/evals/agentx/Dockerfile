@@ -24,7 +24,10 @@ RUN --mount=type=cache,id=agentx-rust199-registry,target=/root/.cargo/registry,s
     --mount=type=cache,id=agentx-rust199-target,target=/workspace/target,sharing=locked \
     --mount=type=cache,id=agentx-cuda130-single-gpu-native,target=/workspace/.deps,sharing=locked \
     --mount=type=cache,id=agentx-cuda130-sccache,target=/root/.cache/sccache,sharing=locked \
-    just agentx-build && just automation-bootstrap && \
+    mkdir -p /tmp/agentx-cuda-link && \
+    ln -s /usr/local/cuda/lib64/stubs/libcuda.so /tmp/agentx-cuda-link/libcuda.so.1 && \
+    LD_LIBRARY_PATH="/tmp/agentx-cuda-link:${LD_LIBRARY_PATH}" just agentx-build && \
+    rm -rf /tmp/agentx-cuda-link && just automation-bootstrap && \
     mkdir -p /prepared/target/debug /prepared/target/release /prepared/.deps/agentx-llama-build && \
     cp target/debug/xtask /prepared/target/debug/ && \
     cp target/release/skippy /prepared/target/release/ && \
