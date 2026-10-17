@@ -1,4 +1,5 @@
 use super::cache_deadline::cache_operation_deadline;
+use super::dflash_decode::{DFlashDecodeState, DFlashSpanProgress};
 use super::native_mtp_decode::NativeMtpSpanProgress;
 use crate::frontend::NativeMtpDecodeOptions;
 use crate::frontend::NativeMtpDraft;
@@ -256,6 +257,9 @@ pub(super) struct DecodeState {
     pub(super) post_prefill_hook_checked: bool,
     pub(super) last_mid_generation_hook_at: Option<usize>,
     pub(super) direct_iteration_channel: Option<DirectIterationChannel>,
+    /// DFlash block speculation, when the plan attaches a draft and the
+    /// request admits token-equality acceptance.
+    pub(super) dflash: Option<DFlashDecodeState>,
 }
 
 pub(super) enum LinearProposalProgress {
@@ -1424,10 +1428,13 @@ impl StageOpenAiBackend {
         let hook_runtime = request.hook_runtime.take();
         let generation_hooks_active =
             self.generation_hooks_active(&hook_request, hook_runtime.as_ref());
+        let greedy_admitted =
+            greedy_linear_proposal_admitted(request.sampling, request.chat_sampling_metadata);
         let linear_proposal_enabled = self.linear_proposal_ingress.is_some()
             && !request.native_mtp_enabled
+            && request.speculative.dflash.is_none()
             && !generation_hooks_active
-            && greedy_linear_proposal_admitted(request.sampling, request.chat_sampling_metadata);
+            && greedy_admitted;
         let linear_proposal_max_tokens = if linear_proposal_enabled {
             let scheduler_session_id = session_id.to_string();
             self.iteration_scheduler
@@ -1473,13 +1480,16 @@ impl StageOpenAiBackend {
             native_mtp: NativeMtpVerifier::default(),
             native_mtp_span_admitted: request.native_mtp_enabled
                 && !generation_hooks_active
-                && greedy_linear_proposal_admitted(
-                    request.sampling,
-                    request.chat_sampling_metadata,
-                ),
+                && greedy_admitted,
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
             direct_iteration_channel: None,
+            dflash: self.admit_dflash(
+                request,
+                session_id,
+                greedy_admitted,
+                generation_hooks_active,
+            )?,
         })
     }
 
@@ -1510,6 +1520,7 @@ impl StageOpenAiBackend {
             && self.linear_proposal_ingress.is_none()
             && self.draft.is_none()
             && !request.native_mtp_enabled
+            && state.dflash.is_none()
             && !state.generation_hooks_active;
         if resume_scheduler_decode {
             let initial_generated_tokens = state.generated_token_ids.clone();
@@ -1586,6 +1597,11 @@ impl StageOpenAiBackend {
                     NativeMtpSpanProgress::Continue => continue,
                     NativeMtpSpanProgress::Stop => break,
                     NativeMtpSpanProgress::NotUsed => {}
+                }
+                match self.try_execute_dflash_span(request, session_id, &mut state, emit_token)? {
+                    DFlashSpanProgress::Continue => continue,
+                    DFlashSpanProgress::Stop => break,
+                    DFlashSpanProgress::NotUsed => {}
                 }
             }
             let control = self.decode_one_token(request, session_id, &mut state, emit_token)?;

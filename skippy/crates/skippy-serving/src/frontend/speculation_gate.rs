@@ -513,7 +513,7 @@ pub(crate) fn speculation_gate_enabled(settings: SpeculationGateSettings) -> boo
 pub(crate) fn speculation_plan_is_active(
     config: &crate::frontend::SpeculativeDecodeConfig,
 ) -> bool {
-    config.ngram.is_some() || config.native_mtp.enabled
+    config.ngram.is_some() || config.native_mtp.enabled || config.dflash.is_some()
 }
 
 /// Owns the gate and the switch it throws.
@@ -599,6 +599,17 @@ mod tests {
         assert!(!resolve_speculation_gate_enabled(None, false));
         // A typo must not read as a policy.
         assert!(!resolve_speculation_gate_enabled(Some("ture"), true));
+    }
+
+    #[test]
+    fn a_dflash_plan_is_an_active_speculation_plan() {
+        let mut plan = crate::frontend::SpeculativeDecodeConfig::default();
+        assert!(!speculation_plan_is_active(&plan));
+        plan.dflash = Some(crate::frontend::DFlashProposalConfig {
+            draft_model_path: "/models/draft-dflash.gguf".into(),
+            max_draft_tokens: None,
+        });
+        assert!(speculation_plan_is_active(&plan));
     }
 
     #[test]

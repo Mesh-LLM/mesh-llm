@@ -9,8 +9,11 @@ use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
 use skippy_runtime::{
-    ModelInfo, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel, StageSession,
+    DFlashDraftOptions, ModelInfo, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel,
+    StageSession,
 };
+
+mod dflash;
 
 const DEFAULT_CORPUS: &str = "skippy/crates/skippy-bench/corpora/kv_mixed_prompts.jsonl";
 
@@ -43,6 +46,9 @@ struct Args {
     json_out: Option<PathBuf>,
     #[arg(long)]
     allow_mismatch: bool,
+    /// Treat the draft as a DFlash/DFlash2 block drafter attached to the target.
+    #[arg(long)]
+    dflash: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -177,15 +183,29 @@ fn main() -> Result<()> {
         args.speculative_window
     );
 
-    let target = open_full_model(&args.target_model_path, args.ctx_size, args.n_gpu_layers)
+    let target_config =
+        full_model_config(&args.target_model_path, args.ctx_size, args.n_gpu_layers)?;
+    let mut target = StageModel::open(&args.target_model_path, &target_config)
         .with_context(|| format!("open target model {}", args.target_model_path.display()))?;
-    let draft = open_full_model(&args.draft_model_path, args.ctx_size, args.n_gpu_layers)
-        .with_context(|| format!("open draft model {}", args.draft_model_path.display()))?;
+    // Baselines run before any draft exists: an attached DFlash draft makes
+    // every target decode capture hidden states and feed the draft.
+    let mut baselines = Vec::with_capacity(prompts.len());
+    for (index, prompt) in prompts.iter().enumerate() {
+        eprintln!("baseline {}/{} {}", index + 1, prompts.len(), prompt.id);
+        baselines.push(run_baseline(&args, &target, prompt)?);
+    }
+    let draft = load_draft(&args, &mut target, &target_config)?;
 
     let mut reports = Vec::with_capacity(prompts.len());
-    for (index, prompt) in prompts.iter().enumerate() {
+    for (index, (prompt, baseline)) in prompts.iter().zip(baselines).enumerate() {
         eprintln!("prompt {}/{} {}", index + 1, prompts.len(), prompt.id);
-        reports.push(run_prompt_pair(&args, &target, &draft, prompt)?);
+        reports.push(run_prompt_pair(
+            &args,
+            &target,
+            draft.as_ref(),
+            prompt,
+            baseline,
+        )?);
     }
 
     let summary = summarize(&reports);
@@ -221,59 +241,112 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn open_full_model(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<StageModel> {
+/// Attaches a DFlash draft to `target`, or opens a separate draft model.
+/// Returns the separate draft model, which a DFlash run does not have.
+fn load_draft(
+    args: &Args,
+    target: &mut StageModel,
+    target_config: &RuntimeConfig,
+) -> Result<Option<StageModel>> {
+    if args.dflash {
+        let info = target
+            .attach_dflash_draft(
+                &args.draft_model_path,
+                &DFlashDraftOptions {
+                    max_draft_tokens: Some(args.speculative_window),
+                    ..DFlashDraftOptions::default()
+                },
+                target_config,
+            )
+            .with_context(|| format!("attach DFlash draft {}", args.draft_model_path.display()))?;
+        eprintln!(
+            "attached {} draft block_size={} max_draft_tokens={} target_layers={:?}",
+            info.variant.as_str(),
+            info.block_size,
+            info.max_draft_tokens,
+            info.target_layer_ids
+        );
+        Ok(None)
+    } else {
+        let draft_config =
+            full_model_config(&args.draft_model_path, args.ctx_size, args.n_gpu_layers)?;
+        StageModel::open(&args.draft_model_path, &draft_config)
+            .with_context(|| format!("open draft model {}", args.draft_model_path.display()))
+            .map(Some)
+    }
+}
+
+/// The target-only reference for one prompt.
+struct Baseline {
+    target_tokens: Vec<i32>,
+    generation: Generation,
+}
+
+fn run_baseline(args: &Args, target: &StageModel, prompt: &PromptCase) -> Result<Baseline> {
+    let target_tokens = target
+        .tokenize(&prompt.prompt, true)
+        .with_context(|| format!("target tokenize prompt {}", prompt.id))?;
+    if target_tokens.is_empty() {
+        bail!("prompt {} produced no tokens", prompt.id);
+    }
+    let generation = generate_baseline(target, &target_tokens, args.max_new_tokens)
+        .with_context(|| format!("baseline target generation for {}", prompt.id))?;
+    Ok(Baseline {
+        target_tokens,
+        generation,
+    })
+}
+
+fn full_model_config(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<RuntimeConfig> {
     let layer_count = model_layer_count(path)?;
-    StageModel::open(
-        path,
-        &RuntimeConfig {
-            stage_index: 0,
-            layer_start: 0,
-            layer_end: layer_count,
-            ctx_size,
-            lane_count: 1,
-            n_batch: None,
-            n_ubatch: None,
-            n_threads: None,
-            n_threads_batch: None,
-            n_gpu_layers,
-            cache_type_k: skippy_runtime::GGML_TYPE_F16,
+    Ok(RuntimeConfig {
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: layer_count,
+        ctx_size,
+        lane_count: 1,
+        n_batch: None,
+        n_ubatch: None,
+        n_threads: None,
+        n_threads_batch: None,
+        n_gpu_layers,
+        cache_type_k: skippy_runtime::GGML_TYPE_F16,
 
-            cache_type_v: skippy_runtime::GGML_TYPE_F16,
-            selected_backend_device: None,
-            flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
-            load_mode: RuntimeLoadMode::RuntimeSlice,
-            projector_path: None,
-            projector_use_gpu: None,
-            media_marker: None,
-            image_min_tokens: None,
-            image_max_tokens: None,
-            batch_max_tokens: None,
-            glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
+        cache_type_v: skippy_runtime::GGML_TYPE_F16,
+        selected_backend_device: None,
+        flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
+        load_mode: RuntimeLoadMode::RuntimeSlice,
+        projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
 
-            mtp_source: MtpSource::Disabled,
-            resident_tensor_names: Vec::new(),
-            execution_contract: String::new(),
-            activation_import_identities: Vec::new(),
-            activation_import_bindings: Vec::new(),
-            activation_export_identities: Vec::new(),
-            activation_export_bindings: Vec::new(),
-            checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
-            checkpoint_imatrix: None,
-            checkpoint_imatrix_sha256: None,
-            mlock: false,
-            repack: false,
-            op_offload: None,
-            no_host_buffer: false,
-            check_tensors: false,
-            direct_io: false,
-            main_gpu: None,
-            split_mode: skippy_runtime::SplitMode::Auto,
-            mmap: Some(true),
-            kv_offload: None,
-            kv_unified: None,
-            swa_full: None,
-        },
-    )
+        mtp_source: MtpSource::Disabled,
+        resident_tensor_names: Vec::new(),
+        execution_contract: String::new(),
+        activation_import_identities: Vec::new(),
+        activation_import_bindings: Vec::new(),
+        activation_export_identities: Vec::new(),
+        activation_export_bindings: Vec::new(),
+        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
+        mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
+        mmap: Some(true),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+    })
 }
 
 fn model_layer_count(path: &Path) -> Result<u32> {
@@ -290,31 +363,34 @@ fn model_layer_count(path: &Path) -> Result<u32> {
 fn run_prompt_pair(
     args: &Args,
     target: &StageModel,
-    draft: &StageModel,
+    draft: Option<&StageModel>,
     prompt: &PromptCase,
+    baseline: Baseline,
 ) -> Result<PromptReport> {
-    let target_tokens = target
-        .tokenize(&prompt.prompt, true)
-        .with_context(|| format!("target tokenize prompt {}", prompt.id))?;
-    let draft_tokens = draft
-        .tokenize(&prompt.prompt, true)
-        .with_context(|| format!("draft tokenize prompt {}", prompt.id))?;
-    let tokenizer_match = target_tokens == draft_tokens;
-    if target_tokens.is_empty() {
-        bail!("prompt {} produced no tokens", prompt.id);
-    }
+    let Baseline {
+        target_tokens,
+        generation: baseline,
+    } = baseline;
+    // An attached DFlash draft reads target hidden states, not draft tokens.
+    let tokenizer_match = match draft {
+        Some(draft) => {
+            let draft_tokens = draft
+                .tokenize(&prompt.prompt, true)
+                .with_context(|| format!("draft tokenize prompt {}", prompt.id))?;
+            target_tokens == draft_tokens
+        }
+        None => true,
+    };
 
-    let baseline = generate_baseline(target, &target_tokens, args.max_new_tokens)
-        .with_context(|| format!("baseline target generation for {}", prompt.id))?;
-    let speculative = generate_speculative(
-        target,
-        draft,
-        SpeculativeRun {
-            prompt_tokens: &target_tokens,
-            max_new_tokens: args.max_new_tokens,
-            window: args.speculative_window,
-        },
-    )
+    let run = SpeculativeRun {
+        prompt_tokens: &target_tokens,
+        max_new_tokens: args.max_new_tokens,
+        window: args.speculative_window,
+    };
+    let speculative = match draft {
+        Some(draft) => generate_speculative(target, draft, run),
+        None => dflash::generate_dflash(target, run),
+    }
     .with_context(|| format!("speculative target/draft generation for {}", prompt.id))?;
 
     let mismatch_index = first_mismatch(&baseline.tokens, &speculative.tokens);

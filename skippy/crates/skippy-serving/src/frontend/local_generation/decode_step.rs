@@ -275,6 +275,12 @@ impl StageOpenAiBackend {
         let model_generation_elapsed = decode_timer.start_instant.elapsed();
         cache_stats.predicted_ms = model_generation_elapsed.as_secs_f64() * 1_000.0;
         native_mtp_stats.insert_attrs(&mut attrs);
+        if let Some(dflash) = state.dflash.as_ref() {
+            dflash.stats.insert_attrs(&mut attrs);
+            if dflash.stats.windows > 0 {
+                cache_stats.speculative_stats = Some(dflash.stats.clone());
+            }
+        }
         self.emit_openai_summary("stage.openai_decode", decode_timer, attrs);
         Ok(model_generation_elapsed)
     }

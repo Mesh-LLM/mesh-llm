@@ -164,8 +164,8 @@ impl StageOpenAiBackend {
 
     /// The resolved speculation plan, with the gate's verdict applied.
     ///
-    /// Disabling means clearing `ngram` and `extension` and the native-MTP
-    /// enable, the same shape `speculation_after_prefix_restore` uses for its
+    /// Disabling means clearing `ngram`, `extension`, `dflash`, and the
+    /// native-MTP enable, the same shape `speculation_after_prefix_restore` uses for its
     /// own conditional bypass. Borrowed when nothing is gated off, so the
     /// common path allocates nothing.
     fn gated_speculative(&self) -> std::borrow::Cow<'_, crate::frontend::SpeculativeDecodeConfig> {
@@ -179,6 +179,7 @@ impl StageOpenAiBackend {
         stood_down.ngram = None;
         stood_down.extension = None;
         stood_down.native_mtp.enabled = false;
+        stood_down.dflash = None;
         std::borrow::Cow::Owned(stood_down)
     }
 

@@ -669,7 +669,7 @@ pub struct Cli {
     pub auto_update: bool,
 
     // ── Advanced options (hidden from default --help) ─────────────
-    /// Override speculative decoding (`mtp`, `ngram-cache`, `ngram-suffix`, or a package strategy id).
+    /// Override speculative decoding (`mtp`, `ngram-cache`, `ngram-suffix`, `dflash`, or a package strategy id).
     #[arg(long, hide = true)]
     pub speculative_strategy: Option<String>,
 

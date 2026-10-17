@@ -16,6 +16,7 @@ mod abi;
 mod activation;
 #[cfg(feature = "dynamic-runtime")]
 mod dynamic;
+pub mod llama_draft;
 mod model;
 mod multimodal;
 mod runtime;
