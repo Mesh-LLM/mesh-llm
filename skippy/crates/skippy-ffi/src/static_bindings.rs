@@ -629,6 +629,10 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_session_has_resident_recurrent_prefix(
+        session: *const Session,
+        token_count: u64,
+    ) -> bool;
     pub fn skippy_import_recurrent_state(
         session: *mut Session,
         input: *const c_void,

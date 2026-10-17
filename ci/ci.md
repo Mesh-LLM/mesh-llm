@@ -2022,3 +2022,16 @@ configuration or prescribe attention/recurrent cache representations. Loaded
 native graphs and memory exporters own cache admission. Split correctness still
 uses genuine planner output and binary stage servers. Cache-hit assertions run
 on immediate repeated requests without publication sleeps or retries.
+
+## Jianyang AgentX
+
+The external Jianyang job inventory is now source-owned in
+[`skippy/evals/agentx/templates.yaml`](../skippy/evals/agentx/templates.yaml). Its `agentx` job runs paired
+llama.cpp/Skippy cells, with a small smoke profile and pinned upstream harness.
+JY builds and runs one source-labelled ARM64 CUDA Docker image on the Spark;
+both engines and the harness run inside it, with the host's NFS-backed `HF_HOME`
+bind-mounted at the same path and mounted JY artifacts,
+an immutable image ID, explicit container removal and an internal deadline.
+See [AgentX operations](../skippy/docs/AGENTX.md) for registration migration and
+validity. This replaces the Jianyang `agentic-replay` entry; the separately
+owned GitHub trajectory qualification workflow is unchanged.

@@ -1,7 +1,7 @@
-From db6248a05e23f6b537899199bd0a2f54a46e91a8 Mon Sep 17 00:00:00 2001
+From de480e8c0dd28448164638b919e317cb7049d3c1 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 1/6] feat(skippy): define graph-derived native ABI
+Subject: [PATCH] feat(skippy): define graph-derived native ABI
 
 ---
  include/skippy.h                      |  29 +++
@@ -17,10 +17,10 @@ Subject: [PATCH 1/6] feat(skippy): define graph-derived native ABI
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
  include/skippy/stage_plan.h           | 252 +++++++++++++++++++++++
- include/skippy/state.h                | 236 ++++++++++++++++++++++
+ include/skippy/state.h                | 243 ++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2110 insertions(+)
+ 16 files changed, 2117 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -147,7 +147,7 @@ index 000000000..673c1d81c
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..3f6aab137
+index 000000000..b9b5259af
 --- /dev/null
 +++ b/include/skippy/common.h
 @@ -0,0 +1,146 @@
@@ -199,7 +199,7 @@ index 000000000..3f6aab137
 +
 +#define SKIPPY_ABI_VERSION_MAJOR 0
 +#define SKIPPY_ABI_VERSION_MINOR 1
-+#define SKIPPY_ABI_VERSION_PATCH 67
++#define SKIPPY_ABI_VERSION_PATCH 68
 +
 +#if defined(_MSC_VER)
 +#define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -1814,10 +1814,10 @@ index 000000000..962674190
 +#endif // SKIPPY_STAGE_PLAN_H
 diff --git a/include/skippy/state.h b/include/skippy/state.h
 new file mode 100644
-index 000000000..1cfaaa5c6
+index 000000000..c03abaf55
 --- /dev/null
 +++ b/include/skippy/state.h
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,243 @@
 +#ifndef SKIPPY_STATE_H
 +#define SKIPPY_STATE_H
 +
@@ -1845,6 +1845,13 @@ index 000000000..1cfaaa5c6
 + * cache representation is available; callers cannot supply capability labels.
 + */
 +LLAMA_API uint32_t skippy_model_memory_cache_capabilities(const struct skippy_model * model);
++
++/** @brief Tests whether a sequential lane retains complete attention coverage for a recurrent checkpoint.
++ * Requires graph-admitted KV/recurrent state and every attention cache to retain
++ * positions zero through token_count - 1. Does not copy or mutate state.
++ * The caller must own the lane exclusively and verify its token identity.
++ */
++LLAMA_API bool skippy_session_has_resident_recurrent_prefix(const struct skippy_session * session, uint64_t token_count);
 +
 +enum skippy_kv_page_flag {
 +    SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,

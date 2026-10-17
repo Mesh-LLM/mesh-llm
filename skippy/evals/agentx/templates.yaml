@@ -1,0 +1,3663 @@
+# Repository-owned Jianyang templates. See README.md beside this file for cutover.
+# Source migrated from general-inference/jianyang; unrelated jobs are preserved.
+# AgentX replaces the old agentic-replay entry with no compatibility alias.
+
+
+version: 1
+
+# Getting a release host AND the right backend, which no single recipe gives.
+#
+# `just build` refuses a release profile outright — "development product profile must
+# be debug or dev" — and a decode number from a debug host is wrong by a large factor
+# while looking exactly like a real one.
+#
+# `just release-build` builds release but its runtime step has no backend detection:
+#
+#     if [[ -z "$selected_backend" ]]; then
+#         if [[ "$(uname -s)" == Darwin ]]; then selected_backend=metal
+#         else selected_backend=cpu; fi
+#     fi
+#
+# On a GB10 that silently produces a CPU runtime, which serves and reports entirely
+# plausible throughput for the wrong backend. The dev path has the full nvcc/rocm/
+# vulkan detection; the release path never got it.
+#
+# So: the two release recipes, with the backend decided here. It cannot be a launch
+# input because this template pins no node — the scheduler chooses the machine, so the
+# only place that knows what to build for is the machine.
+#
+# Not `just llama-build`: that builds the CPU stage while cargo links Metal.
+build: |
+  # KEEP THE MACHINE AWAKE FOR THE BUILD, not just for the command.
+  #
+  # Every command in this file already starts with `caffeinate -dimsu -w $$`. The build
+  # runs BEFORE any of them and takes fifteen to twenty minutes, with nothing holding
+  # the machine up — so gis-Mac-mini slept seven minutes into its first successful
+  # build and the run died on "no heartbeat for 300s; presumed dead". The agent had
+  # stopped reporting because the box was asleep.
+  #
+  # `$$` is the top-level script's PID even inside this subshell, so one caffeinate
+  # here covers the build AND the command that follows. The per-command ones become
+  # redundant rather than wrong, and are left alone: they also protect a command run
+  # without a build.
+  #
+  # Darwin only, and tested for, because caffeinate does not exist on Linux and the
+  # Spark does not need it.
+  if [ "$(uname -s)" = Darwin ] && command -v caffeinate >/dev/null 2>&1; then
+    caffeinate -dimsu -w $$ &
+    echo "holding this Mac awake for the build (caffeinate pid $!)"
+  fi
+
+  # Existence-tested, because `|| true` does NOT save you here and looked like it did.
+  #
+  # Sourcing a file that does not exist EXITS the shell on macOS's /bin/bash 3.2, which
+  # is what `#!/bin/bash` gets you on every Mac in the lab. It is not errexit doing it,
+  # so guarding the exit status guards nothing:
+  #
+  #   $ /bin/bash -c 'set -euo pipefail; . /nope 2>/dev/null || true; echo SURVIVED'
+  #   $ echo $?
+  #   1                      # SURVIVED never printed
+  #
+  # Neither mini has ~/.cargo/env — their rustup is Homebrew's, which keeps the
+  # toolchain under ~/.rustup and never creates ~/.cargo. So this line killed the build
+  # on line 6, before a single echo, leaving a zero-byte log and a retained workspace
+  # with nothing in it. Both minis, every run, since this template was written. The
+  # Spark has the file, so it never noticed.
+  #
+  # That is also what killed both members of every split, and it fired long before the
+  # nvm assignment and the toolchain check that were fixed earlier for the same
+  # symptom.
+  if [ -f "$HOME/.cargo/env" ]; then
+    . "$HOME/.cargo/env"
+  fi
+
+  # Sourcing cargo's env is NOT enough, and that is worth stating because it looks
+  # like it should be. The agent appends `~/.cargo/bin` to a job's PATH —
+  # deliberately, so adding it can never change which `python3` or `git` a job has
+  # been getting — and cargo's env script only prepends the directory when it is
+  # absent. It is not absent, so the script does nothing, and a system binary keeps
+  # winning.
+  #
+  # Fine until the system binary is too old. spark-db08 carries `just 1.21` from
+  # apt; mesh-llm's Justfile calls `read()`, which arrived in 1.39, so the build died
+  # on Justfile line 17 having compiled nothing. Getting past apt needs root, which
+  # an unprivileged agent does not have — so `cargo install just` puts a current one
+  # in the single directory a job can write to, and this line is what lets the job
+  # see it ahead of /usr/bin.
+  export PATH="$HOME/.cargo/bin:$PATH"
+
+  # And ask rustup where cargo is, rather than assuming one layout.
+  #
+  # `$HOME/.cargo/bin` is rustup's own default and is what a rustup.rs install gives
+  # you. It is NOT what Homebrew's rustup gives you: that formula links only `rustup`
+  # into /opt/homebrew/bin and leaves the cargo shims in the keg, with the toolchain's
+  # real binaries under `~/.rustup/toolchains/<name>/bin`. Both minis are set up that
+  # way, so `~/.cargo/bin` does not exist on either — and the build concluded there was
+  # no Rust at all on machines carrying a working rustc 1.98.0.
+  #
+  # `rustup which cargo` answers it for any layout, which is better than a second
+  # hardcoded path that is right on two machines and wrong on the third.
+  if ! command -v cargo >/dev/null 2>&1 && command -v rustup >/dev/null 2>&1; then
+    CARGO_BIN="$(rustup which cargo 2>/dev/null || true)"
+    if [ -n "$CARGO_BIN" ] && [ -x "$CARGO_BIN" ]; then
+      export PATH="$(dirname "$CARGO_BIN"):$PATH"
+      echo "cargo found through rustup: $CARGO_BIN"
+    fi
+  fi
+
+  # mesh-llm's .cargo/config.toml names sccache as the rustc-wrapper unconditionally,
+  # so cargo fails outright on a machine that does not have it — the build dies before
+  # it compiles anything, and the obvious-looking fix (clearing RUSTC_WRAPPER) also
+  # throws away the cache on every machine that DOES have it. Decide per machine.
+  #
+  # SIZED TO THE MACHINE, because a fixed 8 GiB was the wrong number on both kinds.
+  #
+  # The cap exists for a real reason: an unbounded cache on a lab box is how the minis
+  # ran down to 5.8 GiB free. But 8 GiB is smaller than one build of this repository, so
+  # on the Spark the cache sat exactly at its ceiling and evicted continuously — the run
+  # of 2026-09-23 reported `Cache hits rate (Rust) 0.00 %` against 243 misses while
+  # C/C++ and Assembler both hit 100%. A cache that never hits is disk and latency spent
+  # to achieve nothing, and it looked healthy: the summary line said 62% overall,
+  # carried entirely by the cheap half.
+  #
+  # A quarter of what is free, between 8 and 48 GiB. Proportional rather than fixed
+  # because the same template runs on a mini with a small SSD and on a DGX, and the
+  # number that protects one starves the other.
+  #
+  # THE FLOOR MUST NOT EXCEED WHAT IS FREE, which it did. `mac` has 4 GiB left and the
+  # 8 GiB floor set it a cache ceiling twice the size of its remaining disk:
+  #
+  #   sccache ceiling 8G (4G free)
+  #
+  # sccache would have filled that and taken the machine to 100%, which is the failure
+  # this cap exists to prevent — the comment above even names it as how the minis got
+  # to 5.8 GiB. A floor is the right idea and an unconditional one is not: it protects
+  # the machine with room and endangers the one without.
+  #
+  # So the floor applies only where there is room for it, and the ceiling is never
+  # more than half of what is free.
+  export SCCACHE_DIR="${SCCACHE_DIR:-$HOME/.cache/sccache}"
+  if [ -z "${SCCACHE_CACHE_SIZE:-}" ]; then
+    FREE_GB=$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {print int($4/1048576)}' || true)
+    QUARTER=$(( ${FREE_GB:-0} / 4 ))
+    if [ "$QUARTER" -lt 8 ]; then QUARTER=8; fi
+    if [ "$QUARTER" -gt 48 ]; then QUARTER=48; fi
+    HALF_FREE=$(( ${FREE_GB:-0} / 2 ))
+    if [ "$QUARTER" -gt "$HALF_FREE" ]; then QUARTER="$HALF_FREE"; fi
+    # Never 0: sccache reads a zero size as no limit, so a machine with nothing left
+    # would get an unbounded cache — the opposite of what this block is for.
+    if [ "$QUARTER" -lt 1 ]; then QUARTER=1; fi
+    export SCCACHE_CACHE_SIZE="${QUARTER}G"
+  fi
+  echo "sccache ceiling ${SCCACHE_CACHE_SIZE} (${FREE_GB:-?}G free)"
+
+  # Same problem, second toolchain: mesh-llm's host embeds the console UI, so the build
+  # shells out to pnpm, and nvm installs under ~/.nvm which JOB_PATH does not carry
+  # either. Globbed rather than pinned to a version — a hardcoded path works today and
+  # is wrong after the next `nvm install`. Silent when there is no nvm, because a node
+  # with system node is not broken.
+  # `|| true` is load-bearing and was missing, which killed every build on a node
+  # without nvm. The agent wraps the whole script in `set -euo pipefail`; `ls` of a
+  # missing directory fails, `pipefail` carries that through the pipeline, and the exit
+  # status of `VAR=$(cmd)` is the command substitution's — so this line aborted the
+  # build subshell on its own.
+  #
+  # It cost a silent failure of exactly the shape this file already warns about two
+  # comments above. Both minis died in about a second with no output, before even the
+  # line that says which backend is being built, because the build had not reached
+  # `mkdir -p "$CARGO_TARGET_DIR"` — which is why that directory did not exist on
+  # gis-Mac-mini at all.
+  #
+  # The guard below is safe as written: a failing `[` inside an `&&` list is exempt
+  # from errexit. Only the assignment was fatal.
+  NODE_BIN=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1 || true)
+  [ -n "$NODE_BIN" ] && export PATH="$NODE_BIN:$PATH"
+
+  # BUILD OUTPUT LIVES OUTSIDE THE WORKSPACE, because the workspace does not survive.
+  #
+  # The agent materialises each run under `work/<run id>/workspace` and removes it on
+  # success — `retain: on_failure` — so `target/` was new on every run and there was
+  # never anything to reuse. The ceiling check below, which speaks of keeping it, has
+  # been measuring a directory about to be deleted.
+  #
+  # Pointing cargo at a stable directory is what makes an incremental build possible at
+  # all. Per machine rather than per run, which is the only scope where it helps.
+  #
+  # One consequence worth knowing: cargo locks its target directory, so two mesh-llm
+  # builds on one machine now queue instead of running at once. That is a real change
+  # and the right trade — they were previously two cold builds competing for the same
+  # cores and twice the disk, and waiting for a warm one beats racing a cold one.
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+  mkdir -p "$CARGO_TARGET_DIR"
+
+  # The same trick for llama.cpp, and it is the larger half.
+  #
+  # `.deps/llama.cpp` and `.deps/llama-build` default to inside the workspace, which the
+  # agent deletes after every run — so CMake started from nothing each time and
+  # recompiled all 144 CUDA translation units, every run, on every machine.
+  #
+  # Both move together, and that is not optional: CMake records its source directory in
+  # CMakeCache.txt, so a stable build dir with a per-run source dir would reconfigure
+  # and rebuild anyway. Moving one without the other buys nothing.
+  #
+  # Safe to share across runs because `package-native-runtime.sh` runs
+  # `prepare-llama.sh` on every build, and prepare compares four stamps before reusing a
+  # checkout — upstream sha, patched sha, patch digest and prepare schema — plus a clean
+  # worktree. Change the pin or the patch queue and it re-prepares. The script calls the
+  # patched checkout "an artifact identity shared across CI jobs"; this is that, per
+  # machine.
+  #
+  # Measured on spark-db08, 2026-09-24, same build block twice:
+  #   cold  16m38s, 144 "Building CUDA object"
+  #   warm   9m01s,   0                          "llama.cpp already prepared"
+  export LLAMA_WORKDIR="${LLAMA_WORKDIR:-$HOME/.cache/mesh-llm-llama-src}"
+  export MESH_LLM_LLAMA_BUILD_ROOT="${MESH_LLM_LLAMA_BUILD_ROOT:-$HOME/.cache/mesh-llm-llama-build}"
+  mkdir -p "$LLAMA_WORKDIR" "$MESH_LLM_LLAMA_BUILD_ROOT"
+  cd ${repo_dir}
+  if [ "$(uname -s)" = Darwin ]; then BACKEND=metal
+  elif command -v nvcc >/dev/null 2>&1 || command -v nvidia-smi >/dev/null 2>&1; then BACKEND=cuda
+  else BACKEND=cpu; fi
+  # THE LLAMA.CPP STAGE BUILDS WITHOUT SCCACHE, AND THAT IS DELIBERATE.
+  #
+  # The claim this block used to make — "sccache gained nvcc support in 0.8, and
+  # spark-db08 runs 0.18.0 ... measured on the machine rather than assumed" — was not
+  # measured. What had been measured was the sccache summary AFTER a build in which
+  # nvcc never went through sccache at all, so it showed no CUDA entries and no CUDA
+  # failures, and that absence was read as success.
+  #
+  # The cost of leaving it off is real and is not in dispute: llama.cpp is hundreds of
+  # translation units and every one is recompiled on every run, while the Rust link
+  # that follows takes ninety seconds. That is the reason to want this. It is not a
+  # reason to believe it works.
+  #
+  SCV="$(sccache --version 2>/dev/null | awk '{print $2}' || true)"
+
+  # sccache CANNOT wrap nvcc on this fleet. Measured on spark-db08 on 2026-09-24,
+  # sccache 0.18.0, CUDA 13, aarch64:
+  #
+  #   sccache: caused by: Missing "cubin" file output
+  #   sccache: Compiler killed by signal 126
+  #   gmake[3]: *** [.../ggml-cuda.dir/allreduce.cu.o] Error 254
+  #
+  # Every .cu fails and the build dies. This killed the daily coder sweep
+  # (job_scxh3hk7fy1p9qq).
+  #
+  # A version check is not protection. 0.18.0 is ten minor
+  # versions past the 0.8 that added nvcc support, and it still breaks here. Enabling
+  # on the strength of "sccache >= 0.8 supports nvcc" is exactly what broke it — the
+  # release notes were believed over the machine.
+  #
+  # Why this looked safe to change: the gate used to also require $RUSTC_WRAPPER, which
+  # nothing in a job sets, so the else branch fired every time and the llama stage never
+  # used sccache on any backend. That was accidental, and it was load-bearing. Removing
+  # it to "fix" the CUDA cache removed the only thing keeping the build alive.
+  #
+  # So: off, explicitly, on every backend. mesh-llm defaults the flag to 1
+  # (`USE_SCCACHE="${LLAMA_STAGE_USE_SCCACHE:-${SKIPPY_USE_SCCACHE:-1}}"`), so leaving
+  # it unset is not the same as turning it off, and unset is what would break CUDA.
+  #
+  # Re-enabling needs a green build on the target machine first, not a version number.
+  # Metal is untested here too and stays off for the same reason: the minis cannot
+  # currently build at all, so there is nowhere to prove it.
+  export LLAMA_STAGE_USE_SCCACHE=0
+  echo "llama stage builds without sccache (nvcc wrapping is broken on this fleet)"
+  echo "  sccache ${SCV:-absent} still caches the Rust half through cargo's own wrapper"
+
+  # Named before the toolchain is used, because the failure otherwise arrives from
+  # inside `just` as a missing-binary error that reads like a repository problem. A
+  # machine that has never been set up for this build should say so in one line.
+  MISSING=""
+  for tool in cargo just; do
+    command -v "$tool" >/dev/null 2>&1 || MISSING="$MISSING $tool"
+  done
+  if [ -n "$MISSING" ]; then
+    echo "this node cannot build mesh-llm: no$MISSING on PATH for $(whoami)" >&2
+    echo "PATH=$PATH" >&2
+    command -v rustup >/dev/null 2>&1 && \
+      echo "rustup is installed; 'rustup which cargo' says: $(rustup which cargo 2>&1)" >&2
+    exit 1
+  fi
+
+  echo "building release host and $BACKEND runtime"
+  just release-host-build
+  just release-runtime-build "$BACKEND"
+
+  # The ceiling, now that there is something for it to bound. It used to measure
+  # `target/` inside the workspace — a directory the agent removes moments later — so it
+  # printed a reassuring line about keeping something that was already doomed. It
+  # measures `$CARGO_TARGET_DIR` instead, which is the thing that actually persists.
+  #
+  # `du -sk`, not `-sg`. `-g` is BSD only, so on Linux this whole line failed — and it
+  # failed in the worst possible way: the exit status of `VAR=$(cmd)` is the command's,
+  # the executor applies `-e`, and the `2>/dev/null` that was meant to be harmless ate
+  # the one message that would have explained it. The job died silently immediately
+  # after "packaged native runtime", having built everything successfully.
+  TARGET_CEILING_GB="${TARGET_CEILING_GB:-40}"
+  TARGET_KB=$(du -sk "$CARGO_TARGET_DIR" 2>/dev/null | cut -f1 || true)
+  TARGET_GB=$(( ${TARGET_KB:-0} / 1048576 ))
+  if [ "$TARGET_GB" -gt "$TARGET_CEILING_GB" ]; then
+    echo "target ${TARGET_GB}G over ${TARGET_CEILING_GB}G ceiling — resetting"
+    rm -rf "$CARGO_TARGET_DIR"
+    mkdir -p "$CARGO_TARGET_DIR"
+  else
+    echo "target ${TARGET_GB}G within ${TARGET_CEILING_GB}G ceiling — kept"
+  fi
+
+  # The llama build root gets its own ceiling, for the same reason and with the same
+  # trade: going over costs one slow build, not a broken one. The source checkout is
+  # left alone — it is small, and deleting it only forces a re-patch.
+  LLAMA_CEILING_GB="${LLAMA_CEILING_GB:-25}"
+  LLAMA_KB=$(du -sk "$MESH_LLM_LLAMA_BUILD_ROOT" 2>/dev/null | cut -f1 || true)
+  LLAMA_GB=$(( ${LLAMA_KB:-0} / 1048576 ))
+  if [ "$LLAMA_GB" -gt "$LLAMA_CEILING_GB" ]; then
+    echo "llama build ${LLAMA_GB}G over ${LLAMA_CEILING_GB}G ceiling — resetting"
+    rm -rf "$MESH_LLM_LLAMA_BUILD_ROOT"
+    mkdir -p "$MESH_LLM_LLAMA_BUILD_ROOT"
+  else
+    echo "llama build ${LLAMA_GB}G within ${LLAMA_CEILING_GB}G ceiling — kept"
+  fi
+
+  # The whole summary, not a grep for three words. `Cache hits rate (Rust)` is the line
+  # that mattered and the old filter dropped it, which is how a cache at 0% on the
+  # expensive half went unnoticed behind a 62% headline.
+  command -v sccache >/dev/null 2>&1 && sccache -s 2>/dev/null || true
+
+templates:
+  # The key stays `decode-10m` although it no longer measures ten minutes of one
+  # stream. It is the identity every recorded result is filed under — `jobs.repo_template`
+  # — so renaming it would orphan the history rather than relabel it. The name and the
+  # description are what people read, and those are accurate again.
+  - key: decode-10m
+    name: DGX Spark decode throughput (concurrency sweep)
+    group: Benchmarks
+    description: >
+      Output throughput on the DGX Spark (spark-db08, GB10) across a ladder of
+      concurrency levels, measured on one server in one run so the levels share a build,
+      a machine and a thermal state. Every level is its own arm, so each one has its own
+      history and the ladder shows where the Spark saturates. Runs nowhere else.
+    #
+    # Why ten windows and not one
+    # ---------------------------
+    # Window standard deviation on this hardware is around 8%, so a single 60-second
+    # window resolves a large regression and nothing finer — the pipeline-saturation
+    # campaign learned that the expensive way, when 60-second windows credited two
+    # changes separately and the real effect was an interaction between them.
+    #
+    # Ten windows cut that to roughly 2.5%, which makes a 5% move readable, and they
+    # expose the shape a single mean hides: a run that decays from 300 to 200 tok/s has
+    # the same mean as one that held 250 and is not the same machine.
+    #
+    # Still not a split measurement, and still not the saturation harness — that runs
+    # 55 windows for an hour and is what decides anything.
+
+    # The safe default. The build stage decides the real value once it knows the
+    # backend and the sccache version, and exports over this — see "The CUDA half"
+    # there. Left at 0 so that a path which somehow skips that decision builds cold
+    # rather than building broken.
+    env:
+      LLAMA_STAGE_USE_SCCACHE: "0"
+
+    target:
+      executor: lab
+      # Pinned, and the pin is enforced: a launch may narrow `nodes`, never widen it
+      # (`nodes_outside_template`). This benchmark's history is the Spark's. Unpinned,
+      # it once landed on a Mac mini, and the M1's numbers drew a second set of lines
+      # beside the GB10's that read as a collapse. The minis' split campaigns no longer
+      # matter here: they cannot hold a machine this never runs on.
+      nodes: [spark-db08]
+
+    # Below every campaign, so this can never jump a queued measurement.
+    priority: 20
+
+    inputs:
+      - key: window_s
+        label: Measured seconds per level
+        kind: number
+        default: 60
+        min: 20
+        max: 600
+        description: >
+          How long each concurrency level is measured for, after it has settled. Sixty
+          seconds is enough to average away most of the per-window noise at low
+          concurrency; a level that saturates needs no longer, because the queue is the
+          thing being measured and it is stable.
+      - key: settle_s
+        label: Settle seconds per level
+        kind: number
+        default: 20
+        min: 0
+        max: 300
+        description: >
+          Discarded before each level is measured. Raising the load does not take effect
+          instantly — new lanes have to fill and the queue has to reach its depth — and
+          folding that ramp into the number reports a level slower than it is.
+      - key: max_tokens
+        label: Tokens per request
+        kind: number
+        default: 128
+        min: 16
+        max: 2048
+        description: >
+          Longer requests amortise prefill and read higher. Changes the number, so two
+          runs only compare at the same value.
+      - key: ctx_size
+        label: Context size
+        kind: number
+        default: 4096
+        min: 256
+        max: 32768
+
+      # A ladder, swept in one run.
+      #
+      # One run per level was the earlier shape and it was wrong for the question this
+      # answers. Where a machine saturates is a property of the machine, and reading it
+      # off eight runs taken on eight different days means eight different thermal
+      # states, eight different commits, and no way to tell a knee in the curve from a
+      # warm afternoon. Swept together, every level shares one build, one server and one
+      # hour.
+      #
+      # Each level is still its own arm downstream — `concurrency` is part of a metric
+      # point's identity — so a 1-lane number and a 128-lane number are never one line.
+      # What the sweep gives is the shape across levels; what the arms give is each
+      # level's own history over time.
+      - key: levels
+        label: Concurrency ladder
+        kind: text
+        default: "1,2,4,8,16,32,64,128"
+        description: >
+          Comma-separated requests-in-flight. Measured lowest first so a level that
+          destabilises the server does not poison the levels below it. Doubling is the
+          useful spacing: saturation shows as a knee, and a knee between 64 and 128 is
+          invisible if you only ran 1 and 128.
+
+      - key: model
+        label: Model
+        kind: choice
+        default: hf:Qwen/Qwen2.5-0.5B-Instruct-GGUF@main#*q4_k_m*
+        choices:
+          # The default stays the small instruct model: it is the tripwire, it is what
+          # a smoke run wants, and it does not make a first run on a fresh node wait on
+          # a 17 GB transfer.
+          - value: hf:Qwen/Qwen2.5-0.5B-Instruct-GGUF@main#*q4_k_m*
+            label: Qwen2.5 0.5B Instruct (Q4_K_M, 0.5 GB)
+          # 17.3 GB. mesh-llm's own catalog carries this one as "agentic coding, tool
+          # use", which makes it the coding model a regression here would actually be
+          # felt in. MoE, A3B active, so it decodes far faster than its size suggests —
+          # but it needs a machine that can hold it, which today means the Spark.
+          - value: hf:unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF@main#*Q4_K_M*
+            label: Qwen3-Coder 30B-A3B Instruct (Q4_K_M, 17 GB)
+        description: >
+          Weights are part of a result's identity, so changing this starts a new series
+          rather than adding a point to the existing one.
+
+    # The agent resolves the chosen ref to a path on whichever machine it lands on and
+    # exports $MODEL — which is the point: the spec carries no path, so it runs anywhere.
+    models:
+      - ref: ${model}
+        env: MODEL
+
+    # 60 s of measurement, but the job also builds mesh-llm first. The budget covers
+    # both; the harness below describes only the measured minute.
+    budget: { max_usd: 0, max_duration_s: 10800 }
+
+    # PROMPT TOKENS. `tokens.input` was a hardcoded 0 from the moment this harness
+    # started streaming — #97 replaced a non-streaming one that read llama.cpp's
+    # `timings.prompt_n` off a complete response. A streamed response carries no
+    # timings, so the server has to be asked: mesh-llm honours
+    # `stream_options.include_usage` (StreamOptions::include_usage in
+    # crates/openai-frontend) and answers with a final chunk carrying `usage` and NO
+    # choices, so it passes through the token-timing loop without touching it. Summed
+    # over the requests that completed inside the window, which is the population every
+    # other per-request number is drawn from. Absent rather than zero when the server
+    # says nothing — zero reads as "this benchmark sent no prompts", which is precisely
+    # what the hardcoded value has been claiming.
+    #
+    # THROTTLING. Asked of the GPU first. `nvidia-smi` needs no privileges, so a
+    # sampler reads SM clock, temperature, power, utilisation and the active clock-event
+    # reasons every two seconds, and each level reports their medians, its peak
+    # temperature, and the reasons that held for at least a fifth of the level.
+    # `throttled` is then the GPU's own answer: HW slowdown, SW or HW thermal slowdown,
+    # or HW power brake. A SW power cap is reported but is not throttling — it is where
+    # a loaded GPU normally runs. The regression alarm reads this to tell a slower
+    # program from a hotter machine.
+    #
+    # First reading, spark-db08 2026-09-27 (run_fcr8s6rvpvaq2c4, 30B, c=1..64): SM clock
+    # 2385-2405 MHz, 50-57 C, no clock-event reason at any level. The "throttled" flags
+    # the sweep-1 nightlies carried were the harness's own low last bucket, not heat.
+    #
+    # Without telemetry (a Mac) the old heuristic stands: a throttled run has a
+    # signature that is: it decays. The first three buckets against
+    # the last three averages away most of the per-window noise — around 8% sd on this
+    # hardware, so ~4.6% across three — and a ten-percent decline is well outside it.
+    # Reported, never corrected: a throttled mean blends a fast machine with a hot one
+    # and describes neither, so the number stands and the run says so. Omitted rather
+    # than guessed when the run is too short to judge.
+    #
+    # ---------------------------------------------------------------- the command
+    #
+    # Comments below this point are INSIDE the command string: they are stored in
+    # `jobs.spec_json` for every job, shipped to the node, and counted against the 16 KB
+    # command cap. The long rationale lives here instead, where it costs nothing at
+    # runtime and is still the first thing a maintainer reads.
+    #
+    # READINESS. Ready means the server has PUBLISHED A MODEL, not that it answers:
+    # `/v1/models` returns 200 with an empty `data[]` while nothing is loaded, so a plain
+    # curl check passes and every request afterwards 404s. The id it yields is what
+    # requests must name — a made-up model name is rejected. This is what mesh-llm's own
+    # scripts/ci-smoke-test.sh checks.
+    #
+    # The timeout is fifteen minutes and was three. Qwen3-Coder-30B at 128 lanes did not
+    # publish inside three: the serve log reached "Opening native model 100%" one second
+    # before the loop gave up, and the job died with "server published no model" having
+    # built everything successfully. The 0.5B publishes in seconds, so the limit only
+    # showed up on the model anybody actually cares about. Loading scales with weights
+    # AND with lanes, because the KV pool is sized per slot, so a flat number has to
+    # cover the worst case. Waiting longer costs nothing when the server is quick — the
+    # loop breaks the moment a model appears — and the budget and the reaper bound a
+    # genuinely hung one.
+    #
+    # STREAMING. The harness counts tokens as they arrive rather than from completed
+    # responses. Counting completions is exact at one lane and reports ZERO at a hundred:
+    # with a deep queue a request outlives the measurement window, so the window holds no
+    # completions and the level reads as 0 tok/s. Timestamping each token counts the work
+    # done inside the window wherever request boundaries fall — the basis the saturation
+    # campaign used, and therefore the one these numbers compare against.
+    #
+    # Each token goes into the shared list the moment it arrives. Until sweep-2 a
+    # request's tokens were added only when it FINISHED, so everything still streaming
+    # when a window closed was dropped: every level under-read by about half a response
+    # per lane in flight, the last bucket always read low, and that low bucket tripped
+    # the decay heuristic into calling healthy levels "throttled". At c=1 on the 30B the
+    # last bucket read 55 against 62 — half of one 126-token response missing.
+    #
+    # SERVING. No `--device`: the platform default is right, and the CI smoke test pins
+    # CPU, so copying it would measure the wrong backend. `--parallel` is sized to the
+    # top of the ladder — the planner's default of four would measure the queue in front
+    # of a four-lane server rather than the engine, flattening the curve at four — and it
+    # is a runtime-surface flag, so it belongs BEFORE `serve` or normalisation drops it
+    # silently. Context is left at the template's value rather than sized per lane: an
+    # explicit large `--ctx-size` beside a high lane count is a known way to make this
+    # server never report ready (spark-db08, 2026-09-21).
+    #
+    # PROVENANCE. mesh-llm publishes a content-addressed id, `local-gguf/sha256-<64 hex>`,
+    # which is the digest of the bytes it actually loaded. A result cannot be recorded
+    # without `model_package_sha256`, the registry does not hold one, and hashing the file
+    # per run costs minutes at 30 GB. The served id is free and is better provenance than
+    # either: it describes what was served, not what somebody believes is on disk.
+    #
+    # THE BINARY. Not simply `target/` any more. The build stage points cargo at a
+    # directory outside the workspace so objects survive a run — the workspace does not,
+    # the agent removes it on success. A shell export there does not reach this stage, so
+    # the same default is spelled out again rather than inherited; the two have to agree,
+    # and the assertion is what catches it if they stop. Both places are checked, because
+    # a machine that has not yet run the new build still has its binary in the old one,
+    # and a template that knew only the new path would refuse a perfectly good tree.
+    #
+    # LOAD GENERATOR. The Python below carries no comments, because every byte of the
+    # command counts against the 16 KB cap. What it does, and why:
+    #   * each request gets a distinct prompt — identical prompts share a cacheable
+    #     prefix, and a server with prefix caching would answer lane 2 from lane 1's KV;
+    #   * greedy (temperature 0, fixed seed), so the token count is not a coin flip;
+    #   * levels run lowest first — a level that destabilises the server must not poison
+    #     the ones below it — and each settles for `settle_s` before it is measured,
+    #     because a new level's lanes take time to fill and the ramp reads slow;
+    #   * the result file is rewritten after EVERY level, so a sweep that dies at its top
+    #     rung still reports the rest; the progress file is one compact line
+    #     (`{"lv": [[c, tok/s], ...]}`, under the agent's 200-character cut) that the
+    #     dashboard shows as tentative, with no fingerprint or custody;
+    #   * a level that completed nothing inside its window says so in `notes` rather than
+    #     reporting empty latency distributions that would read as fast.
+    #
+    # SUB-WINDOWS. The single-level harness took ten sixty-second windows and reported
+    # their standard deviation, which is what decides whether a difference between two
+    # runs is a result or noise. A sweep cannot afford ten windows per level and does not
+    # need to: each level's window is cut into six buckets and the spread across those
+    # answers the same question. Short enough that a level which decays still shows it.
+    command: |
+      set -euo pipefail
+      cd "$JIANYANG_REPO_DIR"
+
+      # Two places, new and old — see "The binary" above the command.
+      TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+      BIN=""
+      for candidate in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+        [ -x "$candidate" ] && { BIN="$candidate"; break; }
+      done
+      if [ -z "$BIN" ]; then
+        echo "no release host in $TARGET_DIR/release or target/release. built:" >&2
+        ls -1 "$TARGET_DIR"/*/mesh-llm target/*/mesh-llm dist/mesh-llm 2>/dev/null >&2 \
+          || echo "  (none found)" >&2
+        exit 1
+      fi
+      echo "host: $BIN"
+
+      # Derived from the run id, not fixed: two jobs can land on one machine, and a
+      # fixed port makes the second one fail against the first one's server.
+      RUN_HASH=$(printf '%s' "$JIANYANG_RUN_ID" | cksum | cut -d' ' -f1 || true)
+      PORT=$(( 9400 + ${RUN_HASH:-0} % 500 ))
+      LOG="$JIANYANG_ARTIFACT_DIR/mesh-llm-serve.log"
+
+      # A globbed ref usually resolves to one file, but the registry hands back whatever
+      # matched — a repository with several Q4_K_M shards gives a directory. Kept as a
+      # guard rather than an assumption, and it says which file it picked.
+      if [ -d "$MODEL" ]; then
+        MODEL="$(find "$MODEL" -name '*.gguf' -type f | sort | head -1)"
+        [ -n "$MODEL" ] || { echo "no .gguf under the resolved model path" >&2; exit 1; }
+      fi
+      echo "model: $MODEL"
+
+      # The host finds its stage runtime through this, not through an install step —
+      # `just build` packages it next to the binary.
+      # `dist/`, not beside $BIN: the release runtime step packages there while the
+      # release host lands in target/release. Explicit because that is what this
+      # variable is for.
+      export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+      [ -d "$MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR" ] || {
+        echo "no packaged runtime beside $BIN — did the build stage run?" >&2
+        exit 1
+      }
+
+      # No --device, `--parallel` before `serve`, ctx left alone — see "Serving".
+      LANES=$(printf '%s' "${levels}" | tr ',' '\n' | sort -n | tail -1 || true)
+      echo "serving with $LANES lanes for a ladder of ${levels}"
+      "$BIN" --log-format json --parallel "$LANES" serve \
+        --model "$MODEL" \
+        --no-draft \
+        --ctx-size "${ctx_size}" \
+        --port "$PORT" >"$LOG" 2>&1 &
+      SERVER=$!
+      # `kill ${VAR:-}` with an empty VAR becomes `kill 0` and signals the job's own
+      # process group. Guarded.
+      # Dump the server's log on ANY failure, not just a readiness one. After readiness
+      # it is the only thing that explains what went wrong, and it is inside the run
+      # rather than in an artifact somebody has to go and fetch.
+      trap 'rc=$?; [ $rc -ne 0 ] && { echo "--- mesh-llm serve log ---" >&2; tail -120 "$LOG" >&2; }; kill "${SERVER:-0}" 2>/dev/null || true' EXIT
+
+      # Ready means a model is PUBLISHED, not that the server answers — see above.
+      # Fifteen minutes, not three — see "Readiness" above the command.
+      READY_TIMEOUT_S="${READY_TIMEOUT_S:-900}"
+      READY_STARTED=$(date +%s)
+      MODEL_ID=""
+      while [ $(( $(date +%s) - READY_STARTED )) -lt "$READY_TIMEOUT_S" ]; do
+        MODEL_ID=$(curl -sf "http://127.0.0.1:$PORT/v1/models" 2>/dev/null \
+          | python3 -c 'import json,sys; d=(json.load(sys.stdin).get("data") or []); print(d[0].get("id","") if d else "")' \
+          2>/dev/null || true)
+        [ -n "$MODEL_ID" ] && break
+        # The server dying is not something to keep waiting out.
+        kill -0 "$SERVER" 2>/dev/null || break
+        WAITED=$(( $(date +%s) - READY_STARTED ))
+        # Said out loud every thirty seconds, and pushed to the progress line the control
+        # plane reads. A fifteen-minute silence looks identical to a wedged job, and the
+        # whole point of the tentative panel is that it should not.
+        if [ $(( WAITED % 30 )) -eq 0 ] && [ "$WAITED" -gt 0 ]; then
+          echo "waiting for the model to publish — ${WAITED}s of ${READY_TIMEOUT_S}s"
+          [ -n "${JIANYANG_PROGRESS_PATH:-}" ] && \
+            printf '{"lv":[],"n":"loading model %ss"}\n' "$WAITED" > "$JIANYANG_PROGRESS_PATH"
+        fi
+        sleep 1
+      done
+      READY_TOOK=$(( $(date +%s) - READY_STARTED ))
+      [ -n "$MODEL_ID" ] || {
+        echo "server published no model after ${READY_TOOK}s" >&2
+        tail -120 "$LOG" >&2
+        exit 1
+      }
+      # Recorded because it is the number that decides whether the timeout above is
+      # generous or lucky, and nothing else reports it.
+      echo "serving model id: $MODEL_ID (ready after ${READY_TOOK}s)"
+
+      # The served id carries the digest of the bytes loaded — see "Provenance".
+      MODEL_SHA=$(printf '%s' "$MODEL_ID" | grep -oE '[a-f0-9]{64}' | head -1 || true)
+      [ -n "$MODEL_SHA" ] || echo "no sha256 in the served model id; the result will not record" >&2
+
+      PORT="$PORT" MAX_TOKENS="${max_tokens}" STACK_COMMIT="$JIANYANG_COMMIT" \
+        MODEL_ID="$MODEL_ID" MODEL_SHA="$MODEL_SHA" \
+        LEVELS="${levels}" WINDOW_S="${window_s}" SETTLE_S="${settle_s}" \
+        python3 - <<'PY'
+      import json, os, shutil, statistics, subprocess, threading, time, urllib.request
+
+      PORT = os.environ["PORT"]
+      MAX_TOKENS = int(os.environ["MAX_TOKENS"])
+      MODEL_ID = os.environ["MODEL_ID"]
+      MODEL_SHA = os.environ.get("MODEL_SHA") or ""
+      LEVELS = [int(x) for x in os.environ["LEVELS"].split(",") if x.strip()]
+      WINDOW_S = float(os.environ["WINDOW_S"])
+      SETTLE_S = float(os.environ["SETTLE_S"])
+      URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
+      BASE = "Explain how a distributed key-value cache stays consistent under partition."
+
+      def prompt_for(i):
+          return f"[request {i:06d}] {BASE}"
+
+      lock = threading.Lock()
+      counter = [0]
+      token_times = []
+      requests = []
+      stop = threading.Event()
+      gpu = []
+      gpu_stop = threading.Event()
+      REASON_BITS = {0x4: "sw_power_cap", 0x8: "hw_slowdown", 0x20: "sw_thermal",
+                     0x40: "hw_thermal", 0x80: "hw_power_brake"}
+      THROTTLE_BITS = 0x8 | 0x20 | 0x40 | 0x80
+      def gpu_sampler():
+          fields = ["clocks_event_reasons.active", "clocks_throttle_reasons.active"]
+          def num(x):
+              try:
+                  return float(x)
+              except ValueError:
+                  return None
+          while not gpu_stop.is_set():
+              t = time.monotonic()
+              for f in list(fields):
+                  try:
+                      out = subprocess.run(
+                          ["nvidia-smi", "--query-gpu=clocks.sm,temperature.gpu,power.draw,"
+                           f"utilization.gpu,{f}", "--format=csv,noheader,nounits"],
+                          capture_output=True, text=True, timeout=5)
+                  except Exception:  # noqa: BLE001
+                      return
+                  if out.returncode != 0 or not out.stdout.strip():
+                      fields.remove(f)
+                      continue
+                  cols = [c.strip() for c in out.stdout.splitlines()[0].split(",")]
+                  try:
+                      reasons = int(cols[4], 16)
+                  except (ValueError, IndexError):
+                      reasons = None
+                  with lock:
+                      gpu.append((t, num(cols[0]), num(cols[1]), num(cols[2]),
+                                  num(cols[3]), reasons))
+                  break
+              if not fields:
+                  return
+              gpu_stop.wait(2.0)
+      if shutil.which("nvidia-smi"):
+          threading.Thread(target=gpu_sampler, daemon=True).start()
+      def gpu_summary(w_start, w_end):
+          with lock:
+              xs = [g for g in gpu if w_start <= g[0] < w_end]
+          if len(xs) < 3:
+              return None
+          out = {}
+          for key, i in (("sm_clock_mhz", 1), ("power_w", 3), ("gpu_pct", 4)):
+              v = [g[i] for g in xs if g[i] is not None]
+              if v:
+                  out[key] = round(statistics.median(v), 1)
+          temps = [g[2] for g in xs if g[2] is not None]
+          if temps:
+              out["temp_c"] = max(temps)
+          masks = [g[5] for g in xs if g[5] is not None]
+          if masks:
+              held = {bit for bit in REASON_BITS
+                      if sum(1 for m in masks if m & bit) >= max(1, len(masks) / 5)}
+              out["throttle_reasons"] = [REASON_BITS[b] for b in sorted(held)]
+              out["throttled"] = any(b & THROTTLE_BITS for b in held)
+          return out
+
+      def worker():
+          """Stream completions back to back until told to stop."""
+          while not stop.is_set():
+              with lock:
+                  i = counter[0]
+                  counter[0] += 1
+              body = json.dumps({
+                  "model": MODEL_ID,
+                  "messages": [{"role": "user", "content": prompt_for(i)}],
+                  "max_tokens": MAX_TOKENS,
+                  "temperature": 0,
+                  "seed": 1234,
+                  "stream": True,
+                  "stream_options": {"include_usage": True},
+              }).encode()
+              req = urllib.request.Request(URL, body, {"Content-Type": "application/json"})
+              started = time.monotonic()
+              first = None
+              n_tokens = 0
+              prompt_n = None
+              status = "ok"
+              try:
+                  with urllib.request.urlopen(req, timeout=1800) as resp:
+                      for raw in resp:
+                          line = raw.decode("utf-8", "replace").strip()
+                          if not line.startswith("data:"):
+                              continue
+                          data = line[5:].strip()
+                          if data == "[DONE]":
+                              break
+                          try:
+                              chunk = json.loads(data)
+                          except ValueError:
+                              continue
+                          usage = chunk.get("usage")
+                          if usage and usage.get("prompt_tokens") is not None:
+                              prompt_n = int(usage["prompt_tokens"])
+                          for choice in chunk.get("choices") or []:
+                              delta = choice.get("delta") or {}
+                              if delta.get("content") or delta.get("reasoning_content"):
+                                  now = time.monotonic()
+                                  if first is None:
+                                      first = now
+                                  n_tokens += 1
+                                  with lock:
+                                      token_times.append(now)
+              except Exception as e:            # noqa: BLE001
+                  status = "error"
+                  time.sleep(0.5)
+              ended = time.monotonic()
+              with lock:
+                  requests.append({
+                      "status": status,
+                      "start": started,
+                      "end": ended,
+                      "ttft_ms": (first - started) * 1000.0 if first else None,
+                      "e2e_ms": (ended - started) * 1000.0,
+                      "tokens": n_tokens,
+                      "prompt_tokens": prompt_n,
+                  })
+
+      points = []
+      notes = []
+      threads = []
+      overall_started = time.monotonic()
+
+      def publish():
+          with open(os.environ["JIANYANG_RESULT_PATH"], "w") as f:
+              json.dump({
+                  "points": points,
+                  "notes": notes,
+                  "provenance": {
+                      "stack_commit": os.environ["STACK_COMMIT"],
+                      **({"model_package_sha256": MODEL_SHA} if MODEL_SHA else {}),
+                  },
+              }, f, indent=2)
+
+      progress_path = os.environ.get("JIANYANG_PROGRESS_PATH")
+
+      def progress(done, note=""):
+          if not progress_path:
+              return
+          payload = {"lv": [[p["concurrency"], p["throughput"]["output_tok_s"]] for p in done]}
+          if note:
+              payload["n"] = note
+          line = json.dumps(payload, separators=(",", ":"))
+          try:
+              with open(progress_path, "w") as f:
+                  f.write(line + "\n")
+          except OSError:
+              pass
+
+      progress([])
+
+      for level in sorted(LEVELS):
+          while len(threads) < level:
+              t = threading.Thread(target=worker, daemon=True)
+              t.start()
+              threads.append(t)
+
+          time.sleep(SETTLE_S)
+          w_start = time.monotonic()
+          time.sleep(WINDOW_S)
+          w_end = time.monotonic()
+
+          with lock:
+              in_window = [t for t in token_times if w_start <= t < w_end]
+              started_in = [r for r in requests if w_start <= r["start"] < w_end]
+              done_in = [r for r in requests if w_start <= r["end"] < w_end and r["status"] == "ok"]
+              errors = sum(1 for r in requests if w_start <= r["end"] < w_end and r["status"] != "ok")
+
+          def dist(xs):
+              if not xs:
+                  return None
+              xs = sorted(xs)
+              def pct(q):
+                  if len(xs) == 1:
+                      return xs[0]
+                  k = (len(xs) - 1) * q / 100.0
+                  lo, hi = int(k), min(int(k) + 1, len(xs) - 1)
+                  return xs[lo] + (xs[hi] - xs[lo]) * (k - lo)
+              return {"mean": round(statistics.fmean(xs), 2),
+                      "p": {str(q): round(pct(q), 2) for q in (50, 90, 95, 99)}}
+
+          bucket_s = max(5.0, (w_end - w_start) / 6.0)
+          buckets = []
+          edge = w_start
+          while edge < w_end - 0.5:
+              upper = min(edge + bucket_s, w_end)
+              n = sum(1 for t in in_window if edge <= t < upper)
+              buckets.append(round(n / (upper - edge), 2))
+              edge = upper
+
+          prompt_in = [r["prompt_tokens"] for r in done_in if r.get("prompt_tokens")]
+          tok_in = sum(prompt_in) if prompt_in else None
+
+          throttled = None
+          if len(buckets) >= 6:
+              head = sum(buckets[:3]) / 3
+              tail = sum(buckets[-3:]) / 3
+              throttled = bool(head) and ((head - tail) / head * 100) > 10
+
+          point = {
+              "concurrency": level,
+              "requests_completed": len(done_in),
+              "requests_failed": errors,
+              "duration_s": round(w_end - w_start, 3),
+              "throughput": {"output_tok_s": round(len(in_window) / (w_end - w_start), 2)},
+              "tokens": {"input": tok_in if tok_in is not None else 0,
+                         "output": len(in_window)},
+              "windows": buckets,
+          }
+          util = gpu_summary(w_start, w_end) or {}
+          if "throttled" not in util and throttled is not None:
+              util["throttled"] = throttled
+          if util:
+              point["utilization"] = util
+          ttft = dist([r["ttft_ms"] for r in done_in if r["ttft_ms"] is not None])
+          e2e = dist([r["e2e_ms"] for r in done_in])
+          if ttft:
+              point["ttft_ms"] = ttft
+          if e2e:
+              point["e2e_ms"] = e2e
+          points.append(point)
+          print(json.dumps(point), flush=True)
+          publish()
+          progress(points)
+
+          if not done_in and level > 1:
+              notes.append(
+                  f"concurrency {level}: no request finished inside the measured window, "
+                  f"so its latency figures are absent; the throughput is still exact "
+                  f"because tokens are counted as they stream"
+              )
+
+      stop.set()
+      gpu_stop.set()
+      for t in threads:
+          t.join(timeout=120)
+      elapsed = time.monotonic() - overall_started
+
+      if any(p["requests_failed"] for p in points):
+          notes.append(
+              f"{sum(p['requests_failed'] for p in points)} request(s) failed across the "
+              f"sweep and are excluded from the token counts"
+          )
+      if len(points) < len(LEVELS):
+          done = ", ".join(str(p["concurrency"]) for p in points)
+          notes.append(
+              f"INCOMPLETE SWEEP: {len(points)} of {len(LEVELS)} levels measured ({done}); "
+              f"the rest did not run"
+          )
+
+      publish()
+      progress(points, note="done")
+      print(f"swept {len(points)} levels in {elapsed:.0f}s")
+      PY
+
+    # Every field here changes the number, which is why it is stated rather than
+    # defaulted: two results compare only when their harness fingerprints match, and the
+    # results plane refuses to chart across differing ones.
+    # REGRESSION ALARMS. Judged by the control plane after every default-branch run —
+    # see `TemplateAlarms` and core/alarms.ts. Each watched series supplies its own
+    # noise, so the band is 4 robust sd of the last 7 runs, never under 5%; a run outside
+    # it re-runs the same job, and only a second miss is announced. The watch list is the
+    # steady part of the ladder: c=1 decode rate and time to first token (repeatable
+    # within ~3%, and where a per-request cost like the 2026-09 scheduler reserve shows
+    # first), and c=8 and c=32 throughput (batching up to the knee). Not c=64/128: a
+    # saturated queue moved +-10% between runs of one commit, so its band is wide enough
+    # to hide most of what it would catch, and c=32 sees the same regressions.
+    # Backtested against the September series: silent through the healthy week, suspect
+    # on d06600e, the night the reserve landed.
+    alarms:
+      watch:
+        - { metric: output_tok_s, concurrency: 1 }
+        - { metric: ttft_ms.p50, concurrency: 1 }
+        - { metric: output_tok_s, concurrency: 8 }
+        - { metric: output_tok_s, concurrency: 32 }
+      baseline_runs: 7
+      min_baseline_runs: 3
+      min_change_pct: 5
+      noise_multiplier: 4
+      confirm: true
+
+    # WHAT THE REPORT OPENS ON.
+    #
+    # A report is about ONE configuration: one model, on one machine, at one node count,
+    # under one harness. It has to be, because those are the facts that decide whether
+    # two numbers may be compared — and an arm no longer carries them, so a page showing
+    # two would not draw two sets of lines, it would draw one set averaged across both.
+    #
+    # This is the Spark's benchmark. `target.nodes` already pins where it RUNS; this
+    # pins what the page opens on, which is a different question — results measured on a
+    # mini before the pin went in are still recorded, and without this the report would
+    # open on whichever of them happened to run last.
+    #
+    # Matched on the readable name first, so `nvidia-gb10` works and a weights digest
+    # nobody can write by hand is not required. A value that has never run is ignored
+    # rather than fatal: this is a preference about data that may not exist yet.
+    #
+    # Deliberately NOT pinning `model`. The ladder runs against both the 0.5B tripwire
+    # and the 30B coder, and which of those the report should open on is a question
+    # about what the benchmark is FOR that nobody has settled yet — until somebody does,
+    # the most recent one is the honest answer and the selector is one click.
+    report:
+      scope:
+        hardware_device: nvidia-gb10
+
+    harness:
+      name: custom
+      # The version names the window count for readability, not for correctness.
+      #
+      # It used to be load-bearing: `harnessFingerprint` did not include `duration_s`,
+      # so a ten-minute run and a one-minute one shared a fingerprint and the results
+      # plane would compare them without complaint. The fingerprint now carries the
+      # bounds, so changing the duration separates the series by itself — but a version
+      # that says what it measures is still worth reading in a chart legend.
+      version: mesh-llm-decode-sweep-2
+      trace: { kind: synthetic, ref: single-prompt-explain-kv-cache }
+      seed: 1234
+      warmup_requests: 1
+      concurrency: ["${levels}"]
+      duration_s: "${window_s}"
+
+  - key: agentx
+    name: AgentX — llama.cpp vs Skippy
+    group: Benchmarks
+    env:
+      # The registered Sparks' host HF_HOME, mounted at the same container path.
+      HF_HOME: /mnt/lab/huggingface
+    labels:
+      model: "${model}"
+      profile: "${profile}"
+    flags:
+      model: "${model}"
+      profile: "${profile}"
+      engines: llama,skippy
+      context_tokens: 262144
+      generation_slots: 1
+      batch_tokens: 2048
+      microbatch_tokens: 512
+      speculation: false
+    description: >
+      ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engines use
+      identical pinned GGUF weights and one 256k generation slot. Smoke uses
+      four complete traces and 60 measured seconds per engine; benchmark sweeps
+      1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
+      submission_valid=false and never enter performance history.
+    build: |
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd "$JIANYANG_REPO_DIR"
+      sg docker -c 'just agentx-container-build'
+    inputs:
+      - key: model
+        label: Model
+        kind: choice
+        default: qwen3.5-4b
+        choices:
+          - {label: Qwen3 4B dense F16, value: qwen3-4b}
+          - {label: Qwen3.5 4B hybrid BF16, value: qwen3.5-4b}
+          - {label: Qwen3.5 4B hybrid Q4_K_M, value: qwen3.5-4b-q4-k-m}
+          - {label: Qwen3.5 9B hybrid BF16, value: qwen3.5-9b}
+          - {label: Qwen3 Coder 30B-A3B MoE BF16, value: qwen3-coder-30b-a3b}
+          - {label: Qwen3.5 35B-A3B hybrid MoE BF16, value: qwen3.5-35b-a3b}
+      - key: profile
+        label: Profile
+        kind: choice
+        default: smoke
+        choices:
+          - {label: Smoke — four traces, value: smoke}
+          - {label: Benchmark — full ladder, value: benchmark}
+    target:
+      executor: lab
+      # JY currently rejects Ubuntu's display name for os: linux; the runner
+      # validates Linux/aarch64/GB10 after placement on these registered Sparks.
+      nodes: [spark-james, spark-db08]
+    budget:
+      max_usd: 0
+      max_duration_s: 86400
+      grace_s: 60
+    command: |
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd "$JIANYANG_REPO_DIR"
+      mkdir -p "$PWD/.deps/agentx-runs"
+      sg docker -c 'just agentx "${model}" "${profile}" "$PWD/.deps/agentx-runs/$JIANYANG_RUN_ID"'
+  - key: split-2node
+    name: Pipeline saturation (2-node split)
+    group: Benchmarks
+    description: >
+      Aggregate output throughput with one model cut across both Mac minis, against
+      the same pair's unsplit total. Answers whether splitting costs less than it
+      buys — the measurement the split thesis rests on, run daily so a regression is
+      datable rather than merely visible.
+
+    inputs:
+      - key: model
+        label: Model
+        description: Layer package to serve, split across both stages.
+        default: meshllm/Qwen3-8B-Q4_K_M-layers
+      # EMPTY MEANS TODAY'S HAND-TUNED ARM, byte-for-byte, so the existing series is
+      # untouched and stays the baseline. Setting it to `throughput` is the test
+      # Mesh-LLM/mesh-llm#2112 asks for: one flag reaching the same operating point
+      # that `--auto-balance` plus `SKIPPY_LAST_STAGE_DECODE_BATCH=1` reaches by hand.
+      #
+      # `harness.version` deliberately does not move. The workload is identical, so
+      # the two arms chart against each other — that comparison IS the test.
+      - key: strategy
+        label: Serving strategy
+        kind: text
+        description: >
+          "none" keeps the hand-tuned flags (--auto-balance plus the last-stage decode
+          batch environment switch). "throughput" drops both and lets --strategy
+          compose them, which is what #2112 claims is equivalent.
+        default: none
+      - key: lanes
+        label: Lanes per stage
+        kind: number
+        description: Parallel lanes per stage. Four is the 16 GB memory ceiling.
+        default: 4
+      - key: ctx
+        label: Context per lane
+        kind: number
+        description: Context per lane. Below 3072 the trace's prompts do not fit.
+        default: 4096
+      - key: windows
+        label: Windows
+        kind: number
+        description: 60-second measurement windows. Ten gives a usable sd.
+        default: 10
+      - key: in_flight
+        label: Requests in flight
+        kind: number
+        description: Requests kept in flight during measurement.
+        default: 16
+
+    # Placed together on the two minis, and pinned. Hardware is part of a result's
+    # comparability fingerprint, so an unpinned split would draw a new line the first
+    # time the scheduler put it somewhere else.
+    #
+    # gis-Mac-mini leads because mesh-llm elects its own canonical coordinator by VRAM
+    # and breaks ties on the smallest node id — these boxes tie at 16 GB, so gis wins.
+    # Having the two notions of "leader" disagree is a debugging afternoon.
+    roles:
+      - name: coordinator
+        nodes: [gis-Mac-mini]
+      - name: joiner
+        nodes: [mac]
+        command: |
+          set -uo pipefail
+          cd "$JIANYANG_REPO_DIR"
+
+          # macOS sleeps on gis after a minute idle and the joiner is idle by design:
+          # it serves a stage and waits. A sleeping stage is a dead split.
+          caffeinate -dimsu -w $$ &
+
+          TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+          BIN=""
+          for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+            [ -x "$c" ] && { BIN="$c"; break; }
+          done
+          [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+          LEAD="${JIANYANG_LEADER_HOST:-}"
+          [ -n "$LEAD" ] || { echo "no leader host in the formation env" >&2; exit 1; }
+          API="${SPLIT_API_PORT:-9447}"
+          # /api/status is the console's, not the API's. See CONSOLE PORT above.
+          CONSOLE="${SPLIT_CONSOLE_PORT:-3232}"
+
+          # THE MODEL MUST BE ON BOTH MACHINES, AND THE SAME --model IS NOT ENOUGH.
+          #
+          # A split's members agree on a model by IDENTITY, and for a layer package that
+          # identity is the local file's digest: the coordinator advertised
+          # `local-gguf/sha256-b0c94888…`. A peer without that file does not merely lack
+          # weights — it never declares interest, so the coordinator counts one eligible
+          # node and refuses to form a two-stage split:
+          #
+          #   found 1 eligible [0c62b56ef3:12.7GB ...]
+          #   excluded [4396de76cc:missing_model_interest]
+          #   next_step: Start the peer with the same --model value or explicit split
+          #              model interest
+          #
+          # Both members WERE passed the same --model. Measured after that failure: gis
+          # held the package and `mac` had no GGUF at all — its entire mesh-llm store was
+          # 399 MB. So the peer has to fetch it, not merely be told its name.
+          #
+          # Before the join rather than during it, which also removes a race that would
+          # otherwise be invisible. A 12.7 GB fetch inside the coordinator's readiness
+          # window reads as "the split never formed", not as "the joiner was still
+          # downloading" — and those want opposite responses.
+          DL_LOG="$JIANYANG_ARTIFACT_DIR/model-download.log"
+          echo "ensuring ${model} is present on $(hostname -s)"
+          if "$BIN" models download "${model}" > "$DL_LOG" 2>&1; then
+            echo "model present: ${model}"
+          else
+            echo "could not fetch ${model} on $(hostname -s)" >&2
+            tail -40 "$DL_LOG" >&2
+            # NAME THE WAY OUT. The default is a private repository and a job inherits
+            # no credentials from the operator's shell, so this failure is far more
+            # often a missing token than a broken model — and whoever reads it has
+            # just spent fifteen minutes on a build to get here.
+            echo "the default layer package is private; either provision a Hugging Face" >&2
+            echo "token for the job account on BOTH nodes, or re-run with the public GGUF:" >&2
+            echo "  --input model=Qwen/Qwen3-8B-GGUF@7c41481f57cb95916b40956ab2f0b139b296d974:Q4_K_M" >&2
+            echo "(same weights, same quantisation; its numbers are NOT comparable with" >&2
+            echo "this template's stored series, which was measured on the private one)" >&2
+            exit 1
+          fi
+
+          # The invite token off the coordinator's own status endpoint. The hand-run
+          # campaigns published it through a side-channel HTTP server; the coordinator
+          # already serves it, and one fewer moving part is one fewer thing to race.
+          #
+          # Polling rather than ordering: the members start together, so the joiner is
+          # up before the coordinator has a mesh. That is fine and expected — this is
+          # the wait, and it replaces the rule that joiners must never be queued first.
+          TOKEN=""
+          for i in $(seq 1 180); do
+            TOKEN=$(curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" 2>/dev/null \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' \
+              2>/dev/null || true)
+            [ -n "$TOKEN" ] && break
+            sleep 5
+          done
+          [ -n "$TOKEN" ] || { echo "no invite token from $LEAD after 15m" >&2; exit 1; }
+          echo "joining the mesh at $LEAD"
+
+          # Own port and bind port: both stages may share a LAN, and two nodes claiming
+          # one port is a failure that reads as a network problem.
+          JOINER_LOG="$JIANYANG_ARTIFACT_DIR/joiner.log"
+          # Same arm as the coordinator; see its account. The engine switch is only
+          # readable in the final stage's own process and --auto-balance can move
+          # which node that is, so it is exported on both roles.
+          case "${strategy}" in
+            none|"")
+              ARM_FLAGS="--auto-balance"
+              export SKIPPY_LAST_STAGE_DECODE_BATCH=1
+              ;;
+            *)
+              ARM_FLAGS="--strategy ${strategy}"
+              ;;
+          esac
+
+          "$BIN" --log-format json --parallel "${lanes}" serve \
+            --model "${model}" --split $ARM_FLAGS --join "$TOKEN" \
+            --ctx-size "${ctx}" --port "$API" --console "$CONSOLE" \
+            --bind-port "${SPLIT_BIND_PORT:-7843}" \
+            > "$JOINER_LOG" 2>&1 &
+          SERVE=$!
+          # ALWAYS tail the joiner's log, not only on failure.
+          #
+          # The coordinator's trap does this and it is the only reason the
+          # missing_model_interest diagnosis existed at all. The joiner had no
+          # equivalent, so everything known about half the system came from the
+          # coordinator's view of it — and the joiner is also the half that gets torn
+          # down as `cancelled` rather than `failed`, which means neither a failure trap
+          # nor `retain: on_failure` would have kept anything.
+          #
+          # Unconditional because the states worth reading are not only the failures: a
+          # split that formed and measured badly, and one that stood down early because
+          # the coordinator vanished, both exit zero here.
+          trap 'echo "--- joiner log (last 60) ---" >&2; tail -60 "$JOINER_LOG" >&2 2>/dev/null || true; kill "${SERVE:-0}" 2>/dev/null || true' EXIT
+
+          # Hold the stage up for as long as the coordinator is measuring, and no
+          # longer. Watching the coordinator rather than a fixed sleep means a run that
+          # dies early frees the machine instead of holding it for the budget.
+          MISSES=0
+          while kill -0 "$SERVE" 2>/dev/null; do
+            if curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" >/dev/null 2>&1; then
+              MISSES=0
+            else
+              MISSES=$((MISSES + 1))
+              [ "$MISSES" -ge 6 ] && { echo "coordinator gone — standing down"; break; }
+            fi
+            sleep 10
+          done
+          echo "joiner finished"
+
+    target:
+      executor: lab
+      num_nodes: 1
+
+    # Below every campaign. A daily tripwire that jumped a queued measurement would
+    # cost somebody an hour of two machines, which is the opposite of cheap.
+    priority: 20
+
+    budget:
+      max_usd: 0
+      # Two builds, a mesh that has to form, and ten measured minutes. The minis build
+      # slowly and the M1 has never had a warm cache; the first run pays for both.
+      max_duration_s: 14400
+      grace_s: 300
+
+    harness:
+      name: custom
+      # Named for what it measures and versioned separately from the single-node
+      # sweep: a split number and an unsplit number are not two points on one line.
+      version: mesh-llm-split-2node-1
+      trace:
+        kind: synthetic
+        ref: single-prompt-explain-kv-cache
+      seed: 1234
+      warmup_requests: 1
+      concurrency: ["${in_flight}"]
+      duration_s: 60
+      percentiles: [50, 90, 95, 99]
+
+    command: |
+      set -uo pipefail
+      cd "$JIANYANG_REPO_DIR"
+      caffeinate -dimsu -w $$ &
+
+      TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+      BIN=""
+      for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+        [ -x "$c" ] && { BIN="$c"; break; }
+      done
+      [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+      export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+      API="${SPLIT_API_PORT:-9447}"
+      # /api/status is the console's, not the API's. See CONSOLE PORT above.
+      CONSOLE="${SPLIT_CONSOLE_PORT:-3232}"
+
+      # The same fetch the joiner does, for the same reason — see the joiner's account
+      # of missing_model_interest. gis happens to hold this package already, which is
+      # exactly why it is worth doing here too: a template that works only on the
+      # machine that was set up by hand is a template that breaks on the next one.
+      DL_LOG="$JIANYANG_ARTIFACT_DIR/model-download.log"
+      echo "ensuring ${model} is present on $(hostname -s)"
+      if "$BIN" models download "${model}" > "$DL_LOG" 2>&1; then
+        echo "model present: ${model}"
+      else
+        echo "could not fetch ${model} on $(hostname -s)" >&2
+        tail -40 "$DL_LOG" >&2
+        # NAME THE WAY OUT. The default is a private repository and a job inherits
+        # no credentials from the operator's shell, so this failure is far more
+        # often a missing token than a broken model — and whoever reads it has
+        # just spent fifteen minutes on a build to get here.
+        echo "the default layer package is private; either provision a Hugging Face" >&2
+        echo "token for the job account on BOTH nodes, or re-run with the public GGUF:" >&2
+        echo "  --input model=Qwen/Qwen3-8B-GGUF@7c41481f57cb95916b40956ab2f0b139b296d974:Q4_K_M" >&2
+        echo "(same weights, same quantisation; its numbers are NOT comparable with" >&2
+        echo "this template's stored series, which was measured on the private one)" >&2
+        exit 1
+      fi
+
+      LOG="$JIANYANG_ARTIFACT_DIR/coordinator.log"
+      # --listen-all, OR THE JOINER CANNOT REACH THE TOKEN.
+      #
+      # The console binds loopback unless told otherwise. From
+      # mesh-llm-console-server/src/lib.rs:
+      #
+      #   let bind_addr = if listen_all { "0.0.0.0" } else { "127.0.0.1" };
+      #
+      # So the coordinator's own poll of 127.0.0.1:$CONSOLE succeeds while the
+      # joiner's poll of $LEAD:$CONSOLE can never succeed, from any machine, on any
+      # network. Every split died the same way: the joiner spent its fifteen minutes
+      # asking for an invite token that was being served only to the coordinator
+      # itself, and the coordinator sat printing "waiting for both stages" until its
+      # own timeout. Two independent-looking timeouts, one cause.
+      #
+      # Worth being explicit about what this opens: the management API becomes
+      # reachable from the LAN for the life of the run — that is precisely the point,
+      # since the token is what the joiner has come for. It is bounded by the job,
+      # and mesh-llm's own docs name --listen-all as the way to make LAN peers able
+      # to reach it.
+      #
+      # Not needed on the joiner: nothing polls the joiner's console.
+      # WHICH ARM. `resolve_last_stage_decode_batch` in
+      # `skippy-serving/src/binary_transport/stage_execution.rs` reads the engine
+      # switch FIRST and decides on its own — a set value ignores the plan entirely.
+      # So the strategy arm must leave it UNSET rather than set it to 0, or
+      # `--strategy throughput` would appear to compose a setting the environment was
+      # already forcing. It is exported here rather than in the template `env:` block
+      # for the same reason: the block cannot be withheld per-arm.
+      #
+      # The switch is only readable in the final stage's own process, and
+      # --auto-balance can move which node that is, so BOTH roles export it.
+      # `none`, NOT an empty string. An empty `default:` reads to the control plane
+      # as no default at all, and it then refuses the job with
+      #   'split-2node' needs a value for 'Serving strategy'
+      # which would make the existing result series unrunnable without an input.
+      case "${strategy}" in
+        none|"")
+          ARM_FLAGS="--auto-balance"
+          export SKIPPY_LAST_STAGE_DECODE_BATCH=1
+          ;;
+        *)
+          ARM_FLAGS="--strategy ${strategy}"
+          ;;
+      esac
+      echo "arm: $ARM_FLAGS"
+
+      "$BIN" --log-format json --parallel "${lanes}" serve \
+        --model "${model}" --split $ARM_FLAGS --listen-all \
+        --ctx-size "${ctx}" --port "$API" --console "$CONSOLE" \
+        --bind-port "${SPLIT_BIND_PORT:-7842}" \
+        > "$LOG" 2>&1 &
+      SERVE=$!
+      trap 'rc=$?; [ $rc -ne 0 ] && { echo "--- coordinator log ---" >&2; tail -120 "$LOG" >&2; }; kill "${SERVE:-0}" 2>/dev/null || true' EXIT
+
+      # Ready means BOTH stages are serving and a model is published. A split that has
+      # only its own stage answers /api/status perfectly well and then serves nothing:
+      # waiting on the local runtime alone is how a one-legged split gets benchmarked.
+      MODEL_ID=""
+      for i in $(seq 1 240); do
+        S=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" 2>/dev/null || true)
+        if [ -n "$S" ]; then
+          # `llama_ready` AND `model_name` ARE TOP-LEVEL IN /api/status, NOT UNDER
+          # `runtime`. Reading them from `runtime` yields None on both counts, so
+          # the predicate is false forever: a run watched a perfectly healthy
+          # two-stage split for 23 minutes and then failed with "the split never
+          # formed with two stages". `runtime` carries `stages`, and each stage
+          # carries `model_id` — kept as the fallback, since when two stages exist
+          # that is by definition the id the API serves.
+          MODEL_ID=$(printf '%s' "$S" | python3 -c 'import json,sys; d=json.load(sys.stdin); st=(d.get("runtime") or {}).get("stages") or []; name=d.get("model_name") or (st[0].get("model_id") if st else "") or ""; print(name if (d.get("llama_ready") and len(st) >= 2) else "")' 2>/dev/null || true)
+        fi
+        [ -n "$MODEL_ID" ] && break
+        WAITED=$((i * 10))
+        if [ $((i % 6)) -eq 0 ]; then
+          echo "waiting for both stages — ${WAITED}s"
+          [ -n "${JIANYANG_PROGRESS_PATH:-}" ] && \
+            printf '{"lv":[],"n":"forming split %ss"}\n' "$WAITED" > "$JIANYANG_PROGRESS_PATH"
+        fi
+        kill -0 "$SERVE" 2>/dev/null || { echo "coordinator died while forming" >&2; break; }
+        sleep 10
+      done
+      [ -n "$MODEL_ID" ] || { echo "the split never formed with two stages" >&2; tail -120 "$LOG" >&2; exit 1; }
+      echo "split serving $MODEL_ID"
+
+      # WHAT THE ARM ACTUALLY COMPOSED, not just what it scored.
+      #
+      # The equivalence claim in Mesh-LLM/mesh-llm#2112 is that one flag reaches the
+      # hand-tuned operating point. Two rates that happen to match do not show that:
+      # a strategy that silently composed nothing would also match, if the baseline
+      # were what the defaults already do. So record the mechanism beside the number.
+      #
+      # `--strategy` reports each axis it filled under a `defaults.` path at startup,
+      # and that report goes to the coordinator's own log, which was tailed only on
+      # failure. The realized cut comes from the console, as in split-runahead.
+      echo "--- resolved plan ---"
+      # MATCH THE MESSAGE, NOT THE FIELD SHAPE. `log_strategy_plan` emits
+      # tracing::info! with `axis`/`value`/`because` under the literal messages
+      # below; grepping for a `"defaults.…"` key shape found nothing, because
+      # `defaults.x` is the *value* of `axis`, not a key. The messages are stable
+      # strings in serving_strategy.rs, so match those and print whole lines.
+      grep -E "strategy (set a global default|deferred to your setting)" \
+        "$LOG" 2>/dev/null | head -20 \
+        || echo "(no strategy report — expected on the hand-tuned arm)"
+      echo "last-stage decode batch env: ${SKIPPY_LAST_STAGE_DECODE_BATCH:-<unset>}"
+      STAGE_SPANS=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" \
+        | python3 -c 'import json,sys; st=(json.load(sys.stdin).get("runtime") or {}).get("stages") or []; print("/".join(str(s["layer_end"] - s["layer_start"]) for s in sorted(st, key=lambda s: s["stage_index"])))' \
+        2>/dev/null || true)
+      echo "realized layer cut: ${STAGE_SPANS:-unknown}"
+
+      MODEL_SHA=$(printf '%s' "$MODEL_ID" | grep -oE '[a-f0-9]{64}' | head -1 || true)
+
+      PORT="$API" MODEL_ID="$MODEL_ID" MODEL_SHA="$MODEL_SHA" \
+        STACK_COMMIT="$JIANYANG_COMMIT" IN_FLIGHT="${in_flight}" \
+        WINDOWS="${windows}" WINDOW_S="60" SETTLE_S="30" \
+        ARM="${strategy}" STAGE_SPANS="$STAGE_SPANS" \
+        BATCH_ENV="${SKIPPY_LAST_STAGE_DECODE_BATCH:-}" \
+        python3 - <<'PY'
+      import json, os, statistics, threading, time, urllib.request
+
+      PORT = os.environ["PORT"]; MODEL_ID = os.environ["MODEL_ID"]
+      MODEL_SHA = os.environ.get("MODEL_SHA") or ""
+      IN_FLIGHT = int(os.environ["IN_FLIGHT"]); WINDOWS = int(os.environ["WINDOWS"])
+      WINDOW_S = float(os.environ["WINDOW_S"]); SETTLE_S = float(os.environ["SETTLE_S"])
+      URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
+      BASE = "Explain how a distributed key-value cache stays consistent under partition."
+
+      lock = threading.Lock(); counter = [0]
+      token_times = []; requests = []; stop = threading.Event()
+
+      def worker():
+          while not stop.is_set():
+              with lock:
+                  i = counter[0]; counter[0] += 1
+              body = json.dumps({
+                  "model": MODEL_ID,
+                  "messages": [{"role": "user", "content": f"[request {i:06d}] {BASE}"}],
+                  "max_tokens": 128, "temperature": 0, "seed": 1234, "stream": True,
+              }).encode()
+              req = urllib.request.Request(URL, body, {"Content-Type": "application/json"})
+              started = time.monotonic(); first = None; mine = []; status = "ok"
+              try:
+                  with urllib.request.urlopen(req, timeout=1800) as resp:
+                      for raw in resp:
+                          line = raw.decode("utf-8", "replace").strip()
+                          if not line.startswith("data:"): continue
+                          data = line[5:].strip()
+                          if data == "[DONE]": break
+                          try: chunk = json.loads(data)
+                          except ValueError: continue
+                          for ch in chunk.get("choices") or []:
+                              d = ch.get("delta") or {}
+                              if d.get("content") or d.get("reasoning_content"):
+                                  now = time.monotonic()
+                                  if first is None: first = now
+                                  mine.append(now)
+              except Exception:
+                  status = "error"; time.sleep(0.5)
+              ended = time.monotonic()
+              with lock:
+                  token_times.extend(mine)
+                  requests.append({"status": status, "start": started, "end": ended,
+                                   "ttft_ms": (first - started) * 1000.0 if first else None,
+                                   "e2e_ms": (ended - started) * 1000.0})
+
+      threads = [threading.Thread(target=worker, daemon=True) for _ in range(IN_FLIGHT)]
+      for t in threads: t.start()
+
+      # Settle before measuring: a split takes longer than one box to reach depth, and
+      # folding the ramp into the number reports the pair slower than it is.
+      time.sleep(SETTLE_S)
+
+      points = []
+      # The arm, and the mechanism it reached it by, travel with the number so the
+      # two runs of the equivalence comparison can be told apart six months from now.
+      ARM = os.environ.get("ARM") or "none"
+      notes = [
+          f"arm: {'--strategy ' + ARM if ARM != 'none' else 'hand-tuned (--auto-balance + SKIPPY_LAST_STAGE_DECODE_BATCH)'}",
+          "last-stage decode batch environment switch: "
+          + (os.environ.get("BATCH_ENV") or "<unset>"),
+      ]
+      if os.environ.get("STAGE_SPANS"):
+          notes.append(f"realized layer cut {os.environ['STAGE_SPANS']}")
+      def publish():
+          with open(os.environ["JIANYANG_RESULT_PATH"], "w") as f:
+              json.dump({"points": points, "notes": notes,
+                         "provenance": {"stack_commit": os.environ["STACK_COMMIT"],
+                                        **({"model_package_sha256": MODEL_SHA} if MODEL_SHA else {})}},
+                        f, indent=2)
+
+      w_start = time.monotonic()
+      per_window = []
+      for w in range(WINDOWS):
+          s = time.monotonic(); time.sleep(WINDOW_S); e = time.monotonic()
+          with lock:
+              n = sum(1 for t in token_times if s <= t < e)
+          per_window.append(round(n / (e - s), 2))
+          print(json.dumps({"window": w + 1, "output_tok_s": per_window[-1]}), flush=True)
+          if os.environ.get("JIANYANG_PROGRESS_PATH"):
+              try:
+                  with open(os.environ["JIANYANG_PROGRESS_PATH"], "w") as f:
+                      f.write(json.dumps({"lv": [[IN_FLIGHT, per_window[-1]]],
+                                          "n": f"window {w+1}/{WINDOWS}"},
+                                         separators=(",", ":")) + "\n")
+              except OSError: pass
+      w_end = time.monotonic()
+
+      with lock:
+          done = [r for r in requests if w_start <= r["end"] < w_end and r["status"] == "ok"]
+          errors = sum(1 for r in requests if w_start <= r["end"] < w_end and r["status"] != "ok")
+          total = sum(1 for t in token_times if w_start <= t < w_end)
+
+      def dist(xs):
+          if not xs: return None
+          xs = sorted(xs)
+          def pct(q):
+              if len(xs) == 1: return xs[0]
+              k = (len(xs) - 1) * q / 100.0
+              lo, hi = int(k), min(int(k) + 1, len(xs) - 1)
+              return xs[lo] + (xs[hi] - xs[lo]) * (k - lo)
+          return {"mean": round(statistics.fmean(xs), 2),
+                  "p": {str(q): round(pct(q), 2) for q in (50, 90, 95, 99)}}
+
+      point = {"concurrency": IN_FLIGHT, "requests_completed": len(done),
+               "requests_failed": errors, "duration_s": round(w_end - w_start, 3),
+               "throughput": {"output_tok_s": round(total / (w_end - w_start), 2)},
+               "tokens": {"input": 0, "output": total}, "windows": per_window}
+      ttft = dist([r["ttft_ms"] for r in done if r["ttft_ms"] is not None])
+      e2e = dist([r["e2e_ms"] for r in done])
+      if ttft: point["ttft_ms"] = ttft
+      if e2e: point["e2e_ms"] = e2e
+      points.append(point)
+
+      if errors:
+          notes.append(f"{errors} request(s) failed and are excluded from the token counts")
+      stop.set()
+      for t in threads: t.join(timeout=120)
+      publish()
+      print(json.dumps(point), flush=True)
+      PY
+
+  # One operating point of the run-ahead sweep, NOT a sweep in one job.
+  #
+  # The run-ahead budget and the wire delay are both decided when `mesh-llm serve`
+  # starts, so varying them means restarting the coordinator. The joiner joins ONCE,
+  # against a token the coordinator minted at startup — restart the coordinator and
+  # the joiner is holding an invite to a mesh that no longer exists. Sweeping inside
+  # one job therefore means driving two processes on two machines through a dozen
+  # coordinated restarts, which is a lot of ways to lose an afternoon and produce a
+  # number nobody can trust.
+  #
+  # So this template measures ONE (runahead, wire_delay_ms) pair and is launched once
+  # per point. The per-node build cache is what makes that affordable: the first run
+  # pays for the build, the rest reuse `$CARGO_TARGET_DIR`. Each point also lands as
+  # its own result with its own inputs recorded, which is better provenance than
+  # twelve points sharing one.
+  #
+  # Why this exists: `--strategy interactive` sets a run-ahead budget of 96 tokens,
+  # which is Mesh-LLM/mesh-llm#1409's figure — measured on a 2-process LOOPBACK split,
+  # where compute and propagation cannot overlap. #1409 says so itself. This is the
+  # two-box run that tells us whether the budget should scale with RTT and how.
+  # Suffix bounds follow #1037 (min 5, max 32, proposal cap 48). The verify
+  # window matches #1409; narrower windows cost extra round trips (#1060).
+  # The coordinator needs --listen-all: otherwise its console binds loopback and
+  # the joiner cannot reach the invite token (see split-2node).
+  - key: split-runahead
+    name: Speculative run-ahead at one budget (2-node split)
+    group: Benchmarks
+    description: >
+      Single-stream decode rate for a suffix-N-gram speculative split at one run-ahead
+      token budget and one conditioned wire delay. Launch it once per point of a sweep;
+      the result records the budget and delay it ran at, so the points chart together.
+
+    inputs:
+      # A PUBLIC GGUF, NOT THE PRIVATE LAYER PACKAGE.
+      #
+      # `meshllm/Qwen3-8B-Q4_K_M-layers` is what `split-2node` defaults to and
+      # what #1935's numbers came from, and neither mini can fetch it: the repo
+      # is private (anonymous HF API returns 401), it is not registered in the
+      # fleet, and no token is readable from the job account on either node.
+      # Three runs died on it, two of them after a fifteen-minute build.
+      #
+      # A split source does not have to be a layer package. `local_package.rs`
+      # accepts "a package-v2 directory or direct GGUF file" and wraps a plain
+      # GGUF as a synthetic package keyed on the file digest — which is the same
+      # `local-gguf/sha256-…` identity a split already agrees on. So the public
+      # Qwen3-8B GGUF works, is the same weights at the same quantisation, and
+      # needs no credentials.
+      #
+      # Pinned to a revision and one file: both stages must agree on the model
+      # by digest, so `@main` could silently give them different bytes.
+      - key: model
+        label: Model
+        description: >
+          Model to split across both stages. A direct GGUF is wrapped as a
+          synthetic package keyed on its file digest.
+      #
+      # MESH-LLM'S REF SYNTAX, NOT JIANYANG'S. `models download` wants
+      # `org/repo`, `org/repo:QUANT` or `org/repo@rev:QUANT`; the
+      # `hf:org/repo@rev#file` form is what a jianyang `model_package.ref`
+      # takes, and passing it here fails with "expected model ref like
+      # org/repo, org/repo:Q4_K_M, or org/repo@rev:Q4_K_M".
+        default: Qwen/Qwen3-8B-GGUF@7c41481f57cb95916b40956ab2f0b139b296d974:Q4_K_M
+      - key: runahead
+        label: Run-ahead tokens
+        kind: number
+        description: >
+          Speculative-token budget for verify-window admission. 0 keeps fixed-depth
+          admission, which is the baseline the budgets are compared against.
+        default: 96
+      # A STRING, not a number, because it is substituted into an `env` value.
+      #
+      # When a scalar is exactly one `${placeholder}`, the renderer replaces it with
+      # the input's typed value — so a `kind: number` input makes
+      # `MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS: "${wire_delay_ms}"` render as a
+      # number, and sync refuses the job with "Expected string, received number".
+      # `serve`'s `hold_s` is a string for the same reason.
+      #
+      # It stays in the template-level `env` rather than being exported inside the
+      # coordinator's command so that BOTH roles get it: the conditioning applies to a
+      # stage's downstream sends, and delaying only the coordinator would model a
+      # one-way link.
+      - key: wire_delay_ms
+        label: Conditioned wire delay (ms)
+        kind: text
+        description: >
+          Extra one-way delay added to every downstream stage message, on top of the
+          pair's real LAN RTT. "0" measures the link as it is.
+        default: "0"
+      - key: in_flight
+        label: Requests in flight
+        kind: number
+        description: >
+          One by default. Run-ahead exists to fill a pipe that a single stream leaves
+          idle, so concurrency would hide the effect being measured.
+        default: 1
+      - key: max_tokens
+        label: Tokens per request
+        kind: number
+        description: Completion length. Long enough to amortise prefill over decode.
+        default: 320
+      - key: lanes
+        label: Lanes per stage
+        kind: number
+        description: Parallel lanes per stage. Four is the 16 GB memory ceiling.
+        default: 4
+      - key: ctx
+        label: Context per lane
+        kind: number
+        description: Context per lane.
+        default: 4096
+
+    # The same pinned pair as `split-2node`, for the same reasons: hardware is part of
+    # a result's fingerprint, and gis leads because mesh-llm elects its coordinator by
+    # VRAM and breaks the 16 GB tie on the smallest node id.
+    #
+    # DELIBERATELY NOT `--auto-balance`. Placement has to be the one thing held still
+    # across the sweep, or a moved cut confounds the budget it is supposed to isolate.
+    # Capacity-only placement is identical for every point.
+    roles:
+      - name: coordinator
+        nodes: [gis-Mac-mini]
+      - name: joiner
+        nodes: [mac]
+        command: |
+          set -uo pipefail
+          cd "$JIANYANG_REPO_DIR"
+          caffeinate -dimsu -w $$ &
+
+          TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+          BIN=""
+          for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+            [ -x "$c" ] && { BIN="$c"; break; }
+          done
+          [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+          LEAD="${JIANYANG_LEADER_HOST:-}"
+          [ -n "$LEAD" ] || { echo "no leader host in the formation env" >&2; exit 1; }
+          API="${SPLIT_API_PORT:-9447}"
+          CONSOLE="${SPLIT_CONSOLE_PORT:-3232}"
+
+          # The peer must HOLD the package, not merely be named it: a split member
+          # declares interest by local file digest, and a peer without the file is
+          # excluded as missing_model_interest. See split-2node for the full account.
+          # HUGGING FACE CREDENTIALS, OR THE PACKAGE CANNOT BE FETCHED.
+          #
+          # `meshllm/Qwen3-8B-Q4_K_M-layers` is private: anonymous API access
+          # returns 401. A job does not run under an interactive login shell, so
+          # it inherits neither HF_HOME nor HF_TOKEN from the operator's
+          # profile, and `models download` fails with "Authentication required:
+          # Invalid username or password" — which tore down a whole formation
+          # after the coordinator had already spent fifteen minutes building.
+          #
+          # Same derivation `agentic-replay` uses: the agent exports
+          # JIANYANG_STORE_HF, and the token lives beside that cache.
+          HF_ROOT="${JIANYANG_STORE_HF:-$HOME/.cache/huggingface}"
+          export HF_HOME="$HF_ROOT"
+          export HF_HUB_CACHE="$HF_ROOT/hub"
+          if [ -z "${HF_TOKEN:-}" ] && [ -f "$HF_ROOT/token" ]; then
+            export HF_TOKEN="$(cat "$HF_ROOT/token")"
+          fi
+
+          # BEST EFFORT, NOT FATAL. A joiner that cannot reach the Hub can still
+          # get the artifacts from the coordinator (see MESH_LLM_ARTIFACT_TRANSFER
+          # above), so failing hard here threw away a usable run — and took the
+          # coordinator's build with it, since a formation tears down on any
+          # member's failure. Fetching locally is still worth attempting: it is
+          # faster than a peer transfer when the node is provisioned for it.
+          DL_LOG="$JIANYANG_ARTIFACT_DIR/model-download.log"
+          if "$BIN" models download "${model}" > "$DL_LOG" 2>&1; then
+            echo "model present locally: ${model}"
+          else
+            echo "local fetch failed; relying on peer artifact transfer" >&2
+            tail -20 "$DL_LOG" >&2
+          fi
+
+          TOKEN=""
+          for i in $(seq 1 180); do
+            TOKEN=$(curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" 2>/dev/null \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' \
+              2>/dev/null || true)
+            [ -n "$TOKEN" ] && break
+            sleep 5
+          done
+          [ -n "$TOKEN" ] || { echo "no invite token from $LEAD after 15m" >&2; exit 1; }
+
+          echo "joining the mesh at $LEAD"
+          JOINER_LOG="$JIANYANG_ARTIFACT_DIR/joiner.log"
+          "$BIN" --log-format json --parallel "${lanes}" serve \
+            --model "${model}" --split --join "$TOKEN" \
+            --ctx-size "${ctx}" --port "$API" --console "$CONSOLE" \
+            --bind-port "${SPLIT_BIND_PORT:-7843}" \
+            > "$JOINER_LOG" 2>&1 &
+          SERVE=$!
+          trap 'echo "--- joiner log (last 60) ---" >&2; tail -60 "$JOINER_LOG" >&2 2>/dev/null || true; kill "${SERVE:-0}" 2>/dev/null || true' EXIT
+
+          MISSES=0
+          while kill -0 "$SERVE" 2>/dev/null; do
+            if curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" >/dev/null 2>&1; then
+              MISSES=0
+            else
+              MISSES=$((MISSES + 1))
+              [ "$MISSES" -ge 6 ] && { echo "coordinator gone — standing down"; break; }
+            fi
+            sleep 10
+          done
+          echo "joiner finished"
+
+    target:
+      executor: lab
+      num_nodes: 1
+
+    priority: 20
+
+    budget:
+      max_usd: 0
+      # A cold build on the minis dominates; the measurement itself is minutes.
+      max_duration_s: 10800
+      grace_s: 300
+
+    harness:
+      name: custom
+      # Its own series: a single-stream speculative number and a saturation number are
+      # not two points on one line. Budgets and delays are inputs within this series,
+      # so they chart against each other.
+      # Bumped with the workload: the v1 series measured a freeform prompt, on
+      # which the suffix proposer barely fires, so its numbers said nothing
+      # about the budget. Those points are not comparable with these.
+      version: mesh-llm-split-runahead-2
+      trace:
+        # MOVED WITH THE PROMPT. The one-function re-emit produced 83-token
+        # completions, too short for the largest run-ahead budget to fill, so its
+        # point measured a different workload and must not chart against the sweep.
+        kind: synthetic
+        ref: single-prompt-rename-one-of-three
+      seed: 1234
+      warmup_requests: 2
+      concurrency: ["${in_flight}"]
+      # Count-based, not duration-based: the measurement is a fixed number of
+      # fixed-length completions, so a wall-clock window would just be a slower way
+      # of counting the same requests. `agentic-replay` does the same.
+      #
+      # A LITERAL, and therefore not an input. `request_count` is parsed as a number
+      # when the file is read, so it cannot carry a `${placeholder}` — sync rejects
+      # that with `Expected number, received string`. Making it an input anyway and
+      # declaring the default here would let a run's declared shape disagree with
+      # what it measured, which is worse than one knob fewer. Nine measured requests
+      # after two warmups gives a usable median.
+      request_count: 9
+      percentiles: [50, 90, 95, 99]
+
+    env:
+      # The conditioning #1409 added for exactly this: an extra one-way delay on every
+      # downstream stage message, so one pair of machines can stand in for several link
+      # latencies. FIFO delivery is preserved, so it models an ordered transport rather
+      # than a lossy one.
+      MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS: "${wire_delay_ms}"
+      # LET THE PEER GET THE WEIGHTS FROM ITS PEER.
+      #
+      # The layer package is private — anonymous Hugging Face API access returns
+      # 401 — and the two minis are not provisioned alike: gis can fetch it and
+      # `mac` cannot. Two runs died on `mac` exiting 1 with "Authentication
+      # required", each after the coordinator had already spent fifteen minutes
+      # building, because a formation tears down when any member fails.
+      #
+      # Artifact transfer is the designed answer: the joiner pulls the stage
+      # artifacts from the coordinator over the mesh instead of from the Hub.
+      #
+      # `open` rather than `trusted` because trusted additionally requires a
+      # verified owner identity, which these lab nodes do not carry. The
+      # exposure is bounded the same way `--listen-all` is: the mesh is private,
+      # joining needs the invite token the coordinator mints, and it lives only
+      # for the job.
+      MESH_LLM_ARTIFACT_TRANSFER: "open"
+
+    command: |
+      set -uo pipefail
+      cd "$JIANYANG_REPO_DIR"
+      caffeinate -dimsu -w $$ &
+
+      TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+      BIN=""
+      for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+        [ -x "$c" ] && { BIN="$c"; break; }
+      done
+      [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+      export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+      API="${SPLIT_API_PORT:-9447}"
+      CONSOLE="${SPLIT_CONSOLE_PORT:-3232}"
+
+      # A job inherits no HF credentials from the operator's shell; see `inputs`.
+      HF_ROOT="${JIANYANG_STORE_HF:-$HOME/.cache/huggingface}"
+      export HF_HOME="$HF_ROOT"
+      export HF_HUB_CACHE="$HF_ROOT/hub"
+      if [ -z "${HF_TOKEN:-}" ] && [ -f "$HF_ROOT/token" ]; then
+        export HF_TOKEN="$(cat "$HF_ROOT/token")"
+      fi
+
+      DL_LOG="$JIANYANG_ARTIFACT_DIR/model-download.log"
+      echo "ensuring ${model} is present on $(hostname -s)"
+      if "$BIN" models download "${model}" > "$DL_LOG" 2>&1; then
+        echo "model present: ${model}"
+      else
+        echo "could not fetch ${model} on $(hostname -s)" >&2
+        tail -40 "$DL_LOG" >&2
+        exit 1
+      fi
+
+      LOG="$JIANYANG_ARTIFACT_DIR/coordinator.log"
+      "$BIN" --log-format json --parallel "${lanes}" serve \
+        --model "${model}" --split --listen-all \
+        --speculative-strategy ngram-suffix \
+        --speculative-ngram-proposer suffix \
+        --speculative-ngram-min 5 \
+        --speculative-ngram-max 32 \
+        --speculative-ngram-max-proposal-tokens 48 \
+        --speculative-verify-window-max-tokens 32 \
+        --speculative-verify-window-runahead-tokens "${runahead}" \
+        --ctx-size "${ctx}" --port "$API" --console "$CONSOLE" \
+        --bind-port "${SPLIT_BIND_PORT:-7842}" \
+        > "$LOG" 2>&1 &
+      SERVE=$!
+      trap 'rc=$?; [ $rc -ne 0 ] && { echo "--- coordinator log ---" >&2; tail -120 "$LOG" >&2; }; kill "${SERVE:-0}" 2>/dev/null || true' EXIT
+
+      # Ready means BOTH stages are serving. A split holding only its own stage answers
+      # /api/status perfectly well and serves nothing; waiting on the local runtime
+      # alone is how a one-legged split gets benchmarked.
+      MODEL_ID=""
+      for i in $(seq 1 240); do
+        S=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" 2>/dev/null || true)
+        if [ -n "$S" ]; then
+          # `llama_ready` AND `model_name` ARE TOP-LEVEL, NOT UNDER `runtime`. Read
+          # from `runtime` they are both None, so the predicate is false forever —
+          # one run watched a healthy two-stage split for 23 minutes and was about
+          # to report it never formed. `runtime` carries `stages`, whose `model_id`
+          # is the fallback: with two stages that is the id the API serves.
+          MODEL_ID=$(printf '%s' "$S" | python3 -c 'import json,sys; d=json.load(sys.stdin); st=(d.get("runtime") or {}).get("stages") or []; name=d.get("model_name") or (st[0].get("model_id") if st else "") or ""; print(name if (d.get("llama_ready") and len(st) >= 2) else "")' 2>/dev/null || true)
+        fi
+        [ -n "$MODEL_ID" ] && break
+        WAITED=$((i * 10))
+        if [ $((i % 6)) -eq 0 ]; then
+          echo "waiting for both stages — ${WAITED}s"
+          [ -n "${JIANYANG_PROGRESS_PATH:-}" ] && \
+            printf '{"lv":[],"n":"forming split %ss"}\n' "$WAITED" > "$JIANYANG_PROGRESS_PATH"
+        fi
+        kill -0 "$SERVE" 2>/dev/null || { echo "coordinator died while forming" >&2; break; }
+        sleep 10
+      done
+      [ -n "$MODEL_ID" ] || { echo "the split never formed with two stages" >&2; tail -120 "$LOG" >&2; exit 1; }
+      echo "split serving $MODEL_ID"
+
+      MODEL_SHA=$(printf '%s' "$MODEL_ID" | grep -oE '[a-f0-9]{64}' | head -1 || true)
+
+      # RECORD THE CUT; the note it emits explains why it matters.
+      STAGE_SPANS=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" \
+        | python3 -c 'import json,sys; st=(json.load(sys.stdin).get("runtime") or {}).get("stages") or []; print("/".join(str(s["layer_end"] - s["layer_start"]) for s in sorted(st, key=lambda s: s["stage_index"])))' \
+        2>/dev/null || true)
+      echo "realized layer cut: ${STAGE_SPANS:-unknown}"
+
+      PORT="$API" MODEL_ID="$MODEL_ID" MODEL_SHA="$MODEL_SHA" \
+        STACK_COMMIT="$JIANYANG_COMMIT" IN_FLIGHT="${in_flight}" \
+        REQUESTS="9" MAX_TOKENS="${max_tokens}" \
+        RUNAHEAD="${runahead}" WIRE_DELAY_MS="${wire_delay_ms}" \
+        STAGE_SPANS="$STAGE_SPANS" \
+        python3 - <<'PY'
+      import json, os, statistics, threading, time, urllib.request
+
+      PORT = os.environ["PORT"]; MODEL_ID = os.environ["MODEL_ID"]
+      MODEL_SHA = os.environ.get("MODEL_SHA") or ""
+      IN_FLIGHT = int(os.environ["IN_FLIGHT"]); REQUESTS = int(os.environ["REQUESTS"])
+      MAX_TOKENS = int(os.environ["MAX_TOKENS"])
+      RUNAHEAD = int(os.environ["RUNAHEAD"]); WIRE_DELAY_MS = int(os.environ["WIRE_DELAY_MS"])
+      URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
+
+      # INPUT-GROUNDED, and that is the whole point. The suffix proposer drafts by
+      # copying spans it has already seen, so it only fires when the output is largely
+      # a copy of the input; #1037 measured 84.9% on this shape. On a freeform prompt
+      # nothing repeats and the tok/s number says nothing about the budget.
+      # LONG ENOUGH FOR THE BUDGET TO FILL. The one-function version completed in 83
+      # tokens — correct and 68% accepted, but prefill dominated end-to-end (17.9
+      # against 30.1 decode). Three functions re-emit at ~230 tokens and reach 87%,
+      # still one verbatim copy so the proposer behaves the way #1037 measured.
+      SOURCE = """def collect_metrics(samples, window):
+          totals = {}
+          for sample in samples:
+              if sample.timestamp < window.start:
+                  continue
+              if sample.timestamp >= window.end:
+                  continue
+              bucket = totals.setdefault(sample.name, [])
+              bucket.append(sample.value)
+          summary = {}
+          for name, values in totals.items():
+              summary[name] = sum(values) / len(values)
+          return summary
+
+
+      def merge_windows(windows, tolerance):
+          ordered = sorted(windows, key=lambda window: window.start)
+          merged = []
+          for window in ordered:
+              if not merged:
+                  merged.append(window)
+                  continue
+              previous = merged[-1]
+              if window.start - previous.end <= tolerance:
+                  merged[-1] = previous.extended_to(window.end)
+              else:
+                  merged.append(window)
+          return merged
+
+
+      def format_report(summary, precision):
+          lines = []
+          for name in sorted(summary):
+              value = summary[name]
+              lines.append(f"{name}: {value:.{precision}f}")
+          if not lines:
+              lines.append("no samples in window")
+          return "\\n".join(lines)"""
+      BASE = (
+          "Here is a Python function:\n\n"
+          + SOURCE
+          + "\n\nRewrite all three functions exactly as given, with one change: rename "
+          "`collect_metrics` to `summarise_metrics`. Leave `merge_windows` and "
+          "`format_report` exactly as they are. Output only the code."
+      )
+
+      # NOT STREAMED, on purpose. The speculative counters this exists to read —
+      # accept rate, proposed/accepted, verify_window_max_in_flight — arrive in the
+      # response's `timings` object, which a streamed response does not carry. A
+      # run-ahead number without its accept rate cannot be interpreted: a budget that
+      # looks neutral because it never filled is a different finding from one that
+      # filled and did not pay.
+      def once(index):
+          body = json.dumps({
+              "model": MODEL_ID,
+              "messages": [{"role": "user", "content": f"[request {index:06d}] {BASE}"}],
+              "max_tokens": MAX_TOKENS, "temperature": 0, "seed": 1234,
+              # THINKING OFF, or this measures the opposite of what it claims. Qwen3
+              # reasons by default, and reasoning text is novel prose rather than a
+              # copy of the prompt: the first run proposed ~80 tokens per request and
+              # accepted 0, every request, spending all 320 tokens thinking and never
+              # reaching the code. 8.9 tok/s of pure speculative overhead.
+              # `skippy-serving/src/frontend/request.rs` merges this into the request.
+              "chat_template_kwargs": {"enable_thinking": False},
+          }).encode()
+          req = urllib.request.Request(URL, body, {"Content-Type": "application/json"})
+          started = time.monotonic()
+          with urllib.request.urlopen(req, timeout=1800) as resp:
+              payload = json.load(resp)
+          elapsed = time.monotonic() - started
+          usage = payload.get("usage") or {}
+          completion = int(usage.get("completion_tokens") or 0)
+          timings = payload.get("timings") or {}
+          return {
+              "completion_tokens": completion,
+              "elapsed_s": elapsed,
+              # Two rates, because they answer different questions and #1037 reported
+              # both. `decode_tok_s` is the server's own predicted_per_second: decode
+              # alone, which is what a run-ahead budget moves. `e2e_tok_s` is wall
+              # clock including queue and prefill, which is what a caller feels.
+              "decode_tok_s": timings.get("predicted_per_second"),
+              "e2e_tok_s": (completion / elapsed) if elapsed > 0 and completion else 0.0,
+              "accept_rate": timings.get("speculative_accept_rate"),
+              "proposed": timings.get("speculative_proposed_n"),
+              "accepted": timings.get("speculative_accepted_n"),
+              # TOKENS, NOT WINDOWS. `decode_scheduler.rs` admits on
+              # `in_flight_tokens < runahead_max_tokens`, so the token high-water mark
+              # says whether the budget engaged; the window count is a different
+              # quantity and read 4 regardless of budget or output length. The budget
+              # is echoed back so each point proves its own input.
+              "runahead_tokens": timings.get("verify_window_runahead_max_tokens"),
+              "peak_tokens": timings.get("verify_window_max_in_flight_tokens"),
+              "windows_in_flight": timings.get("verify_window_max_in_flight"),
+              # WHAT THE MODEL ACTUALLY SAID. A 0% accept rate is ambiguous on its own:
+              # it looks identical whether the proposer is broken or the output simply
+              # is not a copy of the input. Keeping a prefix makes that one glance
+              # instead of another 20-minute run.
+              "finish_reason": ((payload.get("choices") or [{}])[0] or {}).get("finish_reason"),
+              "sample": (((payload.get("choices") or [{}])[0] or {}).get("message")
+                         or {}).get("content", "")[:240],
+          }
+
+      # Two warmups, discarded: the first request on a fresh split pays graph
+      # construction and a cold prefix cache, and folding that into the rate reports
+      # the budget worse than it is.
+      for i in range(2):
+          try:
+              once(900000 + i)
+          except Exception as error:
+              print(f"warmup {i} failed: {error}", flush=True)
+
+      results = []; failed = []; lock = threading.Lock(); nxt = [0]
+
+      def worker():
+          while True:
+              with lock:
+                  i = nxt[0]
+                  if i >= REQUESTS:
+                      break
+                  nxt[0] += 1
+              try:
+                  measured = once(i)
+              except Exception as error:
+                  with lock:
+                      failed.append(i)
+                  print(json.dumps({"request": i, "error": str(error)}), flush=True)
+                  continue
+              with lock:
+                  results.append(measured)
+              print(json.dumps({"request": i, **measured}), flush=True)
+              if os.environ.get("JIANYANG_PROGRESS_PATH"):
+                  try:
+                      with open(os.environ["JIANYANG_PROGRESS_PATH"], "w") as f:
+                          f.write(json.dumps(
+                              {"lv": [[IN_FLIGHT, round(measured["e2e_tok_s"], 2)]],
+                               "n": f"request {len(results)}/{REQUESTS}"},
+                              separators=(",", ":")) + "\n")
+                  except OSError: pass
+
+      threads = [threading.Thread(target=worker) for _ in range(max(IN_FLIGHT, 1))]
+      for t in threads: t.start()
+      for t in threads: t.join()
+
+      if not results:
+          raise SystemExit("every measured request failed; see the coordinator log")
+
+      def median(key):
+          xs = [r[key] for r in results if r.get(key) is not None]
+          return round(statistics.median(xs), 4) if xs else None
+
+      total_tokens = sum(r["completion_tokens"] for r in results)
+      total_elapsed = sum(r["elapsed_s"] for r in results)
+      notes = [
+          f"run-ahead budget {RUNAHEAD} tokens"
+          + (" (fixed-depth admission)" if RUNAHEAD == 0 else ""),
+          f"conditioned one-way wire delay {WIRE_DELAY_MS}ms on top of the pair's real LAN RTT",
+          "capacity-only placement, held constant across the sweep so a moved cut cannot "
+          "confound the budget",
+      ]
+      spans = os.environ.get("STAGE_SPANS") or ""
+      if spans:
+          notes.append(
+              f"realized layer cut {spans} — a lopsided cut leaves the last stage little "
+              "work and so little for a run-ahead budget to overlap with"
+          )
+      accept = median("accept_rate")
+      if accept is not None:
+          notes.append(f"median speculative accept rate {accept}")
+      peak_tokens = median("peak_tokens")
+      engine_budget = median("runahead_tokens")
+      if peak_tokens is not None:
+          notes.append(
+              f"peak {peak_tokens} speculative tokens in flight against a budget of "
+              f"{engine_budget} the engine reports — a budget that never filled is a "
+              "different finding from one that filled and did not pay"
+          )
+      in_flight_windows = median("windows_in_flight")
+      if in_flight_windows is not None:
+          notes.append(f"median peak verify windows in flight {in_flight_windows}")
+      if failed:
+          notes.append(f"{len(failed)} request(s) failed and are excluded")
+      total_proposed = sum(r.get("proposed") or 0 for r in results)
+      total_accepted = sum(r.get("accepted") or 0 for r in results)
+      notes.append(f"{total_accepted} of {total_proposed} proposed tokens accepted across "
+                   f"{len(results)} requests")
+      if total_proposed and not total_accepted:
+          notes.append(
+              "NOTHING was accepted, so this point measures speculative overhead rather "
+              "than a run-ahead budget — check the completion sample before reading the "
+              "rate"
+          )
+      sample = next((r.get("sample") for r in results if r.get("sample")), "")
+      if sample:
+          notes.append("first completion begins: " + " ".join(sample.split())[:200])
+
+      e2e_ms_values = sorted(r["elapsed_s"] * 1000.0 for r in results)
+
+      def percentile(fraction):
+          if not e2e_ms_values:
+              return 0.0
+          rank = min(len(e2e_ms_values) - 1,
+                     max(0, int(round(fraction * (len(e2e_ms_values) - 1)))))
+          return round(e2e_ms_values[rank], 2)
+
+      e2e_distribution = {
+          "mean": round(statistics.fmean(e2e_ms_values), 2),
+          "min": round(e2e_ms_values[0], 2),
+          "max": round(e2e_ms_values[-1], 2),
+          "p": {"50": percentile(0.50), "90": percentile(0.90),
+                "95": percentile(0.95), "99": percentile(0.99)},
+      }
+
+      decode_rate = median("decode_tok_s")
+      e2e_rate = median("e2e_tok_s")
+      if decode_rate is not None:
+          notes.append(f"median server decode rate {decode_rate} tok/s")
+
+      point = {
+          "concurrency": IN_FLIGHT,
+          "requests_completed": len(results),
+          "requests_failed": len(failed),
+          "duration_s": round(total_elapsed, 3),
+          # The charted quantity is end-to-end, so a budget cannot look good by
+          # speeding decode while spending more of it elsewhere. The decode rate the
+          # budget directly moves is in the notes beside it.
+          "throughput": {"output_tok_s": e2e_rate},
+          "tokens": {"input": 0, "output": total_tokens},
+          # `p` IS REQUIRED. `Distribution` in `pilot/schema/src/result.ts` makes
+          # only min/max/stddev nullish, so a mean-only distribution fails validation
+          # — and the job still reports `succeeded` while `jy result` says "result not
+          # found". One run measured nine clean requests and stored none of them.
+          "e2e_ms": e2e_distribution,
+      }
+
+      with open(os.environ["JIANYANG_RESULT_PATH"], "w") as f:
+          json.dump({"points": [point], "notes": notes,
+                     "provenance": {"stack_commit": os.environ["STACK_COMMIT"],
+                                    **({"model_package_sha256": MODEL_SHA} if MODEL_SHA else {})}},
+                    f, indent=2)
+      print(json.dumps(point), flush=True)
+      PY
+
+  # The arm uses explicit suffix proposer bounds; interactive strategy also adds a
+  # run-ahead budget and would confound this gate. Gate settings need a TOML file.
+  # Keep cooldown below the 24-request run; zero never latches. The config path may
+  # contain spaces, so pass it through MESH_LLM_CONFIG rather than a shell flag.
+  - key: split-speculation-gate
+    name: Speculation stand-down on a freeform workload (2-node split)
+    group: Benchmarks
+    description: >
+      Mesh-LLM/mesh-llm#2112's third acceptance gate: speculation must not regress a
+      freeform workload. Run all three arms — plain, speculate, gated — and the gated
+      arm has to land with plain rather than with speculate. #1581 measured the
+      regression this exists to catch: 12.2-12.4 tok/s speculating against 13.8 plain.
+
+    inputs:
+      # A PUBLIC GGUF, NOT THE PRIVATE LAYER PACKAGE.
+      #
+      # `meshllm/Qwen3-8B-Q4_K_M-layers` is what `split-2node` defaults to and
+      # what #1935's numbers came from, and neither mini can fetch it: the repo
+      # is private (anonymous HF API returns 401), it is not registered in the
+      # fleet, and no token is readable from the job account on either node.
+      # Three runs died on it, two of them after a fifteen-minute build.
+      #
+      # A split source does not have to be a layer package. `local_package.rs`
+      # accepts "a package-v2 directory or direct GGUF file" and wraps a plain
+      # GGUF as a synthetic package keyed on the file digest — which is the same
+      # `local-gguf/sha256-…` identity a split already agrees on. So the public
+      # Qwen3-8B GGUF works, is the same weights at the same quantisation, and
+      # needs no credentials.
+      #
+      # Pinned to a revision and one file: both stages must agree on the model
+      # by digest, so `@main` could silently give them different bytes.
+      - key: model
+        label: Model
+        description: >
+          Model to split across both stages. A direct GGUF is wrapped as a
+          synthetic package keyed on its file digest.
+      #
+      # MESH-LLM'S REF SYNTAX, NOT JIANYANG'S. `models download` wants
+      # `org/repo`, `org/repo:QUANT` or `org/repo@rev:QUANT`; the
+      # `hf:org/repo@rev#file` form is what a jianyang `model_package.ref`
+      # takes, and passing it here fails with "expected model ref like
+      # org/repo, org/repo:Q4_K_M, or org/repo@rev:Q4_K_M".
+        default: Qwen/Qwen3-8B-GGUF@7c41481f57cb95916b40956ab2f0b139b296d974:Q4_K_M
+      # THREE ARMS, ONE TEMPLATE, so all three share a workload and a fingerprint.
+      # A gate that stands down is only meaningful against the two rates it is
+      # choosing between, so the comparison needs all three or none.
+      - key: arm
+        label: Arm
+        kind: text
+        description: >
+          "plain" disables speculation — the rate the gate should converge to if
+          speculation loses. "speculate" forces it on with no gate, which is the
+          regression #1581 measured. "gated" turns the gate on and lets it decide.
+        default: gated
+      # THE REGRESSION HAS TO BE BIG ENOUGH TO RESOLVE.
+      #
+      # At #1037's min of 5 the suffix proposer almost never matches prose: the
+      # first run of this template proposed 10-20 tokens per request, accepted
+      # 10 of 270, and cost only 2.5%. Real, but below what any safe gate margin
+      # can see — Mesh-LLM/mesh-llm#2288 puts the floor at 5% against a measured
+      # 1.6% noise, so a 2.5% effect is deliberately out of reach.
+      #
+      # #1581 lost 11.6%, so its proposer was firing far more often. A shorter
+      # minimum match is what does that: it fires on short coincidences, which
+      # prose is full of, and pays a round trip for each. That is also a
+      # configuration an operator can really have — the `cache` proposer is
+      # shallower than `suffix` by default.
+      #
+      # THREE IS THE FLOOR, NOT TWO. `SUFFIX_MIN_SEED_LEN` in
+      # `skippy-serving/src/frontend/speculative/suffix.rs` is 3, and the engine
+      # refuses to start below it:
+      #   suffix N-gram proposer requires 3 <= min_ngram <= max_ngram <= 64
+      # A run at 2 failed model startup, took the formation down with it, and
+      # cost a fifteen-minute build to discover.
+      - key: ngram_min
+        label: Minimum N-gram match
+        kind: number
+        description: >
+          Shortest suffix match the proposer will draft from. 5 is #1037's value
+          and barely fires on prose; 3 is the engine's floor and fires far more
+          often, which is how the freeform regression becomes large enough to
+          measure. Values below 3 are rejected at model startup.
+        default: 3
+      # A COOLDOWN OF ZERO NEVER LATCHES, which is a measurement artefact rather
+      # than the gate's behaviour. The first arms ran at 0 so a verdict would be
+      # reached inside one formation; the gate then trialled continuously and
+      # spent half the run back in the losing configuration — 12 of 24 requests
+      # proposed, landing at 9.57 tok/s between plain's 10.10 and speculate's
+      # 9.44, which is what a 50% duty cycle predicts.
+      #
+      # So the cooldown is an input. Zero shows the controller reacting; a
+      # realistic value shows what a deployment actually gets, which is what
+      # Mesh-LLM/mesh-llm#2112's acceptance gate asks about.
+      - key: gate_cooldown_s
+        label: Gate cooldown (s)
+        kind: number
+        description: >
+          Quiet period between the gate's trials. 0 trials continuously and never
+          settles — useful for proving it reacts, misleading as a throughput
+          number. 300 lets it latch within a run of this length.
+        default: 300
+      - key: in_flight
+        label: Requests in flight
+        kind: number
+        description: >
+          One by default. Run-ahead exists to fill a pipe that a single stream leaves
+          idle, so concurrency would hide the effect being measured.
+        default: 1
+      - key: max_tokens
+        label: Tokens per request
+        kind: number
+        description: Completion length. Long enough to amortise prefill over decode.
+        default: 320
+      - key: lanes
+        label: Lanes per stage
+        kind: number
+        description: Parallel lanes per stage. Four is the 16 GB memory ceiling.
+        default: 4
+      - key: ctx
+        label: Context per lane
+        kind: number
+        description: Context per lane.
+        default: 4096
+
+    # The same pinned pair as `split-2node`, for the same reasons: hardware is part of
+    # a result's fingerprint, and gis leads because mesh-llm elects its coordinator by
+    # VRAM and breaks the 16 GB tie on the smallest node id.
+    #
+    # DELIBERATELY NOT `--auto-balance`. Placement has to be the one thing held still
+    # across the sweep, or a moved cut confounds the budget it is supposed to isolate.
+    # Capacity-only placement is identical for every point.
+    roles:
+      - name: coordinator
+        nodes: [gis-Mac-mini]
+      - name: joiner
+        nodes: [mac]
+        command: |
+          set -uo pipefail
+          cd "$JIANYANG_REPO_DIR"
+          caffeinate -dimsu -w $$ &
+
+          TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+          BIN=""
+          for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+            [ -x "$c" ] && { BIN="$c"; break; }
+          done
+          [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+          LEAD="${JIANYANG_LEADER_HOST:-}"
+          [ -n "$LEAD" ] || { echo "no leader host in the formation env" >&2; exit 1; }
+          API="${SPLIT_API_PORT:-9447}"
+          CONSOLE="${SPLIT_CONSOLE_PORT:-3232}"
+
+          # The peer must HOLD the package, not merely be named it: a split member
+          # declares interest by local file digest, and a peer without the file is
+          # excluded as missing_model_interest. See split-2node for the full account.
+          # HUGGING FACE CREDENTIALS, OR THE PACKAGE CANNOT BE FETCHED.
+          #
+          # `meshllm/Qwen3-8B-Q4_K_M-layers` is private: anonymous API access
+          # returns 401. A job does not run under an interactive login shell, so
+          # it inherits neither HF_HOME nor HF_TOKEN from the operator's
+          # profile, and `models download` fails with "Authentication required:
+          # Invalid username or password" — which tore down a whole formation
+          # after the coordinator had already spent fifteen minutes building.
+          #
+          # Same derivation `agentic-replay` uses: the agent exports
+          # JIANYANG_STORE_HF, and the token lives beside that cache.
+          HF_ROOT="${JIANYANG_STORE_HF:-$HOME/.cache/huggingface}"
+          export HF_HOME="$HF_ROOT"
+          export HF_HUB_CACHE="$HF_ROOT/hub"
+          if [ -z "${HF_TOKEN:-}" ] && [ -f "$HF_ROOT/token" ]; then
+            export HF_TOKEN="$(cat "$HF_ROOT/token")"
+          fi
+
+          # BEST EFFORT, NOT FATAL. A joiner that cannot reach the Hub can still
+          # get the artifacts from the coordinator (see MESH_LLM_ARTIFACT_TRANSFER
+          # above), so failing hard here threw away a usable run — and took the
+          # coordinator's build with it, since a formation tears down on any
+          # member's failure. Fetching locally is still worth attempting: it is
+          # faster than a peer transfer when the node is provisioned for it.
+          DL_LOG="$JIANYANG_ARTIFACT_DIR/model-download.log"
+          if "$BIN" models download "${model}" > "$DL_LOG" 2>&1; then
+            echo "model present locally: ${model}"
+          else
+            echo "local fetch failed; relying on peer artifact transfer" >&2
+            tail -20 "$DL_LOG" >&2
+          fi
+
+          TOKEN=""
+          for i in $(seq 1 180); do
+            TOKEN=$(curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" 2>/dev/null \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' \
+              2>/dev/null || true)
+            [ -n "$TOKEN" ] && break
+            sleep 5
+          done
+          [ -n "$TOKEN" ] || { echo "no invite token from $LEAD after 15m" >&2; exit 1; }
+
+          echo "joining the mesh at $LEAD"
+          JOINER_LOG="$JIANYANG_ARTIFACT_DIR/joiner.log"
+          "$BIN" --log-format json --parallel "${lanes}" serve \
+            --model "${model}" --split --join "$TOKEN" \
+            --ctx-size "${ctx}" --port "$API" --console "$CONSOLE" \
+            --bind-port "${SPLIT_BIND_PORT:-7843}" \
+            > "$JOINER_LOG" 2>&1 &
+          SERVE=$!
+          trap 'echo "--- joiner log (last 60) ---" >&2; tail -60 "$JOINER_LOG" >&2 2>/dev/null || true; kill "${SERVE:-0}" 2>/dev/null || true' EXIT
+
+          MISSES=0
+          while kill -0 "$SERVE" 2>/dev/null; do
+            if curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" >/dev/null 2>&1; then
+              MISSES=0
+            else
+              MISSES=$((MISSES + 1))
+              [ "$MISSES" -ge 6 ] && { echo "coordinator gone — standing down"; break; }
+            fi
+            sleep 10
+          done
+          echo "joiner finished"
+
+    target:
+      executor: lab
+      num_nodes: 1
+
+    priority: 20
+
+    budget:
+      max_usd: 0
+      # A cold build on the minis dominates; the measurement itself is minutes.
+      max_duration_s: 10800
+      grace_s: 300
+
+    harness:
+      name: custom
+      # Its own series: a single-stream speculative number and a saturation number are
+      # not two points on one line. Budgets and delays are inputs within this series,
+      # so they chart against each other.
+      # Bumped with the workload: the v1 series measured a freeform prompt, on
+      # which the suffix proposer barely fires, so its numbers said nothing
+      # about the budget. Those points are not comparable with these.
+      version: mesh-llm-speculation-gate-1
+      trace:
+        # MOVED WITH THE PROMPT. The one-function re-emit produced 83-token
+        # completions, too short for the largest run-ahead budget to fill, so its
+        # point measured a different workload and must not chart against the sweep.
+        kind: synthetic
+        ref: single-prompt-freeform-explain
+      seed: 1234
+      warmup_requests: 2
+      concurrency: ["${in_flight}"]
+      # Count-based, not duration-based: the measurement is a fixed number of
+      # fixed-length completions, so a wall-clock window would just be a slower way
+      # of counting the same requests. `agentic-replay` does the same.
+      #
+      # A LITERAL, and therefore not an input. `request_count` is parsed as a number
+      # when the file is read, so it cannot carry a `${placeholder}` — sync rejects
+      # that with `Expected number, received string`. Making it an input anyway and
+      # declaring the default here would let a run's declared shape disagree with
+      # what it measured, which is worse than one knob fewer. Nine measured requests
+      # after two warmups gives a usable median.
+      request_count: 24
+      percentiles: [50, 90, 95, 99]
+
+    env:
+      # The conditioning #1409 added for exactly this: an extra one-way delay on every
+      # downstream stage message, so one pair of machines can stand in for several link
+      # latencies. FIFO delivery is preserved, so it models an ordered transport rather
+      # than a lossy one.
+      # LET THE PEER GET THE WEIGHTS FROM ITS PEER.
+      #
+      # The layer package is private — anonymous Hugging Face API access returns
+      # 401 — and the two minis are not provisioned alike: gis can fetch it and
+      # `mac` cannot. Two runs died on `mac` exiting 1 with "Authentication
+      # required", each after the coordinator had already spent fifteen minutes
+      # building, because a formation tears down when any member fails.
+      #
+      # Artifact transfer is the designed answer: the joiner pulls the stage
+      # artifacts from the coordinator over the mesh instead of from the Hub.
+      #
+      # `open` rather than `trusted` because trusted additionally requires a
+      # verified owner identity, which these lab nodes do not carry. The
+      # exposure is bounded the same way `--listen-all` is: the mesh is private,
+      # joining needs the invite token the coordinator mints, and it lives only
+      # for the job.
+      MESH_LLM_ARTIFACT_TRANSFER: "open"
+
+    command: |
+      set -uo pipefail
+      cd "$JIANYANG_REPO_DIR"
+      caffeinate -dimsu -w $$ &
+
+      TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+      BIN=""
+      for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+        [ -x "$c" ] && { BIN="$c"; break; }
+      done
+      [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+      export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+      API="${SPLIT_API_PORT:-9447}"
+      CONSOLE="${SPLIT_CONSOLE_PORT:-3232}"
+
+      # A job inherits no HF credentials from the operator's shell; see `inputs`.
+      HF_ROOT="${JIANYANG_STORE_HF:-$HOME/.cache/huggingface}"
+      export HF_HOME="$HF_ROOT"
+      export HF_HUB_CACHE="$HF_ROOT/hub"
+      if [ -z "${HF_TOKEN:-}" ] && [ -f "$HF_ROOT/token" ]; then
+        export HF_TOKEN="$(cat "$HF_ROOT/token")"
+      fi
+
+      DL_LOG="$JIANYANG_ARTIFACT_DIR/model-download.log"
+      echo "ensuring ${model} is present on $(hostname -s)"
+      if "$BIN" models download "${model}" > "$DL_LOG" 2>&1; then
+        echo "model present: ${model}"
+      else
+        echo "could not fetch ${model} on $(hostname -s)" >&2
+        tail -40 "$DL_LOG" >&2
+        exit 1
+      fi
+
+      SPEC_FLAGS="--speculative-strategy ngram-suffix \
+        --speculative-ngram-proposer suffix \
+        --speculative-ngram-min ${ngram_min} --speculative-ngram-max 32 \
+        --speculative-ngram-max-proposal-tokens 48 \
+        --speculative-verify-window-max-tokens 32"
+      case "${arm}" in
+        plain)
+          SPEC_FLAGS="--speculative-strategy disabled"
+          ;;
+        speculate)
+          ;;
+        gated)
+          CONF="$JIANYANG_ARTIFACT_DIR/gate.toml"
+          cat > "$CONF" <<TOML
+      [defaults.speculative]
+      gate = true
+      gate_cooldown_s = ${gate_cooldown_s}
+      gate_min_window_s = 20
+      gate_min_requests = 3
+      TOML
+          export MESH_LLM_CONFIG="$CONF"
+          echo "--- gate config ---"; cat "$CONF"
+          ;;
+        *)
+          echo "unknown arm '${arm}'; expected plain, speculate or gated" >&2; exit 1
+          ;;
+      esac
+      echo "arm: ${arm}"
+
+      LOG="$JIANYANG_ARTIFACT_DIR/coordinator.log"
+      "$BIN" --log-format json --parallel "${lanes}" serve \
+        --model "${model}" --split --listen-all \
+        $SPEC_FLAGS \
+        --ctx-size "${ctx}" --port "$API" --console "$CONSOLE" \
+        --bind-port "${SPLIT_BIND_PORT:-7842}" \
+        > "$LOG" 2>&1 &
+      SERVE=$!
+      trap 'rc=$?; [ $rc -ne 0 ] && { echo "--- coordinator log ---" >&2; tail -120 "$LOG" >&2; }; kill "${SERVE:-0}" 2>/dev/null || true' EXIT
+
+      # Ready means BOTH stages are serving. A split holding only its own stage answers
+      # /api/status perfectly well and serves nothing; waiting on the local runtime
+      # alone is how a one-legged split gets benchmarked.
+      MODEL_ID=""
+      for i in $(seq 1 240); do
+        S=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" 2>/dev/null || true)
+        if [ -n "$S" ]; then
+          # `llama_ready` AND `model_name` ARE TOP-LEVEL, NOT UNDER `runtime`. Read
+          # from `runtime` they are both None, so the predicate is false forever —
+          # one run watched a healthy two-stage split for 23 minutes and was about
+          # to report it never formed. `runtime` carries `stages`, whose `model_id`
+          # is the fallback: with two stages that is the id the API serves.
+          MODEL_ID=$(printf '%s' "$S" | python3 -c 'import json,sys; d=json.load(sys.stdin); st=(d.get("runtime") or {}).get("stages") or []; name=d.get("model_name") or (st[0].get("model_id") if st else "") or ""; print(name if (d.get("llama_ready") and len(st) >= 2) else "")' 2>/dev/null || true)
+        fi
+        [ -n "$MODEL_ID" ] && break
+        WAITED=$((i * 10))
+        if [ $((i % 6)) -eq 0 ]; then
+          echo "waiting for both stages — ${WAITED}s"
+          [ -n "${JIANYANG_PROGRESS_PATH:-}" ] && \
+            printf '{"lv":[],"n":"forming split %ss"}\n' "$WAITED" > "$JIANYANG_PROGRESS_PATH"
+        fi
+        kill -0 "$SERVE" 2>/dev/null || { echo "coordinator died while forming" >&2; break; }
+        sleep 10
+      done
+      [ -n "$MODEL_ID" ] || { echo "the split never formed with two stages" >&2; tail -120 "$LOG" >&2; exit 1; }
+      echo "split serving $MODEL_ID"
+
+      MODEL_SHA=$(printf '%s' "$MODEL_ID" | grep -oE '[a-f0-9]{64}' | head -1 || true)
+
+      # RECORD THE CUT; the note it emits explains why it matters.
+      STAGE_SPANS=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" \
+        | python3 -c 'import json,sys; st=(json.load(sys.stdin).get("runtime") or {}).get("stages") or []; print("/".join(str(s["layer_end"] - s["layer_start"]) for s in sorted(st, key=lambda s: s["stage_index"])))' \
+        2>/dev/null || true)
+      echo "realized layer cut: ${STAGE_SPANS:-unknown}"
+
+      PORT="$API" MODEL_ID="$MODEL_ID" MODEL_SHA="$MODEL_SHA" \
+        STACK_COMMIT="$JIANYANG_COMMIT" IN_FLIGHT="${in_flight}" \
+        REQUESTS="24" MAX_TOKENS="${max_tokens}" \
+        ARM="${arm}" NGRAM_MIN="${ngram_min}" \
+        GATE_COOLDOWN_S="${gate_cooldown_s}" \
+        STAGE_SPANS="$STAGE_SPANS" \
+        python3 - <<'PY'
+      import json, os, statistics, threading, time, urllib.request
+
+      PORT = os.environ["PORT"]; MODEL_ID = os.environ["MODEL_ID"]
+      MODEL_SHA = os.environ.get("MODEL_SHA") or ""
+      IN_FLIGHT = int(os.environ["IN_FLIGHT"]); REQUESTS = int(os.environ["REQUESTS"])
+      MAX_TOKENS = int(os.environ["MAX_TOKENS"])
+      ARM = os.environ["ARM"]
+      URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
+
+      # FREEFORM, which is the whole point. The suffix proposer drafts by copying
+      # spans it has already seen; prose that never repeats gives it nothing, so it
+      # proposes and is rejected and pays round trips for nothing. #1581 measured
+      # exactly this on a two-node split: 12.2-12.4 tok/s speculating against 13.8
+      # plain. `split-runahead` uses a re-emit prompt quite correctly — it measures
+      # speculation working — and this one has to measure it losing.
+      #
+      # Unique per request via the index, so a shared prefix cache cannot turn the
+      # later requests into a re-emit workload and hide the regression.
+      BASE = (
+          "Explain, in flowing prose and without code, lists or headings, how a "
+          "key-value cache changes the cost of transformer inference: what is stored, "
+          "why the stored tensors grow with sequence length, and what that means for "
+          "a deployment that must serve many concurrent conversations."
+      )
+
+      # NOT STREAMED, on purpose. The speculative counters this exists to read —
+      # accept rate, proposed/accepted, verify_window_max_in_flight — arrive in the
+      # response's `timings` object, which a streamed response does not carry. A
+      # run-ahead number without its accept rate cannot be interpreted: a budget that
+      # looks neutral because it never filled is a different finding from one that
+      # filled and did not pay.
+      def once(index):
+          body = json.dumps({
+              "model": MODEL_ID,
+              "messages": [{"role": "user", "content": f"[request {index:06d}] {BASE}"}],
+              "max_tokens": MAX_TOKENS, "temperature": 0, "seed": 1234,
+              # THINKING OFF, or this measures the opposite of what it claims. Qwen3
+              # reasons by default, and reasoning text is novel prose rather than a
+              # copy of the prompt: the first run proposed ~80 tokens per request and
+              # accepted 0, every request, spending all 320 tokens thinking and never
+              # reaching the code. 8.9 tok/s of pure speculative overhead.
+              # `skippy-serving/src/frontend/request.rs` merges this into the request.
+              "chat_template_kwargs": {"enable_thinking": False},
+          }).encode()
+          req = urllib.request.Request(URL, body, {"Content-Type": "application/json"})
+          started = time.monotonic()
+          with urllib.request.urlopen(req, timeout=1800) as resp:
+              payload = json.load(resp)
+          elapsed = time.monotonic() - started
+          usage = payload.get("usage") or {}
+          completion = int(usage.get("completion_tokens") or 0)
+          timings = payload.get("timings") or {}
+          return {
+              "completion_tokens": completion,
+              "elapsed_s": elapsed,
+              # Two rates, because they answer different questions and #1037 reported
+              # both. `decode_tok_s` is the server's own predicted_per_second: decode
+              # alone, which is what a run-ahead budget moves. `e2e_tok_s` is wall
+              # clock including queue and prefill, which is what a caller feels.
+              "decode_tok_s": timings.get("predicted_per_second"),
+              "e2e_tok_s": (completion / elapsed) if elapsed > 0 and completion else 0.0,
+              "accept_rate": timings.get("speculative_accept_rate"),
+              "proposed": timings.get("speculative_proposed_n"),
+              "accepted": timings.get("speculative_accepted_n"),
+              # WHAT THE MODEL ACTUALLY SAID. A 0% accept rate is ambiguous on its own:
+              # it looks identical whether the proposer is broken or the output simply
+              # is not a copy of the input. Keeping a prefix makes that one glance
+              # instead of another 20-minute run.
+              "finish_reason": ((payload.get("choices") or [{}])[0] or {}).get("finish_reason"),
+              "sample": (((payload.get("choices") or [{}])[0] or {}).get("message")
+                         or {}).get("content", "")[:240],
+          }
+
+      # Two warmups, discarded: the first request on a fresh split pays graph
+      # construction and a cold prefix cache, and folding that into the rate reports
+      # the budget worse than it is.
+      for i in range(2):
+          try:
+              once(900000 + i)
+          except Exception as error:
+              print(f"warmup {i} failed: {error}", flush=True)
+
+      results = []; failed = []; lock = threading.Lock(); nxt = [0]
+
+      def worker():
+          while True:
+              with lock:
+                  i = nxt[0]
+                  if i >= REQUESTS:
+                      break
+                  nxt[0] += 1
+              try:
+                  measured = once(i)
+              except Exception as error:
+                  with lock:
+                      failed.append(i)
+                  print(json.dumps({"request": i, "error": str(error)}), flush=True)
+                  continue
+              with lock:
+                  results.append(measured)
+              measured["index"] = i
+              print(json.dumps({"request": i, **measured}), flush=True)
+              if os.environ.get("JIANYANG_PROGRESS_PATH"):
+                  try:
+                      with open(os.environ["JIANYANG_PROGRESS_PATH"], "w") as f:
+                          f.write(json.dumps(
+                              {"lv": [[IN_FLIGHT, round(measured["e2e_tok_s"], 2)]],
+                               "n": f"request {len(results)}/{REQUESTS}"},
+                              separators=(",", ":")) + "\n")
+                  except OSError: pass
+
+      threads = [threading.Thread(target=worker) for _ in range(max(IN_FLIGHT, 1))]
+      for t in threads: t.start()
+      for t in threads: t.join()
+
+      if not results:
+          raise SystemExit("every measured request failed; see the coordinator log")
+
+      def median(key):
+          xs = [r[key] for r in results if r.get(key) is not None]
+          return round(statistics.median(xs), 4) if xs else None
+
+      total_tokens = sum(r["completion_tokens"] for r in results)
+      total_elapsed = sum(r["elapsed_s"] for r in results)
+      notes = [
+          f"arm: {ARM}",
+          f"minimum n-gram match {os.environ.get('NGRAM_MIN', '?')} — a shorter minimum "
+          "fires on prose coincidences and is what makes the regression resolvable",
+          "capacity-only placement, held constant across the arms so a moved cut cannot "
+          "confound the comparison",
+      ]
+      # THE STAND-DOWN, VISIBLE WITHOUT INTROSPECTION. Gate verdicts go to a
+      # telemetry event rather than a log line, but a stood-down request proposes
+      # nothing — so the proposal count per request, in order, shows the gate
+      # switching off. A gated arm that never reaches 0 never stood down.
+      proposals = [r.get("proposed") or 0 for r in sorted(
+          results, key=lambda r: r.get("index", 0))]
+      speculating = sum(1 for n in proposals if n > 0)
+      notes.append(
+          f"{speculating} of {len(proposals)} measured requests proposed drafts; "
+          f"proposal counts in order: {proposals}"
+      )
+      if ARM == "gated":
+          notes.append(
+              f"gate cooldown {os.environ.get('GATE_COOLDOWN_S', '?')}s — at 0 the gate "
+              "trials continuously and never latches, so the rate reflects a duty cycle "
+              "rather than a settled decision"
+          )
+          notes.append(
+              "the gate stood down during the run" if speculating < len(proposals)
+              else "THE GATE NEVER STOOD DOWN — either speculation won here, or no "
+                   "trial completed; check the proposal counts before reading this as "
+                   "a pass"
+          )
+      spans = os.environ.get("STAGE_SPANS") or ""
+      if spans:
+          notes.append(
+              f"realized layer cut {spans}, identical across the arms"
+          )
+      accept = median("accept_rate")
+      if accept is not None:
+          notes.append(f"median speculative accept rate {accept}")
+      if failed:
+          notes.append(f"{len(failed)} request(s) failed and are excluded")
+      total_proposed = sum(r.get("proposed") or 0 for r in results)
+      total_accepted = sum(r.get("accepted") or 0 for r in results)
+      notes.append(f"{total_accepted} of {total_proposed} proposed tokens accepted across "
+                   f"{len(results)} requests")
+
+      sample = next((r.get("sample") for r in results if r.get("sample")), "")
+      if sample:
+          notes.append("first completion begins: " + " ".join(sample.split())[:200])
+
+      e2e_ms_values = sorted(r["elapsed_s"] * 1000.0 for r in results)
+
+      def percentile(fraction):
+          if not e2e_ms_values:
+              return 0.0
+          rank = min(len(e2e_ms_values) - 1,
+                     max(0, int(round(fraction * (len(e2e_ms_values) - 1)))))
+          return round(e2e_ms_values[rank], 2)
+
+      e2e_distribution = {
+          "mean": round(statistics.fmean(e2e_ms_values), 2),
+          "min": round(e2e_ms_values[0], 2),
+          "max": round(e2e_ms_values[-1], 2),
+          "p": {"50": percentile(0.50), "90": percentile(0.90),
+                "95": percentile(0.95), "99": percentile(0.99)},
+      }
+
+      decode_rate = median("decode_tok_s")
+      e2e_rate = median("e2e_tok_s")
+      if decode_rate is not None:
+          notes.append(f"median server decode rate {decode_rate} tok/s")
+
+      point = {
+          "concurrency": IN_FLIGHT,
+          "requests_completed": len(results),
+          "requests_failed": len(failed),
+          "duration_s": round(total_elapsed, 3),
+          # The charted quantity is end-to-end, so a budget cannot look good by
+          # speeding decode while spending more of it elsewhere. The decode rate the
+          # budget directly moves is in the notes beside it.
+          "throughput": {"output_tok_s": e2e_rate},
+          "tokens": {"input": 0, "output": total_tokens},
+          # `p` IS REQUIRED. `Distribution` in `pilot/schema/src/result.ts` makes
+          # only min/max/stddev nullish, so a mean-only distribution fails validation
+          # — and the job still reports `succeeded` while `jy result` says "result not
+          # found". One run measured nine clean requests and stored none of them.
+          "e2e_ms": e2e_distribution,
+      }
+
+      with open(os.environ["JIANYANG_RESULT_PATH"], "w") as f:
+          json.dump({"points": [point], "notes": notes,
+                     "provenance": {"stack_commit": os.environ["STACK_COMMIT"],
+                                    **({"model_package_sha256": MODEL_SHA} if MODEL_SHA else {})}},
+                    f, indent=2)
+      print(json.dumps(point), flush=True)
+      PY
+
+  # ================================================================ Serving
+  #
+  # These do not measure anything. They stand a model up and leave it up, so a person or
+  # an agent can send it requests — the endpoint is the product, and the run ends when
+  # somebody stops it or the hold expires.
+  #
+  # Each writes `ready` to $JIANYANG_PROGRESS_PATH only once requests will actually
+  # succeed, which is what the control plane waits for before publishing an address.
+  # Weights take minutes to load, and an address handed out early is one that refuses
+  # connections for four minutes and looks broken.
+  #
+  # CUSTODY, and why none of these track the PID they launched
+  # ----------------------------------------------------------
+  # `mesh-llm serve` re-execs. The PID from `$!` is a parent that has already gone, so
+  # using it to test liveness reports the server dead while it is happily answering, and
+  # using it to stop reports success while the server keeps running. On 2026-09-21 that
+  # left a server answering on spark-db08 for three hours; every job afterwards saw
+  # "ready after 5s" and measured THAT server — same model, different build, four lanes
+  # instead of thirty-two — and the numbers went into the record looking clean.
+  #
+  # For a benchmark that corrupts a measurement. For a service it is worse: the control
+  # plane would publish an address to a process it does not own, running a commit nobody
+  # asked for, and Stop would not stop it.
+  #
+  # So a served process is tracked by THE PORT IT LISTENS ON. Not by `$!`, which is
+  # wrong, and not by `pkill -x mesh-llm`, which is right on a box running one model and
+  # takes down the other one the moment somebody uses the port input to run two.
+
+  - key: reset-mesh
+    name: Free the Mesh ports on a node
+    group: Maintenance
+    description: >
+      Kill any mesh-llm process still holding the management or serving ports, and report
+      what was there. For the case where a benchmark was killed mid-run and left its
+      server behind: every later run on that node then dies on "Address already in use",
+      and the node looks healthy from the control plane because nothing is in flight.
+
+    # 20, like everything else in this file. The argument for jumping the queue is real —
+    # every job behind this one fails in seconds until it has run — but the invariant that
+    # nothing here outranks a measurement is worth more than the seconds it would save,
+    # and the case this exists for is one where the queue is empty anyway.
+    priority: 20
+    target:
+      executor: lab
+    retain: never
+
+    inputs:
+      - key: ports
+        label: Ports to free
+        kind: text
+        default: "3131,9337"
+        description: >
+          Comma-separated. 3131 is the web console and 9337 the serving port; those are
+          the two a stranded `mesh-llm serve` holds. The harness checks both before it
+          starts, so both have to be clear.
+
+    build: ""
+    command: |
+      set -euo pipefail
+
+      # Only ever mesh-llm, and never this job or the agent. A maintenance template that
+      # can kill by port alone is one that takes the node out the first time something
+      # unrelated is listening.
+      SAFE='mesh-llm'
+      FREED=0
+
+      holders() {
+        local port="$1"
+        if command -v ss >/dev/null 2>&1; then
+          ss -lptnH "sport = :$port" 2>/dev/null \
+            | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
+        elif command -v lsof >/dev/null 2>&1; then
+          lsof -t -i ":$port" -sTCP:LISTEN 2>/dev/null | sort -u
+        fi
+      }
+
+      IFS=',' read -ra PORTS <<< "${ports}"
+      for raw in "${PORTS[@]}"; do
+        port="$(printf '%s' "$raw" | tr -d '[:space:]')"
+        [ -n "$port" ] || continue
+        case "$port" in (*[!0-9]*) echo "not a port: $port" >&2; exit 1 ;; esac
+
+        found=0
+        for pid in $(holders "$port"); do
+          found=1
+          args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+          age="$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+          echo "port $port held by pid $pid (up $age): $args"
+
+          if [ "$pid" = "$$" ]; then
+            echo "  refusing: that is this job" >&2
+            continue
+          fi
+          case "$args" in
+            *"$SAFE"*) ;;
+            *) echo "  refusing: not a $SAFE process, leaving it alone" >&2; continue ;;
+          esac
+
+          # Its own session, because the harness starts servers with setsid — which is
+          # also why the agent's process-group kill never reached this one.
+          pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+          if [ -n "$pgid" ]; then kill -TERM "-$pgid" 2>/dev/null || true; else kill -TERM "$pid" 2>/dev/null || true; fi
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 1
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "  did not stop on TERM, sending KILL"
+            if [ -n "$pgid" ]; then kill -KILL "-$pgid" 2>/dev/null || true; else kill -KILL "$pid" 2>/dev/null || true; fi
+            sleep 2
+          fi
+          kill -0 "$pid" 2>/dev/null && { echo "  STILL RUNNING" >&2; exit 1; }
+          echo "  stopped"
+          FREED=$((FREED + 1))
+        done
+        [ "$found" = 1 ] || echo "port $port already free"
+      done
+
+      # Prove it, rather than trusting the kill. A port that is still held is the whole
+      # failure this template exists to clear, so it must not report success.
+      for raw in "${PORTS[@]}"; do
+        port="$(printf '%s' "$raw" | tr -d '[:space:]')"
+        [ -n "$port" ] || continue
+        if [ -n "$(holders "$port")" ]; then
+          echo "port $port is still held after the sweep" >&2
+          exit 1
+        fi
+      done
+
+      echo "all requested ports free on $JIANYANG_NODE (stopped $FREED process(es))"
+
+    budget:
+      max_usd: 0
+      max_duration_s: 600
+      grace_s: 60
+
+  - key: serve
+    name: Serve a model
+    group: Serving
+    description: >
+      Stand one model up on one machine and keep it there. An OpenAI-compatible endpoint
+      on the node's LAN address, held until you stop it or the hold expires.
+
+    serves:
+      port: "${port}"
+      # mesh-llm speaks the OpenAI shape under /v1, so the address handed out is the one
+      # that can be pasted straight into a client's base_url.
+      api_path: /v1
+      ready_progress: ready
+
+    inputs:
+      - key: model
+        label: Model
+        description: Layer package to serve.
+        default: meshllm/Qwen3-8B-Q4_K_M-layers
+      - key: lanes
+        label: Parallel lanes
+        kind: number
+        description: >
+          Concurrent requests served at once. Each lane costs context memory, so the
+          ceiling is the machine's, not a preference — four fits a 16 GB mini.
+        default: 4
+        min: 1
+        max: 128
+      - key: ctx
+        label: Context per lane
+        kind: number
+        default: 4096
+        min: 512
+        max: 131072
+      - key: port
+        label: Port
+        kind: number
+        description: >
+          The port to listen on. Change it to run a second model on the same machine
+          without the two fighting over one number.
+        default: 9450
+        min: 1024
+        max: 65535
+      - key: hold_s
+        label: Hold for
+        kind: choice
+        description: >
+          How long to keep it up. It is stopped at this point whatever is connected, so
+          the machine comes back on its own if everybody forgets about it.
+        default: "14400"
+        choices:
+          - { value: "3600", label: "1 hour" }
+          - { value: "14400", label: "4 hours" }
+          - { value: "43200", label: "12 hours" }
+          - { value: "86400", label: "24 hours" }
+
+    target:
+      executor: lab
+      # No pin. Any lab machine can serve, and the launcher offers a machine picker for
+      # the times it matters which one.
+
+    # The same 20 every shipped template carries. Somebody waiting on an endpoint is a
+    # better claim on a free machine than a scheduled benchmark, and it is still not a
+    # good enough one to jump a queued campaign: that costs somebody an hour of two
+    # machines to save somebody else a few minutes. Raise it deliberately or not at all.
+    priority: 20
+
+    budget:
+      max_usd: 0
+      max_duration_s: "${hold_s}"
+      grace_s: 60
+
+    command: |
+      set -uo pipefail
+      cd "$JIANYANG_REPO_DIR"
+
+      # macOS sleeps an idle machine after a minute, and a served model is idle by
+      # definition between requests. A sleeping server is a dead endpoint.
+      command -v caffeinate >/dev/null 2>&1 && caffeinate -dimsu -w $$ &
+
+      TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+      BIN=""
+      for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+        [ -x "$c" ] && { BIN="$c"; break; }
+      done
+      [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+      export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+      PORT="${port}"
+      LOG="$JIANYANG_ARTIFACT_DIR/serve.log"
+
+      # See CUSTODY above. The server is whatever holds our port.
+      # Presence and ownership are different questions, and only the first one is the
+      # guard's. `ss -p` names a process only when you own it, so a server left by
+      # another account reads as a free port — which is precisely the case this exists
+      # to catch. `port_held` answers "is anything listening"; `port_pid` is best
+      # effort, for the message and for stopping it.
+      port_held() {
+        if command -v lsof >/dev/null 2>&1; then
+          lsof -ti "tcp:$PORT" -sTCP:LISTEN >/dev/null 2>&1
+        else
+          [ -n "$(ss -ltnH "sport = :$PORT" 2>/dev/null)" ]
+        fi
+      }
+      port_pid() {
+        if command -v lsof >/dev/null 2>&1; then
+          lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null | head -1
+        else
+          ss -lptnH "sport = :$PORT" 2>/dev/null \
+            | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2
+        fi
+      }
+
+      # Refuse rather than join. A stale server answers at once, so the readiness check
+      # below would pass in seconds and publish an address to whatever build and weights
+      # that process happens to be running.
+      if port_held; then
+        STALE="$(port_pid || true)"
+        echo "port $PORT already held by ${STALE:-a process this account cannot see}" >&2
+        [ -n "$STALE" ] && ps -o pid=,comm= -p "$STALE" >&2 2>/dev/null
+        echo "refusing to start — callers would be handed that server as if it were this one" >&2
+        exit 1
+      fi
+
+      stop_server() {
+        port_held || return 0
+        P="$(port_pid || true)"
+        case "$P" in ''|*[!0-9]*) return 0 ;; esac
+        kill "$P" 2>/dev/null || true
+        n=0
+        while [ "$n" -lt 10 ]; do
+          sleep 1
+          port_held || return 0
+          n=$((n + 1))
+        done
+        kill -9 "$P" 2>/dev/null || true
+      }
+      trap 'rc=$?; [ $rc -ne 0 ] && { echo "--- serve log ---" >&2; tail -120 "$LOG" >&2; }; stop_server' EXIT
+
+      "$BIN" --log-format json --parallel "${lanes}" serve \
+        --model "${model}" --ctx-size "${ctx}" --port "$PORT" \
+        > "$LOG" 2>&1 &
+
+      progress() {
+        [ -n "${JIANYANG_PROGRESS_PATH:-}" ] && printf '%s\n' "$1" > "$JIANYANG_PROGRESS_PATH"
+      }
+
+      # Ready means the runtime has loaded and will answer, not that the process exists.
+      # Those are minutes apart for a large model, and the control plane publishes the
+      # address on the strength of this line.
+      MODEL_ID=""
+      for i in $(seq 1 240); do
+        MODEL_ID=$(curl -sf -m 5 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null \
+          | python3 -c 'import json,sys; d=(json.load(sys.stdin).get("data") or []); print(d[0].get("id","") if d else "")' \
+          2>/dev/null || true)
+        [ -n "$MODEL_ID" ] && break
+        WAITED=$((i * 5))
+        [ $((i % 12)) -eq 0 ] && progress "loading weights — ${WAITED}s"
+        # The port may not be open yet, so liveness here is "some mesh-llm survives".
+        # Loose, and bounded by the loop; the refusal above means the port is ours.
+        pgrep -x mesh-llm >/dev/null 2>&1 || { echo "server died while loading" >&2; exit 1; }
+        sleep 5
+      done
+      [ -n "$MODEL_ID" ] || { echo "model never became ready" >&2; exit 1; }
+
+      # Proof we own what we are about to advertise. Without this the ready line could
+      # describe a server this job never started.
+      port_held || { echo "ready, but nothing holds port $PORT" >&2; exit 1; }
+      OWNED="$(port_pid || true)"
+
+
+      progress "ready · $MODEL_ID"
+      echo "serving $MODEL_ID on port $PORT (pid $OWNED)"
+
+      # Hold the machine for as long as the server is listening. Exiting here would stop
+      # the endpoint; the run ends when the budget expires or somebody presses Stop.
+      while port_held; do sleep 15; done
+      echo "server stopped listening"
+      exit 1
+
+  - key: serve-spark-qwen-coder
+    name: Serve Qwen3-Coder on the Spark
+    group: Serving
+    description: >
+      Qwen3-Coder 30B-A3B on spark-db08, at the lane and context settings the saturation
+      work settled on. The coding endpoint — point a client's base_url at it.
+
+    serves:
+      port: "${port}"
+      api_path: /v1
+      ready_progress: ready
+
+    # Pinned, and not a convenience. This is the only machine in the lab that holds a
+    # 30B, the settings below were measured on THIS box, and its CUDA runtime is what
+    # the build stage produces here and nowhere else.
+    target:
+      executor: lab
+      nodes: [spark-db08]
+
+    priority: 20
+
+    inputs:
+      - key: model
+        label: Model
+        kind: choice
+        default: hf:unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF@main#*Q4_K_M*
+        choices:
+          - value: hf:unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF@main#*Q4_K_M*
+            label: Qwen3-Coder 30B-A3B Instruct (Q4_K_M, 17 GB)
+        description: >
+          The coding model in mesh-llm's own catalog — agentic coding and tool use. A
+          single choice today, and a dropdown rather than a fixed string so a second
+          quant can be added without the launch form changing shape.
+      - key: lanes
+        label: Parallel lanes
+        kind: number
+        # 32, because the box saturates at about 32 in-flight and extra lanes only
+        # queue: at c=32/64/128 it does 426/443/434 tok/s, and TTFT p50 goes 1.6s / 38s
+        # / 118s. Asking for more lanes than it can serve buys nothing and costs the
+        # people waiting.
+        default: 32
+        min: 1
+        max: 128
+        description: >
+          Concurrent requests. The Spark saturates around 32; more lanes queue rather
+          than serve, and time-to-first-token grows sharply past it.
+      - key: ctx
+        label: Context per lane
+        kind: number
+        default: 4096
+        min: 512
+        max: 131072
+        description: >
+          4096 is what the published numbers were taken at. A large explicit context
+          beside a high lane count is a known way to make this server never report
+          ready — it did not, in fifteen minutes, on 2026-09-21.
+      - key: port
+        label: Port
+        kind: number
+        # NOT 3131. That is mesh-llm's own console default, and passing it to `--port`
+        # makes the process collide with itself: it came up, formed a mesh, announced
+        # an invite token, and then died on `Failed to bind Web console to port 3131 —
+        # Address already in use`, seventeen minutes of CUDA build later.
+        #
+        # Nothing else held the port; checked on the box afterwards with nothing
+        # running. The recipe's ":3131/api/status" describes where the console answers
+        # BY DEFAULT, which is the opposite of a port to ask for. Every template here
+        # that works stays in the 9400s for exactly this reason.
+        default: 9450
+        min: 1024
+        max: 65535
+      - key: hold_s
+        label: Hold for
+        kind: choice
+        default: "14400"
+        choices:
+          - { value: "3600", label: "1 hour" }
+          - { value: "14400", label: "4 hours" }
+          - { value: "43200", label: "12 hours" }
+          - { value: "86400", label: "24 hours" }
+
+    # Resolved by the agent against the registry, so the spec carries no path. `cache`
+    # rather than the default `auto`: a served model is read continuously for hours, and
+    # streaming 17 GB off an SMB share for that long is a slower endpoint and a busier
+    # network than anybody signed up for. The weights are pre-cached on this node, so
+    # this normally costs nothing.
+    models:
+      - ref: ${model}
+        env: MODEL
+        delivery: cache
+
+    budget:
+      max_usd: 0
+      max_duration_s: "${hold_s}"
+      grace_s: 60
+
+    command: |
+      set -uo pipefail
+      cd "$JIANYANG_REPO_DIR"
+
+      TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+      BIN=""
+      for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+        [ -x "$c" ] && { BIN="$c"; break; }
+      done
+      [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+
+      # The bundle the build stage packaged, pointed at directly. NOT
+      # `mesh-llm runtime install --bundle-dir`: the release catalog carries an artifact
+      # with the same id and an older Skippy ABI, and the installer prefers it — which
+      # is a version mismatch at load time rather than an error anybody can read.
+      export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+      PORT="${port}"
+      LOG="$JIANYANG_ARTIFACT_DIR/serve.log"
+
+      # See CUSTODY above. This is the box the three-hour orphan happened on.
+      # Presence and ownership are different questions, and only the first one is the
+      # guard's. `ss -p` names a process only when you own it, so a server left by
+      # another account reads as a free port — which is precisely the case this exists
+      # to catch. `port_held` answers "is anything listening"; `port_pid` is best
+      # effort, for the message and for stopping it.
+      port_held() {
+        if command -v lsof >/dev/null 2>&1; then
+          lsof -ti "tcp:$PORT" -sTCP:LISTEN >/dev/null 2>&1
+        else
+          [ -n "$(ss -ltnH "sport = :$PORT" 2>/dev/null)" ]
+        fi
+      }
+      port_pid() {
+        if command -v lsof >/dev/null 2>&1; then
+          lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null | head -1
+        else
+          ss -lptnH "sport = :$PORT" 2>/dev/null \
+            | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2
+        fi
+      }
+
+      if port_held; then
+        STALE="$(port_pid || true)"
+        echo "port $PORT already held by ${STALE:-a process this account cannot see}" >&2
+        [ -n "$STALE" ] && ps -o pid=,comm= -p "$STALE" >&2 2>/dev/null
+        echo "refusing to start — callers would be handed that server as if it were this one" >&2
+        exit 1
+      fi
+
+      stop_server() {
+        port_held || return 0
+        P="$(port_pid || true)"
+        case "$P" in ''|*[!0-9]*) return 0 ;; esac
+        kill "$P" 2>/dev/null || true
+        n=0
+        while [ "$n" -lt 10 ]; do
+          sleep 1
+          port_held || return 0
+          n=$((n + 1))
+        done
+        kill -9 "$P" 2>/dev/null || true
+      }
+      trap 'rc=$?; [ $rc -ne 0 ] && { echo "--- serve log ---" >&2; tail -160 "$LOG" >&2; }; stop_server' EXIT
+
+      echo "serving $MODEL at ${lanes} lanes, ctx ${ctx}"
+      # `--parallel` is a runtime-surface flag and belongs BEFORE `serve`, or it is
+      # normalised away without a word and the planner's default of four lanes is what
+      # actually runs.
+      "$BIN" --log-format json --parallel "${lanes}" serve \
+        --model "$MODEL" --ctx-size "${ctx}" --port "$PORT" \
+        > "$LOG" 2>&1 &
+
+      progress() {
+        [ -n "${JIANYANG_PROGRESS_PATH:-}" ] && printf '%s\n' "$1" > "$JIANYANG_PROGRESS_PATH"
+      }
+
+      # Twenty minutes, and the length is earned. `node_state` says serving before the
+      # model is loaded and `/v1/models` returns 200 with an empty list, so the only
+      # honest signal is `llama_ready` with a model name beside it. A 30B at 32 lanes
+      # has taken over three minutes to publish; the loop breaks the moment it does.
+      MODEL_ID=""
+      for i in $(seq 1 240); do
+        MODEL_ID=$(curl -sf -m 5 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null \
+          | python3 -c 'import json,sys; d=(json.load(sys.stdin).get("data") or []); print(d[0].get("id","") if d else "")' \
+          2>/dev/null || true)
+        [ -n "$MODEL_ID" ] && break
+        WAITED=$((i * 5))
+        [ $((i % 12)) -eq 0 ] && progress "loading weights — ${WAITED}s"
+        pgrep -x mesh-llm >/dev/null 2>&1 || { echo "server died while loading" >&2; exit 1; }
+        sleep 5
+      done
+      [ -n "$MODEL_ID" ] || { echo "model never became ready" >&2; exit 1; }
+
+      port_held || { echo "ready, but nothing holds port $PORT" >&2; exit 1; }
+      OWNED="$(port_pid || true)"
+
+
+      # The served id is what requests must name — a made-up model name is rejected —
+      # so it goes in the ready line and in the log where a caller can find it.
+      progress "ready · $MODEL_ID · ${lanes} lanes"
+      echo "serving $MODEL_ID on port $PORT (pid $OWNED)"
+      echo "requests must name model id: $MODEL_ID"
+
+      while port_held; do sleep 15; done
+      echo "server stopped listening"
+      exit 1
+
+  - key: serve-split-2node
+    name: Serve a model split across both minis
+    group: Serving
+    description: >
+      One model cut across both Mac minis and served from the coordinator. The address
+      is the coordinator's; the joiner holds half the weights and talks only to its
+      peer. For models that do not fit on one 16 GB machine.
+
+    serves:
+      port: "${port}"
+      api_path: /v1
+      ready_progress: ready
+      # The coordinator answers requests. The joiner is listening for a mesh, and
+      # handing out its address would give somebody a port that never replies.
+      role: coordinator
+
+    inputs:
+      - key: model
+        label: Model
+        description: Layer package to serve, split across both stages.
+        default: meshllm/Qwen3-8B-Q4_K_M-layers
+      - key: lanes
+        label: Parallel lanes per stage
+        kind: number
+        default: 4
+        min: 1
+        max: 64
+      - key: ctx
+        label: Context per lane
+        kind: number
+        default: 4096
+        min: 512
+        max: 131072
+      - key: port
+        label: Port
+        kind: number
+        default: 9450
+        min: 1024
+        max: 65535
+      - key: hold_s
+        label: Hold for
+        kind: choice
+        default: "14400"
+        choices:
+          - { value: "3600", label: "1 hour" }
+          - { value: "14400", label: "4 hours" }
+          - { value: "43200", label: "12 hours" }
+          - { value: "86400", label: "24 hours" }
+
+    # Pinned for the same reason the split benchmark is, minus the comparability
+    # argument: gis-Mac-mini leads because mesh-llm elects its own coordinator by VRAM
+    # and breaks ties on the smallest node id. Having the two notions of "leader"
+    # disagree is a debugging afternoon.
+    roles:
+      - name: coordinator
+        nodes: [gis-Mac-mini]
+      - name: joiner
+        nodes: [mac]
+        command: |
+          set -uo pipefail
+          cd "$JIANYANG_REPO_DIR"
+          command -v caffeinate >/dev/null 2>&1 && caffeinate -dimsu -w $$ &
+
+          TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+          BIN=""
+          for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+            [ -x "$c" ] && { BIN="$c"; break; }
+          done
+          [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+          export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+          LEAD="${JIANYANG_LEADER_HOST:-}"
+          [ -n "$LEAD" ] || { echo "no leader host in the formation env" >&2; exit 1; }
+          API="${port}"
+          BIND="${SPLIT_BIND_PORT:-7843}"
+          # /api/status is the console's, not the API's. See CONSOLE PORT above.
+          CONSOLE="${SPLIT_CONSOLE_PORT:-3232}"
+
+          # This stage's own port, tracked the same way the coordinator's is and for the
+          # same reason — a stale joiner would join the mesh as a second copy of itself.
+          # Presence and ownership are different questions; only the first is the
+          # guard's. `ss -p` names a process only when you own it, so a stage left by
+          # another account reads as a free port.
+          port_held() {
+            if command -v lsof >/dev/null 2>&1; then
+              lsof -ti "tcp:$BIND" -sTCP:LISTEN >/dev/null 2>&1
+            else
+              [ -n "$(ss -ltnH "sport = :$BIND" 2>/dev/null)" ]
+            fi
+          }
+          port_pid() {
+            if command -v lsof >/dev/null 2>&1; then
+              lsof -ti "tcp:$BIND" -sTCP:LISTEN 2>/dev/null | head -1
+            else
+              ss -lptnH "sport = :$BIND" 2>/dev/null \
+                | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2
+            fi
+          }
+          if port_held; then
+            STALE="$(port_pid || true)"
+            echo "bind port $BIND already held by ${STALE:-another process}" >&2
+            exit 1
+          fi
+
+          stop_server() {
+            port_held || return 0
+            P="$(port_pid || true)"
+            case "$P" in ''|*[!0-9]*) return 0 ;; esac
+            kill "$P" 2>/dev/null || true
+            n=0
+            while [ "$n" -lt 10 ]; do
+              sleep 1
+              port_held || return 0
+              n=$((n + 1))
+            done
+            kill -9 "$P" 2>/dev/null || true
+          }
+          # Tail the joiner's own log on the way out, always. Without it everything known
+          # about this half of the split comes from the coordinator's view of it, and a
+          # joiner torn down as `cancelled` leaves nothing behind at all.
+          JOINER_LOG="$JIANYANG_ARTIFACT_DIR/joiner.log"
+          trap 'echo "--- joiner log (last 60) ---" >&2; tail -60 "$JOINER_LOG" >&2 2>/dev/null || true; stop_server' EXIT
+
+          # The model has to be HERE, not merely named. A peer without the package never
+          # declares interest, so the coordinator counts one eligible node and refuses to
+          # form a split — `excluded [<peer>:missing_model_interest]`. See the benchmark
+          # template's joiner for the full account. Before the join, so a large fetch
+          # cannot be mistaken for a split that would not form.
+          DL_LOG="$JIANYANG_ARTIFACT_DIR/model-download.log"
+          echo "ensuring ${model} is present on $(hostname -s)"
+          if "$BIN" models download "${model}" > "$DL_LOG" 2>&1; then
+            echo "model present: ${model}"
+          else
+            echo "could not fetch ${model} on $(hostname -s)" >&2
+            tail -40 "$DL_LOG" >&2
+            exit 1
+          fi
+
+          # The invite token off the coordinator's own status endpoint. Polling rather
+          # than ordering: both members start together, so the joiner is up before the
+          # coordinator has a mesh. That is expected, and this is the wait.
+          TOKEN=""
+          for i in $(seq 1 180); do
+            TOKEN=$(curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" 2>/dev/null \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' \
+              2>/dev/null || true)
+            [ -n "$TOKEN" ] && break
+            sleep 5
+          done
+          [ -n "$TOKEN" ] || { echo "no invite token from $LEAD after 15m" >&2; exit 1; }
+          echo "joining the mesh at $LEAD"
+
+          "$BIN" --log-format json --parallel "${lanes}" serve \
+            --model "${model}" --split --auto-balance --join "$TOKEN" \
+            --ctx-size "${ctx}" --port "$API" --console "$CONSOLE" \
+            --bind-port "$BIND" \
+            > "$JOINER_LOG" 2>&1 &
+
+          # Stand down when the coordinator goes, rather than holding the machine for
+          # the whole budget serving a stage nobody can reach.
+          MISSES=0
+          while true; do
+            pgrep -x mesh-llm >/dev/null 2>&1 || { echo "joiner stage exited"; break; }
+            if curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" >/dev/null 2>&1; then
+              MISSES=0
+            else
+              MISSES=$((MISSES + 1))
+              [ "$MISSES" -ge 6 ] && { echo "coordinator gone — standing down"; break; }
+            fi
+            sleep 10
+          done
+          echo "joiner finished"
+
+    target:
+      executor: lab
+      num_nodes: 1
+
+    # As above: a service does not outrank a campaign.
+    priority: 20
+
+    budget:
+      max_usd: 0
+      max_duration_s: "${hold_s}"
+      grace_s: 60
+
+    env:
+      # The engine switch that makes the balanced cut pay, carried over from the split
+      # benchmark: without it the 12/24 cut performs worse than an even split.
+      SKIPPY_LAST_STAGE_DECODE_BATCH: "1"
+
+    command: |
+      set -uo pipefail
+      cd "$JIANYANG_REPO_DIR"
+      command -v caffeinate >/dev/null 2>&1 && caffeinate -dimsu -w $$ &
+
+      TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
+      BIN=""
+      for c in "$TARGET_DIR/release/mesh-llm" "target/release/mesh-llm"; do
+        [ -x "$c" ] && { BIN="$c"; break; }
+      done
+      [ -n "$BIN" ] || { echo "no release host built" >&2; exit 1; }
+      export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
+
+      PORT="${port}"
+      # /api/status is the console's, not the API's. See CONSOLE PORT above.
+      CONSOLE="${SPLIT_CONSOLE_PORT:-3232}"
+
+      # The same fetch the joiner does. A template that works only on the machine that
+      # was set up by hand breaks on the next one.
+      DL_LOG="$JIANYANG_ARTIFACT_DIR/model-download.log"
+      echo "ensuring ${model} is present on $(hostname -s)"
+      if "$BIN" models download "${model}" > "$DL_LOG" 2>&1; then
+        echo "model present: ${model}"
+      else
+        echo "could not fetch ${model} on $(hostname -s)" >&2
+        tail -40 "$DL_LOG" >&2
+        exit 1
+      fi
+
+      LOG="$JIANYANG_ARTIFACT_DIR/coordinator.log"
+
+      # Presence and ownership are different questions, and only the first one is the
+      # guard's. `ss -p` names a process only when you own it, so a server left by
+      # another account reads as a free port — which is precisely the case this exists
+      # to catch. `port_held` answers "is anything listening"; `port_pid` is best
+      # effort, for the message and for stopping it.
+      port_held() {
+        if command -v lsof >/dev/null 2>&1; then
+          lsof -ti "tcp:$PORT" -sTCP:LISTEN >/dev/null 2>&1
+        else
+          [ -n "$(ss -ltnH "sport = :$PORT" 2>/dev/null)" ]
+        fi
+      }
+      port_pid() {
+        if command -v lsof >/dev/null 2>&1; then
+          lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null | head -1
+        else
+          ss -lptnH "sport = :$PORT" 2>/dev/null \
+            | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2
+        fi
+      }
+
+      if port_held; then
+        STALE="$(port_pid || true)"
+        echo "port $PORT already held by ${STALE:-a process this account cannot see}" >&2
+        [ -n "$STALE" ] && ps -o pid=,comm= -p "$STALE" >&2 2>/dev/null
+        echo "refusing to start — the joiner would form a mesh with that server" >&2
+        exit 1
+      fi
+
+      stop_server() {
+        port_held || return 0
+        P="$(port_pid || true)"
+        case "$P" in ''|*[!0-9]*) return 0 ;; esac
+        kill "$P" 2>/dev/null || true
+        n=0
+        while [ "$n" -lt 10 ]; do
+          sleep 1
+          port_held || return 0
+          n=$((n + 1))
+        done
+        kill -9 "$P" 2>/dev/null || true
+      }
+      trap 'rc=$?; [ $rc -ne 0 ] && { echo "--- coordinator log ---" >&2; tail -120 "$LOG" >&2; }; stop_server' EXIT
+
+      # --listen-all, or the joiner cannot reach the token. The console binds
+      # 127.0.0.1 unless told otherwise, so $LEAD:$CONSOLE is unreachable from
+      # anywhere but this box. See the benchmark template's coordinator for the full
+      # account — this is the same failure in the serving half.
+      "$BIN" --log-format json --parallel "${lanes}" serve \
+        --model "${model}" --split --auto-balance --listen-all \
+        --ctx-size "${ctx}" --port "$PORT" --console "$CONSOLE" \
+        --bind-port "${SPLIT_BIND_PORT:-7842}" \
+        > "$LOG" 2>&1 &
+
+      progress() {
+        [ -n "${JIANYANG_PROGRESS_PATH:-}" ] && printf '%s\n' "$1" > "$JIANYANG_PROGRESS_PATH"
+      }
+
+      # Ready means BOTH stages are up and a model is published. A split that has only
+      # its own stage answers /api/status perfectly well and then serves nothing, so
+      # waiting on the local runtime alone would publish an address to a one-legged mesh.
+      MODEL_ID=""
+      for i in $(seq 1 240); do
+        S=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" 2>/dev/null || true)
+        if [ -n "$S" ]; then
+          # `llama_ready` AND `model_name` ARE TOP-LEVEL IN /api/status, NOT UNDER
+          # `runtime`. Reading them from `runtime` yields None on both counts, so
+          # the predicate is false forever: a run watched a perfectly healthy
+          # two-stage split for 23 minutes and then failed with "the split never
+          # formed with two stages". `runtime` carries `stages`, and each stage
+          # carries `model_id` — kept as the fallback, since when two stages exist
+          # that is by definition the id the API serves.
+          MODEL_ID=$(printf '%s' "$S" | python3 -c 'import json,sys; d=json.load(sys.stdin); st=(d.get("runtime") or {}).get("stages") or []; name=d.get("model_name") or (st[0].get("model_id") if st else "") or ""; print(name if (d.get("llama_ready") and len(st) >= 2) else "")' 2>/dev/null || true)
+        fi
+        [ -n "$MODEL_ID" ] && break
+        WAITED=$((i * 5))
+        [ $((i % 12)) -eq 0 ] && progress "forming split — ${WAITED}s"
+        pgrep -x mesh-llm >/dev/null 2>&1 || { echo "coordinator died while forming" >&2; exit 1; }
+        sleep 5
+      done
+      [ -n "$MODEL_ID" ] || { echo "the split never formed" >&2; exit 1; }
+
+      port_held || { echo "ready, but nothing holds port $PORT" >&2; exit 1; }
+      OWNED="$(port_pid || true)"
+
+
+      progress "ready · $MODEL_ID · 2 stages"
+      echo "serving $MODEL_ID split across two stages on port $PORT (pid $OWNED)"
+
+      while port_held; do sleep 15; done
+      echo "server stopped listening"
+      exit 1

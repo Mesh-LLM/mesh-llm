@@ -1,4 +1,4 @@
-From c33dedca23df05088d225ba8a938950ec9c942bc Mon Sep 17 00:00:00 2001
+From b91848d0aa83ff60cacad3c07d3edf684fb643b2 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
 Subject: [PATCH] models: add Laya decision model support
@@ -70,15 +70,15 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 80ab5b76b..ab0182c3a 100644
+index 507a762fe..5180a2531 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 68
-+#define SKIPPY_ABI_VERSION_PATCH 70
+-#define SKIPPY_ABI_VERSION_PATCH 69
++#define SKIPPY_ABI_VERSION_PATCH 71
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))

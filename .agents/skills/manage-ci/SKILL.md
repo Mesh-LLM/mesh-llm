@@ -742,3 +742,21 @@ Also run what applies:
 Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
+
+## Repository-owned Jianyang AgentX
+
+`skippy/evals/agentx/templates.yaml` owns Jianyang repository jobs. AgentX orchestration belongs
+in typed Rust automation, with thin Just build/run recipes and a locked upstream
+harness environment under `skippy/evals/agentx`. Smoke results and local-corpus
+exports marked `submission_valid=false` must never enter performance history.
+Benchmark engines and the harness execute inside the same ARM64 CUDA container
+on the JY-leased Spark. The host may build the image and lifecycle controller,
+but must not run benchmark cells natively. Record the immutable image ID and
+source label, bind the host's existing `HF_HOME` at the same container path for
+standard HF cache reuse (never a separate weight download directory), mount
+JY artifacts, and remove the owned
+container on success, failure, timeout, and cancellation. An in-container hard
+deadline bounds work even if the host controller disappears.
+Migration of the live template-source registration follows review; preview runs
+use Jianyang's existing template renderer with immutable PR source, then submit
+the rendered specification so unrelated jobs keep their production default ref.

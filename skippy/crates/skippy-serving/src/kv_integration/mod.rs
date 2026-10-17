@@ -35,6 +35,8 @@ pub mod lifecycle;
 mod output_tokens;
 mod records;
 mod resident_prefix;
+mod resident_recurrent;
+pub(crate) use resident_recurrent::ResidentRecurrentPolicy;
 
 pub use lifecycle::{KvLifecycleEvent, KvLifecycleObserver};
 pub use records::{

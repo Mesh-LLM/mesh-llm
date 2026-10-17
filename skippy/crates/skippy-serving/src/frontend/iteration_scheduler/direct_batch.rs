@@ -19,6 +19,12 @@ pub(super) fn direct_coalesce_target(
     queued_direct_iterations: usize,
     max_direct_batch_size: usize,
 ) -> usize {
+    // Active sessions may belong to the planned scheduler. There is no
+    // direct batch to coalesce until its first request is actually queued;
+    // waiting here would delay every planned decode by the coalesce window.
+    if queued_direct_iterations == 0 {
+        return 0;
+    }
     active_runtime_sessions
         .max(queued_direct_iterations)
         .min(max_direct_batch_size)
@@ -153,6 +159,14 @@ pub(super) fn validate_direct_iteration(
 #[cfg(test)]
 mod pipeline_group_tests {
     use super::*;
+
+    #[test]
+    fn active_sessions_do_not_start_an_empty_direct_batch() {
+        for active in [0, 1, 16, 32] {
+            assert_eq!(direct_coalesce_target(active, 0, 16), 0);
+        }
+        assert_eq!(direct_coalesce_target(16, 1, 16), 16);
+    }
 
     #[test]
     fn groups_default_to_one_and_ignore_invalid_values() {

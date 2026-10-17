@@ -788,9 +788,9 @@ mod tests {
     #[test]
     fn recurrent_pricing_rejects_plan_that_old_zero_cost_model_admitted() {
         // Falcon-H1 1.5B metadata: conv=4, inner=3072, state=256,
-        // groups=1, 24 recurrent layers. Three state planes and two native
-        // sequence slots per configured lane cost 19,132,416 bytes per layer.
-        const FALCON_RECURRENT_BYTES_PER_LANE_PER_LAYER: u64 = 19_132_416;
+        // groups=1, 24 recurrent layers. One state plane and two native
+        // sequence slots per configured lane cost 6,377,472 bytes per layer.
+        const FALCON_RECURRENT_BYTES_PER_LANE_PER_LAYER: u64 = 6_377_472;
         const LAYERS: u32 = 24;
         const LANES: usize = 64;
 
@@ -843,7 +843,7 @@ mod tests {
         );
         request.nodes[0].detected_vram_bytes = old_required + recurrent_required;
         assert!(plan_topology(&request).is_ok());
-        assert_eq!(recurrent_required, 29_387_390_976);
+        assert_eq!(recurrent_required, 9_795_796_992);
     }
 
     #[test]

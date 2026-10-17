@@ -68,6 +68,35 @@ limit. Both limits are reported on
 `stage.openai_generation_summary` as `skippy.exact_cache.max_bytes` and
 `skippy.exact_cache.hard_max_bytes`.
 
+## Resident hybrid checkpoints
+
+Single-lane local generation can retain attention KV in its native execution
+lane between successful requests. L1 keeps up to four exact recurrent
+checkpoints, bounded by the configured exact-cache entry and hard byte limits.
+This is a combined representation: attention remains in backend memory, while
+the recurrent checkpoint is serialized in host RAM. L1 does not mean GPU memory.
+
+Lookup matches both the cache namespace and token prefix. A native coverage
+check rejects reuse when attention no longer covers the whole prefix, including
+shifted sliding-window histories. A hit restores only recurrent state, trims the
+obsolete attention suffix, restores token history and evaluates the new suffix.
+Its exact-hit source is `resident_recurrent`; attention import and reconstruction
+times are zero. The lane is the sole owner of its cells; there is no second
+cache sequence pin. Multi-lane and other serving paths retain serialized caching.
+Resident capture byte statistics count host recurrent checkpoints; they do not
+measure the backend's attention allocation or total GPU residency.
+
+On lane reuse for an unrelated request, checkpoint pressure, or explicit idle
+eviction, eligible checkpoints become ordinary KV/recurrent snapshots before
+the native cells are released. Bounded admission prioritizes the newest
+continuation and then a durable shared checkpoint. The existing recorder and L3
+admission rules apply; refused captures can be discarded. Cancellation and
+errors discard resident state instead of preserving a possibly dirty lane.
+Disabling idle retention (`cache_idle_slots=0`) keeps the serialized path.
+
+Demoted snapshots can reach L3 and subsequently qualify for L2 under the policy
+below. A resident lane reference itself is never written to either lower tier.
+
 ## Host-RAM L2 Cache
 
 Set `model_fit.cache_ram_mib` to a positive MiB value to enable the bounded

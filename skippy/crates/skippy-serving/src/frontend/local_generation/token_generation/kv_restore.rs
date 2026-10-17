@@ -30,7 +30,11 @@ impl StageOpenAiBackend {
             Ok(Some(restored)) => {
                 restored_prefill = true;
                 cache_stats.status = "hit";
-                cache_stats.hit_kind = Some("exact_prefix");
+                cache_stats.hit_kind = Some(if restored.source == "resident_recurrent" {
+                    "resident_recurrent"
+                } else {
+                    "exact_prefix"
+                });
                 let mut attrs = self.openai_attrs(ids);
                 attrs.insert("skippy.kv.decision".to_string(), json!("exact_hit"));
                 attrs.insert(
