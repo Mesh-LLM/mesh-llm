@@ -1,4 +1,4 @@
-From 101d7ca369cbfde1971e506169eefabd4cae48f8 Mon Sep 17 00:00:00 2001
+From a3a02ceaf5ee00edbc7f06d1cc9e1d6e16a5bab0 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -12,7 +12,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  .../tests/hardware_application_probe.cpp      |   76 +
  src/skippy/tests/input_capabilities.cpp       |   78 +
  .../tests/input_leaf_state_regression.h       |   49 +
- src/skippy/tests/live_graph_reference.h       |  194 ++
+ src/skippy/tests/live_graph_reference.h       |  198 ++
  src/skippy/tests/noalloc_graph_planning.cpp   | 1107 +++++++++++
  src/skippy/tests/profile_residency.cpp        |  258 +++
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9378 insertions(+), 33 deletions(-)
+ 34 files changed, 9382 insertions(+), 33 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -1838,10 +1838,10 @@ index 000000000..33d3faca9
 +}
 diff --git a/src/skippy/tests/live_graph_reference.h b/src/skippy/tests/live_graph_reference.h
 new file mode 100644
-index 000000000..73129bf07
+index 000000000..aba85bf81
 --- /dev/null
 +++ b/src/skippy/tests/live_graph_reference.h
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,198 @@
 +#pragma once
 +
 +#include "llama-context.h"
@@ -1904,6 +1904,10 @@ index 000000000..73129bf07
 +        skippy_error * error = nullptr;
 +        const auto status = skippy_model_open_from_parts(parts.data(), parts.size(), &config, &model, &error);
 +        if (!finished(status, error) || !model) return false;
++        if (model->ctx->get_cparams().n_rs_seq != 0) {
++            std::fprintf(stderr, "ordinary stage contexts must not reserve rolling rollback snapshots\n");
++            return false;
++        }
 +        error = nullptr;
 +        const auto session_status = skippy_session_create(model, &session, &error);
 +        return finished(session_status, error);

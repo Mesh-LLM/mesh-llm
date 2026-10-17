@@ -1,4 +1,4 @@
-From a6b585f108cb8601723ab6896dc9354a9e050fc0 Mon Sep 17 00:00:00 2001
+From ee50e306396217334865d6a1505c386a72015de6 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -30,7 +30,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/model_lifecycle.cpp          |  155 +++
  src/skippy/model_load_config.cpp        |  194 ++++
  src/skippy/model_load_config_internal.h |   25 +
- src/skippy/model_loading.cpp            | 1191 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1193 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  463 +++++++++
@@ -61,7 +61,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  371 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16061 insertions(+)
+ 57 files changed, 16063 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -6273,10 +6273,10 @@ index 000000000..0f7c83139
 +        llama_context_params & params);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..ea92120e4
+index 000000000..a110c9c6e
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,1191 @@
+@@ -0,0 +1,1193 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -7014,7 +7014,9 @@ index 000000000..ea92120e4
 +    }
 +    if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
 +        params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
-+        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
++        // Keep the default of zero rolling rollback snapshots. Verification
++        // captures a checkpoint on demand; ordinary decode needs only the
++        // current recurrent state, not two extra state copies per token.
 +        params.kv_unified = true;
 +    }
 +    // Multi-lane activation exports rely on the shared KV pool's batch order.

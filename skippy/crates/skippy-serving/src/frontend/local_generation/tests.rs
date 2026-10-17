@@ -29,6 +29,7 @@ use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMod
 use skippy_runtime::SamplingConfig;
 
 mod recurrent_early_stop;
+mod recurrent_verification;
 mod resident_recurrent;
 
 // The real-model tests below are deliberately ignored by default. The

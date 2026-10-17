@@ -1832,9 +1832,9 @@ fn build_scheduler_config(
     }];
     if recurrent_bytes_per_sequence > 0 {
         // Native recurrent contexts reserve two sequence slots per configured
-        // lane and three state planes per native sequence. The per-sequence
-        // value already includes the three planes; capacity reflects the
-        // native two-slots-per-lane allocation.
+        // lane, with one current-state plane per native sequence. Capacity
+        // reflects the native two-slots-per-lane allocation; verification
+        // checkpoints are captured separately on demand.
         memory_components.push(MemoryComponent {
             name: "recurrent-state".to_string(),
             capacity_bytes: recurrent_bytes_per_sequence
