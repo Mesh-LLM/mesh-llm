@@ -10,6 +10,9 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 [features]
 default = []
 dynamic-native-runtime = ["skippy-ffi/dynamic-runtime"]
+# Test-only runtime loading for crates whose tests call into the native
+# runtime; enable it from [dev-dependencies] only.
+test-support = []
 
 [dependencies]
 crossbeam-queue.workspace = true
