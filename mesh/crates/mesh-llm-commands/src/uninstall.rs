@@ -326,11 +326,17 @@ where
             service_host_record,
             binary_name,
         } => {
-            // Nothing to report when setup never registered the task.
-            let registered = Command::new("schtasks")
-                .args(["/Query", "/TN", SERVICE_NAME])
-                .output()
-                .is_ok_and(|output| output.status.success());
+            // Nothing to report when setup never registered the task, but a
+            // failed lookup is not an absent task.
+            let registered = match scheduled_task_registered() {
+                Ok(registered) => registered,
+                Err(error) => {
+                    outcome.warnings.push(format!(
+                        "could not check for the {SERVICE_NAME} scheduled task ({error}); if it is still registered, remove it with: schtasks /End /TN {SERVICE_NAME}, then schtasks /Delete /TN {SERVICE_NAME} /F"
+                    ));
+                    false
+                }
+            };
             if registered {
                 run_best_effort(
                     Command::new("schtasks").args(["/End", "/TN", SERVICE_NAME]),
@@ -499,6 +505,36 @@ fn remove_recursively(path: &Path, outcome: &mut UninstallOutcome) -> Result<()>
         Err(error) => return Err(error.into()),
     }
     Ok(())
+}
+
+/// Whether setup's scheduled task is registered. `schtasks /Query /TN` fails
+/// the same way for an absent task and for a lookup error, so this lists every
+/// task: a failed listing is an error, and a listing without the task means it
+/// is absent.
+fn scheduled_task_registered() -> Result<bool, String> {
+    let output = Command::new("schtasks")
+        .args(["/Query", "/FO", "CSV", "/NH"])
+        .output()
+        .map_err(|error| format!("failed to run schtasks: {error}"))?;
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "`schtasks /Query` exited with status {}: {said}",
+            output.status
+        ));
+    }
+    Ok(task_listed(
+        &String::from_utf8_lossy(&output.stdout),
+        SERVICE_NAME,
+    ))
+}
+
+/// Whether `schtasks /Query /FO CSV /NH` lists the root-folder task `name`.
+fn task_listed(listing: &str, name: &str) -> bool {
+    let wanted = format!("\"\\{name}\"");
+    listing
+        .lines()
+        .any(|line| line.trim_start().split(',').next() == Some(wanted.as_str()))
 }
 
 /// Stops the service host recorded at `record` when a process with that id
@@ -814,6 +850,33 @@ mod tests {
                     .any(|step| matches!(step, UninstallStep::RemoveScheduledTask { .. }))
             );
         }
+    }
+
+    #[test]
+    fn the_task_listing_names_only_the_root_mesh_llm_task() {
+        let listing = concat!(
+            r#""\Microsoft\Windows\UpdateOrchestrator\Schedule Scan","N/A","Ready""#,
+            "\r\n",
+            r#""\mesh-llm-probe","N/A","Ready""#,
+            "\r\n",
+            r#""\Vendor\mesh-llm","N/A","Ready""#,
+            "\r\n",
+        );
+        assert!(!task_listed(listing, "mesh-llm"));
+
+        let listing = format!("{listing}{}\r\n", r#""\mesh-llm","N/A","Running""#);
+        assert!(task_listed(&listing, "mesh-llm"));
+        assert!(!task_listed(
+            "INFO: There are no scheduled tasks presently available.\r\n",
+            "mesh-llm"
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_scheduled_task_lookup_runs_on_windows() {
+        // Registered or not, listing the tasks must not be an error here.
+        assert!(scheduled_task_registered().is_ok());
     }
 
     #[cfg(windows)]
