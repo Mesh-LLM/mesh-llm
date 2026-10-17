@@ -32,7 +32,6 @@ pub(crate) use exact_state::CaptureAdmission;
 mod identity;
 mod l2_serving;
 pub mod lifecycle;
-mod model_capability;
 mod output_tokens;
 mod records;
 mod resident_prefix;
@@ -160,9 +159,6 @@ pub struct KvStageIntegration {
     /// not replace the fast warm path with serialized state import.
     pub(crate) payload: StagePrefixCachePayload,
     pub(crate) payload_selection_reason: &'static str,
-    pub(crate) payload_fallbacks: u64,
-    pub(crate) graph_loaded_state_mismatches: u64,
-    pub(crate) admitted_graph_state: String,
     pub(crate) loaded_state_kind: Option<ModelStateKind>,
     pub(crate) loaded_memory_cache: Option<MemoryCacheCapabilities>,
     /// Exportable representation written to and restored from L3. This is
@@ -1073,11 +1069,6 @@ impl KvStageIntegration {
                 "skippy.kv.payload_selection_reason",
                 json!(self.payload_selection_reason),
             ),
-            ("skippy.kv.payload_fallbacks", json!(self.payload_fallbacks)),
-            (
-                "skippy.kv.admitted_graph_state",
-                json!(self.admitted_graph_state),
-            ),
             (
                 "skippy.kv.loaded_state_kind",
                 json!(self.loaded_state_kind.map(|kind| format!("{kind:?}"))),
@@ -1089,10 +1080,6 @@ impl KvStageIntegration {
             (
                 "skippy.kv.loaded_memory_cache_kv_recurrent",
                 json!(self.loaded_memory_cache.map(|cache| cache.kv_recurrent)),
-            ),
-            (
-                "skippy.kv.graph_loaded_state_mismatches",
-                json!(self.graph_loaded_state_mismatches),
             ),
             (
                 "skippy.kv.page_size_tokens",

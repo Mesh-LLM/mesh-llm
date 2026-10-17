@@ -1,148 +1,83 @@
-//! Select cache representations from the loaded native memory adapter contract.
-use skippy_protocol::StageKvCachePayload;
+//! Select a complete representation from the loaded runtime's graph admission.
+use skippy_runtime::MemoryCacheCapabilities;
 
-use super::{StagePrefixCachePayload, model_capability::ModelKvCapability};
+use super::StagePrefixCachePayload;
 
 pub(super) fn effective_cache_payload(
-    requested: StageKvCachePayload,
-    capability: &ModelKvCapability,
-    memory_cache: Option<skippy_runtime::MemoryCacheCapabilities>,
-) -> StagePrefixCachePayload {
-    if matches!(
-        (requested, capability),
-        (
-            StageKvCachePayload::ResidentKv,
-            ModelKvCapability::KnownRecurrent
-        ) | (
-            StageKvCachePayload::KvRecurrent,
-            ModelKvCapability::KnownDense
-        )
-    ) {
-        return StagePrefixCachePayload::FullState;
+    admitted: MemoryCacheCapabilities,
+) -> Option<StagePrefixCachePayload> {
+    if admitted.resident {
+        Some(StagePrefixCachePayload::ResidentKv)
+    } else if admitted.kv_recurrent {
+        Some(StagePrefixCachePayload::KvRecurrent)
+    } else if admitted.full_state {
+        Some(StagePrefixCachePayload::FullState)
+    } else {
+        None
     }
-    let supported = memory_cache.unwrap_or_default();
-    match requested {
-        StageKvCachePayload::FullState => StagePrefixCachePayload::FullState,
-        StageKvCachePayload::Auto => match capability {
-            ModelKvCapability::KnownDense if supported.resident => {
-                StagePrefixCachePayload::ResidentKv
-            }
-            ModelKvCapability::KnownRecurrent if supported.kv_recurrent => {
-                StagePrefixCachePayload::KvRecurrent
-            }
-            ModelKvCapability::Unknown(_) => StagePrefixCachePayload::FullState,
-            _ => StagePrefixCachePayload::FullState,
-        },
-        StageKvCachePayload::ResidentKv
-            if supported.resident && matches!(capability, ModelKvCapability::KnownDense) =>
-        {
-            StagePrefixCachePayload::ResidentKv
-        }
-        StageKvCachePayload::KvRecurrent
-            if supported.kv_recurrent
-                && matches!(capability, ModelKvCapability::KnownRecurrent) =>
-        {
-            StagePrefixCachePayload::KvRecurrent
-        }
-        _ => StagePrefixCachePayload::FullState,
-    }
+}
+
+/// Durable tiers require an admitted byte exporter; resident handles cannot spill.
+pub(super) fn durable_cache_payload(
+    admitted: MemoryCacheCapabilities,
+) -> Option<StagePrefixCachePayload> {
+    effective_cache_payload(MemoryCacheCapabilities {
+        resident: false,
+        ..admitted
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn unknown_memory_uses_full_state_for_dense_and_hybrid_models() {
-        for capability in [
-            ModelKvCapability::KnownDense,
-            ModelKvCapability::KnownRecurrent,
+    fn only_admitted_complete_representations_are_selected() {
+        for (resident, kv_recurrent, full_state, expected) in [
+            (true, true, true, Some(StagePrefixCachePayload::ResidentKv)),
+            (
+                true,
+                false,
+                false,
+                Some(StagePrefixCachePayload::ResidentKv),
+            ),
+            (
+                false,
+                true,
+                true,
+                Some(StagePrefixCachePayload::KvRecurrent),
+            ),
+            (
+                false,
+                true,
+                false,
+                Some(StagePrefixCachePayload::KvRecurrent),
+            ),
+            (false, false, true, Some(StagePrefixCachePayload::FullState)),
+            (false, false, false, None),
         ] {
             assert_eq!(
-                effective_cache_payload(StageKvCachePayload::Auto, &capability, None),
-                StagePrefixCachePayload::FullState
-            );
-        }
-    }
-
-    #[test]
-    fn supported_memory_retains_fast_payloads() {
-        let supported = Some(skippy_runtime::MemoryCacheCapabilities {
-            resident: true,
-            kv_recurrent: true,
-        });
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::Auto,
-                &ModelKvCapability::KnownDense,
-                supported
-            ),
-            StagePrefixCachePayload::ResidentKv
-        );
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::Auto,
-                &ModelKvCapability::KnownRecurrent,
-                supported
-            ),
-            StagePrefixCachePayload::KvRecurrent
-        );
-    }
-
-    #[test]
-    fn resident_only_memory_cannot_select_partial_snapshots() {
-        let supported = Some(skippy_runtime::MemoryCacheCapabilities {
-            resident: true,
-            kv_recurrent: false,
-        });
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::Auto,
-                &ModelKvCapability::KnownDense,
-                supported
-            ),
-            StagePrefixCachePayload::ResidentKv
-        );
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::Auto,
-                &ModelKvCapability::KnownRecurrent,
-                supported
-            ),
-            StagePrefixCachePayload::FullState
-        );
-        assert_eq!(
-            effective_cache_payload(
-                StageKvCachePayload::KvRecurrent,
-                &ModelKvCapability::KnownRecurrent,
-                supported
-            ),
-            StagePrefixCachePayload::FullState
-        );
-    }
-
-    #[test]
-    fn graph_choice_is_gated_by_the_loaded_exporter_for_every_state_class() {
-        let both = Some(skippy_runtime::MemoryCacheCapabilities {
-            resident: true,
-            kv_recurrent: true,
-        });
-        let none = Some(skippy_runtime::MemoryCacheCapabilities {
-            resident: false,
-            kv_recurrent: false,
-        });
-        for (state, supported, expected) in [
-            ("dense", both, StagePrefixCachePayload::ResidentKv),
-            ("dense", none, StagePrefixCachePayload::FullState),
-            ("recurrent", both, StagePrefixCachePayload::KvRecurrent),
-            ("recurrent", none, StagePrefixCachePayload::FullState),
-            ("full-state", both, StagePrefixCachePayload::FullState),
-            ("derived-unknown", both, StagePrefixCachePayload::FullState),
-        ] {
-            let capability = super::super::model_capability::graph_model_kv_capability(state);
-            assert_eq!(
-                effective_cache_payload(StageKvCachePayload::Auto, &capability, supported),
+                effective_cache_payload(MemoryCacheCapabilities {
+                    resident,
+                    kv_recurrent,
+                    full_state,
+                }),
                 expected,
-                "graph state={state}"
+            );
+            let durable = if kv_recurrent {
+                Some(StagePrefixCachePayload::KvRecurrent)
+            } else if full_state {
+                Some(StagePrefixCachePayload::FullState)
+            } else {
+                None
+            };
+            assert_eq!(
+                durable_cache_payload(MemoryCacheCapabilities {
+                    resident,
+                    kv_recurrent,
+                    full_state,
+                }),
+                durable,
             );
         }
     }

@@ -234,6 +234,7 @@ mod tests {
 
         assert_eq!(metadata.parameter_size.as_deref(), Some("494M"));
         assert_eq!(metadata.parameter_count_b, Some(0.494));
+        assert_eq!(metadata.architecture.as_deref(), Some("llama"));
         let _ = std::fs::remove_file(path);
     }
 
@@ -242,7 +243,12 @@ mod tests {
         bytes.extend_from_slice(b"GGUF");
         bytes.extend_from_slice(&3u32.to_le_bytes());
         bytes.extend_from_slice(&1u64.to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&20u64.to_le_bytes());
+        bytes.extend_from_slice(b"general.architecture");
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&5u64.to_le_bytes());
+        bytes.extend_from_slice(b"llama");
         bytes.extend_from_slice(&7u64.to_le_bytes());
         bytes.extend_from_slice(b"weights");
         bytes.extend_from_slice(&1u32.to_le_bytes());

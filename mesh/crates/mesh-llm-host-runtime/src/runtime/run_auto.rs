@@ -1798,7 +1798,13 @@ async fn run_auto_inner(
         initial_run_auto_requested_models(&startup_specs, &requested_model_names);
     node.set_requested_models(initial_requested_models).await;
 
-    run_auto_join_mesh_phase(&mut options, &node, &auto_join_candidates).await?;
+    // On cancellation, continue to the lifecycle owner below so it can run
+    // the existing ordered cleanup for the node we have already created.
+    tokio::select! {
+        biased;
+        _ = crate::sdk::embedded_shutdown::cancelled() => {},
+        result = run_auto_join_mesh_phase(&mut options, &node, &auto_join_candidates) => result?,
+    }
 
     let affinity_router = affinity::AffinityRouter::new();
 

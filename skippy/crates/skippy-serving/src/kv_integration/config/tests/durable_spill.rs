@@ -154,12 +154,14 @@ fn blocked_l3_spill_does_not_head_of_line_block_later_l1_records() {
         .join(format!("l1-while-l3-blocked-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
-    let mut config = enabled_auto_config("future/model");
-    config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::FullState;
+    let config = enabled_auto_config("future/model");
     let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &config,
         Some(ModelStateKind::Dense),
-        None,
+        Some(skippy_runtime::MemoryCacheCapabilities {
+            full_state: true,
+            ..Default::default()
+        }),
         Some(manager),
         None,
     )

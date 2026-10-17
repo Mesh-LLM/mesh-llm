@@ -27,6 +27,20 @@ For the concrete benchy command and contract, see
 
 ## Supported API Surface
 
+`GET /v1/models` can include a `thinking` summary from the loaded template probe:
+`{"toggle":"not_observed","reasoning_parser":true,"efforts":[]}`. `toggle`
+is `observed` when on/off renders differ, `not_observed` when both succeed but
+match, and `unknown` when the comparison cannot be made. `reasoning_parser`
+reports whether the native parser recognizes reasoning in the default render;
+`null` means no evidence was supplied. Neither field promises that generation
+obeys an off request. `efforts` contains tested effort values that changed the
+prompt relative to thinking-on. This replaces the ambiguous `thinking.enabled`
+field without a compatibility alias. An absent `thinking` object remains unprobed.
+
+Thinking is requested off by default. A reasoning model whose template ignores
+that control may still emit `reasoning_content` before `content`. A response cut
+off by `max_tokens` can therefore contain reasoning with no final answer.
+
 | Surface | Status | Notes |
 |---|---|---|
 | `GET /v1/models` | Supported | Returns backend-provided model objects with opaque ids such as `org/repo:Q4_K_M`. |

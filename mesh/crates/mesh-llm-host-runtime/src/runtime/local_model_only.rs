@@ -478,7 +478,7 @@ mod tests {
         clear_runtime_event_engine, install_runtime_event_engine, runtime_event_engine,
     };
     use skippy_inference_api::ChatCompletionRequest;
-    use skippy_protocol::{StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
+    use skippy_protocol::{StageKvCacheConfig, StageKvCacheMode};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -539,7 +539,6 @@ mod tests {
         .with_kv_cache(Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::Auto,
             max_entries: 8,
             max_bytes: 0,
             l2_max_bytes: 0,

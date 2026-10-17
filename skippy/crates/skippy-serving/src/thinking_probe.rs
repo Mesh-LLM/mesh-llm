@@ -12,11 +12,11 @@
 //!
 //! What the summary can and cannot say:
 //!
-//! * `enabled: true` means turning thinking on versus off changed the rendered
+//! * `toggle: observed` means turning thinking on versus off changed the rendered
 //!   prompt. It is not evidence that the model obeyed the control.
-//! * `enabled: false` is inconclusive: the template may be indifferent, or a
-//!   render may have failed. A control this probe could not observe is never
-//!   advertised.
+//! * `toggle: not_observed` means both renders succeeded but matched;
+//!   `unknown` means a comparison could not be made. Neither means thinking is off.
+//! * `reasoning_parser` reports native parser support independently of controls.
 //! * `efforts` lists only the values that changed the prompt relative to a plain
 //!   thinking-on render, and only the bounded set that was tried. Every other
 //!   effort value, budget semantic, or control name stays unreported.
@@ -33,8 +33,9 @@ use crate::runtime_state::RuntimeState;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use skippy_inference_api::ReasoningConfig;
 use skippy_inference_api::ReasoningEffort;
-use skippy_inference_api::thinking::ThinkingControls;
+use skippy_inference_api::thinking::{ThinkingControls, ThinkingToggle};
 use skippy_runtime::ChatTemplateJsonOptions;
+use skippy_runtime::ChatTemplateJsonResult;
 use skippy_runtime::StageModelReader;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -69,7 +70,7 @@ pub trait ChatTemplateProbeRenderer {
         &self,
         messages_json: &str,
         options: ChatTemplateJsonOptions,
-    ) -> Result<String, String>;
+    ) -> Result<ChatTemplateJsonResult, String>;
 }
 
 /// Inputs the probe needs before it can render anything.
@@ -169,6 +170,7 @@ enum ProbeRender {
     Rendered {
         prompt_sha256: String,
         prompt_bytes: usize,
+        reasoning_parser: Option<bool>,
     },
     Error(String),
 }
@@ -227,7 +229,17 @@ fn summarize_controls(observations: &[(ProbeCase, ProbeRender)]) -> ThinkingCont
     };
     let on = hash(ProbeCase::On);
     let off = hash(ProbeCase::Off);
-    let enabled = matches!((on, off), (Some(on), Some(off)) if on != off);
+    let toggle = match (on, off) {
+        (Some(on), Some(off)) if on != off => ThinkingToggle::Observed,
+        (Some(_), Some(_)) => ThinkingToggle::NotObserved,
+        _ => ThinkingToggle::Unknown,
+    };
+    let reasoning_parser = match find_render(observations, ProbeCase::Default) {
+        Some(ProbeRender::Rendered {
+            reasoning_parser, ..
+        }) => *reasoning_parser,
+        _ => None,
+    };
     let efforts = on
         .map(|on| {
             PROBE_EFFORTS
@@ -237,7 +249,11 @@ fn summarize_controls(observations: &[(ProbeCase, ProbeRender)]) -> ThinkingCont
                 .collect()
         })
         .unwrap_or_default();
-    ThinkingControls { enabled, efforts }
+    ThinkingControls {
+        toggle,
+        reasoning_parser,
+        efforts,
+    }
 }
 
 fn find_render(observations: &[(ProbeCase, ProbeRender)], case: ProbeCase) -> Option<&ProbeRender> {
@@ -263,9 +279,16 @@ fn render_case(
         Err(error) => return ProbeRender::Error(format!("{error:?}")),
     };
     match renderer.render(PROBE_MESSAGES_JSON, options) {
-        Ok(prompt) => ProbeRender::Rendered {
-            prompt_sha256: sha256_hex(prompt.as_bytes()),
-            prompt_bytes: prompt.len(),
+        Ok(rendered) => ProbeRender::Rendered {
+            prompt_sha256: sha256_hex(rendered.prompt.as_bytes()),
+            prompt_bytes: rendered.prompt.len(),
+            reasoning_parser: serde_json::from_str::<serde_json::Value>(&rendered.metadata_json)
+                .ok()
+                .and_then(|metadata| {
+                    metadata
+                        .get("supports_thinking")
+                        .and_then(serde_json::Value::as_bool)
+                }),
         },
         Err(message) => ProbeRender::Error(message),
     }
@@ -292,11 +315,12 @@ pub fn emit_probe_status(report: &ThinkingProbeReport) -> std::io::Result<()> {
         .join(" ");
     skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
         message: format!(
-            "skippy thinking probe: model_id={} template={} renderer={} enabled={} efforts=[{}] cases: {cases}",
+            "skippy thinking probe: model_id={} template={} renderer={} toggle={:?} reasoning_parser={:?} efforts=[{}] cases: {cases}",
             report.fingerprint.model_id,
             report.fingerprint.template,
             report.fingerprint.renderer,
-            report.controls.enabled,
+            report.controls.toggle,
+            report.controls.reasoning_parser,
             report.controls.efforts.join(","),
         ),
     })
@@ -323,10 +347,9 @@ impl ChatTemplateProbeRenderer for NativeChatTemplateProbe<'_> {
         &self,
         messages_json: &str,
         options: ChatTemplateJsonOptions,
-    ) -> Result<String, String> {
+    ) -> Result<ChatTemplateJsonResult, String> {
         self.reader
             .apply_chat_template_json(messages_json, options)
-            .map(|result| result.prompt)
             .map_err(|error| error.to_string())
     }
 }
@@ -342,6 +365,34 @@ mod tests {
     use super::*;
     use crate::frontend::EmbeddedReasoningBudget;
     use std::sync::Mutex;
+
+    fn fixture_render(prompt: String) -> Result<ChatTemplateJsonResult, String> {
+        Ok(ChatTemplateJsonResult {
+            prompt,
+            metadata_json: "{}".into(),
+        })
+    }
+
+    #[test]
+    fn reasoning_parser_support_does_not_imply_an_observed_toggle() {
+        struct ReasoningWithoutControls;
+        impl ChatTemplateProbeRenderer for ReasoningWithoutControls {
+            fn render(
+                &self,
+                _: &str,
+                _: ChatTemplateJsonOptions,
+            ) -> Result<ChatTemplateJsonResult, String> {
+                Ok(ChatTemplateJsonResult {
+                    prompt: "Think before answering: 2 + 2".into(),
+                    metadata_json: r#"{"supports_thinking":true}"#.into(),
+                })
+            }
+        }
+        let defaults = defaults();
+        let report = run_thinking_probe(&ReasoningWithoutControls, &inputs(&defaults));
+        assert_eq!(report.controls().toggle, ThinkingToggle::NotObserved);
+        assert_eq!(report.controls().reasoning_parser, Some(true));
+    }
 
     /// Parses the serialized `chat_template_kwargs` a render received.
     fn kwargs(options: &ChatTemplateJsonOptions) -> serde_json::Value {
@@ -360,13 +411,13 @@ mod tests {
             &self,
             messages_json: &str,
             options: ChatTemplateJsonOptions,
-        ) -> Result<String, String> {
+        ) -> Result<ChatTemplateJsonResult, String> {
             let kwargs = kwargs(&options);
             let effort = kwargs
                 .get("reasoning_effort")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("-");
-            Ok(format!(
+            fixture_render(format!(
                 "<|thinking={}|><|effort={effort}|>{messages_json}",
                 options.enable_thinking.unwrap_or(false)
             ))
@@ -381,8 +432,8 @@ mod tests {
             &self,
             messages_json: &str,
             _options: ChatTemplateJsonOptions,
-        ) -> Result<String, String> {
-            Ok(messages_json.to_string())
+        ) -> Result<ChatTemplateJsonResult, String> {
+            fixture_render(messages_json.to_string())
         }
     }
 
@@ -394,13 +445,13 @@ mod tests {
             &self,
             messages_json: &str,
             options: ChatTemplateJsonOptions,
-        ) -> Result<String, String> {
+        ) -> Result<ChatTemplateJsonResult, String> {
             let kwargs = kwargs(&options);
             let effort = kwargs
                 .get("reasoning_effort")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("-");
-            Ok(format!("<|effort={effort}|>{messages_json}"))
+            fixture_render(format!("<|effort={effort}|>{messages_json}"))
         }
     }
 
@@ -413,7 +464,7 @@ mod tests {
             &self,
             messages_json: &str,
             options: ChatTemplateJsonOptions,
-        ) -> Result<String, String> {
+        ) -> Result<ChatTemplateJsonResult, String> {
             let kwargs = kwargs(&options);
             let mode = match kwargs
                 .get("reasoning_effort")
@@ -423,7 +474,7 @@ mod tests {
                 Some("high") => "high",
                 _ => "default",
             };
-            Ok(format!("<|mode={mode}|>{messages_json}"))
+            fixture_render(format!("<|mode={mode}|>{messages_json}"))
         }
     }
 
@@ -436,15 +487,15 @@ mod tests {
             &self,
             messages_json: &str,
             options: ChatTemplateJsonOptions,
-        ) -> Result<String, String> {
+        ) -> Result<ChatTemplateJsonResult, String> {
             let kwargs = kwargs(&options);
             let effort = kwargs
                 .get("reasoning_effort")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("-");
             match effort {
-                "medium" | "-" => Ok(format!("<|thinking=on|>{messages_json}")),
-                other => Ok(format!("<|effort={other}|>{messages_json}")),
+                "medium" | "-" => fixture_render(format!("<|thinking=on|>{messages_json}")),
+                other => fixture_render(format!("<|effort={other}|>{messages_json}")),
             }
         }
     }
@@ -457,11 +508,11 @@ mod tests {
             &self,
             messages_json: &str,
             options: ChatTemplateJsonOptions,
-        ) -> Result<String, String> {
+        ) -> Result<ChatTemplateJsonResult, String> {
             if options.enable_thinking == Some(true) {
                 return Err("enable_thinking is not a known variable".to_string());
             }
-            Ok(messages_json.to_string())
+            fixture_render(messages_json.to_string())
         }
     }
 
@@ -486,7 +537,8 @@ mod tests {
         assert_eq!(
             *report.controls(),
             ThinkingControls {
-                enabled: false,
+                toggle: ThinkingToggle::NotObserved,
+                reasoning_parser: None,
                 efforts: vec![],
             }
         );
@@ -499,7 +551,8 @@ mod tests {
         assert_eq!(
             *report.controls(),
             ThinkingControls {
-                enabled: true,
+                toggle: ThinkingToggle::Observed,
+                reasoning_parser: None,
                 efforts: vec![
                     "none".to_string(),
                     "minimal".to_string(),
@@ -517,7 +570,7 @@ mod tests {
     fn an_effort_only_template_offers_effort_without_a_toggle() {
         let defaults = defaults();
         let report = run_thinking_probe(&EffortOnlyTemplate, &inputs(&defaults));
-        assert!(!report.controls().enabled);
+        assert_eq!(report.controls().toggle, ThinkingToggle::NotObserved);
         assert_eq!(
             report.controls().efforts,
             vec![
@@ -536,7 +589,7 @@ mod tests {
     fn effort_only_none_high_modes_are_offered_without_a_generic_toggle() {
         let defaults = defaults();
         let report = run_thinking_probe(&NoneHighTemplate, &inputs(&defaults));
-        assert!(!report.controls().enabled);
+        assert_eq!(report.controls().toggle, ThinkingToggle::NotObserved);
         assert_eq!(report.controls().efforts, vec!["none", "high"]);
     }
 
@@ -551,13 +604,14 @@ mod tests {
     }
 
     #[test]
-    fn a_control_that_cannot_render_is_not_advertised() {
+    fn a_control_that_cannot_render_is_unknown() {
         let defaults = defaults();
         let report = run_thinking_probe(&ThinkingRejectingTemplate, &inputs(&defaults));
         assert_eq!(
             *report.controls(),
             ThinkingControls {
-                enabled: false,
+                toggle: ThinkingToggle::Unknown,
+                reasoning_parser: None,
                 efforts: vec![],
             }
         );
@@ -579,12 +633,12 @@ mod tests {
                 &self,
                 _messages_json: &str,
                 options: ChatTemplateJsonOptions,
-            ) -> Result<String, String> {
+            ) -> Result<ChatTemplateJsonResult, String> {
                 self.0
                     .lock()
                     .expect("recording lock poisoned")
                     .push(options);
-                Ok("render".to_string())
+                fixture_render("render".to_string())
             }
         }
 
@@ -673,12 +727,12 @@ mod tests {
                 &self,
                 messages_json: &str,
                 _options: ChatTemplateJsonOptions,
-            ) -> Result<String, String> {
+            ) -> Result<ChatTemplateJsonResult, String> {
                 self.0
                     .lock()
                     .expect("recording lock poisoned")
                     .push(messages_json.to_string());
-                Ok(messages_json.to_string())
+                fixture_render(messages_json.to_string())
             }
         }
 

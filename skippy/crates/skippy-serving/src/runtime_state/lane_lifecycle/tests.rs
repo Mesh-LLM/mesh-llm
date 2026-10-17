@@ -2,6 +2,9 @@ use super::*;
 use anyhow::{Result, bail};
 use std::sync::Mutex as StdMutex;
 
+#[path = "tests/generation_warmup.rs"]
+mod generation_warmup;
+
 struct RecordingSessionObserver(StdMutex<Vec<crate::runtime_state::SessionLifecycleEvent>>);
 
 impl Default for RecordingSessionObserver {

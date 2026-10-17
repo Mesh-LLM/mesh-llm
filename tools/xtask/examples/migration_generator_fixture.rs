@@ -51,7 +51,12 @@ fn rewrite(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         "second"
     };
     if Path::new(&format!("fail-{pass}")).exists() {
+        writeln!(io::stderr(), "rewriter {pass} fixture refused")?;
         std::process::exit(23);
+    }
+    if let Ok(delay) = fs::read_to_string(format!("delay-{pass}-ms")) {
+        writeln!(io::stderr(), "rewriter {pass} fixture started")?;
+        std::thread::sleep(std::time::Duration::from_millis(delay.trim().parse()?));
     }
     let index = arguments
         .iter()

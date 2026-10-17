@@ -1,6 +1,7 @@
 use super::super::{Error, args};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 pub(super) struct Options {
     pub(super) publication: args::Options,
@@ -8,6 +9,7 @@ pub(super) struct Options {
     pub(super) rewriter: PathBuf,
     pub(super) report: PathBuf,
     pub(super) extra: Vec<String>,
+    pub(super) rewriter_timeout: Duration,
 }
 
 pub(super) fn parse(arguments: &[String]) -> Result<Options, Error> {
@@ -40,6 +42,13 @@ pub(super) fn parse(arguments: &[String]) -> Result<Options, Error> {
         return Err(Error::Arguments("--rewriter must be absolute"));
     }
     let mut publication = args::parse(&publication)?;
+    // Each pass parses every model translation unit. The short Git deadline
+    // is insufficient on the lab runner; an explicit timeout still owns both.
+    let rewriter_timeout = if pairs.iter().any(|[key, _]| key == "--timeout") {
+        publication.git.timeout
+    } else {
+        Duration::from_secs(600)
+    };
     publication.output = resolve(&publication.output)?;
     if publication.output.to_str().is_none() {
         return Err(Error::Arguments("output path must be UTF-8"));
@@ -55,6 +64,7 @@ pub(super) fn parse(arguments: &[String]) -> Result<Options, Error> {
         rewriter: resolve(&rewriter)?,
         report: resolve(Path::new(required("--report")?))?,
         extra,
+        rewriter_timeout,
     })
 }
 

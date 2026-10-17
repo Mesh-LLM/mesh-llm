@@ -33,13 +33,27 @@ pub(super) fn classify(receipt: &WorkerReceipt, directory: &Path) -> FailureClas
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         {
-            Some(value) if value.is_object() && value["status"] == "passed" => (),
+            Some(value) if admitted_memory(&value) => (),
             _ => return FailureClass::Infrastructure,
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
         Err(_) => return FailureClass::Infrastructure,
     }
     classify_results(&results, &receipt.provenance.family)
+}
+
+fn admitted_memory(value: &Value) -> bool {
+    if !value.is_object() {
+        return false;
+    }
+    value["status"] == "passed"
+        || (value["status"] == "failed"
+            && value["admission_status"] == "passed"
+            && value["memory_guard_status"] == "passed"
+            && value["supervisor_outcome"] == "Exited"
+            && value["cleanup_complete"].as_bool() == Some(true)
+            && value["output_capture_complete"].as_bool() == Some(true)
+            && value["exit_code"].as_i64().is_some_and(|code| code != 0))
 }
 
 fn classify_results(bytes: &[u8], family: &Family) -> FailureClass {

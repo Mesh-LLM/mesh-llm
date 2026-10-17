@@ -25,6 +25,7 @@ struct Input {
     outcome: Option<WorkerOutcome>,
     runner: Option<String>,
     repository: Option<String>,
+    source_root: Option<PathBuf>,
 }
 pub(crate) fn run(args: &[String], publication: bool) -> DynResult<()> {
     const GRAMMAR: Grammar = Grammar {
@@ -85,10 +86,29 @@ fn execute(input: &Input, publication: bool) -> DynResult<()> {
             return Err("publication does not accept worker receipt fields".into());
         }
         let (identity, count, bundle) = package.publication_context();
+        let selected = !input.selected_source.is_empty();
+        if selected {
+            if identity.pass_id != "verify-1" || bundle {
+                return Err(
+                    "selected publication requires unchanged independent verifier package".into(),
+                );
+            }
+            super::canary_package_closure::selected_publication::prepare(
+                input
+                    .source_root
+                    .as_deref()
+                    .ok_or("selected publication requires source root")?,
+                &input.package,
+                &input.controller_revision,
+                identity,
+            )?;
+        } else if input.source_root.is_some() {
+            return Err("ordinary publication does not accept selected source root".into());
+        }
         let body = publication_body(
             identity,
             count,
-            bundle,
+            bundle || selected,
             input
                 .repository
                 .as_deref()
@@ -103,7 +123,7 @@ fn execute(input: &Input, publication: bool) -> DynResult<()> {
         }
         fs::write(path, body)?;
     } else {
-        if input.repository.is_some() {
+        if input.repository.is_some() || input.source_root.is_some() {
             return Err("receipt does not accept publication repository".into());
         }
         let evidence = input.evidence.as_ref().ok_or("receipt requires evidence")?;
@@ -145,7 +165,7 @@ fn publication_body(
         return Err("publication requires the independent verifier package".into());
     }
     Ok(format!(
-        "Update the llama.cpp pin and its patch queue to the independently certified candidate.\n\nCandidate: `{}`. Both complete per-family passes succeeded on this exact tree. Each pass independently rebuilt the native/Rust binaries and ran the complete roster, including single-step, chain, state-handoff, native draft requirements, applicable multimodal smokes, and class-specific workload smoke/oracle lanes for the non-chat families.\n\nEvidence: https://github.com/{repository}/actions/runs/{} ({}; {count} families).\n\n{summary}",
+        "Publish the independently certified llama.cpp candidate and its MeshLLM changes.\n\nCandidate: `{}`. Both complete per-family passes succeeded on this exact tree. Each pass independently rebuilt the native/Rust binaries and ran the complete roster, including single-step, chain, state-handoff, native draft requirements, applicable multimodal smokes, and class-specific workload smoke/oracle lanes for the non-chat families.\n\nEvidence: https://github.com/{repository}/actions/runs/{} ({}; {count} families).\n\n{summary}",
         identity.candidate, identity.run_id, identity.pass_id
     ))
 }

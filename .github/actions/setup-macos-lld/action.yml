@@ -9,17 +9,43 @@ description: >
   15-30s bottle-pour saving. Revisit only with a measured number and a
   quota plan, not an assumption.
 
+inputs:
+  tool-source:
+    description: Use preinstalled runner tools or install them through Homebrew.
+    required: false
+    default: homebrew
+
 runs:
   using: composite
   steps:
-    - name: Install required build tools
+    - name: Prepare required build tools
       shell: bash
+      env:
+        TOOL_SOURCE: ${{ inputs.tool-source }}
       run: |
         set -euo pipefail
-        brew install lld
-        if ! command -v sccache >/dev/null 2>&1; then
-          brew install sccache
-        fi
+        case "$TOOL_SOURCE" in
+          homebrew)
+            brew install lld
+            if ! command -v sccache >/dev/null 2>&1; then
+              brew install sccache
+            fi
+            ;;
+          preinstalled)
+            for tool in brew sccache; do
+              command -v "$tool" >/dev/null 2>&1 || {
+                echo "missing preinstalled build prerequisite: $tool; provision the runner before retrying" >&2
+                exit 1
+              }
+            done
+            lld_bin="$(brew --prefix lld)/bin"
+            test -x "$lld_bin/ld64.lld" || {
+              echo "missing preinstalled build prerequisite: ld64.lld; provision the runner before retrying" >&2
+              exit 1
+            }
+            ;;
+          *) echo "unsupported macOS tool source: $TOOL_SOURCE" >&2; exit 1 ;;
+        esac
 
     - name: Verify repository build accelerators
       shell: bash
@@ -47,8 +73,10 @@ runs:
           echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"
           export SCCACHE_DIR="$cache_dir"
           export SCCACHE_IGNORE_SERVER_IO_ERROR=1
-          sccache --start-server
         fi
+        # Start the fresh endpoint in remote-cache modes too, before parallel
+        # compiler clients can race to bind the same Unix socket.
+        sccache --start-server
         lld_bin="$(brew --prefix lld)/bin"
         test -x "$lld_bin/ld64.lld"
         echo "$lld_bin" >> "$GITHUB_PATH"
