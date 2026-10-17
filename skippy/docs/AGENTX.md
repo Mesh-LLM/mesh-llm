@@ -114,11 +114,18 @@ single slot's prompt cache. These cache policies are recorded in launch argument
 
 Large CUDA snapshot reads into pageable host memory use a reusable 64 MiB
 pinned staging buffer per physical GPU. Capture remains synchronous so later
-inference cannot change the exported state. Already pinned destinations and
+inference cannot change the exported state. Large staging-to-host copies use
+up to eight CPU workers, joining before reusing the staging buffer.
+Already pinned destinations and
 small reads retain their direct path; unavailable pinned memory or
 `GGML_CUDA_NO_PINNED` selects the original path. The native
 `test-cuda-host-readback` and `test-cuda-host-readback-unpinned` CTest cases
 check byte equality, chunk boundaries, unaligned buffers and concurrent reads.
+
+Fragmented host snapshots of at least 64 MiB reconstruct with up to eight CPU
+workers, bounded by available parallelism and block count. Contiguous snapshots
+remain borrowed directly. Reconstruction preserves deduplication and cache
+accounting, and falls back to a serial copy if worker creation fails.
 
 Sixty seconds is only the smoke measurement window. Building, downloading,
 tokenizer synthesis, server readiness, warmup, outstanding-request drain, and

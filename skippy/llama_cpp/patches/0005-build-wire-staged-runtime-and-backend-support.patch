@@ -1,4 +1,4 @@
-From d44d87453f6680fc19fe5f5fb638d00eb258ed27 Mon Sep 17 00:00:00 2001
+From d2a8b47193f007c40b4f82525a9ea84a7a07fb7d Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] build(skippy): wire native runtime and backend support
@@ -22,7 +22,7 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  ggml/src/ggml-cuda/cachegen.cu             | 223 ++++++++
  ggml/src/ggml-cuda/cachegen.cuh            |  27 +
  ggml/src/ggml-cuda/ggml-cuda.cu            | 352 +++++++++++-
- ggml/src/ggml-cuda/host-readback.cuh       |  69 +++
+ ggml/src/ggml-cuda/host-readback.cuh       |  99 ++++
  ggml/src/ggml-cuda/vendors/hip.h           |   1 +
  ggml/src/ggml-metal/CMakeLists.txt         |   1 +
  ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
@@ -35,7 +35,7 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  36 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 2870 insertions(+), 127 deletions(-)
+ 31 files changed, 2900 insertions(+), 127 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -2163,10 +2163,10 @@ index 9dd34c866..6ce3d6790 100644
  
 diff --git a/ggml/src/ggml-cuda/host-readback.cuh b/ggml/src/ggml-cuda/host-readback.cuh
 new file mode 100644
-index 000000000..bbe3e9fba
+index 000000000..174aefd2f
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/host-readback.cuh
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,99 @@
 +#pragma once
 +
 +#include "common.cuh"
@@ -2177,6 +2177,36 @@ index 000000000..bbe3e9fba
 +#include <cstdlib>
 +#include <cstring>
 +#include <mutex>
++#include <thread>
++#include <vector>
++#include <exception>
++
++// Keep the extra pageable-host copy from serializing large snapshots on one CPU.
++inline void ggml_cuda_copy_readback_bytes(void * destination, const void * source, size_t size) {
++    const unsigned workers = std::min(std::thread::hardware_concurrency(), 8u);
++    if (size < 16 * 1024 * 1024 || workers < 2) {
++        std::memcpy(destination, source, size);
++        return;
++    }
++    auto * dst = static_cast<char *>(destination);
++    const auto * src = static_cast<const char *>(source);
++    const size_t chunk = size / workers;
++    std::vector<std::thread> threads;
++    try {
++        threads.reserve(workers - 1);
++        for (unsigned i = 0; i + 1 < workers; ++i) {
++            threads.emplace_back([=] { std::memcpy(dst + i * chunk, src + i * chunk, chunk); });
++        }
++        const size_t offset = (workers - 1) * chunk;
++        std::memcpy(dst + offset, src + offset, size - offset);
++    } catch (const std::exception &) {
++        for (auto & thread : threads) thread.join();
++        // A transient worker allocation failure retains the synchronous contract.
++        std::memcpy(destination, source, size);
++        return;
++    }
++    for (auto & thread : threads) thread.join();
++}
 +
 +// Bound locked host memory independently of snapshot size and caller threads.
 +// Portable allocations let virtual devices sharing a physical GPU reuse it.
@@ -2210,7 +2240,7 @@ index 000000000..bbe3e9fba
 +            // Neither the staging bytes nor the caller's snapshot may escape
 +            // before capture completes; later inference may mutate the source.
 +            CUDA_CHECK(cudaStreamSynchronize(stream));
-+            std::memcpy(static_cast<char *>(destination) + offset, staging, bytes);
++            ggml_cuda_copy_readback_bytes(static_cast<char *>(destination) + offset, staging, bytes);
 +            offset += bytes;
 +        }
 +        return true;
