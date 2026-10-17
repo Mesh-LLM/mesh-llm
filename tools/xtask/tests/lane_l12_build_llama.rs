@@ -171,7 +171,7 @@ fn linux_omits_macos_target() {
     assert!(!fixture.log().contains("CMAKE_OSX_DEPLOYMENT_TARGET"));
 }
 #[test]
-fn cuda_disables_graph_capture() {
+fn cuda_graph_probe_records_capture_in_build_identity() {
     let fixture = Fixture::new(true);
     success(
         fixture
@@ -181,7 +181,7 @@ fn cuda_disables_graph_capture() {
             .unwrap(),
     );
     assert!(fixture.log().contains("-DGGML_CUDA=ON"));
-    assert!(fixture.stamp().contains("cmake-arg=-DGGML_CUDA_GRAPHS=OFF"));
+    assert!(fixture.stamp().contains("cmake-arg=-DGGML_CUDA_GRAPHS=ON"));
 }
 #[test]
 fn mismatched_generator_clears_cache() {
