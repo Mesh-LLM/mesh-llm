@@ -2,6 +2,7 @@ mod cache_runtime;
 mod detached_runtime;
 mod direct_batch;
 mod direct_reply;
+mod generation_events;
 
 use self::cache_runtime::{
     CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
@@ -579,66 +580,6 @@ impl IterationScheduler {
             started,
             true,
         )
-    }
-
-    fn drive_generation_events(
-        &self,
-        id: &str,
-        cancellation: Option<&skippy_inference_api::CancellationToken>,
-        events: std_mpsc::Receiver<SchedulerEvent>,
-        on_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
-        started: Instant,
-        resumed: bool,
-    ) -> InferenceResult<ScheduledGenerationStats> {
-        let mut first_token_at = None;
-        loop {
-            if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
-                let _ = self
-                    .shared
-                    .commands
-                    .try_send(SchedulerCommand::Cancel(id.to_string()));
-                return Err(InferenceError::backend("request cancelled"));
-            }
-            match events.recv_timeout(CANCELLATION_POLL_INTERVAL) {
-                Ok(SchedulerEvent::Token { token, ack }) => {
-                    first_token_at.get_or_insert_with(Instant::now);
-                    match on_token(token) {
-                        Ok(control) => {
-                            let _ = ack.send(control);
-                        }
-                        Err(error) => {
-                            let _ = ack.send(TokenControl::Stop);
-                            let _ = self
-                                .shared
-                                .commands
-                                .try_send(SchedulerCommand::Cancel(id.to_string()));
-                            return Err(error);
-                        }
-                    }
-                }
-                Ok(SchedulerEvent::Complete) => {
-                    let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
-                    let prompt_ms = if resumed {
-                        0.0
-                    } else {
-                        first_token_at
-                            .map(|first| first.duration_since(started).as_secs_f64() * 1_000.0)
-                            .unwrap_or(elapsed_ms)
-                    };
-                    return Ok(ScheduledGenerationStats {
-                        prompt_ms,
-                        predicted_ms: (elapsed_ms - prompt_ms).max(0.0),
-                    });
-                }
-                Ok(SchedulerEvent::Error(error)) => return Err(error),
-                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(InferenceError::backend(
-                        "iteration scheduler stopped before generation completed",
-                    ));
-                }
-            }
-        }
     }
 
     pub(super) fn execute_iteration(
