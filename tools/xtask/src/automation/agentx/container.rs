@@ -202,7 +202,7 @@ fn attached(launch: &Launch, cancellation: &process::Cancellation) -> DynResult<
     let spec = command::spec(
         &launch.root,
         "docker",
-        &command::strings(&["start", "--attach", "--sig-proxy=true", &launch.name]),
+        &command::strings(&["start", "--attach", &launch.name]),
     )?;
     let report = process::supervise_inherited_closed_stdin(
         &spec,
