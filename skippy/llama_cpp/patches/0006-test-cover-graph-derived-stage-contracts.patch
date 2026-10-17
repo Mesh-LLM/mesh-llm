@@ -1,4 +1,4 @@
-From 75699e82ac8bbdc257d7da6aed5407118c3a2bd0 Mon Sep 17 00:00:00 2001
+From 101d7ca369cbfde1971e506169eefabd4cae48f8 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -18,7 +18,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  624 +++++++
- src/skippy/tests/sampling_history.cpp         |  263 +++
+ src/skippy/tests/sampling_history.cpp         |  287 +++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9354 insertions(+), 33 deletions(-)
+ 34 files changed, 9378 insertions(+), 33 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5768,10 +5768,10 @@ index 000000000..8c9e3288b
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..cbc02d616
+index 000000000..a458b8469
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,263 @@
+@@ -0,0 +1,287 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "llama-model.h"
@@ -5835,6 +5835,26 @@ index 000000000..cbc02d616
 +    const auto status = skippy_decode_step_sampled(session, token, &sampling,
 +            nullptr, 0, nullptr, 0, &bytes, &predicted, &error);
 +    ok(status, error);
++    return predicted;
++}
++
++llama_token iteration(skippy_session * session, const skippy_sampling_config & sampling,
++        const std::vector<llama_token> & tokens) {
++    skippy_iteration_request request{};
++    request.session = session;
++    request.token_ids = tokens.data();
++    request.token_count = tokens.size();
++    request.sampling = &sampling;
++    request.sample_last = true;
++    size_t sampled_index = 99;
++    size_t sampled_count = 0;
++    llama_token predicted = -1;
++    skippy_error * error = nullptr;
++    const auto status = skippy_iteration_batch_sampled(&request, 1,
++            nullptr, nullptr, nullptr, nullptr, &sampled_index, &predicted,
++            1, &sampled_count, &error);
++    ok(status, error);
++    CHECK(sampled_count == 1 && sampled_index == 0);
 +    return predicted;
 +}
 +
@@ -5933,6 +5953,7 @@ index 000000000..cbc02d616
 +    CHECK(expected == std::vector<llama_token>({42, 43, 44}));
 +    release(cold);
 +    auto * warm = create(model);
++    const llama_token_data * candidates = nullptr;
 +    for (int attempt = 0; attempt < 3; ++attempt) {
 +        skippy_error * error = nullptr;
 +        const auto status = skippy_session_reset(warm, &error);
@@ -5943,8 +5964,11 @@ index 000000000..cbc02d616
 +        prefill(warm, suffix);
 +        previous = 2;
 +        for (const auto token : expected) {
-+            previous = decode(warm, sampling, previous);
++            previous = iteration(warm, sampling, {previous});
 +            CHECK(previous == token);
++            CHECK(!warm->sampling_candidates.empty());
++            if (candidates != nullptr) CHECK(candidates == warm->sampling_candidates.data());
++            candidates = warm->sampling_candidates.data();
 +        }
 +        CHECK(warm->token_history.size() == 353);
 +    }

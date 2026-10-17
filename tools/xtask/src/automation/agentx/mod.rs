@@ -3,6 +3,7 @@ mod command;
 mod container;
 mod inputs;
 mod lifecycle;
+mod memory;
 mod results;
 mod workload;
 use crate::{command::DynResult, repository::check_args::Grammar};

@@ -165,6 +165,16 @@ latency and output tokens/second. The full upstream export remains authoritative
 for metric units and validity reasons. Engine identities are never collapsed
 into one concurrency series. Build and input preparation are outside measurement.
 
+Each cell also retains `memory.jsonl` with one-second samples and
+`memory-summary.json` with sampled process RSS and container-memory peaks,
+the process RSS high-water mark, and minimum host available memory. Sampling
+covers the server lifecycle, including loading and warmup. Container memory
+includes the harness and file cache; missing counters remain null. These OS
+measurements are not GPU residency. Hardware evidence includes NVIDIA memory
+counters where supported; GB10 currently reports them as unavailable because
+Spark uses unified memory. No native GPU allocation or KV allocation totals
+are inferred from RSS.
+
 A passing cell requires a zero-exit harness, completed measured requests,
 positive output token usage, streaming TTFT/ITL observations, zero request or
 context-overflow failures, and clean process-tree shutdown. Failures retain

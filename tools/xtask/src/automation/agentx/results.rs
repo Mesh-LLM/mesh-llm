@@ -40,6 +40,8 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
     let path = input.output.join("upstream/profile_export_aiperf.json");
     let export: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
     validate(&export, input.profile)?;
+    let memory: Value =
+        serde_json::from_slice(&std::fs::read(input.output.join("memory-summary.json"))?)?;
     let summary = json!({
         "name":format!("agentx/{}/{}/{}/c{}",input.model.key,engine,input.profile.label(),concurrency),
         "engine":engine,"offered_sessions":concurrency,"generation_slots":1,
@@ -49,6 +51,7 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
         "errors":export["error_request_count"],"context_overflows":export["context_overflow_count"],
         "usage_prompt_tokens":export["usage_prompt_tokens"],"usage_completion_tokens":export["usage_completion_tokens"],
         "cache_read_tokens":export["usage_prompt_cache_read_tokens"],
+        "memory":memory,
         "upstream_metadata":export["metadata"],
         "export_sha256":crate::product::digest::file_sha256(&path).map_err(|failure|failure.error)?
     });

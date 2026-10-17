@@ -56,7 +56,10 @@ fn hardware(input: &Prepared) -> DynResult<()> {
     let spec = command::spec(
         &input.root,
         "nvidia-smi",
-        &command::strings(&["--query-gpu=name", "--format=csv,noheader"]),
+        &command::strings(&[
+            "--query-gpu=name,memory.total,memory.used,memory.free",
+            "--format=csv,noheader",
+        ]),
     )?;
     let log = input.output.join("hardware");
     command::run(&spec, 30, &log)?;
@@ -197,7 +200,9 @@ fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynResult<()> {
     } else {
         10200
     };
+    let memory = super::memory::Monitor::start(&input.output)?;
     let mut owner = Owner {
+        memory_pid: std::sync::Arc::clone(&memory.pid),
         server: Some(launch(input, server, MemberId::Seed, "server", seconds)),
         worker: Some(launch(
             input,
@@ -211,6 +216,10 @@ fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynResult<()> {
     };
     drop(listener);
     let report = super::super::retained_session::run(&mut owner, &command::limits(seconds))?;
+    write(
+        &input.output.join("memory-summary.json"),
+        &serde_json::to_value(memory.finish()?)?,
+    )?;
     let clean = report.recovery_success()
         && report.members.len() == 2
         && report.members.iter().all(|member| {
@@ -285,6 +294,7 @@ fn launch(
     }
 }
 struct Owner {
+    memory_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
     server: Option<Launch>,
     worker: Option<Launch>,
     stop: bool,
@@ -301,6 +311,14 @@ impl Coordinator for Owner {
         process::ProbeDecision::Pending
     }
     fn tick(&mut self, context: Context<'_>) -> Action<String> {
+        if let Some(server) = context
+            .members
+            .iter()
+            .find(|member| member.member == MemberId::Seed)
+        {
+            self.memory_pid
+                .store(server.pid, std::sync::atomic::Ordering::Relaxed);
+        }
         if self.stop {
             return Action::Complete;
         }
