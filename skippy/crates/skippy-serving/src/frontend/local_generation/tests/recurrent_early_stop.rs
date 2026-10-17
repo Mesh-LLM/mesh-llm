@@ -40,7 +40,7 @@ fn generate(
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
-fn recurrent_resume_preserves_prompt_checkpoint_after_early_stop() -> Result<()> {
+fn recurrent_prompt_checkpoint_survives_early_stop() -> Result<()> {
     let (backend, _) = recurrent_test_backend("resume", "resume", 256, 32, 8, 256)?;
     let prompt = (1..=64).collect::<Vec<_>>();
     let (first, _) = generate(&backend, &prompt, 2)?;
@@ -51,8 +51,8 @@ fn recurrent_resume_preserves_prompt_checkpoint_after_early_stop() -> Result<()>
     kv.wait_for_exact_state_recording(Duration::from_secs(30))
         .map_err(anyhow::Error::msg)?;
 
-    // Reopening the same prompt must reproduce the output even when the
-    // scheduler ran ahead before receiving the consumer's stop signal.
+    // Reopening the same prompt after consumer stop must preserve the
+    // exact checkpoint and reproduce the generated output.
     let (repeated, cached_tokens) = generate(&backend, &prompt, 8)?;
     assert!(cached_tokens > 0, "the prompt checkpoint must be reusable");
     assert_eq!(repeated[..2], first);

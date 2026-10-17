@@ -24,13 +24,13 @@ impl StageOpenAiBackend {
         let resume_scheduler_decode = prompt_prefill_sample.is_some()
             && !state.stopped
             && state.decoded_tokens < request.max_tokens as usize
+            && !recurrent_checkpoint_required
             && self.linear_proposal_ingress.is_none()
             && self.draft.is_none()
             && !request.native_mtp_enabled
             && !state.generation_hooks_active;
-        // Exact prompt captures and resume submissions share the FIFO command
-        // queue. Captures run before this session can advance; recurrent state
-        // does not require a caller-to-worker request for every decode token.
+        // Recurrent requests keep the direct path: the resumed scheduler
+        // passed cache parity tests but did not improve the paired Spark smoke.
         if resume_scheduler_decode {
             return self.resume_prefilled_decode(
                 request,
