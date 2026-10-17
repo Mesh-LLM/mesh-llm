@@ -100,6 +100,7 @@ the smoke, and submit the benchmark only after the smoke passes.
 | Random seed | 42 | 42 |
 | Resident generation slots | 1 | 1 |
 | Context pool / KV precision | 262,144 / F16 | 262,144 / F16 |
+| Logical batch / microbatch tokens | 2,048 / 512 | 2,048 / 512 |
 
 Offered agent concurrency is distinct from resident generation capacity.
 Subagents may also issue concurrent requests. Both servers queue into one

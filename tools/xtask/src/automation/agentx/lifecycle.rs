@@ -86,6 +86,10 @@ fn server(input: &Prepared, engine: &str, port: u16) -> DynResult<process::Proce
                 "262144",
                 "--parallel",
                 "1",
+                "--batch-size",
+                "2048",
+                "--ubatch-size",
+                "512",
                 "--n-gpu-layers",
                 "99",
                 "--cache-type-k",
@@ -114,6 +118,10 @@ fn server(input: &Prepared, engine: &str, port: u16) -> DynResult<process::Proce
                 "262144",
                 "--generation-concurrency",
                 "1",
+                "--batch-size",
+                "2048",
+                "--microbatch-size",
+                "512",
                 "--generation-queue-capacity",
                 "256",
                 "--generation-admission-timeout-secs",
@@ -254,6 +262,7 @@ fn launch_identity(
         "runtime_tree_sha256":crate::product::digest::tree_sha256(&runtime).map_err(|error|error.error)?,
         "harness_lock_sha256":crate::product::digest::file_sha256(&input.root.join("skippy/evals/agentx/uv.lock")).map_err(|error|error.error)?,
         "context_tokens":262144,"generation_slots":1,"offered_sessions":concurrency,
+        "batch_tokens":2048,"microbatch_tokens":512,
         "speculation":false,"dataset_sha256":inputs::DATA_SHA,
         "llama_upstream":std::fs::read_to_string(input.root.join("skippy/llama_cpp/upstream.txt"))?.trim()
     }))
@@ -281,6 +290,7 @@ struct Owner {
     stop: bool,
     policy: ExpectedExit,
 }
+
 impl Coordinator for Owner {
     type Rejection = String;
     fn line(
@@ -316,5 +326,42 @@ impl Coordinator for Owner {
             return Action::Stop(MemberId::Seed);
         }
         Action::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn paired_engines_pin_identical_batch_capacity() {
+        let models: Vec<super::super::Model> = serde_json::from_str(include_str!(
+            "../../../../../skippy/evals/agentx/models.json"
+        ))
+        .unwrap();
+        let input = Prepared {
+            root: "/repo".into(),
+            output: "/output".into(),
+            weights: "/cache/model.gguf".into(),
+            dataset: "/traces".into(),
+            model: models[1].clone(),
+            profile: Profile::Smoke,
+        };
+        for (engine, microbatch) in [("llama", "--ubatch-size"), ("skippy", "--microbatch-size")] {
+            let spec = server(&input, engine, 8080).unwrap();
+            let arguments: Vec<_> = spec
+                .arguments
+                .iter()
+                .map(|value| match value {
+                    process::Value::Public(value) => value.to_string_lossy().into_owned(),
+                    process::Value::Secret(_) => panic!("unexpected secret in server arguments"),
+                })
+                .collect();
+            for pair in [["--batch-size", "2048"], [microbatch, "512"]] {
+                assert!(
+                    arguments.windows(2).any(|args| args == pair),
+                    "{engine}: {pair:?}"
+                );
+            }
+        }
     }
 }

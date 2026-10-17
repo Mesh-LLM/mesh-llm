@@ -1033,6 +1033,8 @@ templates:
       engines: llama,skippy
       context_tokens: 262144
       generation_slots: 1
+      batch_tokens: 2048
+      microbatch_tokens: 512
       speculation: false
     description: >
       ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engines use
