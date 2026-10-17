@@ -1,8 +1,15 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { MultimodalContent } from '@tanstack/ai-client'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { chatMock, renderChatPage } from './ChatPage.test-support'
+
+vi.mock('@/lib/attachments', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/attachments')>()
+  return { ...actual, resolveImageFiles: vi.fn(actual.resolveImageFiles) }
+})
+
+const PNG_MAGIC_BYTES = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 
 function pasteIntoComposer(files: File[]) {
   return fireEvent.paste(screen.getByLabelText('Prompt'), {
@@ -123,5 +130,190 @@ describe('ChatPage composer paste', () => {
 
     expect(screen.getAllByRole('button', { name: 'Remove attachment same.png' })).toHaveLength(1)
     expect(screen.getByTestId('composer-attachments')).toBeInTheDocument()
+  })
+
+  it('attaches a pasted image with an empty MIME type after sniffing its bytes', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage({ mode: 'live' })
+
+    const image = new File([new Uint8Array(PNG_MAGIC_BYTES)], 'clipboard-image', { type: '' })
+    const consumed = pasteIntoComposer([image])
+
+    expect(consumed).toBe(false)
+    expect(await screen.findByText('clipboard-image')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Prompt'), 'Describe this')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(chatMock.sendCalls).toHaveLength(1)
+    })
+    const content = chatMock.sendCalls[0]?.content
+    expect(typeof content).not.toBe('string')
+    expect((content as MultimodalContent).content).toEqual([
+      { type: 'text', content: 'Describe this' },
+      { type: 'text', content: '[Image description: A tabby cat]' }
+    ])
+  })
+
+  it('drops a pasted file with an empty MIME type when its bytes are not an image', async () => {
+    renderChatPage({ mode: 'live' })
+
+    const notConsumedAsText = pasteIntoComposer([new File(['%PDF-1.7'], 'doc.pdf', { type: '' })])
+
+    expect(notConsumedAsText).toBe(false)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
+    expect(screen.queryByText('doc.pdf')).not.toBeInTheDocument()
+  })
+
+  it('restores the clipboard text when an undetermined file turns out not to be an image', async () => {
+    renderChatPage({ mode: 'live' })
+
+    const notConsumedAsText = fireEvent.paste(screen.getByLabelText('Prompt'), {
+      clipboardData: {
+        files: [new File(['%PDF-1.7'], 'doc.pdf', { type: '' })],
+        getData: (type: string) => (type === 'text/plain' ? '/home/alex/report.pdf' : '')
+      }
+    })
+
+    expect(notConsumedAsText).toBe(false)
+    await waitFor(() => {
+      expect(screen.getByLabelText('Prompt')).toHaveValue('/home/alex/report.pdf')
+    })
+    expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
+  })
+
+  it('restores clipboard text at the caret, not at the end of the prompt', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage({ mode: 'live' })
+    const prompt = screen.getByLabelText('Prompt')
+    await user.type(prompt, 'Hello world')
+    ;(prompt as HTMLTextAreaElement).setSelectionRange(5, 5)
+
+    fireEvent.paste(prompt, {
+      clipboardData: {
+        files: [new File(['%PDF-1.7'], 'doc.pdf', { type: '' })],
+        getData: (type: string) => (type === 'text/plain' ? '/report.pdf' : '')
+      }
+    })
+
+    await waitFor(() => {
+      expect(prompt).toHaveValue('Hello/report.pdf world')
+    })
+  })
+
+  it('restores clipboard text over a selection instead of appending it', async () => {
+    const user = userEvent.setup()
+
+    renderChatPage({ mode: 'live' })
+    const prompt = screen.getByLabelText('Prompt')
+    await user.type(prompt, 'Hello world')
+    ;(prompt as HTMLTextAreaElement).setSelectionRange(6, 11)
+
+    fireEvent.paste(prompt, {
+      clipboardData: {
+        files: [new File(['%PDF-1.7'], 'doc.pdf', { type: '' })],
+        getData: (type: string) => (type === 'text/plain' ? 'there' : '')
+      }
+    })
+
+    await waitFor(() => {
+      expect(prompt).toHaveValue('Hello there')
+    })
+  })
+
+  it('attaches the typed image from a mixed paste and drops the undetected file', async () => {
+    renderChatPage({ mode: 'live' })
+
+    const consumed = pasteIntoComposer([
+      new File(['image-bytes'], 'shot.png', { type: 'image/png' }),
+      new File(['%PDF-1.7'], 'doc.pdf', { type: '' })
+    ])
+
+    expect(consumed).toBe(false)
+    const pendingAttachments = await screen.findByTestId('composer-attachments')
+    expect(pendingAttachments).toHaveTextContent('shot.png')
+    expect(pendingAttachments).not.toHaveTextContent('doc.pdf')
+  })
+
+  it('appends instead of overwriting when the prompt is edited while detection is pending', async () => {
+    const user = userEvent.setup()
+    const { resolveImageFiles } = await import('@/lib/attachments')
+    let releaseSniff!: (files: File[]) => void
+    vi.mocked(resolveImageFiles).mockImplementationOnce(
+      () =>
+        new Promise<File[]>((resolve) => {
+          releaseSniff = resolve
+        })
+    )
+
+    renderChatPage({ mode: 'live' })
+    const prompt = screen.getByLabelText('Prompt')
+    await user.type(prompt, 'Hello world')
+    ;(prompt as HTMLTextAreaElement).setSelectionRange(6, 11)
+
+    const file = new File(['%PDF-1.7'], 'doc.pdf', { type: '' })
+    fireEvent.paste(prompt, {
+      clipboardData: {
+        files: [file],
+        getData: (type: string) => (type === 'text/plain' ? '/notes.txt' : '')
+      }
+    })
+
+    await user.type(prompt, '!')
+    expect(prompt).toHaveValue('Hello world!')
+
+    releaseSniff([file])
+
+    await waitFor(() => {
+      expect(prompt).toHaveValue('Hello world!/notes.txt')
+    })
+    expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
+  })
+
+  it('keeps both texts when two undetermined pastes resolve back to back', async () => {
+    const { resolveImageFiles } = await import('@/lib/attachments')
+    let releaseFirst!: (files: File[]) => void
+    let releaseSecond!: (files: File[]) => void
+    vi.mocked(resolveImageFiles)
+      .mockImplementationOnce(
+        () =>
+          new Promise<File[]>((resolve) => {
+            releaseFirst = resolve
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<File[]>((resolve) => {
+            releaseSecond = resolve
+          })
+      )
+
+    renderChatPage({ mode: 'live' })
+    const prompt = screen.getByLabelText('Prompt')
+
+    const first = new File(['%PDF-1.7'], 'one.pdf', { type: '' })
+    fireEvent.paste(prompt, {
+      clipboardData: { files: [first], getData: (type: string) => (type === 'text/plain' ? 'FIRST' : '') }
+    })
+    const second = new File(['%PDF-2.7'], 'two.pdf', { type: '' })
+    fireEvent.paste(prompt, {
+      clipboardData: { files: [second], getData: (type: string) => (type === 'text/plain' ? 'SECOND' : '') }
+    })
+
+    await act(async () => {
+      releaseFirst([first])
+      releaseSecond([second])
+    })
+
+    await waitFor(() => {
+      expect(prompt).toHaveValue('FIRSTSECOND')
+    })
+    expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
   })
 })
