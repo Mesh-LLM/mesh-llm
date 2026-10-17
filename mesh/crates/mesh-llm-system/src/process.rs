@@ -216,17 +216,20 @@ mod platform {
 
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, HANDLE,
+        WAIT_OBJECT_0,
     };
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+        WaitForSingleObject,
     };
 
-    /// The exit code a process reports while it is still running.
+    /// The exit code a process reports while it is still running, and also a
+    /// code a process may exit with, hence only a fallback.
     const STILL_ACTIVE: u32 = 259;
 
-    /// Owned process handle, closed on drop.
-    struct Process(HANDLE);
+    /// Owned process handle, closed on drop, and whether it may be waited on.
+    struct Process(HANDLE, bool);
 
     impl Drop for Process {
         fn drop(&mut self) {
@@ -239,30 +242,45 @@ mod platform {
     /// Open `pid` for querying: `Ok(None)` when no such process exists or it
     /// cannot be queried, `Err` for anything else.
     fn open(pid: u32) -> anyhow::Result<Option<Process>> {
-        // SAFETY: a plain Win32 call taking values; the null return is
-        // checked before the handle is used.
-        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if !handle.is_null() {
-            let process = Process(handle);
-            // An exited process stays openable while any handle still
-            // references it, but names no running process any more, and its
-            // image name query fails (Win32 error 31, measured).
-            return Ok((!has_exited(&process)).then_some(process));
-        }
-        // SAFETY: reads the calling thread's last error and takes nothing.
-        match unsafe { GetLastError() } {
-            ERROR_INVALID_PARAMETER => Ok(None),
-            ERROR_ACCESS_DENIED => {
-                tracing::debug!(pid, "access denied opening process for query");
-                Ok(None)
+        // SYNCHRONIZE lets `has_exited` wait on the handle; a process that
+        // grants query rights only is still opened, without it.
+        for access in [
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        ] {
+            // SAFETY: a plain Win32 call taking values; the null return is
+            // checked before the handle is used.
+            let handle = unsafe { OpenProcess(access, 0, pid) };
+            if !handle.is_null() {
+                let process = Process(handle, access & PROCESS_SYNCHRONIZE != 0);
+                // An exited process stays openable while any handle still
+                // references it, but names no running process any more, and
+                // its image name query fails (Win32 error 31, measured).
+                return Ok((!has_exited(&process)).then_some(process));
             }
-            code => Err(anyhow::anyhow!(
-                "OpenProcess({pid}) failed with Win32 error {code}"
-            )),
+            // SAFETY: reads the calling thread's last error and takes nothing.
+            match unsafe { GetLastError() } {
+                ERROR_INVALID_PARAMETER => return Ok(None),
+                ERROR_ACCESS_DENIED => {}
+                code => {
+                    return Err(anyhow::anyhow!(
+                        "OpenProcess({pid}) failed with Win32 error {code}"
+                    ));
+                }
+            }
         }
+        tracing::debug!(pid, "access denied opening process for query");
+        Ok(None)
     }
 
+    /// A process handle is signaled once the process has exited. Without the
+    /// right to wait, the exit code is the fallback, which a process that
+    /// exited with code 259 would pass as still running.
     fn has_exited(process: &Process) -> bool {
+        if process.1 {
+            // SAFETY: the handle carries SYNCHRONIZE; a zero timeout only polls.
+            return unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0;
+        }
         let mut code = 0u32;
         // SAFETY: the handle carries query rights and `code` outlives the call.
         let ok = unsafe { GetExitCodeProcess(process.0, &mut code) };
@@ -676,5 +694,22 @@ mod pid_identity_tests {
             None
         );
         assert_eq!(pid_identity(child.id(), "cmd", None), PidIdentity::Gone);
+    }
+
+    // 259 is also STILL_ACTIVE, the code a running process reports, so only
+    // waiting on the handle tells this exit apart from a running process.
+    #[cfg(windows)]
+    #[test]
+    fn a_process_that_exited_with_code_259_is_gone() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/d", "/c", "exit", "259"])
+            .spawn()
+            .expect("spawn a short process");
+        assert_eq!(child.wait().expect("wait for it").code(), Some(259));
+
+        assert_eq!(
+            process_comm(child.id()).expect("query the exited process"),
+            None
+        );
     }
 }
