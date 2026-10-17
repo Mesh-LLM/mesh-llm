@@ -764,6 +764,7 @@ impl StageOpenAiBackend {
                 base_pos_start: prefill_token_count,
                 sampling: wire_sampling.clone(),
                 sideband_capacity: skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES,
+                native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
             })?;
             let mut native_mtp = NativeMtpVerifier::default();
             let effective_speculative =
@@ -1226,6 +1227,7 @@ impl StageOpenAiBackend {
                                     decode_step: window.decode_step,
                                     tokens: &input_tokens,
                                     sampling: wire_sampling.clone(),
+                                    native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
                                 })?;
                             let dispatched = self.dispatch_embedded_stage_message(
                                 &request,
@@ -1622,6 +1624,7 @@ impl StageOpenAiBackend {
                             decode_step: decoded_tokens,
                             tokens: &verify_inputs,
                             sampling: wire_sampling.clone(),
+                            native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
                         })?;
                         let verify = self.execute_embedded_stage_message(
                             &request,

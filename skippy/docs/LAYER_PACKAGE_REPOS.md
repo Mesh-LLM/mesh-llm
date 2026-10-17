@@ -51,7 +51,9 @@ Native speculation defaults belong beside those fields as
 `generation.speculative_decoding`. Keep it as a strategy map, not as a backend
 switch: `native-mtp` says the package has preserved native prediction tensors
 and recommends that strategy; it does not force a Skippy-specific speculation
-implementation.
+implementation. Its `prediction_depth` is the number of draft tokens one
+proposal should produce: up to the number of NextN blocks, or more for a single
+block trained to chain (see [QWEN3_MOE_NATIVE_MTP.md](QWEN3_MOE_NATIVE_MTP.md)).
 
 GLM-DSA package generation is currently an offline artifact-preparation
 workflow: the pinned runtime does not advertise GLM-DSA stage execution. These
