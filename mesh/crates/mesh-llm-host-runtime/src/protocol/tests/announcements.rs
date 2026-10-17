@@ -834,7 +834,6 @@ fn advertised_memory_roundtrips_through_proto_announcement() {
         usable_bytes: 9_500_000_000,
         system_ram_bytes: Some(32_000_000_000),
         ram_offload_bytes: 18_000_000_000,
-        model_store_read_bytes_per_second: None,
     };
     // Start from a bare announcement with no GPU inventory, hostname or SoC
     // flag: the memory block alone must carry the hardware envelope onto the
@@ -880,7 +879,6 @@ fn platform_reserve_roundtrips_and_counts_in_the_partition() {
         usable_bytes: 57_600_000_000,
         system_ram_bytes: Some(64_000_000_000),
         ram_offload_bytes: 0,
-        model_store_read_bytes_per_second: None,
     };
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD1; 32]).public());
     let bare = crate::proto::node::PeerAnnouncement {
@@ -987,7 +985,6 @@ fn malformed_memory_blocks_are_dropped_at_ingest() {
             usable_bytes: 12_000_000_000,
             system_ram_bytes: None,
             ram_offload_bytes: 0,
-            model_store_read_bytes_per_second: None,
         }),
         "absent reserves count as zero when the partition still adds up"
     );

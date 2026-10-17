@@ -50,17 +50,16 @@ pub struct HostExpertLayers {
     pub end: u32,
 }
 
-/// Operator and planner inputs that decide a stage's [`HostExpertLayers`].
+/// Operator settings that decide a stage's [`HostExpertLayers`].
 ///
-/// `cpu_moe` is the operator's explicit switch, `n_cpu_moe` mirrors
-/// llama.cpp's `--n-cpu-moe N` (the first `N` model blocks, counted from
-/// block 0), and `planned_layer_end` is the split planner's placement for the
-/// stage. The explicit switch wins, then the explicit count, then the plan.
+/// `cpu_moe = true` moves every block's routed experts in the stage, and
+/// `n_cpu_moe = N` mirrors llama.cpp's `--n-cpu-moe N`: the first `N` model
+/// blocks, counted from block 0, so a later split stage may hold none of
+/// them. `cpu_moe = false` wins over `n_cpu_moe`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HostExpertPolicy {
     pub cpu_moe: Option<bool>,
     pub n_cpu_moe: Option<u32>,
-    pub planned_layer_end: Option<u32>,
 }
 
 impl HostExpertLayers {
@@ -77,12 +76,10 @@ impl HostExpertLayers {
     /// `[layer_start, layer_end)`. Returns `None` when every routed expert
     /// stays on the accelerator.
     pub fn for_stage(layer_start: u32, layer_end: u32, policy: HostExpertPolicy) -> Option<Self> {
-        let host_end = match (policy.cpu_moe, policy.n_cpu_moe, policy.planned_layer_end) {
-            (Some(false), _, _) => return None,
-            (Some(true), _, _) => layer_end,
-            (None, Some(count), _) => count,
-            (None, None, Some(planned)) => planned,
-            (None, None, None) => return None,
+        let host_end = match (policy.cpu_moe, policy.n_cpu_moe) {
+            (Some(false), _) | (None, None) => return None,
+            (Some(true), _) => layer_end,
+            (None, Some(count)) => count,
         };
         Self::new(layer_start, host_end.min(layer_end))
     }

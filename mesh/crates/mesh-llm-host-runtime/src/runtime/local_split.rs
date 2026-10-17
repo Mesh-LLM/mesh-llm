@@ -327,10 +327,6 @@ pub(super) async fn start_runtime_split_model(
             ctx_size_override: spec.ctx_size_override,
             parallel_override: spec.parallel_override,
             placement: spec.placement,
-            expert_offload: super::split_expert_tiering::configured_expert_offload(
-                spec.mesh_config,
-                spec.config_model_id,
-            ),
         },
         cache_type_k_override: spec.cache_type_k_override.map(str::to_string),
         cache_type_v_override: spec.cache_type_v_override.map(str::to_string),
@@ -420,10 +416,6 @@ async fn prepare_split_runtime_start(
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
         placement: spec.placement,
-        expert_offload: super::split_expert_tiering::configured_expert_offload(
-            spec.mesh_config,
-            spec.config_model_id,
-        ),
     };
     let configured_locked_stages = load_configured_split_assignments(
         spec.mesh_config,

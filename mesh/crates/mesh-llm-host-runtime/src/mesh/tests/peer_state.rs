@@ -1430,7 +1430,6 @@ fn transitive_peer_update_refreshes_memory_only_when_advertised() {
         usable_bytes: 10_000_000_000,
         system_ram_bytes: None,
         ram_offload_bytes: 0,
-        model_store_read_bytes_per_second: None,
     };
     let mut existing = make_test_peer_info(peer_id);
     existing.memory = Some(advertised);
@@ -1468,7 +1467,6 @@ fn transitive_peer_update_drops_the_cached_memory_when_the_capacity_moves() {
         usable_bytes: 10_000_000_000,
         system_ram_bytes: None,
         ram_offload_bytes: 0,
-        model_store_read_bytes_per_second: None,
     };
     let mut existing = make_test_peer_info(peer_id);
     existing.vram_bytes = 10_000_000_000;
@@ -1509,7 +1507,6 @@ fn peer_meaningfully_changed_detects_memory_updates() {
         usable_bytes: 10_000_000_000,
         system_ram_bytes: None,
         ram_offload_bytes: 0,
-        model_store_read_bytes_per_second: None,
     };
     old_peer.memory = Some(advertised);
     new_peer.memory = Some(crate::mesh::AdvertisedMemory {

@@ -291,12 +291,6 @@ pub(super) struct SplitParticipant {
     /// Weight bytes per second this node streams during decode, from its GPU
     /// memory-bandwidth benchmark. Used by `--auto-balance` placement.
     pub(super) decode_bytes_per_second: Option<u64>,
-    /// Host memory this node can lend to routed experts moved off its
-    /// accelerator budget, derived from its gossiped memory block.
-    pub(super) host_expert_bytes: Option<u64>,
-    /// Measured random-read throughput of this node's model store, for
-    /// experts that must page in from disk.
-    pub(super) model_store_read_bytes_per_second: Option<u64>,
 }
 
 impl SplitParticipant {
@@ -316,29 +310,11 @@ impl SplitParticipant {
             decode_batch_policy_supported: false,
             availability_score: 0,
             decode_bytes_per_second: None,
-            host_expert_bytes: None,
-            model_store_read_bytes_per_second: None,
         }
     }
 
     pub(super) fn with_decode_speed(mut self, decode_bytes_per_second: Option<u64>) -> Self {
         self.decode_bytes_per_second = decode_bytes_per_second;
-        self
-    }
-
-    /// What the node can offer spilled routed experts: host memory outside
-    /// its accelerator budget and its model store's measured read rate.
-    pub(super) fn with_expert_tier(
-        mut self,
-        memory: Option<&mesh::AdvertisedMemory>,
-        is_soc: bool,
-    ) -> Self {
-        self.host_expert_bytes = memory
-            .map(|memory| crate::system::capacity::host_expert_budget_bytes(memory, is_soc))
-            .filter(|bytes| *bytes > 0);
-        self.model_store_read_bytes_per_second = memory
-            .and_then(|memory| memory.model_store_read_bytes_per_second)
-            .filter(|rate| *rate > 0);
         self
     }
 
@@ -604,10 +580,6 @@ pub(super) async fn collect_split_participants(
     local_source_required: bool,
 ) -> SplitParticipantSnapshot {
     let local_bandwidth = node.gpu_mem_bandwidth_gbps.lock().await.clone();
-    let local_memory = mesh::AdvertisedMemory {
-        model_store_read_bytes_per_second: *node.model_store_read_bytes_per_second.lock().await,
-        ..node.advertised_memory
-    };
     let mut participants = vec![
         SplitParticipant::local_package(
             node.id(),
@@ -617,8 +589,7 @@ pub(super) async fn collect_split_participants(
         )
         .with_decode_speed(decode_bytes_per_second_from_gbps(
             local_bandwidth.as_deref(),
-        ))
-        .with_expert_tier(Some(&local_memory), node.is_soc.unwrap_or(false)),
+        )),
     ];
     let mut excluded = Vec::new();
     let blocked_now_ms = crate::network::peer_blocks::now_ms();
@@ -666,8 +637,7 @@ pub(super) async fn collect_split_participants(
                         .with_decode_batch_policy(peer.decode_batch_policy_supported)
                         .with_decode_speed(decode_bytes_per_second_from_gossip(
                             peer.gpu_mem_bandwidth_gbps.as_deref(),
-                        ))
-                        .with_expert_tier(peer.memory.as_ref(), peer.is_soc.unwrap_or(false)),
+                        )),
                 );
             }
             Err(reason) => {
@@ -1076,7 +1046,6 @@ pub(super) fn plan_runtime_slice_topology_with_exclusions(
             layer_start: stage.layer_start,
             layer_end: stage.layer_end,
             parameter_bytes: stage.parameter_bytes,
-            host_expert_layer_end: None,
         })
         .collect::<Vec<_>>();
     stages.sort_by_key(|stage| stage.stage_index);

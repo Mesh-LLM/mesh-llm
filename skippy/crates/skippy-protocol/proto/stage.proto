@@ -133,11 +133,10 @@ message StageLoadRuntimeSettings {
   optional bool swa_full = 10;
   optional uint32 cache_idle_slots = 11;
   StageActivationCodecPolicy activation_codec_policy = 12;
-  // Host-resident routed experts: the operator switch, the operator block
-  // count (llama.cpp --n-cpu-moe), and the planner's placement for the stage.
+  // Host-resident routed experts: the operator switch and the operator
+  // block count (llama.cpp --n-cpu-moe).
   optional bool cpu_moe = 13;
   optional uint32 n_cpu_moe = 14;
-  optional uint32 planned_host_expert_layer_end = 15;
 }
 
 message StopStage {

@@ -24,7 +24,6 @@ mod model_lifecycle;
 mod model_presentation;
 pub(crate) mod model_reconciliation;
 mod node_lifecycle_events;
-mod node_measurements;
 mod operational_logging;
 mod options;
 mod passive_readiness;
@@ -56,7 +55,6 @@ pub(crate) fn placement_policy_for(
 }
 mod serving_surface;
 mod shutdown_signal;
-mod split_expert_tiering;
 mod split_participant_settle;
 mod split_planning;
 mod split_topology_lock;

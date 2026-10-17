@@ -2,7 +2,6 @@ use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
 use super::default_plugins::resolve_after_defaults;
 use super::failed_node_start::cleanup_failed_node_start;
 use super::join_sources;
-use super::node_measurements::spawn_node_measurement_tasks;
 use super::plugin_host_role;
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
 use super::status::mesh_guardrail_mode_to_openai;
@@ -45,7 +44,7 @@ use crate::runtime::survey;
 use crate::runtime::{
     InstanceLifecycleRecord, InstanceLifecycleState, tracing_writer::init_audit_logging,
 };
-use crate::system::{autoupdate, hardware};
+use crate::system::{autoupdate, benchmark, hardware};
 use anyhow::{Context, Result};
 use mesh_llm_events::{LogFormat, OutputEvent, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
@@ -658,6 +657,17 @@ pub(super) fn node_display_name(options: &RuntimeOptions, node: &mesh::Node) -> 
         .unwrap_or_else(|| node.id().fmt_short().to_string())
 }
 
+pub(super) async fn store_benchmark_metrics(
+    mem_arc: std::sync::Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
+    fp32_arc: std::sync::Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
+    fp16_arc: std::sync::Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
+    result: Option<&benchmark::BenchmarkResult>,
+) {
+    *mem_arc.lock().await = result.map(|r| r.mem_bandwidth_gbps.clone());
+    *fp32_arc.lock().await = result.and_then(|r| r.compute_tflops_fp32.clone());
+    *fp16_arc.lock().await = result.and_then(|r| r.compute_tflops_fp16.clone());
+}
+
 #[expect(
     clippy::cognitive_complexity,
     reason = "release attestation loading logs missing, valid, and invalid embedded states before advertising the result"
@@ -779,6 +789,113 @@ pub(super) fn configure_run_auto_process_state(
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));
+}
+
+/// Lift the soft open-file limit to the hard limit. A serving node holds a
+/// socket per lane, per stage bridge relay and per client, and macOS starts
+/// processes at a soft limit as low as 256, which a busy split exhausts —
+/// after which accepts fail and stage bridges stop taking connections.
+fn raise_open_file_limit() {
+    #[cfg(unix)]
+    {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: getrlimit/setrlimit read and write a caller-owned struct.
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+            return;
+        }
+        // macOS rejects RLIM_INFINITY for NOFILE; OPEN_MAX-style caps apply.
+        let target = if limit.rlim_max == libc::RLIM_INFINITY {
+            65_536
+        } else {
+            limit.rlim_max.min(1_048_576)
+        };
+        if limit.rlim_cur >= target {
+            return;
+        }
+        let previous = limit.rlim_cur;
+        limit.rlim_cur = target;
+        // SAFETY: as above.
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } == 0 {
+            tracing::info!(previous, raised_to = target, "raised open-file limit");
+        } else {
+            limit.rlim_cur = 10_240.max(previous);
+            // SAFETY: as above; fall back to a limit macOS always accepts.
+            let _ = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
+        }
+    }
+}
+
+pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
+    let mem_arc = node.gpu_mem_bandwidth_gbps.clone();
+    let compute_fp32_arc = node.gpu_compute_tflops_fp32.clone();
+    let compute_fp16_arc = node.gpu_compute_tflops_fp16.clone();
+    let bin_dir_clone = bin_dir.to_path_buf();
+    let node_bench = node.clone();
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            tokio::task::spawn_blocking(move || {
+                let hw = hardware::survey();
+                if hw.gpu_count == 0 {
+                    tracing::debug!("no GPUs detected — skipping memory bandwidth benchmark");
+                    return None;
+                }
+                benchmark::run_or_load(&hw, &bin_dir_clone, benchmark::BENCHMARK_TIMEOUT)
+            }),
+        )
+        .await
+        .map_err(|_| {
+            tracing::warn!("benchmark timed out after 30s — bandwidth will not be gossiped")
+        })
+        .ok()
+        .and_then(|r| r.ok())
+        .flatten();
+
+        if let Some(ref run) = result {
+            let total: f64 = run.mem_bandwidth_gbps.iter().sum();
+            tracing::info!(
+                "Memory bandwidth fingerprint: {} GPUs, {:.1} GB/s total",
+                run.mem_bandwidth_gbps.len(),
+                total
+            );
+            for (i, gbps) in run.mem_bandwidth_gbps.iter().enumerate() {
+                tracing::debug!("  GPU {}: {:.1} GB/s", i, gbps);
+            }
+            if let Some(fp32s) = &run.compute_tflops_fp32 {
+                let total_fp32: f64 = fp32s.iter().sum();
+                tracing::info!(
+                    "Compute FP32 TFLOPS: {} GPUs, {:.1} TFLOPS total",
+                    fp32s.len(),
+                    total_fp32
+                );
+                for (i, tf) in fp32s.iter().enumerate() {
+                    tracing::debug!("  GPU {}: {:.1} TF32", i, tf);
+                }
+            }
+            if let Some(fp16s) = &run.compute_tflops_fp16 {
+                let total_fp16: f64 = fp16s.iter().sum();
+                tracing::info!(
+                    "Compute FP16 TFLOPS: {} GPUs, {:.1} TFLOPS total",
+                    fp16s.len(),
+                    total_fp16
+                );
+                for (i, tf) in fp16s.iter().enumerate() {
+                    tracing::debug!("  GPU {}: {:.1} TF16", i, tf);
+                }
+            }
+        }
+        store_benchmark_metrics(
+            mem_arc.clone(),
+            compute_fp32_arc.clone(),
+            compute_fp16_arc.clone(),
+            result.as_ref(),
+        )
+        .await;
+        node_bench.regossip().await;
+    });
 }
 
 pub(super) async fn start_run_auto_node_and_plugins(
@@ -1076,7 +1193,12 @@ pub(super) async fn build_run_auto_node_setup(
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
     let lan_bootstrap_tasks = spawn_mdns_reverse_dial(options, &node);
 
-    spawn_node_measurement_tasks(&node, bin_dir, is_client);
+    if !is_client && skippy_runtime::native_runtime_loaded() {
+        spawn_node_benchmark_task(&node, bin_dir);
+        raise_open_file_limit();
+    } else {
+        tracing::debug!("client node — skipping memory bandwidth benchmark");
+    }
 
     Ok(AutoRuntimeNodeSetup {
         is_client,

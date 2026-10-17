@@ -349,7 +349,6 @@ fn stage_runtime_settings_to_proto(
         cache_idle_slots: settings.cache_idle_slots,
         cpu_moe: settings.host_experts.cpu_moe,
         n_cpu_moe: settings.host_experts.n_cpu_moe,
-        planned_host_expert_layer_end: settings.host_experts.planned_layer_end,
         activation_codec_policy: stage_activation_codec_policy_to_proto(
             settings.activation_codec_policy,
         ) as i32,
@@ -583,7 +582,6 @@ fn stage_runtime_settings_from_proto(
         host_experts: skippy_protocol::HostExpertPolicy {
             cpu_moe: settings.cpu_moe,
             n_cpu_moe: settings.n_cpu_moe,
-            planned_layer_end: settings.planned_host_expert_layer_end,
         },
         activation_codec_policy: stage_activation_codec_policy_from_proto(
             settings.activation_codec_policy,
@@ -1434,7 +1432,6 @@ mod tests {
             cache_idle_slots: Some(3),
             cpu_moe: None,
             n_cpu_moe: None,
-            planned_host_expert_layer_end: None,
             activation_codec_policy: skippy_stage_proto::StageActivationCodecPolicy::FixedV1 as i32,
         };
         let load = skippy_stage_proto::LoadStage {

@@ -179,47 +179,6 @@ context/node/lane candidates. Later work can let one peer own multiple adjacent
 logical stages, but the first planner decision is simpler: prefer fewer
 physical decode hops whenever residency allows it.
 
-## Routed-Expert Tiering
-
-A mixture-of-experts layer is mostly routed-expert weight, and a token reads
-only `expert_used_count / expert_count` of it. When no node set can hold a
-MoE model with every expert on its accelerators, the coordinator planner
-(`skippy-coordinator/src/topology/expert_tiering.rs`) may keep the dense
-trunk, attention and KV on the accelerator and move the routed experts of a
-leading prefix of a stage's blocks into host memory. A stage can then hold
-more layers than its accelerator budget, which removes pipeline hops.
-
-Tiering is a capacity fallback. The planner first searches every context,
-node count and lane count with all experts resident, and only when nothing
-fits does it search again allowing spills. Host-resident experts run on CPU
-kernels whose cost the estimate does not price, so a resident split always
-wins over a tiered plan with fewer stages. For each stage the planner spills
-the smallest block prefix that fits. Host memory the node advertises
-outside its accelerator budget holds the spilled experts; anything beyond it
-pages from the node's model store per token, which the planner allows only
-when the node has gossiped a measured store read rate.
-
-Paging cost joins the network term in the decode estimate:
-
-```text
-decode_estimate_ms = serialized_network_hops_ms + max(stage_expert_paging_ms)
-stage_expert_paging_ms = touched_bytes_per_token * streamed_share / store_read_rate
-```
-
-Within the tiered search, stage count is chosen by the latency-aware
-comparison, so a single node that pages experts beats a two-node tiered split
-only when paging costs less than the hop it removes. A tiered plan is never re-cut by auto-balance,
-because moving a boundary would invalidate the expert placement.
-
-The stage loader receives the placement as `host_expert_layers`, a half-open
-absolute block range, and the native runtime routes those blocks'
-`ffn_{up,down,gate,gate_up}_exps` tensors to the CPU buffer type, the same
-mechanism as llama.cpp `--n-cpu-moe`. Operators can pin the placement with
-`hardware.cpu_moe` and `hardware.n_cpu_moe`; an explicit `cpu_moe = false`
-also forbids the planner from spilling. Placement never changes routing or
-precision, and it is part of the KV cache identity because CPU and
-accelerator kernels do not produce interchangeable pages.
-
 ## Family Capability Records
 
 Family capability records let the planner evaluate exceptional split boundaries,

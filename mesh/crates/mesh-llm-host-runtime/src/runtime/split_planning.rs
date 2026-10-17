@@ -1,7 +1,5 @@
-use super::split_expert_tiering::{package_layer_expert_weight_bytes, stage_host_expert_bytes};
 use crate::inference::skippy;
 use anyhow::{Context, Result};
-pub(crate) use skippy_coordinator::topology::ExpertOffloadPolicy;
 pub(crate) use skippy_coordinator::topology::PlacementObjective;
 use skippy_coordinator::topology::{
     LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlan, TopologyPlanningInput,
@@ -25,10 +23,6 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) layer_count: u32,
     pub(super) model_weight_bytes: u64,
     pub(super) layer_weight_bytes: Vec<u64>,
-    pub(super) layer_expert_weight_bytes: Vec<u64>,
-    pub(super) expert_count: u32,
-    pub(super) expert_used_count: u32,
-    pub(super) expert_offload: ExpertOffloadPolicy,
     pub(super) kv_bytes_per_token: u64,
     pub(super) recurrent_bytes_per_sequence_by_layer: Vec<u64>,
     pub(super) reserved_sequence_ids: usize,
@@ -50,8 +44,6 @@ pub(super) struct SplitTopologyPlanNode {
     pub(super) runtime_headroom_bytes: u64,
     pub(super) stage_transfer_latency_ms: Option<u32>,
     pub(super) decode_bytes_per_second: Option<u64>,
-    pub(super) host_expert_bytes: Option<u64>,
-    pub(super) expert_stream_bytes_per_second: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,7 +51,6 @@ pub(super) struct SplitTopologyPlan {
     pub(super) context_length: u32,
     pub(super) parallel_lanes: usize,
     pub(super) estimated_decode_network_ms_per_token: Option<u32>,
-    pub(super) estimated_decode_expert_stream_ms_per_token: Option<u32>,
     pub(super) decode_tpot_target_met: Option<bool>,
     pub(super) stages: Vec<TopologyStagePlan>,
     pub(super) throughput: Option<ThroughputEstimate>,
@@ -73,9 +64,6 @@ pub(super) struct RuntimeSliceStagePlan {
     pub(super) layer_start: u32,
     pub(super) layer_end: u32,
     pub(super) parameter_bytes: u64,
-    /// Routed experts of blocks `[layer_start, host_expert_layer_end)` load
-    /// into host memory on this stage; `None` keeps them on the accelerator.
-    pub(super) host_expert_layer_end: Option<u32>,
 }
 
 /// Warn when last-stage decode batching is planned for a peer that cannot act
@@ -180,8 +168,6 @@ pub(super) struct SplitTopologyResourceInputs {
     pub(super) parallel_override: Option<usize>,
     /// How boundaries are chosen, and whether they keep moving.
     pub(super) placement: SplitPlacementPolicy,
-    /// Whether the planner may spill routed experts into host memory.
-    pub(super) expert_offload: ExpertOffloadPolicy,
 }
 
 /// Per-stage capacity-model inputs resolved for a finished plan: the context
@@ -267,8 +253,6 @@ fn split_topology_plan(plan: skippy_coordinator::topology::TopologyPlan) -> Spli
         context_length: plan.context_length,
         parallel_lanes: plan.parallel_lanes,
         estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
-        estimated_decode_expert_stream_ms_per_token: plan
-            .estimated_decode_expert_stream_ms_per_token,
         decode_tpot_target_met: plan.decode_tpot_target_met,
         stages: plan.stages,
         throughput: plan.throughput,
@@ -281,10 +265,6 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
         layer_count: input.layer_count,
         model_weight_bytes: input.model_weight_bytes,
         layer_weight_bytes: input.layer_weight_bytes,
-        layer_expert_weight_bytes: input.layer_expert_weight_bytes,
-        expert_count: input.expert_count,
-        expert_used_count: input.expert_used_count,
-        expert_offload: input.expert_offload,
         kv_bytes_per_token: input.kv_bytes_per_token,
         recurrent_bytes_per_sequence_by_layer: input.recurrent_bytes_per_sequence_by_layer,
         reserved_sequence_ids: input.reserved_sequence_ids,
@@ -299,8 +279,6 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
                 runtime_headroom_bytes: node.runtime_headroom_bytes,
                 stage_transfer_latency_ms: node.stage_transfer_latency_ms,
                 decode_bytes_per_second: node.decode_bytes_per_second,
-                host_expert_bytes: node.host_expert_bytes,
-                expert_stream_bytes_per_second: node.expert_stream_bytes_per_second,
             })
             .collect(),
         context_length_override: input.context_length_override,
@@ -391,8 +369,6 @@ pub(super) fn plan_runtime_slice_topology_with_resources_and_stage0(
         context_length: plan.context_length,
         slots: plan.parallel_lanes,
         estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
-        estimated_decode_expert_stream_ms_per_token: plan
-            .estimated_decode_expert_stream_ms_per_token,
         decode_tpot_target_met: plan.decode_tpot_target_met,
         auto_balance_applied: plan.throughput.is_some(),
         stage_decode_ms: plan.throughput.as_ref().map(stage_decode_ms_labels),
@@ -434,7 +410,6 @@ struct PlannedSliceTopologyLabels {
     context_length: u32,
     slots: usize,
     estimated_decode_network_ms_per_token: Option<u32>,
-    estimated_decode_expert_stream_ms_per_token: Option<u32>,
     decode_tpot_target_met: Option<bool>,
     auto_balance_applied: bool,
     stage_decode_ms: Option<Vec<String>>,
@@ -459,7 +434,6 @@ fn log_planned_slice_topology(
         context_length,
         slots,
         estimated_decode_network_ms_per_token,
-        estimated_decode_expert_stream_ms_per_token,
         decode_tpot_target_met,
         auto_balance_applied,
         stage_decode_ms,
@@ -477,7 +451,6 @@ fn log_planned_slice_topology(
         context_length,
         slots,
         estimated_decode_network_ms_per_token,
-        estimated_decode_expert_stream_ms_per_token,
         decode_tpot_target_met,
         stages = ?split_stage_plan_labels(stages),
         speed_aware_placement_requested = plan_auto_balance,
@@ -620,14 +593,6 @@ pub(super) fn measured_rebalance(
             participant.with_decode_speed(measured_rates.get(&participant.node_id).copied())
         })
         .collect::<Vec<_>>();
-    if stages
-        .iter()
-        .any(|stage| stage.host_expert_layer_end.is_some())
-    {
-        // Moving boundaries would invalidate the expert placement the tiering
-        // fit chose for each stage's memory.
-        return None;
-    }
     let input = topology_planning_input(runtime_slice_plan_input(package, &measured, resources));
     let current = TopologyPlan {
         context_length,
@@ -641,11 +606,9 @@ pub(super) fn measured_rebalance(
                 layer_start: stage.layer_start,
                 layer_end: stage.layer_end,
                 parameter_bytes: stage.parameter_bytes,
-                expert_placement: None,
             })
             .collect(),
         estimated_decode_network_ms_per_token: None,
-        estimated_decode_expert_stream_ms_per_token: None,
         decode_tpot_target_met: None,
         throughput: None,
     };
@@ -717,10 +680,6 @@ fn runtime_slice_plan_input(
         layer_count: package.layer_count,
         model_weight_bytes: package.source_model_bytes,
         layer_weight_bytes: package_layer_weight_bytes(package),
-        layer_expert_weight_bytes: package_layer_expert_weight_bytes(package),
-        expert_count: package.expert_count,
-        expert_used_count: package.expert_used_count,
-        expert_offload: resources.expert_offload,
         kv_bytes_per_token: resources.kv_bytes_per_token,
         recurrent_bytes_per_sequence_by_layer: resources.recurrent_bytes_per_sequence_by_layer,
         reserved_sequence_ids: 0,
@@ -737,8 +696,6 @@ fn runtime_slice_plan_input(
                 runtime_headroom_bytes: default_runtime_headroom_bytes(participant.vram_bytes),
                 stage_transfer_latency_ms: participant.rtt_ms,
                 decode_bytes_per_second: participant.decode_bytes_per_second,
-                host_expert_bytes: participant.host_expert_bytes,
-                expert_stream_bytes_per_second: participant.model_store_read_bytes_per_second,
             })
             .collect(),
         auto_balance: resources.placement.recuts(),
@@ -912,10 +869,6 @@ fn map_runtime_slice_stages(
                 layer_start: stage.layer_start,
                 layer_end: stage.layer_end,
                 parameter_bytes: stage.parameter_bytes,
-                host_expert_layer_end: stage
-                    .expert_placement
-                    .as_ref()
-                    .map(|placement| placement.host_layer_end),
             })
         })
         .collect()
@@ -1084,14 +1037,7 @@ pub(super) fn validate_split_capacity(
         .sum::<u64>();
     // Use raw model weight for aggregate split check — the topology planner
     // already performed detailed per-node budgeting with KV and headroom.
-    // Routed experts planned into host memory leave the accelerator budget.
-    let host_expert_total_bytes = stages
-        .iter()
-        .map(|stage| stage_host_expert_bytes(stage, package))
-        .fold(0u64, u64::saturating_add);
-    let required_total_bytes = package
-        .source_model_bytes
-        .saturating_sub(host_expert_total_bytes);
+    let required_total_bytes = package.source_model_bytes;
     anyhow::ensure!(
         total_vram_bytes >= required_total_bytes,
         "{}",
@@ -1134,8 +1080,7 @@ pub(super) fn validate_split_capacity(
             kv_per_layer,
             capacity.context_length,
             capacity.parallel_lanes,
-        )
-        .saturating_sub(stage_host_expert_bytes(stage, package));
+        );
         anyhow::ensure!(
             usable_vram_bytes >= required_bytes,
             "{} assigned to {} for {model_ref} exceeds node capacity: requires {} against usable {} (node budget {} minus {} runtime headroom) for {} layer(s) of repriced weights plus context-scaled KV at the compute reserve and recurrent state (context {}, {} lane(s))",
@@ -1245,7 +1190,6 @@ mod tests {
             layer_start,
             layer_end,
             parameter_bytes: 0,
-            host_expert_layer_end: None,
         }
     }
 
@@ -1555,9 +1499,6 @@ mod tests {
             source_model_bytes,
             source_files: Vec::new(),
             layer_weight_bytes: Vec::new(),
-            layer_expert_weight_bytes: Vec::new(),
-            expert_count: 0,
-            expert_used_count: 0,
             layer_count,
             activation_width: 896,
             tensor_count: 100,
@@ -1686,7 +1627,6 @@ mod tests {
                 layer_start: 0,
                 layer_end: 10,
                 parameter_bytes: 10_000_000,
-                host_expert_layer_end: None,
             },
             RuntimeSliceStagePlan {
                 stage_id: "stage-1".to_string(),
@@ -1695,7 +1635,6 @@ mod tests {
                 layer_start: 10,
                 layer_end: 20,
                 parameter_bytes: 10_000_000,
-                host_expert_layer_end: None,
             },
         ];
 
@@ -1731,7 +1670,6 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 placement: Default::default(),
-                expert_offload: ExpertOffloadPolicy::Disabled,
             },
         )
         .expect("resource-aware topology");
@@ -1763,7 +1701,6 @@ mod tests {
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
                 placement: Default::default(),
-                expert_offload: ExpertOffloadPolicy::Disabled,
             },
         )
         .expect("resource-aware topology with exact layer weights");
@@ -1800,7 +1737,6 @@ mod tests {
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
                 placement: Default::default(),
-                expert_offload: ExpertOffloadPolicy::Disabled,
             },
         )
         .expect("MI300X and smaller accelerator should form a valid topology");
@@ -1845,7 +1781,6 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 placement: Default::default(),
-                expert_offload: ExpertOffloadPolicy::Disabled,
             },
         )
         .expect("latency-aware runtime topology");
@@ -1900,7 +1835,6 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 placement: Default::default(),
-                expert_offload: ExpertOffloadPolicy::Disabled,
             },
         );
 

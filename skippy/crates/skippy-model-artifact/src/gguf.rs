@@ -785,9 +785,7 @@ pub fn scan_gguf_tensor_names_any(
     Some(false)
 }
 
-/// Whether a GGUF tensor name belongs to a routed-expert bank (`ffn_*_exps`
-/// and friends). Shared experts are not routed and do not count.
-pub fn is_expert_partitioned_tensor(name: &str) -> bool {
+fn is_expert_partitioned_tensor(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     if lower.contains("shared_expert") || lower.contains("sharedexpert") || lower.contains("shexp")
     {

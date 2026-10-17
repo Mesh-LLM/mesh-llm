@@ -40,7 +40,6 @@ pub(crate) struct LocalAnnouncementData {
     gpu_mem_bandwidth_gbps: Option<String>,
     gpu_compute_tflops_fp32: Option<String>,
     gpu_compute_tflops_fp16: Option<String>,
-    model_store_read_bytes_per_second: Option<u64>,
     inference_admission_state: Option<crate::proto::node::InferenceAdmissionState>,
 }
 
@@ -162,7 +161,6 @@ impl Node {
                 &self.gpu_compute_tflops_fp16,
             )
             .await,
-            model_store_read_bytes_per_second: *self.model_store_read_bytes_per_second.lock().await,
             inference_admission_state: activity_advertisement.admission_state,
         }
     }
@@ -220,12 +218,7 @@ impl Node {
                 .enumerate_host
                 .then(|| self.gpu_reserved_bytes.clone())
                 .flatten(),
-            memory: self
-                .enumerate_host
-                .then_some(crate::mesh::AdvertisedMemory {
-                    model_store_read_bytes_per_second: data.model_store_read_bytes_per_second,
-                    ..self.advertised_memory
-                }),
+            memory: self.enumerate_host.then_some(self.advertised_memory),
             gpu_mem_bandwidth_gbps: data.gpu_mem_bandwidth_gbps,
             gpu_compute_tflops_fp32: data.gpu_compute_tflops_fp32,
             gpu_compute_tflops_fp16: data.gpu_compute_tflops_fp16,

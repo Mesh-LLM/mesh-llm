@@ -461,7 +461,6 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
             model_hardware.and_then(|hardware| hardware.n_cpu_moe),
             global_hardware.and_then(|hardware| hardware.n_cpu_moe),
         ),
-        planned_layer_end: None,
     };
     let safety_margin_gb = pick_owned(
         model_hardware.and_then(|hardware| hardware.safety_margin_gb),

@@ -69,6 +69,3 @@ mesh/sdk/swift/Generated/MeshLLMFFI.xcframework/
 
 # Generated UI dependencies left at their pre-split location.
 /crates/mesh-llm-ui/node_modules/
-
-# Generated mesh-llm ui builds
-/crates/mesh-llm-ui/dist

@@ -25,7 +25,7 @@ pub struct StageLoadRuntimeSettings {
     pub direct_io: bool,
     pub main_gpu: Option<u32>,
     pub split_mode: SplitMode,
-    /// Operator policy and planner placement for host-resident routed experts.
+    /// Operator policy for host-resident routed experts.
     pub host_experts: HostExpertPolicy,
     pub kv_offload: Option<bool>,
     pub kv_unified: Option<bool>,

@@ -50,7 +50,7 @@ fn push_cpu_moe_status(plan: &mut TunePlan, context: &CpuMoeTuneContext<'_>, exp
             field: TuneField::CpuMoe,
             value: TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Auto),
             rationale: format!(
-                "GGUF advertises {expert_count} experts; auto lets split planning move routed experts into host memory when a node set cannot otherwise hold the model"
+                "GGUF advertises {expert_count} experts; auto keeps them on the accelerator unless n_cpu_moe moves some"
             ),
         },
         reason: "cpu_moe stays auto; n_cpu_moe carries the single-node placement".to_string(),

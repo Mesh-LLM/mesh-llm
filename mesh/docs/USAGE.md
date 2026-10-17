@@ -525,8 +525,7 @@ check_tensors    = false         # tensor-validation at load time (debug)
 
 # MoE (Mixture-of-Experts) expert placement
 # cpu_moe   = "auto"   # true: every block's routed experts in host memory;
-#                      # false: never, and split planning may not spill them;
-#                      # "auto": split planning spills only when it must
+#                      # false or "auto": keep them on the GPU
 # n_cpu_moe = 0        # routed experts of the first N blocks in host memory
 
 # --- Throughput, scheduling, and CPU -------------------------------------

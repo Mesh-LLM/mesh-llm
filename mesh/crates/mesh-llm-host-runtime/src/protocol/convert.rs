@@ -499,7 +499,6 @@ fn local_memory_to_proto(memory: &crate::mesh::AdvertisedMemory) -> crate::proto
         system_ram_bytes: memory.system_ram_bytes,
         ram_offload_bytes: Some(memory.ram_offload_bytes),
         platform_reserve_bytes: Some(memory.platform_reserve_bytes),
-        model_store_read_bytes_per_second: memory.model_store_read_bytes_per_second,
     }
 }
 
@@ -530,7 +529,6 @@ fn proto_memory_to_local(
         usable_bytes,
         system_ram_bytes: memory.system_ram_bytes,
         ram_offload_bytes: memory.ram_offload_bytes.unwrap_or(0),
-        model_store_read_bytes_per_second: memory.model_store_read_bytes_per_second,
     })
 }
 
