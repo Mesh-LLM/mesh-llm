@@ -147,13 +147,14 @@ fn parse_safetensors_index_shards(index: &serde_json::Value) -> Result<Vec<Strin
     Ok(shards.into_iter().collect())
 }
 
-fn ensure_cached_hf_asset(api: &hf_hub::HFClientSync, asset: &HfAsset) -> Result<PathBuf> {
+async fn ensure_cached_hf_asset(api: &hf_hub::HFClient, asset: &HfAsset) -> Result<PathBuf> {
     let (owner, name) = asset.repo_parts();
     api.model(owner, name)
         .download_file()
         .filename(asset.file.clone())
         .revision(asset.revision.clone())
         .send()
+        .await
         .with_context(|| {
             format!(
                 "Cache Hugging Face asset {}/{}@{}. {}",
@@ -165,11 +166,14 @@ fn ensure_cached_hf_asset(api: &hf_hub::HFClientSync, asset: &HfAsset) -> Result
         })
 }
 
-fn mlx_sharded_weight_assets(api: &hf_hub::HFClientSync, asset: &HfAsset) -> Result<Vec<HfAsset>> {
+async fn mlx_sharded_weight_assets(
+    api: &hf_hub::HFClient,
+    asset: &HfAsset,
+) -> Result<Vec<HfAsset>> {
     if asset.file != "model.safetensors.index.json" {
         return Ok(Vec::new());
     }
-    let index_path = ensure_cached_hf_asset(api, asset)?;
+    let index_path = ensure_cached_hf_asset(api, asset).await?;
     let index_text = std::fs::read_to_string(&index_path)
         .with_context(|| format!("Read {}", index_path.display()))?;
     let index: serde_json::Value = serde_json::from_str(&index_text)
@@ -284,9 +288,7 @@ async fn download_hf_assets(
             });
         }
     }
-    tokio::task::spawn_blocking(move || download_hf_assets_blocking(&label, assets, progress))
-        .await
-        .context("Join Hugging Face download task")?
+    download_hf_assets_async(&label, assets, progress).await
 }
 
 #[derive(Debug)]
@@ -554,40 +556,14 @@ fn emit_or_print_model_progress(
     emit_model_progress(label, file, downloaded_bytes, total_bytes, status);
 }
 
-fn download_hf_assets_blocking(
-    label: &str,
-    assets: Vec<HfAsset>,
-    progress: bool,
-) -> Result<HfAssetsDownload> {
-    let label = label.to_string();
-    super::run_hf_sync(move || download_hf_assets_sync(&label, assets, progress))
-}
-
-fn download_hf_assets_sync(
+async fn download_hf_assets_async(
     label: &str,
     assets: Vec<HfAsset>,
     progress: bool,
 ) -> Result<HfAssetsDownload> {
     let mut console = mesh_llm_events::console_err();
-    let api = super::build_hf_api(false)?;
-    let mut download_plan = initial_download_plan_for_assets(assets)?;
-    let current_plan: Vec<(bool, HfAsset)> = download_plan.iter().cloned().collect();
-    for (_, asset) in current_plan {
-        if !is_mlx_primary_asset(&asset.file) {
-            continue;
-        }
-        for sidecar in mlx_sidecar_assets(&asset) {
-            download_plan.insert(sidecar);
-        }
-        // Expand shards from an index file (downloads index to discover shard names)
-        for shard in mlx_sharded_weight_assets(&api, &asset)? {
-            download_plan.insert((true, shard));
-        }
-        // Expand shards from a first-shard ref without needing to download the index
-        for shard in expand_split_mlx_first_shard(&asset) {
-            download_plan.insert((true, shard));
-        }
-    }
+    let api = super::build_hf_tokio_api(false)?;
+    let download_plan = download_plan_for_assets(&api, assets).await?;
     if progress {
         emit_or_print_model_progress(
             label,
@@ -680,6 +656,7 @@ fn download_hf_assets_sync(
                 .revision(asset.revision.clone())
                 .local_files_only(true)
                 .send()
+                .await
                 .is_ok();
         let path = match api_repo
             .download_file()
@@ -687,6 +664,7 @@ fn download_hf_assets_sync(
             .revision(asset.revision.clone())
             .maybe_progress(progress_handler)
             .send()
+            .await
         {
             Ok(path) => {
                 if progress {
@@ -891,6 +869,31 @@ fn multipart_progress_terminal_line(progress: &MultipartDownloadProgress) -> Str
 
 fn multipart_progress_label(label: &str) -> String {
     format!("parts::{label}")
+}
+
+async fn download_plan_for_assets(
+    api: &hf_hub::HFClient,
+    assets: Vec<HfAsset>,
+) -> Result<std::collections::BTreeSet<(bool, HfAsset)>> {
+    let mut download_plan = initial_download_plan_for_assets(assets)?;
+    let current_plan: Vec<(bool, HfAsset)> = download_plan.iter().cloned().collect();
+    for (_, asset) in current_plan {
+        if !is_mlx_primary_asset(&asset.file) {
+            continue;
+        }
+        for sidecar in mlx_sidecar_assets(&asset) {
+            download_plan.insert(sidecar);
+        }
+        // Expand shards from an index file (downloads index to discover shard names)
+        for shard in mlx_sharded_weight_assets(api, &asset).await? {
+            download_plan.insert((true, shard));
+        }
+        // Expand shards from a first-shard ref without needing to download the index
+        for shard in expand_split_mlx_first_shard(&asset) {
+            download_plan.insert((true, shard));
+        }
+    }
+    Ok(download_plan)
 }
 
 fn initial_download_plan_for_assets(

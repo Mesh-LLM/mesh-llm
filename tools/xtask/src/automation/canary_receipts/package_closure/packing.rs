@@ -144,7 +144,8 @@ fn validate_mode(input: &Input) -> DynResult<()> {
         "repair-build" if repair && input.candidate != input.base && input.bundle.is_some() => {}
         "verify-build" if verify && input.candidate != input.base && input.bundle.is_some() => {}
         "pinned-build"
-            if input.pass_id == "repair-1"
+            if (input.pass_id == "repair-1"
+                || (!input.context.selected_source.is_empty() && input.pass_id == "verify-1"))
                 && input.candidate == input.base
                 && input.bundle.is_none() => {}
         _ => return Err("package mode/pass/candidate/bundle contract mismatch".into()),
