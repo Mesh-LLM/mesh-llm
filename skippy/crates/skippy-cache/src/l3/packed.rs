@@ -1087,6 +1087,22 @@ fn is_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// Join a verification worker, treating a panic as a failed verification.
+///
+/// A panicked worker has checked none of its segments. Dropping it would
+/// report the run as verified, so the panic is surfaced as the error it is.
+fn join_verification(
+    handle: std::thread::ScopedJoinHandle<'_, Result<(), PackedReadError>>,
+    pack_digest: &str,
+) -> Result<(), PackedReadError> {
+    handle.join().unwrap_or_else(|_| {
+        Err(PackedReadError {
+            pack_digest: pack_digest.to_string(),
+            error: anyhow::anyhow!("packed verification worker panicked"),
+        })
+    })
+}
+
 /// Total bytes covered by `requests` if they tile the output contiguously from
 /// `base`, in manifest order.
 fn contiguous_output_len(requests: &[PackedReadRequest<'_>], base: usize) -> Option<u64> {
@@ -1189,7 +1205,12 @@ fn verify_run_segments(
         }
         handles
             .into_iter()
-            .filter_map(|handle| handle.join().ok())
+            .map(|handle| {
+                // A panicked verifier has checked nothing: surface it as a
+                // verification failure rather than dropping the worker and
+                // reporting the run as verified.
+                join_verification(handle, run.pack_digest)
+            })
             .collect::<Vec<Result<(), PackedReadError>>>()
     });
     outcomes
@@ -1219,4 +1240,30 @@ fn verify_segments_serial(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panicked_verification_worker_fails_the_run() {
+        // A worker that dies has verified none of its segments; the join must
+        // report a failure rather than silently dropping it.
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| -> Result<(), PackedReadError> {
+                panic!("verification worker died");
+            });
+            let outcome = join_verification(handle, "blake3:pack");
+            assert!(outcome.is_err());
+        });
+    }
+
+    #[test]
+    fn a_completed_verification_worker_keeps_its_result() {
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| Ok(()));
+            assert!(join_verification(handle, "blake3:pack").is_ok());
+        });
+    }
 }

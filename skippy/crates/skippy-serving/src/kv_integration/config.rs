@@ -419,6 +419,14 @@ const L3_SEGMENT_BYTES: usize = 8 * 1024 * 1024;
 /// no margin; 64 rows gives 1.07x (worst turn 1.17x). The cost of the smaller
 /// window is segment count, which is why it is capped rather than shrunk
 /// further.
+///
+/// **This constant is part of the cache key.** L3 entries are keyed by a
+/// composition root over their segment list bound to a `segmentation_id`
+/// derived from this window (see `geometry_segmentation_id`), so changing it
+/// forks the key space: existing entries become unreachable, and two nodes
+/// running different values silently stop deduping against each other. Treat a
+/// retune as a format change — version the derivation, and roll the mesh
+/// together or accept a cold cache.
 const L3_MAX_WINDOW_ROWS: u64 = 64;
 
 fn l3_manager_from_env(config: &StageConfig) -> Result<Option<L3CacheManager>> {
