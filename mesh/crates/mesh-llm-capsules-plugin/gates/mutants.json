@@ -75,6 +75,21 @@
       "feature": "mutant-corroboration-role-equality",
       "tests": "exchange_corroboration::",
       "must_print": { "failed_test": "two_halves_with_the_same_role_disagree_on_role" }
+    },
+    {
+      "feature": "mutant-service-history-card-rebuilt",
+      "tests": "service_history::",
+      "must_print": { "failed_test": "the_embedded_card_is_the_direct_card" }
+    },
+    {
+      "feature": "mutant-service-history-drops-member",
+      "tests": "service_history::",
+      "must_print": { "failed_test": "every_case_the_definition_refuses_is_refused" }
+    },
+    {
+      "feature": "mutant-served-summary-folds-whole-log",
+      "tests": "served_summary::",
+      "must_print": { "failed_test": "a_verdict_appended_after_the_checkpoint_leaves_the_summary_unchanged" }
     }
   ]
 }

@@ -41,6 +41,7 @@ mod routing_choice_bridge;
 mod routing_rule;
 mod self_peer;
 mod served_summary;
+mod service_history;
 mod settings;
 mod settlement_channel;
 mod settlement_legs;

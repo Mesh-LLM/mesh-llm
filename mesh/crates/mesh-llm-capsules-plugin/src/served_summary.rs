@@ -21,10 +21,30 @@
 //! One departure from the Python, stated: a `latency_ms` that is not a finite
 //! number (`NaN`, `inf`) is not counted. The Python would fold it into the
 //! percentiles and publish `nan`.
+//!
+//! **Two definitions, two digests.** The fold (`by_model`) is
+//! `mesh.served_summary_fold/1`, [`DEFINITION_DIGEST`]
+//! (`derivations/served-summary-fold-1.json`), named inside the summary as
+//! `derivation.definition_digest`. The whole artifact is `served_summary/1`,
+//! [`SERVED_SUMMARY_DEFINITION_DIGEST`] (`derivations/served-summary-1.json`):
+//! the fold, `adjudications_received` and `selection`, every field they read,
+//! and the fixed members' exact values. That second digest names the
+//! derivation on the wire ([`is_derivation`]) and in the artifact. The fold's
+//! digest never names a request: it identifies a part of the artifact, not
+//! the artifact.
+//!
+//! **The covered range.** Everything the summary counts is under the anchor
+//! checkpoint: the fold, and the verdicts in `adjudications_received`, which
+//! count only when the half they judge is under it too. A record appended
+//! after the anchor never changes the summary for that anchor.
 
+use evidence_request::request::Derivation;
 use serde_json::{json, Value};
 
 pub const SERVED_SUMMARY_SCHEMA: &str = "mesh-served-summary/1";
+/// The bare token, a legacy alias for [`SERVED_SUMMARY_DEFINITION_DIGEST`]:
+/// accepted on requests through 0.1.8, refused `derivation_unsupported` from
+/// 0.1.9. New requesters send the digest.
 pub const SERVED_SUMMARY_DERIVATION_TOKEN: &str = "served_summary/1";
 pub const FLOOR: u64 = 5;
 pub const FLOOR_LABEL: &str = "fewer than 5";
@@ -35,6 +55,42 @@ pub const FLOOR_LABEL: &str = "fewer than 5";
 /// digest; it moves only if the definition's reads or class change.
 pub const DEFINITION_DIGEST: &str =
     "6eb6f1870dbcee613573c60692b79ab979e2a6188a0f4c6191d4af65a7b773b8";
+
+/// The fold's definition document. Only its digest is used at run time; a
+/// test pins one to the other.
+#[cfg(test)]
+pub const FOLD_DEFINITION_DOCUMENT: &str =
+    include_str!("../derivations/served-summary-fold-1.json");
+
+/// The `served_summary/1` definition document. Only its digest is used at
+/// run time; tests pin one to the other, and the fixed values to what
+/// [`summary_value`] emits.
+#[cfg(test)]
+pub const DEFINITION_DOCUMENT: &str = include_str!("../derivations/served-summary-1.json");
+
+/// SHA-256 over the RFC 8785 bytes of [`DEFINITION_DOCUMENT`]: the
+/// derivation's name on the wire, and the artifact's `derivation`.
+pub const SERVED_SUMMARY_DEFINITION_DIGEST: &str =
+    "d494544ca59a4d7f997e4d59f87a83670d08f555cae65fb3752614f669757260";
+
+/// The fixed statements every summary carries, exactly as the definition
+/// document states them.
+const NO_REQUESTER_IDENTIFIERS: &str =
+    "this summary reads and reports no requester-identity field \
+     (cross_party.initiator_ref, serving_provenance.requesting_party/counterparty_ref) \
+     -- it answers WHAT was served, never WHO asked";
+const NOT_A_SCORE: &str = "An account of facts + a witness handle to verify them, not a score or \
+     routing recommendation.";
+
+/// Whether `derivation` names the served summary: its definition digest, or
+/// the legacy token.
+pub fn is_derivation(derivation: Option<&Derivation>) -> bool {
+    match derivation {
+        Some(Derivation::Digest(d)) => d == SERVED_SUMMARY_DEFINITION_DIGEST,
+        Some(Derivation::Token(t)) => t == SERVED_SUMMARY_DERIVATION_TOKEN,
+        None => false,
+    }
+}
 
 const REFUSED_STATUS_ABSENT_REASON: &str =
     "agent_action_capsule.contracts.EFFECT_STATUSES carries no distinct 'refused' value; a \
@@ -284,11 +340,8 @@ pub fn summary_value(
                      references path is what carries weight in an adversarial reading; this \
                      count is never presented as a substitute for it.",
         },
-        "no_requester_identifiers": "this summary reads and reports no requester-identity field \
-             (cross_party.initiator_ref, serving_provenance.requesting_party/counterparty_ref) \
-             -- it answers WHAT was served, never WHO asked",
-        "not_a_score": "An account of facts + a witness handle to verify them, not a score or routing \
-             recommendation.",
+        "no_requester_identifiers": NO_REQUESTER_IDENTIFIERS,
+        "not_a_score": NOT_A_SCORE,
     })
 }
 
@@ -300,10 +353,16 @@ fn adjudications_received(
     covered: u64,
     leaf_index_of: &dyn Fn(&str) -> Option<u64>,
 ) -> usize {
-    let is_covered_own = |id: &str| leaf_index_of(id).is_some_and(|at| at < covered);
+    // Deliberately broken in one CI build: the whole log, as before.
+    let whole_log = cfg!(feature = "mutant-served-summary-folds-whole-log");
+    let is_covered_own = |id: &str| leaf_index_of(id).is_some_and(|at| whole_log || at < covered);
     leaves
         .iter()
-        .take(covered as usize)
+        .take(if whole_log {
+            leaves.len()
+        } else {
+            covered as usize
+        })
         .filter_map(|f| f.adjudicated_halves.as_ref())
         .filter(|(a, b)| {
             a.as_deref().is_some_and(is_covered_own) || b.as_deref().is_some_and(is_covered_own)
@@ -470,5 +529,93 @@ mod tests {
         assert_eq!(m["failed"], json!(1));
         assert_eq!(m["latency_max_ms"], json!("5.000"));
         assert!(!v.to_string().contains("someone"));
+    }
+
+    /// The digest of a definition document: SHA-256 over its RFC 8785 bytes.
+    fn digest_of_document(text: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let document: Value = serde_json::from_str(text).unwrap();
+        let bytes = evidence_request::jcs::to_string(&document).unwrap();
+        hex::encode(Sha256::digest(bytes.as_bytes()))
+    }
+
+    #[test]
+    fn the_fold_digest_is_the_digest_of_the_fold_definition_file() {
+        assert_eq!(
+            digest_of_document(FOLD_DEFINITION_DOCUMENT),
+            DEFINITION_DIGEST
+        );
+        let document: Value = serde_json::from_str(FOLD_DEFINITION_DOCUMENT).unwrap();
+        assert_eq!(document["name"], json!("mesh.served_summary_fold/1"));
+        assert_eq!(document["selection_kind"], json!("range"));
+    }
+
+    #[test]
+    fn the_served_summary_digest_is_the_digest_of_its_definition_file() {
+        assert_eq!(
+            digest_of_document(DEFINITION_DOCUMENT),
+            SERVED_SUMMARY_DEFINITION_DIGEST
+        );
+        let document: Value = serde_json::from_str(DEFINITION_DOCUMENT).unwrap();
+        assert_eq!(document["name"], json!(SERVED_SUMMARY_DERIVATION_TOKEN));
+        let members = document["members"].as_array().unwrap();
+        let names: Vec<&str> = members
+            .iter()
+            .map(|m| m["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["derivation", "adjudications_received", "selection"]);
+        // The fold is named by its own digest, never as a derivation.
+        assert_eq!(members[0]["definition"], json!(DEFINITION_DIGEST));
+        // `reads` is the ordered union of every member's and fixed entry's.
+        let mut union: Vec<&Value> = Vec::new();
+        for entry in members.iter().chain(document["fixed"].as_array().unwrap()) {
+            for read in entry["reads"].as_array().into_iter().flatten() {
+                if !union.contains(&read) {
+                    union.push(read);
+                }
+            }
+        }
+        let reads: Vec<&Value> = document["reads"].as_array().unwrap().iter().collect();
+        assert_eq!(reads, union);
+        let record_reads = reads
+            .iter()
+            .filter(|r| r.as_str().unwrap().starts_with("record: "))
+            .count();
+        assert_eq!(record_reads, 13);
+    }
+
+    /// The fixed members carry exactly the values the definition states, so
+    /// their wording cannot change under an unchanged digest.
+    #[test]
+    fn every_constant_fixed_member_is_emitted_exactly_as_the_definition_states() {
+        let document: Value = serde_json::from_str(DEFINITION_DOCUMENT).unwrap();
+        let cp = checkpoint();
+        let v = summary_value(
+            &[],
+            &Coverage {
+                checkpoint: &cp,
+                covered: 0,
+            },
+            &|_| None,
+        );
+        let fixed = document["fixed"].as_array().unwrap();
+        let constants: Vec<&Value> = fixed.iter().filter(|f| f.get("value").is_some()).collect();
+        assert_eq!(constants.len(), 3);
+        for entry in constants {
+            let name = entry["name"].as_str().unwrap();
+            assert_eq!(v[name], entry["value"], "{name}");
+        }
+        // Every key the summary carries is a member or a fixed entry.
+        let mut declared: Vec<&str> = document["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(fixed)
+            .map(|m| m["name"].as_str().unwrap())
+            .collect();
+        declared.sort_unstable();
+        let mut emitted: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        emitted.sort_unstable();
+        assert_eq!(emitted, declared);
     }
 }

@@ -1,0 +1,13 @@
+{
+  "name": "mesh.served_summary_fold/1",
+  "selection_kind": "range",
+  "reads": [
+    "effect.status",
+    "latency_ms",
+    "model_canonical_ref",
+    "quantization",
+    "weights_digest",
+    "role"
+  ],
+  "derivation_class": "deterministic"
+}

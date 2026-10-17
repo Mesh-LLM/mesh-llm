@@ -60,6 +60,15 @@
   `crates/evidence-request-v0.2.0`), and the responder and requester are run against them. The
   sharing-policy cases, which no vector states, keep their reviewed expected answers in the
   runner.
+- **The served summary is asked for by the digest of its definition,**
+  `d494544ca59a4d7f997e4d59f87a83670d08f555cae65fb3752614f669757260`
+  (`derivations/served-summary-1.json`, `docs/SERVED-SUMMARY.md`), and its answer names that
+  digest as its `derivation`.
+  - The bare token `served_summary/1` is still answered through 0.1.8. From 0.1.9 it is refused
+    `derivation_unsupported`.
+  - The fold's own digest (`6eb6f187…`, `derivations/served-summary-fold-1.json`) stays inside
+    the summary and is not a derivation: a request naming it is refused `derivation_unsupported`.
+  - An answer from an older node, naming the token, still verifies.
 - **Who asks for evidence is now proven, not stated. Upgrade both nodes.** Each evidence request
   this node sends is signed with the key its host announces for it. The request carries
   `requester_auth` (`key_id`, `sig`), an `audience` (the node it is sent to), a `nonce` and a
@@ -136,6 +145,19 @@
 
 ### Added
 
+- **A Service History, `service_history/1`:** one answer that carries this node's
+  `history_card/1` artifact unchanged, beside its served summary. Ask for it by the digest of its
+  definition (`derivations/service-history-1.json`, `docs/SERVICE-HISTORY.md`), with
+  `full_history` and an `expected_pin` naming the newest checkpoint.
+  - The card inside is byte for byte the card a direct `history_card/1` request gets for the same
+    anchor, and the answer states its SHA-256 (`history_card_digest`).
+  - The answer is the same for every requester. It is Standard History, so it goes only where
+    `share_standard_history` allows. If either part cannot be served, the whole answer is refused:
+    it is never sent with a part missing.
+  - When this node checks a Service History it was sent, it checks the card's checkpoint
+    signatures, consistency proofs and receipts, and the served summary's anchor. It shows each
+    count with its unit, and the model, quantization and weights-digest figures as what the
+    provider states.
 - **Witness receipts on an answer are checked under the witness keys you configured:** when this
   node asks another for evidence, each witness receipt carried on the answer's checkpoints is
   checked under the key set for that witness's URL in `CAPSULES_CHECKPOINT_WITNESS_KEYS` (URLs

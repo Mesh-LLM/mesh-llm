@@ -1,0 +1,129 @@
+{
+  "name": "served_summary/1",
+  "kind": "projection",
+  "subjects": [
+    "full_history"
+  ],
+  "selection": {
+    "kind": "range",
+    "covers": "the records under the anchor checkpoint: leaf indices from 0 to leaf_count(anchor.mmr_size) - 1, in log order",
+    "applies_to": [
+      "derivation",
+      "adjudications_received"
+    ],
+    "never": "a record appended after the anchor checkpoint"
+  },
+  "members": [
+    {
+      "name": "derivation",
+      "required": true,
+      "definition": "6eb6f1870dbcee613573c60692b79ab979e2a6188a0f4c6191d4af65a7b773b8",
+      "reads": [
+        "record: record_type",
+        "record: effect.status",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.role",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.latency_ms",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.model_canonical_ref",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.quantization",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.weights_digest",
+        "record: model_attestation.compute_attestation.x-mesh-lifecycle-v1.observation_point"
+      ],
+      "units": [
+        {
+          "where": "derivation.by_model.*.served, .completed, .failed, .refused, .weights_digest.present, .weights_digest.absent",
+          "unit": "served"
+        }
+      ],
+      "claims": {
+        "asserted_by": "provider",
+        "label": "provider states",
+        "where": [
+          "derivation.by_model (each key)",
+          "derivation.by_model.*.quantizations",
+          "derivation.by_model.*.weights_digest"
+        ]
+      }
+    },
+    {
+      "name": "adjudications_received",
+      "required": true,
+      "source": "self_held",
+      "reads": [
+        "record: record_type",
+        "record: chain.relation",
+        "record: model_attestation.compute_attestation.epistemic_type",
+        "record: model_attestation.compute_attestation.adjudication.half_a_capsule_id",
+        "record: model_attestation.compute_attestation.adjudication.half_b_capsule_id",
+        "record: capsule_id"
+      ],
+      "units": [
+        {
+          "where": "adjudications_received.value",
+          "unit": "referee_verdicts"
+        }
+      ]
+    },
+    {
+      "name": "selection",
+      "required": true,
+      "reads": [
+        "checkpoint: mmr_size"
+      ],
+      "units": [
+        {
+          "where": "selection.covered_entries, .from_entry, .to_entry",
+          "unit": "records"
+        }
+      ]
+    }
+  ],
+  "fixed": [
+    {
+      "name": "schema",
+      "value": "mesh-served-summary/1"
+    },
+    {
+      "name": "node_id",
+      "reads": [
+        "checkpoint: key_id"
+      ]
+    },
+    {
+      "name": "coverage",
+      "reads": [
+        "checkpoint: root, mmr_size, log_id, timestamp, witnesses[].ts_url"
+      ]
+    },
+    {
+      "name": "no_requester_identifiers",
+      "value": "this summary reads and reports no requester-identity field (cross_party.initiator_ref, serving_provenance.requesting_party/counterparty_ref) -- it answers WHAT was served, never WHO asked"
+    },
+    {
+      "name": "not_a_score",
+      "value": "An account of facts + a witness handle to verify them, not a score or routing recommendation."
+    }
+  ],
+  "reads": [
+    "record: record_type",
+    "record: effect.status",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.role",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.latency_ms",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.model_canonical_ref",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.quantization",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.weights_digest",
+    "record: model_attestation.compute_attestation.x-mesh-lifecycle-v1.observation_point",
+    "record: chain.relation",
+    "record: model_attestation.compute_attestation.epistemic_type",
+    "record: model_attestation.compute_attestation.adjudication.half_a_capsule_id",
+    "record: model_attestation.compute_attestation.adjudication.half_b_capsule_id",
+    "record: capsule_id",
+    "checkpoint: mmr_size",
+    "checkpoint: key_id",
+    "checkpoint: root, mmr_size, log_id, timestamp, witnesses[].ts_url"
+  ],
+  "excludes": [
+    "requester identity",
+    "per-recipient release state"
+  ],
+  "spec": "https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/crates/mesh-llm-capsules-plugin/docs/SERVED-SUMMARY.md"
+}

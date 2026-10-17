@@ -1,0 +1,98 @@
+{
+  "name": "service_history/1",
+  "kind": "projection",
+  "embeds": [
+    "history_card/1"
+  ],
+  "subjects": [
+    "full_history"
+  ],
+  "members": [
+    {
+      "name": "history_card",
+      "required": true,
+      "derivation": "history_card/1",
+      "reads": [
+        "checkpoint: v, kind, log_id, mmr_size, root, prev_size, prev_root, key_id, timestamp, signature, witnesses",
+        "log: the MMR nodes of each consistency proof"
+      ],
+      "units": [
+        {
+          "where": "history (one entry per checkpoint)",
+          "unit": "checkpoints"
+        },
+        {
+          "where": "history[].checkpoint.witnesses",
+          "unit": "witness_receipts"
+        }
+      ]
+    },
+    {
+      "name": "served_summary",
+      "required": false,
+      "derivation": "d494544ca59a4d7f997e4d59f87a83670d08f555cae65fb3752614f669757260",
+      "reads": [
+        "record: record_type",
+        "record: effect.status",
+        "record: chain.relation",
+        "record: model_attestation.compute_attestation.epistemic_type",
+        "record: model_attestation.compute_attestation.adjudication.half_a_capsule_id",
+        "record: model_attestation.compute_attestation.adjudication.half_b_capsule_id",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.role",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.latency_ms",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.model_canonical_ref",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.quantization",
+        "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.weights_digest",
+        "record: model_attestation.compute_attestation.x-mesh-lifecycle-v1.observation_point",
+        "record: capsule_id",
+        "checkpoint: key_id, root, mmr_size, log_id, timestamp, witnesses[].ts_url"
+      ],
+      "units": [
+        {
+          "where": "served_summary.derivation.by_model.*.served, .completed, .failed, .refused, .weights_digest.present, .weights_digest.absent",
+          "unit": "served"
+        },
+        {
+          "where": "served_summary.adjudications_received.value",
+          "unit": "referee_verdicts"
+        },
+        {
+          "where": "served_summary.selection.covered_entries, .from_entry, .to_entry",
+          "unit": "records"
+        }
+      ],
+      "claims": {
+        "asserted_by": "provider",
+        "label": "provider states",
+        "where": [
+          "served_summary.derivation.by_model (each key)",
+          "served_summary.derivation.by_model.*.quantizations",
+          "served_summary.derivation.by_model.*.weights_digest"
+        ]
+      }
+    }
+  ],
+  "reads": [
+    "checkpoint: v, kind, log_id, mmr_size, root, prev_size, prev_root, key_id, timestamp, signature, witnesses",
+    "log: the MMR nodes of each consistency proof",
+    "record: record_type",
+    "record: effect.status",
+    "record: chain.relation",
+    "record: model_attestation.compute_attestation.epistemic_type",
+    "record: model_attestation.compute_attestation.adjudication.half_a_capsule_id",
+    "record: model_attestation.compute_attestation.adjudication.half_b_capsule_id",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.role",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.latency_ms",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.model_canonical_ref",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.quantization",
+    "record: model_attestation.compute_attestation.x-mesh-poc-v1.serving_provenance.weights_digest",
+    "record: model_attestation.compute_attestation.x-mesh-lifecycle-v1.observation_point",
+    "record: capsule_id",
+    "checkpoint: key_id, root, mmr_size, log_id, timestamp, witnesses[].ts_url"
+  ],
+  "excludes": [
+    "requester identity",
+    "per-recipient release state"
+  ],
+  "spec": "https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/crates/mesh-llm-capsules-plugin/docs/SERVICE-HISTORY.md"
+}

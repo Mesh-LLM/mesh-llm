@@ -97,7 +97,7 @@ use ed25519_dalek::SigningKey;
 use evidence_request::digest::request_digest;
 use evidence_request::refusal;
 use evidence_request::registry::Reason;
-use evidence_request::request::{self, Coverage, Derivation, Request, Subject};
+use evidence_request::request::{self, Coverage, Request, Subject};
 use evidence_request::resolve::{self, Resolution, ResolvedAnchor};
 use evidence_request::time::parse_utc;
 use serde_json::{json, Map, Value};
@@ -106,7 +106,6 @@ use std::path::Path;
 use crate::evidence_artifact::{self, Build, CheckError, ReceiptStatus};
 use crate::evidence_log::{self, LedgerIndex, LogView};
 use crate::requester_auth::{self, Form, Principal};
-use crate::served_summary::SERVED_SUMMARY_DERIVATION_TOKEN;
 
 /// The largest request answered. A -00 request is a few hundred bytes; this
 /// turns a large one away before it is parsed.
@@ -480,9 +479,14 @@ fn answer_from(
         Resolution::Refuse(reason) => return Err(reason),
     };
     let at = serving_position(index, &anchor)?;
-    let served_summary = matches!(&req.derivation,
-        Some(Derivation::Token(t)) if t == SERVED_SUMMARY_DERIVATION_TOKEN);
-    if served_summary {
+    let served_summary = crate::served_summary::is_derivation(req.derivation.as_ref());
+    // The Service History embeds the served summary, so it is answered under
+    // the same rule, and refused whole when the summary cannot be served
+    // (except in the deliberately broken build that drops the member).
+    let pinned_to_latest = served_summary
+        || (crate::service_history::is_derivation(req.derivation.as_ref())
+            && !cfg!(feature = "mutant-service-history-drops-member"));
+    if pinned_to_latest {
         // A static export, answered only under an `expected_pin` naming
         // this node's latest anchor (the Python reference's rule). A
         // `min_freshness` request asks for an on-demand export, which this
@@ -805,6 +809,12 @@ pub fn verify_response(
         }
         configured_witness_key(witness_keys, ts_url)
     };
+    if crate::service_history::is_derivation(req.derivation.as_ref()) {
+        return match crate::service_history::verify(sent, &req, response, key, &witness_key) {
+            Ok(verified) => verified.to_json(),
+            Err(why) => not_evidence(why),
+        };
+    }
     match evidence_artifact::check(sent, &req, response, key, &witness_key) {
         Ok(v) => {
             let mut out = json!({
