@@ -104,7 +104,7 @@ Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint
 
 ## Setup
 
-Use `mesh-llm setup` after the executable is installed. It configures the native runtime and can install the background service on supported macOS and Linux machines.
+Use `mesh-llm setup` after the executable is installed. It configures the native runtime and can install the background service on macOS, Linux, and Windows.
 
 See [CLI.md](CLI.md) for the setup flags and the service options.
 

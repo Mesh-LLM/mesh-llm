@@ -145,6 +145,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Unload { name, port } => run_drop(name, *port).await,
         Command::Status { port } => run_status(*port).await,
         Command::Stop => run_stop(),
+        Command::ServiceHost => mesh_llm_commands::setup::run_service_host(),
         Command::Discover {
             name,
             model,

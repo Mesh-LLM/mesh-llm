@@ -1135,6 +1135,10 @@ pub enum Command {
     Openclaw(crate::agent_config::AgentConfigArgs),
     /// Stop running mesh-llm processes.
     Stop,
+    /// Run `serve` under the Windows background service: restart it on
+    /// failure, log its output, and stop it when the scheduled task ends.
+    #[command(name = "service-host", hide = true)]
+    ServiceHost,
     /// Plugin management.
     #[command(name = "plugins", alias = "plugin")]
     Plugin {
