@@ -1418,20 +1418,27 @@ bool delegatesRemoteDecoderBody(const CXXConstructorDecl *constructor,
   }
   HelperCallVisitor visitor;
   visitor.TraverseStmt(const_cast<CompoundStmt *>(constructor_body));
-  size_t remote = 0;
+  std::set<const FunctionDecl *> remotes;
   for (const CallExpr *call : visitor.calls()) {
     const FunctionDecl *callee = directCallee(call);
     if (callee == nullptr || callee->hasBody() ||
         !producesGraphTensor(callee)) {
       continue;
     }
-    if (declaredInClassHierarchy(
-            owner, llvm::dyn_cast_or_null<clang::CXXRecordDecl>(
-                       callee->getParent()))) {
-      ++remote;
+    const auto *callee_record =
+        llvm::dyn_cast_or_null<clang::CXXRecordDecl>(callee->getParent());
+    // Shared graph helpers are declared on llm_graph_context and defined in
+    // llama-graph.cpp; they are library code, not the model's decoder body.
+    if (callee_record != nullptr &&
+        callee_record->getName() == "llm_graph_context") {
+      continue;
+    }
+    if (declaredInClassHierarchy(owner, callee_record)) {
+      // Repeated calls to one helper still describe one remote body.
+      remotes.insert(callee->getCanonicalDecl());
     }
   }
-  return remote == 1;
+  return remotes.size() == 1;
 }
 
 class BuilderCallback final : public MatchFinder::MatchCallback {

@@ -177,6 +177,12 @@ int main(int argc, char **argv) {
                 text(object(field(builder(auxiliary), "proof")), "execution_scope") == "final_stage_sidecar" &&
                 editKinds(builder(auxiliary)).empty(), "auxiliary scope");
     std::cout << "PASS auxiliary.cpp\n";
+    auto auxiliary_shared = invoke(tool, root, temp / "auxiliary-shared-helpers.json", "auxiliary-shared-helpers.cpp");
+    require(text(builder(auxiliary_shared), "verdict") == "supported_auxiliary" &&
+                text(object(field(builder(auxiliary_shared), "proof")), "execution_scope") == "final_stage_sidecar" &&
+                contains(array(object(field(builder(auxiliary_shared), "proof")), "scope_evidence"), "inherited_decoder_body") &&
+                editKinds(builder(auxiliary_shared)).empty(), "auxiliary shared-helpers scope");
+    std::cout << "PASS auxiliary-shared-helpers.cpp\n";
     check(tool, root, temp, "multiple-domains.cpp", "supported_whole_model");
     auto delegated = invoke(tool, root, temp / "delegated-stacks.json", "delegated-stacks.cpp");
     const auto &delegatedRecord = builder(delegated);

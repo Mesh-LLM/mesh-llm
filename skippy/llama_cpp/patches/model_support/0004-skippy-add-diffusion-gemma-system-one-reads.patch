@@ -263,41 +263,6 @@ index 000000000..5044b13df
 +    }
 +
 +    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model->model));
-+    std::vector<uint8_t> seen_canvas_positions(canvas_token_count, 0);
-+    std::vector<uint8_t> seen_label_positions(label_token_count, 0);
-+    for (size_t slot_index = 0; slot_index < slot_count; ++slot_index) {
-+        const skippy_system_one_slot & slot = slots[slot_index];
-+        if (slot.canvas_position >= canvas_token_count ||
-+                slot.label_token_count == 0 ||
-+                slot.label_token_offset > label_token_count ||
-+                slot.label_token_count > label_token_count - slot.label_token_offset) {
-+            return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
-+                    "system-one slot is outside the canvas or flattened label-token array");
-+        }
-+        if (seen_canvas_positions[slot.canvas_position] != 0) {
-+            return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
-+                    "system-one canvas positions must be unique");
-+        }
-+        seen_canvas_positions[slot.canvas_position] = 1;
-+        for (size_t label_index = 0; label_index < slot.label_token_count; ++label_index) {
-+            const size_t flattened_index = slot.label_token_offset + label_index;
-+            if (seen_label_positions[flattened_index] != 0) {
-+                return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
-+                        "system-one label ranges must not overlap");
-+            }
-+            seen_label_positions[flattened_index] = 1;
-+            const llama_token token = label_token_ids[flattened_index];
-+            if (token < 0 || token >= n_vocab) {
-+                return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
-+                        "system-one label token is outside the model vocabulary");
-+            }
-+        }
-+    }
-+    if (std::find(seen_label_positions.begin(), seen_label_positions.end(), 0) != seen_label_positions.end()) {
-+        return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
-+                "system-one label ranges must cover the flattened label-token array exactly");
-+    }
-+
 +    const int32_t lane = skippy_claim_execution_lane(model);
 +    if (lane < 0) {
 +        return system_one_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
@@ -309,6 +274,41 @@ index 000000000..5044b13df
 +        skippy_synchronize_context_if_pending(model);
 +        llama_set_causal_attn(model->ctx, false);
 +        llama_diffusion_set_sc(model->model, nullptr, 0.0f, 1.0f, false);
++
++        std::vector<uint8_t> seen_canvas_positions(canvas_token_count, 0);
++        std::vector<uint8_t> seen_label_positions(label_token_count, 0);
++        for (size_t slot_index = 0; slot_index < slot_count; ++slot_index) {
++            const skippy_system_one_slot & slot = slots[slot_index];
++            if (slot.canvas_position >= canvas_token_count ||
++                    slot.label_token_count == 0 ||
++                    slot.label_token_offset > label_token_count ||
++                    slot.label_token_count > label_token_count - slot.label_token_offset) {
++                return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                        "system-one slot is outside the canvas or flattened label-token array");
++            }
++            if (seen_canvas_positions[slot.canvas_position] != 0) {
++                return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                        "system-one canvas positions must be unique");
++            }
++            seen_canvas_positions[slot.canvas_position] = 1;
++            for (size_t label_index = 0; label_index < slot.label_token_count; ++label_index) {
++                const size_t flattened_index = slot.label_token_offset + label_index;
++                if (seen_label_positions[flattened_index] != 0) {
++                    return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                            "system-one label ranges must not overlap");
++                }
++                seen_label_positions[flattened_index] = 1;
++                const llama_token token = label_token_ids[flattened_index];
++                if (token < 0 || token >= n_vocab) {
++                    return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                            "system-one label token is outside the model vocabulary");
++                }
++            }
++        }
++        if (std::find(seen_label_positions.begin(), seen_label_positions.end(), 0) != seen_label_positions.end()) {
++            return system_one_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "system-one label ranges must cover the flattened label-token array exactly");
++        }
 +
 +        const int32_t prompt_count = static_cast<int32_t>(prompt_token_count);
 +        const int32_t canvas_count = static_cast<int32_t>(canvas_token_count);

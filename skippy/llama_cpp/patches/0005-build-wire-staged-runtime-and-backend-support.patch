@@ -13,7 +13,7 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  common/chat.cpp                            | 126 ++++-
  common/chat.h                              |   5 +-
  common/ngram-cache.cpp                     | 158 +++++-
- common/peg-parser.cpp                      | 304 ++++++++++
+ common/peg-parser.cpp                      | 337 ++++++++++
  common/peg-parser.h                        |   8 +
  common/reasoning-budget.cpp                | 119 ++--
  common/reasoning-budget.h                  |  16 +-
@@ -35,7 +35,7 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3091 insertions(+), 127 deletions(-)
+ 31 files changed, 3124 insertions(+), 127 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -722,7 +722,7 @@ diff --git a/common/peg-parser.cpp b/common/peg-parser.cpp
 index 8033f7e81..94a628b1b 100644
 --- a/common/peg-parser.cpp
 +++ b/common/peg-parser.cpp
-@@ -1814,6 +1814,310 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
+@@ -1814,6 +1814,343 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
      }
  }
  
@@ -948,7 +948,7 @@ index 8033f7e81..94a628b1b 100644
 +    }
 +    if (type == "atomic") {
 +        if (!j.contains("child")) {
-+            throw std::runtime_error("tag parser missing required fields");
++            throw std::runtime_error("atomic parser missing required fields");
 +        }
 +        return common_peg_atomic_parser{
 +            j["child"].get<common_peg_parser_id>(),
@@ -1017,6 +1017,39 @@ index 8033f7e81..94a628b1b 100644
 +    arena.root_ = j["root"].get<common_peg_parser_id>();
 +    if (arena.root_ != COMMON_PEG_INVALID_PARSER_ID && arena.root_ >= arena.parsers_.size()) {
 +        throw std::runtime_error("Root references invalid parser ID: " + std::to_string(arena.root_));
++    }
++
++    // Validate every child ID stored inside parser variants and every ref target name: rule and root
++    // checks alone leave sequence/choice children and single-child variants able to hold dangling IDs.
++    const auto validate_child = [&arena](common_peg_parser_id id, const char * owner) {
++        if (id >= arena.parsers_.size()) {
++            throw std::runtime_error(std::string(owner) + " references invalid parser ID: " + std::to_string(id));
++        }
++    };
++    for (const auto & parser : arena.parsers_) {
++        std::visit([&](const auto & p) {
++            using T = std::decay_t<decltype(p)>;
++            if constexpr (std::is_same_v<T, common_peg_sequence_parser> ||
++                          std::is_same_v<T, common_peg_choice_parser>) {
++                for (const common_peg_parser_id child : p.children) {
++                    validate_child(child, "sequence/choice parser");
++                }
++            } else if constexpr (std::is_same_v<T, common_peg_repetition_parser> ||
++                                 std::is_same_v<T, common_peg_and_parser> ||
++                                 std::is_same_v<T, common_peg_not_parser> ||
++                                 std::is_same_v<T, common_peg_schema_parser> ||
++                                 std::is_same_v<T, common_peg_rule_parser> ||
++                                 std::is_same_v<T, common_peg_atomic_parser> ||
++                                 std::is_same_v<T, common_peg_tag_parser> ||
++                                 std::is_same_v<T, common_peg_gbnf_parser> ||
++                                 std::is_same_v<T, common_peg_ac_parser>) {
++                validate_child(p.child, "child parser");
++            } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
++                if (arena.rules_.find(p.name) == arena.rules_.end()) {
++                    throw std::runtime_error("ref parser references unknown rule: " + p.name);
++                }
++            }
++        }, parser);
 +    }
 +
 +    return arena;

@@ -27,7 +27,7 @@ Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
  tests/test-chat.cpp                           |  189 +-
  tests/test-deepseek4-mtp.h                    |   88 +
  tests/test-graph-contract-fixture.h           |  155 ++
- tests/test-llama-archs.cpp                    |  349 +++-
+ tests/test-llama-archs.cpp                    |  352 +++-
  tests/test-reasoning-budget.cpp               |    1 +
  tests/test-skippy-cachegen-metal.cpp          |  399 ++++
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
@@ -37,7 +37,7 @@ Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 33 files changed, 9290 insertions(+), 32 deletions(-)
+ 33 files changed, 9293 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -7950,7 +7950,7 @@ index 3dd8f0655..ef56c4c61 100644
 +        const bool moe,
 +        const glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT,
 +        const uint32_t context_length = 256,
-+        const uint32_t glm_dsa_indexer_top_k = 8,
++        const uint32_t glm_dsa_indexer_top_k = 131072,
 +        const bool deepseek4_mtp = false,
 +        const uint32_t contract_layers = 0, const uint32_t contract_width = 0) {
      gguf_context_ptr ret(gguf_init_empty());
@@ -8007,12 +8007,13 @@ index 3dd8f0655..ef56c4c61 100644
      } else if (arch == LLM_ARCH_DEEPSEEK2
              || arch == LLM_ARCH_DEEPSEEK32
              || arch == LLM_ARCH_GLM_DSA
-@@ -359,12 +406,44 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -359,12 +406,45 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      // note: using a realistic top-k here makes the results unstable and hard to match between CPU and GPU
      //       a large value makes things deterministic since all data is selected by the indexer
      //ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
 -    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(131072));
-+    // GLM-DSA stage contracts exercise the sparse indexer, so that fixture keeps a realistic top-k
++    // GLM-DSA callers pass a realistic top-k explicitly for sparse-indexer stage contracts; the
++    // default stays at the select-everything value so backend parity remains deterministic
 +    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        arch == LLM_ARCH_GLM_DSA ? glm_dsa_indexer_top_k : uint32_t(131072));
  
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
@@ -8222,12 +8223,14 @@ index 3dd8f0655..ef56c4c61 100644
      struct user_data_t {
          struct {
              ggml_log_callback callback;
-@@ -841,11 +1016,18 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+@@ -841,11 +1016,20 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                  LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
                  continue;
              }
 -            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
-+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, glm_dsa_indexshare);
++            // sparse-indexer stage-contract fixtures keep a realistic top-k; all other consumers
++            // (including test_backends CPU/GPU parity) keep the stable select-everything default
++            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, glm_dsa_indexshare, 256, 8);
 +            if (text_only) {
 +                const uint32_t sections[4] = {};
 +                const std::string key = std::string(llm_arch_name(arch)) + ".rope.dimension_sections";

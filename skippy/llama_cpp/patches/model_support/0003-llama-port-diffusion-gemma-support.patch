@@ -18,7 +18,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  .../diffusion-gemma-server.cpp                | 189 ++++
  .../diffusion-gemma-visual-server.cpp         | 388 ++++++++
  examples/diffusion/diffusion-cli.cpp          | 548 +++++++++--
- examples/diffusion/diffusion.cpp              | 273 ++++++
+ examples/diffusion/diffusion.cpp              | 289 ++++++
  examples/diffusion/diffusion.h                |  38 +
  ggml/src/ggml-cuda/diffusion-sampling.cu      | 178 ++++
  ggml/src/ggml-cuda/diffusion-sampling.cuh     |  19 +
@@ -34,7 +34,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  src/models/gemma4-common.h                    | 126 +++
  src/models/models.h                           |  60 ++
  tests/test-llama-archs.cpp                    |  23 +-
- 25 files changed, 3041 insertions(+), 97 deletions(-)
+ 25 files changed, 3057 insertions(+), 97 deletions(-)
  create mode 100644 examples/diffusion-gemma-eval/CMakeLists.txt
  create mode 100644 examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp
  create mode 100644 examples/diffusion-gemma-server/CMakeLists.txt
@@ -957,7 +957,7 @@ index 000000000..193b326d9
 +                inputs.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
 +            }
 +            inputs.add_generation_prompt = true;
-+            const std::string prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
++            const std::string prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt.str();
 +            prefix = common_tokenize(vocab, prompt, /*add special*/ true, /*parse special*/ true);
 +        } catch (const std::exception & e) {
 +            printf("ERR parse %s\n", e.what()); fflush(stdout); continue;
@@ -1567,7 +1567,7 @@ index c64611356..198515402 100644
 +        common_chat_templates_inputs inputs;
 +        inputs.messages              = messages;
 +        inputs.add_generation_prompt = true;
-+        return common_chat_templates_apply(chat_templates.get(), inputs).prompt;
++        return common_chat_templates_apply(chat_templates.get(), inputs).prompt.str();
 +    };
  
 -    if (n_generated > 0) {
@@ -1766,7 +1766,7 @@ index 0ff57d953..f859d6893 100644
  
                      llama_token_data_array cur_p = {
                          candidates.data(),
-@@ -404,3 +432,248 @@ void diffusion_generate(llama_context *          ctx,
+@@ -404,3 +432,264 @@ void diffusion_generate(llama_context *          ctx,
  
      n_generated = params.max_length;
  }
@@ -1825,10 +1825,18 @@ index 0ff57d953..f859d6893 100644
 +
 +    llama_batch batch = llama_batch_init(params.max_length, 0, 1);
 +
++    // single-exit cleanup: free the host batch and leave the model in the unified, SC-off state
++    auto finish = [&]() {
++        llama_diffusion_set_sc(model, nullptr, 0.0f, 1.0f, false);
++        llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);
++        llama_batch_free(batch);
++    };
++
 +    // Cached path: PREFILL the prompt once (writing the prefix K/V store), then each step DECODE only the
-+    // canvas, reading the cached prefix - instead of re-decoding [prompt|canvas] every step. The packed
-+    // canvas logits then start at row 0 (cached) instead of row n_input (unified).
-+    const int32_t logit_off = params.kv_cache ? 0 : n_input;
++    // canvas, reading the cached prefix - instead of re-decoding [prompt|canvas] every step.
++    // The canvas logits row base is re-resolved from output_ids after each decode below: a capped
++    // n_outputs_max compacts the flagged canvas rows to 0, while an uncapped pass keeps them at n_input.
++    int32_t logit_off = params.kv_cache ? 0 : n_input;
 +    if (params.kv_cache) {
 +        llama_diffusion_set_sc(model, nullptr, 0.0f, 1.0f, false);
 +        // Chunked causal PREFILL: feed the prompt in ubatch-sized chunks, each writing its K/V to the store and
@@ -1886,7 +1894,8 @@ index 0ff57d953..f859d6893 100644
 +                batch.pos[i]       = i;
 +                batch.n_seq_id[i]  = 1;
 +                batch.seq_id[i][0] = 0;
-+                batch.logits[i]    = 1;
++                // only the canvas rows need logits; a capped n_outputs_max then reserves C rows, not max_length
++                batch.logits[i]    = (i >= n_input) ? 1 : 0;
 +            }
 +        }
 +
@@ -1907,6 +1916,13 @@ index 0ff57d953..f859d6893 100644
 +        const float * logits = nullptr;                           // canvas rows packed: [C or max_length, n_vocab]
 +        if (want_logits) {
 +            logits = llama_get_logits(ctx);
++            const float * first_canvas = llama_get_logits_ith(ctx, params.kv_cache ? 0 : n_input);
++            if (first_canvas == nullptr) {
++                LOG_ERR("%s: canvas logits row missing at step %d\n", __func__, step_idx);
++                decode_failed = true;
++                break;
++            }
++            logit_off = (int32_t) (first_canvas - logits) / n_vocab;
 +        } else {
 +            llama_synchronize(ctx);                               // sc_dev write must complete before we read it
 +        }
