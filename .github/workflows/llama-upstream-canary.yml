@@ -405,7 +405,7 @@ jobs:
 
   publish-certified-canary:
     needs: [resolve, result]
-    if: ${{ needs.result.outputs.publish == 'true' }}
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

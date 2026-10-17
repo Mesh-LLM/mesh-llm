@@ -584,6 +584,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+The final publisher must use an explicit `!cancelled()` status condition,
+require successful source resolution and final selection, and require
+`publish=true`. Optional repair and retry jobs may be skipped after a green
+pass; their skipped status must not suppress publication through GitHub's
+implicit `success()` condition.
+
 Default upstream selection uses GitHub's latest published stable release of
 `ggml-org/llama.cpp`, never an unqualified `master` tip or a `b*` prerelease.
 The hosted resolver validates the release and peels its tag to an exact commit

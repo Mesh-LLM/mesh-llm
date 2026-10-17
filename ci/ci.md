@@ -230,6 +230,8 @@ The independent selected build admits the digest-bound first-pass package; each
 pass has separate build directories and evidence. Failed certification publishes
 no branch or PR. Publication refuses a selected revision with no diff from main's
 merge base. Closing an earlier PR and merging the replacement remain operator actions.
+The publisher explicitly checks `!cancelled()`, successful `resolve` and `result`
+jobs, and `publish=true`, so skipped optional repair attempts do not suppress it.
 The approved Rust source-plan API uses the current controller planner for every
 selected SHA; source build scripts and the battery remain selected-source code.
 Rust `gguf_metadata` yields `metadata_admitted`; other modes stay `pending`, with downgrade rejection.

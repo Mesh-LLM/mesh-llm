@@ -383,7 +383,7 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
     assert_eq!(needs(publish), BTreeSet::from(["resolve", "result"]));
     assert_eq!(
         field(publish, "if"),
-        "${{ needs.result.outputs.publish == 'true' }}"
+        "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}"
     );
     assert_eq!(field(publish, "runs-on"), "ubuntu-24.04");
     let (_, action) = named(publish, "id", "publish");

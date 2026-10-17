@@ -28,7 +28,10 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     result(h::job(document, "result")?)?;
     let publish = h::job(document, "publish-certified-canary")?;
     h::needs(publish, &["resolve", "result"])?;
-    h::condition(publish, "${{ needs.result.outputs.publish == 'true' }}")?;
+    h::condition(
+        publish,
+        "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}",
+    )?;
     super::canary_execution::publication(publish)?;
     let steps = h::steps(publish)?;
     h::checkout(steps, "${{ needs.resolve.outputs.source }}", None)?;
@@ -426,6 +429,31 @@ mod tests {
     #[test]
     fn current_admission_graph_is_bound() {
         validate(document()).unwrap();
+    }
+
+    #[test]
+    fn publisher_requires_explicit_status_and_successful_selection() {
+        // Run #301 certified both passes but skipped publication because optional
+        // attempts were skipped and this condition inherited implicit success().
+        for condition in [
+            "${{ needs.result.outputs.publish == 'true' }}",
+            "${{ success() && needs.result.outputs.publish == 'true' }}",
+            "${{ !cancelled() && needs.result.outputs.publish == 'true' }}",
+            "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.outputs.publish == 'true' }}",
+            "${{ !cancelled() && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}",
+            "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' }}",
+        ] {
+            let mut node = document();
+            h::replace(
+                &mut node,
+                &["jobs", "publish-certified-canary", "if"],
+                Node::Scalar(condition.into()),
+            );
+            assert!(
+                validate(node).is_err(),
+                "accepted unsafe publication: {condition}"
+            );
+        }
     }
 
     #[test]
