@@ -32,7 +32,8 @@ pub use l3::{
     LEGACY_MANIFEST_VERSION, LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION, MANIFEST_VERSION, ManifestPin,
     PayloadCodec, PayloadGeometry, Reservation, SegmentCodecIdentity, SegmentHold, SegmentPut,
     StoreLimits, StoreReconciliation, StoreUsage, StoredSegment, WriteRefusal, composition_root,
-    fixed_segmentation_id, geometry_segmentation_id, segment_digest,
+    decode_manifest_container, encode_manifest_container, fixed_segmentation_id,
+    geometry_segmentation_id, is_manifest_container, segment_digest,
 };
 pub use l3_remote::{
     FetchStats, KvFetchClient, serve_connection, serve_store, serve_store_with_timeout,

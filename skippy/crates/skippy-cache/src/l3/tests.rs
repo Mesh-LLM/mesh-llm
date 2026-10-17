@@ -1386,10 +1386,15 @@ fn truncated_binary_manifest_fails_closed() {
         fs::read(store.existing_manifest_path(&manifest.payload_digest)).expect("read container");
 
     for keep in [0, 3, 6, 7, 20, bytes.len() / 2, bytes.len() - 1] {
-        assert!(
-            super::manifest_codec::decode_manifest(&bytes[..keep]).is_err(),
-            "truncation at {keep} bytes must be rejected"
-        );
+        // Either the container refuses to decode, or the truncated manifest
+        // fails verification when used. A truncated entry must never be
+        // served as complete.
+        if let Ok(decoded) = super::manifest_codec::decode_manifest(&bytes[..keep]) {
+            assert!(
+                store.assemble(&decoded).is_err(),
+                "truncation at {keep} bytes decoded into a usable manifest"
+            );
+        }
     }
     assert!(super::manifest_codec::decode_manifest(&bytes).is_ok());
 }

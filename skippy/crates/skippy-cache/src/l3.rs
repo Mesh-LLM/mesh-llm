@@ -785,6 +785,22 @@ pub fn segment_digest(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
+/// Encode a manifest in the on-disk container. Public so the peer protocol can
+/// ship the same bytes it stores.
+pub fn encode_manifest_container(manifest: &HandoffManifest) -> Result<Vec<u8>> {
+    manifest_codec::encode_manifest(manifest)
+}
+
+/// Decode a manifest container produced by [`encode_manifest_container`].
+pub fn decode_manifest_container(bytes: &[u8]) -> Result<HandoffManifest> {
+    manifest_codec::decode_manifest(bytes)
+}
+
+/// Whether these bytes are a manifest container rather than legacy JSON.
+pub fn is_manifest_container(bytes: &[u8]) -> bool {
+    manifest_codec::looks_binary(bytes)
+}
+
 /// Identity of a geometry cutting scheme.
 ///
 /// Excludes row count: the scheme describes how a payload is cut, not how long
@@ -1587,6 +1603,25 @@ impl HandoffSegmentStore {
         let bytes = fs::read(self.existing_manifest_path(payload_digest))
             .with_context(|| format!("failed to read manifest {payload_digest}"))?;
         decode_manifest(payload_digest, &bytes)
+    }
+
+    /// Newest manifest key, optionally restricted to legacy JSON entries.
+    ///
+    /// A peer that asked for JSON must receive an entry its own decoder can
+    /// verify: handing it a composition-root entry would transcode a key its
+    /// admission re-hash rejects. Scoping the "newest" answer keeps that a
+    /// clean miss instead.
+    pub fn newest_manifest(&self, legacy_json_only: bool) -> Result<Option<String>> {
+        for key in self.list_manifests()? {
+            let path = self.existing_manifest_path(&key);
+            let is_json = path
+                .extension()
+                .is_some_and(|extension| extension == "json");
+            if !legacy_json_only || is_json {
+                return Ok(Some(key));
+            }
+        }
+        Ok(None)
     }
 
     /// Manifest keys, newest first by modification time.
