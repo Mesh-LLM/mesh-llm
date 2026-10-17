@@ -133,6 +133,19 @@ skippy-native-tests backend="cpu":
     scripts/prepare-llama.sh pinned
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_BUILD_TESTS=ON scripts/build-llama.sh
 
+# Check pageable, pinned, concurrent, and fallback CUDA host readbacks.
+[unix]
+skippy-cuda-readback-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="$PWD/.deps/llama-build/build-cuda-readback-tests"
+    scripts/prepare-llama.sh pinned
+    LLAMA_STAGE_BACKEND=cuda LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_FULL_REPLAY=ON \
+      LLAMA_STAGE_BUILD_DIR="$build_dir" scripts/build-llama.sh --build-only
+    cmake --build "$build_dir" --target test-cuda-host-readback
+    ctest --test-dir "$build_dir" --output-on-failure --no-tests=error \
+      -R '^test-cuda-host-readback(-unpinned)?$'
+
 # Replay every retained and current native Skippy gate without broad upstream tests.
 [unix]
 skippy-native-full-replay backend="cpu":

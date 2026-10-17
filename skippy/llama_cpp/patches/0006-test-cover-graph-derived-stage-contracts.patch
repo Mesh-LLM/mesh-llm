@@ -1,4 +1,4 @@
-From 956ebe34bd84b8c9c61a063937c2c16e98b27940 Mon Sep 17 00:00:00 2001
+From e4fc94699ef2003426a65828ce403f2b370cc585 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -25,7 +25,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/CMakeLists.txt                          |   26 +
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  170 +-
- tests/test-cuda-host-readback.cpp             |   76 +
+ tests/test-cuda-host-readback.cpp             |   80 +
  tests/test-deepseek4-mtp.h                    |   88 +
  tests/test-graph-contract-fixture.h           |  155 ++
  tests/test-llama-archs.cpp                    |  353 +++-
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9433 insertions(+), 33 deletions(-)
+ 34 files changed, 9437 insertions(+), 33 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -7687,10 +7687,10 @@ index f2728f7cc..faf95716e 100644
          return 0;
 diff --git a/tests/test-cuda-host-readback.cpp b/tests/test-cuda-host-readback.cpp
 new file mode 100644
-index 000000000..114d135e9
+index 000000000..75c7205e8
 --- /dev/null
 +++ b/tests/test-cuda-host-readback.cpp
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,80 @@
 +#include "ggml.h"
 +#include "ggml-alloc.h"
 +#include "ggml-backend.h"
@@ -7736,7 +7736,11 @@ index 000000000..114d135e9
 +    ggml_backend_tensor_set(tensor, expected.data(), 0, bytes);
 +    bool ok = matches(tensor, expected, 0, bytes) &&
 +              matches(tensor, expected, 13, 2 * mib + 17) &&
-+              matches(tensor, expected, 5, 4097);
++              matches(tensor, expected, 5, 4097) &&
++              matches(tensor, expected, 7, 64 * 1024 - 1) &&
++              matches(tensor, expected, 11, 64 * 1024) &&
++              matches(tensor, expected, 17, 64 * 1024 + 1) &&
++              matches(tensor, expected, 19, 96 * 1024);
 +    // Exercise reuse of the shared staging allocation from concurrent callers.
 +    std::atomic<bool> concurrent_ok{true};
 +    auto read = [&](size_t offset, size_t size) {

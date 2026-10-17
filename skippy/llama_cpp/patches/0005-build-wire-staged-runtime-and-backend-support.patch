@@ -1,4 +1,4 @@
-From d2a8b47193f007c40b4f82525a9ea84a7a07fb7d Mon Sep 17 00:00:00 2001
+From ed4e155cdd76e128038889906670afa17b85c32e Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] build(skippy): wire native runtime and backend support
@@ -22,7 +22,7 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  ggml/src/ggml-cuda/cachegen.cu             | 223 ++++++++
  ggml/src/ggml-cuda/cachegen.cuh            |  27 +
  ggml/src/ggml-cuda/ggml-cuda.cu            | 352 +++++++++++-
- ggml/src/ggml-cuda/host-readback.cuh       |  99 ++++
+ ggml/src/ggml-cuda/host-readback.cuh       | 101 ++++
  ggml/src/ggml-cuda/vendors/hip.h           |   1 +
  ggml/src/ggml-metal/CMakeLists.txt         |   1 +
  ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
@@ -35,7 +35,7 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  36 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 2900 insertions(+), 127 deletions(-)
+ 31 files changed, 2902 insertions(+), 127 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -2163,10 +2163,10 @@ index 9dd34c866..6ce3d6790 100644
  
 diff --git a/ggml/src/ggml-cuda/host-readback.cuh b/ggml/src/ggml-cuda/host-readback.cuh
 new file mode 100644
-index 000000000..174aefd2f
+index 000000000..9d4f07d63
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/host-readback.cuh
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,101 @@
 +#pragma once
 +
 +#include "common.cuh"
@@ -2249,7 +2249,9 @@ index 000000000..174aefd2f
 +
 +inline bool ggml_cuda_try_host_readback(int physical_device, void * destination, const void * source,
 +                                       size_t size, cudaStream_t stream) {
-+    if (size < 1024 * 1024 || std::getenv("GGML_CUDA_NO_PINNED") != nullptr) {
++    // Recurrent convolution checkpoints are 96 KiB on common hybrid models.
++    // They need the same pinned staging as larger state and logit reads.
++    if (size < 64 * 1024 || std::getenv("GGML_CUDA_NO_PINNED") != nullptr) {
 +        return false;
 +    }
 +    cudaPointerAttributes attributes{};
