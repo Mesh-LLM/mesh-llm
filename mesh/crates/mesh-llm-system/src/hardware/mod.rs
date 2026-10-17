@@ -233,12 +233,52 @@ struct DefaultCollector;
 ))]
 struct TegraCollector;
 
+/// Reads the host name from the kernel instead of running `hostname`, which
+/// minimal systems (containers, sandboxed services) don't always have on `PATH`.
+#[cfg(unix)]
 fn detect_hostname() -> Option<String> {
+    let mut bytes = [0_u8; 256];
+    // SAFETY: bytes is writable for the exact length passed to libc.
+    if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } != 0 {
+        return None;
+    }
+    let end = bytes.iter().position(|byte| *byte == 0)?;
+    parse_hostname(std::str::from_utf8(&bytes[..end]).ok()?)
+}
+
+#[cfg(windows)]
+fn detect_hostname() -> Option<String> {
+    use windows_sys::Win32::System::SystemInformation::{
+        ComputerNameDnsHostname, GetComputerNameExW,
+    };
+
+    if std::env::var_os("_CLUSTER_NETWORK_NAME_").is_some() {
+        return detect_hostname_from_command();
+    }
+
+    let mut buffer = [0_u16; 256];
+    let mut size = u32::try_from(buffer.len()).ok()?;
+    // SAFETY: buffer is writable for the exact capacity passed to the API.
+    if unsafe { GetComputerNameExW(ComputerNameDnsHostname, buffer.as_mut_ptr(), &mut size) } == 0 {
+        return None;
+    }
+    let size = usize::try_from(size).ok()?;
+    let name = String::from_utf16(buffer.get(..size)?).ok()?;
+    parse_hostname(&name)
+}
+
+#[cfg(not(unix))]
+fn detect_hostname_from_command() -> Option<String> {
     let out = std::process::Command::new("hostname").output().ok()?;
     if !out.status.success() {
         return None;
     }
-    parse_hostname(&String::from_utf8(out.stdout).ok()?)
+    parse_hostname(std::str::from_utf8(&out.stdout).ok()?)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn detect_hostname() -> Option<String> {
+    detect_hostname_from_command()
 }
 
 #[cfg(target_os = "linux")]

@@ -1286,11 +1286,15 @@ mod output_capacity_tests {
 
     #[test]
     fn cache_capabilities_follow_loaded_memory_not_architecture() {
-        for (bits, resident, kv_recurrent) in [
-            (0, false, false),
-            (1, true, false),
-            (2, false, true),
-            (3, true, true),
+        for (bits, resident, kv_recurrent, full_state) in [
+            (0, false, false, false),
+            (1, true, false, false),
+            (2, false, true, false),
+            (3, true, true, false),
+            (4, false, false, true),
+            (6, false, true, true),
+            (7, true, true, true),
+            (128, false, false, false),
         ] {
             let capability =
                 capability_from_state_probes(Some(false), Some(true), Some(false), bits)
@@ -1298,6 +1302,7 @@ mod output_capacity_tests {
             assert_eq!(capability.state_kind, ModelStateKind::Hybrid);
             assert_eq!(capability.cache_capabilities.resident, resident);
             assert_eq!(capability.cache_capabilities.kv_recurrent, kv_recurrent);
+            assert_eq!(capability.cache_capabilities.full_state, full_state);
         }
     }
 

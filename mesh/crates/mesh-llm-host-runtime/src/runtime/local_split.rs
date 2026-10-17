@@ -1,3 +1,4 @@
+mod activation_edge;
 mod attestation;
 mod auto_balance;
 mod coordinator;

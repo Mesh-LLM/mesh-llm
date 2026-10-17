@@ -1,9 +1,11 @@
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
+mod compact_meta;
 mod kv_cache;
 mod split_bundle;
 
+pub use compact_meta::scan_gguf_compact_meta;
 pub use kv_cache::{GgufKvCacheQuant, GgufKvCacheType};
 pub use split_bundle::scan_gguf_bundle_total_parameters;
 
@@ -556,146 +558,6 @@ fn skip_all_kv_pairs(f: &mut GgufReader, n_kv: usize) -> Option<()> {
         skip_gguf_value(f, vtype).ok()?;
     }
     Some(())
-}
-
-pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
-    let GgufHeader {
-        file: mut f, n_kv, ..
-    } = open_gguf_header(path)?;
-
-    let mut meta = GgufCompactMeta::default();
-    for _ in 0..n_kv {
-        let key = read_gguf_string(&mut f).ok()?;
-        let vtype = GgufType::from_u32(read_u32(&mut f).ok()?)?;
-
-        if key == "general.architecture" {
-            meta.architecture = read_gguf_value_as_string_opt(&mut f, vtype).ok()??;
-        } else if key == "general.size_label" {
-            meta.parameter_size = read_gguf_value_as_string_opt(&mut f, vtype).ok()?;
-        } else if key == "tokenizer.ggml.model" {
-            meta.tokenizer_model_name = read_gguf_value_as_string_opt(&mut f, vtype).ok()??;
-        } else if key.ends_with(".context_length") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.context_length = v;
-            }
-        } else if key.ends_with(".max_len") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.max_len = v;
-            }
-        } else if key.ends_with(".embedding_length") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.embedding_size = v;
-            }
-        } else if key.ends_with(".head_count") && !key.ends_with("_kv") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.head_count = v;
-            }
-        } else if key.ends_with(".attention.head_count_kv") {
-            if let Ok(Some(values)) = read_gguf_value_as_u32_list(&mut f, vtype) {
-                if values.len() == 1 {
-                    meta.kv_head_count = values[0];
-                } else {
-                    meta.kv_head_counts = values;
-                }
-            }
-        } else if key.ends_with(".block_count") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.layer_count = v;
-            }
-        } else if key.ends_with(".feed_forward_length") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.feed_forward_length = v;
-            }
-        } else if key.ends_with(".attention.key_length") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.key_length = v;
-            }
-        } else if key.ends_with(".attention.key_length_swa") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.key_length_swa = v;
-            }
-        } else if key.ends_with(".attention.value_length") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.value_length = v;
-            }
-        } else if key.ends_with(".attention.value_length_swa") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.value_length_swa = v;
-            }
-        } else if key.ends_with(".attention.kv_lora_rank") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.kv_lora_rank = v;
-            }
-        } else if key.ends_with(".rope.scale") {
-            if let Ok(Some(v)) = read_gguf_value_as_f32(&mut f, vtype) {
-                meta.rope_scale = v;
-            }
-        } else if key.ends_with(".rope.freq_base") {
-            if let Ok(Some(v)) = read_gguf_value_as_f32(&mut f, vtype) {
-                meta.rope_freq_base = v;
-            }
-        } else if key.ends_with(".vocab_size") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.vocab_size = v;
-            }
-        } else if key.ends_with(".expert_count") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.expert_count = v;
-            }
-        } else if key.ends_with(".expert_used_count") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.expert_used_count = v;
-            }
-        } else if key.ends_with(".nextn_predict_layers") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.nextn_predict_layers = v;
-            }
-        } else if key.ends_with(".ssm.conv_kernel") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.ssm_conv_kernel = v;
-            }
-        } else if key.ends_with(".ssm.inner_size") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.ssm_inner_size = v;
-            }
-        } else if key.ends_with(".ssm.state_size") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.ssm_state_size = v;
-            }
-        } else if key.ends_with(".ssm.group_count") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.ssm_group_count = v;
-            }
-        } else if key.ends_with(".attention.recurrent_layers") {
-            if let Ok(Some(values)) = read_gguf_value_as_bool_list(&mut f, vtype) {
-                meta.recurrent_layers = values;
-            }
-        } else if key.ends_with(".full_attention_interval") {
-            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
-                meta.full_attention_interval = v;
-            }
-        } else {
-            skip_gguf_value(&mut f, vtype).ok()?;
-        }
-    }
-
-    let derived_key_length = (meta.key_length == 0 && meta.head_count > 0)
-        .then(|| meta.embedding_size.checked_div(meta.head_count))
-        .flatten();
-    if let Some(key_length) = derived_key_length {
-        meta.key_length = key_length;
-    }
-    let derived_value_length = (meta.value_length == 0)
-        .then(|| {
-            meta.effective_kv_head_count()
-                .and_then(|effective_kv| meta.embedding_size.checked_div(effective_kv))
-        })
-        .flatten();
-    if let Some(value_length) = derived_value_length {
-        meta.value_length = value_length;
-    }
-
-    Some(meta)
 }
 
 /// Scan the modality flags stored in a multimodal projector GGUF.
@@ -1336,7 +1198,10 @@ mod tests {
         bytes.extend_from_slice(b"GGUF");
         bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.extend_from_slice(&0i64.to_le_bytes());
-        bytes.extend_from_slice(&2i64.to_le_bytes());
+        bytes.extend_from_slice(&(3i64).to_le_bytes());
+        push_gguf_string(&mut bytes, "general.architecture");
+        bytes.extend_from_slice(&(GgufType::String as u32).to_le_bytes());
+        push_gguf_string(&mut bytes, "llama");
         push_u32_kv(&mut bytes, "llama.embedding_length", 4096);
         push_u32_kv(&mut bytes, "llama.attention.head_count_kv", 8);
 
@@ -1355,7 +1220,10 @@ mod tests {
         bytes.extend_from_slice(b"GGUF");
         bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.extend_from_slice(&0i64.to_le_bytes());
-        bytes.extend_from_slice(&6i64.to_le_bytes());
+        bytes.extend_from_slice(&(7i64).to_le_bytes());
+        push_gguf_string(&mut bytes, "general.architecture");
+        bytes.extend_from_slice(&(GgufType::String as u32).to_le_bytes());
+        push_gguf_string(&mut bytes, "llama");
         push_u32_kv(&mut bytes, "llama.embedding_length", 4096);
         push_u32_kv(&mut bytes, "llama.attention.head_count", 32);
         push_u32_kv(&mut bytes, "llama.attention.head_count_kv", 8);
@@ -1379,7 +1247,10 @@ mod tests {
         bytes.extend_from_slice(b"GGUF");
         bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.extend_from_slice(&0i64.to_le_bytes());
-        bytes.extend_from_slice(&8i64.to_le_bytes());
+        bytes.extend_from_slice(&(9i64).to_le_bytes());
+        push_gguf_string(&mut bytes, "general.architecture");
+        bytes.extend_from_slice(&(GgufType::String as u32).to_le_bytes());
+        push_gguf_string(&mut bytes, "llama");
         push_u32_kv(&mut bytes, "llama.embedding_length", 4096);
         push_u32_kv(&mut bytes, "llama.attention.head_count", 32);
         push_u32_kv(&mut bytes, "llama.attention.head_count_kv", 8);
@@ -1404,7 +1275,10 @@ mod tests {
         bytes.extend_from_slice(b"GGUF");
         bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.extend_from_slice(&0i64.to_le_bytes());
-        bytes.extend_from_slice(&6i64.to_le_bytes());
+        bytes.extend_from_slice(&(7i64).to_le_bytes());
+        push_gguf_string(&mut bytes, "general.architecture");
+        bytes.extend_from_slice(&(GgufType::String as u32).to_le_bytes());
+        push_gguf_string(&mut bytes, "llama");
         push_u32_kv(&mut bytes, "llama.embedding_length", 4096);
         push_u32_kv(&mut bytes, "llama.attention.head_count", 32);
         push_u32_kv(&mut bytes, "llama.attention.head_count_kv", 8);
@@ -1425,7 +1299,10 @@ mod tests {
         bytes.extend_from_slice(b"GGUF");
         bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.extend_from_slice(&0i64.to_le_bytes());
-        bytes.extend_from_slice(&1i64.to_le_bytes());
+        bytes.extend_from_slice(&(2i64).to_le_bytes());
+        push_gguf_string(&mut bytes, "general.architecture");
+        bytes.extend_from_slice(&(GgufType::String as u32).to_le_bytes());
+        push_gguf_string(&mut bytes, "glm-dsa");
         push_u32_kv(&mut bytes, "glm-dsa.attention.kv_lora_rank", 512);
 
         let path = write_bytes("skippy-model-artifact-gguf-kv-lora-rank", &bytes);

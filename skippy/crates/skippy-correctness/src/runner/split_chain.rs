@@ -2,7 +2,6 @@ use std::{
     fs,
     net::SocketAddr,
     path::PathBuf,
-    process::Command,
     time::{Duration, Instant},
 };
 
@@ -534,9 +533,9 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
     fs::write(&topology_path, serde_json::to_vec_pretty(&topology)?)
         .with_context(|| format!("failed to write {}", topology_path.display()))?;
 
-    let mut stage2_command = Command::new(&args.stage_server_bin);
+    let mut stage2_command =
+        crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
     stage2_command.args([
-        "serve",
         "--stage-transport",
         "binary",
         "--worker-only",
@@ -562,9 +561,9 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         .context("stage 2 binary server did not become ready")?,
     );
 
-    let mut stage1_command = Command::new(&args.stage_server_bin);
+    let mut stage1_command =
+        crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
     stage1_command.args([
-        "serve",
         "--stage-transport",
         "binary",
         "--worker-only",

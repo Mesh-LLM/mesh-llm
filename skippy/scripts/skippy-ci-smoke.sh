@@ -160,6 +160,7 @@ download_model() {
   local output path
 
   if [[ -n "${HF_CACHE:-}" ]]; then
+    require_cmd hf
     # The family-certify runner's cache is shared over NFS. Resolve artifacts
     # from that pre-warmed cache without creating local-dir metadata or locks;
     # a miss must fail instead of mutating shared storage during certification.
@@ -178,6 +179,7 @@ download_model() {
       return 0
     fi
     echo "downloading ${repo}/${file}" >&2
+    require_cmd hf
     output="$(run_with_timeout "download ${repo}/${file}" hf download "$repo" "$file" --revision "$revision" --local-dir "$out_dir")"
   fi
 
@@ -230,30 +232,11 @@ assert_json() {
   fi
 }
 
-write_stage_config() {
-  local config_path="$1"
-  local model_id="$2"
-  local model_path="$3"
-  local layer_end="$4"
-  local ctx_size="$5"
-  local bind_addr="$6"
-  local payload="$7"
-  local n_batch="${8:-$SMOKE_N_BATCH}"
-  local n_ubatch="${9:-$SMOKE_N_UBATCH}"
-  local upstream_endpoint="${10:-}"
-  "${automation[@]}" automation openai-smoke-config cache \
-    --output "$config_path" --model-id "$model_id" --model-path "$model_path" \
-    --layer-end "$layer_end" --ctx-size "$ctx_size" --bind-addr "$bind_addr" \
-    --payload "$payload" --flash-attn "$SMOKE_FLASH_ATTN" \
-    --n-batch "$n_batch" --n-ubatch "$n_ubatch" --upstream-endpoint "$upstream_endpoint"
-}
-
 make_long_prompt_file() {
   cp "$ROOT/ci/fixtures/skippy-cache-prompt-input.txt" "$1"
 }
 
 require_cmd jq
-require_cmd hf
 require_cmd curl
 
 if [[ ! -d "$LLAMA_BUILD_DIR" ]]; then
@@ -393,6 +376,7 @@ fi
 
 if [[ "$SKIPPY_SMOKE_ENABLE_DENSE_STATE" == "1" ]]; then
   echo "smoke: dense full-state cache hit correctness"
+  # Suffix-remap parity holds a restored session beside an independent source.
   LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     run_with_timeout "dense full-state smoke" target/debug/skippy-correctness state-handoff \
       --model "$DENSE_MODEL_PATH" \
@@ -409,7 +393,7 @@ if [[ "$SKIPPY_SMOKE_ENABLE_DENSE_STATE" == "1" ]]; then
       --state-payload-kind full-state \
       --prefix-token-count "$STATE_PREFIX_TOKENS" \
       --cache-hit-repeats 2 \
-      --runtime-lane-count 1 \
+      --runtime-lane-count 2 \
       --report-out "$REPORT_DIR/dense-full-state.json"
   assert_json "$REPORT_DIR/dense-full-state.json" \
     '.matches == true and .cache_hit_matches == true and .suffix_prefill_matches == true and .state_payload_kind == "full-state" and .cache_hit_repeats == 2 and .state_bytes > 0 and .roundtrip_state_matches == true'
@@ -440,28 +424,26 @@ LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
 assert_json "$REPORT_DIR/recurrent-kv-recurrent.json" \
   '.matches == true and .cache_hit_matches == true and .suffix_prefill_matches == null and .state_payload_kind == "kv-recurrent" and .cache_hit_repeats == 2 and .state_bytes > 0 and .payload_digest.recurrent_bytes > 0 and .payload_digest.kv_bytes > 0'
 
-PROMPT_PORT="$(pick_port)"
-PROMPT_CONFIG="$WORK_DIR/prompt-stage.json"
 PROMPT_LOG="$WORK_DIR/prompt-stage.log"
 PROMPT_IN="$WORK_DIR/prompt-input.txt"
 PROMPT_OUT="$WORK_DIR/prompt-output.log"
-PROMPT_BIND="127.0.0.1:${PROMPT_PORT}"
 PROMPT_OPENAI_PORT="$(pick_port)"
 PROMPT_OPENAI_URL="http://127.0.0.1:${PROMPT_OPENAI_PORT}/v1"
-write_stage_config "$PROMPT_CONFIG" "$DENSE_MODEL_ID" "$DENSE_MODEL_PATH" "$DENSE_LAYER_END" "$PROMPT_CTX_SIZE" "$PROMPT_BIND" "resident-kv" "$PROMPT_N_BATCH" "$PROMPT_N_UBATCH"
 make_long_prompt_file "$PROMPT_IN"
 
-OPENAI_PORTS="$("${automation[@]}" automation local-ports 2)"
-IFS=',' read -r OPENAI_PORT OPENAI_STAGE_PORT <<<"$OPENAI_PORTS"
-OPENAI_CONFIG="$WORK_DIR/openai-stage.json"
+OPENAI_PORT="$(pick_port)"
 OPENAI_LOG="$WORK_DIR/openai-server.log"
 OPENAI_BASE_URL="http://127.0.0.1:${OPENAI_PORT}/v1"
-write_stage_config "$OPENAI_CONFIG" "$DENSE_MODEL_ID" "$DENSE_MODEL_PATH" "$DENSE_LAYER_END" "$CTX_SIZE" "127.0.0.1:${OPENAI_STAGE_PORT}" "resident-kv"
 
 echo "smoke: OpenAI /v1/chat/completions streaming/tools/logprobs/structured-output"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
   "$STAGE_SERVER_BIN" serve \
-    --config "$OPENAI_CONFIG" \
+    --model-path "$DENSE_MODEL_PATH" --model-id "$DENSE_MODEL_ID" \
+    --ctx-size "$CTX_SIZE" --n-gpu-layers 0 --generation-concurrency 4 \
+    --batch-size "$SMOKE_N_BATCH" --microbatch-size "$SMOKE_N_UBATCH" \
+    --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention "$SMOKE_FLASH_ATTN" \
+    --prefix-cache on --prefix-cache-max-entries 32 --prefix-cache-min-tokens 64 \
+    --prefix-cache-stride-tokens 128 --prefix-cache-record-limit 2 \
     --bind-addr "127.0.0.1:${OPENAI_PORT}" \
     --default-max-tokens 2 \
     >"$OPENAI_LOG" 2>&1 &
@@ -623,18 +605,16 @@ SERVER_PID=""
 
 echo "smoke: staged OpenAI repeated-prompt and growing-chat cache reuse"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-  "$STAGE_SERVER_BIN" serve --stage-transport binary \
-    --config "$PROMPT_CONFIG" \
-    --max-inflight 4 \
+  "$STAGE_SERVER_BIN" serve \
+    --model-path "$DENSE_MODEL_PATH" --model-id "$DENSE_MODEL_ID" \
+    --ctx-size "$PROMPT_CTX_SIZE" --n-gpu-layers 0 --generation-concurrency 4 \
+    --batch-size "$PROMPT_N_BATCH" --microbatch-size "$PROMPT_N_UBATCH" \
+    --kv-cache-type-k f16 --kv-cache-type-v f16 --flash-attention "$SMOKE_FLASH_ATTN" \
+    --prefix-cache on --prefix-cache-max-entries 32 --prefix-cache-min-tokens 64 \
+    --prefix-cache-stride-tokens 128 --prefix-cache-record-limit 2 \
     --bind-addr "127.0.0.1:${PROMPT_OPENAI_PORT}" \
     >"$PROMPT_LOG" 2>&1 &
 SERVER_PID="$!"
-if ! wait_for_tcp "127.0.0.1" "$PROMPT_PORT" "$SERVER_PID"; then
-  echo "prompt binary stage did not become ready; log follows" >&2
-  sed -n '1,240p' "$PROMPT_LOG" >&2 || true
-  exit 1
-fi
-
 for _ in $(seq 1 30); do
   if curl -fsS --max-time 2 "${PROMPT_OPENAI_URL}/models" >/dev/null 2>&1; then
     break

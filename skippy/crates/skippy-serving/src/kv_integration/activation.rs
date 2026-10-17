@@ -157,7 +157,6 @@ fn activation_prefix_frame(
 mod tests {
     use skippy_protocol::{
         LoadMode, SCHEMA_VERSION, StageConfig, StageKvCacheConfig, StageKvCacheMode,
-        StageKvCachePayload,
     };
     use skippy_runtime::{
         ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES, ACTIVATION_MAX_PARTS, ActivationDesc,
@@ -210,7 +209,6 @@ mod tests {
             kv_cache: Some(StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: StageKvCacheMode::LookupRecord,
-                payload: StageKvCachePayload::ResidentKv,
                 max_entries: 8,
                 max_bytes: 0,
                 l2_max_bytes: 0,
@@ -300,9 +298,10 @@ mod tests {
     #[test]
     fn resident_activation_records_and_restores_exact_frame() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
         let frame = activation_frame(tokens.len() as u32, tokens.len() * 4);
 
@@ -318,9 +317,10 @@ mod tests {
     #[test]
     fn resident_activation_rejects_mismatched_frame_token_count() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
         let frame = activation_frame(128, 64);
 
@@ -336,9 +336,10 @@ mod tests {
     #[test]
     fn resident_activation_records_identity_matched_shared_prefix_frame() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache enabled");
         let recorded_tokens = (0..2214).collect::<Vec<_>>();
         let mut lookup_tokens = recorded_tokens.clone();
         lookup_tokens.extend(100_000..100_017);
@@ -366,9 +367,10 @@ mod tests {
     #[test]
     fn restore_hits_shared_prefix_activation_for_extended_prompt() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache enabled");
         let recorded_tokens = (0..2214).collect::<Vec<i32>>();
         let mut extended_lookup_tokens = recorded_tokens.clone();
         extended_lookup_tokens.extend(100_000..100_017);
@@ -390,9 +392,10 @@ mod tests {
     #[test]
     fn resident_activation_keys_include_activation_width() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
         let frame = activation_frame(tokens.len() as u32, tokens.len() * 4);
 
@@ -408,9 +411,10 @@ mod tests {
     #[test]
     fn resident_activation_rejects_ambiguous_cached_token_count() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
         let identity = kv.prefill_identity(&config, &test_base(), 0, &tokens);
         let page_id = activation_page_id(&identity.page_id, 4096);
@@ -428,9 +432,10 @@ mod tests {
     #[test]
     fn resident_activation_slices_every_multipart_plane() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
         let frame = crate::test_activation::frame(
             tokens.len() as u32,

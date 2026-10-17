@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use skippy_runtime::{MtpSource, RuntimeConfig, StageModel};
 
-use crate::cli::{NativeMtpHeadsArgs, StageLoadMode};
+use crate::cli::{NativeMtpHeadsArgs, RuntimeArgs, StageLoadMode};
 
 use super::{
     native_mtp::{emit_report, native_mtp_artifact_summary, normalize_runtime_layer_end},
@@ -67,6 +67,38 @@ fn coverage(
     }
 }
 
+fn admitted_decoder_config(runtime: &RuntimeArgs) -> Result<RuntimeConfig> {
+    let plan = stage_runtime_plans(
+        StageLoadMode::RuntimeSlice,
+        &runtime.model,
+        &[&runtime.model],
+        &[(0, runtime.layer_end)],
+        runtime.ctx_size,
+        1,
+    )?
+    .into_iter()
+    .next()
+    .context("missing MTP runtime plan")?;
+    // A decoder-only context still needs admission for GGUFs containing MTP
+    // tensors. Preserve their resident union without creating a draft sidecar.
+    Ok(RuntimeConfig {
+        layer_end: runtime.layer_end,
+        ctx_size: runtime.ctx_size,
+        n_batch: runtime.n_batch,
+        n_ubatch: runtime.n_ubatch,
+        n_gpu_layers: runtime.n_gpu_layers,
+        flash_attn_type: runtime_flash_attn(runtime.flash_attn),
+        mtp_source: MtpSource::Disabled,
+        resident_tensor_names: plan.resident_tensor_names,
+        execution_contract: plan.execution_contract,
+        activation_import_identities: plan.activation_import_identities,
+        activation_import_bindings: plan.activation_import_bindings,
+        activation_export_identities: plan.activation_export_identities,
+        activation_export_bindings: plan.activation_export_bindings,
+        ..RuntimeConfig::default()
+    })
+}
+
 /// A proposal's depth selects its native head. Requesting the metadata count
 /// therefore exercises all heads, unlike the binary smoke's one-token budget.
 /// Teacher-force the same proposal prefix into both target and clean baseline:
@@ -84,35 +116,10 @@ pub fn native_mtp_heads(mut args: NativeMtpHeadsArgs) -> Result<()> {
     let expected = usize::try_from(summary.nextn_predict_layers)?;
     normalize_runtime_layer_end(&mut args.runtime)?;
     let identity = runtime_model_identity(&args.runtime)?;
-    let config = RuntimeConfig {
-        layer_end: args.runtime.layer_end,
-        ctx_size: args.runtime.ctx_size,
-        n_batch: args.runtime.n_batch,
-        n_ubatch: args.runtime.n_ubatch,
-        n_gpu_layers: args.runtime.n_gpu_layers,
-        flash_attn_type: runtime_flash_attn(args.runtime.flash_attn),
-        ..RuntimeConfig::default()
-    };
+    let config = admitted_decoder_config(&args.runtime)?;
     let (inputs, drafts, target) = {
         let mut integrated = config.clone();
         integrated.mtp_source = MtpSource::Integrated;
-        let plan = stage_runtime_plans(
-            StageLoadMode::RuntimeSlice,
-            &args.runtime.model,
-            &[&args.runtime.model],
-            &[(0, args.runtime.layer_end)],
-            args.runtime.ctx_size,
-            1,
-        )?
-        .into_iter()
-        .next()
-        .context("missing MTP runtime plan")?;
-        integrated.resident_tensor_names = plan.resident_tensor_names;
-        integrated.execution_contract = plan.execution_contract;
-        integrated.activation_import_identities = plan.activation_import_identities;
-        integrated.activation_import_bindings = plan.activation_import_bindings;
-        integrated.activation_export_identities = plan.activation_export_identities;
-        integrated.activation_export_bindings = plan.activation_export_bindings;
         let model = StageModel::open(&args.runtime.model, &integrated)?;
         let token = *model
             .tokenize(&args.runtime.prompt, true)?
@@ -136,8 +143,8 @@ pub fn native_mtp_heads(mut args: NativeMtpHeadsArgs) -> Result<()> {
         }
         (inputs, drafts, target)
     };
-    // Drop all proposal weights and contexts before opening the independent
-    // baseline, so this coverage lane never doubles model residency.
+    // Drop the proposal model and contexts before opening an independent
+    // decoder-only baseline, so this lane never doubles model residency.
     let baseline = {
         let model = StageModel::open(&args.runtime.model, &config)?;
         let mut session = model.create_session()?;

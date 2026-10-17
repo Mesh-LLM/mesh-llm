@@ -286,10 +286,8 @@ fn actual_smoke_nested_cancellation_cleans_owned_tree_and_leaves_unrelated_senti
 fn actual_smoke_pair_callers_select_distinct_ports_in_one_typed_batch() {
     let root = tempfile::tempdir().unwrap();
     let source = source();
-    for (prefix, first, second) in [
-        ("CHAIN_PORTS=", "CHAIN_PORT_1", "CHAIN_PORT_2"),
-        ("OPENAI_PORTS=", "OPENAI_PORT", "OPENAI_STAGE_PORT"),
-    ] {
+    {
+        let (prefix, first, second) = ("CHAIN_PORTS=", "CHAIN_PORT_1", "CHAIN_PORT_2");
         let mut lines = source.lines();
         let select = lines
             .find(|line| line.trim_start().starts_with(prefix))

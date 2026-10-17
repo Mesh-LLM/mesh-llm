@@ -112,7 +112,7 @@ impl ModelLoadRequest {
             args.activation_width = runtime
                 .output_activation_boundary()
                 .context("stage 0 graph did not expose its output activation boundary")?
-                .raw_f32_width("output")?;
+                .primary_token_width("output")?;
         }
         args.prediction_returns = prediction_return_listener
             .as_ref()

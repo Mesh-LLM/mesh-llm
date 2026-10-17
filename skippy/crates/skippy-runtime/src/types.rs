@@ -43,6 +43,7 @@ pub enum ModelStateKind {
 pub struct MemoryCacheCapabilities {
     pub resident: bool,
     pub kv_recurrent: bool,
+    pub full_state: bool,
 }
 
 impl MemoryCacheCapabilities {
@@ -50,6 +51,7 @@ impl MemoryCacheCapabilities {
         Self {
             resident: bits & 1 != 0,
             kv_recurrent: bits & 2 != 0,
+            full_state: bits & 4 != 0,
         }
     }
 }
@@ -57,8 +59,8 @@ impl MemoryCacheCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
-    /// Complete representations supported by the loaded native memory adapters.
-    /// Unknown memory advertises neither; callers must use full-state snapshots.
+    /// Complete representations admitted across reserved graph profiles and
+    /// supported by the loaded native memory. No bits means caching is unavailable.
     pub cache_capabilities: MemoryCacheCapabilities,
 }
 
@@ -146,15 +148,15 @@ impl ActivationBoundaryDesc {
         Ok(&self.parts[..count])
     }
 
-    /// Compatibility helper for consumers that still size the primary F32
-    /// tensor by width. Multipart bytes are accounted for by payload_bytes.
-    pub fn raw_f32_width(self, edge: &str) -> Result<i32> {
+    /// Element count outside the primary part's token axis, independent of dtype.
+    /// This is a shape hint; multipart byte sizes come from each typed descriptor.
+    pub fn primary_token_width(self, edge: &str) -> Result<i32> {
         let primary = *self
             .parts()?
             .first()
             .context("activation boundary has no primary part")?;
-        if primary.ggml_type != crate::GGML_TYPE_F32 || primary.token_axis < 0 {
-            bail!("{edge} primary activation part is not token-indexed F32");
+        if primary.token_axis < 0 {
+            bail!("{edge} primary activation part is not token-indexed");
         }
         let rank = usize::try_from(primary.rank)
             .with_context(|| format!("{edge} primary activation rank exceeds usize"))?;
@@ -178,7 +180,16 @@ impl ActivationBoundaryDesc {
             .with_context(|| format!("graph-observed {edge} activation width exceeds i32"))
     }
 
+    /// Reject unsupported wire types in every part, even when geometry is dynamic.
+    pub fn validate_transport_types(&self) -> Result<()> {
+        for part in self.parts()? {
+            ggml_type_bytes(part.ggml_type)?;
+        }
+        Ok(())
+    }
+
     pub fn payload_bytes_hint(self, edge: &str, token_count: u32) -> Result<Option<u64>> {
+        self.validate_transport_types()?;
         let mut total = 0_u64;
         for part in self.parts()? {
             if part.token_axis < 0
@@ -1014,34 +1025,43 @@ mod activation_boundary_descriptor_tests {
     }
 
     #[test]
-    fn raw_f32_boundary_accepts_exact_graph_contract() {
+    fn boundary_accepts_exact_graph_contract() {
         let boundary = f32_boundary(1024);
-        assert_eq!(boundary.raw_f32_width("output").unwrap(), 1024);
+        assert_eq!(boundary.primary_token_width("output").unwrap(), 1024);
         assert_eq!(boundary.payload_bytes("output", 128).unwrap(), 524_288);
     }
 
     #[test]
-    fn raw_f32_boundary_sizes_the_full_graph_observed_width() {
+    fn boundary_sizes_the_full_graph_observed_width() {
         let boundary = f32_boundary(3072);
-        assert_eq!(boundary.raw_f32_width("input").unwrap(), 3072);
+        assert_eq!(boundary.primary_token_width("input").unwrap(), 3072);
         assert_eq!(boundary.payload_bytes("input", 2).unwrap(), 24_576);
     }
 
     #[test]
-    fn raw_f32_boundary_rejects_each_invalid_semantic() {
+    fn boundary_preserves_typed_multipart_sizes() {
+        let mut boundary = f32_boundary(8);
+        boundary.part_count = 2;
+        boundary.parts[1] = f32_boundary(1024).parts[0];
+        boundary.parts[0].ggml_type = crate::GGML_TYPE_I32;
+        assert_eq!(boundary.primary_token_width("input").unwrap(), 8);
+        assert_eq!(
+            boundary.payload_bytes("input", 3).unwrap(),
+            (8 + 1024) * 4 * 3
+        );
+    }
+
+    #[test]
+    fn boundary_rejects_each_invalid_semantic() {
         let mut cases = Vec::new();
 
         let mut unsupported_version = f32_boundary(1024);
         unsupported_version.version += 1;
         cases.push((unsupported_version, "descriptor version"));
 
-        let mut unsupported_type = f32_boundary(1024);
-        unsupported_type.parts[0].ggml_type = crate::GGML_TYPE_F16;
-        cases.push((unsupported_type, "not token-indexed F32"));
-
         let mut invalid_axis = f32_boundary(1024);
         invalid_axis.parts[0].token_axis = -1;
-        cases.push((invalid_axis, "not token-indexed F32"));
+        cases.push((invalid_axis, "not token-indexed"));
 
         let mut axis_outside_rank = f32_boundary(1024);
         axis_outside_rank.parts[0].token_axis = 2;
@@ -1064,7 +1084,7 @@ mod activation_boundary_descriptor_tests {
 
         for (boundary, expected) in cases {
             let error = boundary
-                .raw_f32_width("input")
+                .primary_token_width("input")
                 .expect_err("invalid graph contract must fail closed");
             assert!(
                 error.to_string().contains(expected),
@@ -1097,6 +1117,22 @@ mod activation_boundary_descriptor_tests {
                 .unwrap_err()
                 .to_string()
                 .contains("unresolved dynamic dimension")
+        );
+    }
+
+    #[test]
+    fn dynamic_payload_hint_still_rejects_unsupported_types_in_later_parts() {
+        let mut boundary = f32_boundary(8);
+        boundary.parts[0].dimensions[0] = -1;
+        boundary.part_count = 2;
+        boundary.parts[1] = f32_boundary(8).parts[0];
+        boundary.parts[1].ggml_type = u32::MAX;
+
+        let error = boundary.payload_bytes_hint("output", 2).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("transport does not support ggml type")
         );
     }
 }

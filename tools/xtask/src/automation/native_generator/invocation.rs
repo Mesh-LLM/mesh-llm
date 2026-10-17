@@ -12,6 +12,7 @@ pub(super) struct Invocation<'a> {
     pub(super) arguments: Vec<OsString>,
     pub(super) phase: &'static str,
     pub(super) capture: bool,
+    pub(super) timeout: Duration,
 }
 
 pub(super) fn execute(
@@ -50,7 +51,7 @@ pub(super) fn execute(
             .collect(),
     };
     let limits = Limits {
-        execution: input.timeout,
+        execution: invocation.timeout,
         graceful_shutdown: Duration::from_secs(1),
         forced_shutdown: Duration::from_secs(2),
         retained_bytes_per_stream: 65536,
@@ -90,6 +91,7 @@ pub(super) fn git(
             arguments: arguments.iter().map(OsString::from).collect(),
             phase: "git",
             capture: true,
+            timeout: input.timeout,
         },
         cancellation,
     )?

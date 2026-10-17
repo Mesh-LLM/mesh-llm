@@ -10,6 +10,12 @@ use std::{
     time::Duration,
 };
 
+#[path = "workload_certify_contract/battery_evidence.rs"]
+mod battery_evidence;
+
+#[path = "workload_certify_contract/media_fixture.rs"]
+mod media_fixture;
+
 #[allow(dead_code, unused_imports)]
 #[path = "../src/process/mod.rs"]
 mod process;

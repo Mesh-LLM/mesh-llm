@@ -215,7 +215,7 @@ fi
 
 MEDIA_PATH=""
 case "$MODEL_CLASS" in
-  ocr) MEDIA_PATH="$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png" ;;
+  ocr) MEDIA_PATH="$ROOT/ci/fixtures/ocr-mesh-42.png" ;;
   speech_recognition) MEDIA_PATH="$ROOT/ci/llama-canary/fixtures/audio-smoke.wav" ;;
 esac
 
@@ -243,12 +243,6 @@ if [[ -n "$PORT" ]] && { [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65
   echo "invalid candidate port: $PORT" >&2
   exit 1
 fi
-CONFIG_PATH="$WORK_DIR/stage-openai.json"
-"${workload_automation[@]}" automation workload-smoke-config \
-  --output "$CONFIG_PATH" --model-id "$MODEL_ID" --model-path "$MODEL_PATH" \
-  --model-sha256 "$MODEL_SHA256" --layer-end "$LAYER_END" \
-  --n-gpu-layers "$N_GPU_LAYERS" --projector-path "$PROJECTOR_PATH"
-
 SERVER_LOG="$WORK_DIR/workload-openai-server.log"
 SERVER_PID=""
 ORACLE_PID=""
@@ -291,6 +285,15 @@ wait_for_workload_server() {
 }
 
 start_candidate_server() {
+  local model_args=(--model-path "$MODEL_PATH" --model-id "$MODEL_ID"
+    --ctx-size 2048 --batch-size 2048 --microbatch-size 2048 --generation-concurrency 1
+    --n-gpu-layers "$N_GPU_LAYERS")
+  if [[ "$N_GPU_LAYERS" == 0 ]]; then
+    model_args+=(--device CPU --kv-cache-offload=false --op-offload=false)
+  fi
+  if [[ -n "$PROJECTOR_PATH" ]]; then
+    model_args+=(--mmproj "$PROJECTOR_PATH")
+  fi
   local dynamic=0 attempt=1 attempt_log
   if [[ -z "$PORT" ]]; then
     dynamic=1
@@ -303,7 +306,7 @@ start_candidate_server() {
     rm -f "$attempt_log"
     LLAMA_STAGE_BACKEND="$BACKEND" \
       "$CANDIDATE_BIN_DIR/skippy" serve \
-        --config "$CONFIG_PATH" \
+        "${model_args[@]}" \
         --bind-addr "127.0.0.1:$PORT" \
         --default-max-tokens 128 \
         --telemetry-level off \
@@ -394,17 +397,12 @@ if [[ -n "$ORACLE_SERVER" ]]; then
   }
   start_oracle_server
   if [[ "$MODEL_CLASS" =~ ^(ocr|speech_recognition)$ ]]; then
-    ORACLE_MEDIA_PATH="$MEDIA_PATH"
-    if [[ "$MODEL_CLASS" == "ocr" ]]; then
-      ORACLE_MEDIA_PATH="$WORK_DIR/ocr-oracle-mesh-42.png"
-      cp "$ROOT/ci/fixtures/ocr-mesh-42.png" "$ORACLE_MEDIA_PATH"
-    fi
     "${workload_automation[@]}" automation workload-media-oracle \
       --candidate-url "http://127.0.0.1:$PORT/v1" \
       --oracle-url "http://127.0.0.1:$ORACLE_PORT/v1" \
       --model "$MODEL_ID" \
       --class "$MODEL_CLASS" \
-      --media-path "$ORACLE_MEDIA_PATH" | tee "$COMPARISON_LOG"
+      --media-path "$MEDIA_PATH" | tee "$COMPARISON_LOG"
   else
     "${workload_automation[@]}" automation workload-monolithic-oracle \
       --candidate-url "http://127.0.0.1:$PORT/v1" \

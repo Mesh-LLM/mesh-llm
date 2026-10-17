@@ -117,14 +117,15 @@ mod tests {
         assert!(bare.get("thinking").is_none());
 
         let controls = crate::thinking::ThinkingControls {
-            enabled: true,
+            toggle: crate::thinking::ThinkingToggle::Observed,
+            reasoning_parser: Some(true),
             efforts: vec!["low".to_string(), "medium".to_string()],
         };
         let probed = serde_json::to_value(
             ModelObject::new("org/model:Q4_K_M").with_thinking(Some(controls)),
         )
         .unwrap();
-        assert_eq!(probed["thinking"]["enabled"], true);
+        assert_eq!(probed["thinking"]["toggle"], "observed");
         assert_eq!(probed["thinking"]["efforts"][0], "low");
     }
 }

@@ -78,7 +78,7 @@ pub(crate) fn verify_package(
         && (candidate != verification.selected_source
             || base != verification.selected_source
             || optional_digest(&identity, "bundle_sha256")?.is_some()
-            || string_field(&identity, "pass_id")? != "repair-1")
+            || !["repair-1", "verify-1"].contains(&string_field(&identity, "pass_id")?))
     {
         return Err(package_identity_error(
             "certify-only package changed selected source",

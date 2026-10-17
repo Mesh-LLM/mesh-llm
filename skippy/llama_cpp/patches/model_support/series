@@ -4,3 +4,4 @@
 0004-skippy-add-diffusion-gemma-system-one-reads.patch
 0005-skippy-query-diffusion-canvas-length.patch
 0006-models-add-laya-decision-model-support.patch
+0007-fix-muse-glimmer-implicit-reasoning-continuations.patch

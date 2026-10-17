@@ -71,6 +71,8 @@ mod runner_cleanup_contracts;
 mod selected_ref;
 #[path = "migration_lifecycle/support.rs"]
 mod support;
+#[path = "migration_lifecycle/upstream_release.rs"]
+mod upstream_release;
 
 #[path = "migration_lifecycle/agent_client_config_cli.rs"]
 mod agent_client_config_cli;
@@ -109,8 +111,6 @@ mod binary_stage_readiness_cli;
 mod canary_source_recovery;
 #[path = "migration_lifecycle/runtime_release_manifest_wrapper.rs"]
 mod runtime_release_manifest_wrapper;
-#[path = "migration_lifecycle/skippy_cache_smoke_config_cli.rs"]
-mod skippy_cache_smoke_config_cli;
 #[path = "migration_lifecycle/skippy_ci_smoke_control_cli.rs"]
 mod skippy_ci_smoke_control_cli;
 #[path = "migration_lifecycle/skippy_cli_release.rs"]

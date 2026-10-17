@@ -84,8 +84,6 @@ fn run() -> DynResult<()> {
         cli::CliCommand::LocalPorts(rest) => automation::local_ports::run(rest),
         cli::CliCommand::ManualSmoke(rest) => automation::manual_smoke::run(rest),
         cli::CliCommand::OpenaiCacheMatrix(rest) => automation::cache_matrix::run(rest),
-        cli::CliCommand::OpenaiSmokeConfig(rest) => automation::openai_smoke_config::run(rest),
-        cli::CliCommand::WorkloadSmokeConfig(rest) => automation::workload_smoke_config::run(rest),
         cli::CliCommand::SplitProbe(rest) => automation::split_probe::run(rest),
         cli::CliCommand::SmokeObservation(rest) => automation::smoke_observation::run(rest),
         cli::CliCommand::HfXetSmoke(rest) => automation::hf_xet_smoke::run(rest),

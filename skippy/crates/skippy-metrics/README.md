@@ -36,6 +36,7 @@ ingestion, SQLite storage, and report export.
 count grouped by payload to see the request-weighted selection distribution.
 The same event carries `skippy.kv.lookup_hits` and
 `skippy.kv.lookup_misses`; sum those fields within each payload group to
-measure prefix-cache use. A stage's KV attributes separately report
-`skippy.kv.graph_loaded_state_mismatches` when graph admission disagrees with
-the loaded model state.
+measure prefix-cache use. A stage's KV attributes report the loaded state kind
+and native cache capabilities. `skippy.kv.payload_selection_reason` is
+`loaded_graph_and_memory`: representation is selected from the loaded runtime,
+with no operator-supplied graph labels or payload requests.
