@@ -8,7 +8,7 @@ mod planner;
 mod prompt;
 mod service;
 pub(crate) mod service_files;
-mod service_host;
+pub(crate) mod service_host;
 #[cfg(windows)]
 mod service_host_windows;
 pub(crate) mod service_paths;

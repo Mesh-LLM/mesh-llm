@@ -4,9 +4,11 @@
 
 use super::service_host::{
     Backoff, ConsoleHost, FIRST_RESTART_DELAY, HostOutcome, MAX_RESTARTS, RunningServe, STABLE_RUN,
-    ServeExit, ServeLauncher, note, supervise,
+    ServeExit, ServeLauncher, note, render_service_host_record, supervise,
 };
-use super::service_paths::{WINDOWS_SERVICE_LOG_FILE, windows_service_log_dir};
+use super::service_paths::{
+    WINDOWS_SERVICE_HOST_RECORD, WINDOWS_SERVICE_LOG_FILE, windows_service_log_dir,
+};
 use anyhow::{Context, Result, bail};
 use mesh_llm_system::process_lifetime::{ParentProcess, end_children_with_current_process};
 use std::fs::{self, File, OpenOptions};
@@ -21,9 +23,16 @@ pub(super) fn run() -> Result<()> {
     let binary = std::env::current_exe().context("could not determine the mesh-llm binary")?;
     let home = dirs::home_dir().context("could not determine the home directory")?;
     let local_data = dirs::data_local_dir().context("could not determine %LOCALAPPDATA%")?;
-    let mut log = open_log(&windows_service_log_dir(&local_data))?;
+    let log_dir = windows_service_log_dir(&local_data);
+    let mut log = open_log(&log_dir)?;
 
     // From here on the log is the only place a failure can be reported.
+    if let Err(error) = record_this_host(&log_dir) {
+        note(
+            &mut log,
+            &format!("warning: could not record this service host for uninstall: {error:#}"),
+        );
+    }
     let result = host(binary, home, &mut log);
     if let Err(error) = &result {
         note(&mut log, &format!("stopping: {error:#}"));
@@ -52,6 +61,15 @@ fn host(binary: PathBuf, home: PathBuf, log: &mut File) -> Result<()> {
         HostOutcome::ServeExited | HostOutcome::TaskEnded => Ok(()),
         HostOutcome::GaveUp(_) => bail!("mesh-llm serve kept failing"),
     }
+}
+
+fn record_this_host(log_dir: &Path) -> Result<()> {
+    let started_at_unix = mesh_llm_system::process::current_process_start_time_unix()?;
+    fs::write(
+        log_dir.join(WINDOWS_SERVICE_HOST_RECORD),
+        render_service_host_record(std::process::id(), started_at_unix),
+    )?;
+    Ok(())
 }
 
 // The previous session's log is kept beside the new one, so a log grows for

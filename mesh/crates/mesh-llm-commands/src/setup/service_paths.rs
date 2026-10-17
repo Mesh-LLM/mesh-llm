@@ -48,6 +48,8 @@ impl ServiceInstallContext {
 /// The scheduled task definition `setup` writes and registers on Windows.
 pub(crate) const WINDOWS_TASK_DEFINITION_FILE: &str = "mesh-llm-task.xml";
 pub(crate) const WINDOWS_SERVICE_LOG_FILE: &str = "service.log";
+/// The running service host's id and start time, beside its log.
+pub(crate) const WINDOWS_SERVICE_HOST_RECORD: &str = "service-host.pid";
 
 /// Where the Windows service host writes the node's output.
 pub(crate) fn windows_service_log_dir(local_data_root: &Path) -> PathBuf {

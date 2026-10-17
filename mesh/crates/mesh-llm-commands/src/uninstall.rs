@@ -1,4 +1,7 @@
-use crate::setup::service_paths::{WINDOWS_TASK_DEFINITION_FILE, windows_service_log_dir};
+use crate::setup::service_host::parse_service_host_record;
+use crate::setup::service_paths::{
+    WINDOWS_SERVICE_HOST_RECORD, WINDOWS_TASK_DEFINITION_FILE, windows_service_log_dir,
+};
 use crate::terminal::{self, ConfirmDefault, style_muted, style_ok, style_warn};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -56,8 +59,12 @@ pub enum UninstallStep {
         user_id: String,
         plist_path: PathBuf,
     },
-    /// End and delete the Windows scheduled task, if it is registered.
-    RemoveScheduledTask,
+    /// End and delete the Windows scheduled task, if it is registered, and
+    /// stop the service host it recorded if that still runs.
+    RemoveScheduledTask {
+        service_host_record: PathBuf,
+        binary_name: String,
+    },
     RemovePath {
         path: PathBuf,
         purpose: RemovePurpose,
@@ -131,7 +138,15 @@ pub fn plan_uninstall(options: &UninstallOptions, env: &UninstallEnvironment) ->
     // Ending the task first stops its service host, which would otherwise
     // restart the node that the next step stops.
     if env.platform == UninstallPlatform::Windows {
-        steps.push(UninstallStep::RemoveScheduledTask);
+        steps.push(UninstallStep::RemoveScheduledTask {
+            service_host_record: windows_service_log_dir(&env.local_data_root)
+                .join(WINDOWS_SERVICE_HOST_RECORD),
+            binary_name: env
+                .binary_path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| SERVICE_NAME.to_string()),
+        });
     }
     steps.push(UninstallStep::StopProcesses);
     match env.platform {
@@ -307,7 +322,10 @@ where
                 );
             }
         }
-        UninstallStep::RemoveScheduledTask => {
+        UninstallStep::RemoveScheduledTask {
+            service_host_record,
+            binary_name,
+        } => {
             // Nothing to report when setup never registered the task.
             let registered = Command::new("schtasks")
                 .args(["/Query", "/TN", SERVICE_NAME])
@@ -318,6 +336,13 @@ where
                     Command::new("schtasks").args(["/End", "/TN", SERVICE_NAME]),
                     outcome,
                 );
+            }
+            // Ending the task ends its service host. Should that have failed,
+            // or a host outlived its task, the host would restart the node the
+            // next step stops, so stop the host it recorded; its job takes the
+            // node down with it.
+            stop_recorded_service_host(service_host_record, binary_name, outcome);
+            if registered {
                 run_best_effort(
                     Command::new("schtasks").args(["/Delete", "/TN", SERVICE_NAME, "/F"]),
                     outcome,
@@ -476,6 +501,25 @@ fn remove_recursively(path: &Path, outcome: &mut UninstallOutcome) -> Result<()>
     Ok(())
 }
 
+/// Stops the service host recorded at `record` when a process with that id
+/// and start time still runs `binary_name`, so a reused id is never touched.
+/// A console process only ends with `/F`.
+fn stop_recorded_service_host(record: &Path, binary_name: &str, outcome: &mut UninstallOutcome) {
+    let Some((pid, started_at_unix)) = fs::read_to_string(record)
+        .ok()
+        .and_then(|record| parse_service_host_record(&record))
+    else {
+        return;
+    };
+    if !mesh_llm_system::process::validate_pid_matches(pid, binary_name, started_at_unix) {
+        return;
+    }
+    run_best_effort(
+        Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]),
+        outcome,
+    );
+}
+
 fn run_best_effort(command: &mut Command, outcome: &mut UninstallOutcome) {
     match command.output() {
         Ok(output) if output.status.success() => {}
@@ -632,7 +676,9 @@ fn step_label(step: &UninstallStep) -> String {
         }
         UninstallStep::ReloadSystemdUser => "reload systemd user units".to_string(),
         UninstallStep::BootoutLaunchdAgent { .. } => "boot out launchd agent".to_string(),
-        UninstallStep::RemoveScheduledTask => "end and delete the scheduled task".to_string(),
+        UninstallStep::RemoveScheduledTask { .. } => {
+            "end and delete the scheduled task".to_string()
+        }
         UninstallStep::RemovePath { path, purpose } => {
             format!("remove {}: {}", purpose_label(*purpose), path.display())
         }
@@ -718,7 +764,15 @@ mod tests {
         assert_eq!(
             &plan.steps[..2],
             &[
-                UninstallStep::RemoveScheduledTask,
+                UninstallStep::RemoveScheduledTask {
+                    service_host_record: temp
+                        .path()
+                        .join("local")
+                        .join("mesh-llm")
+                        .join("logs")
+                        .join("service-host.pid"),
+                    binary_name: "mesh-llm".to_string(),
+                },
                 UninstallStep::StopProcesses
             ]
         );
@@ -753,8 +807,87 @@ mod tests {
         for platform in [UninstallPlatform::Linux, UninstallPlatform::MacOs] {
             let plan = plan_uninstall(&options(), &env(temp.path(), platform));
             assert_eq!(plan.steps[0], UninstallStep::StopProcesses);
-            assert!(!plan.steps.contains(&UninstallStep::RemoveScheduledTask));
+            assert!(
+                !plan
+                    .steps
+                    .iter()
+                    .any(|step| matches!(step, UninstallStep::RemoveScheduledTask { .. }))
+            );
         }
+    }
+
+    #[cfg(windows)]
+    fn long_running_child() -> (std::process::Child, i64) {
+        let child = Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        let started_at_unix = mesh_llm_system::process::process_started_at_unix(child.id())
+            .expect("start time")
+            .expect("ping is running");
+        (child, started_at_unix)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_recorded_service_host_that_still_runs_is_stopped() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let record = temp.path().join("service-host.pid");
+        let (mut child, started_at_unix) = long_running_child();
+        fs::write(
+            &record,
+            crate::setup::service_host::render_service_host_record(child.id(), started_at_unix),
+        )
+        .expect("write record");
+        let mut outcome = UninstallOutcome {
+            dry_run: false,
+            removed: Vec::new(),
+            scheduled_removal: Vec::new(),
+            already_absent: Vec::new(),
+            warnings: Vec::new(),
+        };
+
+        stop_recorded_service_host(&record, "PING", &mut outcome);
+
+        let status = child.wait().expect("wait for ping");
+        assert!(!status.success(), "ping was killed, not finished: {status}");
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_record_whose_start_time_differs_stops_nothing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let record = temp.path().join("service-host.pid");
+        let (mut child, started_at_unix) = long_running_child();
+        // The same id with another start time is a different process.
+        fs::write(
+            &record,
+            crate::setup::service_host::render_service_host_record(
+                child.id(),
+                started_at_unix - 3600,
+            ),
+        )
+        .expect("write record");
+        let mut outcome = UninstallOutcome {
+            dry_run: false,
+            removed: Vec::new(),
+            scheduled_removal: Vec::new(),
+            already_absent: Vec::new(),
+            warnings: Vec::new(),
+        };
+
+        stop_recorded_service_host(&record, "PING", &mut outcome);
+
+        assert!(
+            child.try_wait().expect("try_wait").is_none(),
+            "a reused id must not be killed"
+        );
+        child.kill().expect("kill ping");
+        let _ = child.wait();
     }
 
     fn options() -> UninstallOptions {

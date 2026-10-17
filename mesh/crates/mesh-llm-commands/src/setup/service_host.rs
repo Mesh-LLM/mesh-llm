@@ -180,6 +180,19 @@ pub(crate) fn note(log: &mut dyn Write, message: &str) {
     let _ = log.flush();
 }
 
+/// The service host's process id and start time, written beside its log so
+/// `uninstall` can stop a host that outlived its task.
+pub(crate) fn render_service_host_record(pid: u32, started_at_unix: i64) -> String {
+    format!("{pid} {started_at_unix}\n")
+}
+
+pub(crate) fn parse_service_host_record(record: &str) -> Option<(u32, i64)> {
+    let mut fields = record.split_whitespace();
+    let pid = fields.next()?.parse().ok()?;
+    let started_at_unix = fields.next()?.parse().ok()?;
+    fields.next().is_none().then_some((pid, started_at_unix))
+}
+
 /// Entry point of the hidden `mesh-llm service-host` subcommand.
 pub fn run_service_host() -> anyhow::Result<()> {
     #[cfg(windows)]

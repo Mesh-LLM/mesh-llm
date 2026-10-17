@@ -1,6 +1,7 @@
 use super::service_host::{
     Backoff, ConsoleHost, FIRST_RESTART_DELAY, HostOutcome, MAX_RESTARTS, RestartDecision,
-    RunningServe, STABLE_RUN, ServeExit, ServeLauncher, supervise,
+    RunningServe, STABLE_RUN, ServeExit, ServeLauncher, parse_service_host_record,
+    render_service_host_record, supervise,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -19,6 +20,19 @@ fn restart_after(seconds: u64, restart: u32) -> RestartDecision {
         delay: Duration::from_secs(seconds),
         restart,
     }
+}
+
+#[test]
+fn the_service_host_record_round_trips_and_rejects_anything_else() {
+    let record = render_service_host_record(4321, 1_790_000_000);
+    assert_eq!(
+        parse_service_host_record(&record),
+        Some((4321, 1_790_000_000))
+    );
+    assert_eq!(parse_service_host_record(""), None);
+    assert_eq!(parse_service_host_record("4321"), None);
+    assert_eq!(parse_service_host_record("4321 now"), None);
+    assert_eq!(parse_service_host_record("4321 1790000000 extra"), None);
 }
 
 #[test]
