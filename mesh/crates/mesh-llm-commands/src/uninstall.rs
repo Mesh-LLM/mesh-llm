@@ -348,11 +348,18 @@ where
             // next step stops, so stop the host it recorded; its job takes the
             // node down with it.
             stop_recorded_service_host(service_host_record, binary_name, outcome);
-            if registered {
-                run_best_effort(
-                    Command::new("schtasks").args(["/Delete", "/TN", SERVICE_NAME, "/F"]),
-                    outcome,
-                );
+            // Best effort, like disabling the systemd unit: a task left behind
+            // only fails at the next logon once the binary is gone, so say how
+            // to remove it rather than stop the uninstall.
+            if registered
+                && !Command::new("schtasks")
+                    .args(["/Delete", "/TN", SERVICE_NAME, "/F"])
+                    .output()
+                    .is_ok_and(|output| output.status.success())
+            {
+                outcome.warnings.push(format!(
+                    "the {SERVICE_NAME} scheduled task is still registered and will fail at the next logon without the binary; delete it with: schtasks /Delete /TN {SERVICE_NAME} /F"
+                ));
             }
         }
         UninstallStep::RemovePath { path, purpose } => {
