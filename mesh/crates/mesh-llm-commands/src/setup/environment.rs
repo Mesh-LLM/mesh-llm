@@ -29,7 +29,7 @@ impl SetupEnvironment {
 
 impl SetupPlatform {
     pub const fn supports_service(self) -> bool {
-        matches!(self, Self::Linux | Self::MacOs)
+        matches!(self, Self::Linux | Self::MacOs | Self::Windows)
     }
 
     pub const fn display_name(self) -> &'static str {

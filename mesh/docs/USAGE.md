@@ -26,8 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh |
 ```
 
 The installer puts `mesh-llm` on your `PATH`. After install, run `mesh-llm setup`
-to finish runtime configuration and, on supported macOS and Linux machines,
-optionally install the background service.
+to finish runtime configuration and, on macOS, Linux, and Windows, optionally
+install the background service.
 
 Source builds must use `just`:
 
@@ -104,7 +104,7 @@ Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint
 
 ## Setup
 
-Use `mesh-llm setup` after the executable is installed. It configures the native runtime and can install the background service on supported macOS and Linux machines.
+Use `mesh-llm setup` after the executable is installed. It configures the native runtime and can install the background service on macOS, Linux, and Windows.
 
 See [CLI.md](CLI.md) for the setup flags and the service options.
 

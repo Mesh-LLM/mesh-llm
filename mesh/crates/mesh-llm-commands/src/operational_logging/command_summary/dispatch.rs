@@ -122,6 +122,7 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             format_client("opencode", model, host, *write, assembly);
         }
         Command::Stop => assembly.command.push_str(" stop"),
+        Command::ServiceHost => assembly.command.push_str(" service-host"),
         Command::ModelPrepare {
             source_repo,
             quant,

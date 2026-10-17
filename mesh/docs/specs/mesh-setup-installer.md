@@ -67,7 +67,7 @@ Unsupported in v1:
 
 - `--skip-doctor`
 - setup-owned doctor/readiness flow
-- Windows service creation
+- a machine-level Windows service (the Windows service is per-user)
 - startup model, public/private mesh, or telemetry prompts
 - a separate installer binary
 
@@ -90,11 +90,26 @@ Service setup is supported for:
 
 - Linux systemd user units
 - macOS launchd agents
+- Windows per-user scheduled tasks
 
-Windows `mesh-llm setup --service` is a hard unsupported-service error. Default
-Windows setup and `--no-service` continue without service setup.
+On Windows, setup registers a scheduled task named `mesh-llm` for the current
+user: a logon trigger, an interactive token, least privilege, and no elevation.
+The task runs `conhost.exe --headless` from the binary's directory with the
+hidden `mesh-llm service-host` subcommand, so no console window shows, at task
+priority 4, which gives the node the CPU, I/O and memory priority of a `serve`
+started from a terminal (the default, 7, would run it below normal). The
+service host runs `mesh-llm serve` with its output appended to
+`%LOCALAPPDATA%\mesh-llm\logs\service.log`, restarts it after a failure with an
+exponential backoff (5 seconds, doubling, five restarts in a row, counted
+afresh after ten minutes of running), and stops it when the task ends: ending a
+task only ends its own process, so the service host watches that console host
+and holds the node in a kill-on-close job. The node reads its TOML config and
+`invite.token` beside it; Windows has no `service.env`. When the user has no
+desktop session, as when setup runs over SSH, the task cannot start until the
+next logon; setup reads the task's last result and reports that, instead of
+reporting a start that did not happen.
 
-Interactive Unix setup prompts for service installation and defaults to Yes.
+Interactive setup prompts for service installation and defaults to Yes.
 `--yes` accepts service setup unless `--no-service` is also present.
 Non-interactive setup prints service opt-in guidance unless `--service` is
 explicitly supplied.
@@ -169,7 +184,9 @@ Supported flags:
 Default uninstall behavior stops tracked `mesh-llm` processes, disables and
 removes the per-user Linux systemd unit or macOS launchd agent when present,
 removes setup-owned service helper files, removes the native-runtime cache, and
-then removes the executable. It preserves `~/.mesh-llm` by default so keys,
+then removes the executable. On Windows it first ends and deletes the per-user
+scheduled task, so its service host does not restart the node being stopped,
+then removes the task definition and the service logs. It preserves `~/.mesh-llm` by default so keys,
 identity, and user configuration are not deleted accidentally.
 
 The command removes only known setup-owned service files. If the setup service
