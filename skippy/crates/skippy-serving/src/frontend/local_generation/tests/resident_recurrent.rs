@@ -4,13 +4,39 @@ use std::sync::atomic::Ordering;
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
+    let (wide, _) = recurrent_test_backend("wide", "wide", 256, (128, 32), 8, 256)?;
+    let (narrow, _) = recurrent_test_backend("narrow", "narrow", 256, (32, 32), 8, 256)?;
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let (expected, _) = generate(&narrow, &prompt, 8)?;
+    let (actual, _) = generate(&wide, &prompt, 8)?;
+    assert_eq!(
+        actual, expected,
+        "native microbatch splitting changes output"
+    );
+    let (repeated, cached) = generate(&wide, &prompt, 8)?;
+    assert!(cached > 0);
+    assert_eq!(repeated, expected);
+    let mut extended = prompt;
+    extended.extend_from_slice(&actual);
+    extended.extend(129..=150);
+    assert_eq!(
+        generate(&wide, &extended, 8)?.0,
+        generate(&narrow, &extended, 8)?.0,
+        "growing resident turns differ across batch sizes"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_demotes_to_l3_and_reopens_after_restart() -> Result<()> {
     let root = tempfile::tempdir()?;
     let manager = skippy_cache::L3CacheManager::acquire(
         root.path(),
         skippy_cache::StoreLimits::new(1 << 30, 0),
     )?;
-    let (mut backend, _) = recurrent_test_backend("durable", "durable", 256, 32, 8, 256)?;
+    let (mut backend, _) = recurrent_test_backend("durable", "durable", 256, (32, 32), 8, 256)?;
     let configure = |backend: &mut StageOpenAiBackend| -> Result<()> {
         let kv = backend.kv.as_ref().unwrap();
         backend.kv = KvStageIntegration::from_loaded_model_with_l3_manager(
@@ -54,7 +80,7 @@ fn resident_hybrid_demotes_to_l3_and_reopens_after_restart() -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    let (mut reopened, _) = recurrent_test_backend("durable", "durable", 256, 32, 8, 256)?;
+    let (mut reopened, _) = recurrent_test_backend("durable", "durable", 256, (32, 32), 8, 256)?;
     configure(&mut reopened)?;
     let (actual, reused) = generate(&reopened, &prompt, 8)?;
     assert!(reused > 0);
@@ -82,7 +108,7 @@ fn drain(backend: &StageOpenAiBackend) -> Result<()> {
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_cancellation_and_error_release_the_lane() -> Result<()> {
-    let (backend, _) = recurrent_test_backend("cleanup", "cleanup", 256, 32, 8, 256)?;
+    let (backend, _) = recurrent_test_backend("cleanup", "cleanup", 256, (32, 32), 8, 256)?;
     let prompt = (1..=64).collect::<Vec<_>>();
     for cancel in [true, false] {
         generate(&backend, &prompt, 8)?;
@@ -134,7 +160,7 @@ fn resident_hybrid_cancellation_and_error_release_the_lane() -> Result<()> {
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_retains_lane_and_demotes_on_unrelated_prompt() -> Result<()> {
-    let (backend, _) = recurrent_test_backend("resident", "resident", 256, 32, 8, 256)?;
+    let (backend, _) = recurrent_test_backend("resident", "resident", 256, (32, 32), 8, 256)?;
     let prompt = (1..=64).collect::<Vec<_>>();
     let (first, _) = generate(&backend, &prompt, 8)?;
     drain(&backend)?;
@@ -159,7 +185,7 @@ fn resident_hybrid_retains_lane_and_demotes_on_unrelated_prompt() -> Result<()> 
     extension.extend_from_slice(&[7, 8]);
     let (warm, reused) = generate(&backend, &extension, 8)?;
     assert!(reused >= 63);
-    let (cold, _) = recurrent_test_backend("cold", "cold", 256, 32, 8, 256)?;
+    let (cold, _) = recurrent_test_backend("cold", "cold", 256, (32, 32), 8, 256)?;
     generate(&cold, &prompt, 8)?;
     drain(&cold)?;
     cold.runtime.lock().unwrap().evict_idle_recurrent()?;

@@ -3,7 +3,7 @@ use super::*;
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn recurrent_verification_recovers_rejected_suffix_without_rolling_snapshots() -> Result<()> {
-    let (backend, _) = recurrent_test_backend("verify", "verify", 128, 32, 8, 128)?;
+    let (backend, _) = recurrent_test_backend("verify", "verify", 128, (32, 32), 8, 128)?;
     let runtime = backend.runtime.lock().unwrap();
     let prompt = (1..=32).collect::<Vec<_>>();
     let proposal = [33, 34];

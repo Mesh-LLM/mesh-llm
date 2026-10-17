@@ -41,7 +41,7 @@ pub(super) fn generate(
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
 fn recurrent_prompt_checkpoint_survives_early_stop() -> Result<()> {
-    let (backend, _) = recurrent_test_backend("resume", "resume", 256, 32, 8, 256)?;
+    let (backend, _) = recurrent_test_backend("resume", "resume", 256, (32, 32), 8, 256)?;
     let prompt = (1..=64).collect::<Vec<_>>();
     let (first, _) = generate(&backend, &prompt, 2)?;
     assert_eq!(first.len(), 2);
@@ -60,7 +60,7 @@ fn recurrent_prompt_checkpoint_survives_early_stop() -> Result<()> {
     extended.extend_from_slice(&first);
     extended.push(7);
     let (warm, _) = generate(&backend, &extended, 8)?;
-    let (cold, _) = recurrent_test_backend("control", "control", 256, 32, 8, 256)?;
+    let (cold, _) = recurrent_test_backend("control", "control", 256, (32, 32), 8, 256)?;
     assert_eq!(warm, generate(&cold, &extended, 8)?.0);
     Ok(())
 }
