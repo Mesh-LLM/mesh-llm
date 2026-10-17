@@ -28,7 +28,7 @@ See [ownership and admission control](https://github.com/Mesh-LLM/mesh-llm/blob/
 ## Start the first serving node
 
 ```sh
-mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 ## Add another serving machine
@@ -36,7 +36,7 @@ mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 Install Mesh on the second machine, then use the same mesh name:
 
 ```sh
-mesh-llm serve --discover my-mesh --model <model-ref>
+mesh-llm serve --discover=my-mesh --model <model-ref>
 ```
 
 ## Join as an API-only client
@@ -44,7 +44,7 @@ mesh-llm serve --discover my-mesh --model <model-ref>
 Use this for a laptop that should send requests but not serve a model:
 
 ```sh
-mesh-llm client --discover my-mesh
+mesh-llm client --discover=my-mesh
 ```
 
 ## Check that peers are visible

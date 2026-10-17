@@ -255,7 +255,7 @@ Switches:
 ### Common runtime options
 
 - `--join <TOKEN>`: join a specific mesh using an invite token (repeatable).
-- `--discover [NAME]`: discover a mesh via Nostr and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`.
+- `--discover[=NAME]`: discover a mesh via Nostr and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`. The name must be `=`-attached (`--discover=alice`), so the next token is never mistaken for it (`--discover status` runs `status`).
 - `--mesh-discovery-mode <nostr|mdns>`: choose public Nostr or LAN mDNS discovery. mDNS is LAN-scoped and still requires an invite token for joining.
 - `--auto`: auto-join the best discovered mesh.
 - `--model <MODEL>`: model to serve (catalog id from `models recommended`, HF ref/URL, or path).

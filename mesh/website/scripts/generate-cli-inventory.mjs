@@ -78,7 +78,7 @@ function visitNode(node, paths, location) {
       throw new Error(`${location} command nodes must declare synthetic and external booleans`);
     }
   } else {
-    for (const field of ["id", "required", "global", "repeatable"]) {
+    for (const field of ["id", "required", "global", "repeatable", "requireEquals"]) {
       const expectedType = field === "id" ? "string" : "boolean";
       if (typeof node[field] !== expectedType) {
         throw new Error(`${location}.${field} must be a ${expectedType}`);
