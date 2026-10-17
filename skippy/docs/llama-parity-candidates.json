@@ -1465,6 +1465,42 @@
       "family": "diffusion-gemma",
       "status": "candidate",
       "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "clef",
+      "family": "clef",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "gemma-embedding2",
+      "family": "gemma-embedding2",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "glm5-next",
+      "family": "glm5-next",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "k2-horizon",
+      "family": "k2-horizon",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "maion-coder",
+      "family": "maion-coder",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "vllm-decision2",
+      "family": "vllm-decision2",
+      "status": "needs_boundary_registration",
+      "notes": "new upstream llama.cpp source; the decision-head builder derives from the qwen3 graph and reuses the inherited backbone layer loop, so this source owns no begin_block/end_block decoder boundaries and cannot be admitted to split serving yet"
     }
   ]
 }

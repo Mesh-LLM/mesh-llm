@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gemma3.cpp b/src/models/gemma3.cpp
-index f99bbaacd8adcdd34810064eb4b2320ff28e2d71..a4db2a0546735dd18de8e733fbe6b4ef815b45c3 100644
+index 4c8183cce9049af62f1dcc10fafaf811be4797d3..31b00d58b42c4192f57635ae26d8306cf9d3e53f 100644
 --- a/src/models/gemma3.cpp
 +++ b/src/models/gemma3.cpp
-@@ -107,6 +107,8 @@ llama_model_gemma3::graph<iswa>::graph(const llama_model & model, const llm_grap
+@@ -105,6 +105,8 @@ llama_model_gemma3::graph<iswa>::graph(const llama_model & model, const llm_grap
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index f99bbaacd8adcdd34810064eb4b2320ff28e2d71..a4db2a0546735dd18de8e733fbe6b4ef
          float freq_base_l  = 0.0f;
          float freq_scale_l = 0.0f;
  
-@@ -194,6 +196,7 @@ llama_model_gemma3::graph<iswa>::graph(const llama_model & model, const llm_grap
+@@ -192,6 +194,7 @@ llama_model_gemma3::graph<iswa>::graph(const llama_model & model, const llm_grap
  
          // input for next layer
          inpL = cur;

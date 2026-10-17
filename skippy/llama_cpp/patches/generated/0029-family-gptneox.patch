@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gptneox.cpp b/src/models/gptneox.cpp
-index ed5e8c50da2f5430315cd0f06ee1f8de219dfb54..667299dcdc2ddff0cc0a249cb152b4167bfbc89c 100644
+index bc8a9fd4a993f26c8d5b501340918e47b4b8b2c9..8647985e3d4c96572c758e5a51190c6779c767f0 100644
 --- a/src/models/gptneox.cpp
 +++ b/src/models/gptneox.cpp
 @@ -102,6 +102,8 @@ llama_model_gptneox::graph::graph(const llama_model & model, const llm_graph_par

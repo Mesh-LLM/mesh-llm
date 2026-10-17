@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/llama.cpp b/src/models/llama.cpp
-index 4bfebc8843c655e122e5f2064a791c583ad3779b..6c3547638f82f22c10ed3eef7a557be536175373 100644
+index f9c1251131a39b79ed519a95b16c3026b4c3af68..73c0a01183c6fcb7187be70dce14e06394038e99 100644
 --- a/src/models/llama.cpp
 +++ b/src/models/llama.cpp
 @@ -124,6 +124,8 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
