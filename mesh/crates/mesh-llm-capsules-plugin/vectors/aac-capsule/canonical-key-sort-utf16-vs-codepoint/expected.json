@@ -1,0 +1,16 @@
+{
+  "canonical_preimages": {
+    "capsule_id": "{\"action_id\":\"canonical-key-sort-utf16-vs-codepoint\",\"action_type\":\"decide\",\"assurance\":{\"attestation_mode\":\"self_attested\",\"effect_mode\":\"not_applicable\",\"ledger_mode\":\"standalone\"},\"canonicalization_id\":\"jcs\",\"developer\":\"conformance-vector@v1\",\"disposition\":{\"approver\":\"policy\",\"decision\":\"accept\",\"human_disposed\":false,\"verdict_class\":\"executed\"},\"extension\":{\"canonical_test_value\":{\"😀\":\"hi\",\"Ｚ\":\"wide\"}},\"format_version\":\"4\",\"operator\":\"AAC-CONFORMANCE\",\"spec_version\":\"draft-mih-scitt-agent-action-capsule-04\",\"timestamp\":\"2026-09-13T00:00:00Z\"}"
+  },
+  "capsule_id_recomputed": "9d07be6c8b0cb9efafd089ee02a2e06846854ee70c3c0f56e88925c1d2cf5dde",
+  "derived": {
+    "attestation_mode": "self_attested",
+    "effect_mode": "not_applicable",
+    "ledger_mode": "standalone"
+  },
+  "description": "UTF-16 key ordering: U+1F600 emoji (first surrogate 0xD83D) sorts after U+FF3A (single unit) under explicit format-4 plain JCS.",
+  "findings": [],
+  "kind": "positive",
+  "ok": true,
+  "provenance": "spec-derived"
+}

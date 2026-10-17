@@ -1,0 +1,63 @@
+{
+  "note": "A verdict signed by a reference referee, for the verifier in adjudication_records.rs. Regenerate: see its tests.",
+  "referee_key_id": "6a9a93a3af20ca17d85764e3206fd1d0417ea943f53f07157792299ba9b6f033",
+  "verdict_capsule": {
+    "spec_version": "draft-mih-scitt-agent-action-capsule-04",
+    "format_version": "4",
+    "capsule_id": "1bd4fa92a5ff02c278b3c79e4e0398ede6c62212483c5a9466176bfc45408f62",
+    "action_id": "adjudicate/1bb92507-473a-49b7-96a0-a6752fb42308",
+    "action_type": "decide",
+    "operator": "",
+    "developer": "",
+    "timestamp": "2026-09-28T22:43:22.545779Z",
+    "canonicalization_id": "jcs",
+    "domain": "action",
+    "provenance": "referee",
+    "model_attestation": {
+      "compute_attestation": {
+        "epistemic_type": "adjudication",
+        "adjudication": {
+          "schema": "capsule-emit-mesh/adjudication/v1",
+          "source": "twin_comparison",
+          "capture_method": "deterministic_replay",
+          "verdict": "contradicted:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "status": "CONTRADICTED",
+          "divergence_index": 3,
+          "margin": "0",
+          "margin_tau": "0.9",
+          "prefix_digest": "0ec7db901e57f96f8d195aa69bbdbd858eb13d125021a24c90972a5ce35d587b",
+          "twin_owner_distinct": true,
+          "weights_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "half_a_capsule_id": "7dc9427b6df5ff222617fb721f25d3c54aebe32682329bb7075902336437fb06",
+          "half_b_capsule_id": "b80db10999779aa17c8fcf7006a57aeaecbc81f5e9de3ecea33e9365c2bfd4d9",
+          "referee_capsule_id": "5d6b949bc8a8f20cd0dc4ba25642b12d4906eeccf5763adbe27f00841356cd44",
+          "referee_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "referee_node_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "half_a_node_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "half_b_node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "twins_request_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "referee_prompt": "requester_attested",
+          "referee_answer_digest": "0242bc9526adbb014565b8175ff134e2ba8731f4a13cab2d1b4d8aff8727586e",
+          "twin_bracket_id": "bracket-1"
+        }
+      }
+    },
+    "assurance": {
+      "attestation_mode": "self_attested",
+      "effect_mode": "not_applicable",
+      "ledger_mode": "chained"
+    },
+    "disposition": {
+      "decision": "accept",
+      "approver": "policy",
+      "human_disposed": false,
+      "verdict_class": "assessed"
+    },
+    "chain": {
+      "parent_capsule_id": "7dc9427b6df5ff222617fb721f25d3c54aebe32682329bb7075902336437fb06",
+      "relation": "adjudicates"
+    },
+    "signature": "d284584ca30378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458206a9a93a3af20ca17d85764e3206fd1d0417ea943f53f07157792299ba9b6f0330127a058201bd4fa92a5ff02c278b3c79e4e0398ede6c62212483c5a9466176bfc45408f6258403ee44284a8b4e71778b72961f058334eff97331248879f41c1821d885e8b48b9a78723e0c46ad4c288f3bc18d6fcd92388042e94f08db68da8eac2c68e8a190e",
+    "key_id": "6a9a93a3af20ca17d85764e3206fd1d0417ea943f53f07157792299ba9b6f033"
+  }
+}

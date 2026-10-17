@@ -428,6 +428,36 @@ jobs:
           artifact_name: sccache-ci-quality-clippy-${{ matrix.batch.id }}-${{ github.run_attempt }}
           cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}
           minimum_hit_rate: "0.20"
+      # The capsules plugin's own gates run in whichever batch holds the
+      # plugin, so they run only when the planner selects it. One step per
+      # gate names the failing one, and each runs even when another failed.
+      # They come after the cache evidence, which measures Clippy alone. The
+      # image has the Node and pnpm the package step needs; the web UI gate
+      # is in the web slice.
+      - name: "Capsules plugin gate: mutants"
+        if: ${{ !cancelled() && steps.resolve_batch_crates.outcome == 'success' && contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'mesh-llm-capsules-plugin') }}
+        timeout-minutes: 25
+        run: just plugin-capsules-gate mutants
+      - name: "Capsules plugin gate: referee mutants"
+        if: ${{ !cancelled() && steps.resolve_batch_crates.outcome == 'success' && contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'mesh-llm-capsules-plugin') }}
+        timeout-minutes: 25
+        run: just plugin-capsules-gate referee-mutants
+      - name: "Capsules plugin gate: serde_json default nesting limit"
+        if: ${{ !cancelled() && steps.resolve_batch_crates.outcome == 'success' && contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'mesh-llm-capsules-plugin') }}
+        timeout-minutes: 5
+        run: just plugin-capsules-gate unbounded-depth
+      - name: "Capsules plugin gate: no keys"
+        if: ${{ !cancelled() && steps.resolve_batch_crates.outcome == 'success' && contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'mesh-llm-capsules-plugin') }}
+        timeout-minutes: 5
+        run: just plugin-capsules-gate no-keys
+      - name: "Capsules plugin gate: vectors SHA256SUMS"
+        if: ${{ !cancelled() && steps.resolve_batch_crates.outcome == 'success' && contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'mesh-llm-capsules-plugin') }}
+        timeout-minutes: 5
+        run: just plugin-capsules-gate vectors
+      - name: "Capsules plugin gate: package twice"
+        if: ${{ !cancelled() && steps.resolve_batch_crates.outcome == 'success' && contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'mesh-llm-capsules-plugin') }}
+        timeout-minutes: 20
+        run: just plugin-capsules-gate package-twice
 
   cli_docs_sync:
     name: CLI inventory freshness

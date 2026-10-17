@@ -1,0 +1,50 @@
+{
+  "description": "Each feature builds the plugin with one deliberate fault. `just plugin-capsules-gate mutants` builds it, runs `tests`, and requires the run to fail and print `must_print`: an exact line (a parity runner prints each differing case on its own line) or a named test reported FAILED. The referee's own mutants are in vectors/parity/referee/mutants.json. mutant-blocked-model-served and mutant-malformed-body-served need a mesh-llm host (tests/host_runtime_e2e.rs) and are not listed.",
+  "mutants": [
+    {
+      "feature": "mutant-record-push-skips-claims",
+      "tests": "record_push_parity::",
+      "must_print": { "line": "claims_served_by_other" }
+    },
+    {
+      "feature": "mutant-evidence-skips-policy-gate",
+      "tests": "evidence_request_parity::",
+      "must_print": { "line": "record_to_a_stranger:" }
+    },
+    {
+      "feature": "mutant-answer-ignores-witness-keys",
+      "tests": "evidence_answer::",
+      "must_print": { "failed_test": "a_receipt_under_its_witnesss_configured_key_is_counted_witnessed" }
+    },
+    {
+      "feature": "mutant-tee-skips-binding-check",
+      "tests": "producer::tee_attest",
+      "must_print": { "failed_test": "check_3_a_quote_bound_to_another_record_fails" }
+    },
+    {
+      "feature": "mutant-own-key-not-announced",
+      "tests": "peer_keys::",
+      "must_print": { "failed_test": "a_peers_announced_key_verifies_its_pushed_half_with_no_configured_keys" }
+    },
+    {
+      "feature": "mutant-requester-auth-skips-verify",
+      "tests": "evidence_answer::",
+      "must_print": { "failed_test": "a_node_claiming_to_be_another_is_refused_before_the_ledger_is_read" }
+    },
+    {
+      "feature": "mutant-requester-auth-skips-audience",
+      "tests": "evidence_answer::",
+      "must_print": { "failed_test": "a_request_addressed_to_another_node_is_refused_before_the_ledger_is_read" }
+    },
+    {
+      "feature": "mutant-requester-auth-downgrades-all",
+      "tests": "evidence_answer::",
+      "must_print": { "failed_test": "a_failed_request_is_never_answered_as_unsigned" }
+    },
+    {
+      "feature": "mutant-requester-auth-shared-tag",
+      "tests": "requester_auth::",
+      "must_print": { "failed_test": "a_request_signed_for_one_channel_fails_on_every_other" }
+    }
+  ]
+}

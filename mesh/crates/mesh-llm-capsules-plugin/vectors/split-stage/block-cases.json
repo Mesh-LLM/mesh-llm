@@ -1,0 +1,1055 @@
+[
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": {
+    "received": {
+     "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+     "frames": 2
+    }
+   },
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "own_slice",
+  "valid": true
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "middle_stage",
+  "valid": true
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": {
+    "sent": {
+     "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+     "frames": 2
+    }
+   },
+   "layer_end": 48,
+   "layer_start": 32,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 2,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "final_stage_direct",
+  "valid": true
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "coordinator_observed": {
+    "downstream": {
+     "replies_received": {
+      "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+      "frames": 0
+     },
+     "sent": {
+      "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+      "frames": 4
+     }
+    }
+   },
+   "coordinator_term": 7,
+   "data_path_observed": true,
+   "direct_return": null,
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "exchange_stage_1_observed",
+  "valid": true
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "coordinator_observed": {
+    "direct_return": {
+     "received": {
+      "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+      "frames": 2
+     }
+    }
+   },
+   "coordinator_term": 7,
+   "data_path_observed": true,
+   "direct_return": null,
+   "layer_end": 48,
+   "layer_start": 32,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 2,
+   "terminal_state": "completed",
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "exchange_final_direct_observed",
+  "valid": true
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "coordinator_term": 7,
+   "data_path_observed": false,
+   "direct_return": null,
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 4,
+   "stage_index": 2,
+   "terminal_state": "completed",
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "exchange_middle_unobserved",
+  "valid": true
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "stage_side_at_index_0",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": {
+    "sent": {
+     "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+     "frames": 2
+    }
+   },
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 48,
+   "layer_start": 32,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 2,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "final_stage_with_downstream",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "middle_stage_without_downstream",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "stage_without_upstream",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": {
+    "sent": {
+     "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+     "frames": 2
+    }
+   },
+   "layer_end": 48,
+   "layer_start": 32,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 2,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+     "frames": 3
+    }
+   },
+   "v": 1
+  },
+  "name": "relayed_with_direct_return",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "layer_end": 48,
+   "layer_start": 32,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 2,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "direct_final_without_direct_return",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": {
+    "sent": {
+     "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+     "frames": 2
+    }
+   },
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "own_slice_direct_sent_not_received",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "007",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "request_id_leading_zero",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": 7,
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "request_id_as_number",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551616",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "request_id_above_u64",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "layer_end_not_after_start",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "finished",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "unknown_terminal_state",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "package_id_unprefixed",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "session_id": "42",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "unknown_member",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "data_path_observed": true,
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+     "frames": 4
+    }
+   },
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "stage",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "upstream": {
+    "received": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    },
+    "replies_sent": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    }
+   },
+   "v": 1
+  },
+  "name": "stage_record_with_exchange_fields",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "coordinator_observed": {
+    "downstream": {
+     "replies_received": {
+      "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+      "frames": 0
+     },
+     "sent": {
+      "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+      "frames": 4
+     }
+    }
+   },
+   "coordinator_term": 7,
+   "data_path_observed": true,
+   "direct_return": null,
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "exchange_with_tokens",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "coordinator_observed": {
+    "downstream": {
+     "replies_received": {
+      "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+      "frames": 0
+     },
+     "sent": {
+      "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+      "frames": 4
+     }
+    }
+   },
+   "coordinator_term": 7,
+   "data_path_observed": false,
+   "direct_return": null,
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 4,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "exchange_stage_1_flag_false_but_observed",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "coordinator_term": 7,
+   "data_path_observed": false,
+   "direct_return": null,
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "exchange_stage_1_unobserved",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "coordinator_observed": {
+    "downstream": {
+     "replies_received": {
+      "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+      "frames": 0
+     },
+     "sent": {
+      "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+      "frames": 4
+     }
+    }
+   },
+   "data_path_observed": true,
+   "direct_return": null,
+   "layer_end": 32,
+   "layer_start": 16,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 1,
+   "terminal_state": "completed",
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "exchange_without_term",
+  "valid": false
+ },
+ {
+  "block": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": {
+    "received": {
+     "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+     "frames": 2
+    }
+   },
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 1,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "name": "single_stage_split",
+  "valid": false
+ }
+]

@@ -30,6 +30,8 @@ const UNVERIFIED: &[&str] = &[
     "xtask",
     // Extracted native reader has Unix regular-file admission branches; Windows runtime proof is pending.
     "trajectory-reader",
+    // External-process plugin with Unix-only data-dir hardening and no Windows package yet.
+    "mesh-llm-capsules-plugin",
 ];
 
 fn predicate(tokens: TokenStream) -> bool {

@@ -1,0 +1,267 @@
+import type { GpuInfo, LatencySource } from '@/lib/api/types'
+import type { PluginSummaryRaw, PluginWebUiStateRaw } from '@/lib/api/plugin-types'
+
+export type LiveNodeState = 'client' | 'standby' | 'loading' | 'serving'
+
+export type WakeableNodeState = 'sleeping' | 'waking'
+
+export const LIVE_NODE_STATE_LABELS: Record<LiveNodeState, string> = {
+  client: 'Client',
+  standby: 'Standby',
+  loading: 'Loading',
+  serving: 'Serving'
+}
+
+export type MeshModel = {
+  name: string
+  display_name?: string
+  status: 'warm' | 'cold' | string
+  node_count: number
+  mesh_vram_gb?: number
+  size_gb: number
+  architecture?: string
+  context_length?: number
+  quantization?: string
+  description?: string
+  multimodal?: boolean
+  multimodal_status?: 'supported' | 'none' | string
+  vision?: boolean
+  vision_status?: 'supported' | 'likely' | 'none' | string
+  audio?: boolean
+  audio_status?: 'supported' | 'likely' | 'none' | string
+  reasoning?: boolean
+  reasoning_status?: 'supported' | 'likely' | 'none' | string
+  tool_use?: boolean
+  tool_use_status?: 'supported' | 'likely' | 'none' | string
+  draft_model?: string
+  source_page_url?: string
+  fit_label?: string
+  fit_detail?: string
+  download_command?: string
+  run_command?: string
+  auto_command?: string
+  request_count?: number
+  last_active_secs_ago?: number
+  source_ref?: string
+  source_revision?: string
+  source_file?: string
+  active_nodes?: string[]
+}
+
+export type Ownership = {
+  owner_id?: string
+  cert_id?: string
+  status: string
+  verified: boolean
+  expires_at_unix_ms?: number
+  node_label?: string
+  hostname_hint?: string
+}
+
+export type ReleaseAttestationStatus = 'valid' | 'missing' | 'invalid'
+
+export type ReleaseAttestationSummary = {
+  status: ReleaseAttestationStatus
+  signer_key_id?: string
+  node_version?: string
+  build_id?: string
+  commit?: string
+  target_triple?: string
+  artifact_digest?: string
+  issued_at_unix_ms?: number
+  expires_at_unix_ms?: number
+  supported_protocol_generation_min?: number
+  supported_protocol_generation_max?: number
+  error?: string
+  verified: boolean
+}
+
+export type Peer = {
+  id: string
+  owner?: Ownership
+  release_attestation?: ReleaseAttestationSummary
+  role: string
+  state: LiveNodeState
+  models: string[]
+  available_models?: string[]
+  requested_models?: string[]
+  vram_gb: number
+  serving_models?: string[]
+  hosted_models?: string[]
+  hosted_models_known?: boolean
+  rtt_ms?: number | null
+  latency_ms?: number
+  latency_source?: LatencySource | null
+  latency_age_ms?: number
+  latency_observer_id?: string
+  hostname?: string
+  version?: string
+  is_soc?: boolean
+  gpus?: GpuInfo[]
+  first_joined_mesh_ts?: number
+}
+
+export type LocalInstance = {
+  pid: number
+  api_port: number | null
+  version: string | null
+  started_at_unix: number
+  runtime_dir: string
+  is_self: boolean
+}
+
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+
+export type LlamaRuntimeEndpointStatus = 'ready' | 'error' | 'unavailable' | string
+
+export type LlamaRuntimeMetricSample = {
+  name: string
+  labels?: Record<string, string>
+  value: number
+}
+
+export type LlamaRuntimeMetricsPayload = {
+  status: LlamaRuntimeEndpointStatus
+  last_attempt_unix_ms?: number
+  last_success_unix_ms?: number
+  error?: string
+  raw_text?: string
+  samples?: LlamaRuntimeMetricSample[]
+}
+
+export type LlamaRuntimeSlotPayload = {
+  id?: number
+  id_task?: number
+  n_ctx?: number
+  speculative?: boolean
+  is_processing?: boolean
+  next_token?: JsonValue
+  params?: JsonValue
+  extra?: JsonValue
+}
+
+export type LlamaRuntimeSlotsPayload = {
+  status: LlamaRuntimeEndpointStatus
+  last_attempt_unix_ms?: number
+  last_success_unix_ms?: number
+  error?: string
+  slots?: LlamaRuntimeSlotPayload[]
+}
+
+export type LlamaRuntimeMetricItem = {
+  name: string
+  labels?: Record<string, string>
+  value: number
+}
+
+export type LlamaRuntimeSlotItem = {
+  index: number
+  id?: number
+  id_task?: number
+  n_ctx?: number
+  is_processing: boolean
+}
+
+export type LlamaRuntimeItemsPayload = {
+  metrics: LlamaRuntimeMetricItem[]
+  slots: LlamaRuntimeSlotItem[]
+  slots_total: number
+  slots_busy: number
+}
+
+export type LlamaRuntimePayload = {
+  metrics: LlamaRuntimeMetricsPayload
+  slots: LlamaRuntimeSlotsPayload
+  items?: LlamaRuntimeItemsPayload
+}
+
+export type WakeableNode = {
+  logical_id: string
+  models: string[]
+  vram_gb: number
+  provider?: string
+  state: WakeableNodeState
+  wake_eta_secs?: number
+}
+
+export type RuntimeStage = {
+  stage_id: string
+  model_id: string
+  node_id?: string
+  layer_start: number
+  layer_end: number
+  state: string
+}
+
+export type RuntimeInfo = {
+  backend?: string
+  models?: { name: string; status: string; port?: number }[]
+  stages?: RuntimeStage[]
+}
+
+export type PluginWebUiState = PluginWebUiStateRaw
+export type PluginSummary = PluginSummaryRaw
+
+export type MeshRequirementsSummary = {
+  policy_hash: string
+  requirements: {
+    node_version: { min?: string; max?: string }
+    protocol_generation: { min?: number; max?: number }
+    release_attestation: { required: boolean; allowed_signer_keys: string[] }
+  }
+}
+
+export type MeshRequirementRejection = {
+  observed_at_unix_ms: number
+  source: 'join' | 'gossip' | 'topology_disclosure'
+  reason: string
+  message: string
+  peer_id?: string
+}
+
+export type StatusPayload = {
+  version?: string
+  latest_version?: string | null
+  node_id: string
+  owner?: Ownership
+  release_attestation?: ReleaseAttestationSummary
+  token: string
+  node_state: LiveNodeState
+  node_status: string
+  is_host: boolean
+  is_client: boolean
+  llama_ready: boolean
+  runtime?: RuntimeInfo
+  model_name: string
+  models?: string[]
+  available_models?: string[]
+  requested_models?: string[]
+  serving_models?: string[]
+  hosted_models?: string[]
+  api_port: number
+  my_vram_gb: number
+  model_size_gb: number
+  mesh_name?: string | null
+  peers: Peer[]
+  wakeable_nodes?: WakeableNode[]
+  local_instances?: LocalInstance[]
+  inflight_requests: number
+  launch_pi?: string | null
+  nostr_discovery?: boolean
+  /** Best-effort publication state per Issue #240: private | public | publish_failed */
+  publication_state?: 'private' | 'public' | 'publish_failed'
+  my_hostname?: string
+  my_is_soc?: boolean
+  gpus?: GpuInfo[]
+  first_joined_mesh_ts?: number
+  mesh_requirements?: MeshRequirementsSummary
+  recent_mesh_rejections?: MeshRequirementRejection[]
+  plugins?: PluginSummary[]
+}
+
+export type ModelServingStat = {
+  nodes: number
+  vramGb: number
+}
+
+export type ThemeMode = 'auto' | 'light' | 'dark'

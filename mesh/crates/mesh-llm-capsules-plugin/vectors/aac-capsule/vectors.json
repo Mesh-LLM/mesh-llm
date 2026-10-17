@@ -1,0 +1,549 @@
+{
+  "format_versions": [
+    "4"
+  ],
+  "spec": "draft-mih-scitt-agent-action-capsule-05",
+  "count": 94,
+  "cases": [
+    {
+      "name": "pos-v4-jcs-chain-committed",
+      "kind": "positive",
+      "description": "Format 4 plain JCS commits the chain block and a present empty array to capsule_id."
+    },
+    {
+      "name": "neg-v3-format-version-unsupported",
+      "kind": "negative",
+      "description": "format_version '3' is abandoned and must fail closed; format 4 is the only supported format.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-v4-chain-tampered",
+      "kind": "negative",
+      "description": "Changing a format-4 chain member after sealing causes capsule_id mismatch."
+    },
+    {
+      "name": "neg-v4-canonicalization-missing",
+      "kind": "negative",
+      "description": "Format 4 without canonicalization_id is a profile mismatch.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-v4-canonicalization-jcs-n",
+      "kind": "negative",
+      "description": "Format 4 explicitly declaring withdrawn jcs-n is rejected.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-v4-canonicalization-non-string",
+      "kind": "negative",
+      "description": "Format 4 declaring a non-string canonicalization identifier is rejected.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-v2-canonicalization-absent",
+      "kind": "negative",
+      "description": "Format 2 with absent canonicalization_id is abandoned and must fail closed; format 4 is the only supported format.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-v2-canonicalization-null",
+      "kind": "negative",
+      "description": "Format 2 with null canonicalization_id is abandoned and must fail closed; there is no vintage null-selection path.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-executed-confirmed",
+      "kind": "positive",
+      "description": "Clean executed capsule: confirmed effect (gate_executed), full identity, no verdict_class reason.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-blocked",
+      "kind": "positive",
+      "description": "blocked: a blocking constraint stopped it pre-dispatch; no effect, effect_mode not_applicable.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-denied",
+      "kind": "positive",
+      "description": "denied: operator/policy refused pre-dispatch; not_applicable.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-hitl-dispatched",
+      "kind": "positive",
+      "description": "hitl_dispatched: routed to a human, awaiting resolution; not_applicable, human_disposed false.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-deferred",
+      "kind": "positive",
+      "description": "deferred: a human postponed the decision; human_disposed true, not_applicable.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-errored",
+      "kind": "positive",
+      "description": "errored: action ran and threw, state unknown; effect dispatched -> dispatched_unconfirmed, attestation present.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-timeout-pre-dispatch",
+      "kind": "positive",
+      "description": "timeout before dispatch: no effect -> not_applicable (one timeout value covers both, per §5.4.2).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-timeout-post-dispatch",
+      "kind": "positive",
+      "description": "timeout after dispatch: effect dispatched -> dispatched_unconfirmed, attestation present.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-confirmed-runtime-claimed",
+      "kind": "positive",
+      "description": "confirmed -> effect_attestation REQUIRED (runtime_claimed variant).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-dispatched-unconfirmed-required",
+      "kind": "positive",
+      "description": "dispatched_unconfirmed -> effect_attestation REQUIRED (present).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-not-applicable-absent",
+      "kind": "positive",
+      "description": "not_applicable -> effect_attestation MUST be absent (no effect record).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-planned-carve",
+      "kind": "positive",
+      "description": "planned carve: effect.status planned -> not_applicable, effect_attestation absent; no digests.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-failed-required",
+      "kind": "positive",
+      "description": "failed -> dispatched_unconfirmed, effect_attestation REQUIRED (present). (§6 NOTE, conformant side.)",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-reverted-required",
+      "kind": "positive",
+      "description": "reverted -> dispatched_unconfirmed, effect_attestation REQUIRED; underlying effect via external_ref.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-unknown-effect-attestation",
+      "kind": "positive",
+      "description": "unknown effect_attestation value: informational + graded no stronger than runtime_claimed; ok stays true.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-unknown-verdict-class",
+      "kind": "positive",
+      "description": "unknown verdict_class value: informational finding, ok stays true.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-unknown-effect-type",
+      "kind": "positive",
+      "description": "unknown effect.type value: informational finding, ok stays true.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-supersedes-chain",
+      "kind": "store",
+      "description": "supersedes chain: a hitl_dispatched parent + a superseding resolution capsule; parent's open item is resolved.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-concurrent-supersedes",
+      "kind": "store",
+      "description": "two supersedes over one parent: earliest in ledger order is authoritative; the later one surfaces an info finding; both remain ok.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-cross-party-full-bilateral",
+      "kind": "positive",
+      "description": "full_bilateral: initiator_ref + counterparty_ref + correlator all present, substantive result -> verifies clean.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-cross-party-acknowledged-receipt",
+      "kind": "positive",
+      "description": "acknowledged_receipt: initiator_ref + counterparty_ref + correlator present, bare receipt (no substantive result) -> verifies clean.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-cross-party-unilateral-fallback",
+      "kind": "positive",
+      "description": "unilateral_fallback: only initiator_ref present, no counterparty evidence -> verifies clean.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-cross-party-overclaim",
+      "kind": "overclaim",
+      "description": "the named overclaim case: full_bilateral claimed with only the initiator's signed half present (no counterparty_ref) -> assurance_overclaim (check 7, info severity, non-gating), derived.cross_party_rung downgraded to unilateral_fallback.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-disposition-approver-counterparty",
+      "kind": "positive",
+      "description": "disposition.approver='counterparty': a valid third member of the closed approver enum; human_disposed stays false, confirming the honesty invariant (human_disposed=true REQUIRES approver='human') still holds against the new value.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-confirmed-without-response",
+      "kind": "negative",
+      "description": "confirmed effect with NO response_digest -> confirmed-effect binding failure (check 3).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-float-in-digest-field",
+      "kind": "negative",
+      "description": "a JSON floating-point value in a digest-bearing field -> structural failure (check 1, §5.1).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-unsafe-integer-in-digest-field",
+      "kind": "negative",
+      "description": "an integer beyond 2^53-1 in a digest-bearing field -> structural failure (check 1); the current draft requires large integers to be decimal strings.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-attestation-present-when-not-applicable",
+      "kind": "negative",
+      "description": "planned (not_applicable) with effect_attestation present -> matrix failure (check 5).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-attestation-missing-when-required",
+      "kind": "negative",
+      "description": "failed (dispatched_unconfirmed) with effect_attestation absent -> matrix failure (check 5, the §6 NOTE).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-never-dispatch-conflict",
+      "kind": "negative",
+      "description": "never-dispatch verdict_class (blocked) with a dispatched effect (dispatched_unconfirmed) -> orthogonality failure (check 4).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-capsule-id-mismatch",
+      "kind": "negative",
+      "description": "a field mutated after sealing: capsule_id no longer recomputes over the canonical form (check 2).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-chain-missing-parent",
+      "kind": "store",
+      "description": "a chain referencing a parent_capsule_id not present in the store -> chain failure (check 6).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-approver-invalid",
+      "kind": "negative",
+      "description": "disposition.approver outside the closed {human, policy} enum (neutral invalid token) -> structural failure (check 1, §5.4).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "honesty-dishonest-human-disposed",
+      "kind": "honesty",
+      "description": "human_disposed=true with a non-human (policy) approver in parsed bytes: §6 makes this a structurally-guaranteed invariant, so the verifier reports a NON-GATING defensive warning; ok still reflects the gating checks (here, true).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-format-version-unknown",
+      "kind": "negative",
+      "description": "format_version '1' is abandoned and must fail closed; format 4 is the only supported format.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-never-dispatch-with-dispatched-effect",
+      "kind": "negative",
+      "description": "blocked verdict_class (NEVER_DISPATCH §5.4.2) combined with effect.status='dispatched' → verdict/effect orthogonality failure (check 4).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-never-dispatch-confirmed-no-response",
+      "kind": "negative",
+      "description": "denied (NEVER_DISPATCH) with effect.status='confirmed' and no response_digest → both check 3 (confirmed-effect binding) and check 4 (verdict/effect conflict).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-array-preserved-not-sorted",
+      "kind": "positive",
+      "description": "Array elements preserved in insertion order, not sorted (RFC 8785 S:3.2.2) under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-bool-and-deep-nesting",
+      "kind": "positive",
+      "description": "Boolean true and deep object nesting: exercises bool branch and recursive dict serialization under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-integer-at-safe-max",
+      "kind": "positive",
+      "description": "Integer at exactly Number.MAX_SAFE_INTEGER = 9007199254740991 accepted (S:5.1 boundary) under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-integer-at-safe-min",
+      "kind": "positive",
+      "description": "Integer at exactly -Number.MAX_SAFE_INTEGER = -9007199254740991 accepted (S:5.1 boundary) under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-integer-negative",
+      "kind": "positive",
+      "description": "Negative integer -1 serialized as '-1' under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-integer-zero",
+      "kind": "positive",
+      "description": "Integer 0 serialized as '0' (int branch in _jcs_value, S:5.1) under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-key-nfc-vs-nfd",
+      "kind": "positive",
+      "description": "JCS does not normalize Unicode; NFD key A+U+030A (first unit 0x0041) sorts before B (0x0042) under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-key-sort-utf16-vs-codepoint",
+      "kind": "positive",
+      "description": "UTF-16 key ordering: U+1F600 emoji (first surrogate 0xD83D) sorts after U+FF3A (single unit) under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-nested-member-named-capsule-id",
+      "kind": "positive",
+      "description": "Top-level capsule_id/chain exclusion does not apply to nested members with those names under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-nested-member-named-chain",
+      "kind": "positive",
+      "description": "Top-level capsule_id/chain exclusion does not apply to nested members with those names under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "canonical-string-escapes",
+      "kind": "positive",
+      "description": "JCS mandatory escapes: \\\" \\\\ \\b \\t \\n \\f \\r in a single string value (RFC 8785 S:3.2.2.2) under explicit format-4 plain JCS.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "reference-absent",
+      "kind": "positive",
+      "description": "format 4 commits an absent references member as absent"
+    },
+    {
+      "name": "reference-bad-capsule-id",
+      "kind": "negative",
+      "description": "AAC SHA-256 reference requires a Capsule ID"
+    },
+    {
+      "name": "reference-boolean-digest",
+      "kind": "negative",
+      "description": "reference digest rejects boolean"
+    },
+    {
+      "name": "reference-duplicate-parent",
+      "kind": "negative",
+      "description": "AAC SHA-256 reference must not duplicate the chain parent"
+    },
+    {
+      "name": "reference-empty",
+      "kind": "positive",
+      "description": "format 4 commits a present empty references array"
+    },
+    {
+      "name": "reference-empty-algorithm",
+      "kind": "negative",
+      "description": "reference digest algorithm is non-empty"
+    },
+    {
+      "name": "reference-empty-digest",
+      "kind": "negative",
+      "description": "reference digest is non-empty"
+    },
+    {
+      "name": "reference-external-capsule",
+      "kind": "positive",
+      "description": "valid external Capsule citation"
+    },
+    {
+      "name": "reference-future-extension",
+      "kind": "positive",
+      "description": "reference extension members remain committed and open"
+    },
+    {
+      "name": "reference-future-purpose",
+      "kind": "positive",
+      "description": "unknown citation purpose is informational"
+    },
+    {
+      "name": "reference-local-only-envelope-fields",
+      "kind": "positive",
+      "description": "local Producer Envelope fields are excluded from format-4 Capsule ID"
+    },
+    {
+      "name": "reference-missing-type",
+      "kind": "negative",
+      "description": "reference type is required"
+    },
+    {
+      "name": "reference-mixed-checks",
+      "kind": "negative",
+      "description": "reference findings retain Class-1 check order"
+    },
+    {
+      "name": "reference-nonobject-reference",
+      "kind": "negative",
+      "description": "each reference must be an object"
+    },
+    {
+      "name": "reference-nonstring-purpose",
+      "kind": "negative",
+      "description": "citation purpose is a non-empty string"
+    },
+    {
+      "name": "reference-null-coordinates",
+      "kind": "negative",
+      "description": "log coordinates must be an object"
+    },
+    {
+      "name": "reference-null-digest",
+      "kind": "negative",
+      "description": "reference digest is a string"
+    },
+    {
+      "name": "reference-null-references",
+      "kind": "negative",
+      "description": "format-4 references must be an array"
+    },
+    {
+      "name": "reference-object-references",
+      "kind": "negative",
+      "description": "format-4 references rejects an object"
+    },
+    {
+      "name": "reference-opaque-proof",
+      "kind": "positive",
+      "description": "Class 1 preserves opaque inclusion proof contents"
+    },
+    {
+      "name": "reference-partial-coordinates",
+      "kind": "negative",
+      "description": "log coordinates requires all three members"
+    },
+    {
+      "name": "reference-same-hex-other-algorithm",
+      "kind": "positive",
+      "description": "same digest under another algorithm is not the chain parent"
+    },
+    {
+      "name": "reference-same-hex-other-type",
+      "kind": "positive",
+      "description": "same digest under another artifact type is not the chain parent"
+    },
+    {
+      "name": "reference-tampered-after-seal",
+      "kind": "negative",
+      "description": "changing a format-4 reference after sealing causes Capsule ID mismatch"
+    },
+    {
+      "name": "reference-unknown-type-algorithm",
+      "kind": "positive",
+      "description": "foreign digest contexts remain open"
+    },
+    {
+      "name": "reference-unregistered-capsule-token",
+      "kind": "positive",
+      "description": "foreign artifact type remains open"
+    },
+    {
+      "name": "spec-derived-flat-payload-digest",
+      "kind": "positive",
+      "description": "Format 4 commits a flat agent_input value with SHA-256(JCS(value)).",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "spec-derived-nested-payload-digest",
+      "kind": "positive",
+      "description": "Format 4 commits a nested agent_output value, including objects inside an array.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "spec-derived-unicode-payload-digest",
+      "kind": "positive",
+      "description": "RFC 8785 string serialization preserves non-BMP and solidus characters while escaping U+0001.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "spec-derived-v4-chain",
+      "kind": "positive",
+      "description": "Format 4 plain JCS commits the chain block to capsule_id.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "spec-derived-v4-null-empty-members",
+      "kind": "positive",
+      "description": "Format 4 plain JCS commits present null, empty-array, and empty-object members.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-v4-canonicalization-null",
+      "kind": "negative",
+      "description": "Format 4 with canonicalization_id null fails closed.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "neg-v4-canonicalization-empty",
+      "kind": "negative",
+      "description": "Format 4 with an empty canonicalization_id fails closed.",
+      "provenance": "spec-derived"
+    },
+    {
+      "name": "pos-v05-spec-version-chain-committed",
+      "kind": "positive",
+      "description": "pos-v4-jcs-chain-committed with only spec_version changed to -05: spec_version participates in capsule_id but selects no verification algorithm, so both verify.",
+      "provenance": "reference-derived"
+    },
+    {
+      "name": "pos-v05-chain-follows",
+      "kind": "positive",
+      "description": "-05 chain.relation 'follows' (the bare next-link) is a registered value.",
+      "provenance": "reference-derived"
+    },
+    {
+      "name": "pos-v05-effect-inference-completion-host-served",
+      "kind": "positive",
+      "description": "-05 effect.type 'inference_completion' with effect_attestation 'host_served_observed' (registered, runtime_claimed grade) and a response_digest.",
+      "provenance": "reference-derived"
+    },
+    {
+      "name": "pos-v05-reference-counterparty-half",
+      "kind": "positive",
+      "description": "-05 citation_purpose 'counterparty_half': a record holding a counterparty's half chains to its own head with 'follows' and cites the half by digest.",
+      "provenance": "reference-derived"
+    },
+    {
+      "name": "pos-v05-reference-ran-under",
+      "kind": "positive",
+      "description": "-05 citation_purpose 'ran_under': the Capsule cites, by digest, a record stating the runtime environment and authority its action executed under.",
+      "provenance": "reference-derived"
+    }
+  ],
+  "spec_versions": [
+    "draft-mih-scitt-agent-action-capsule-04",
+    "draft-mih-scitt-agent-action-capsule-05"
+  ]
+}

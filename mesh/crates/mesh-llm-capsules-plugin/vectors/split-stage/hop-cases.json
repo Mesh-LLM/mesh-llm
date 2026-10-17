@@ -1,0 +1,3621 @@
+[
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": true,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "relayed_all_agree",
+  "note": "",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+       "frames": 0
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "direct",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+       "frames": 0
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": {
+      "sent": {
+       "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+       "frames": 2
+      }
+     },
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "direct",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+       "frames": 0
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": true,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": false,
+     "state": "not_applicable"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": false,
+     "state": "not_applicable"
+    },
+    {
+     "hop_index": 2,
+     "lane": "direct_return",
+     "required": true,
+     "state": "agree"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "direct_all_agree",
+  "note": "replies go straight to stage 0, so hop-by-hop reply lanes are empty and not needed",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": {
+    "received": {
+     "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+     "frames": 2
+    }
+   },
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": {
+      "sent": {
+       "digest": "sha256:60651adb330a08956032d1632d6469e598f162f49ff935d98edcc44fe82cf978",
+       "frames": 2
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "direct",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 2,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+       "frames": 0
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": true,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": false,
+     "state": "not_applicable"
+    },
+    {
+     "hop_index": 1,
+     "lane": "direct_return",
+     "required": true,
+     "state": "agree"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "two_stage_direct",
+  "note": "",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": {
+    "received": {
+     "digest": "sha256:60651adb330a08956032d1632d6469e598f162f49ff935d98edcc44fe82cf978",
+     "frames": 2
+    }
+   },
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "direct",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 2,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:bd35af516764b483df0b69467a5ffd55c4184e64ab6581a5f3fc0c77608d943a",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "break"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "one_byte_changed",
+  "note": "one byte of one frame differs between stage 1's sent and stage 2's received",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:9858c658f72b3e9250f8d2a189dbc3d03e47d381c4f6cc2025052d5b18e44afb",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "break"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "swapped_frames",
+  "note": "",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "not_received"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "gap"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "missing_end_absent",
+  "note": "a missing end is a gap, never agreement",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "absent",
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "not_received"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "gap"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "cited_not_carried",
+  "note": "",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+       "frames": 0
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "required_lane_empty_both_ends",
+  "note": "a lane empty on both ends has nothing to compare",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:ada5726084c5023eb13b8c132228fcc1c364beed3a99fe9bf5f38e3367502f2d",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "break"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "replayed_at_other_hop_index",
+  "note": "the same frames folded for hop 1 do not stand for hop 0",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 5
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "malformed"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "equal_digest_unequal_count",
+  "note": "",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": {
+      "sent": {
+       "digest": "sha256:597c4500d91a1e28fbf7c445d0a771911d9a1575b565c53b43f8ce532e4a4c9b",
+       "frames": 2
+      }
+     },
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "rejected"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "gap"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "relayed_with_direct_return_rejected",
+  "note": "",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 5,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "02020202020202020202020202020202020202020202020202020202020202ff"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "conflict"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "gap"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "two_records_one_key",
+  "note": "neither record counts as present, and no hop involving stage 2 agrees",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "conflict"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "gap"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "receipt_says_conflict",
+  "note": "",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "conflict",
+     "bundle_refs": [
+      {
+       "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+       "digest_alg": "SHA-256",
+       "type": "capsule"
+      },
+      {
+       "digest": "02020202020202020202020202020202020202020202020202020202020202ff",
+       "digest_alg": "SHA-256",
+       "type": "capsule"
+      }
+     ],
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 30,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "disagrees"
+    }
+   ],
+   "handoffs_agree": true,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "agree"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "assignment_disagrees",
+  "note": "the hand-offs still agree; the stage cell shows the mismatch",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "completed",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:b6eb868e31e55d57db915c87158b2b86aece54321a0b3cb306a774581d557161",
+       "frames": 3
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "not_requested"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": false,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "gap"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": true,
+     "state": "gap"
+    }
+   ],
+   "terminal_state": "completed"
+  },
+  "name": "not_requested_stage",
+  "note": "",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:dee44caeb95e4142b5bc09274cd08252bc5025dfde02842eda5af77e93a85c44",
+     "frames": 3
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "completed",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ },
+ {
+  "carried": [
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "downstream": {
+      "replies_received": {
+       "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+       "frames": 0
+      },
+      "sent": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      }
+     },
+     "layer_end": 32,
+     "layer_start": 16,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 1,
+     "terminal_state": "timed_out",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+       "frames": 0
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0101010101010101010101010101010101010101010101010101010101010100"
+   },
+   {
+    "block": {
+     "coordinator_node_id": "node-coordinator-c",
+     "direct_return": null,
+     "layer_end": 48,
+     "layer_start": 32,
+     "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+     "request_id": "18446744073709551615",
+     "return_mode": "relayed",
+     "run_id": "mesh-split-1790000000000000000-g2",
+     "side": "stage",
+     "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+     "stage_count": 3,
+     "stage_index": 2,
+     "terminal_state": "timed_out",
+     "tokens": {
+      "decode": 4,
+      "prefill_received": 12
+     },
+     "topology_hash": "topology-hash-0001",
+     "upstream": {
+      "received": {
+       "digest": "sha256:292c1d551a824014fbca8353a8ed0dd417286036d3fe7bc27ac97dac81774e51",
+       "frames": 4
+      },
+      "replies_sent": {
+       "digest": "sha256:85b1e24dbcb4a2665eb7a8788bb98b825776a5de0a1d1ec2a19c9f0e3d23f9a4",
+       "frames": 0
+      }
+     },
+     "v": 1
+    },
+    "capsule_id": "0202020202020202020202020202020202020202020202020202020202020200"
+   }
+  ],
+  "expect": {
+   "cells": [
+    {
+     "stage_index": 0,
+     "state": "coordinator_slice"
+    },
+    {
+     "stage_index": 1,
+     "state": "ok"
+    },
+    {
+     "stage_index": 2,
+     "state": "ok"
+    }
+   ],
+   "handoffs_agree": true,
+   "lanes": [
+    {
+     "hop_index": 0,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 0,
+     "lane": "reply",
+     "required": false,
+     "state": "not_applicable"
+    },
+    {
+     "hop_index": 1,
+     "lane": "forward",
+     "required": true,
+     "state": "agree"
+    },
+    {
+     "hop_index": 1,
+     "lane": "reply",
+     "required": false,
+     "state": "not_applicable"
+    }
+   ],
+   "terminal_state": "timed_out"
+  },
+  "name": "stopped_early_agrees_on_truncated_stream",
+  "note": "agreement is not completion: terminal_state is shown beside the line",
+  "own": {
+   "coordinator_node_id": "node-coordinator-c",
+   "direct_return": null,
+   "downstream": {
+    "replies_received": {
+     "digest": "sha256:30ab26149dea6e7f2ace73196cc6e6ca26b038ae5d0e316fb141c2f34ba2f6d1",
+     "frames": 0
+    },
+    "sent": {
+     "digest": "sha256:557e4faf6e4fb73578f5715bb0a7a71b659adb949699d5e0d71702162c3db6d3",
+     "frames": 4
+    }
+   },
+   "layer_end": 16,
+   "layer_start": 0,
+   "manifest_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "package_id": "sha256:abababababababababababababababababababababababababababababababab",
+   "request_id": "18446744073709551615",
+   "return_mode": "relayed",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "side": "coordinator",
+   "source_model_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "stage_count": 3,
+   "stage_index": 0,
+   "terminal_state": "timed_out",
+   "tokens": {
+    "decode": 4,
+    "prefill_received": 12
+   },
+   "topology_hash": "topology-hash-0001",
+   "v": 1
+  },
+  "receipt": {
+   "coordinator_node_id": "node-coordinator-c",
+   "kind": "mesh-coordinator-receipt",
+   "request_id": "18446744073709551615",
+   "run_id": "mesh-split-1790000000000000000-g2",
+   "stage_seal_deadline_ms": 2000,
+   "stages": [
+    {
+     "bundle": "not_requested",
+     "hop_id": "stage-0"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0101010101010101010101010101010101010101010101010101010101010100",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-1"
+    },
+    {
+     "bundle": "present",
+     "bundle_ref": {
+      "digest": "0202020202020202020202020202020202020202020202020202020202020200",
+      "digest_alg": "SHA-256",
+      "type": "capsule"
+     },
+     "hop_id": "stage-2"
+    }
+   ],
+   "topology": [
+    {
+     "assignment": {
+      "layer_end": 16,
+      "layer_start": 0,
+      "node_id": "node-coordinator-c",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-0",
+     "observation_point": null,
+     "role": "coordinator",
+     "seq": 0
+    },
+    {
+     "assignment": {
+      "layer_end": 32,
+      "layer_start": 16,
+      "node_id": "node-b",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-1",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 1
+    },
+    {
+     "assignment": {
+      "layer_end": 48,
+      "layer_start": 32,
+      "node_id": "node-d",
+      "package_id": "sha256:abababababababababababababababababababababababababababababababab"
+     },
+     "hop_id": "stage-2",
+     "observation_point": null,
+     "role": "stage",
+     "seq": 2
+    }
+   ],
+   "v": 1
+  }
+ }
+]

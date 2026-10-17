@@ -341,3 +341,9 @@ ci-automation-contracts:
 # Native component owner and actual CLI, including the embedded job caller.
 ci-snapshot-promotion-contracts:
     just with-lld cargo test --locked -p skippy-model-package --lib --test snapshot_promotion_cli -- --test-threads=1
+
+# CI runs each gate as its own step: web-ui in the web slice, the rest in the
+# quality slice's Clippy batch that holds the plugin.
+# Run one capsules plugin gate: mutants, referee-mutants, unbounded-depth, no-keys, vectors, web-ui or package-twice.
+plugin-capsules-gate gate:
+    cargo xtool repository capsules-plugin-gate {{gate}}

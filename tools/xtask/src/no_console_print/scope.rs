@@ -22,6 +22,9 @@ const NON_PRODUCT_CRATES: &[&str] = &[
     "skippy-correctness",
     "mesh-llm-test-harness",
     "metrics-server",
+    // An external-process plugin: the host runs its executable and never links
+    // it, and it prints its package manifest at packaging time.
+    "mesh-llm-capsules-plugin",
 ];
 
 /// Files that implement the console output facility, and therefore legitimately

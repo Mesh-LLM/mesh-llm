@@ -1,0 +1,71 @@
+/* The Evidence page's stylesheet, injected by the bundle on mount.
+ *
+ * The page mounts inside the mesh-llm console's own DOM (the web UI projection
+ * has no iframe or shadow root), so the console's global CSS -- its theme
+ * tokens, light/dark switching, and component classes such as
+ * `surface-menu-panel` -- already applies. What the console's CSS cannot
+ * carry is a Tailwind utility only this page uses: the console build scans its
+ * own sources, not this bundle's. So this sheet is utilities only:
+ *   - no preflight and no base layer (the console owns both);
+ *   - Tailwind's default theme inlined into each utility, so a utility never
+ *     depends on a default-theme variable the console may not emit;
+ *   - the console's own tokens declared as `reference`: a utility such as
+ *     `bg-background` compiles to `var(--color-background)`, which the
+ *     console defines and re-themes. Nothing here redefines a console token.
+ * The token list below is copied from mesh-llm-ui `src/styles/globals.css`
+ * (@theme) at upstream Mesh-LLM/mesh-llm main at commit d635e6156c87a2e7e7d0c0c7173a2b388fb225b2; only the names matter, the
+ * values are never emitted.
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme) theme(inline reference);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import 'tw-animate-css';
+
+@source '../**/*.{ts,tsx}';
+@source not '../**/*.test.{ts,tsx}';
+
+@theme reference {
+  --font-sans: 'Inter Tight', -apple-system, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --color-background: oklch(0.985 0.003 80);
+  --color-foreground: oklch(0.22 0.02 250);
+  --color-primary: var(--color-foreground);
+  --color-muted: oklch(0.955 0.005 80);
+  --color-muted-foreground: oklch(0.45 0.015 250);
+  --color-border: oklch(0.88 0.005 80);
+  --color-border-soft: oklch(0.93 0.005 80);
+  --color-panel: oklch(0.975 0.004 80);
+  --color-panel-strong: oklch(0.955 0.005 80);
+  --color-accent: oklch(0.62 0.14 220);
+  --color-accent-contrast: oklch(0.62 0.14 322);
+  --color-accent-ink: oklch(0.98 0.01 220);
+  --color-accent-soft: oklch(0.92 0.05 198);
+  --color-accent-text: var(--color-accent);
+  --color-good: oklch(0.58 0.13 150);
+  --color-good-text: var(--color-good);
+  --color-warn: oklch(0.62 0.14 55);
+  --color-warn-text: var(--color-warn);
+  --color-bad: oklch(0.62 0.16 28);
+  --color-bad-text: var(--color-bad);
+  --color-log-requests: oklch(0.56 0.15 193);
+  --color-log-system: oklch(0.54 0.14 78);
+  --color-log-quic: oklch(0.57 0.15 294);
+  --color-log-gossip: oklch(0.53 0.13 150);
+  --color-log-iroh: oklch(0.58 0.15 32);
+  --color-destructive: var(--color-bad);
+  --color-destructive-foreground: oklch(0.985 0.003 80);
+  --color-fg-dim: oklch(0.45 0.015 250);
+  --color-fg-faint: oklch(0.5 0.012 250);
+  --model-family-text: oklch(0.985 0.003 80);
+  --model-family-color-fallback: oklch(0.58 0.15 242);
+  --model-family-color-family-0: color-mix(in oklch, oklch(0.55 0.16 350), black 42%);
+  --model-family-color-family-1: color-mix(in oklch, oklch(0.65 0.13 220), black 42%);
+  --model-family-color-family-2: color-mix(in oklch, oklch(0.72 0.14 178), black 42%);
+  --model-family-color-family-3: color-mix(in oklch, oklch(0.67 0.14 76), black 42%);
+  --model-family-color-family-4: color-mix(in oklch, oklch(0.6 0.15 292), black 42%);
+  --model-family-color-family-5: color-mix(in oklch, oklch(0.55 0.16 28), black 42%);
+  --model-family-color-family-6: color-mix(in oklch, oklch(0.58 0.12 25), black 42%);
+  --model-family-color-family-7: color-mix(in oklch, oklch(0.58 0.15 242), black 42%);
+  --radius: 6px;
+  --radius-lg: 10px;
+}

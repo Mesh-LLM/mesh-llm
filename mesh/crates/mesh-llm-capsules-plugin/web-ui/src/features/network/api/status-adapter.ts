@@ -1,0 +1,190 @@
+// PEERS-ONLY SUBSET of mesh-llm-ui `src/features/network/api/status-adapter.ts`
+// (see ../../../VENDORED.md). The Evidence page reads one thing from the
+// console's `/api/status`: the peer list (`usePeerMeshStatusIndex` in
+// `features/capsules/lib/peer-mesh-status.ts`). The dashboard-only parts of the
+// original (hero, connect card, status metrics, mesh node seeds, and the
+// console's dashboard fixtures they fall back on) are left out; the peer
+// adaptation below is unchanged.
+import type { StatusPayload, PeerInfo, ServingModelEntry } from '@/lib/api/types'
+import { isClientPeer, memoryBreakdownGB, meshCapacityInputFromStatus, nodeAdvertisedVramGB } from '@/lib/vram'
+import type { Peer } from '@/features/app-tabs/types'
+
+type NodeState = NonNullable<Peer['nodeState']>
+
+function isNodeState(state: string | undefined): state is NodeState {
+  return state === 'client' || state === 'standby' || state === 'loading' || state === 'serving'
+}
+
+function mapNodeState(state: string | undefined): Peer['status'] {
+  if (state === 'loading') return 'degraded'
+  if (isNodeState(state)) return 'online'
+  return 'offline'
+}
+
+function servingModelName(model: ServingModelEntry): string {
+  return typeof model === 'string' ? model : model.name
+}
+
+function resolvePeerId(peer: PeerInfo, fallbackIndex: number): string {
+  return peer.node_id ?? peer.id ?? peer.hostname ?? `peer-${fallbackIndex}`
+}
+
+function resolvePeerState(peer: PeerInfo): string | undefined {
+  return peer.node_state ?? peer.state ?? peer.role?.toLowerCase()
+}
+
+function resolvePeerNodeState(peer: PeerInfo): Peer['nodeState'] | undefined {
+  const state = resolvePeerState(peer)
+  if (isNodeState(state)) return state
+  return undefined
+}
+
+function resolvePeerRole(peer: PeerInfo): NonNullable<Peer['role']> {
+  const role = peer.role?.toLowerCase()
+  const state = resolvePeerNodeState(peer)
+
+  if (role === 'host') return 'host'
+  if (role === 'worker') return 'worker'
+  if (role === 'client' || state === 'client') return 'client'
+  return 'peer'
+}
+
+function normalizeModelList(models: (string | undefined)[]): string[] {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+
+  for (const model of models) {
+    const trimmed = model?.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    normalized.push(trimmed)
+  }
+
+  return normalized
+}
+
+function resolveHostedModels(peer: PeerInfo): string[] {
+  const modelLists = [peer.serving_models, peer.hosted_models, peer.models]
+
+  for (const models of modelLists) {
+    const normalized = normalizeModelList(models ?? [])
+    if (normalized.length > 0) return normalized
+  }
+
+  return []
+}
+
+function normalizeSharePct(sharePct: number | undefined): number {
+  if (typeof sharePct !== 'number' || !Number.isFinite(sharePct)) return 0
+  return Math.min(Math.max(Math.round(sharePct), 0), 100)
+}
+
+function resolveOwner(owner: PeerInfo['owner']): string | undefined {
+  if (typeof owner === 'string') return owner
+  return owner?.display_name ?? owner?.name ?? owner?.status
+}
+
+function finiteMetric(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+// Node and mesh VRAM figures use the capacity each node advertises to the mesh,
+// so the dashboard agrees with `/api/status`, `doctor split`, and the scheduler.
+// Per-GPU labels elsewhere keep the rated class (see docs/specs/vram-accounting.md).
+function peerVramGb(peer: PeerInfo): number {
+  return finiteMetric(nodeAdvertisedVramGB({ ...peer, client: isClientPeer(peer) }) ?? undefined)
+}
+
+function selfVramGb(payload: StatusPayload): number {
+  const { peers: _peers, ...self } = meshCapacityInputFromStatus(payload)
+  return finiteMetric(nodeAdvertisedVramGB(self) ?? undefined)
+}
+
+function adaptPeer(peer: PeerInfo, fallbackIndex: number): Peer {
+  const id = resolvePeerId(peer, fallbackIndex)
+  const nodeState = resolvePeerNodeState(peer)
+
+  return {
+    id,
+    hostname: peer.hostname ?? id,
+    region: peer.region ?? '',
+    status: mapNodeState(resolvePeerState(peer)),
+    hostedModels: resolveHostedModels(peer),
+    sharePct: normalizeSharePct(peer.share_pct),
+    latencyMs: peer.latency_ms ?? peer.rtt_ms ?? null,
+    latencySource: peer.latency_source ?? null,
+    latencyAgeMs: peer.latency_age_ms ?? null,
+    latencyObserverId: peer.latency_observer_id ?? null,
+    loadPct: peer.load_pct ?? 0,
+    shortId: id.slice(0, 8),
+    version: peer.version,
+    vramGB: peerVramGb(peer),
+    memory: memoryBreakdownGB(peer.memory) ?? undefined,
+    role: resolvePeerRole(peer),
+    nodeState,
+    toksPerSec: peer.tok_per_sec,
+    hardwareLabel: peer.hardware_label,
+    owner: resolveOwner(peer.owner),
+    firstJoinedMeshTs: peer.first_joined_mesh_ts
+  }
+}
+
+function isSplitParticipant(payload: StatusPayload): boolean {
+  const stages = payload.runtime?.stages ?? []
+  return stages.some((s) => s.node_id === payload.node_id)
+}
+
+function adaptSelfPeer(payload: StatusPayload): Peer {
+  const splitParticipant = isSplitParticipant(payload)
+  const servingModels = normalizeModelList([
+    ...payload.serving_models.map(servingModelName),
+    payload.node_state === 'serving' ? payload.model_name : undefined
+  ])
+
+  // A split worker is in standby but actively participating — treat it as serving
+  const effectiveState = splitParticipant && payload.node_state === 'standby' ? 'serving' : payload.node_state
+
+  return {
+    id: payload.node_id,
+    hostname: payload.hostname ?? payload.my_hostname ?? 'localhost',
+    region: payload.region ?? '',
+    status: mapNodeState(effectiveState),
+    hostedModels: servingModels,
+    sharePct: 0,
+    latencyMs: 0,
+    latencySource: null,
+    latencyAgeMs: null,
+    latencyObserverId: null,
+    loadPct: payload.load_pct ?? 0,
+    shortId: payload.node_id.slice(0, 8),
+    role: 'you' as const,
+    nodeState: effectiveState,
+    version: payload.version,
+    vramGB: selfVramGb(payload),
+    memory: memoryBreakdownGB(payload.my_memory) ?? undefined,
+    toksPerSec: payload.tok_per_sec,
+    firstJoinedMeshTs: payload.first_joined_mesh_ts
+  }
+}
+
+function normalizePeerShares(peers: Peer[]): Peer[] {
+  if (peers.some((peer) => peer.sharePct > 0)) return peers
+
+  const peersWithShareCapacity = peers.filter((peer) => peer.nodeState === 'serving' || peer.hostedModels.length > 0)
+  const totalVram = peersWithShareCapacity.reduce((sum, peer) => sum + (peer.vramGB ?? 0), 0)
+  if (totalVram <= 0) return peers
+
+  return peers.map((peer) => ({
+    ...peer,
+    sharePct:
+      peer.nodeState === 'serving' || peer.hostedModels.length > 0
+        ? normalizeSharePct(((peer.vramGB ?? 0) / totalVram) * 100)
+        : peer.sharePct
+  }))
+}
+
+export function adaptStatusToDashboard(payload: StatusPayload): { peers: Peer[] } {
+  const selfPeer = adaptSelfPeer(payload)
+  const remotePeers = payload.peers.map(adaptPeer)
+  return { peers: normalizePeerShares([selfPeer, ...remotePeers]) }
+}

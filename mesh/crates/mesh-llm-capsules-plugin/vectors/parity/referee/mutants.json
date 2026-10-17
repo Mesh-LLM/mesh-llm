@@ -1,0 +1,162 @@
+{
+ "mutants": [
+  {
+   "fault": "A node with a contradiction for the model inside the bar window is treated as eligible.",
+   "feature": "mutant-referee-select-skips-bar-window",
+   "must_fail": [
+    "select/bar_runs_from_this_nodes_clock",
+    "select/barred_inside_d",
+    "select/barred_one_second_inside_d",
+    "select/contradiction_for_x_never_picked_for_x",
+    "select/corroboration_inside_d_does_not_clear",
+    "select/d_default_is_30",
+    "select/d_from_setting_longer"
+   ],
+   "name": "select-skips-bar-window",
+   "paths": [
+    "select"
+   ],
+   "port_module": "referee/bar.rs, referee/select.rs"
+  },
+  {
+   "fault": "The pick is made over every eligible node, not inside the best non-empty tier.",
+   "feature": "mutant-referee-select-mixes-tiers",
+   "must_fail": [
+    "select/corroborated_one_second_after_the_lapse_is_tier1",
+    "select/lapsed_contradiction_corroborated_after_the_lapse_is_tier1",
+    "select/pick_uniform_within_best_tier",
+    "select/tier1_before_tier2"
+   ],
+   "name": "select-mixes-tiers",
+   "paths": [
+    "select"
+   ],
+   "port_module": "referee/select.rs"
+  },
+  {
+   "fault": "A node this node stopped routing to is treated as eligible.",
+   "feature": "mutant-referee-select-ignores-blocked",
+   "must_fail": [
+    "select/blocked_node_never_picked",
+    "select/ineligible_tier1_node_leaves_tier2",
+    "select/one_eligible_among_the_rest"
+   ],
+   "name": "select-ignores-blocked",
+   "paths": [
+    "select"
+   ],
+   "port_module": "referee/select.rs"
+  },
+  {
+   "fault": "The referee signs the verdict without the tier it was asked from.",
+   "feature": "mutant-referee-verdict-tier-not-sealed",
+   "must_fail": [
+    "service/answer_matches_neither",
+    "service/contradicts_a",
+    "service/contradicts_b",
+    "service/no_bracket_id",
+    "service/repeat_returns_the_issued_verdict",
+    "service/repeat_with_the_halves_swapped",
+    "service/sampled_twins",
+    "service/tier_two_referee",
+    "service/twins_agree_answer_unused",
+    "service/twins_agree_no_answer",
+    "service/weights_differ",
+    "service/weights_unknown"
+   ],
+   "name": "verdict-tier-not-sealed",
+   "paths": [
+    "service"
+   ],
+   "port_module": "referee/service.rs"
+  },
+  {
+   "fault": "A verdict is held whatever tier it seals, without comparing it with the tier this node asked at.",
+   "feature": "mutant-referee-hold-ignores-the-asked-tier",
+   "must_fail": [
+    "hold/hold_refuses_tier_other_than_asked"
+   ],
+   "name": "hold-ignores-the-asked-tier",
+   "paths": [
+    "hold"
+   ],
+   "port_module": "referee/hold.rs"
+  },
+  {
+   "fault": "The one-call cap is not checked: a pair already asked about is asked about again.",
+   "feature": "mutant-referee-request-asks-twice-per-pair",
+   "must_fail": [
+    "request/another_referee_is_not_tried",
+    "request/operator_asking_again_uses_the_one_call",
+    "request/operator_asks_again_after_no_answer",
+    "request/referee_timeout_is_not_retried",
+    "request/resealed_halves_same_exchange_still_capped",
+    "request/second_call_same_pair_refused"
+   ],
+   "name": "request-asks-twice-per-pair",
+   "paths": [
+    "request"
+   ],
+   "port_module": "referee/request.rs"
+  },
+  {
+   "fault": "A received verdict counts whether or not this node asked that referee about that pair.",
+   "feature": "mutant-referee-counts-skip-asked-gate",
+   "must_fail": [
+    "counts/asked_another_referee_about_the_pair",
+    "counts/only_verified_and_asked_verdicts_count"
+   ],
+   "name": "counts-skip-asked-gate",
+   "paths": [
+    "counts"
+   ],
+   "port_module": "referee/verdict_counts.rs"
+  },
+  {
+   "fault": "The ruling names the twin the referee agreed with as the contradicted one.",
+   "feature": "mutant-referee-verdict-names-wrong-twin",
+   "must_fail": [
+    "adjudicate/differ_at_the_first_word",
+    "adjudicate/differ_last_word_referee_decides",
+    "adjudicate/no_disclosed_request",
+    "adjudicate/one_answer_is_the_start_of_the_other",
+    "adjudicate/referee_matches_a",
+    "adjudicate/referee_matches_b",
+    "adjudicate/temperature_zero_is_compared",
+    "service/contradicts_a",
+    "service/contradicts_b",
+    "service/no_bracket_id",
+    "service/repeat_returns_the_issued_verdict",
+    "service/repeat_with_the_halves_swapped",
+    "service/tier_two_referee"
+   ],
+   "name": "verdict-names-wrong-twin",
+   "paths": [
+    "adjudicate",
+    "service"
+   ],
+   "port_module": "referee/verdict.rs"
+  },
+  {
+   "fault": "Every delivered verdict is treated as one this node asked for.",
+   "feature": "mutant-referee-hold-skips-asked-check",
+   "must_fail": [
+    "hold/delivered_twice",
+    "hold/not_comparable_ruling_is_held",
+    "hold/other_provider_holds_it_too",
+    "hold/provider_holds_a_verdict_about_its_record",
+    "hold/requester_asked_about_another_pair",
+    "hold/requester_asked_another_referee",
+    "hold/requester_did_not_ask",
+    "hold/second_verdict_on_a_providers_record"
+   ],
+   "name": "hold-skips-asked-check",
+   "paths": [
+    "hold"
+   ],
+   "port_module": "referee/hold.rs"
+  }
+ ],
+ "note": "Implementation mutants for the Rust runner. Build the port with 'feature' and run its referee parity test: the run must fail, and every case in 'must_fail' must be among the cases it reports. The lists are produced by referee_mutants.py, which makes each fault in the Python that gives the expected answers and records the cases whose answers change.",
+ "v": 1
+}
