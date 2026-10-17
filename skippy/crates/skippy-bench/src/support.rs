@@ -86,10 +86,6 @@ pub fn activation_width(frame: &skippy_runtime::ActivationFrame) -> Result<i32> 
         .parts()?
         .first()
         .context("activation frame has no primary part")?;
-    anyhow::ensure!(
-        primary.ggml_type == skippy_runtime::GGML_TYPE_F32,
-        "primary activation part is not F32"
-    );
     let rank = usize::try_from(primary.rank).context("primary activation rank exceeds usize")?;
     anyhow::ensure!(
         rank > 0 && rank <= primary.dimensions.len(),

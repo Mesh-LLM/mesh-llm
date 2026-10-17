@@ -6,7 +6,7 @@ on:
         type: string
         required: true
       mesh_source:
-        description: Frozen trusted MeshLLM commit for certify-only mode
+        description: Frozen trusted MeshLLM commit for unchanged certification passes
         type: string
         default: ''
       upstream:
@@ -98,15 +98,16 @@ jobs:
       - uses: ./.github/actions/setup-canary-runner
         with:
           require-agent: ${{ inputs.mode == 'repair-build' }}
-      - uses: ./.github/actions/setup-canary-python
       - name: Prepare protected controller automation
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
+          runner-profile: preinstalled-macos
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
+      - uses: ./.github/actions/setup-canary-python
       - uses: ./.github/actions/use-canary-cache
       - name: Download previous candidate
         if: inputs.previous_package != ''
@@ -232,8 +233,10 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          include-hidden-files: true
           path: |
             ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
+            ${{ env.LLAMA_STAGE_BUILD_DIR }}/Testing/Temporary/
             ${{ runner.temp }}/canary-build-contract-${{ inputs.pass_id }}/
           if-no-files-found: warn
           retention-days: 14
@@ -288,12 +291,14 @@ jobs:
           path: canary-source
           fetch-depth: 0
           persist-credentials: false
+      - uses: ./.github/actions/setup-canary-runner
       - name: Prepare frozen controller automation for verify-only restore
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
+          runner-profile: preinstalled-macos
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache
@@ -462,12 +467,14 @@ jobs:
           path: canary-source
           fetch-depth: 0
           persist-credentials: false
+      - uses: ./.github/actions/setup-canary-runner
       - name: Prepare frozen controller automation for retry cache admission
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
+          runner-profile: preinstalled-macos
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache

@@ -36,6 +36,7 @@ mod integer;
 pub(super) mod manifest_preflight;
 mod measured_prefix;
 pub(super) mod model_preflight;
+mod output_integrity;
 mod parameters;
 mod pass_artifacts;
 mod pass_identity;

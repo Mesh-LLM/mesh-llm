@@ -1,7 +1,6 @@
 //! Behavioral retry boundaries of the actual workload candidate launcher.
 #![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
-use serde_json::Value;
 use std::{
     fs::{self, File},
     os::unix::{fs::PermissionsExt as _, process::CommandExt as _},
@@ -45,15 +44,8 @@ impl Fixture {
             .split_once("# Frozen automation selection ends.")
             .unwrap()
             .0;
-        let config = source
-            .split_once("\"${workload_automation[@]}\" automation workload-smoke-config \\\n")
-            .unwrap()
-            .1
-            .split_once("\nSERVER_LOG=")
-            .unwrap()
-            .0;
         let script = format!(
-            "set -euo pipefail\n{selector}\n\"${{workload_automation[@]}}\" automation workload-smoke-config \\\n{config}\n{}\nwait_for_workload_server() {{ wait \"$1\"; }}\n{}\nstart_candidate_server\n",
+            "set -euo pipefail\n{selector}\n{}\nwait_for_workload_server() {{ wait \"$1\"; }}\n{}\nstart_candidate_server\n",
             function(&source, "address_in_use_log"),
             function(&source, "start_candidate_server")
         );
@@ -67,8 +59,6 @@ if [[ "$1" == automation && "$2" == local-ports && "$3" == 1 && $# == 3 ]]; then
   if [[ -f "$FIXTURE_ROOT/ports" ]]; then port=41002; else port=41001; fi
   printf '%s\n' "$port" >> "$FIXTURE_ROOT/ports"
   printf '%s\n' "$port"
-elif [[ "$1" == automation && "$2" == workload-smoke-config ]]; then
-  exec "$ACTUAL_AUTOMATION" "$@"
 else
   echo unexpected-automation-boundary >&2
   exit 93
@@ -102,18 +92,14 @@ printf 'fixture candidate started\n'
             .args(["-c", &self.script])
             .env("ROOT", self.path())
             .env("FIXTURE_ROOT", self.path())
-            .env("ACTUAL_AUTOMATION", env!("CARGO_BIN_EXE_xtask"))
             .env(
                 "MESH_LLM_AUTOMATION_BIN",
                 self.path().join("bin/owner with spaces"),
             )
             .env("CANDIDATE_BIN_DIR", self.path().join("bin"))
-            .env("CONFIG_PATH", self.path().join("stage config.json"))
             .env("SERVER_LOG", self.path().join("server.log"))
             .env("MODEL_ID", "captured model id")
             .env("MODEL_PATH", "/selected/model with spaces.gguf")
-            .env("MODEL_SHA256", "a".repeat(64))
-            .env("LAYER_END", "8")
             .env("N_GPU_LAYERS", "0")
             .env("PROJECTOR_PATH", "")
             .env("BACKEND", "cpu")
@@ -157,12 +143,24 @@ printf 'fixture candidate started\n'
         for port in ports {
             expected.extend([
                 "serve".to_owned(),
-                "--config".to_owned(),
-                self.path()
-                    .join("stage config.json")
-                    .to_str()
-                    .unwrap()
-                    .to_owned(),
+                "--model-path".to_owned(),
+                "/selected/model with spaces.gguf".to_owned(),
+                "--model-id".to_owned(),
+                "captured model id".to_owned(),
+                "--ctx-size".to_owned(),
+                "2048".to_owned(),
+                "--batch-size".to_owned(),
+                "2048".to_owned(),
+                "--microbatch-size".to_owned(),
+                "2048".to_owned(),
+                "--generation-concurrency".to_owned(),
+                "1".to_owned(),
+                "--n-gpu-layers".to_owned(),
+                "0".to_owned(),
+                "--device".to_owned(),
+                "CPU".to_owned(),
+                "--kv-cache-offload=false".to_owned(),
+                "--op-offload=false".to_owned(),
                 "--bind-addr".to_owned(),
                 format!("127.0.0.1:{port}"),
                 "--default-max-tokens".to_owned(),
@@ -172,17 +170,6 @@ printf 'fixture candidate started\n'
             ]);
         }
         assert_eq!(actual, expected);
-    }
-
-    fn assert_config(&self) {
-        let config: Value =
-            serde_json::from_slice(&fs::read(self.path().join("stage config.json")).unwrap())
-                .unwrap();
-        assert_eq!(config["model_id"], "captured model id");
-        assert_eq!(config["model_path"], "/selected/model with spaces.gguf");
-        assert_eq!(config["source_model_sha256"], "a".repeat(64));
-        assert_eq!(config["layer_end"], 8);
-        assert_eq!(config["n_gpu_layers"], 0);
     }
 }
 
@@ -207,7 +194,6 @@ fn candidate_start_retries_only_address_in_use_with_fresh_port_and_retained_hist
     let fixture = Fixture::new();
     let failure = "Address already in use (os error 48)";
     assert!(fixture.run(failure).success());
-    fixture.assert_config();
     fixture.assert_launch_arguments(&[41001, 41002]);
     assert_eq!(
         fs::read_to_string(fixture.path().join("calls")).unwrap(),
@@ -237,7 +223,6 @@ fn candidate_start_retries_only_address_in_use_with_fresh_port_and_retained_hist
 fn candidate_start_does_not_retry_other_startup_failures() {
     let fixture = Fixture::new();
     assert_eq!(fixture.run("model initialization failed").code(), Some(1));
-    fixture.assert_config();
     fixture.assert_launch_arguments(&[41001]);
     assert_eq!(
         fs::read_to_string(fixture.path().join("calls")).unwrap(),

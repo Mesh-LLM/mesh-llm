@@ -405,7 +405,8 @@ mod tests {
 
     fn thinking_fixture() -> skippy_inference_api::thinking::ThinkingControls {
         skippy_inference_api::thinking::ThinkingControls {
-            enabled: true,
+            toggle: skippy_inference_api::thinking::ThinkingToggle::Observed,
+            reasoning_parser: Some(true),
             efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
         }
     }
@@ -416,7 +417,7 @@ mod tests {
         crate::inference::skippy::register_local_thinking(model, Some(&thinking_fixture()));
         let body = models_list_json(&[model.to_string()], &[local_gguf_descriptor(model)], &[]);
         let thinking = &body["data"][0]["thinking"];
-        assert_eq!(thinking["enabled"], true);
+        assert_eq!(thinking["toggle"], "observed");
         assert_eq!(thinking["efforts"][1], "medium");
         crate::inference::skippy::forget_local_thinking(model);
     }

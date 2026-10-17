@@ -138,7 +138,7 @@ fn parse_hf_diff_line(line: &str) -> Result<HFFileDiff, HFDiffParseError> {
     let bin_or_text = line.chars().next().ok_or(HFDiffParseError::EmptyLine)?;
     let is_binary = bin_or_text != 'T';
     // skip {B|T} and space
-    let line = line.get(2..).ok_or_else(&fmt_err)?;
+    let line = line.get(2..).ok_or_else(fmt_err)?;
     let mut i = 0;
     for char in line.chars() {
         if !char.is_ascii_digit() {
@@ -155,17 +155,17 @@ fn parse_hf_diff_line(line: &str) -> Result<HFFileDiff, HFDiffParseError> {
             source: e,
         })?;
     // skip file size + \t
-    let line = line.get(i + 1..).ok_or_else(&fmt_err)?;
+    let line = line.get(i + 1..).ok_or_else(fmt_err)?;
     // skip :000000 000000 & space
-    let line = line.get(15..).ok_or_else(&fmt_err)?;
-    let old_blob_id = line.get(..40).ok_or_else(&fmt_err)?.to_owned();
+    let line = line.get(15..).ok_or_else(fmt_err)?;
+    let old_blob_id = line.get(..40).ok_or_else(fmt_err)?.to_owned();
     // skip sha1;0{40}, ... & space
-    let line = line.get(44..).ok_or_else(&fmt_err)?;
-    let new_blob_id = line.get(..40).ok_or_else(&fmt_err)?.to_owned();
+    let line = line.get(44..).ok_or_else(fmt_err)?;
+    let new_blob_id = line.get(..40).ok_or_else(fmt_err)?.to_owned();
     // skip sha1;0{40}, ... & space
-    let line = line.get(44..).ok_or_else(&fmt_err)?;
-    let status = line.chars().next().ok_or_else(&fmt_err)?.into();
-    let line = line.get(1..).ok_or_else(&fmt_err)?;
+    let line = line.get(44..).ok_or_else(fmt_err)?;
+    let status = line.chars().next().ok_or_else(fmt_err)?.into();
+    let line = line.get(1..).ok_or_else(fmt_err)?;
     // skip optional score digits 1-3 chars & \t
     let mut i = 0;
     for char in line.chars() {
@@ -174,7 +174,7 @@ fn parse_hf_diff_line(line: &str) -> Result<HFFileDiff, HFDiffParseError> {
         }
         i += char.len_utf8();
     }
-    let line = line.get(i + 1..).ok_or_else(&fmt_err)?;
+    let line = line.get(i + 1..).ok_or_else(fmt_err)?;
     let separator_is_tab = line.contains('\t');
     // read up to next space or newline
     let i = if matches!(status, GitStatus::Copy | GitStatus::Rename) {

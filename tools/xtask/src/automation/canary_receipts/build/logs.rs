@@ -58,7 +58,16 @@ pub(super) fn supervise(
         );
         drop(done);
         match forward.join() {
-            Ok(Ok(())) => report,
+            Ok(Ok(())) => {
+                if let Ok(report) = &report
+                    && (report.stdout.truncated || report.stderr.truncated)
+                {
+                    writeln!(crate::cli_output::stderr(),
+                        "canary live output was truncated; complete gate logs and CTest results are in the build evidence artifact")
+                        .map_err(|_| process::Failure::InvalidSpec("canary truncation notice failed"))?;
+                }
+                report
+            }
             Ok(Err(_)) | Err(_) => Err(process::Failure::InvalidSpec(
                 "canary log forwarding failed",
             )),
@@ -123,5 +132,44 @@ mod tests {
         drain(Some(&path), &mut reader, &mut bytes).unwrap();
         drain(Some(&path), &mut reader, &mut bytes).unwrap();
         assert_eq!(bytes, b"first\nsecond\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_output_keeps_terminal_failure_beyond_old_live_log_bound() {
+        use crate::process::{Completion, Readiness, Value};
+        let directory = tempfile::tempdir().unwrap();
+        let mut output = b"compiler progress\n".repeat(5000);
+        output.extend_from_slice(b"native test failed: final diagnostic\n");
+        std::fs::write(directory.path().join("fixture-output"), &output).unwrap();
+        let log = directory.path().join("stdout.log");
+        let report = supervise(
+            &ProcessSpec {
+                executable: "/bin/sh".into(),
+                cwd: directory.path().into(),
+                arguments: ["-c", "/bin/cat fixture-output; exit 73"]
+                    .map(|arg| Value::Public(arg.into()))
+                    .into(),
+                environment: Default::default(),
+            },
+            &Limits {
+                execution: Duration::from_secs(5),
+                graceful_shutdown: Duration::from_secs(1),
+                forced_shutdown: Duration::from_secs(1),
+                retained_bytes_per_stream: super::super::WRAPPER_LOG_BYTES,
+                readiness: Readiness::None,
+                completion: Completion::Exit,
+            },
+            &Cancellation::default(),
+            OutputFiles {
+                stdout: Some(log.clone()),
+                stderr: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(report.status.unwrap().code(), Some(73));
+        assert!(report.cleanup.complete);
+        assert!(!report.stdout.truncated);
+        assert_eq!(std::fs::read(log).unwrap(), output);
     }
 }

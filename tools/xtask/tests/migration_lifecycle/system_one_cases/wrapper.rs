@@ -38,7 +38,6 @@ cached_artifact_path() {{ printf '%s/model.gguf\n' "$PWD"; }}
 verify_artifact_digest() {{ :; }}
 stage_layer_end() {{ printf '2\n'; }}
 pick_port() {{ printf '{port}\n'; }}
-write_stage_config() {{ : > "$1"; }}
 start_stage_server() {{ test -f "$2"; }}
 cleanup() {{ printf 'cleanup\n' >> cleanup.log; }}
 : > model.gguf

@@ -1,4 +1,4 @@
-From eb6e9dab6e57aa8c7f0e10343b4ab682c631c73c Mon Sep 17 00:00:00 2001
+From 28083980e08a1f8a8aea9cec40febc2c922a1290 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 18:30:01 +1000
 Subject: [PATCH] models: add inkling family support
@@ -836,10 +836,10 @@ index e6732e854..c48613aca 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index cc8f6fd83..4125ba648 100644
+index 296e0fcf0..cac098d4e 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -184,6 +184,12 @@ llama_context::llama_context(
+@@ -185,6 +185,12 @@ llama_context::llama_context(
          }
      }
  
@@ -853,10 +853,10 @@ index cc8f6fd83..4125ba648 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 2fce22c3f..281f43e8d 100644
+index 2aea3b60b..7fd0b2028 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3332,9 +3332,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3149,9 +3149,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -922,10 +922,10 @@ index de8cfdd3d..9387f526b 100644
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index a1ca82498..6f2746dc7 100644
+index b3fe9e14f..4925b9391 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
-@@ -282,6 +282,10 @@ public:
+@@ -280,6 +280,10 @@ public:
      void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
      void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
  
@@ -936,7 +936,7 @@ index a1ca82498..6f2746dc7 100644
      void set_input_k_rot(ggml_tensor * dst) const;
      void set_input_v_rot(ggml_tensor * dst) const;
  
-@@ -501,6 +505,7 @@ public:
+@@ -495,6 +499,7 @@ public:
      void set_input_k_shift   (ggml_tensor * dst) const;
      void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
      void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
@@ -957,10 +957,10 @@ index 39160a417..e466919d5 100644
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 22e512727..29dd071ad 100644
+index 8bbb935ef..887adad5f 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -344,6 +344,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -343,6 +343,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_step35(params);
          case LLM_ARCH_SPARK2_5:
              return new llama_model_spark2_5(params);
@@ -969,7 +969,7 @@ index 22e512727..29dd071ad 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -2683,8 +2685,19 @@ llama_memory_i * llama_model::create_memory(
+@@ -2682,8 +2684,19 @@ llama_memory_i * llama_model::create_memory(
                      llama_memory_hybrid::layer_filter_cb filter_idx  = nullptr;
                      const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP);
                      if (arch == LLM_ARCH_FALCON_H1) {
@@ -989,7 +989,7 @@ index 22e512727..29dd071ad 100644
                      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                          filter_attn = [&](uint32_t il) {
                              return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
-@@ -3077,6 +3090,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3052,6 +3065,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_NEMOTRON_H_MOE:
          case LLM_ARCH_KIMI_LINEAR:
          case LLM_ARCH_KIMI_K3:
@@ -1956,7 +1956,7 @@ index 3d15111fb..258c86143 100644
          draft_limit = std::min<size_t>(draft_limit, mtp_depth_scope.depth_count);
      }
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index e125786fa..32a55d405 100644
+index 13b28b74c..6c033ff9d 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -2991,6 +2991,97 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
@@ -2084,12 +2084,12 @@ index e125786fa..32a55d405 100644
 +    }
 +
      {
-         // The stage alias hardening must win when thinking is explicitly disabled.
+         // Preserve canonical "none" while keeping the boolean aliases disabled.
          auto render_disabled = [](const char * template_path) {
 @@ -7355,6 +7468,8 @@ static void test_template_generation_prompt() {
          assert_contains(qwen, "<think>\n\n</think>\n\n");
          const auto gpt_oss = render_disabled("models/templates/openai-gpt-oss-120b.jinja");
-         assert_contains(gpt_oss, "Reasoning: 0");
+         assert_contains(gpt_oss, "Reasoning: none");
 +        const auto inkling = render_disabled("models/templates/Inkling.jinja");
 +        assert_contains(inkling, "Thinking effort level: 0");
      }
@@ -2737,5 +2737,5 @@ index 2efa4d65d..f70fe3f16 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

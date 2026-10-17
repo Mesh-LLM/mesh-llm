@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
+use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode};
 
 use skippy_model_artifact::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
 
@@ -48,10 +48,8 @@ impl FamilyPolicy {
         Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
-            // The host only requests automatic selection. The server resolves
-            // the concrete payload after llama.cpp has loaded and classified
-            // the actual model.
-            payload: StageKvCachePayload::Auto,
+            // The host sets cache budgets. The loaded native graph and memory
+            // determine the concrete representation inside the server.
             max_entries: bounded_entries,
             max_bytes,
             l2_max_bytes: 0,
@@ -238,7 +236,7 @@ mod tests {
             let cache = family_policy_for_stage_config(&config)
                 .stage_kv_cache_config_for_stage(&config)
                 .expect("generic cache policy");
-            assert_eq!(cache.payload, StageKvCachePayload::Auto, "{model_id}");
+            assert_eq!(cache.mode, StageKvCacheMode::LookupRecord);
         }
     }
 

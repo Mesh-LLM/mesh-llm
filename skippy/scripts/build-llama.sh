@@ -33,6 +33,7 @@ if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then
 fi
 PRINT_BUILD_DIR=0
 REQUIRE_EXISTING=0
+BUILD_ONLY=0
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -42,6 +43,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --require-existing)
       REQUIRE_EXISTING=1
+      shift
+      ;;
+    --build-only)
+      BUILD_ONLY=1
       shift
       ;;
     *)
@@ -486,6 +491,7 @@ if [[ "$LLAMA_STAGE_BUILD_TESTS" == "ON" ]]; then
     skippy-model-fixture-generator
     skippy-model-loader-accounting
     skippy-runtime-events-test
+    skippy-sampling-history
     skippy-noalloc-graph-planning
     skippy-renamed-multishard-planning
     skippy-stage-slice-plan
@@ -517,7 +523,9 @@ else
   cmake --build "$LLAMA_BUILD_DIR" --config "${CMAKE_BUILD_TYPE:-Release}" --parallel "$(detect_jobs)" --target "${BUILD_TARGETS[@]}"
 fi
 
-if [[ "$LLAMA_STAGE_UPSTREAM_TESTS" == "ON" ]]; then
+if [[ "$BUILD_ONLY" == "1" ]]; then
+  echo "native tests deferred to caller (--build-only)"
+elif [[ "$LLAMA_STAGE_UPSTREAM_TESTS" == "ON" ]]; then
   ctest --test-dir "$LLAMA_BUILD_DIR" --build-config "${CMAKE_BUILD_TYPE:-Release}" --output-on-failure --timeout 900
 elif [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
   REPLAY_FIXTURE_DIR="$LLAMA_BUILD_DIR/tests/test-models"

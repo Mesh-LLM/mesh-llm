@@ -4,10 +4,7 @@ pub mod family_policy;
 pub mod kv_cache;
 pub mod speculative;
 pub mod stage;
-pub use stage::{
-    SingleStageOptions, StageSourceIdentity, single_stage_config,
-    single_stage_config_with_graph_evidence,
-};
+pub use stage::{SingleStageOptions, StageSourceIdentity, single_stage_config};
 
 pub mod hash_cache;
 pub mod package;

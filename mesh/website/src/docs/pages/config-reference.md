@@ -190,7 +190,6 @@ normal warnings in every mode.
 | `model_fit.prefix_cache.min_tokens` | integer | runtime default | both | model reload | wired | none |
 | `model_fit.prefix_cache.shared_stride_tokens` | integer | runtime default | both | model reload | wired | none |
 | `model_fit.prefix_cache.shared_record_limit` | integer | runtime default | both | model reload | wired | none |
-| `model_fit.prefix_cache.payload_mode` | enum | `resident-kv`, `kv-recurrent`, `full-state`, `auto` (default) | both | model reload | wired | none |
 | `model_fit.keep_tokens` | integer | unset | both | model reload | unwired | none |
 | `model_fit.context_shift` | bool-or-`auto` | `auto` | both | model reload | unwired | none |
 | `model_fit.swa_full` | boolean | unset | both | model reload | wired | none |

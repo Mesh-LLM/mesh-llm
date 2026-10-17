@@ -387,16 +387,24 @@ pub(super) fn restore_prefill_decode_as_decode_message(
     message: &StageWireMessage,
     current_token: i32,
 ) -> StageWireMessage {
-    let mut decode = message.clone();
-    decode.kind = WireMessageKind::DecodeEmbd;
-    decode.token_count = 1;
-    decode.tokens = vec![current_token];
-    decode.positions.clear();
-    decode.activation.clear();
-    decode.raw_bytes.clear();
-    decode.state.phase = StageStateHeader::new(WireMessageKind::DecodeEmbd).phase;
-    decode.state.current_token = current_token;
-    decode
+    let mut state = message.state;
+    state.phase = StageStateHeader::new(WireMessageKind::DecodeEmbd).phase;
+    state.current_token = current_token;
+    // Keep only decode metadata, not the prefill buffers that would be discarded.
+    StageWireMessage {
+        kind: WireMessageKind::DecodeEmbd,
+        pos_start: message.pos_start,
+        token_count: 1,
+        state,
+        request_id: message.request_id,
+        session_id: message.session_id,
+        sampling: message.sampling.clone(),
+        chat_sampling_metadata: message.chat_sampling_metadata.clone(),
+        tokens: vec![current_token],
+        positions: Vec::new(),
+        activation: Vec::new(),
+        raw_bytes: Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -451,12 +459,27 @@ mod tests {
             sampling: Some(sampling.clone()),
             chat_sampling_metadata: Some(metadata.to_string()),
             tokens: vec![101, 102, 103, 104],
-            positions: Vec::new(),
+            positions: vec![0, 1, 2, 3],
             activation: vec![1, 2, 3, 4],
-            raw_bytes: Vec::new(),
+            raw_bytes: vec![5, 6, 7, 8],
         };
 
+        let original = message.clone();
         let decode = restore_prefill_decode_as_decode_message(&message, 104);
+        let mut expected = original.clone();
+        expected.kind = WireMessageKind::DecodeEmbd;
+        expected.token_count = 1;
+        expected.tokens = vec![104];
+        expected.positions.clear();
+        expected.activation.clear();
+        expected.raw_bytes.clear();
+        expected.state.phase = StageStateHeader::new(WireMessageKind::DecodeEmbd).phase;
+        expected.state.current_token = 104;
+        assert_eq!(decode, expected);
+        assert_eq!(message, original);
+        assert_eq!(decode.activation.capacity(), 0);
+        assert_eq!(decode.raw_bytes.capacity(), 0);
+        assert_eq!(decode.positions.capacity(), 0);
 
         assert_eq!(decode.kind, WireMessageKind::DecodeEmbd);
         assert_eq!(decode.token_count, 1);

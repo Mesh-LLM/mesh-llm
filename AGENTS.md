@@ -102,6 +102,10 @@ Product crate documentation.
 Run Cargo commands serially. Do not run multiple Cargo commands in parallel: this workspace frequently hits package-cache and artifact-directory lock conflicts.
 
 - For a touched workspace crate, run focused `cargo check -p <crate>` and `cargo test -p <crate> --lib` during iteration.
+- Before a PR, run the full `cargo test -p <crate>` for every crate CI will test: usually the crates you changed plus their workspace dependents. Root build files and llama pin/patch changes escalate to the whole workspace (the command below prints that). Changes with no crate path (workflows, CI config, just recipes) leave the command's list empty — CI may test everything or nothing depending on the file — so use `just test-all` there.
+- `cargo xtool repository affected-crates <paths from your diff against the PR base>` prints CI's list in its `affected` field (a bare invocation prints an empty list), and `just test-all` is the broad fallback, though it runs skippy-runtime and skippy-serving lib-only there.
+- `--lib` skips the integration-test binaries and the doc tests, and CI runs both for the crates it executes (`ci-rust-tests-slice.yml`), so a `--lib`-only run can be green while CI is red.
+- Exceptions: `xtask` runs its suites through `just ci-automation-contracts`; `skippy-ffi` is skipped by that slice and no CI job runs its own tests, so run `cargo test -p skippy-ffi --lib` yourself if you touched it; and CI additionally runs one feature-gated `claude-code-integration` real-client test for `mesh-llm-host-runtime` inline.
 - For broad refactors, fall back to `cargo check --workspace` (serially).
 - Follow the owning product's additional test and compatibility guidance.
 

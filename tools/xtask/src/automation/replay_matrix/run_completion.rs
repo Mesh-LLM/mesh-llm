@@ -26,6 +26,9 @@ pub(super) fn complete(
         super::run_transport::invoke(root, "acceptance-gates", &gate_input, &gate_output);
     document["gates"] = serde_json::from_slice(&std::fs::read(&gate_output)?)?;
     passed &= acceptance.is_ok();
+    if input.require_complete_output {
+        passed &= super::output_integrity::apply(document)?;
+    }
     if !passed {
         document["gates"]["passed"] = false.into();
     }
@@ -43,6 +46,7 @@ pub(super) fn complete(
         crate::ci_operations::ci_metrics_time::Instant::now(),
     )
     .into();
+    crate::command::write_json_file(&gate_output, &document["gates"])?;
     super::run_snapshot::write(run_path, document)?;
     super::report::write(&input.output, &serde_json::from_value(document.clone())?)?;
     if passed {

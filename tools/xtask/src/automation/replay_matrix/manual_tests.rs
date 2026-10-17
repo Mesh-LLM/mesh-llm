@@ -4,7 +4,7 @@ use super::{
     recorded_requests::{Selection, Trajectory},
     replay_profile::{self, Mode},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 fn trajectory(id: &str, framework: &str, turns: usize) -> Trajectory {
     let mut messages = vec![json!({"role":"user","content":"task"})];
     for index in 0..turns {
@@ -154,6 +154,7 @@ fn documented_default_and_explicit_modes_keep_manual_defaults() {
             "--min-cache-pct",
             "70",
             "--require-output-match",
+            "--require-complete-output",
             "--max-ttft-regression-pct",
             "5",
             "--output",
@@ -165,6 +166,7 @@ fn documented_default_and_explicit_modes_keep_manual_defaults() {
     assert_eq!(captured.mode, Mode::Final);
     assert_eq!(captured.prompt_range, Some([18000, 22000]));
     assert!(captured.output_match);
+    assert!(captured.complete_output);
 }
 #[test]
 fn zero_minimum_cache_percentage_is_rejected_before_plan_creation() {
@@ -299,6 +301,7 @@ fn public_run_handoff_keeps_captured_profile_uri_gates_and_build_jobs() {
             "final",
             "--min-cache-pct",
             "70",
+            "--require-complete-output",
             "--output",
             "artifact",
         ],
@@ -318,6 +321,7 @@ fn public_run_handoff_keeps_captured_profile_uri_gates_and_build_jobs() {
     assert_eq!(input["context_qualification"], "captured");
     assert_eq!(input["model_reference"], "hf://owner/model");
     assert_eq!(input["min_cache_pct"], 70.0);
+    assert_eq!(input["require_complete_output"], true);
     assert_eq!(input["build_jobs"][0]["ref"], "HEAD");
     assert_eq!(input["build_jobs"][0]["backend"], "metal");
     assert!(!parent.path().join("artifact").exists());
@@ -337,6 +341,30 @@ fn selected_profile_summary_keeps_metrics_and_checks_selected_ids() {
     assert_eq!(summary["replay_mode"], "final");
     assert_eq!(summary["recorded_assistant_turns"], 4);
     assert_eq!(summary["prompt_tokens"], 19000.0);
+}
+
+#[test]
+fn strict_gate_rejects_structural_truncation_even_when_all_requests_completed() {
+    let cohort = vec![trajectory("s", "goose", 1)];
+    for (problems, passed) in [
+        (json!([]), true),
+        (json!(["incomplete tool call"]), false),
+        (Value::Null, false),
+    ] {
+        let record = json!({"session_id":"s","request_id":"s:0","assistant_turn":0,
+            "prompt_tokens":351,"cached_tokens":256,"completion_tokens":92,"requested_output_tokens":512,
+            "generation_seconds":0.1,"elapsed_seconds":0.2,"started":0.0,"completed":0.2,
+            "ttft_seconds":0.1,"cache_pct":72.9,"content_sha256":"fixture","finish_reason":"stop",
+            "decode_inter_token_seconds":[0.05],"output_problems":problems});
+        let summary = replay_profile::summarize(&cohort, &[record], 1, Mode::All).unwrap();
+        assert_eq!(summary["acceptance"]["passed"], true);
+        let mut document =
+            json!({"results":[{"cells":[summary]}],"gates":{"passed":null,"checks":[]}});
+        assert_eq!(
+            super::output_integrity::apply(&mut document).unwrap(),
+            passed
+        );
+    }
 }
 #[test]
 fn actual_local_http_final_exchange_sends_full_recorded_checkpoint_prefix() {

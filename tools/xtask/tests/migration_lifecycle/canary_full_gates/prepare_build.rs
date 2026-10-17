@@ -124,6 +124,7 @@ fn actual_full_build_preserves_arm64_generators_full_crates_and_both_oracle_envi
         [
             "uv",
             "archive",
+            "uv",
             "generated",
             "cargo",
             "smoke",
@@ -134,7 +135,7 @@ fn actual_full_build_preserves_arm64_generators_full_crates_and_both_oracle_envi
         ]
     );
     assert_eq!(
-        fixture.args("uv"),
+        fixture.args("uv-1"),
         [
             "run",
             "--no-project",
@@ -145,6 +146,7 @@ fn actual_full_build_preserves_arm64_generators_full_crates_and_both_oracle_envi
             "-arm64",
             "bash",
             "scripts/build-llama.sh",
+            "--build-only",
             "-DCMAKE_OSX_ARCHITECTURES=arm64",
             "-DGGML_METAL_EMBED_LIBRARY=ON"
         ]
@@ -152,6 +154,22 @@ fn actual_full_build_preserves_arm64_generators_full_crates_and_both_oracle_envi
     assert_eq!(
         fs::read(fixture.root.join("upstream-tests")).unwrap(),
         b"ON"
+    );
+    assert_eq!(fixture.args("generated"), ["--full-native-suite"]);
+    assert_eq!(
+        fixture.args("uv-2"),
+        [
+            "run",
+            "--no-project",
+            "--with",
+            "jinja2==3.1.6",
+            "--",
+            "arch",
+            "-arm64",
+            "bash",
+            "scripts/check-skippy-generated-family-patch.sh",
+            "--full-native-suite"
+        ]
     );
     assert_eq!(
         fixture.args("archive"),

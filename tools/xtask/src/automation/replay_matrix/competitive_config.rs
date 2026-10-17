@@ -65,7 +65,7 @@ fn optional_backends(model: &Value) -> DynResult<()> {
 }
 fn model(model: &Value) -> DynResult<&str> {
     let key = text(&model["key"], "model key")?;
-    for field in ["family", "repo", "filename", "model_id", "cache_payload"] {
+    for field in ["family", "repo", "filename", "model_id"] {
         text(&model[field], field)?;
     }
     hex(&model["revision"], 40, "model revision")?;

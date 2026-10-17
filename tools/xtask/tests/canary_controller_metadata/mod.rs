@@ -133,7 +133,7 @@ fn admission_rejects_invalid_metadata_before_battery_or_output() {
 }
 
 #[test]
-fn corrupt_projector_rejects_admission_before_battery_or_output() {
+fn truncated_projector_rejects_admission_before_battery_or_output() {
     let fixture = fixture(&valid_target(), &valid_draft());
     let digest = hex::encode(Sha256::digest(b"projector"));
     fs::write(
@@ -142,16 +142,35 @@ fn corrupt_projector_rejects_admission_before_battery_or_output() {
             .path()
             .join("cache/hub/models--fixture--metadata/blobs")
             .join(digest),
-        b"corrupted",
+        b"short",
     )
     .unwrap();
 
     let result = fixture.run("source-plan");
 
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("SHA-256 mismatch"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("pinned blob identity or size"));
     assert!(!fixture.output("plan.json").exists());
     assert!(!fixture.output("battery-ran").exists());
+}
+
+#[test]
+fn nas_preflight_does_not_rehash_opaque_projector_payload() {
+    let fixture = fixture(&valid_target(), &valid_draft());
+    let digest = hex::encode(Sha256::digest(b"projector"));
+    let blob = fixture
+        .directory
+        .path()
+        .join("cache/hub/models--fixture--metadata/blobs")
+        .join(digest);
+    // Same-size payload changes are outside routine immutable-cache admission.
+    fs::write(blob, b"different").unwrap();
+
+    let result = fixture.run("preflight");
+
+    assert!(result.status.success(), "{:?}", result);
+    assert!(fixture.output("battery-ran").is_file());
+    assert!(fixture.run("verify-source-plan").status.success());
 }
 
 #[test]

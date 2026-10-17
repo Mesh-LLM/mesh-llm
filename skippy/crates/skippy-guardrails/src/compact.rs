@@ -52,6 +52,7 @@ pub struct CompactionRequest {
 pub enum CompactionDecision {
     Disabled,
     BelowThreshold,
+    NoReduction,
     Compacted,
 }
 
@@ -112,16 +113,56 @@ pub fn compact_messages(
     if config.allow_reasoning_drop && estimate_messages_tokens(&messages) > target_tokens {
         report.dropped_reasoning = strip_reasoning_fields(&mut messages);
     }
-    inject_compaction_warning(&mut messages);
-    report.warning_injected = true;
-    report.decision = CompactionDecision::Compacted;
+    if report.dropped_nudges + report.dropped_tool_results + report.dropped_reasoning > 0 {
+        inject_compaction_warning(&mut messages);
+        report.warning_injected = true;
+        report.decision = CompactionDecision::Compacted;
+    } else {
+        report.decision = CompactionDecision::NoReduction;
+    }
     report.estimated_tokens_after = estimate_messages_tokens(&messages);
     report.messages_after = messages.len();
     (messages, report)
 }
 
 pub fn estimate_message_tokens(message: &Value) -> usize {
-    estimate_value_chars(message) / 4 + 1
+    // Estimate compactable text only. Encoded media bytes and image URLs are
+    // not text tokens; the runtime owns the actual multimodal context limit.
+    let chars = message.as_object().map_or_else(
+        || estimate_value_chars(message),
+        |object| {
+            object
+                .iter()
+                .map(|(key, value)| {
+                    if key == "content" {
+                        estimate_content_chars(value)
+                    } else {
+                        estimate_value_chars(value)
+                    }
+                })
+                .sum()
+        },
+    );
+    chars / 4 + 1
+}
+
+fn estimate_content_chars(content: &Value) -> usize {
+    let Value::Array(parts) = content else {
+        return estimate_value_chars(content);
+    };
+    parts
+        .iter()
+        .map(|part| {
+            if matches!(
+                part.get("type").and_then(Value::as_str),
+                Some("image_url" | "input_image" | "input_audio")
+            ) {
+                0
+            } else {
+                estimate_value_chars(part)
+            }
+        })
+        .sum()
 }
 
 fn estimate_messages_tokens(messages: &[Value]) -> usize {
@@ -217,6 +258,64 @@ fn inject_compaction_warning(messages: &mut Vec<Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn media_shaped_tool_arguments_and_plain_text_still_count() {
+        let payload = "A".repeat(64_000);
+        for message in [
+            serde_json::json!({"role":"assistant","tool_calls":[{"function":{"arguments":{"type":"image_url","image_url":{"url":payload}}}}]}),
+            serde_json::json!({"role":"user","content":[{"type":"text","text":payload}]}),
+        ] {
+            assert!(estimate_message_tokens(&message) >= 16_000);
+        }
+    }
+
+    #[test]
+    fn encoded_media_does_not_trigger_text_compaction() {
+        for part in [
+            serde_json::json!({"type":"image_url","image_url":{"url":format!("data:image/png;base64,{}", "A".repeat(64_000))}}),
+            serde_json::json!({"type":"input_audio","input_audio":{"data":"A".repeat(64_000),"format":"wav"}}),
+        ] {
+            let messages = vec![
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"Describe this."},part]}),
+            ];
+            let (actual, report) = compact_messages(
+                CompactionRequest {
+                    messages: messages.clone(),
+                    override_value: CompactionOverride::Unset,
+                },
+                CompactionConfig {
+                    enabled: true,
+                    context_limit_tokens: Some(2048),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(actual, messages);
+            assert_eq!(report.decision, CompactionDecision::BelowThreshold);
+            assert!(!report.warning_injected);
+        }
+    }
+
+    #[test]
+    fn unsuccessful_compaction_preserves_the_prompt_even_when_forced() {
+        for override_value in [CompactionOverride::Unset, CompactionOverride::Enabled] {
+            let messages = vec![serde_json::json!({"role":"user","content":"x".repeat(10_000)})];
+            let (actual, report) = compact_messages(
+                CompactionRequest {
+                    messages: messages.clone(),
+                    override_value,
+                },
+                CompactionConfig {
+                    enabled: true,
+                    context_limit_tokens: Some(2048),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(actual, messages);
+            assert_eq!(report.decision, CompactionDecision::NoReduction);
+            assert!(!report.warning_injected);
+        }
+    }
 
     #[test]
     fn disabled_config_passes_through() {
