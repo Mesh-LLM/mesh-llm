@@ -409,11 +409,6 @@ fn validate_prefix_cache(config: &PrefixCacheConfig, base_path: &str) -> Diagnos
             10_000_000,
         )?;
     }
-    validate_optional_enum(
-        config.payload_mode.as_deref(),
-        &["resident-kv", "kv-recurrent", "full-state", "auto"],
-        &format!("{base_path}.payload_mode"),
-    )?;
     Ok(())
 }
 
@@ -1198,6 +1193,15 @@ mod tests {
     use super::*;
     use crate::diagnostic::legacy_validation_error_text;
     use crate::{DrySamplingConfig, MeshConfig, validate_config, validate_config_diagnostics};
+
+    #[test]
+    fn prefix_cache_accepts_budgets_but_rejects_state_claims() {
+        assert!(toml::from_str::<PrefixCacheConfig>("enabled = true\nmax_entries = 32").is_ok());
+        for payload in ["auto", "resident-kv", "kv-recurrent", "full-state"] {
+            let input = format!("payload_mode = {payload:?}");
+            assert!(toml::from_str::<PrefixCacheConfig>(&input).is_err());
+        }
+    }
 
     #[test]
     fn model_fit_accepts_non_unified_kv() {

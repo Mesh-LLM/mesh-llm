@@ -16,19 +16,56 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let (bootstrap, prepare) = h::step(steps, "uses", "./.github/actions/prepare-automation")?;
     h::binding(h::member(prepare, "with")?, "runner-profile", "hosted-bare")?;
     let (resolve, step) = h::step(steps, "id", "resolve")?;
-    if !(checkout < bootstrap && bootstrap < resolve) {
+    let (upstream, selection) = h::step(steps, "id", "upstream")?;
+    if !(checkout < bootstrap && bootstrap < upstream && upstream < resolve) {
         return Err(
             "protected controller checkout/bootstrap must precede selected resolution".into(),
         );
     }
     let env = h::member(step, "env")?;
     h::binding(env, "MESH_REF", "${{ inputs.mesh_ref }}")?;
+    h::binding(env, "MESH_ACTION", "${{ inputs.mesh_action }}")?;
     h::binding(env, "UPSTREAM", "${{ inputs.upstream_sha }}")?;
+    h::binding(
+        env,
+        "SELECTED_UPSTREAM",
+        "${{ steps.upstream.outputs.sha }}",
+    )?;
+    h::condition(selection, "inputs.mesh_ref == ''")?;
+    h::binding(
+        h::member(selection, "env")?,
+        "GH_TOKEN",
+        "${{ github.token }}",
+    )?;
+    h::binding(
+        h::member(selection, "env")?,
+        "UPSTREAM",
+        "${{ inputs.upstream_sha }}",
+    )?;
+    h::binding(selection, "timeout-minutes", "3")?;
+    h::command(
+        selection,
+        &[
+            "\"$MESH_LLM_AUTOMATION_BIN\"",
+            "repository",
+            "llama-upstream-release",
+        ],
+        &[
+            ("--upstream", "\"$UPSTREAM\""),
+            ("--github-output", "\"$GITHUB_OUTPUT\""),
+            ("--summary", "\"$GITHUB_STEP_SUMMARY\""),
+        ],
+    )?;
+    let run = field(step, "run").ok_or("resolver run missing")?;
+    if !run.contains("upstream=\"$SELECTED_UPSTREAM\"") || run.contains("ls-remote") {
+        return Err("default upstream must consume the admitted stable release commit".into());
+    }
     h::command(
         step,
         &["\"$MESH_LLM_AUTOMATION_BIN\"", "repository", "selected-ref"],
         &[
             ("--ref", "\"$MESH_REF\""),
+            ("--action", "\"${MESH_ACTION:-certify}\""),
             ("--event", "\"$GITHUB_EVENT_NAME\""),
             ("--upstream", "\"$UPSTREAM\""),
             (
@@ -44,7 +81,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
 fn selected_output_order(run: &str) -> DynResult<()> {
     let run = run.replace("\\\n", " ");
     let (prefix, rest) = run
-        .split_once("if [[ -n \"$MESH_REF\" ]]; then")
+        .split_once("if [[ -n \"$MESH_REF\" || \"${MESH_ACTION:-certify}\" != certify ]]; then")
         .ok_or("explicit selected-ref branch missing")?;
     for key in ["mesh_source=", "certify=", "mode=", "upstream=", "changed="] {
         if prefix.contains(key) {

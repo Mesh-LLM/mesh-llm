@@ -228,24 +228,35 @@ fn regression_system_one_label_coverage_rejects_overlap_and_holes_before_claimin
     );
 }
 #[test]
-fn regression_pooled_reset_detaches_sampler_and_native_gate_repeats_multi_token_prefill() {
-    let mail = patch("-fix-skippy-detach-backend-sampler-before-pooled-pre.patch");
-    let session = postimage(&mail, "src/skippy/session.cpp");
+fn regression_pooled_sampler_reset_and_native_gate_repeat_multi_token_prefill() {
+    let session = owned(
+        "-skippy-implement-graph-planning-realization-and-runt.patch",
+        "src/skippy/session.cpp",
+    );
+    let session = session
+        .split_once("enum skippy_status skippy_session_reset(")
+        .unwrap()
+        .1;
     required(
-        &session,
-        "session->sampling_backend_enabled || !skippy_reset_reusable_sampling(session)",
+        session,
+        "detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)",
     );
     ordered(
-        &session,
-        "session->sampling_backend_enabled",
+        session,
+        "detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)",
         "skippy_clear_chat_sampling(session)",
     );
-    let gate = postimage(&mail, "src/skippy/tests/runtime_events.cpp");
+    let gate = owned(
+        "-test-cover-graph-derived-stage-contracts.patch",
+        "src/skippy/tests/runtime_events.cpp",
+    );
     for needle in [
         "CHECK(session->sampling_backend_enabled);",
         "CHECK(!session->sampling_backend_enabled);",
         "CHECK(session->sampling_chain == nullptr);",
         "CHECK(session->n_past == 0);",
+        "CHECK(session->sampling_chain == sampling_chain);",
+        "CHECK(session->ctx->get_sched_reserve_count() == reserves_before_reset);",
     ] {
         required(&gate, needle);
     }

@@ -323,6 +323,14 @@ async fn certify_rerank(backend: &StageOpenAiBackend) -> Result<()> {
 /// Exercise source encoding followed by decoder generation on the pinned model.
 async fn certify_encoder_decoder(backend: &StageOpenAiBackend, max_tokens: u32) -> Result<()> {
     backend.ensure_local_workload(ModelWorkload::EncoderDecoder)?;
+    let capabilities =
+        crate::runtime_state::loaded_memory_cache_capabilities(Some(&backend.runtime))
+            .context("loaded encoder-decoder capabilities")?;
+    assert_eq!(
+        capabilities,
+        skippy_runtime::MemoryCacheCapabilities::default(),
+        "cross-attention input state is not preserved by native memory snapshots"
+    );
     let request: CompletionRequest = serde_json::from_value(json!({
         "model": backend.model_id,
         "prompt": "translate English to German: The house is wonderful.",
@@ -330,6 +338,15 @@ async fn certify_encoder_decoder(backend: &StageOpenAiBackend, max_tokens: u32) 
         "temperature": 0.0
     }))?;
     let first = backend.completion(request.clone()).await?;
+    // An intervening encoder pass changes context-owned cross-attention state.
+    // Repeating the first request must encode it again instead of reusing the
+    // decoder's KV alone or retaining the other source's encoded embeddings.
+    let mut other = request.clone();
+    other.prompt =
+        serde_json::from_value(json!("translate English to German: The cat is sleeping."))?;
+    let intervening = backend.completion(other).await?;
+    assert!(!intervening.choices[0].text.trim().is_empty());
+    assert_ne!(first.choices[0].text, intervening.choices[0].text);
     let second = backend.completion(request).await?;
     assert!(!first.choices[0].text.trim().is_empty());
     assert_eq!(first.choices[0].text, second.choices[0].text);
@@ -499,11 +516,18 @@ async fn real_non_chat_class_smoke_when_fixture_is_set() -> Result<()> {
     };
     let backend =
         support::local_openai_backend(workload_stage_config(&fixture), fixture.model_id.clone())?;
-    // Startup calls this before any request. A non-causal workload must not
-    // acquire a decoder session just to warm a generation graph.
+    // API workload class and native execution mode are different: these OCR
+    // and speech fixtures have causal decoders behind their media frontends.
+    // Only encode-only and encoder-decoder fixtures must skip decoder warmup.
     {
-        let runtime = backend.runtime.lock().expect("runtime mutex poisoned");
-        assert!(!runtime.warmup_generation_graph()?);
+        let mut runtime = backend.runtime.lock().expect("runtime mutex poisoned");
+        let expects_decoder_warmup = matches!(
+            fixture.class,
+            CertifiedWorkloadClass::Ocr
+                | CertifiedWorkloadClass::SpeechSynthesis
+                | CertifiedWorkloadClass::SpeechRecognition
+        );
+        assert_eq!(runtime.warmup_generation_graph()?, expects_decoder_warmup);
     }
     match fixture.class {
         CertifiedWorkloadClass::Embedding => certify_embedding(&backend).await?,

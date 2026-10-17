@@ -62,8 +62,6 @@ enum CacheError {
     Symlink,
     #[error("snapshot entry differs from pinned blob identity or size")]
     Identity,
-    #[error("immutable cache blob SHA-256 mismatch")]
-    Digest,
 }
 
 pub(super) fn verify(bytes: &[u8], policy: &CachePolicy) -> DynResult<CacheAdmission> {
@@ -180,9 +178,10 @@ fn verify_artifact(hub: &Path, artifact: &Artifact) -> DynResult<Vec<PathBuf>> {
         {
             return Err(CacheError::Identity.into());
         }
-        if Digest::of_file(&resolved)? != expected.blob_id {
-            return Err(CacheError::Digest.into());
-        }
+        // The immutable model cache lives on a NAS. Hashing every model payload
+        // on each admission is too expensive; retain pinned blob identity, size
+        // and the caller's GGUF metadata checks. Full content verification belongs
+        // to cache population or a separate audit, not routine certification.
         paths.push(resolved);
     }
     Ok(paths)

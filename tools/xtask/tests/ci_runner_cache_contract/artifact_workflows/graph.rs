@@ -70,7 +70,12 @@ fn artifact_sdk_producers_keep_parallel_start_and_static_abi_identity() {
     );
     assert_eq!(
         job(&macos, "sdk").get("needs").unwrap().list(),
-        ["validate_plan", "runtime_product", "swift_sdk_input"]
+        [
+            "validate_plan",
+            "runtime_product",
+            "swift_sdk_input",
+            "product_automation_macos_arm64"
+        ]
     );
     let name = "ci-static-abi-${{ github.run_id }}";
     assert_eq!(

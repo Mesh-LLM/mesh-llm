@@ -429,6 +429,7 @@ fn retained_publisher_admits_exact_push_and_refuses_identity_drift_without_unsaf
                 ("MODE", mode),
                 ("CANARY_BRANCH", BRANCH),
                 ("CANARY_CERTIFIED_SHA", HEAD),
+                ("CANARY_UPSTREAM_SHA", HEAD),
                 ("GITHUB_REPOSITORY", "fixture/repository"),
                 ("CANARY_REPAIR_TOKEN", "inert-publication-secret"),
                 ("MESH_LLM_AUTOMATION_BIN", env!("CARGO_BIN_EXE_xtask")),

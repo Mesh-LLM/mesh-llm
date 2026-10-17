@@ -96,7 +96,7 @@ fn competitive_artifact_admission_rejects_byte_drift_and_stage_keeps_shared_cont
     std::fs::write(&artifact.path, b"changed").unwrap();
     assert!(file(&artifact).is_err());
     let stage = stage(
-        &json!({"key":"fixture","model_id":"fixture","layer_end":40,"cache_payload":"kv-recurrent"}),
+        &json!({"key":"fixture","model_id":"fixture","layer_end":40}),
         &artifact,
         1234,
         Capacity {
@@ -107,6 +107,7 @@ fn competitive_artifact_admission_rejects_byte_drift_and_stage_keeps_shared_cont
     );
     assert_eq!(stage["ctx_size"], 131072);
     assert_eq!(stage["lane_count"], 16);
+    assert!(stage["kv_cache"].get("payload").is_none());
     assert_eq!(stage["kv_cache"]["max_entries"], 512);
     assert_eq!(stage["kv_cache"]["shared_prefix_record_limit"], 2);
     assert_eq!(stage["native_mtp_enabled"], false);
@@ -344,7 +345,6 @@ fn competitive_mesh_raw_and_adaptive_commands_share_exact_fixed_lane_ceiling() {
     model["key"] = json!("fixture");
     model["model_id"] = json!("fixture-model");
     model["layer_end"] = json!(40);
-    model["cache_payload"] = json!("kv-recurrent");
     let runtime = root.path().join("runtime");
     std::fs::create_dir(&runtime).unwrap();
     std::fs::write(runtime.join("fixture"), b"inert").unwrap();

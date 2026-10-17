@@ -56,13 +56,10 @@ mod tests {
     }
     #[test]
     fn rejected_exports_increment_counter_without_recording() {
-        use skippy_protocol::{
-            StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-        };
+        use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode};
         let config = StageConfig {
             kv_cache: Some(StageKvCacheConfig {
                 mode: StageKvCacheMode::LookupRecord,
-                payload: StageKvCachePayload::FullState,
                 max_entries: 4,
                 max_bytes: 0,
                 l2_max_bytes: 0,
@@ -77,7 +74,10 @@ mod tests {
         let kv = KvStageIntegration::from_loaded_model(
             &config,
             Some(skippy_runtime::ModelStateKind::Hybrid),
-            None,
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                full_state: true,
+                ..Default::default()
+            }),
             None,
         )
         .unwrap()

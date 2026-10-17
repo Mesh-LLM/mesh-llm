@@ -31,7 +31,7 @@ package installation example. This is a generic registry client fork, not a
 reverse call into Mesh discovery, plugins or serving. Its package identity still
 fails the literal no-`mesh-*` dependency criterion.
 
-The lockfile includes paths from `skippy-bench`, `skippy-correctness` and
+The lockfile includes paths from `skippy-correctness` and
 `skippy-package-builder` through `skippy-model-hf` to that registry package. Standalone
 acquisition will also use it when the lifecycle API consumes model resolution.
 The current check must therefore cover aliases and transitive registry packages,

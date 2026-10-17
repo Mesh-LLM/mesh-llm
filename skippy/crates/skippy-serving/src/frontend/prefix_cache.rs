@@ -1281,7 +1281,6 @@ mod tests {
             kv_cache: Some(skippy_protocol::StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: skippy_protocol::StageKvCacheMode::LookupRecord,
-                payload: skippy_protocol::StageKvCachePayload::ResidentKv,
                 max_entries: 8,
                 max_bytes: 0,
                 l2_max_bytes: 0,
@@ -1292,9 +1291,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let cache = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache");
+        let cache =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache");
         let identity = crate::kv_integration::PrefillKvIdentity {
             identity: crate::kv_proto::PageIdentity {
                 token_count: 4,
@@ -1361,7 +1361,6 @@ mod tests {
             kv_cache: Some(skippy_protocol::StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: skippy_protocol::StageKvCacheMode::LookupRecord,
-                payload: skippy_protocol::StageKvCachePayload::ResidentKv,
                 max_entries: 8,
                 max_bytes: 0,
                 l2_max_bytes: 0,
@@ -1372,9 +1371,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let cache = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache");
+        let cache =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache");
         let identity = crate::kv_integration::PrefillKvIdentity {
             identity: crate::kv_proto::PageIdentity {
                 token_count: 4,

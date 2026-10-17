@@ -283,6 +283,7 @@ mod tests {
             activation_export_bindings: vec!["binding".into()],
         };
         let first = StageAdmissionDescriptor {
+            kv_graph_state: String::new(),
             version: skippy_protocol::STAGE_ADMISSION_DESCRIPTOR_VERSION,
             package_id: "package".into(),
             plan_id: "plan".into(),
@@ -292,7 +293,6 @@ mod tests {
             resident_tensor_ids: vec![],
             sidecars: vec![],
             profiles: vec![profile],
-            kv_graph_state: String::new(),
         };
         let mut second = first.clone();
         second.layer_start = 1;

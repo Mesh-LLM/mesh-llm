@@ -1359,7 +1359,6 @@ pub(super) struct RunAutoStartupTasksContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) config: &'a plugin::MeshConfig,
     pub(super) node: &'a mesh::Node,
-    pub(super) tunnel_mgr: &'a tunnel::Manager,
     pub(super) startup_models: &'a [StartupModelPlan],
     pub(super) primary_startup_model: Option<&'a StartupModelPlan>,
     pub(super) model_name: &'a str,
@@ -1421,7 +1420,6 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         options,
         config,
         node,
-        tunnel_mgr,
         startup_models,
         primary_startup_model,
         model_name,
@@ -1480,7 +1478,6 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_task = tokio::spawn(Box::pin(startup_local_model_loop(StartupLocalModelTask {
         node: node.clone(),
         config: config.clone(),
-        tunnel_mgr: tunnel_mgr.clone(),
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
         model_ref: primary_model_ref,
@@ -1550,7 +1547,6 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         options,
         config,
         node,
-        tunnel_mgr,
         startup_models,
         primary_model_name: model_name,
         target_tx,
@@ -1802,7 +1798,13 @@ async fn run_auto_inner(
         initial_run_auto_requested_models(&startup_specs, &requested_model_names);
     node.set_requested_models(initial_requested_models).await;
 
-    run_auto_join_mesh_phase(&mut options, &node, &auto_join_candidates).await?;
+    // On cancellation, continue to the lifecycle owner below so it can run
+    // the existing ordered cleanup for the node we have already created.
+    tokio::select! {
+        biased;
+        _ = crate::sdk::embedded_shutdown::cancelled() => {},
+        result = run_auto_join_mesh_phase(&mut options, &node, &auto_join_candidates) => result?,
+    }
 
     let affinity_router = affinity::AffinityRouter::new();
 
@@ -1833,7 +1835,6 @@ async fn run_auto_inner(
     // Serving hosts terminate inbound HTTP tunnel streams directly in the
     // shared OpenAI ingress. Client-only nodes remain unreachable as hosts.
     if !is_client {
-        tunnel_mgr.set_http_port(api_port);
         tunnel_mgr.set_http_ingress(target_rx.clone(), affinity_router.clone());
         plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
     }
@@ -1960,7 +1961,6 @@ async fn run_auto_inner(
         presentation_subscriber,
         runtime_event_driver,
         startup_specs: &startup_specs,
-        tunnel_mgr: &tunnel_mgr,
         skippy_telemetry: &skippy_telemetry,
         api_port,
         console_port,

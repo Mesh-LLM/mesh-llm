@@ -14,6 +14,8 @@ use super::{
 
 const MAX_PREFIX_PROBES: usize = 64;
 
+mod restore;
+
 fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Location) -> String {
     format!("{}:{}", l3.state_identity(), location.manifest_key)
 }
@@ -205,46 +207,6 @@ impl KvStageIntegration {
             .and_then(|l3| l3.benefit_candidate_cost(cold_prefill_cost))
     }
 
-    pub fn restore_exact_state(
-        &self,
-        runtime: &mut RuntimeState,
-        session_id: &str,
-        identities: &[PrefillKvIdentity],
-    ) -> Result<Option<ExactStateRestore>> {
-        self.restore_exact_state_with_cold_cost(runtime, session_id, identities, None)
-    }
-
-    /// Restores the longest warm L1 prefix, but constrains a cold L3 fallback
-    /// to the canonical checkpoint shared by every stage in a split chain.
-    pub(crate) fn restore_exact_state_with_shared_durable_fallback(
-        &self,
-        runtime: &mut RuntimeState,
-        session_id: &str,
-        identities: &[PrefillKvIdentity],
-    ) -> Result<Option<ExactStateRestore>> {
-        runtime.restore_transaction(session_id, |runtime| {
-            self.restore_exact_state_inner(runtime, session_id, identities, None, true)
-        })
-    }
-
-    pub fn restore_exact_state_with_cold_cost(
-        &self,
-        runtime: &mut RuntimeState,
-        session_id: &str,
-        identities: &[PrefillKvIdentity],
-        cold_prefill_cost: Option<f64>,
-    ) -> Result<Option<ExactStateRestore>> {
-        runtime.restore_transaction(session_id, |runtime| {
-            self.restore_exact_state_inner(
-                runtime,
-                session_id,
-                identities,
-                cold_prefill_cost,
-                false,
-            )
-        })
-    }
-
     fn restore_exact_state_inner(
         &self,
         runtime: &mut RuntimeState,
@@ -304,7 +266,7 @@ impl KvStageIntegration {
                     cold_prefill_cost,
                     shared_durable_fallback,
                 )? {
-                    return Ok(Some(restored));
+                    return restore::finish_restore(runtime, session_id, identity, restored);
                 }
                 continue;
             };
@@ -509,7 +471,7 @@ impl KvStageIntegration {
                 fill_ms: 0.0,
                 rewarm_enqueued: promotion_enqueued,
             };
-            return Ok(Some(restored));
+            return restore::finish_restore(runtime, session_id, identity, restored);
         }
         Ok(None)
     }

@@ -27,6 +27,10 @@ on:
         description: Swift artifact coverage selected by the semantic CI profile.
         required: true
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON from the lane's product_automation producer; the Swift smoke restores that executable.
+        required: true
+        type: string
     secrets:
       HF_TOKEN:
         required: false
@@ -49,6 +53,7 @@ jobs:
       staged_binary_path: ${{ inputs.binary_target }}
       swift_artifact_name: ci-sdk-swift
       swift_artifact_mode: ${{ inputs.swift_mode }}
+      product_automation: ${{ inputs.product_automation }}
       model_cache_scope: sdk-smoke-model
       timeout_minutes: 35
     secrets:

@@ -364,6 +364,13 @@ mod tests {
         );
     }
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn detects_the_glibc_loaded_into_this_process() {
+        let loaded = loaded_glibc_version().expect("glibc version");
+        assert!(parse_glibc_version(&loaded).is_some(), "{loaded}");
+    }
+
     #[test]
     fn glibc_detection_is_unknown_off_linux() {
         assert_eq!(

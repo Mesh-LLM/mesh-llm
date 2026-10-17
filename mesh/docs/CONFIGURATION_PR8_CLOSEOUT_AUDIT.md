@@ -70,7 +70,7 @@ schema row or stale manifest row from passing review:
 `model_fit.prefix_cache.enabled`, `model_fit.prefix_cache.max_entries`,
 `model_fit.prefix_cache.max_bytes`, `model_fit.prefix_cache.min_tokens`,
 `model_fit.prefix_cache.shared_stride_tokens`,
-`model_fit.prefix_cache.shared_record_limit`, `model_fit.prefix_cache.payload_mode`,
+`model_fit.prefix_cache.shared_record_limit`,
 `model_fit.keep_tokens`, `model_fit.context_shift`, `model_fit.swa_full`,
 `model_fit.checkpoint_interval`, `model_fit.checkpoint_count`,
 `model_fit.lookup_cache_static`, `model_fit.lookup_cache_dynamic`,

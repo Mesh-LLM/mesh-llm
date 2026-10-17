@@ -226,7 +226,9 @@ fn actual_custom_driver_deadline_and_causal_cancel_reap_owned_sleep_without_succ
         let result = run(
             &root,
             &driver,
-            if cancelled { "5" } else { "0.2" },
+            // The deadline must allow the driver to start before verifying
+            // that the owned sleeping process is reaped, even on a busy host.
+            if cancelled { "5" } else { "2" },
             &cancellation,
         );
         if let Some(trigger) = trigger {

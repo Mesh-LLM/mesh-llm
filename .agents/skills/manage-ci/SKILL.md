@@ -43,6 +43,12 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
+Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
+They check runner prerequisites before compiling automation or preparing SDK
+dependencies and fail if any are absent. Tool installation and upgrades belong
+to runner provisioning: never invoke Rust, Just, or Homebrew installers from
+this profile. Keep job-owned compiler-cache startup and linker verification.
+
 Automation is compiled at most once per run and platform for product-source
 work, never once per job. Each platform lane has one `product_automation_*`
 producer (`product-automation-artifact.yml` through `upload-automation` with
@@ -417,6 +423,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
+- macOS compiler-cache bootstrap must use a job-owned Unix socket before any
+  compiler probe. Eagerly start its server in every cache mode; parallel compiler
+  clients must not race to initialize a newly allocated socket. Never stop or
+  restart the host-wide default sccache server:
+  multiple runner accounts can share one physical host. Preserve the disk cache
+  independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
 - GitHub-hosted PR writes remain isolated from trusted main: normal protected
@@ -572,6 +584,39 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+Default upstream selection uses GitHub's latest published stable release of
+`ggml-org/llama.cpp`, never an unqualified `master` tip or a `b*` prerelease.
+The hosted resolver validates the release and peels its tag to an exact commit
+before any hardware work. Missing releases, malformed metadata, moved tags or
+API failures stop resolution without a fallback. Record the release tag and
+commit in the run summary. An explicit full `upstream_sha` remains an operator
+override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and-publish`
+adds independent verification and publication of the unchanged selected commit. Upstream release
+qualification never replaces the complete candidate and independent family
+passes required before publishing an upgrade PR. Only the hosted upstream
+selection step may receive the read-only GitHub token for public upstream API
+reads; workers and repair agents remain credential-free.
+
+Each candidate build owns one complete native CTest pass. The initial native
+build may compile tests without executing them; after fresh annotation
+generation, patch equality and idempotence must pass before rebuilding and
+running the complete suite. Keep the generator's own unit tests separate.
+Ordinary native build invocations retain their requested test execution.
+
+Whole-source graph rewriting needs a separate bounded deadline from Git
+metadata operations. The native generator allows 600 seconds for each complete
+rewriter pass and 60 seconds per Git command by default; an explicit `--timeout`
+overrides both. Keep both generation and idempotence passes mandatory, and
+report deadline failures with readable retained diagnostics and cleanup status.
+
+Build evidence uploads must explicitly include the run-owned hidden `.deps`
+state and native CTest results before cleanup. A truncated live log is not a
+substitute for the retained failure output.
+
+Git payloads consumed as manifests, source inventories or source identity diffs
+must use bounded raw capture, never redacted diagnostic output. Keep diagnostic
+redaction enabled separately; incomplete or oversized payloads fail admission.
+
 The trusted-main canary releases its build runner before scheduling one job
 per certified family. Every worker consumes the exact source, plan, manifest,
 and executable handoff from its producer; family workers never rebuild.
@@ -583,7 +628,11 @@ Manual `mesh_ref` is an explicitly authorized trusted-code path, not a PR
 runner exception. Keep the workflow/controller on protected main, resolve only
 same-repository branch-reachable commits once, and bind the controller and
 selected source independently in every handoff. Certify the selected revision's
-existing pin and patches without repair or publication. Selected build scripts
+existing pin and patches without repair. Default `mesh_action=certify` does not
+publish. Explicit `mesh_action=certify-and-publish` requires a complete candidate
+pass and a fresh independent build and complete family pass on the same frozen
+selected commit before publishing that exact commit as a PR to main. It never
+changes the selected pin or invokes coding repair. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 
@@ -591,6 +640,12 @@ Changed pins use up to three distributed repair attempts. Each attempt consists
 of one candidate pass followed by one independent verification pass when the
 candidate is green. Before the first candidate begins, a separate deterministic
 preflight verifies the immutable family plan and every pinned cache artifact.
+For the NAS-backed immutable model cache, validate pinned revision, blob path,
+byte size and GGUF metadata without hashing full model payloads. Re-reading
+the complete model roster over the NAS on every admission is too expensive.
+This gate does not detect same-size payload corruption; content verification
+belongs to cache population or a separate cache audit. Continue hashing
+controller plans, executable handoffs and certification evidence.
 Environment or process-supervision failures stop without asking Goose to repair
 source. Within a candidate build, prepare/build failures return to the same
 bounded Goose session. A candidate-class family or independent-verification

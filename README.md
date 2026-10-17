@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="mesh/docs/mesh-llm-wordmark.png" alt="Mesh LLM" width="420">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="mesh/docs/mesh-llm-wordmark.png">
+    <source media="(prefers-color-scheme: light)" srcset="mesh/docs/mesh-llm-wordmark-light.png">
+    <img src="mesh/docs/mesh-llm-wordmark-light.png" alt="Mesh LLM" width="420">
+  </picture>
 </p>
 
 ![Mesh LLM web console](mesh.png)

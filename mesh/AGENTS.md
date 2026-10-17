@@ -183,6 +183,13 @@ Shipped binary and CLI (`mesh/crates/mesh-llm/src/`, `mesh/crates/mesh-llm-cli/s
 - `mesh-llm-cli/src/parser.rs` — Clap surface, serve/client arg normalization, advanced help.
 - `mesh-llm-commands/src/` — user-facing handlers (auth, gpus, update, skills, agent launchers, plugin, benchmark).
 
+## Peer Inference Execution Boundary
+
+- Local-user HTTP ingress may select a mesh host and retry eligible peers.
+- Incoming QUIC HTTP inference is already assigned to this host: execute the named local model (including a registered serving plugin) or return an error to the caller. Never forward it to another mesh peer, including on local failure, missing model, automatic/virtual model selection, or routing headers.
+- Incoming QUIC inference must never reconnect to the main Mesh HTTP API port (9337 by default, including configured replacements). Use in-process execution ingress; if it is unavailable, return an error. Do not restore a TCP fallback. Headers are not proof of local origin. Model-name aliases and multiple hosts advertising the same model are normal and must not weaken the boundary.
+- Keep real-QUIC regression tests proving local execution, local-unavailable rejection without a second hop, and continued local-user HTTP routing when changing ingress or target selection.
+
 ## Mesh Protocol Compatibility
 
 Mesh compatibility across versions is critical. Nodes in the wild run different versions and must interoperate.

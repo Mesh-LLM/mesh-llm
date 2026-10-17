@@ -7,7 +7,7 @@ and the receiver imports nothing until the commit record validates
 completeness — then both sides greedy-decode the same continuation and the
 tokens are compared one-for-one. With `--baseline` the receiver also
 measures prefill-in-place, so one run yields the disaggregated-vs-local TTFT
-comparison with the counters from `EXPERIMENTS.md` (export/transfer/import
+comparison with the handoff counters (export/transfer/import
 bytes and seconds, attach, first-decode).
 
 ## Requirements
@@ -158,5 +158,5 @@ between those two columns is approximate.
 - `ttft_speedup > 1` at some prefix length — disaggregation pays on this
   pair; the break-even length feeds the Phase 4 cost gate.
 - This prototype transfers after prefill completes (no chunk streaming) and
-  runs one request; it is the measurement harness for the EXPERIMENTS.md
+  runs one request; it is the measurement harness for the handoff-cost
   falsifier, not the serving integration.

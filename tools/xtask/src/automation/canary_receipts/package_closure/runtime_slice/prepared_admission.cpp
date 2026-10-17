@@ -285,18 +285,6 @@ enum skippy_status skippy_finish_model_open(
         fprintf(stderr, "skippy: integrated MTP requested, but this split stage is missing required MTP graph tensors; continuing without drafts\n");
     }
 
-    if (skippy_runtime_has_stage_plan(config)) {
-        std::string error;
-        if (!stage_model->ctx->install_stage_program(graph_build_inputs, error)) {
-            const std::string message = "failed to install reusable stage program: " + error;
-            return fail_boundary_load(message.c_str());
-        }
-        if (stage_model->mtp_ctx != nullptr && !stage_model->mtp_ctx->install_stage_program(graph_build_inputs, error)) {
-            const std::string message = "failed to install reusable MTP stage program: " + error;
-            return fail_boundary_load(message.c_str());
-        }
-    }
-
     stage_model->lane_in_use.assign(stage_model->lane_count, false);
     stage_model->lane_resident_prefix_tokens.resize(stage_model->lane_count);
 

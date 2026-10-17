@@ -779,7 +779,7 @@ run_mmproj_smoke() {
       SKIPPY_MM_IMAGE="$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png" \
       SKIPPY_MM_ACTIVATION_WIDTH="$activation_width" \
       SKIPPY_MM_CTX_SIZE=2048 \
-      SKIPPY_MM_MAX_TOKENS=16 \
+      SKIPPY_MM_MAX_TOKENS=256 \
       SKIPPY_MM_N_GPU_LAYERS=999 \
       SKIPPY_MM_SPLIT_LAYER="$split_layer" \
       LLAMA_STAGE_BACKEND=metal \
@@ -885,7 +885,7 @@ run_workload_certify() {
   if (( certified == 1 && exit_code == 0 )); then
     verify_workload_oracle \
       "$cert_run_dir/workload-oracle-evidence.json" "$model_class" "$smoke_lane" "$oracle_lane" \
-      "$model_id" "$target" "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy-serving" \
+      "$model_id" "$target" "${SKIPPY_WORKLOAD_CANDIDATE_BIN_DIR:-$ROOT/target/debug}/skippy" \
       "$oracle_executable" "$mmproj" >>"$log_path" 2>&1 || exit_code=$?
   fi
   jq -c -n \

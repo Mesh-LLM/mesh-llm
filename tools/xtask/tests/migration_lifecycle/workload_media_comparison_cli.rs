@@ -524,8 +524,14 @@ fn server_caller(root: &Path, helper: &str) -> process::ProcessReport {
         ("CANDIDATE_BIN_DIR", root.display().to_string()),
         ("FIXTURE", root.display().to_string()),
         (
-            "CONFIG_PATH",
-            root.join("admitted config.json").display().to_string(),
+            "MODEL_PATH",
+            root.join("admitted model.gguf").display().to_string(),
+        ),
+        ("MODEL_ID", "local/asr".into()),
+        ("N_GPU_LAYERS", "0".into()),
+        (
+            "PROJECTOR_PATH",
+            root.join("admitted projector.gguf").display().to_string(),
         ),
         ("SERVER_LOG", root.join("server log").display().to_string()),
         ("PORT", "43123".into()),
@@ -564,7 +570,7 @@ fn server_caller(root: &Path, helper: &str) -> process::ProcessReport {
 }
 
 #[test]
-fn actual_asr_server_caller_binds_admitted_config_backend_and_128_token_default() {
+fn actual_asr_server_caller_binds_model_projector_backend_and_128_token_default() {
     use std::os::unix::fs::PermissionsExt as _;
     let root = tempfile::Builder::new()
         .prefix("asr caller space ")
@@ -573,15 +579,14 @@ fn actual_asr_server_caller_binds_admitted_config_backend_and_128_token_default(
     let executable = root.path().join("skippy");
     fs::write(&executable, "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > \"$FIXTURE/argv\"\nprintf '%s\\n' \"$LLAMA_STAGE_BACKEND\" > \"$FIXTURE/backend\"\nprintf 'called\\n' >> \"$FIXTURE/calls\"\n").unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
-    let config = root.path().join("admitted config.json");
-    fs::write(&config, b"immutable admitted fixture config").unwrap();
     let output = server_caller(root.path(), &candidate_server_helper());
     assert!(output.success(), "{output:?}");
     assert_eq!(
         fs::read_to_string(root.path().join("argv")).unwrap(),
         format!(
-            "serve\n--config\n{}\n--bind-addr\n127.0.0.1:43123\n--default-max-tokens\n128\n--telemetry-level\noff\n",
-            config.display()
+            "serve\n--model-path\n{}\n--model-id\nlocal/asr\n--ctx-size\n2048\n--batch-size\n2048\n--microbatch-size\n2048\n--generation-concurrency\n1\n--n-gpu-layers\n0\n--device\nCPU\n--kv-cache-offload=false\n--op-offload=false\n--mmproj\n{}\n--bind-addr\n127.0.0.1:43123\n--default-max-tokens\n128\n--telemetry-level\noff\n",
+            root.path().join("admitted model.gguf").display(),
+            root.path().join("admitted projector.gguf").display(),
         )
     );
     assert_eq!(
@@ -591,10 +596,6 @@ fn actual_asr_server_caller_binds_admitted_config_backend_and_128_token_default(
     assert_eq!(
         fs::read_to_string(root.path().join("calls")).unwrap(),
         "called\n"
-    );
-    assert_eq!(
-        fs::read(&config).unwrap(),
-        b"immutable admitted fixture config"
     );
     assert!(root.path().join("server log").is_file());
 }

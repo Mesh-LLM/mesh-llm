@@ -40,7 +40,15 @@ fn missing_selected_catalog_row_cannot_be_synthesized() {
         .as_array_mut()
         .expect("rows")
         .retain(|row| row["id"] != "linux-cuda");
-    slices["domain_rows"]["backend-cuda"] = serde_json::json!(["windows-cuda"]);
+    for rows in slices["domain_rows"]
+        .as_object_mut()
+        .expect("domain rows")
+        .values_mut()
+    {
+        rows.as_array_mut()
+            .expect("rows")
+            .retain(|row| row != "linux-cuda");
+    }
     let catalog = Catalog::parse(OWNERSHIP, &bytes(&slices)).expect("remaining catalog");
 
     let result = catalog.row(ProductRow::LinuxCuda);

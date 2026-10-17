@@ -57,6 +57,7 @@ pub(super) fn setup(root: &Path) -> options::Options {
         rewriter: fixture(),
         report: root.join("reports/report.first.json"),
         extra: vec!["-std=c++17".into(), "-DFIXTURE=1".into()],
+        rewriter_timeout: Duration::from_secs(5),
     }
 }
 
