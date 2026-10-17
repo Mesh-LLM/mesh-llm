@@ -293,7 +293,24 @@ impl PaymentService {
     /// Wait for this incoming payment to succeed; returns the receiving
     /// wallet's own record of it (what it credited and the fee it deducted).
     pub async fn wait_received(&self, invoice: &Invoice) -> Result<Transaction> {
-        let payment = self.await_incoming(invoice, false, None).await?;
+        self.received_by(invoice, None).await
+    }
+
+    /// [`Self::wait_received`], but never past `deadline`.
+    pub async fn wait_received_within(
+        &self,
+        invoice: &Invoice,
+        deadline: Duration,
+    ) -> Result<Transaction> {
+        self.received_by(invoice, Some(deadline)).await
+    }
+
+    async fn received_by(
+        &self,
+        invoice: &Invoice,
+        deadline: Option<Duration>,
+    ) -> Result<Transaction> {
+        let payment = self.await_incoming(invoice, false, deadline).await?;
         ensure!(
             payment.status == PaymentStatus::Succeeded,
             "incoming payment did not succeed"

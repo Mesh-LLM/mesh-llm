@@ -572,3 +572,63 @@ async fn an_overridden_minimum_payment_is_the_deposit_and_the_final_round_up() {
     );
     assert_eq!(bill.invoice.unwrap().amount_msat, Some(2000));
 }
+
+#[tokio::test]
+async fn a_never_paid_final_gives_up_promptly_and_still_blocks_the_buyer() {
+    // The seller's bounded final-settlement wait must change no accounting:
+    // giving up leaves each final an unpaid strike, three of them block the
+    // buyer, and a payment that lands later is still recorded.
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    let mut finals = Vec::new();
+    for n in 0..STRIKE_LIMIT {
+        let id = format!("never-{n}");
+        service
+            .ledger
+            .metered_admit(&MeteredRequest {
+                id: &id,
+                peer: "peer",
+                pricing: &rates(),
+                require_deposit: false,
+            })
+            .unwrap();
+        let invoice = service
+            .serve_settle(settle(&id, 100, 100))
+            .await
+            .unwrap()
+            .invoice
+            .unwrap();
+        let started = std::time::Instant::now();
+        let waited = service
+            .settle_received_within(&invoice, std::time::Duration::from_millis(50))
+            .await;
+        assert!(waited.is_err(), "an unpaid final must not settle");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the wait is bounded by the deadline, not the hour-long invoice expiry"
+        );
+        assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), n + 1);
+        finals.push(invoice);
+    }
+    assert!(matches!(
+        service.serve_admit(admit("after", "peer")).await.unwrap(),
+        ServeAdmitResponse::Blocked { .. }
+    ));
+
+    // A late payment, after the seller stopped waiting, is still recorded by
+    // reconciliation and lifts the block.
+    received(&wallet, &finals[0]);
+    service.metered_refresh_all().await.unwrap();
+    assert_eq!(
+        service.ledger.metered_unpaid_finals("peer").unwrap(),
+        STRIKE_LIMIT - 1
+    );
+    assert!(!matches!(
+        service
+            .serve_admit(admit("unblocked", "peer"))
+            .await
+            .unwrap(),
+        ServeAdmitResponse::Blocked { .. }
+    ));
+}

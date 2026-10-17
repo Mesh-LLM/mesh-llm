@@ -427,7 +427,11 @@ async fn settle(
         session.observations.final_amount(bill.bill_msat);
         if let Some(invoice) = bill.invoice {
             session.observations.invoice(1, &invoice);
-            let settled: SettledReceived = session
+            // Bounded by FINAL_SETTLEMENT_WAIT in the payments service. A
+            // final that does not land in time stays an unpaid strike and a
+            // late payment is recorded by reconciliation, so the exchange
+            // completes either way.
+            let settled: Result<SettledReceived> = session
                 .payments
                 .call(
                     ops::SETTLE_RECEIVED,
@@ -435,8 +439,15 @@ async fn settle(
                         invoice: invoice.clone(),
                     },
                 )
-                .await?;
-            session.observations.received(1, &invoice, &settled);
+                .await;
+            match settled {
+                Ok(settled) => session.observations.received(1, &invoice, &settled),
+                Err(error) => tracing::debug!(
+                    request = %session.terms.id,
+                    error = %format!("{error:#}"),
+                    "final invoice not settled before completing; left to reconciliation"
+                ),
+            }
         }
     }
     wire::write(writer, &Frame::Complete {}).await
@@ -475,15 +486,10 @@ pub(super) async fn recover(
         ServeRecoverResponse::Abandoned => None,
         ServeRecoverResponse::Billed { bill } => Some(bill),
     };
+    // Recovery never waits for the payment: the buyer pays inside its own
+    // settlement step and periodic reconciliation records it. Waiting here
+    // held a seller task per Recover pass until invoice expiry.
     wire::write(writer, &settlement_frame(id, bill.as_ref())).await?;
-    if let Some(invoice) = bill.and_then(|bill| bill.invoice) {
-        let _: SettledReceived = payments
-            .call(
-                ops::SETTLE_RECEIVED,
-                &mesh_llm_payments_types::contract::InvoiceRequest { invoice },
-            )
-            .await?;
-    }
     wire::write(writer, &Frame::Complete {}).await
 }
 

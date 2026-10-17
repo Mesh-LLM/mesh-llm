@@ -26,7 +26,16 @@ pub const FUNDING_INVOICE_EXPIRY_SECS: u32 = 24 * 60 * 60;
 /// "the seller gave up" and "the payer can no longer be charged" coincide.
 pub const DEPOSIT_ARRIVAL_WAIT: Duration = Duration::from_secs(DEPOSIT_INVOICE_EXPIRY_SECS as u64);
 
+/// How long the seller watches a final invoice after sending the bill. The
+/// buyer pays inside its settlement step, so a healthy payment lands well
+/// within this. An unpaid final stays an `unpaid` strike in the ledger and a
+/// late payment is still recorded by periodic reconciliation, so giving up
+/// here changes no accounting; it only stops one task and stream per bill
+/// from being held until invoice expiry.
+pub const FINAL_SETTLEMENT_WAIT: Duration = Duration::from_secs(60);
+
 const _: () = {
+    assert!(FINAL_SETTLEMENT_WAIT.as_secs() < FINAL_INVOICE_EXPIRY_SECS as u64);
     assert!(DEPOSIT_ARRIVAL_WAIT.as_secs() == DEPOSIT_INVOICE_EXPIRY_SECS as u64);
     assert!(DEPOSIT_INVOICE_EXPIRY_SECS < FINAL_INVOICE_EXPIRY_SECS);
     assert!(FINAL_INVOICE_EXPIRY_SECS <= FUNDING_INVOICE_EXPIRY_SECS);

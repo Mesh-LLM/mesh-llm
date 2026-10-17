@@ -142,6 +142,19 @@ impl PaymentService {
         Ok(payment)
     }
 
+    /// [`Self::settle_received`] that gives up after `deadline`. Giving up
+    /// records nothing: the invoice stays `unpaid` (a strike for a final) and
+    /// periodic reconciliation still records a payment that lands later.
+    pub async fn settle_received_within(
+        &self,
+        invoice: &Invoice,
+        deadline: Duration,
+    ) -> Result<Transaction> {
+        let payment = self.wait_received_within(invoice, deadline).await?;
+        self.record_received(&invoice.payment_hash).await?;
+        Ok(payment)
+    }
+
     /// Record a metered invoice paid; a paid final invoice puts its buyer in
     /// good standing for the next admission.
     async fn record_received(&self, hash: &str) -> Result<()> {

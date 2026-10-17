@@ -157,11 +157,15 @@ async fn interrupted_final() -> Result<()> {
 }
 
 fn serve_original_and_recovery(pair: &Pair, port: u16) -> ServingTask {
+    serve_exchanges(pair, port, 2)
+}
+
+fn serve_exchanges(pair: &Pair, port: u16, exchanges_expected: usize) -> ServingTask {
     let node = pair.seller_node.clone();
     tokio::spawn(async move {
         let connection = node.endpoint.accept().await.unwrap().await?;
         let mut exchanges = tokio::task::JoinSet::new();
-        for _ in 0..2 {
+        for _ in 0..exchanges_expected {
             let (send, mut recv) = accept_tunnel(&connection).await?;
             let mut prefix = vec![0; wire::HTTP_UPGRADE.len()];
             recv.read_exact(&mut prefix).await?;
@@ -181,4 +185,75 @@ fn serve_original_and_recovery(pair: &Pair, port: u16) -> ServingTask {
         // finishes its ledger entry, just like Pair::serve.
         Ok(connection)
     })
+}
+
+/// A seller answering `Recover` for a bill the buyer has not paid must not
+/// wait for that payment: the buyer gives up on each pass within seconds and
+/// retries, so a waiting seller accumulated one task and stream per pass
+/// until the hour-long invoice expiry. The final stays an unpaid strike.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn recovery_of_an_unpaid_final_completes_without_waiting_for_payment() -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(20), unpaid_recovery()).await?
+}
+
+async fn unpaid_recovery() -> Result<()> {
+    let network = Arc::new(Network::default());
+    let pair = Pair::new(network.clone()).await?;
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    let failure = network.clone();
+    let backend = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        read_backend_request(&mut stream).await?;
+        // Deposit already succeeded. Lose only the final payment submission.
+        failure.fail_next_payment.store(true, Ordering::SeqCst);
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 52\r\nConnection: close\r\n\r\n{\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":3}}").await?;
+        stream.shutdown().await?;
+        Ok::<_, anyhow::Error>(())
+    });
+    let serving = serve_exchanges(&pair, port, 3);
+    pair.connect().await?;
+    let raw = b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n\r\n{\"model\":\"test\",\"prompt\":\"Hi\",\"max_tokens\":8}";
+    let response = pair.request(raw, None).await?;
+    assert!(response.contains("completion_tokens"), "{response}");
+    network.payment_failed.notified().await;
+    let id = pair.buyer.ledger.requests()?[0].terms.id.clone();
+
+    let (mut send, mut recv) = pair
+        .buyer_node
+        .open_http_tunnel(pair.seller_node.id())
+        .await?;
+    send.write_all(wire::HTTP_UPGRADE).await?;
+    wire::write(&mut send, &Frame::Recover { id: id.clone() }).await?;
+    let answered = tokio::time::timeout(Duration::from_secs(3), async {
+        let settlement = wire::read(&mut recv).await?;
+        let complete = wire::read(&mut recv).await?;
+        Ok::<_, anyhow::Error>((settlement, complete))
+    })
+    .await
+    .expect("recovery must not wait for the unpaid final to settle")?;
+    let (Frame::Settlement { invoice, .. }, Frame::Complete {}) = answered else {
+        panic!("expected Settlement then Complete, got {answered:?}");
+    };
+    assert!(invoice.is_some(), "the unpaid final is replayed");
+    assert_eq!(
+        network.payments.load(Ordering::SeqCst),
+        1,
+        "no payment made"
+    );
+    assert_eq!(
+        pair.seller.ledger.unpaid_metered_invoices()?.len(),
+        1,
+        "the unpaid final remains a strike"
+    );
+    drop(send);
+    // Paying late still settles the debt: the original exchange's bounded
+    // wait observes it, so no seller task outlives the fixture.
+    crate::network::openai::payment_recovery::recover(&pair.buyer_node).await?;
+    pair.wait_completed(1).await?;
+    assert_eq!(network.payments.load(Ordering::SeqCst), 2);
+    backend.await??;
+    let _connection = serving.await??;
+    pair.close().await;
+    Ok(())
 }

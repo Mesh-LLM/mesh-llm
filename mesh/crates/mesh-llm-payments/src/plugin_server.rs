@@ -300,12 +300,20 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
         router,
         source,
         ops::SETTLE_RECEIVED,
-        "Wait for an invoice to settle and record it received.",
+        "Wait a bounded time for an invoice to settle and record it received.",
         |service, request: InvoiceRequest| async move {
-            // Durable settlement continues even if the caller goes away.
-            let payment =
-                tokio::spawn(async move { service.settle_received(&request.invoice).await })
-                    .await??;
+            // Settlement continues even if the caller goes away, but never
+            // past FINAL_SETTLEMENT_WAIT: an unpaid final stays a ledger
+            // strike and reconciliation records a late payment.
+            let payment = tokio::spawn(async move {
+                service
+                    .settle_received_within(
+                        &request.invoice,
+                        crate::lifetimes::FINAL_SETTLEMENT_WAIT,
+                    )
+                    .await
+            })
+            .await??;
             // A wallet that reports no amount reports 0; never claim a 0 credit.
             Ok(SettledReceived {
                 credited_msat: (payment.amount_msat > 0).then_some(payment.amount_msat),
