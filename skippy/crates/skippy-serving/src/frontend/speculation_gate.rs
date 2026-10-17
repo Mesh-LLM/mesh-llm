@@ -9,7 +9,7 @@
 //!
 //! # Why this is a controller and not a formula
 //!
-//! `WAN_SPLIT_PERF.md` gives a closed form: speculation pays when
+//! A round-trip cost model predicts that speculation pays when
 //! `C_verify + 2·RTT/k_accepted < C_total + 2·RTT`. Tempting, and not
 //! evaluable here. `k_accepted` and the per-window verify cost are both
 //! measured, but `C_total` — plain decode time for all layers, under the same
@@ -25,7 +25,7 @@
 //!
 //! # The failure mode this must not have
 //!
-//! `WAN_SPLIT_PERF.md` records a run with `window_shrinks 0` across 231 early
+//! A regression workload had `window_shrinks 0` across 231 early
 //! rejections: an adaptive policy that never adapted, so it kept proposing
 //! deep, kept rejecting, and kept paying three round trips to commit what
 //! plain decode commits in one. A gate that cannot be shown to stand down
@@ -737,7 +737,7 @@ mod tests {
     /// The `window_shrinks 0` bug as a test: a configuration that loses has to
     /// actually be stood down.
     ///
-    /// Numbers are the losing run from `WAN_SPLIT_PERF.md` — 660 accepted of
+    /// Regression workload: 660 accepted of
     /// 2200 drafted, 12 tok/s against 17 for plain decode. Note the 29.8%
     /// acceptance: healthy-looking, which is why acceptance is not the trigger.
     #[test]

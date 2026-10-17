@@ -49,7 +49,7 @@ just family-certify FAMILY /path/to/model.gguf \
   --activation-width H \
   --ctx-size 256 \
   --n-gpu-layers 999 \
-  --corpus skippy/crates/skippy-bench/corpora/kv_mixed_prompts.jsonl \
+  --corpus skippy/evals/corpora/kv_mixed_prompts.jsonl \
   --corpus-limit 24 \
   --max-tokens 8 \
   --run-id family-cert-$(date +%Y%m%d-%H%M%S)

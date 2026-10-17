@@ -178,7 +178,7 @@ Embedded staged runtime (skippy):
 - `skippy-ffi/` — Rust ABI bindings to the patched llama.cpp staged runtime.
 - `skippy-runtime/` — Rust-side staged runtime, package materialization, model info.
 - `skippy-serving/` — embedded staged-runtime serving (frontend, binary transport, runtime state, embedded HTTP).
-- `skippy-protocol/`, `skippy-topology/`, `skippy-coordinator/`, `skippy-cache/`, `skippy-metrics/`, `skippy-bench/`, `skippy-correctness/`, `skippy-package-builder/` — supporting skippy infrastructure.
+- `skippy-protocol/`, `skippy-topology/`, `skippy-coordinator/`, `skippy-cache/`, `skippy-metrics/`, `skippy-correctness/`, `skippy-package-builder/` — supporting skippy infrastructure.
 
 Tools and benchmarks:
 
