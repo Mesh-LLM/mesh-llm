@@ -1,0 +1,30 @@
+{
+  "name": "exchange_corroboration/1",
+  "kind": "projection",
+  "embeds": [],
+  "members": [
+    {"name": "half", "required": true, "reads": ["capsule_id"], "unit": "digest"},
+    {"name": "client_nonce_sha256", "required": true, "reads": ["model_attestation.compute_attestation.x-mesh-poc-v1.client_nonce"], "unit": "digest"},
+    {"name": "role", "required": true, "reads": ["model_attestation.compute_attestation.x-mesh-poc-v1.role"], "unit": "requested|served"},
+    {"name": "request_digest", "required": true, "reads": ["effect.request_digest"], "unit": "digest"},
+    {"name": "response_digest", "required": true, "reads": ["effect.response_digest"], "unit": "digest"},
+    {"name": "inclusion", "required": true, "reads": ["the inclusion proof of half at the resolved anchor"], "unit": "proof"}
+  ],
+  "reads": [
+    "capsule_id",
+    "effect.request_digest",
+    "effect.response_digest",
+    "model_attestation.compute_attestation.x-mesh-poc-v1.client_nonce",
+    "model_attestation.compute_attestation.x-mesh-poc-v1.role"
+  ],
+  "excludes": [
+    "record bodies, payloads, artifact text and any free text",
+    "counterparty identity",
+    "prices and amounts",
+    "timestamps other than those inside the anchor checkpoint",
+    "exchange_id",
+    "client_nonce_source",
+    "any member naming the requester"
+  ],
+  "spec": "https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/crates/mesh-llm-capsules-plugin/docs/PRD-SERVICE-EVIDENCE.md"
+}

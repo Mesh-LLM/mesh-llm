@@ -170,6 +170,30 @@
         }
       },
       {
+        "key": "share_exchange_corroboration",
+        "value_schema": {
+          "kind": "enum",
+          "enum_values": [
+            "off",
+            "on"
+          ],
+          "allow_additional_properties": false
+        },
+        "required": false,
+        "default_json": "\"off\"",
+        "apply_mode": "static_on_load",
+        "restart_scope": "none",
+        "visibility": "user",
+        "description": "Answer a node this node has never exchanged with when it asks whether this node holds a half of one exchange, named by its client nonce (on), or decline (off, the default). The answer carries the half's id, role and two digests, never the record or who was on the other side. Off, such a node gets a signed policy_declined that says nothing about who asked.",
+        "presentation": {
+          "label": "Exchange corroboration",
+          "category_id": "share",
+          "category_label": "Sharing policy",
+          "category_summary": "What this node shares, with whom, by default. Every default keys on relationship (counterparty in the window), never proximity or latency.",
+          "category_order": 6
+        }
+      },
+      {
         "key": "adjudicate_differing_twins",
         "value_schema": {
           "kind": "enum",

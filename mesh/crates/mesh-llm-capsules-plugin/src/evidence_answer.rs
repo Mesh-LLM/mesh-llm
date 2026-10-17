@@ -134,6 +134,8 @@ pub struct Responder<'a> {
     pub history_segments: &'a str,
     /// `share_policy::shares_standard_history()`.
     pub share_standard_history: bool,
+    /// `share_policy::shares_exchange_corroboration()`.
+    pub share_exchange_corroboration: bool,
     /// The keys a requester's signature is bound through
     /// (`requester_auth::bound_node`).
     pub keys: requester_auth::Keys<'a>,
@@ -327,6 +329,14 @@ fn carries_records(req: &Request) -> bool {
 /// the operator serves them to any peer (`peers`); Standard History, unless
 /// the operator shares it.
 fn needs_requester(req: &Request, responder: &Responder<'_>) -> bool {
+    // `exchange_corroboration/1` has a setting of its own: Standard History
+    // being shared never releases it.
+    if crate::exchange_corroboration::is_derivation(req.derivation.as_ref()) {
+        if cfg!(feature = "mutant-corroboration-uses-standard-history-gate") {
+            return !responder.share_standard_history;
+        }
+        return !responder.share_exchange_corroboration;
+    }
     if carries_records(req) {
         responder.history_segments != "peers"
     } else {
@@ -461,6 +471,9 @@ fn answer_from(
             Reason::PolicyDeclined
         });
     }
+    if crate::exchange_corroboration::is_derivation(req.derivation.as_ref()) {
+        return corroboration_answer(req, request_bytes, principal, responder, view);
+    }
     // 7. Resolve.
     let anchor = match resolve::resolve(req, view) {
         Resolution::Artifact(anchor) => anchor,
@@ -534,6 +547,61 @@ fn answer_from(
     }
 
     // 10. Build and sign.
+    evidence_artifact::build(
+        &Build {
+            request: req,
+            request_bytes,
+            resolved: &anchor,
+            at,
+            records: &records,
+            signing_key: responder.signing_key,
+            issued_at: responder.now,
+        },
+        view,
+    )
+}
+
+/// Steps 7 to 10 for `exchange_corroboration/1`: resolved against the bound
+/// client nonces only, answered whole or refused whole. Under the default
+/// (the setting off), only to a node every matching half names as the other
+/// side of its exchange; never a half that never leaves this node.
+fn corroboration_answer(
+    req: &Request,
+    request_bytes: &[u8],
+    principal: Option<&str>,
+    responder: &Responder<'_>,
+    view: &LogView<'_>,
+) -> Result<Value, Reason> {
+    use crate::exchange_corroboration as corroboration;
+    let index = view.index;
+    let anchor = match resolve::resolve(req, &corroboration::NonceView(view)) {
+        Resolution::Artifact(anchor @ ResolvedAnchor::Anchor(_)) => anchor,
+        Resolution::Artifact(ResolvedAnchor::ExchangeHalf(_)) => return Err(Reason::NoSuchSubject),
+        Resolution::Refuse(reason) => return Err(reason),
+    };
+    let at = serving_position(index, &anchor)?;
+    #[allow(unused_mut)]
+    let mut records = corroboration::matching_records(req, &index.chain[at].record, view);
+    if records.len() as u64 > MAX_ANSWER_RECORDS {
+        return Err(Reason::PolicyDeclined);
+    }
+    let never_leaves = |i: &u64| index.leaves.get(*i as usize).is_none_or(|l| l.never_leaves);
+    if policy_gate_applies() && records.iter().any(never_leaves) {
+        return Err(Reason::NotAuthorized);
+    }
+    if needs_requester(req, responder) && policy_gate_applies() {
+        if cfg!(feature = "mutant-corroboration-filters-per-asker") {
+            let asker = principal.map(str::trim);
+            records.retain(|&i| {
+                index
+                    .leaves
+                    .get(i as usize)
+                    .is_some_and(|l| l.counterparty.as_deref() == asker)
+            });
+        } else if !may_serve_all(index, &records, principal, "counterparties") {
+            return Err(Reason::NotAuthorized);
+        }
+    }
     evidence_artifact::build(
         &Build {
             request: req,
@@ -720,6 +788,17 @@ pub fn verify_response(
     let Ok(req) = request::parse_json(sent) else {
         return not_evidence("the request sent is not a -00 request".into());
     };
+    if crate::exchange_corroboration::is_derivation(req.derivation.as_ref()) {
+        return match crate::exchange_corroboration::verify(sent, response, key) {
+            crate::exchange_corroboration::Verified::Halves { anchor, halves } => {
+                json!({"state": "artifact", "anchor": anchor, "halves": halves.len()})
+            }
+            crate::exchange_corroboration::Verified::Refusal(reason) => {
+                json!({"state": "refusal", "reason": reason.token()})
+            }
+            crate::exchange_corroboration::Verified::Failed(why) => not_evidence(why),
+        };
+    }
     let witness_key = |ts_url: &str| {
         if cfg!(feature = "mutant-answer-ignores-witness-keys") {
             return None;
@@ -862,6 +941,7 @@ mod tests {
                 now: NOW,
                 history_segments: segments,
                 share_standard_history,
+                share_exchange_corroboration: false,
                 keys: Keys {
                     announced: &announced,
                     configured: None,
@@ -1074,6 +1154,7 @@ mod tests {
             now: NOW,
             history_segments: "peers",
             share_standard_history: true,
+            share_exchange_corroboration: false,
             keys: Keys {
                 announced: &announced,
                 configured: None,
@@ -1100,6 +1181,7 @@ mod tests {
             now: "yesterday",
             history_segments: "peers",
             share_standard_history: true,
+            share_exchange_corroboration: false,
             keys: Keys {
                 announced: &announced,
                 configured: None,
@@ -1707,6 +1789,7 @@ mod tests {
             now: NOW,
             history_segments: "peers",
             share_standard_history: false,
+            share_exchange_corroboration: false,
             keys: Keys {
                 announced: &announced,
                 configured: None,
@@ -1748,6 +1831,7 @@ mod tests {
                 now: NOW,
                 history_segments: segments,
                 share_standard_history: false,
+                share_exchange_corroboration: false,
                 keys: Keys {
                     announced: &announced,
                     configured: None,
@@ -1944,6 +2028,7 @@ mod tests {
             now: NOW,
             history_segments: "peers",
             share_standard_history: true,
+            share_exchange_corroboration: false,
             keys: Keys {
                 announced: &announced,
                 configured: None,
@@ -2066,6 +2151,7 @@ mod tests {
                     now: NOW,
                     history_segments: segments,
                     share_standard_history: false,
+                    share_exchange_corroboration: false,
                     keys: Keys {
                         announced: &announced,
                         configured: None,
@@ -2347,6 +2433,7 @@ mod tests {
             now: NOW,
             history_segments: "counterparties",
             share_standard_history: false,
+            share_exchange_corroboration: false,
             keys: Keys {
                 announced: &announced,
                 configured: None,

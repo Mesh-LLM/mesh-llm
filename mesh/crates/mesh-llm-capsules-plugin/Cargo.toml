@@ -56,6 +56,23 @@ mutant-requester-auth-downgrades-all = []
 # Evidence Request's tag again. CI requires the cross-channel tests to FAIL.
 mutant-requester-auth-shared-tag = []
 
+# Deliberately-broken historical-reference corroboration
+# (exchange_corroboration/1): each builds one fault, and CI requires the
+# named exchange_corroboration test to FAIL (gates/mutants.json).
+# Resolves against the wide correlation index (exchange_id, request nonce,
+# digest binding) instead of the bound client nonce.
+mutant-corroboration-wide-index = []
+# Joins halves on their digest binding when X's half binds no client nonce.
+mutant-corroboration-joins-by-binding = []
+# Records a signed refusal as an absence.
+mutant-corroboration-refusal-as-absence = []
+# Gates the derivation on share_standard_history instead of its own setting.
+mutant-corroboration-uses-standard-history-gate = []
+# Drops the halves that do not name the asker instead of refusing whole.
+mutant-corroboration-filters-per-asker = []
+# Counts two halves with the same role as agreeing.
+mutant-corroboration-role-equality = []
+
 # The referee's implementation mutants: each builds the referee with one
 # deliberate fault (vectors/parity/referee/mutants.json names the fault and
 # the cases that must catch it). CI builds each and requires the referee

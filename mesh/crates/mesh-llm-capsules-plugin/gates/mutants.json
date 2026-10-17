@@ -45,6 +45,36 @@
       "feature": "mutant-requester-auth-shared-tag",
       "tests": "requester_auth::",
       "must_print": { "failed_test": "a_request_signed_for_one_channel_fails_on_every_other" }
+    },
+    {
+      "feature": "mutant-corroboration-wide-index",
+      "tests": "exchange_corroboration::",
+      "must_print": { "failed_test": "a_record_matched_only_by_exchange_id_nonce_or_binding_is_no_such_subject" }
+    },
+    {
+      "feature": "mutant-corroboration-joins-by-binding",
+      "tests": "exchange_corroboration::",
+      "must_print": { "failed_test": "a_pair_with_no_shared_nonce_is_not_joinable_and_no_one_is_asked" }
+    },
+    {
+      "feature": "mutant-corroboration-refusal-as-absence",
+      "tests": "exchange_corroboration::",
+      "must_print": { "failed_test": "a_refusal_is_never_an_absence_and_silence_never_a_refusal" }
+    },
+    {
+      "feature": "mutant-corroboration-uses-standard-history-gate",
+      "tests": "exchange_corroboration::",
+      "must_print": { "failed_test": "sharing_standard_history_does_not_release_corroboration" }
+    },
+    {
+      "feature": "mutant-corroboration-filters-per-asker",
+      "tests": "exchange_corroboration::",
+      "must_print": { "failed_test": "a_counterparty_is_refused_whole_when_one_half_names_another_node" }
+    },
+    {
+      "feature": "mutant-corroboration-role-equality",
+      "tests": "exchange_corroboration::",
+      "must_print": { "failed_test": "two_halves_with_the_same_role_disagree_on_role" }
     }
   ]
 }

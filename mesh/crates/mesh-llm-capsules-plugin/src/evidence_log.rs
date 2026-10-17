@@ -214,6 +214,10 @@ pub struct LedgerIndex {
     nodes: MemoryNodeStore,
     by_id: HashMap<String, u64>,
     correlations: HashMap<String, Vec<u64>>,
+    /// SHA-256 (lowercase hex) of each record's bound client nonce, to the
+    /// records that carry it: the only key `exchange_corroboration/1`
+    /// resolves against ([`LedgerIndex::by_client_nonce`]).
+    client_nonces: HashMap<String, Vec<u64>>,
     citations: HashMap<String, Vec<u64>>,
     /// Why indexing stopped, if it did: nothing after this line is a leaf.
     capsules_stopped: Option<String>,
@@ -234,6 +238,7 @@ impl LedgerIndex {
             nodes: MemoryNodeStore::new(),
             by_id: HashMap::new(),
             correlations: HashMap::new(),
+            client_nonces: HashMap::new(),
             citations: HashMap::new(),
             capsules_stopped: None,
             chain: Vec::new(),
@@ -292,6 +297,9 @@ impl LedgerIndex {
             self.by_id.entry(capsule_id.clone()).or_insert(index);
             for id in record_correlation_ids(&record) {
                 self.correlations.entry(id).or_default().push(index);
+            }
+            if let Some(digest) = client_nonce_digest(&record) {
+                self.client_nonces.entry(digest).or_default().push(index);
             }
             for half in counterparty_half_citations(&record) {
                 self.citations.entry(half).or_default().push(index);
@@ -428,6 +436,17 @@ impl LedgerIndex {
 
     pub fn citing(&self, half: &str) -> &[u64] {
         self.citations.get(half).map_or(&[], Vec::as_slice)
+    }
+
+    /// The records whose bound client nonce hashes to `digest` (64 lowercase
+    /// hex). Never the wider [`LedgerIndex::correlated`] index: an
+    /// `exchange_id`, a request nonce or a digest binding equal to `digest`
+    /// finds nothing here.
+    pub fn by_client_nonce(&self, digest: &str) -> &[u64] {
+        if cfg!(feature = "mutant-corroboration-wide-index") {
+            return self.correlated(digest);
+        }
+        self.client_nonces.get(digest).map_or(&[], Vec::as_slice)
     }
 
     /// A view that reads record bodies from the ledger file.
@@ -623,6 +642,23 @@ fn collect_correlations(value: &Value, out: &mut Vec<String>) {
         Value::Array(items) => items.iter().for_each(|v| collect_correlations(v, out)),
         _ => {}
     }
+}
+
+/// The SHA-256 (lowercase hex) of the client nonce a record binds, over the
+/// nonce's UTF-8 octets: `x-mesh-poc-v1.client_nonce` and nothing else. `None`
+/// when the record binds none, binds the host-served placeholder (which every
+/// nonce-less host-served record carries, so it names no exchange), or one
+/// out of the indexed bounds.
+pub fn client_nonce_digest(record: &Value) -> Option<String> {
+    record
+        .pointer("/model_attestation/compute_attestation/x-mesh-poc-v1/client_nonce")
+        .and_then(Value::as_str)
+        .filter(|nonce| {
+            !nonce.is_empty()
+                && nonce.len() <= MAX_CORRELATION_ID_LEN
+                && *nonce != HOST_SERVED_NO_NONCE
+        })
+        .map(|nonce| hex::encode(Sha256::digest(nonce.as_bytes())))
 }
 
 /// The exchange halves a record cites as its counterparty's half

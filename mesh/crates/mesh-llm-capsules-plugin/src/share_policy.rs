@@ -32,6 +32,9 @@ pub const WITNESS_KEY: &str = "witness";
 /// Standard Service History (checkpoints, `history_card/1`,
 /// `served_summary/1`) to a requester that is not this node's counterparty.
 pub const STANDARD_HISTORY_KEY: &str = "share_standard_history";
+/// `exchange_corroboration/1` (one exchange's half digests) to a requester
+/// that no record of this node names as its counterparty.
+pub const EXCHANGE_CORROBORATION_KEY: &str = "share_exchange_corroboration";
 /// Whether this node advertises that it answers evidence requests at all.
 pub const ADVERTISE_EVIDENCE_REQUESTS_KEY: &str = "advertise_evidence_requests";
 /// The opt-in stop-routing rule (`routing_rule`): N, and D in days. Same
@@ -131,6 +134,20 @@ pub(crate) fn shares_standard_history_for(raw: Option<&str>) -> bool {
 /// other nodes.
 pub const ENV_ADVERTISE_EVIDENCE_REQUESTS: &str = "CAPSULES_ADVERTISE_EVIDENCE_REQUESTS";
 
+/// This process's own env var for `share_exchange_corroboration`.
+pub const ENV_EXCHANGE_CORROBORATION: &str = "CAPSULES_SHARE_EXCHANGE_CORROBORATION";
+
+/// Whether `exchange_corroboration/1` goes to a requester that is not this
+/// node's counterparty: only when the operator turned it on. Off by default.
+/// A setting of its own: `share_standard_history` never releases it.
+pub fn shares_exchange_corroboration() -> bool {
+    switched_on(
+        crate::settings::var(ENV_EXCHANGE_CORROBORATION)
+            .ok()
+            .as_deref(),
+    )
+}
+
 /// An on/off switch: on only for `on` (or `1`, `true`, `yes`); unset and
 /// anything else is off.
 fn switched_on(raw: Option<&str>) -> bool {
@@ -144,13 +161,14 @@ fn switched_on(raw: Option<&str>) -> bool {
 /// as off: for the page, so a typo is seen rather than silently obeyed.
 pub fn setting_problems() -> Vec<String> {
     const ON_OFF: &[&str] = &["on", "off", "1", "0", "true", "false", "yes", "no"];
-    let known: [(&str, &[&str]); 7] = [
+    let known: [(&str, &[&str]); 8] = [
         (ENV_RECORD_AT_COMPLETION, &["counterparty", "off"]),
         (
             ENV_HISTORY_SEGMENTS,
             &["counterparties", DEPRECATED_PROSPECTIVE, "peers", "off"],
         ),
         (ENV_STANDARD_HISTORY, ON_OFF),
+        (ENV_EXCHANGE_CORROBORATION, ON_OFF),
         (ENV_ADVERTISE_EVIDENCE_REQUESTS, ON_OFF),
         (ENV_ADJUDICATIONS, &["deliver_to_subjects", "off"]),
         (
@@ -305,6 +323,20 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                 .category(CATEGORY_ID, CATEGORY_LABEL, CATEGORY_SUMMARY, 5),
         )
         .setting(
+            // Wording is a draft awaiting the operator's text (Q7 ruling §5).
+            config_setting(EXCHANGE_CORROBORATION_KEY, config_enum(["off", "on"]))
+                .default_value(&"off")
+                .description(
+                    "Answer a node this node has never exchanged with when it asks whether this \
+                     node holds a half of one exchange, named by its client nonce (on), or \
+                     decline (off, the default). The answer carries the half's id, role and two \
+                     digests, never the record or who was on the other side. Off, such a node \
+                     gets a signed policy_declined that says nothing about who asked.",
+                )
+                .label("Exchange corroboration")
+                .category(CATEGORY_ID, CATEGORY_LABEL, CATEGORY_SUMMARY, 6),
+        )
+        .setting(
             config_setting(ADJUDICATE_DIFFERING_TWINS_KEY, config_enum(["off", "on"]))
                 .default_value(&"off")
                 .description(
@@ -383,6 +415,7 @@ mod tests {
                 WITNESS_KEY,
                 STANDARD_HISTORY_KEY,
                 ADVERTISE_EVIDENCE_REQUESTS_KEY,
+                EXCHANGE_CORROBORATION_KEY,
                 ADJUDICATE_DIFFERING_TWINS_KEY,
                 REFEREE_BAR_DAYS_KEY,
                 STOP_ROUTING_AFTER_KEY,
@@ -420,7 +453,7 @@ mod tests {
             );
             checked += 1;
         }
-        assert_eq!(checked, 6, "the six choice settings were checked");
+        assert_eq!(checked, 7, "the seven choice settings were checked");
     }
 
     #[test]
@@ -470,6 +503,7 @@ mod tests {
             (ADJUDICATIONS_KEY, "SHARE_ADJUDICATIONS"),
             (WITNESS_KEY, "CHECKPOINT_WITNESS_URLS"),
             (STANDARD_HISTORY_KEY, "SHARE_STANDARD_HISTORY"),
+            (EXCHANGE_CORROBORATION_KEY, "SHARE_EXCHANGE_CORROBORATION"),
             (
                 ADVERTISE_EVIDENCE_REQUESTS_KEY,
                 "ADVERTISE_EVIDENCE_REQUESTS",
@@ -502,6 +536,10 @@ mod tests {
         );
         assert_eq!(
             by_key(STANDARD_HISTORY_KEY).default_json.as_deref(),
+            Some("\"off\"")
+        );
+        assert_eq!(
+            by_key(EXCHANGE_CORROBORATION_KEY).default_json.as_deref(),
             Some("\"off\"")
         );
         assert_eq!(

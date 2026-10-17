@@ -34,7 +34,7 @@ pub(super) fn inclusion_parts(octets: &[u8]) -> Option<(u64, Vec<Hash>)> {
 }
 
 /// The leaf an inclusion proof is for.
-pub(super) fn inclusion_leaf(octets: &[u8]) -> Option<u64> {
+pub(crate) fn inclusion_leaf(octets: &[u8]) -> Option<u64> {
     let (index, _) = inclusion_parts(octets)?;
     pos_to_leaf_index(index).ok()
 }
@@ -46,7 +46,7 @@ pub(super) fn inclusion_leaf(octets: &[u8]) -> Option<u64> {
 /// from that node to the one peak that holds it. A leaf cannot be passed off
 /// at another position or under another size: a peak that is itself a leaf
 /// would otherwise match any position given an empty path.
-pub(super) fn proves(proof: &[u8], leaf: u64, entry: &Hash, size: u64, peaks: &[Hash]) -> bool {
+pub(crate) fn proves(proof: &[u8], leaf: u64, entry: &Hash, size: u64, peaks: &[Hash]) -> bool {
     let Some((index, path)) = inclusion_parts(proof) else {
         return false;
     };

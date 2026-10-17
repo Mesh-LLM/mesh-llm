@@ -13,6 +13,7 @@ mod evidence_panes;
 #[cfg(test)]
 mod evidence_request_parity;
 mod evidence_routes;
+mod exchange_corroboration;
 mod exchange_text;
 mod ledger_fetch_bridge;
 mod lifecycle_channel;
@@ -942,6 +943,27 @@ fn with_evidence_operations(
                         context,
                         ledger_dir.clone(),
                         self_id,
+                    ))
+                }
+            }),
+    );
+    builder = builder.mcp_item(
+        mcp::tool(exchange_corroboration::HISTORICAL_REFERENCE_OPERATION)
+            .description(
+                "Ask a peer X for its half of an earlier exchange, by the SHA-256 of the \
+                 exchange's client nonce (or X's own record of it), then ask each named Y once \
+                 for Y's half. Returns, per Y, whether the halves agree, disagree (which \
+                 fields), are not joinable, one-sided, refused, absent or unverifiable, with \
+                 its frame and independence stated separately. No figure across Ys.",
+            )
+            .input::<exchange_corroboration::RunArgs>()
+            .handle({
+                let ledger_dir = capsules_for_delivery.ledger_dir().to_path_buf();
+                move |args, context| {
+                    Box::pin(exchange_corroboration::handle_historical_reference(
+                        args,
+                        context,
+                        ledger_dir.clone(),
                     ))
                 }
             }),
@@ -1921,6 +1943,7 @@ mod published_operations_tests {
             .collect();
         for name in [
             EVIDENCE_REQUEST_OPERATION,
+            exchange_corroboration::HISTORICAL_REFERENCE_OPERATION,
             routing_choice_bridge::LOCAL_ROUTING_CHOICE_OPERATION,
             LEDGER_FETCH_OPERATION,
             adjudication_records::DELIVER_OPERATION,

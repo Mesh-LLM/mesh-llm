@@ -252,6 +252,7 @@ async fn answer_in_process(
             now: &now,
             history_segments: crate::share_policy::history_segments(),
             share_standard_history: crate::share_policy::shares_standard_history(),
+            share_exchange_corroboration: crate::share_policy::shares_exchange_corroboration(),
             keys: crate::requester_auth::Keys {
                 announced: &announced,
                 configured: configured.as_deref(),
@@ -566,7 +567,7 @@ fn add_requester_id(request: &mut serde_json::Value, self_id: Option<&str>) {
 }
 
 /// An announced `key_id` (raw Ed25519 public key, lowercase hex) as a key.
-fn verifying_key(key_id: &str) -> Option<ed25519_dalek::VerifyingKey> {
+pub(crate) fn verifying_key(key_id: &str) -> Option<ed25519_dalek::VerifyingKey> {
     let bytes: [u8; 32] = hex::decode(key_id).ok()?.try_into().ok()?;
     ed25519_dalek::VerifyingKey::from_bytes(&bytes).ok()
 }

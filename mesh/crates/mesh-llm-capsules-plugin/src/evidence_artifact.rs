@@ -31,7 +31,12 @@
 //! - `history_card/1`: RFC 8785 of `{anchor, derivation, evidence_stream,
 //!   history, subject}`, each entry `{checkpoint, consistency_from_previous}`;
 //! - `served_summary/1` (this node's own derivation): RFC 8785 of `{anchor,
-//!   derivation, evidence_stream, served_summary, subject}`.
+//!   derivation, evidence_stream, served_summary, subject}`;
+//! - `exchange_corroboration/1` (this node's own, named by its definition
+//!   digest): RFC 8785 of `{anchor, derivation, entries, evidence_stream,
+//!   subject}`, each entry the derivation's members with `inclusion` the
+//!   half's `cll-inclusion-proof` at the anchor, in hex
+//!   (`crate::exchange_corroboration`).
 //!
 //! **Beyond the profile.** The profile defines no material for a record set,
 //! the checkpoint list or a derivation (its P-13), and no carrier for a
@@ -40,10 +45,10 @@
 //!
 //! - for a record set, the anchor's `cll-checkpoint` and one
 //!   `cll-inclusion-proof` per record, in the artifact's order; for
-//!   `served_summary/1`, the anchor's `cll-checkpoint`. A profile verifier
-//!   reports `anchor_inclusion` `NOT_CHECKED` for these subjects before it
-//!   reads any material (§6.2.1 step 1), so the extra items change nothing
-//!   for it;
+//!   `served_summary/1` and `exchange_corroboration/1`, the anchor's
+//!   `cll-checkpoint`. A profile verifier reports `anchor_inclusion`
+//!   `NOT_CHECKED` for these subjects before it reads any material
+//!   (§6.2.1 step 1), so the extra items change nothing for it;
 //! - the receipts its witnesses issued for the checkpoints the answer
 //!   carries, as an unsigned top-level `witness_receipts` member of the
 //!   reply, which a profile reader ignores. A receipt authenticates itself:
@@ -71,7 +76,7 @@ use sha2::{Digest, Sha256};
 
 use crate::evidence_log::{ChainCheckpoint, LogView, Record};
 
-mod cll_proofs;
+pub(crate) mod cll_proofs;
 
 use crate::served_summary::SERVED_SUMMARY_DERIVATION_TOKEN;
 use cll_proofs::{consistent, inclusion_leaf, proves};
@@ -169,6 +174,16 @@ pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
             );
             head.insert("derivation".into(), json!(SERVED_SUMMARY_DERIVATION_TOKEN));
             head.insert("served_summary".into(), summary);
+            material.push((KIND_CHECKPOINT.into(), statement.clone()));
+            jcs(head)?
+        }
+        (Some(Derivation::Digest(d)), Subject::Correlation(id))
+            if d == crate::exchange_corroboration::DEFINITION_DIGEST =>
+        {
+            let entries =
+                crate::exchange_corroboration::entries(id, &served.record, b.records, view)?;
+            head.insert("derivation".into(), json!(d));
+            head.insert("entries".into(), entries);
             material.push((KIND_CHECKPOINT.into(), statement.clone()));
             jcs(head)?
         }
@@ -296,7 +311,7 @@ fn jcs(object: Map<String, Value>) -> Result<Vec<u8>, Reason> {
         .map_err(|_| Reason::PolicyDeclined)
 }
 
-fn inclusion(view: &LogView<'_>, leaf: u64, size: u64) -> Result<Vec<u8>, Reason> {
+pub(crate) fn inclusion(view: &LogView<'_>, leaf: u64, size: u64) -> Result<Vec<u8>, Reason> {
     view.index
         .inclusion_path(leaf, size)
         .and_then(|path| encode_inclusion_proof(leaf, &path))
@@ -324,6 +339,9 @@ pub struct Checked {
     pub records: Vec<u64>,
     /// The checkpoints it lists (`checkpoints`, `history_card/1`).
     pub checkpoints: usize,
+    /// The halves an `exchange_corroboration/1` answer states, each proven
+    /// under the anchor. Empty for any other answer.
+    pub halves: Vec<crate::exchange_corroboration::Half>,
     /// The witness receipts it carries, each as checked.
     pub receipts: Vec<ReceiptCheck>,
 }
@@ -443,9 +461,13 @@ pub fn check(
         {
             Some(t.as_str())
         }
+        Some(Derivation::Digest(d)) if d == crate::exchange_corroboration::DEFINITION_DIGEST => {
+            Some(d.as_str())
+        }
         Some(_) => return fail("the answer is for a derivation this node does not check"),
     };
 
+    let mut halves = Vec::new();
     let (served, records, listed) = match (derivation, &env.subject) {
         (None, Subject::Record(digest)) => {
             let report = cll_material::check_anchor_inclusion(&env, &ResponderLogKey(*key));
@@ -525,7 +547,7 @@ pub fn check(
             let served = check_chain(listed, &art)?;
             (served.0, Vec::new(), served.1)
         }
-        (Some(_), Subject::FullHistory) => {
+        (Some(t), Subject::FullHistory) if t == SERVED_SUMMARY_DERIVATION_TOKEN => {
             // served_summary/1: a static export, answered only under a pin.
             if !matches!(request.coverage, Coverage::ExpectedPin(_)) {
                 return fail("a served summary is answered only under an expected_pin");
@@ -534,15 +556,20 @@ pub fn check(
             if !art.get("served_summary").is_some_and(Value::is_object) {
                 return fail("the artifact carries no served summary");
             }
-            let [statement] = env.verification_content.as_slice() else {
-                return fail("the answer carries no anchor checkpoint");
-            };
-            if env.verification[0].kind != KIND_CHECKPOINT {
-                return fail("the answer carries no anchor checkpoint");
-            }
-            let served = stated(statement, key)?;
+            let served = anchor_checkpoint_only(&env, key)?;
             check_names(&art, &served)?;
             (served, Vec::new(), Vec::new())
+        }
+        (Some(d), Subject::Correlation(id))
+            if d == crate::exchange_corroboration::DEFINITION_DIGEST =>
+        {
+            let art = artifact_map(&env, derivation)?;
+            let served = anchor_checkpoint_only(&env, key)?;
+            check_names(&art, &served)?;
+            let leaves;
+            (halves, leaves) = crate::exchange_corroboration::check_entries(&art, id, &served.cp)
+                .map_err(|why| CheckError::Answer(why.into()))?;
+            (served, leaves, Vec::new())
         }
         (Some(_), _) => return fail("the answer is for a derivation of another subject"),
         (None, Subject::Checkpoints) => {
@@ -581,8 +608,21 @@ pub fn check(
         anchor: served.digest,
         records,
         checkpoints: listed.len(),
+        halves,
         receipts,
     })
+}
+
+/// The material of an answer that carries only its anchor checkpoint (a
+/// served summary, an exchange corroboration), verified under `key`.
+fn anchor_checkpoint_only(env: &Envelope, key: &VerifyingKey) -> Result<Stated, CheckError> {
+    match (
+        env.verification.as_slice(),
+        env.verification_content.as_slice(),
+    ) {
+        ([item], [statement]) if item.kind == KIND_CHECKPOINT => stated(statement, key),
+        _ => fail("the answer carries no anchor checkpoint"),
+    }
 }
 
 /// The relying party's key policy for the anchor checkpoint: the
@@ -1018,6 +1058,7 @@ mod tests {
                     now: NOW,
                     history_segments: "peers",
                     share_standard_history: true,
+                    share_exchange_corroboration: false,
                     keys: crate::requester_auth::Keys {
                         announced: &announced,
                         configured: None,
@@ -1736,6 +1777,7 @@ mod tests {
                 now: NOW,
                 history_segments: "peers",
                 share_standard_history: true,
+                share_exchange_corroboration: false,
                 keys: crate::requester_auth::Keys {
                     announced: &announced,
                     configured: None,
@@ -1833,6 +1875,7 @@ mod tests {
                 now: NOW,
                 history_segments: "peers",
                 share_standard_history: true,
+                share_exchange_corroboration: false,
                 keys: crate::requester_auth::Keys {
                     announced: &announced,
                     configured: None,

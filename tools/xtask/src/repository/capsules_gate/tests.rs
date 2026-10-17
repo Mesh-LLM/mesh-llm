@@ -29,7 +29,7 @@ fn capsules_gate_names_parse_and_unknown_names_do_not() {
 fn capsules_gate_plugin_tables_parse_and_name_mutant_features() {
     let table = MutantTable::parse(PLUGIN_MUTANTS).unwrap();
     let referee = RefereeTable::parse(PLUGIN_REFEREE_MUTANTS).unwrap();
-    assert_eq!(table.mutants.len(), 9);
+    assert_eq!(table.mutants.len(), 15);
     assert_eq!(referee.mutants.len(), 9);
     let manifest = include_str!("../../../../../mesh/crates/mesh-llm-capsules-plugin/Cargo.toml");
     for feature in table

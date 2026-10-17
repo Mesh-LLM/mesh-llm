@@ -1031,6 +1031,7 @@ fn run() -> (BTreeMap<String, Value>, Vec<String>) {
                 case["history_segments"].as_str(),
             ),
             share_standard_history: case["share_standard_history"] == json!("on"),
+            share_exchange_corroboration: case["share_exchange_corroboration"] == json!("on"),
             keys: crate::requester_auth::Keys {
                 announced: &announced,
                 configured: None,
@@ -1146,6 +1147,7 @@ fn answer_openly(dir: &Path, bytes: &[u8]) -> Outcome {
             now: NOW,
             history_segments: "peers",
             share_standard_history: true,
+            share_exchange_corroboration: false,
             keys: crate::requester_auth::Keys {
                 announced: &announced,
                 configured: None,
