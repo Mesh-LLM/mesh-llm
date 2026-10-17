@@ -1046,8 +1046,6 @@ templates:
       four complete traces and 60 measured seconds per cell; benchmark sweeps
       1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
-    report:
-      headline: throughput.output_tok_s
     harness:
       name: custom
       version: agentx-1.0.7-local-smoke-1
@@ -1115,8 +1113,6 @@ templates:
       four complete traces and 60 measured seconds per cell; benchmark sweeps
       1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
-    report:
-      headline: throughput.output_tok_s
     harness:
       name: custom
       version: agentx-1.0.7-local-benchmark-1
@@ -1184,8 +1180,6 @@ templates:
       four complete traces and 60 measured seconds per cell; benchmark sweeps
       1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
-    report:
-      headline: throughput.output_tok_s
     harness:
       name: custom
       version: agentx-1.0.7-local-smoke-1
@@ -1253,8 +1247,6 @@ templates:
       four complete traces and 60 measured seconds per cell; benchmark sweeps
       1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
-    report:
-      headline: throughput.output_tok_s
     harness:
       name: custom
       version: agentx-1.0.7-local-benchmark-1
