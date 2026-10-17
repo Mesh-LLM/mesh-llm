@@ -24,7 +24,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use skippy_cache::{
     GeometryBlock, GeometryKind, HandoffManifest, HandoffSegmentRef, HandoffSegmentStore,
-    PayloadGeometry, SegmentCodecIdentity, segment_digest,
+    PayloadGeometry, SegmentCodecIdentity,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -245,7 +245,10 @@ fn run_layout(
         "assembled payload has the wrong length"
     );
     anyhow::ensure!(
-        segment_digest(&payload) == loaded.payload_digest,
+        skippy_cache::composition_root(
+            loaded.segmentation_id.as_deref().unwrap_or_default(),
+            &loaded.segments,
+        )? == loaded.payload_digest,
         "assembled payload does not match its manifest"
     );
 
@@ -337,7 +340,15 @@ fn spill(
         .try_put_segments(&segments)?
         .map_err(|refusal| anyhow::anyhow!("packed put refused: {}", refusal.reason()))?;
     let mut manifest = HandoffManifest::new("blake3:profile".into(), "full-state".into());
-    let mut hasher = blake3::Hasher::new();
+    manifest.key_kind = skippy_cache::KeyKind::CompositionRoot;
+    let geometry_descriptor = PayloadGeometry {
+        blocks: blocks.to_vec(),
+        rows: tokens,
+        window_rows: options.window_rows,
+        tail_bytes: 0,
+    };
+    let segmentation = skippy_cache::geometry_segmentation_id(&geometry_descriptor);
+    manifest.segmentation_id = Some(segmentation.clone());
     let hash_started = Instant::now();
     for (index, (stored, bytes)) in held.iter().zip(&segments).enumerate() {
         let bytes_len = bytes.len() as u64;
@@ -349,7 +360,7 @@ fn spill(
             codec_identity: Some(SegmentCodecIdentity::raw(bytes_len)),
             meta_json: None,
         });
-        hasher.update(bytes);
+        let _ = bytes;
     }
     manifest.total_bytes = plan
         .last()
@@ -357,7 +368,7 @@ fn spill(
     manifest.kv_bytes = manifest.total_bytes;
     manifest.kv_decoded_bytes = manifest.total_bytes;
     manifest.token_count = tokens;
-    manifest.payload_digest = hasher.finalize().to_hex().to_string();
+    manifest.payload_digest = skippy_cache::composition_root(&segmentation, &manifest.segments)?;
     let hash_nanos = hash_started.elapsed().as_nanos() as u64;
     store.commit(&manifest)?;
     drop(held);

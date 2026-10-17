@@ -305,6 +305,10 @@ pub enum KeyKind {
     /// bound to `segmentation_id`. Commit and restore verify it without
     /// hashing payload bytes.
     CompositionRoot,
+    /// `payload_digest` names another tier's entry. It is an in-memory index
+    /// record (the L2 mirror), never a persisted L3 manifest, and nothing may
+    /// claim a derivation for it.
+    Alias,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1480,6 +1484,9 @@ impl HandoffSegmentStore {
                 manifest.total_bytes
             );
         }
+        if manifest.key_kind == KeyKind::Alias {
+            bail!("an alias key cannot be committed as an L3 manifest");
+        }
         if manifest.key_kind == KeyKind::CompositionRoot {
             let segmentation_id = manifest
                 .segmentation_id
@@ -1820,6 +1827,9 @@ impl HandoffSegmentStore {
                 if hasher.finalize().to_hex().as_str() != manifest.payload_digest {
                     bail!("assembled payload failed manifest digest verification");
                 }
+            }
+            None if manifest.key_kind == KeyKind::Alias => {
+                bail!("an alias manifest cannot be assembled from this store");
             }
             None => {
                 let segmentation_id = manifest

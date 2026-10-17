@@ -446,7 +446,7 @@ impl KvStageIntegration {
                         token_ids: stored_tokens,
                         l3_fill_claim: None,
                         write_through_l3: true,
-                        l2_promotion_digest: None,
+                        l2_promotion: None,
                         l3_cost: None,
                         admission_credit,
                     }),
@@ -666,7 +666,7 @@ impl KvStageIntegration {
             token_ids: identity.token_ids.clone(),
             l3_fill_claim: None,
             write_through_l3,
-            l2_promotion_digest: None,
+            l2_promotion: None,
             l3_cost,
             admission_credit,
         }) {
@@ -960,9 +960,9 @@ impl KvStageIntegration {
                 rewarm_enqueued: false,
             }));
         }
-        let l2_promotion_digest = self.l2.as_ref().and_then(|l2| {
+        let l2_promotion = self.l2.as_ref().and_then(|l2| {
             l2.consider_l3_fill(&location.manifest_key, token_count, fill.payload.byte_len())
-                .then(|| location.manifest_key.clone())
+                .then(|| fill.manifest.clone())
         });
         let rewarm_enqueued = ExactStateAdmissionCredit::acquire(
             &self.admission_outstanding,
@@ -979,7 +979,7 @@ impl KvStageIntegration {
                     token_ids: identity.token_ids[..token_count as usize].to_vec(),
                     l3_fill_claim: Some(l3_fill_claim_key(l3, location)),
                     write_through_l3: false,
-                    l2_promotion_digest,
+                    l2_promotion,
                     l3_cost: None,
                     admission_credit,
                 }),
