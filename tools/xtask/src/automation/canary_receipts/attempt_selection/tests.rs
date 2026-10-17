@@ -36,7 +36,7 @@ fn final_outputs(
     value: Value,
 ) -> DynResult<BTreeMap<&'static str, String>> {
     let attempts = decode(&value.to_string())?;
-    Ok(select_final(certify, changed, selected, preflight, &attempts)?.outputs())
+    Ok(select_final(certify, changed, selected, preflight, &attempts, false)?.outputs())
 }
 fn selected(result: &str, state: &str) -> Value {
     let mut value = green(result, 'a');
@@ -208,4 +208,43 @@ fn contradictory_producer_progress_flags_are_rejected_before_normalization() {
         }
         assert!(attempt(true, repair, verification).is_err());
     }
+}
+
+#[test]
+fn selected_publication_requires_two_distinct_green_builds_of_exact_selected_commit() {
+    let mut repair = green("success", 'a');
+    repair["outputs"]["identity"] = json!("d".repeat(64));
+    let valid = json!({"repair_1":repair,"verify_1":green("success", 'a'),
+        "attempt_1":selected("success", "green")});
+    let check = |value: Value, source: &str, changed: bool| {
+        let attempts = decode(&value.to_string())?;
+        Ok::<_, Box<dyn std::error::Error>>(
+            select_final(true, changed, source, JobResult::Success, &attempts, true)?.outputs(),
+        )
+    };
+    assert_eq!(
+        check(valid.clone(), &"a".repeat(40), false).unwrap()["publish"],
+        "true"
+    );
+    for key in ["repair_1", "verify_1"] {
+        for result in ["skipped", "cancelled", "failure"] {
+            let mut value = valid.clone();
+            value[key] = json!({"result":result,"outputs":{}});
+            assert!(check(value, &"a".repeat(40), false).is_err());
+        }
+        let mut value = valid.clone();
+        value.as_object_mut().unwrap().remove(key);
+        assert!(check(value, &"a".repeat(40), false).is_err());
+    }
+    for (key, field, replacement) in [
+        ("verify_1", "head", "c".repeat(40)),
+        ("repair_1", "identity", "b".repeat(64)),
+        ("attempt_1", "package", "different-package".into()),
+    ] {
+        let mut value = valid.clone();
+        value[key]["outputs"][field] = json!(replacement);
+        assert!(check(value, &"a".repeat(40), false).is_err());
+    }
+    assert!(check(valid.clone(), "", false).is_err());
+    assert!(check(valid, &"a".repeat(40), true).is_err());
 }

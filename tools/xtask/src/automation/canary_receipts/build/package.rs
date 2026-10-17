@@ -30,10 +30,17 @@ pub(super) fn previous(input: &Input) -> DynResult<Option<(PathBuf, Identity)>> 
     }
     let pass = PassId::parse(&input.pass_id)?;
     let producer = PassId::parse(&identity.pass_id)?;
-    if matches!(input.mode, Mode::Pinned)
-        || matches!(input.mode, Mode::Verify) == pass.is_repair()
-        || !pass.accepts_previous(producer)
-    {
+    if matches!(input.mode, Mode::Pinned) {
+        if input.mesh_source.is_empty()
+            || pass != PassId::Verify1
+            || producer != PassId::Repair1
+            || identity.candidate != input.mesh_source
+        {
+            return Err("selected verification requires its exact first-pass package".into());
+        }
+        return Ok(Some((previous.package.canonicalize()?, identity)));
+    }
+    if matches!(input.mode, Mode::Verify) == pass.is_repair() || !pass.accepts_previous(producer) {
         return Err("canary pass requires its exact preceding producer package".into());
     }
     if identity.candidate == identity.base || !previous.package.join("candidate.bundle").is_file() {

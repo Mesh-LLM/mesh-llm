@@ -230,7 +230,14 @@ fn assert_canary_pass_pair(jobs: &Node, attempt: u8) {
         format!("repair-{attempt}")
     );
     assert_eq!(text(inputs, "pass_id"), format!("verify-{attempt}"));
-    assert_eq!(text(inputs, "mode"), "verify-build");
+    assert_eq!(
+        text(inputs, "mode"),
+        if attempt == 1 {
+            "${{ needs.resolve.outputs.publish_selected == 'true' && 'pinned-build' || 'verify-build' }}"
+        } else {
+            "verify-build"
+        }
+    );
     assert!(
         verification
             .get("needs")

@@ -7,7 +7,7 @@ Subject: [PATCH 3/6] feat(llama): integrate live stage planning and execution
  include/llama.h                |    7 +
  src/llama-arch.cpp             |   22 +
  src/llama-arch.h               |    2 +
- src/llama-context.cpp          |  605 +++++++++---
+ src/llama-context.cpp          |  609 +++++++++---
  src/llama-context.h            |  102 +-
  src/llama-ext.h                |    6 +
  src/llama-graph.h              |    6 +
@@ -29,7 +29,7 @@ Subject: [PATCH 3/6] feat(llama): integrate live stage planning and execution
  src/llama-quant.cpp            |   12 +-
  src/llama.cpp                  |   91 +-
  src/skippy-verify-checkpoint.h |   24 +
- 25 files changed, 3020 insertions(+), 369 deletions(-)
+ 25 files changed, 3024 insertions(+), 369 deletions(-)
  create mode 100644 src/skippy-verify-checkpoint.h
 
 diff --git a/include/llama.h b/include/llama.h
@@ -747,7 +747,19 @@ index da9c558d2..296e0fcf0 100644
              const auto stride = n_vocab;
  
              // async copy the sampling data from the backend to the host
-@@ -2287,9 +2451,9 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
+@@ -2033,7 +2197,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+         }
+ 
+         n_outputs_prev += n_outputs;
+         n_tokens_prev  += ubatch.n_tokens;
++        if (llm_arch_is_recurrent(model.arch) || llm_arch_is_hybrid(model.arch)) {
++            // Recurrent state written by this graph must be ready before the next ubatch or output read.
++            ggml_backend_sched_synchronize(sched.get());
++        }
+     } while (mctx->next());
+ 
+     // set to total number of outputs in the batch, for use in llama_get_logits_ith
+@@ -2287,9 +2455,9 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
  }
  
  void llama_context::output_reorder() {
@@ -5345,4 +5357,3 @@ index 000000000..8793000c1
 +}
 -- 
 2.56.0
-
