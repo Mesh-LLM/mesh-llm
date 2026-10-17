@@ -41,11 +41,18 @@ pub(super) fn generate(
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
 fn recurrent_prompt_checkpoint_survives_early_stop() -> Result<()> {
+    for stop_after in [2, 3] {
+        check_prompt_checkpoint_after_stop(stop_after)?;
+    }
+    Ok(())
+}
+
+fn check_prompt_checkpoint_after_stop(stop_after: usize) -> Result<()> {
     let (backend, _) = recurrent_test_backend("resume", "resume", 256, (32, 32), 8, 256)?;
     let prompt = (1..=64).collect::<Vec<_>>();
-    // Stop after the hybrid path has handed decode back to the scheduler.
-    let (first, _) = generate(&backend, &prompt, 3)?;
-    assert_eq!(first.len(), 3);
+    // Cover consumer stop before and after handing decode back to the scheduler.
+    let (first, _) = generate(&backend, &prompt, stop_after)?;
+    assert_eq!(first.len(), stop_after);
     let kv = backend.kv.as_ref().unwrap();
     kv.wait_for_exact_state_captures_idle(Duration::from_secs(30))
         .map_err(anyhow::Error::msg)?;
@@ -56,7 +63,7 @@ fn recurrent_prompt_checkpoint_survives_early_stop() -> Result<()> {
     // exact checkpoint and reproduce the generated output.
     let (repeated, cached_tokens) = generate(&backend, &prompt, 8)?;
     assert!(cached_tokens > 0, "the prompt checkpoint must be reusable");
-    assert_eq!(repeated[..3], first);
+    assert_eq!(repeated[..stop_after], first);
     let mut extended = prompt.clone();
     extended.extend_from_slice(&first);
     extended.push(7);
