@@ -553,6 +553,35 @@ mod tests {
     }
 
     #[test]
+    fn a_worst_case_manifest_fits_the_frame_payload_bound() {
+        // A manifest rides in the frame payload, so the bound it must satisfy
+        // is MAX_SEGMENT_BYTES, not MAX_STAGE_FRAME_BYTES (which caps stage
+        // messages on a different stream). Pin the real bound against a
+        // full-size entry so a future field addition cannot silently exceed it.
+        let mut manifest = HandoffManifest::new("blake3:identity".to_string(), "full-state".into());
+        manifest.key_kind = crate::KeyKind::CompositionRoot;
+        manifest.segmentation_id = Some("blake3:segmentation".to_string());
+        manifest.total_bytes = 2 * 1024 * 1024 * 1024;
+        for index in 0..16_384u32 {
+            manifest.segments.push(HandoffSegmentRef {
+                index,
+                offset: u64::from(index) * 131_072,
+                bytes: 131_072,
+                digest: segment_digest(format!("segment-{index}").as_bytes()),
+                codec_identity: Some(SegmentCodecIdentity::raw(131_072)),
+                meta_json: Some("k:31:0:0".to_string()),
+            });
+        }
+        let encoded = crate::encode_manifest_container(&manifest).expect("encode");
+        assert!(
+            (encoded.len() as u64) < MAX_SEGMENT_BYTES,
+            "manifest is {} bytes, over the {MAX_SEGMENT_BYTES}-byte payload bound",
+            encoded.len()
+        );
+        assert!(crate::is_manifest_container(&encoded));
+    }
+
+    #[test]
     fn missing_segments_and_manifests_are_reported() {
         let server_root = temp_root("missing");
         let client_root = temp_root("missing-client");
