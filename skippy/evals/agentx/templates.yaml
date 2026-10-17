@@ -1036,7 +1036,7 @@ templates:
       speculation: false
     description: >
       ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engines use
-      identical 16-bit GGUF weights and one 256k generation slot. Smoke uses
+      identical pinned GGUF weights and one 256k generation slot. Smoke uses
       four complete traces and 60 measured seconds per engine; benchmark sweeps
       1, 2, 4, 8 offered agent sessions. Local-corpus exports retain upstream
       submission_valid=false and never enter performance history.
@@ -1052,6 +1052,7 @@ templates:
         choices:
           - {label: Qwen3 4B dense F16, value: qwen3-4b}
           - {label: Qwen3.5 4B hybrid BF16, value: qwen3.5-4b}
+          - {label: Qwen3.5 4B hybrid Q4_K_M, value: qwen3.5-4b-q4-k-m}
           - {label: Qwen3.5 9B hybrid BF16, value: qwen3.5-9b}
           - {label: Qwen3 Coder 30B-A3B MoE BF16, value: qwen3-coder-30b-a3b}
           - {label: Qwen3.5 35B-A3B hybrid MoE BF16, value: qwen3.5-35b-a3b}

@@ -20,6 +20,8 @@ The baseline source is the exact commit in
 ```sh
 jy repos run mesh-llm agentx --ref pr:NUMBER --input model=qwen3.5-4b --input profile=smoke
 jy repos run mesh-llm agentx --ref pr:NUMBER --input model=qwen3.5-9b --input profile=smoke
+jy repos run mesh-llm agentx --ref pr:NUMBER --input model=qwen3.5-4b-q4-k-m --input profile=smoke
+jy repos run mesh-llm agentx --ref pr:NUMBER --input model=qwen3.5-4b-q4-k-m --input profile=benchmark
 ```
 
 Register the immutable custom result schema once before dispatch:
@@ -80,6 +82,12 @@ verify every weight shard against [models.json](../evals/agentx/models.json).
 No projector is needed for these text-only traces. Tokenizers have independent
 immutable Hugging Face revisions.
 
+The explicit `qwen3.5-4b-q4-k-m` variant uses the existing NAS-cached
+`Qwen3.5-4B-Q4_K_M.gguf` at the same pinned revision. Its result names include
+the quantization, so these measurements remain distinct from the BF16 model.
+For a cache-only campaign, confirm that exact file is present before submitting
+the smoke, and submit the benchmark only after the smoke passes.
+
 ## Profiles and capacity
 
 | Setting | Smoke | Benchmark |
@@ -97,7 +105,7 @@ Offered agent concurrency is distinct from resident generation capacity.
 Subagents may also issue concurrent requests. Both servers queue into one
 resident slot, keeping the 16-bit dense and MoE models within Spark's memory
 budget. This is a fixed-capacity comparison, not a maximum-throughput claim.
-There is no context shortening, weight quantization, or automatic fallback on
+There is no context shortening, automatic weight quantization, or fallback on
 allocation failure. Other resident capacities require a separate campaign.
 Skippy's in-memory prefix retention target is explicitly 8 GiB, with disk
 caching off; exact snapshots can exceed that target. llama-server retains its
