@@ -1,4 +1,4 @@
-From ee50e306396217334865d6a1505c386a72015de6 Mon Sep 17 00:00:00 2001
+From 467bb0ba15c009debb628e777c15197bddf99209 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -17,7 +17,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  329 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  462 +++++++++
+ src/skippy/execution-batch.cpp          |  468 +++++++++
  src/skippy/execution-single.cpp         |  641 ++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
@@ -61,7 +61,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  371 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16063 insertions(+)
+ 57 files changed, 16069 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -2487,10 +2487,10 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..95fd4be72
+index 000000000..6743a53e0
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
-@@ -0,0 +1,462 @@
+@@ -0,0 +1,468 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -2869,7 +2869,13 @@ index 000000000..95fd4be72
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +    skippy_mark_context_work_pending(first->stage_model);
-+    skippy_synchronize_context_if_pending(first->stage_model);
++    // A prefill with no host-visible outputs may remain queued, just like
++    // llama_decode. The next decode orders its inputs through the backend;
++    // state export, reset and destruction fence pending work before access.
++    // Do not stall CPU preparation of the next batch behind this GPU batch.
++    if (request_exports || sampled_count != 0) {
++        skippy_synchronize_context_if_pending(first->stage_model);
++    }
 +
 +    size_t sampled_index = 0;
 +    for (size_t request_index = 0; request_index < request_count; ++request_index) {

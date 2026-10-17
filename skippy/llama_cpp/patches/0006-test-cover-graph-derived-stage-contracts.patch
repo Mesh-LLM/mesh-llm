@@ -1,4 +1,4 @@
-From a3a02ceaf5ee00edbc7f06d1cc9e1d6e16a5bab0 Mon Sep 17 00:00:00 2001
+From 956ebe34bd84b8c9c61a063937c2c16e98b27940 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -18,7 +18,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  624 +++++++
- src/skippy/tests/sampling_history.cpp         |  287 +++
+ src/skippy/tests/sampling_history.cpp         |  338 ++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9382 insertions(+), 33 deletions(-)
+ 34 files changed, 9433 insertions(+), 33 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5772,10 +5772,10 @@ index 000000000..8c9e3288b
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..a458b8469
+index 000000000..28d783979
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,338 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "llama-model.h"
@@ -5939,6 +5939,56 @@ index 000000000..a458b8469
 +    ok(status, error);
 +}
 +
++void queued_prefill(skippy_session * session, const std::vector<llama_token> & tokens) {
++    skippy_iteration_request request{};
++    request.session = session;
++    request.token_ids = tokens.data();
++    request.token_count = tokens.size();
++    size_t count = 99;
++    skippy_error * error = nullptr;
++    const auto status = skippy_iteration_batch_sampled(&request, 1,
++            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, &count, &error);
++    ok(status, error);
++    CHECK(count == 0);
++    CHECK(session->stage_model->context_work_pending.load());
++}
++
++void queued_prefill_state_parity(skippy_model * model) {
++    const std::vector<llama_token> first(64, 1);
++    const std::vector<llama_token> second(64, 2);
++    auto sampling = sampling_config();
++    sampling.logit_bias_count = 0;
++    auto * reference = create(model);
++    prefill(reference, first);
++    prefill(reference, second);
++    snapshot expected(reference, true);
++    const auto predicted = decode(reference, sampling, 3);
++    release(reference);
++
++    auto * queued = create(model);
++    queued_prefill(queued, first);
++    queued_prefill(queued, second);
++    CHECK(queued->n_past == 128);
++    CHECK(queued->token_history.size() == 128);
++    // Export must fence queued execution and serialize exactly the same state.
++    snapshot actual(queued, true);
++    CHECK(actual.payload == expected.payload);
++    CHECK(iteration(queued, sampling, {3}) == predicted);
++    CHECK(!queued->stage_model->context_work_pending.load());
++    queued_prefill(queued, first);
++    skippy_error * error = nullptr;
++    const auto status = skippy_session_reset(queued, &error);
++    ok(status, error);
++    CHECK(!queued->stage_model->context_work_pending.load());
++    CHECK(queued->n_past == 0);
++    queued_prefill(queued, first);
++    queued_prefill(queued, second);
++    snapshot after_reset(queued, true);
++    CHECK(after_reset.payload == expected.payload);
++    queued_prefill(queued, first);
++    release(queued); // Destruction also owns a pending-work fence.
++}
++
 +void grammar_restore(skippy_model * model, bool full, bool lazy) {
 +    const auto sampling = sampling_config();
 +    const std::vector<llama_token> prefix(256, 1);
@@ -6046,6 +6096,7 @@ index 000000000..a458b8469
 +    skippy_error * error = nullptr;
 +    const auto status = skippy_model_open(argv[1], &config, &model, &error);
 +    ok(status, error);
++    queued_prefill_state_parity(model);
 +    for (const bool full : {false, true}) {
 +        if (grammar) {
 +            for (const bool lazy : {false, true}) {
