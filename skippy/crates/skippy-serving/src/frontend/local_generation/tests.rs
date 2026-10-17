@@ -168,7 +168,7 @@ fn recurrent_test_backend(
     run_id: &str,
     backend_model_id: &str,
     ctx_size: usize,
-    (batch_size, microbatch_size): (u32, u32),
+    batch_size: u32,
     default_max_tokens: u32,
     token_budget: usize,
 ) -> Result<(StageOpenAiBackend, SpeculativeDecodeConfig)> {
@@ -207,7 +207,7 @@ fn recurrent_test_backend(
             .map_err(|error| anyhow::anyhow!("invalid recurrent test context size: {error}"))?,
         lane_count: 1,
         n_batch: Some(batch_size),
-        n_ubatch: Some(microbatch_size),
+        n_ubatch: Some(batch_size),
         n_gpu_layers: 0,
         mmap: Some(true),
         mlock: false,
@@ -394,7 +394,7 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
         "recurrent-cache-test",
         "recurrent-cache-test",
         128,
-        (32, 32),
+        32,
         2,
         128,
     )?;
@@ -500,7 +500,7 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
         "recurrent-chat-cache-test",
         "recurrent-chat-cache-test",
         512,
-        (64, 64),
+        64,
         8,
         512,
     )?;
