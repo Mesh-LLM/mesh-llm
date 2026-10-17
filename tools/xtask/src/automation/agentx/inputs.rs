@@ -21,7 +21,7 @@ pub(super) fn prepare(
         .find(|model| model.key == key)
         .ok_or("unknown AgentX model")?;
     let mut weights = None;
-    for file in &model.files {
+    for (index, file) in model.files.iter().enumerate() {
         let path = download(
             &root,
             &model.repo,
@@ -29,6 +29,7 @@ pub(super) fn prepare(
             &file.name,
             false,
             &output,
+            &format!("download-weight-{index}"),
         )?;
         verify(&path, &file.sha256)?;
         weights.get_or_insert(path);
@@ -40,6 +41,7 @@ pub(super) fn prepare(
         "",
         false,
         &output,
+        "download-tokenizer",
     )?;
     let dataset = download(
         &root,
@@ -48,6 +50,7 @@ pub(super) fn prepare(
         "traces.jsonl",
         true,
         &output,
+        "download-dataset",
     )?;
     verify(&dataset, DATA_SHA)?;
     let traces = output.join("traces");
@@ -70,6 +73,7 @@ fn download(
     file: &str,
     dataset: bool,
     output: &Path,
+    log_name: &str,
 ) -> DynResult<PathBuf> {
     let hf = root.join("skippy/evals/agentx/.venv/bin/hf");
     // Standard HF cache resolution reuses the host's blobs/snapshots and writes
@@ -94,7 +98,7 @@ fn download(
             "chat_template*",
         ]));
     }
-    let log = output.join("download");
+    let log = output.join(log_name);
     command::run(
         &command::spec(root, hf.to_str().ok_or("hf path")?, &args)?,
         7200,
@@ -188,6 +192,43 @@ mod tests {
     fn corrupted_download_fails_before_use() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         assert!(verify(temp.path(), DATA_SHA).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn consecutive_input_commands_retain_independent_outputs() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("skippy/evals/agentx/.venv/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let fixture = root.path().join("cached.gguf");
+        std::fs::write(&fixture, b"cached weights").unwrap();
+        let hf = bin.join("hf");
+        std::fs::write(
+            &hf,
+            format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", fixture.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&hf, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for name in [
+            "download-weight-0",
+            "download-tokenizer",
+            "download-dataset",
+        ] {
+            assert_eq!(
+                download(
+                    root.path(),
+                    "org/model",
+                    "pin",
+                    "file",
+                    false,
+                    root.path(),
+                    name
+                )
+                .unwrap(),
+                fixture
+            );
+            assert!(root.path().join(format!("{name}.stdout.log")).is_file());
+        }
     }
     #[cfg(unix)]
     #[test]

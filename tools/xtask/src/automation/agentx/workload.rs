@@ -86,10 +86,13 @@ fn ready(root: &Path, port: u16, output: &Path) -> DynResult<()> {
         ]),
     )?;
     let deadline = Instant::now() + Duration::from_secs(900);
+    let mut attempt = 0;
     while Instant::now() < deadline {
-        if command::run(&spec, 10, &output.join("health")).is_ok() {
+        let log = output.join(format!("health-{attempt}"));
+        if command::run(&spec, 10, &log).is_ok() {
             return Ok(());
         }
+        attempt += 1;
         std::thread::sleep(Duration::from_secs(2));
     }
     Err("server never became healthy within 900s".into())
