@@ -67,7 +67,7 @@ Unsupported in v1:
 
 - `--skip-doctor`
 - setup-owned doctor/readiness flow
-- Windows service creation
+- a machine-level Windows service (the Windows service is per-user)
 - startup model, public/private mesh, or telemetry prompts
 - a separate installer binary
 
@@ -95,7 +95,9 @@ Service setup is supported for:
 On Windows, setup registers a scheduled task named `mesh-llm` for the current
 user: a logon trigger, an interactive token, least privilege, and no elevation.
 The task runs `conhost.exe --headless` from the binary's directory with the
-hidden `mesh-llm service-host` subcommand, so no console window shows. The
+hidden `mesh-llm service-host` subcommand, so no console window shows, at task
+priority 4, which gives the node the CPU, I/O and memory priority of a `serve`
+started from a terminal (the default, 7, would run it below normal). The
 service host runs `mesh-llm serve` with its output appended to
 `%LOCALAPPDATA%\mesh-llm\logs\service.log`, restarts it after a failure with an
 exponential backoff (5 seconds, doubling, five restarts in a row, counted
@@ -182,7 +184,9 @@ Supported flags:
 Default uninstall behavior stops tracked `mesh-llm` processes, disables and
 removes the per-user Linux systemd unit or macOS launchd agent when present,
 removes setup-owned service helper files, removes the native-runtime cache, and
-then removes the executable. It preserves `~/.mesh-llm` by default so keys,
+then removes the executable. On Windows it first ends and deletes the per-user
+scheduled task, so its service host does not restart the node being stopped,
+then removes the task definition and the service logs. It preserves `~/.mesh-llm` by default so keys,
 identity, and user configuration are not deleted accidentally.
 
 The command removes only known setup-owned service files. If the setup service

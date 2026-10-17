@@ -457,6 +457,7 @@ fn windows_task_runs_the_service_host_hidden_from_the_binary_directory() {
         "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
         "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
         "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
+        "<Priority>4</Priority>",
         r"<Command>%SystemRoot%\System32\conhost.exe</Command>",
         r"<Arguments>--headless .\mesh-llm.exe service-host</Arguments>",
         r"<WorkingDirectory>C:\Users\Example User\Programs\mesh &amp; co</WorkingDirectory>",
@@ -515,7 +516,7 @@ fn windows_service_install_registers_and_starts_the_task() {
     for expected in [
         format!("Logs: {}", log.display()),
         format!(
-            "Private mesh: write the invite token to {} (re-read on every rejoin)",
+            "Private mesh: write the invite token to {}, then restart the task (schtasks /End /TN mesh-llm, then schtasks /Run /TN mesh-llm): a node that started without a token starts its own mesh, and once it has one the file is re-read on every rejoin",
             invite.display()
         ),
         "Stop it with: schtasks /End /TN mesh-llm".to_string(),

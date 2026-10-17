@@ -388,7 +388,7 @@ fn install_windows_task(
         paths.mesh_config_file.display()
     ));
     messages.push(format!(
-        "Private mesh: write the invite token to {} (re-read on every rejoin)",
+        "Private mesh: write the invite token to {}, then restart the task (schtasks /End /TN {SERVICE_NAME}, then schtasks /Run /TN {SERVICE_NAME}): a node that started without a token starts its own mesh, and once it has one the file is re-read on every rejoin",
         paths
             .mesh_config_file
             .with_file_name("invite.token")

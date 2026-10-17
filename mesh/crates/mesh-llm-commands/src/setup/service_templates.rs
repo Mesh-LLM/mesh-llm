@@ -73,14 +73,18 @@ pub(crate) fn render_launchd_plist(
 /// directory and names the binary relative to it instead of quoting a path.
 /// Task Scheduler expands `%SystemRoot%` in both the command and its
 /// arguments. Battery and run-time limits are lifted: the defaults would not
-/// start the task on battery and would stop it after three days.
+/// start the task on battery and would stop it after three days. Priority 4
+/// gives the node the CPU, I/O and memory priority of a `serve` started from a
+/// terminal (measured: normal class, normal I/O, memory priority 5); the
+/// default, 7, runs it below normal with low I/O and memory priority 2, and
+/// its children inherit that.
 pub(crate) fn render_windows_task_xml(
     user_sid: &str,
     binary_dir: &Path,
     binary_file_name: &str,
 ) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <RegistrationInfo>\n    <Description>Mesh LLM user service, installed by mesh-llm setup</Description>\n  </RegistrationInfo>\n  <Triggers>\n    <LogonTrigger>\n      <Enabled>true</Enabled>\n      <UserId>{user_sid}</UserId>\n    </LogonTrigger>\n  </Triggers>\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>{user_sid}</UserId>\n      <LogonType>InteractiveToken</LogonType>\n      <RunLevel>LeastPrivilege</RunLevel>\n    </Principal>\n  </Principals>\n  <Settings>\n    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n  </Settings>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>%SystemRoot%\\System32\\conhost.exe</Command>\n      <Arguments>--headless .\\{binary_file_name} {WINDOWS_SERVICE_HOST_COMMAND}</Arguments>\n      <WorkingDirectory>{binary_dir}</WorkingDirectory>\n    </Exec>\n  </Actions>\n</Task>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <RegistrationInfo>\n    <Description>Mesh LLM user service, installed by mesh-llm setup</Description>\n  </RegistrationInfo>\n  <Triggers>\n    <LogonTrigger>\n      <Enabled>true</Enabled>\n      <UserId>{user_sid}</UserId>\n    </LogonTrigger>\n  </Triggers>\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>{user_sid}</UserId>\n      <LogonType>InteractiveToken</LogonType>\n      <RunLevel>LeastPrivilege</RunLevel>\n    </Principal>\n  </Principals>\n  <Settings>\n    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n    <Priority>4</Priority>\n  </Settings>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>%SystemRoot%\\System32\\conhost.exe</Command>\n      <Arguments>--headless .\\{binary_file_name} {WINDOWS_SERVICE_HOST_COMMAND}</Arguments>\n      <WorkingDirectory>{binary_dir}</WorkingDirectory>\n    </Exec>\n  </Actions>\n</Task>\n",
         user_sid = xml_escape(user_sid),
         binary_file_name = xml_escape(binary_file_name),
         binary_dir = xml_escape(&binary_dir.to_string_lossy()),
