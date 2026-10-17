@@ -248,27 +248,19 @@ fn send_signal_if_matches(
         return SignalOutcome::Failed;
     }
 
-    {
-        let matches = if let Some(expected_t) = expected_start_time {
-            crate::process::validate_pid_matches(pid, expected_comm, expected_t)
-        } else {
-            crate::process::process_name_matches(pid, expected_comm)
-        };
-        if !matches {
-            // Only a process that is readable and different is someone
-            // else's; one whose identity could not be read is a failure to
-            // stop, not a stale record.
-            return match crate::process::process_liveness(pid) {
-                crate::process::Liveness::Dead => SignalOutcome::AlreadyDead,
-                crate::process::Liveness::Unknown => {
-                    tracing::warn!("could not read what pid {pid} is, not signalling it");
-                    SignalOutcome::Failed
-                }
-                crate::process::Liveness::Alive => {
-                    tracing::warn!("pid {pid} no longer matches {expected_comm}, skipping signal");
-                    SignalOutcome::Skipped
-                }
-            };
+    // Only a process that is readable and different is someone else's; one
+    // whose identity could not be read is a failure to stop, not a stale
+    // record.
+    match crate::process::pid_identity(pid, expected_comm, expected_start_time) {
+        crate::process::PidIdentity::Recorded => {}
+        crate::process::PidIdentity::Gone => return SignalOutcome::AlreadyDead,
+        crate::process::PidIdentity::Other => {
+            tracing::warn!("pid {pid} no longer matches {expected_comm}, skipping signal");
+            return SignalOutcome::Skipped;
+        }
+        crate::process::PidIdentity::Unknown => {
+            tracing::warn!("could not read what pid {pid} is, not signalling it");
+            return SignalOutcome::Failed;
         }
     }
 

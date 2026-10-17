@@ -218,9 +218,12 @@ mod platform {
         CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, HANDLE,
     };
     use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
+        GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
     };
+
+    /// The exit code a process reports while it is still running.
+    const STILL_ACTIVE: u32 = 259;
 
     /// Owned process handle, closed on drop.
     struct Process(HANDLE);
@@ -240,7 +243,11 @@ mod platform {
         // checked before the handle is used.
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         if !handle.is_null() {
-            return Ok(Some(Process(handle)));
+            let process = Process(handle);
+            // An exited process stays openable while any handle still
+            // references it, but names no running process any more, and its
+            // image name query fails (Win32 error 31, measured).
+            return Ok((!has_exited(&process)).then_some(process));
         }
         // SAFETY: reads the calling thread's last error and takes nothing.
         match unsafe { GetLastError() } {
@@ -253,6 +260,13 @@ mod platform {
                 "OpenProcess({pid}) failed with Win32 error {code}"
             )),
         }
+    }
+
+    fn has_exited(process: &Process) -> bool {
+        let mut code = 0u32;
+        // SAFETY: the handle carries query rights and `code` outlives the call.
+        let ok = unsafe { GetExitCodeProcess(process.0, &mut code) };
+        ok != 0 && code != STILL_ACTIVE
     }
 
     /// Full image path of the process, as the kernel reports it.
@@ -418,6 +432,56 @@ pub fn validate_pid_matches(pid: u32, expected_comm: &str, expected_started_at_u
     }
 }
 
+/// What a pid is now, compared with a recorded process, for deciding whether
+/// stopping it is ours to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidIdentity {
+    /// The recorded process.
+    Recorded,
+    /// Another process now holds the id.
+    Other,
+    /// No process can be queried under the id.
+    Gone,
+    /// What the id names could not be read.
+    Unknown,
+}
+
+/// Compares the process under `pid` with a recorded name and, when given,
+/// start time. Unlike [`validate_pid_matches`], a lookup that fails is
+/// `Unknown`, not a mismatch, so a caller never mistakes a process it could
+/// not read for someone else's.
+pub fn pid_identity(
+    pid: u32,
+    expected_comm: &str,
+    expected_started_at_unix: Option<i64>,
+) -> PidIdentity {
+    let names = [process_executable_name(pid), process_comm(pid)];
+    let readable: Vec<&String> = names
+        .iter()
+        .filter_map(|name| name.as_ref().ok()?.as_ref())
+        .collect();
+    if !readable.iter().any(|name| names_match(name, expected_comm)) {
+        return if !readable.is_empty() {
+            PidIdentity::Other
+        } else if names.iter().any(Result::is_err) {
+            PidIdentity::Unknown
+        } else {
+            PidIdentity::Gone
+        };
+    }
+    let Some(expected) = expected_started_at_unix else {
+        return PidIdentity::Recorded;
+    };
+    match process_started_at_unix(pid) {
+        Ok(Some(started)) if (started - expected).abs() <= START_TIME_TOLERANCE_SECS => {
+            PidIdentity::Recorded
+        }
+        Ok(Some(_)) => PidIdentity::Other,
+        Ok(None) => PidIdentity::Gone,
+        Err(_) => PidIdentity::Unknown,
+    }
+}
+
 /// Returns the Unix start time of the current process.
 pub fn current_process_start_time_unix() -> anyhow::Result<i64> {
     process_started_at_unix(std::process::id())?
@@ -536,5 +600,81 @@ mod tests {
             cfg!(windows),
             "case folding must follow the platform's filesystem"
         );
+    }
+}
+
+#[cfg(test)]
+mod pid_identity_tests {
+    use super::*;
+
+    fn own_identity() -> (u32, String, i64) {
+        let pid = std::process::id();
+        let comm = process_comm(pid)
+            .expect("read own name")
+            .expect("own process is running");
+        let started = current_process_start_time_unix().expect("own start time");
+        (pid, comm, started)
+    }
+
+    #[test]
+    fn the_running_process_is_the_recorded_one() {
+        let (pid, comm, started) = own_identity();
+
+        assert_eq!(
+            pid_identity(pid, &comm, Some(started)),
+            PidIdentity::Recorded
+        );
+        assert_eq!(pid_identity(pid, &comm, None), PidIdentity::Recorded);
+    }
+
+    #[test]
+    fn another_name_or_start_time_is_another_process() {
+        let (pid, comm, started) = own_identity();
+
+        assert_eq!(
+            pid_identity(pid, &comm, Some(started - 3600)),
+            PidIdentity::Other
+        );
+        assert_eq!(
+            pid_identity(pid, "not-the-recorded-binary", Some(started)),
+            PidIdentity::Other
+        );
+    }
+
+    #[test]
+    fn an_exited_process_is_gone() {
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/d", "/c", "exit", "0"]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = std::process::Command::new("true");
+        let mut child = command.spawn().expect("spawn a short process");
+        let pid = child.id();
+        child.wait().expect("wait for it");
+        // The handle keeps an exited process queryable on Windows.
+        drop(child);
+
+        assert_eq!(pid_identity(pid, "anything", None), PidIdentity::Gone);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_exited_process_another_handle_still_references_is_gone() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/d", "/c", "exit", "0"])
+            .spawn()
+            .expect("spawn a short process");
+        child.wait().expect("wait for it");
+        // `child` still holds its handle, so the process object outlives the
+        // process, as it does while a parent keeps an exited child's handle.
+
+        assert_eq!(
+            process_comm(child.id()).expect("query the exited process"),
+            None
+        );
+        assert_eq!(pid_identity(child.id(), "cmd", None), PidIdentity::Gone);
     }
 }
