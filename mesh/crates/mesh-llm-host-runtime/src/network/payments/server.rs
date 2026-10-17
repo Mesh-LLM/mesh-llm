@@ -33,7 +33,8 @@ pub(crate) async fn serve(
     targets: ModelTargets,
 ) -> Result<()> {
     let result = serve_inner(&node, peer, &mut reader, &mut writer, &targets).await;
-    if result.is_err() {
+    if let Err(error) = &result {
+        tracing::warn!(buyer = %peer, error = %format!("{error:#}"), "paid exchange failed");
         // Avoid reflecting request contents or wallet-provider errors to peers.
         let _ = wire::write(
             &mut writer,

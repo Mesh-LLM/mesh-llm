@@ -180,10 +180,16 @@ pub(crate) async fn start(
     let (mut send, mut recv) = node
         .open_http_tunnel(peer)
         .await
-        .map_err(|_| PrePaymentTransportFailure)?;
+        .map_err(|error| {
+            tracing::warn!(seller = %peer.fmt_short(), %error, "could not open paid tunnel; trying another target");
+            PrePaymentTransportFailure
+        })?;
     send.write_all(wire::HTTP_UPGRADE)
         .await
-        .map_err(|_| PrePaymentTransportFailure)?;
+        .map_err(|error| {
+            tracing::warn!(seller = %peer.fmt_short(), %error, "could not send paid upgrade; trying another target");
+            PrePaymentTransportFailure
+        })?;
     wire::write(
         &mut send,
         &Frame::Request {
@@ -294,12 +300,13 @@ async fn read_admission(recv: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
     // retryable. That includes an older seller that does not know this
     // protocol and answers with plain HTTP bytes.
     let frame = wire::read(recv).await.map_err(|error| {
-        tracing::debug!(%error, "unreadable payment admission; trying another target");
+        tracing::warn!(%error, "unreadable payment admission; trying another target");
         anyhow::Error::from(PrePaymentTransportFailure)
     })?;
     // A seller-side refusal or failure here cannot have charged this buyer:
     // no admission has been accepted and no payment task has been spawned.
-    if matches!(frame, Frame::Error { .. }) {
+    if let Frame::Error { message } = &frame {
+        tracing::warn!(seller_message = %message, "seller refused paid admission; trying another target");
         return Err(PrePaymentTransportFailure.into());
     }
     Ok(frame)
