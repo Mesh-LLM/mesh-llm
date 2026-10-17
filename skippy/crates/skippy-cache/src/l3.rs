@@ -293,6 +293,20 @@ pub struct HandoffSegmentRef {
     pub meta_json: Option<String>,
 }
 
+/// How a manifest's key is derived.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyKind {
+    /// `payload_digest` is BLAKE3 over the assembled payload bytes. Legacy
+    /// entries and any manifest that does not declare otherwise.
+    #[default]
+    WireBlake3,
+    /// `payload_digest` is a composition root over the ordered segment list,
+    /// bound to `segmentation_id`. Commit and restore verify it without
+    /// hashing payload bytes.
+    CompositionRoot,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandoffManifest {
     pub version: u32,
@@ -313,6 +327,15 @@ pub struct HandoffManifest {
     pub total_bytes: u64,
     /// BLAKE3 of the assembled payload; also the manifest's key.
     pub payload_digest: String,
+    /// How `payload_digest` was derived. Absent in older manifests, which were
+    /// all wire digests.
+    #[serde(default)]
+    pub key_kind: KeyKind,
+    /// Identity of the cutting scheme that produced `segments`. Required for
+    /// composition-root keys: the same bytes cut differently are different
+    /// entries, and this is what makes that explicit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segmentation_id: Option<String>,
     pub segments: Vec<HandoffSegmentRef>,
     pub kv_bytes: u64,
     /// Decoded native KV length. Equal to `kv_bytes` for native pages; for a
@@ -350,6 +373,8 @@ impl HandoffManifest {
             codec: Some(PayloadCodec::raw()),
             total_bytes: 0,
             payload_digest: String::new(),
+            key_kind: KeyKind::WireBlake3,
+            segmentation_id: None,
             segments: Vec::new(),
             kv_bytes: 0,
             kv_decoded_bytes: 0,
@@ -753,6 +778,87 @@ struct ManifestFootprint {
 
 pub fn segment_digest(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
+}
+
+/// Identity of a geometry cutting scheme.
+///
+/// Excludes row count: the scheme describes how a payload is cut, not how long
+/// this entry is. Two entries of different lengths cut the same way share an
+/// id, which is what lets a longer prefix reuse a shorter one's segments.
+pub fn geometry_segmentation_id(geometry: &PayloadGeometry) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"skippy-kv/segmentation/1");
+    hasher.update(&geometry.window_rows.to_le_bytes());
+    hasher.update(&geometry.tail_bytes.to_le_bytes());
+    for block in &geometry.blocks {
+        hasher.update(&block.stride.to_le_bytes());
+        hasher.update(&[match block.kind {
+            GeometryKind::Key => 0,
+            GeometryKind::Value => 1,
+            GeometryKind::KeyIndex => 2,
+        }]);
+        hasher.update(&block.layer.to_le_bytes());
+        hasher.update(&block.column.to_le_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Identity of the fixed-size fallback cutting scheme.
+pub fn fixed_segmentation_id(segment_bytes: u64) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"skippy-kv/segmentation/1");
+    hasher.update(b"fixed");
+    hasher.update(&segment_bytes.to_le_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Composition root over the ordered segment list.
+///
+/// Binds offsets, lengths, codec identity and content without hashing payload
+/// bytes: every byte is already bound by its segment digest, and order is
+/// implied by position. Metadata (`token_count`, `expected_tokens`,
+/// `kv_desc_json`, calibration) is deliberately out of the root, matching the
+/// wire-digest semantics where two entries with identical bytes and different
+/// metadata already share a key.
+pub fn composition_root(segmentation_id: &str, segments: &[HandoffSegmentRef]) -> Result<String> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"skippy-kv/root/1");
+    hasher.update(segmentation_id.as_bytes());
+    hasher.update(&[0u8]);
+    for segment in segments {
+        hasher.update(&segment.offset.to_le_bytes());
+        hasher.update(&segment.bytes.to_le_bytes());
+        let (name, version) = segment
+            .codec_identity
+            .as_ref()
+            .map(|identity| (identity.name.as_str(), identity.version))
+            .unwrap_or((CODEC_RAW, CODEC_RAW_VERSION));
+        hasher.update(name.as_bytes());
+        hasher.update(&[0u8]);
+        hasher.update(&version.to_le_bytes());
+        // Hash the digest's raw bytes, not its hex spelling, so a binary
+        // manifest and a JSON manifest produce the same root.
+        hasher.update(&digest_bytes(&segment.digest)?);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn digest_bytes(digest: &str) -> Result<[u8; 32]> {
+    let bytes = digest.as_bytes();
+    if bytes.len() != 64 {
+        bail!("segment digest is not 64 hex characters");
+    }
+    let mut out = [0u8; 32];
+    for (index, chunk) in bytes.as_chunks::<2>().0.iter().enumerate() {
+        let high = (chunk[0] as char)
+            .to_digit(16)
+            .context("segment digest is not hex")?;
+        let low = (chunk[1] as char)
+            .to_digit(16)
+            .context("segment digest is not hex")?;
+        out[index] = ((high << 4) | low) as u8;
+    }
+    Ok(out)
 }
 
 fn acquire_root_lock(root: &Path) -> Result<fs::File> {
@@ -1374,6 +1480,19 @@ impl HandoffSegmentStore {
                 manifest.total_bytes
             );
         }
+        if manifest.key_kind == KeyKind::CompositionRoot {
+            let segmentation_id = manifest
+                .segmentation_id
+                .as_deref()
+                .context("composition-root manifest has no segmentation identity")?;
+            let root = composition_root(segmentation_id, &manifest.segments)?;
+            if root != manifest.payload_digest {
+                bail!(
+                    "manifest key {} is not the composition root of its segments ({root})",
+                    manifest.payload_digest
+                );
+            }
+        }
         let limits = self.limits();
         if limits.budget_bytes > 0 && manifest.total_bytes > limits.budget_bytes {
             return Ok(Err(WriteRefusal::SkippedOversize));
@@ -1623,7 +1742,10 @@ impl HandoffSegmentStore {
         validate_manifest_compatibility(manifest)?;
         let total = usize::try_from(manifest.total_bytes).context("payload exceeds usize")?;
         let mut payload = Vec::with_capacity(total);
-        let mut payload_hasher = blake3::Hasher::new();
+        // A composition-root manifest is verified from segment metadata, not
+        // by re-hashing the payload. Wire-digest manifests keep the old path.
+        let mut payload_hasher =
+            (manifest.key_kind == KeyKind::WireBlake3).then(blake3::Hasher::new);
         let locations = self
             .packed
             .load_manifest_index(&manifest.payload_digest, manifest.segments.len())?;
@@ -1669,12 +1791,14 @@ impl HandoffSegmentStore {
                 self.append_packed(
                     &packed_requests,
                     &mut payload,
-                    &mut payload_hasher,
+                    &mut payload_hasher.as_mut(),
                     &mut stats,
                 )?;
                 packed_requests.clear();
                 let bytes = self.read_segment(&segment.digest)?;
-                payload_hasher.update(&bytes);
+                if let Some(hasher) = payload_hasher.as_mut() {
+                    hasher.update(&bytes);
+                }
                 payload.extend_from_slice(&bytes);
                 stats.loose_segment_reads = stats.loose_segment_reads.saturating_add(1);
             }
@@ -1682,7 +1806,7 @@ impl HandoffSegmentStore {
         self.append_packed(
             &packed_requests,
             &mut payload,
-            &mut payload_hasher,
+            &mut payload_hasher.as_mut(),
             &mut stats,
         )?;
         if payload.len() != total {
@@ -1691,8 +1815,26 @@ impl HandoffSegmentStore {
                 payload.len()
             );
         }
-        if payload_hasher.finalize().to_hex().as_str() != manifest.payload_digest {
-            bail!("assembled payload failed manifest digest verification");
+        match payload_hasher {
+            Some(hasher) => {
+                if hasher.finalize().to_hex().as_str() != manifest.payload_digest {
+                    bail!("assembled payload failed manifest digest verification");
+                }
+            }
+            None => {
+                let segmentation_id = manifest
+                    .segmentation_id
+                    .as_deref()
+                    .context("composition-root manifest has no segmentation identity")?;
+                let root = composition_root(segmentation_id, &manifest.segments)?;
+                if root != manifest.payload_digest {
+                    bail!("assembled payload failed composition-root verification");
+                }
+            }
+        }
+        if std::env::var("SKIPPY_L3_VERIFY_WIRE").is_ok_and(|value| value != "0" && value != "off")
+        {
+            verify_segments_at_offsets(&payload, &manifest.segments)?;
         }
         stats.total_nanos = started.elapsed().as_nanos() as u64;
         Ok((payload, stats))
@@ -1702,16 +1844,19 @@ impl HandoffSegmentStore {
         &self,
         requests: &[PackedReadRequest<'_>],
         payload: &mut Vec<u8>,
-        payload_hasher: &mut blake3::Hasher,
+        payload_hasher: &mut Option<&mut blake3::Hasher>,
         stats: &mut AssembleStats,
     ) -> Result<()> {
         if requests.is_empty() {
             return Ok(());
         }
         let mut accounting = packed::ReadAccounting::default();
-        let result =
-            self.packed
-                .append_many(requests, payload, Some(payload_hasher), &mut accounting);
+        let result = self.packed.append_many(
+            requests,
+            payload,
+            payload_hasher.as_deref_mut(),
+            &mut accounting,
+        );
         stats.packs_opened = stats.packs_opened.saturating_add(accounting.packs_opened);
         stats.physical_reads = stats
             .physical_reads
@@ -2188,6 +2333,31 @@ impl HandoffSegmentStore {
         })?);
         Ok(freed)
     }
+}
+
+/// Verify the assembled bytes at each manifest offset.
+///
+/// The per-segment digests checked during reads prove the bytes are what they
+/// claim; this proves the scatter put them where the manifest says. It is the
+/// only check that catches a correct segment copied to the wrong offset, so it
+/// is opt-in (`SKIPPY_L3_VERIFY_WIRE`) and exercised by the gate.
+fn verify_segments_at_offsets(payload: &[u8], segments: &[HandoffSegmentRef]) -> Result<()> {
+    for segment in segments {
+        let start = usize::try_from(segment.offset).context("segment offset exceeds usize")?;
+        let len = usize::try_from(segment.bytes).context("segment length exceeds usize")?;
+        let end = start.checked_add(len).context("segment range overflows")?;
+        let bytes = payload
+            .get(start..end)
+            .context("segment range exceeds assembled payload")?;
+        if segment_digest(bytes) != segment.digest {
+            bail!(
+                "assembled payload disagrees with segment {} at offset {}",
+                segment.index,
+                segment.offset
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a manifest whose payload codec this build cannot decode, before any

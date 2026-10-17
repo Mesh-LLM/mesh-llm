@@ -173,31 +173,69 @@ fn run_layout(
     let started = Instant::now();
     let mut turns = 0u32;
     let mut committed = 0u64;
+    let mut spill_hash_nanos = 0u64;
+    let mut spilled_bytes = 0u64;
     let manifest = match layout {
-        Layout::Single => spill(&store, blocks, total_tokens, options, &mut cache)?,
+        Layout::Single => {
+            let (manifest, hash_nanos) = spill(&store, blocks, total_tokens, options, &mut cache)?;
+            spill_hash_nanos += hash_nanos;
+            spilled_bytes += manifest.total_bytes;
+            manifest
+        }
         Layout::Turns => {
             let base = (total_tokens / 4).max(options.window_rows);
             let mut produced = base;
-            let mut last = None;
             while produced < total_tokens && turns < options.turns {
                 let before = store.managed_usage_bytes()?;
-                last = Some(spill(&store, blocks, produced, options, &mut cache)?);
+                let (manifest, hash_nanos) = spill(&store, blocks, produced, options, &mut cache)?;
+                spill_hash_nanos += hash_nanos;
+                spilled_bytes += manifest.total_bytes;
                 committed = committed.saturating_add(store.managed_usage_bytes()? - before);
                 produced = (produced + options.tokens_per_turn).min(total_tokens);
                 turns += 1;
             }
-            let manifest = last.expect("at least one turn");
             let before = store.managed_usage_bytes()?;
-            let final_manifest = spill(&store, blocks, total_tokens, options, &mut cache)?;
+            let (final_manifest, hash_nanos) =
+                spill(&store, blocks, total_tokens, options, &mut cache)?;
+            spill_hash_nanos += hash_nanos;
+            spilled_bytes += final_manifest.total_bytes;
             committed = committed.saturating_add(store.managed_usage_bytes()? - before);
             turns += 1;
-            let _ = manifest;
             final_manifest
         }
     };
     let write_elapsed = started.elapsed();
 
+    // Manifest and packed-index size on disk: both are compact JSON today.
+    let manifests_dir = root.join("manifests");
+    let mut manifest_bytes = 0u64;
+    let mut manifest_count = 0u64;
+    if let Ok(entries) = std::fs::read_dir(&manifests_dir) {
+        for entry in entries.flatten() {
+            manifest_bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+            manifest_count += 1;
+        }
+    }
+    let indexes_dir = root.join("pack-indexes");
+    let mut index_bytes = 0u64;
+    if let Ok(entries) = std::fs::read_dir(&indexes_dir) {
+        for entry in entries.flatten() {
+            index_bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    let load_started = Instant::now();
     let loaded = store.load_manifest(&manifest.payload_digest)?;
+    let manifest_load = load_started.elapsed();
+    if manifest_count > 0 {
+        println!(
+            "  json: {:.1} MiB manifests ({:.0} KiB each) + {:.1} MiB packed indexes; \
+             load_manifest {:.2} ms",
+            manifest_bytes as f64 / (1024.0 * 1024.0),
+            manifest_bytes as f64 / manifest_count as f64 / 1024.0,
+            index_bytes as f64 / (1024.0 * 1024.0),
+            manifest_load.as_secs_f64() * 1000.0,
+        );
+    }
     let restore_started = Instant::now();
     let (payload, stats) = store.assemble_traced(&loaded)?;
     let restore_elapsed = restore_started.elapsed();
@@ -221,9 +259,13 @@ fn run_layout(
         turns
     );
     println!(
-        "  write {:.2}s, committed {:.3} GiB, write amplification {amplification:.3}x",
+        "  write {:.2}s, committed {:.3} GiB, write amplification {amplification:.3}x, \
+         payload hashing {:.3}s ({:.1} GiB/s over {:.2} GiB spilled)",
         write_elapsed.as_secs_f64(),
         committed as f64 / GIB,
+        spill_hash_nanos as f64 / 1e9,
+        spilled_bytes as f64 / GIB / (spill_hash_nanos as f64 / 1e9).max(1e-9),
+        spilled_bytes as f64 / GIB,
     );
     println!(
         "  restore {:.3}s: {:.3} GiB over {} segments in {} packs, {} physical reads / \
@@ -282,7 +324,7 @@ fn spill(
     tokens: u64,
     options: &Options,
     cache: &mut SegmentCache,
-) -> Result<HandoffManifest> {
+) -> Result<(HandoffManifest, u64)> {
     let plan = segment_plan(blocks, tokens, options.window_rows);
     for segment in &plan {
         cache.ensure(segment);
@@ -296,6 +338,7 @@ fn spill(
         .map_err(|refusal| anyhow::anyhow!("packed put refused: {}", refusal.reason()))?;
     let mut manifest = HandoffManifest::new("blake3:profile".into(), "full-state".into());
     let mut hasher = blake3::Hasher::new();
+    let hash_started = Instant::now();
     for (index, (stored, bytes)) in held.iter().zip(&segments).enumerate() {
         let bytes_len = bytes.len() as u64;
         manifest.segments.push(HandoffSegmentRef {
@@ -315,9 +358,10 @@ fn spill(
     manifest.kv_decoded_bytes = manifest.total_bytes;
     manifest.token_count = tokens;
     manifest.payload_digest = hasher.finalize().to_hex().to_string();
+    let hash_nanos = hash_started.elapsed().as_nanos() as u64;
     store.commit(&manifest)?;
     drop(held);
-    Ok(manifest)
+    Ok((manifest, hash_nanos))
 }
 
 /// Peak BLAKE3 throughput for the two shapes this store asks for: many

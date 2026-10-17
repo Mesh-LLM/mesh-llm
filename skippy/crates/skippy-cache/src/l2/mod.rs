@@ -1938,6 +1938,8 @@ mod tests {
             model_identity: "blake3:model".to_string(),
             state_identity: "blake3:state".to_string(),
             payload_kind: "kv-recurrent".to_string(),
+            key_kind: crate::l3::KeyKind::WireBlake3,
+            segmentation_id: None,
             total_bytes: wire_bytes.len() as u64,
             payload_digest: digest.clone(),
             segments: vec![
@@ -1998,6 +2000,8 @@ mod tests {
             model_identity: "m".to_string(),
             state_identity: "s".to_string(),
             payload_kind: "blob".to_string(),
+            key_kind: crate::l3::KeyKind::WireBlake3,
+            segmentation_id: None,
             total_bytes: 10,
             payload_digest: "blake3:aa".to_string(),
             segments: Vec::new(),
@@ -2723,6 +2727,8 @@ mod tests {
             model_identity: "m".to_string(),
             state_identity: "s".to_string(),
             payload_kind: "full-state".to_string(),
+            key_kind: crate::l3::KeyKind::WireBlake3,
+            segmentation_id: None,
             total_bytes: 32,
             payload_digest: digest.clone(),
             segments: vec![HandoffSegmentRef {
