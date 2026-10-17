@@ -1,4 +1,4 @@
-From 6a0393b7eb7ac89c6bbc86b12952850ba58773e2 Mon Sep 17 00:00:00 2001
+From 467bb0ba15c009debb628e777c15197bddf99209 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -17,7 +17,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  329 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  470 +++++++++
+ src/skippy/execution-batch.cpp          |  468 +++++++++
  src/skippy/execution-single.cpp         |  641 ++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/package_tensor_binding.h     |   27 +
  src/skippy/rerank_template.h            |   36 +
  src/skippy/runtime_support.h            |   50 +
- src/skippy/runtime_types.h              |  183 ++++
+ src/skippy/runtime_types.h              |  182 ++++
  src/skippy/sampling.cpp                 | 1128 +++++++++++++++++++++
  src/skippy/sampling_internal.h          |   70 ++
  src/skippy/sampling_vocab.cpp           |   74 ++
@@ -61,7 +61,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  371 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16072 insertions(+)
+ 57 files changed, 16069 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -2487,10 +2487,10 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..8288744e4
+index 000000000..6743a53e0
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
-@@ -0,0 +1,470 @@
+@@ -0,0 +1,468 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -2714,15 +2714,13 @@ index 000000000..8288744e4
 +    }
 +
 +    std::unordered_set<skippy_session *> unique_sessions;
-+    auto & offsets = first->iteration_offsets;
-+    offsets.assign(request_count + 1, 0);
++    std::vector<size_t> offsets(request_count + 1, 0);
 +    size_t sampled_count = 0;
 +    for (size_t index = 0; index < request_count; ++index) {
 +        const auto & request = requests[index];
 +        if (request.session == nullptr || request.session->ctx != first->ctx ||
 +                request.session->stage_model != first->stage_model || request.token_ids == nullptr ||
-+                request.token_count == 0 ||
-+                (request_count > 1 && !unique_sessions.insert(request.session).second)) {
++                request.token_count == 0 || !unique_sessions.insert(request.session).second) {
 +            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
 +                    "iteration requests must use unique sessions on one stage model");
 +            return SKIPPY_STATUS_INVALID_ARGUMENT;
@@ -9038,10 +9036,10 @@ index 000000000..55499ea20
 +        skippy_error ** out_error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 new file mode 100644
-index 000000000..1bb21aab1
+index 000000000..125cd2a46
 --- /dev/null
 +++ b/src/skippy/runtime_types.h
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,182 @@
 +#pragma once
 +
 +#include "skippy.h"
@@ -9186,7 +9184,6 @@ index 000000000..1bb21aab1
 +    // execution lock. Samplers may reorder candidates, so refill every row.
 +    std::vector<llama_token_data> sampling_candidates;
 +    std::vector<llama_token> iteration_tokens;
-+    std::vector<size_t> iteration_offsets;
 +    std::vector<llama_pos> prefill_positions;
 +    std::vector<int32_t> prefill_n_seq_ids;
 +    std::vector<llama_seq_id> prefill_seq_ids;
