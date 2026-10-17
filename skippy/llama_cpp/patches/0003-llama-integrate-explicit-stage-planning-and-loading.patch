@@ -1,7 +1,7 @@
-From 047cf104f6f590f4578b91c825288f79716aeb29 Mon Sep 17 00:00:00 2001
+From 931841681ac0d9aee9dc869f9492c3ab980411ce Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH] feat(llama): integrate live stage planning and execution
+Subject: [PATCH 3/6] feat(llama): integrate live stage planning and execution
 
 ---
  include/llama.h                |    7 +
@@ -15,7 +15,7 @@ Subject: [PATCH] feat(llama): integrate live stage planning and execution
  src/llama-hparams.h            |   20 +-
  src/llama-kv-cache-dsv4.cpp    |    6 +-
  src/llama-kv-cache-msa.cpp     |    6 +-
- src/llama-kv-cache.cpp         | 1659 +++++++++++++++++++++++++++++---
+ src/llama-kv-cache.cpp         | 1650 +++++++++++++++++++++++++++++---
  src/llama-kv-cache.h           |   81 +-
  src/llama-kv-cells.h           |   66 +-
  src/llama-memory-recurrent.cpp |   69 +-
@@ -29,7 +29,7 @@ Subject: [PATCH] feat(llama): integrate live stage planning and execution
  src/llama-quant.cpp            |   12 +-
  src/llama.cpp                  |   91 +-
  src/skippy-verify-checkpoint.h |   24 +
- 25 files changed, 3026 insertions(+), 372 deletions(-)
+ 25 files changed, 3020 insertions(+), 369 deletions(-)
  create mode 100644 src/skippy-verify-checkpoint.h
 
 diff --git a/include/llama.h b/include/llama.h
@@ -1638,7 +1638,7 @@ index 55ef286ca..c814869d0 100644
  
  void llama_kv_cache_msa::clear(bool data) {
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 332d1abe0..89667a1fc 100644
+index 332d1abe0..51524af74 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -4,6 +4,7 @@
@@ -3293,31 +3293,7 @@ index 332d1abe0..89667a1fc 100644
  ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
      const uint32_t n_tokens = ubatch.n_tokens;
  
-@@ -1610,9 +2873,12 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
-             // ref:  https://github.com/ggml-org/llama.cpp/pull/18842
-             bool prev = false;
- 
--            auto & idxs = seq_idxs[seq_id];
-+            // A one-row stream cannot reuse this row. Avoid allocating maps
-+            // and recording candidate indices that no later row can consume.
-+            std::vector<uint32_t> unused_idxs;
-+            auto & idxs = n_tps > 1 ? seq_idxs[seq_id] : unused_idxs;
- 
--            if (!alibi) {
-+            if (!alibi && n_tps > 1) {
-                 if (seq_srct.find(seq_id) != seq_srct.end()) {
-                     const uint32_t srct = seq_srct[seq_id];
- 
-@@ -1655,7 +2921,7 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
-                 p0 = cells.pos_get(j);
- 
-                 if (!alibi) {
--                    if (!prev) {
-+                    if (!prev && n_tps > 1) {
-                         // record all cells for which: p0 >= seq_pos_min[seq_id] - n_swa - 32
-                         if (p0 + (int32_t) (n_swa + 32) >= seq_pos_min[seq_id]) {
-                             idxs.push_back(j);
-@@ -1812,6 +3078,39 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
+@@ -1812,6 +3075,39 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch
      }
  }
  
@@ -3357,7 +3333,7 @@ index 332d1abe0..89667a1fc 100644
  void llama_kv_cache::set_input_k_rot(ggml_tensor * dst) const {
      GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
  
-@@ -1921,6 +3220,18 @@ size_t llama_kv_cache::size_v_bytes() const {
+@@ -1921,6 +3217,18 @@ size_t llama_kv_cache::size_v_bytes() const {
      return size_v_bytes;
  }
  
@@ -3376,7 +3352,7 @@ index 332d1abe0..89667a1fc 100644
  ggml_tensor * llama_kv_cache::build_rope_shift(
          const llama_cparams & cparams,
                 ggml_context * ctx,
-@@ -2269,6 +3580,36 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
+@@ -2269,6 +3577,36 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
          }
      }
  
@@ -3413,7 +3389,7 @@ index 332d1abe0..89667a1fc 100644
      if (!v_trans) {
          for (const auto & layer : layers) {
              const uint32_t il = layer.il;
-@@ -2580,6 +3921,68 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
+@@ -2580,6 +3918,68 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
          }
      }
  
@@ -3482,7 +3458,7 @@ index 332d1abe0..89667a1fc 100644
      if (!this->v_trans) {
          for (const auto & layer : layers) {
              const uint32_t il = layer.il;
-@@ -2690,8 +4093,9 @@ llama_kv_cache_context::llama_kv_cache_context(
+@@ -2690,8 +4090,9 @@ llama_kv_cache_context::llama_kv_cache_context(
          llama_kv_cache * kv,
          llama_context * lctx,
          bool do_shift,
@@ -3494,7 +3470,7 @@ index 332d1abe0..89667a1fc 100644
          status = LLAMA_MEMORY_STATUS_NO_UPDATE;
      }
  }
-@@ -2744,6 +4148,21 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
+@@ -2744,6 +4145,21 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
      return n_kv;
  }
  
@@ -3516,7 +3492,7 @@ index 332d1abe0..89667a1fc 100644
  ggml_type llama_kv_cache_context::type_k() const {
      return kv->type_k();
  }
-@@ -2760,6 +4179,18 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
+@@ -2760,6 +4176,18 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
      return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
  }
  
@@ -3535,7 +3511,7 @@ index 332d1abe0..89667a1fc 100644
  ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
      return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
  }
-@@ -2768,6 +4199,10 @@ ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_
+@@ -2768,6 +4196,10 @@ ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_
      return kv->cpy_v(ctx, v_cur, v_idxs, il, sinfos[i_cur]);
  }
  
@@ -3546,7 +3522,7 @@ index 332d1abe0..89667a1fc 100644
  ggml_tensor * llama_kv_cache_context::build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
      return kv->build_input_k_idxs(ctx, ubatch);
  }
-@@ -2804,6 +4239,10 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
+@@ -2804,6 +4236,10 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
      kv->set_input_pos_bucket(dst, ubatch);
  }
  
