@@ -517,6 +517,15 @@ fn scheduled_task_registered() -> Result<bool, String> {
         .output()
         .map_err(|error| format!("failed to run schtasks: {error}"))?;
     if !output.status.success() {
+        // An unrelated damaged task can fail the listing; a named query that
+        // succeeds still proves this one is registered.
+        if Command::new("schtasks")
+            .args(["/Query", "/TN", SERVICE_NAME])
+            .output()
+            .is_ok_and(|named| named.status.success())
+        {
+            return Ok(true);
+        }
         let said = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(format!(
             "`schtasks /Query` exited with status {}: {said}",
