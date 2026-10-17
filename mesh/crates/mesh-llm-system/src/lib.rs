@@ -8,6 +8,7 @@ pub use mesh_llm_release_footer as embedded_release_footer;
 pub mod hardware;
 pub mod process;
 pub mod release_target;
+pub mod storage_probe;
 pub mod util;
 pub mod vram;
 

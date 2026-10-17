@@ -31,6 +31,12 @@ pub struct SkippyPackageIdentity {
     pub source_model_bytes: u64,
     pub source_files: Vec<SkippyPackageSourceFile>,
     pub layer_weight_bytes: Vec<u64>,
+    /// Routed-expert weight bytes per layer, zero for dense layers.
+    /// Layer-aligned when known; empty for dense models and v1 packages.
+    pub layer_expert_weight_bytes: Vec<u64>,
+    /// Experts per MoE layer and experts routed per token; zero when unknown.
+    pub expert_count: u32,
+    pub expert_used_count: u32,
     pub layer_count: u32,
     pub activation_width: u32,
     pub tensor_count: u64,
@@ -145,6 +151,7 @@ pub fn identity_from_package_v2(
     );
     let mut source_files = package_v2_source_files(&package_dir, &manifest, digest_cache)?;
     let layer_weight_bytes = package_v2_layer_weight_bytes(&manifest)?;
+    let expert_profile = package_v2_expert_profile(&manifest, architecture)?;
     let tensor_count = u64::try_from(manifest.tensor_catalog.entries.len())
         .context("package-v2 tensor count exceeds u64")?;
     let manifest_sha256 = hex_lower(&Sha256::digest(&manifest_bytes));
@@ -165,6 +172,9 @@ pub fn identity_from_package_v2(
         source_model_bytes,
         source_files,
         layer_weight_bytes,
+        layer_expert_weight_bytes: expert_profile.layer_expert_weight_bytes,
+        expert_count: expert_profile.expert_count,
+        expert_used_count: expert_profile.expert_used_count,
         layer_count: manifest.layer_count,
         activation_width,
         tensor_count,
@@ -265,6 +275,57 @@ pub fn package_v2_layer_weight_bytes(manifest: &PackageManifestV2) -> Result<Vec
         return Ok(Vec::new());
     }
     Ok(layer_bytes)
+}
+
+/// Routed-expert accounting read from a package-v2 manifest.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PackageExpertProfile {
+    pub layer_expert_weight_bytes: Vec<u64>,
+    pub expert_count: u32,
+    pub expert_used_count: u32,
+}
+
+/// Sum each layer's routed-expert tensor bytes and read the expert counts for
+/// `architecture`. A model without routed experts yields an empty vector.
+pub fn package_v2_expert_profile(
+    manifest: &PackageManifestV2,
+    architecture: &str,
+) -> Result<PackageExpertProfile> {
+    let metadata_u32 = |suffix: &str| {
+        manifest
+            .model_metadata
+            .get(&format!("{architecture}.{suffix}"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0)
+    };
+    let expert_count = metadata_u32("expert_count");
+    let expert_used_count = metadata_u32("expert_used_count");
+    let mut layer_bytes = vec![0_u64; manifest.layer_count as usize];
+    let mut any = false;
+    for tensor in &manifest.tensor_catalog.entries {
+        let Some(layer) = tensor.layer_ordinal else {
+            continue;
+        };
+        if !skippy_model_artifact::gguf::is_expert_partitioned_tensor(&tensor.name) {
+            continue;
+        }
+        let TensorStorage::Owned { stored_length, .. } = tensor.storage else {
+            continue;
+        };
+        let slot = layer_bytes
+            .get_mut(layer as usize)
+            .with_context(|| format!("package-v2 tensor layer {layer} exceeds layer count"))?;
+        *slot = slot
+            .checked_add(stored_length)
+            .context("package-v2 expert byte count overflow")?;
+        any = true;
+    }
+    Ok(PackageExpertProfile {
+        layer_expert_weight_bytes: if any { layer_bytes } else { Vec::new() },
+        expert_count,
+        expert_used_count,
+    })
 }
 
 pub fn manifest_ships_mtp_without_generation(manifest: &PackageManifestV2) -> bool {

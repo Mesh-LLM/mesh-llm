@@ -1,15 +1,18 @@
 use std::cmp::Ordering;
 
 mod capacity;
+mod expert_tiering;
 mod locked;
 mod performance;
 
 use capacity::layer_required_bytes;
 pub use capacity::{
     default_runtime_headroom_bytes, diagnostic_candidate_bytes_per_layer,
-    repriced_stage_weight_bytes, required_stage_bytes,
+    host_expert_bytes_for_stage, repriced_stage_weight_bytes, required_stage_bytes,
 };
 
+use expert_tiering::{ExpertLayerProfile, HostExpertBudget, fit_tiered_span};
+pub use expert_tiering::{ExpertOffloadPolicy, StageExpertPlacement};
 pub use locked::{LockedTopologyStage, plan_locked_topology};
 pub use performance::{PlacementObjective, StageDecodeEstimate, ThroughputEstimate};
 
@@ -63,6 +66,16 @@ pub struct TopologyPlanningInput {
     /// set; defaults to `Throughput`, which is the behaviour `--auto-balance`
     /// has always had.
     pub placement_objective: PlacementObjective,
+    /// Routed-expert weight bytes per layer, zero for dense layers. Layer-
+    /// aligned when set; empty disables expert tiering.
+    pub layer_expert_weight_bytes: Vec<u64>,
+    /// Experts per MoE layer and experts routed per token, used to price the
+    /// bytes a token reads from a spilled expert bank.
+    pub expert_count: u32,
+    pub expert_used_count: u32,
+    /// Whether the planner may move routed experts into host memory when the
+    /// node set cannot hold the model with every expert resident.
+    pub expert_offload: ExpertOffloadPolicy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,6 +88,12 @@ pub struct TopologyNode {
     /// Rate this node streams weights during decode, in bytes per second.
     /// Estimated before load or measured from a running stage.
     pub decode_bytes_per_second: Option<u64>,
+    /// Host memory outside the accelerator budget that spilled routed experts
+    /// may occupy. `None` or zero keeps every expert on the accelerator.
+    pub host_expert_bytes: Option<u64>,
+    /// Measured random-read rate of the node's model store, in bytes per
+    /// second. Without it the planner never plans experts that must page in.
+    pub expert_stream_bytes_per_second: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,6 +102,9 @@ pub struct TopologyPlan {
     pub parallel_lanes: usize,
     pub stages: Vec<TopologyStagePlan>,
     pub estimated_decode_network_ms_per_token: Option<u32>,
+    /// Slowest stage's per-token expert paging estimate; present when any
+    /// stage streams routed experts from its model store.
+    pub estimated_decode_expert_stream_ms_per_token: Option<u32>,
     pub decode_tpot_target_met: Option<bool>,
     /// Per-stage decode estimate; present when every placed node has a speed.
     pub throughput: Option<ThroughputEstimate>,
@@ -96,6 +118,9 @@ pub struct TopologyStagePlan {
     pub layer_start: u32,
     pub layer_end: u32,
     pub parameter_bytes: u64,
+    /// Where the stage's routed experts live; `None` keeps them on the
+    /// accelerator.
+    pub expert_placement: Option<StageExpertPlacement>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -170,6 +195,15 @@ pub fn rebalance_topology(
     input: &TopologyPlanningInput,
     current: &TopologyPlan,
 ) -> Option<TopologyPlan> {
+    // A re-cut moves layer boundaries without re-deriving expert placement,
+    // so a tiered plan keeps the boundaries the tiering fit chose.
+    if current
+        .stages
+        .iter()
+        .any(|stage| stage.expert_placement.is_some())
+    {
+        return None;
+    }
     let nodes = usable_nodes(&input.nodes);
     let layer_weights = layer_weight_bytes(input);
     let layer_required = layer_required_bytes(
@@ -238,11 +272,46 @@ fn plan_topology_with_required_stage0(
         input.context_length_override,
     )?;
     let nodes = usable_nodes(&input.nodes);
-    let latency_aware = latency_aware_planning(input, &nodes);
+    // Resident placements are searched first across every node count and
+    // context. The estimate prices expert paging from disk but not the CPU
+    // kernels that run host-resident experts, so tiering is a capacity
+    // fallback: it is tried only when no resident placement fits at all.
+    let resident = search_topology(
+        input,
+        &nodes,
+        &context_candidates,
+        required_stage0_node_id,
+        None,
+    )?;
+    if let Some(plan) = resident {
+        return Ok(plan);
+    }
+    if let Some(profile) = expert_profile(input)
+        && let Some(plan) = search_topology(
+            input,
+            &nodes,
+            &context_candidates,
+            required_stage0_node_id,
+            Some(&profile),
+        )?
+    {
+        return Ok(plan);
+    }
+    Err(TopologyPlanError::NoValidTopology { minimum_context })
+}
+
+fn search_topology(
+    input: &TopologyPlanningInput,
+    nodes: &[UsableNode],
+    context_candidates: &[u32],
+    required_stage0_node_id: Option<&str>,
+    tiering: Option<&ExpertLayerProfile>,
+) -> Result<Option<TopologyPlan>, TopologyPlanError> {
+    let latency_aware = latency_aware_planning(nodes, tiering.is_some());
 
     let minimum_nodes = input.minimum_nodes.max(1);
     let mut best_latency_candidate: Option<CandidatePlan> = None;
-    for context_length in context_candidates {
+    for context_length in context_candidates.iter().copied() {
         let lane_candidates = parallel_lane_candidates(
             input.parallel_lanes_override,
             context_length,
@@ -252,10 +321,14 @@ fn plan_topology_with_required_stage0(
         for node_count in minimum_nodes..=nodes.len().min(input.layer_count as usize) {
             for parallel_lanes in lane_candidates.iter().copied() {
                 let mut best_for_count: Option<CandidatePlan> = None;
-                for_each_node_subset(&nodes, node_count, |subset| {
-                    let Some(candidate) =
-                        fit_candidate(input, subset, context_length, parallel_lanes)
-                    else {
+                for_each_node_subset(nodes, node_count, |subset| {
+                    let Some(candidate) = fit_candidate_with_experts(
+                        input,
+                        subset,
+                        context_length,
+                        parallel_lanes,
+                        tiering,
+                    ) else {
                         return;
                     };
                     if !candidate_has_required_stage0(&candidate, required_stage0_node_id) {
@@ -277,17 +350,13 @@ fn plan_topology_with_required_stage0(
                         }
                         continue;
                     }
-                    return Ok(candidate.plan);
+                    return Ok(Some(candidate.plan));
                 }
             }
         }
     }
 
-    if let Some(candidate) = best_latency_candidate {
-        return Ok(candidate.plan);
-    }
-
-    Err(TopologyPlanError::NoValidTopology { minimum_context })
+    Ok(best_latency_candidate.map(|candidate| candidate.plan))
 }
 
 fn validate_input(input: &TopologyPlanningInput) -> Result<(), TopologyPlanError> {
@@ -384,6 +453,8 @@ struct UsableNode {
     usable_vram_bytes: u64,
     stage_transfer_latency_ms: Option<u32>,
     decode_bytes_per_second: Option<u64>,
+    host_expert_bytes: u64,
+    expert_stream_bytes_per_second: Option<u64>,
 }
 
 fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
@@ -399,6 +470,10 @@ fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
                 usable_vram_bytes: capped.saturating_sub(node.runtime_headroom_bytes),
                 stage_transfer_latency_ms: node.stage_transfer_latency_ms,
                 decode_bytes_per_second: node.decode_bytes_per_second,
+                host_expert_bytes: node.host_expert_bytes.unwrap_or(0),
+                expert_stream_bytes_per_second: node
+                    .expert_stream_bytes_per_second
+                    .filter(|rate| *rate > 0),
             }
         })
         .collect::<Vec<_>>();
@@ -445,6 +520,15 @@ struct CandidatePlan {
     total_remaining_vram: u128,
 }
 
+impl CandidatePlan {
+    fn decode_estimate_ms(&self) -> Option<u32> {
+        decode_estimate_ms(
+            self.plan.estimated_decode_network_ms_per_token,
+            self.plan.estimated_decode_expert_stream_ms_per_token,
+        )
+    }
+}
+
 impl Ord for CandidatePlan {
     fn cmp(&self, other: &Self) -> Ordering {
         self.minimum_remaining_vram
@@ -474,11 +558,12 @@ impl PartialOrd for CandidatePlan {
     }
 }
 
-fn fit_candidate(
+fn fit_candidate_with_experts(
     input: &TopologyPlanningInput,
     nodes: &[UsableNode],
     context_length: u32,
     parallel_lanes: usize,
+    tiering: Option<&ExpertLayerProfile>,
 ) -> Option<CandidatePlan> {
     let layer_count = input.layer_count as usize;
     if nodes.len() > layer_count {
@@ -516,25 +601,21 @@ fn fit_candidate(
         let remaining_nodes = capacities.len() - stage_index;
         let min_for_later = remaining_nodes.saturating_sub(1) as u32;
         let assignable = remaining_layers.saturating_sub(min_for_later);
-        let layer_span = assignable.min(max_contiguous_layers_from(
+        let fit = fit_stage_span(
             &layer_required_bytes,
+            tiering,
+            node,
             next_layer as usize,
             assignable as usize,
-            node.usable_vram_bytes,
-        ) as u32);
-        if layer_span == 0 {
-            return None;
-        }
-
+            remaining_nodes == 1,
+        )?;
         let layer_start = next_layer;
-        let layer_end = layer_start + layer_span;
-        let range = layer_start as usize..layer_end as usize;
-        let parameter_bytes = sum_u64(&layer_weights[range.clone()]);
-        let required_bytes = sum_u64(&layer_required_bytes[range]);
-        if required_bytes > node.usable_vram_bytes {
+        let layer_end = layer_start + fit.layer_span;
+        let parameter_bytes = sum_u64(&layer_weights[layer_start as usize..layer_end as usize]);
+        if fit.accelerator_bytes > node.usable_vram_bytes {
             return None;
         }
-        let remaining = node.usable_vram_bytes - required_bytes;
+        let remaining = node.usable_vram_bytes - fit.accelerator_bytes;
         minimum_remaining_vram = minimum_remaining_vram.min(remaining);
         total_remaining_vram += u128::from(remaining);
         stages.push(TopologyStagePlan {
@@ -544,6 +625,7 @@ fn fit_candidate(
             layer_start,
             layer_end,
             parameter_bytes,
+            expert_placement: fit.placement,
         });
         next_layer = layer_end;
     }
@@ -553,14 +635,21 @@ fn fit_candidate(
     }
 
     let estimated_decode_network_ms_per_token = estimate_decode_network_ms_per_token(nodes);
+    let estimated_decode_expert_stream_ms_per_token =
+        estimate_decode_expert_stream_ms_per_token(&stages);
+    let decode_estimate = decode_estimate_ms(
+        estimated_decode_network_ms_per_token,
+        estimated_decode_expert_stream_ms_per_token,
+    );
     Some(CandidatePlan {
         plan: TopologyPlan {
             context_length,
             parallel_lanes,
             stages,
             estimated_decode_network_ms_per_token,
+            estimated_decode_expert_stream_ms_per_token,
             decode_tpot_target_met: decode_tpot_target_met(
-                estimated_decode_network_ms_per_token,
+                decode_estimate,
                 input.target_decode_tpot_ms,
             ),
             throughput: None,
@@ -570,10 +659,64 @@ fn fit_candidate(
     })
 }
 
-fn latency_aware_planning(_input: &TopologyPlanningInput, nodes: &[UsableNode]) -> bool {
-    nodes
-        .iter()
-        .any(|node| node.stage_transfer_latency_ms.is_some())
+/// One node's layer span: the resident packing when experts stay on the
+/// accelerator, the tiered packing when the caller allows spilling.
+fn fit_stage_span(
+    layer_required_bytes: &[u64],
+    tiering: Option<&ExpertLayerProfile>,
+    node: &UsableNode,
+    start: usize,
+    limit: usize,
+    must_cover: bool,
+) -> Option<expert_tiering::TieredStageFit> {
+    if let Some(profile) = tiering {
+        return fit_tiered_span(
+            layer_required_bytes,
+            profile,
+            start,
+            limit,
+            node.usable_vram_bytes,
+            HostExpertBudget {
+                host_bytes: node.host_expert_bytes,
+                stream_bytes_per_second: node.expert_stream_bytes_per_second,
+            },
+            must_cover,
+        );
+    }
+    let layer_span =
+        max_contiguous_layers_from(layer_required_bytes, start, limit, node.usable_vram_bytes);
+    if layer_span == 0 {
+        return None;
+    }
+    let end = start + layer_span as usize;
+    Some(expert_tiering::TieredStageFit {
+        layer_span: layer_span as u32,
+        accelerator_bytes: sum_u64(&layer_required_bytes[start..end]),
+        placement: None,
+    })
+}
+
+fn expert_profile(input: &TopologyPlanningInput) -> Option<ExpertLayerProfile> {
+    if input.expert_offload == ExpertOffloadPolicy::Disabled {
+        return None;
+    }
+    ExpertLayerProfile::from_input(
+        input.layer_count,
+        &input.layer_expert_weight_bytes,
+        input.expert_count,
+        input.expert_used_count,
+    )
+}
+
+/// Stage counts are compared by estimated time per token when any node has a
+/// measured hop latency, or during the tiered search: a one-node plan that
+/// pages experts per token is only better than a two-node tiered plan if the
+/// paging costs less than the hop, and that needs a comparison, not first fit.
+fn latency_aware_planning(nodes: &[UsableNode], tiering: bool) -> bool {
+    tiering
+        || nodes
+            .iter()
+            .any(|node| node.stage_transfer_latency_ms.is_some())
 }
 
 fn candidate_has_required_stage0(
@@ -590,14 +733,8 @@ fn candidate_has_required_stage0(
 }
 
 fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
-    let candidate_estimate = candidate
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
-    let current_estimate = current
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
+    let candidate_estimate = candidate.decode_estimate_ms().unwrap_or_default();
+    let current_estimate = current.decode_estimate_ms().unwrap_or_default();
     candidate_estimate < current_estimate
         || (candidate_estimate == current_estimate && candidate.cmp(current) == Ordering::Greater)
 }
@@ -615,24 +752,14 @@ fn latency_candidate_ordering(
     right: &CandidatePlan,
     input: &TopologyPlanningInput,
 ) -> Ordering {
-    let left_estimate = left
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
-    let right_estimate = right
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
-    let left_target_met = decode_tpot_target_met(
-        left.plan.estimated_decode_network_ms_per_token,
-        input.target_decode_tpot_ms,
-    )
-    .unwrap_or(true);
-    let right_target_met = decode_tpot_target_met(
-        right.plan.estimated_decode_network_ms_per_token,
-        input.target_decode_tpot_ms,
-    )
-    .unwrap_or(true);
+    let left_estimate = left.decode_estimate_ms().unwrap_or_default();
+    let right_estimate = right.decode_estimate_ms().unwrap_or_default();
+    let left_target_met =
+        decode_tpot_target_met(left.decode_estimate_ms(), input.target_decode_tpot_ms)
+            .unwrap_or(true);
+    let right_target_met =
+        decode_tpot_target_met(right.decode_estimate_ms(), input.target_decode_tpot_ms)
+            .unwrap_or(true);
 
     left_target_met
         .cmp(&right_target_met)
@@ -652,6 +779,24 @@ fn estimate_decode_network_ms_per_token(nodes: &[UsableNode]) -> Option<u32> {
 
 fn decode_tpot_target_met(estimate: Option<u32>, target: Option<u32>) -> Option<bool> {
     Some(estimate? <= target?)
+}
+
+/// Per-token decode estimate the planner ranks by: serialized network hops
+/// plus the slowest stage's expert paging. `None` when neither is known.
+fn decode_estimate_ms(network_ms: Option<u32>, expert_stream_ms: Option<u32>) -> Option<u32> {
+    match (network_ms, expert_stream_ms) {
+        (None, None) => None,
+        (network, stream) => Some(network.unwrap_or(0).saturating_add(stream.unwrap_or(0))),
+    }
+}
+
+fn estimate_decode_expert_stream_ms_per_token(stages: &[TopologyStagePlan]) -> Option<u32> {
+    stages
+        .iter()
+        .filter_map(|stage| stage.expert_placement.as_ref())
+        .filter(|placement| placement.streamed_bytes > 0)
+        .map(|placement| placement.estimated_stream_ms_per_token)
+        .max()
 }
 
 fn layer_weight_bytes(input: &TopologyPlanningInput) -> Vec<u64> {
@@ -697,10 +842,13 @@ fn sum_u64(values: &[u64]) -> u64 {
 }
 
 #[cfg(test)]
+mod expert_tiering_plan_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    const GIB: u64 = 1024 * 1024 * 1024;
+    pub(super) const GIB: u64 = 1024 * 1024 * 1024;
     const QWEN_CODER_480B_NATIVE_CONTEXT: u32 = 262_144;
     const QWEN_CODER_480B_LAYERS: u32 = 62;
     const QWEN_CODER_480B_WEIGHT_BYTES: u64 = 315_680_000_000;
@@ -709,7 +857,7 @@ mod tests {
     const STUDIO_METAL_BYTES: u64 = 239_143_780_352;
     const STUDIO_RAM_BYTES: u64 = 274_877_906_944;
 
-    fn node(id: &str, gib: u64) -> TopologyNode {
+    pub(super) fn node(id: &str, gib: u64) -> TopologyNode {
         TopologyNode {
             node_id: id.to_string(),
             detected_vram_bytes: gib * GIB,
@@ -717,17 +865,19 @@ mod tests {
             runtime_headroom_bytes: 0,
             stage_transfer_latency_ms: None,
             decode_bytes_per_second: None,
+            host_expert_bytes: None,
+            expert_stream_bytes_per_second: None,
         }
     }
 
-    fn latency_node(id: &str, gib: u64, stage_transfer_latency_ms: u32) -> TopologyNode {
+    pub(super) fn latency_node(id: &str, gib: u64, stage_transfer_latency_ms: u32) -> TopologyNode {
         TopologyNode {
             stage_transfer_latency_ms: Some(stage_transfer_latency_ms),
             ..node(id, gib)
         }
     }
 
-    fn input(nodes: Vec<TopologyNode>) -> TopologyPlanningInput {
+    pub(super) fn input(nodes: Vec<TopologyNode>) -> TopologyPlanningInput {
         TopologyPlanningInput {
             native_context_length: 65_536,
             layer_count: 40,
@@ -743,6 +893,10 @@ mod tests {
             target_decode_tpot_ms: None,
             auto_balance: false,
             placement_objective: Default::default(),
+            layer_expert_weight_bytes: Vec::new(),
+            expert_count: 0,
+            expert_used_count: 0,
+            expert_offload: ExpertOffloadPolicy::Disabled,
         }
     }
 
@@ -762,6 +916,10 @@ mod tests {
             target_decode_tpot_ms: None,
             auto_balance: false,
             placement_objective: Default::default(),
+            layer_expert_weight_bytes: Vec::new(),
+            expert_count: 0,
+            expert_used_count: 0,
+            expert_offload: ExpertOffloadPolicy::Disabled,
         }
     }
 
@@ -809,6 +967,10 @@ mod tests {
             target_decode_tpot_ms: None,
             auto_balance: false,
             placement_objective: Default::default(),
+            layer_expert_weight_bytes: Vec::new(),
+            expert_count: 0,
+            expert_used_count: 0,
+            expert_offload: ExpertOffloadPolicy::Disabled,
         };
         let layer_weights = layer_weight_bytes(&request);
         let kv_per_layer = request.kv_bytes_per_token.div_ceil(u64::from(LAYERS));
@@ -884,6 +1046,8 @@ mod tests {
             runtime_headroom_bytes: 0,
             stage_transfer_latency_ms: None,
             decode_bytes_per_second: None,
+            host_expert_bytes: None,
+            expert_stream_bytes_per_second: None,
         }
     }
 

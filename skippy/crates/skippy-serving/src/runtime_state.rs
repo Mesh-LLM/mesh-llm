@@ -549,6 +549,9 @@ fn runtime_config_from_stage_config(
             SplitMode::Row => RuntimeSplitMode::Row,
             SplitMode::Tensor => RuntimeSplitMode::Tensor,
         },
+        host_expert_layers: config
+            .host_expert_layers
+            .and_then(|layers| skippy_runtime::HostExpertLayers::new(layers.start, layers.end)),
         selected_backend_device: config
             .selected_device
             .as_ref()
@@ -775,6 +778,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Enabled,
@@ -897,6 +901,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -976,6 +981,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -1104,6 +1110,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Disabled,
@@ -1328,6 +1335,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -1432,6 +1440,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "auto".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,

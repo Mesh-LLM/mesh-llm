@@ -129,6 +129,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             checkpoint_quantization: CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
             checkpoint_imatrix_sha256: None,

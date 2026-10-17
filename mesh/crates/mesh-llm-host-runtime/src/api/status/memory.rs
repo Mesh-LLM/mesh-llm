@@ -22,6 +22,8 @@ pub(crate) struct MemoryPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) system_ram_bytes: Option<u64>,
     pub(crate) ram_offload_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) model_store_read_bytes_per_second: Option<u64>,
 }
 
 impl From<crate::mesh::AdvertisedMemory> for MemoryPayload {
@@ -34,6 +36,7 @@ impl From<crate::mesh::AdvertisedMemory> for MemoryPayload {
             usable_bytes: memory.usable_bytes,
             system_ram_bytes: memory.system_ram_bytes,
             ram_offload_bytes: memory.ram_offload_bytes,
+            model_store_read_bytes_per_second: memory.model_store_read_bytes_per_second,
         }
     }
 }
@@ -52,6 +55,7 @@ mod tests {
             usable_bytes: 9_500_000_000,
             system_ram_bytes: None,
             ram_offload_bytes: 18_000_000_000,
+            model_store_read_bytes_per_second: None,
         });
 
         let json = serde_json::to_value(payload).expect("memory payload serializes");

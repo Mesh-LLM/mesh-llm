@@ -454,6 +454,7 @@ async fn make_test_node_with_requirements(
         gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
+        model_store_read_bytes_per_second: Arc::new(tokio::sync::Mutex::new(None)),
         config_state: Arc::new(tokio::sync::Mutex::new(
             crate::runtime::config_state::ConfigState::default(),
         )),

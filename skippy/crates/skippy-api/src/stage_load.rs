@@ -1,7 +1,8 @@
 //! Build transport-neutral stage configurations from admitted planning facts.
 use anyhow::{Context, Result, anyhow};
 use skippy_protocol::{
-    FlashAttentionType, LoadMode, PeerConfig, SplitMode, StageConfig, StageDevice,
+    FlashAttentionType, HostExpertLayers, HostExpertPolicy, LoadMode, PeerConfig, SplitMode,
+    StageConfig, StageDevice,
 };
 use std::path::{Path, PathBuf};
 
@@ -24,6 +25,8 @@ pub struct StageLoadRuntimeSettings {
     pub direct_io: bool,
     pub main_gpu: Option<u32>,
     pub split_mode: SplitMode,
+    /// Operator policy and planner placement for host-resident routed experts.
+    pub host_experts: HostExpertPolicy,
     pub kv_offload: Option<bool>,
     pub kv_unified: Option<bool>,
     pub swa_full: Option<bool>,
@@ -163,6 +166,11 @@ pub fn admitted_stage_config(
         direct_io: load.runtime_settings.direct_io,
         main_gpu: load.runtime_settings.main_gpu,
         split_mode: load.runtime_settings.split_mode,
+        host_expert_layers: HostExpertLayers::for_stage(
+            load.layer_start,
+            load.layer_end,
+            load.runtime_settings.host_experts,
+        ),
         cache_type_k: empty_to_default(&load.cache_type_k, "f16"),
         cache_type_v: empty_to_default(&load.cache_type_v, "f16"),
         flash_attn_type: load.flash_attn_type,

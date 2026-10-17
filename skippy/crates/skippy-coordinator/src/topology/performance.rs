@@ -285,6 +285,8 @@ mod tests {
             usable_vram_bytes: usable,
             stage_transfer_latency_ms: None,
             decode_bytes_per_second: speed,
+            host_expert_bytes: 0,
+            expert_stream_bytes_per_second: None,
         }
     }
 
@@ -296,6 +298,7 @@ mod tests {
             layer_start: start,
             layer_end: end,
             parameter_bytes: 0,
+            expert_placement: None,
         }
     }
 

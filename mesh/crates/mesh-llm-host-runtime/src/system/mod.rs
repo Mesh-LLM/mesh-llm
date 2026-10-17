@@ -5,4 +5,6 @@ pub(crate) mod native_runtime_events;
 pub(crate) mod native_runtime_install;
 pub(crate) mod native_runtime_requirement;
 
-pub(crate) use mesh_llm_system::{autoupdate, backend, benchmark, hardware};
+pub(crate) use mesh_llm_system::{
+    autoupdate, backend, benchmark, capacity, hardware, storage_probe,
+};

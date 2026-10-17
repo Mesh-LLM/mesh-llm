@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::model_reconciliation::intent::DesiredModelState;
+use crate::runtime::node_measurements::store_benchmark_metrics;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 

@@ -181,6 +181,10 @@ pub struct AdvertisedMemory {
     /// Portion of the local fit budget backed by system RAM, after any
     /// `max_vram_gb` cap. Never advertised as accelerator capacity.
     pub ram_offload_bytes: u64,
+    /// Measured random-read throughput of the node's model store in bytes per
+    /// second, when the node has probed it. Split planning uses it to price
+    /// routed experts that page in from disk instead of occupying memory.
+    pub model_store_read_bytes_per_second: Option<u64>,
 }
 
 pub fn merge_demand(

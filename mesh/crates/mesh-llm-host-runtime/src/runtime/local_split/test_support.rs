@@ -28,6 +28,9 @@ pub(super) fn package(layer_count: u32) -> skippy::SkippyPackageIdentity {
         source_model_bytes: u64::from(layer_count) * 1_000_000,
         source_files: Vec::new(),
         layer_weight_bytes: Vec::new(),
+        layer_expert_weight_bytes: Vec::new(),
+        expert_count: 0,
+        expert_used_count: 0,
         layer_count,
         activation_width: 2048,
         tensor_count: 100,
@@ -323,6 +326,7 @@ pub(super) fn stage(
         layer_start,
         layer_end,
         parameter_bytes: u64::from(layer_end.saturating_sub(layer_start)) * 1_000_000,
+        host_expert_layer_end: None,
     }
 }
 
@@ -386,6 +390,7 @@ pub(super) fn local_stage(
         layer_start,
         layer_end,
         parameter_bytes: u64::from(layer_end.saturating_sub(layer_start)) * 1_000_000,
+        host_expert_layer_end: None,
     }
 }
 

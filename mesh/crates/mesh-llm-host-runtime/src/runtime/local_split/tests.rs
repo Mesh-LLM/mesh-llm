@@ -223,6 +223,7 @@ layer_end = 40
             ctx_size_override: Some(1024),
             parallel_override: Some(1),
             placement: Default::default(),
+            expert_offload: crate::runtime::split_planning::ExpertOffloadPolicy::Disabled,
         },
         &assignments,
     )
@@ -457,6 +458,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
             ctx_size_override: Some(65_536),
             parallel_override: Some(1),
             placement: Default::default(),
+            expert_offload: crate::runtime::split_planning::ExpertOffloadPolicy::Disabled,
         },
         Some(canonical.node_id),
     )
@@ -919,6 +921,7 @@ fn stage_source_load_timeout_scales_with_assigned_package_bytes() {
         layer_start: 59,
         layer_end: 66,
         parameter_bytes: 0,
+        host_expert_layer_end: None,
     };
     let large_stage = RuntimeSliceStagePlan {
         stage_id: "stage-0".to_string(),
@@ -927,6 +930,7 @@ fn stage_source_load_timeout_scales_with_assigned_package_bytes() {
         layer_start: 0,
         layer_end: 39,
         parameter_bytes: 0,
+        host_expert_layer_end: None,
     };
 
     let small_timeout = stage_source_load_timeout(&package, &small_stage);
@@ -947,6 +951,7 @@ fn split_stage_topology_instance_populates_stage_zero_endpoint() {
             layer_start: 0,
             layer_end: 12,
             parameter_bytes: 0,
+            host_expert_layer_end: None,
         },
         RuntimeSliceStagePlan {
             stage_id: "stage-1".to_string(),
@@ -955,6 +960,7 @@ fn split_stage_topology_instance_populates_stage_zero_endpoint() {
             layer_start: 12,
             layer_end: 24,
             parameter_bytes: 0,
+            host_expert_layer_end: None,
         },
     ];
 
@@ -1609,6 +1615,7 @@ fn split_replan_decision_accepts_more_stage_capacity() {
             layer_start: 0,
             layer_end: 40,
             parameter_bytes: 40_000_000,
+            host_expert_layer_end: None,
         }],
     );
     let candidate = SplitTopologyGeneration::new(
@@ -1624,6 +1631,7 @@ fn split_replan_decision_accepts_more_stage_capacity() {
                 layer_start: 0,
                 layer_end: 16,
                 parameter_bytes: 16_000_000,
+                host_expert_layer_end: None,
             },
             RuntimeSliceStagePlan {
                 stage_id: "stage-1".into(),
@@ -1632,6 +1640,7 @@ fn split_replan_decision_accepts_more_stage_capacity() {
                 layer_start: 16,
                 layer_end: 40,
                 parameter_bytes: 24_000_000,
+                host_expert_layer_end: None,
             },
         ],
     );
@@ -1655,6 +1664,7 @@ fn split_replan_decision_keeps_equivalent_topology() {
         layer_start: 0,
         layer_end: 40,
         parameter_bytes: 40_000_000,
+        host_expert_layer_end: None,
     }];
     let participants = vec![SplitParticipant::new(make_id(1), 16_000_000_000, None)];
     let active = SplitTopologyGeneration::new(

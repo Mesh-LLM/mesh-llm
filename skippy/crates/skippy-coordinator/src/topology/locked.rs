@@ -160,6 +160,7 @@ fn fit_locked_candidate(
             layer_start: locked.layer_start,
             layer_end: locked.layer_end,
             parameter_bytes,
+            expert_placement: None,
         });
     }
 
@@ -170,6 +171,7 @@ fn fit_locked_candidate(
             parallel_lanes,
             stages,
             estimated_decode_network_ms_per_token,
+            estimated_decode_expert_stream_ms_per_token: None,
             decode_tpot_target_met: decode_tpot_target_met(
                 estimated_decode_network_ms_per_token,
                 input.target_decode_tpot_ms,
@@ -184,7 +186,7 @@ fn fit_locked_candidate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::topology::TopologyNode;
+    use crate::topology::{ExpertOffloadPolicy, TopologyNode};
 
     const GIB: u64 = 1024 * 1024 * 1024;
 
@@ -196,6 +198,8 @@ mod tests {
             runtime_headroom_bytes: 0,
             stage_transfer_latency_ms: None,
             decode_bytes_per_second: None,
+            host_expert_bytes: None,
+            expert_stream_bytes_per_second: None,
         }
     }
 
@@ -215,6 +219,10 @@ mod tests {
             target_decode_tpot_ms: None,
             auto_balance: false,
             placement_objective: Default::default(),
+            layer_expert_weight_bytes: Vec::new(),
+            expert_count: 0,
+            expert_used_count: 0,
+            expert_offload: ExpertOffloadPolicy::Disabled,
         }
     }
 

@@ -108,6 +108,25 @@ pub fn required_stage_bytes(
         .try_fold(0u64, |sum, cost| sum.checked_add(*cost))
 }
 
+/// Routed-expert bytes a stage keeps in host memory: the experts of its
+/// blocks `[layer_start, host_layer_end)`. Inputs must cover every model
+/// layer; an unaligned expert vector contributes nothing.
+pub fn host_expert_bytes_for_stage(
+    layer_expert_weight_bytes: &[u64],
+    layer_count: u32,
+    layer_start: u32,
+    host_layer_end: u32,
+) -> u64 {
+    if layer_expert_weight_bytes.len() != layer_count as usize {
+        return 0;
+    }
+    let start = (layer_start as usize).min(layer_expert_weight_bytes.len());
+    let end = (host_layer_end as usize).clamp(start, layer_expert_weight_bytes.len());
+    layer_expert_weight_bytes[start..end]
+        .iter()
+        .fold(0u64, |sum, bytes| sum.saturating_add(*bytes))
+}
+
 /// Reprice the weights held by a stage after its layer boundaries move.
 /// Without complete per-layer detail, use the released even-share fallback.
 pub fn repriced_stage_weight_bytes(

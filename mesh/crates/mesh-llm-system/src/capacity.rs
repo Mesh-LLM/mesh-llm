@@ -136,6 +136,29 @@ pub fn local_fit_budget_bytes(hw: &HardwareSurvey) -> u64 {
 
 pub use mesh_llm_types::mesh::AdvertisedMemory;
 
+/// Host memory a node can lend to routed experts that split planning moves
+/// off its accelerator budget.
+///
+/// On a unified-memory host the accelerator budget is already a slice of
+/// system RAM, so only what the platform left outside that slice is free. On
+/// a discrete-GPU host the whole of system RAM is outside the budget except
+/// the share the node already counts as RAM offload. Both keep a fixed
+/// reserve for the operating system and the serving process.
+pub fn host_expert_budget_bytes(memory: &AdvertisedMemory, is_soc: bool) -> u64 {
+    const HOST_EXPERT_RESERVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+    let Some(system_ram_bytes) = memory.system_ram_bytes else {
+        return 0;
+    };
+    let committed = if is_soc {
+        memory.total_bytes
+    } else {
+        memory.ram_offload_bytes
+    };
+    system_ram_bytes
+        .saturating_sub(committed)
+        .saturating_sub(HOST_EXPERT_RESERVE_BYTES)
+}
+
 pub fn advertised_memory(
     hw: &HardwareSurvey,
     max_vram_gb: Option<f64>,
@@ -187,6 +210,7 @@ pub fn advertised_memory(
         usable_bytes,
         system_ram_bytes: hw.system_ram_bytes,
         ram_offload_bytes,
+        model_store_read_bytes_per_second: None,
     }
 }
 
@@ -248,6 +272,7 @@ mod tests {
                 usable_bytes: 9_500_000_000,
                 system_ram_bytes: Some(32_000_000_000),
                 ram_offload_bytes: 18_000_000_000,
+                model_store_read_bytes_per_second: None,
             }
         );
         assert_breakdown_adds_up(&memory);
@@ -385,6 +410,7 @@ mod tests {
                 usable_bytes: 0,
                 system_ram_bytes: Some(32_000_000_000),
                 ram_offload_bytes: 24_000_000_000,
+                model_store_read_bytes_per_second: None,
             }
         );
     }

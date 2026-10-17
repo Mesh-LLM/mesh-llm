@@ -178,6 +178,9 @@ pub struct Node {
     pub gpu_mem_bandwidth_gbps: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub gpu_compute_tflops_fp32: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
+    /// Measured random-read throughput of the local model store, filled by
+    /// the startup storage probe and gossiped with the memory block.
+    pub model_store_read_bytes_per_second: Arc<tokio::sync::Mutex<Option<u64>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     /// Peers this node's operator chose to stop routing to (local only).
     pub(crate) peer_blocks: crate::network::peer_blocks::PeerBlocks,
@@ -893,6 +896,7 @@ impl Node {
             gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
+            model_store_read_bytes_per_second: Arc::new(tokio::sync::Mutex::new(None)),
             config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
             peer_blocks: crate::network::peer_blocks::PeerBlocks::for_this_node(),
             config_revision_tx: {
@@ -1077,6 +1081,7 @@ impl Node {
             gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
+            model_store_read_bytes_per_second: Arc::new(tokio::sync::Mutex::new(None)),
             config_state: Arc::new(tokio::sync::Mutex::new(
                 crate::runtime::config_state::ConfigState::default(),
             )),

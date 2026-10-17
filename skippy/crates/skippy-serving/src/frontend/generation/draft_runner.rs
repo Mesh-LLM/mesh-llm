@@ -272,6 +272,7 @@ pub(in crate::frontend) fn draft_runtime_config(
         direct_io: config.direct_io,
         main_gpu: config.main_gpu,
         split_mode: map_split_mode(config.split_mode),
+        host_expert_layers: None,
         selected_backend_device: speculative.draft_device.clone().or_else(|| {
             config
                 .selected_device

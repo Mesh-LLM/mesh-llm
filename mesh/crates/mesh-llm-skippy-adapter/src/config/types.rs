@@ -103,6 +103,9 @@ pub struct ResolvedHardwareConfig {
     pub direct_io: bool,
     pub main_gpu: Option<u32>,
     pub split_mode: skippy_protocol::SplitMode,
+    /// Operator policy for host-resident routed experts (`hardware.cpu_moe`
+    /// and `hardware.n_cpu_moe`). The split planner fills the planned part.
+    pub host_experts: skippy_protocol::HostExpertPolicy,
     pub fit_target_mib: Option<u64>,
     pub resolved_model_path: PathBuf,
     pub projector_path: Option<PathBuf>,

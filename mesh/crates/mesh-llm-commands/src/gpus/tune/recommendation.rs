@@ -64,7 +64,20 @@ pub(crate) fn build_tune_plan(input: TuneRecommendationInput<'_>) -> TunePlan {
     }
     plan.field_statuses
         .push(input.hardware.device_field_status());
-    push_cpu_moe_statuses(&mut plan, input.metadata);
+    push_cpu_moe_statuses(
+        &mut plan,
+        input.metadata,
+        CpuMoeTuneContext {
+            apply_mode: input.apply_mode,
+            model_entry,
+            defaults,
+            host_expert_blocks: fit
+                .diagnostic
+                .is_none()
+                .then_some(fit.host_expert_blocks)
+                .flatten(),
+        },
+    );
     plan.field_statuses.push(unsupported_status(
         TuneField::TensorSplit,
         "tensor_split remains unsupported by the pinned runtime in v1",
@@ -97,7 +110,45 @@ pub(crate) struct PlannedFit {
     pub(crate) batch: u32,
     pub(crate) ubatch: u32,
     pub(crate) gpu_layers: TuneGpuLayersValue,
+    /// Model blocks, from block 0, whose routed experts must load into host
+    /// memory for every layer to stay on the accelerator.
+    pub(crate) host_expert_blocks: Option<u32>,
     pub(crate) diagnostic: Option<TuneDiagnostic>,
+}
+
+/// Fit a mixture-of-experts model on the accelerator by moving the routed
+/// experts of the fewest leading blocks into host memory.
+///
+/// Experts are assumed evenly spread across blocks, which matches the dense
+/// MoE families the tuner sees. Host memory must hold every moved expert.
+fn find_host_expert_fit(
+    metadata: &TuneGgufMetadata,
+    layer_count: u32,
+    selected_budget: u64,
+    host_budget: u64,
+    kv_bytes_per_token: u64,
+    quant: skippy_model_artifact::gguf::GgufKvCacheQuant,
+) -> Option<(u32, u32)> {
+    let TuneTensorProfile::Exact(profile) = &metadata.tensor_profile else {
+        return None;
+    };
+    if profile.expert_count == 0 || profile.expert_tensor_bytes == 0 {
+        return None;
+    }
+    let expert_bytes_per_block = profile.expert_tensor_bytes.div_ceil(u64::from(layer_count));
+    (1..=layer_count).find_map(|blocks| {
+        let moved = expert_bytes_per_block.saturating_mul(u64::from(blocks));
+        if moved > host_budget {
+            return None;
+        }
+        let resident = metadata.model_bytes.saturating_sub(moved);
+        minimum_context_fits(resident, selected_budget, kv_bytes_per_token).then(|| {
+            (
+                blocks,
+                planned_context_length(&metadata.compact_meta, resident, selected_budget, quant),
+            )
+        })
+    })
 }
 
 fn find_partial_gpu_layers_fit(
@@ -140,6 +191,11 @@ fn plan_fit(
     let layer_count = metadata.compact_meta.layer_count.max(1);
     let cpu_can_fit = minimum_context_fits(metadata.model_bytes, cpu_budget, kv_bytes_per_token);
 
+    let host_budget = survey
+        .system_ram_bytes
+        .map(|ram| derive_fit_target_mib(ram).saturating_mul(1024 * 1024))
+        .unwrap_or(cpu_budget);
+    let mut host_expert_blocks = None;
     let chosen = match &hardware.evaluated_device.target {
         TuneDeviceTarget::Cpu => {
             if cpu_can_fit {
@@ -167,6 +223,16 @@ fn plan_fit(
                         quant,
                     ),
                 ))
+            } else if let Some((blocks, ctx_size)) = find_host_expert_fit(
+                metadata,
+                layer_count,
+                selected_budget,
+                host_budget,
+                kv_bytes_per_token,
+                quant,
+            ) {
+                host_expert_blocks = Some(blocks);
+                Some((TuneGpuLayersValue::All, ctx_size))
             } else if !cpu_can_fit {
                 None
             } else {
@@ -187,6 +253,7 @@ fn plan_fit(
             batch: recommended_batch(ctx_size),
             ubatch: recommended_ubatch(recommended_batch(ctx_size)),
             gpu_layers,
+            host_expert_blocks,
             diagnostic: None,
         },
         None => PlannedFit {
@@ -194,6 +261,7 @@ fn plan_fit(
             batch: 0,
             ubatch: 0,
             gpu_layers: TuneGpuLayersValue::Count(0),
+            host_expert_blocks: None,
             diagnostic: Some(insufficient_memory_diagnostic(
                 &hardware.memory.source,
                 selected_budget,

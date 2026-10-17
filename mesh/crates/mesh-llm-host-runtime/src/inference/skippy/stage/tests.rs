@@ -111,6 +111,7 @@ fn load_request() -> StageLoadRequest {
             direct_io: true,
             main_gpu: Some(2),
             split_mode: skippy_protocol::SplitMode::Row,
+            host_experts: skippy_protocol::HostExpertPolicy::default(),
             kv_offload: Some(false),
             kv_unified: Some(true),
             swa_full: Some(false),

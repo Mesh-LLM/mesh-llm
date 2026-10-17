@@ -105,6 +105,9 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     /// Planned final-stage decode batching. A stage policy rather than a
     /// frontend one, so it rides here instead of on the OpenAI args.
     pub(super) last_stage_decode_batch: Option<bool>,
+    /// Operator policy for host-resident routed experts, applied to every
+    /// stage together with the planner's per-stage placement.
+    pub(super) host_experts: skippy_protocol::HostExpertPolicy,
     pub(super) load_mode: LoadMode,
     pub(super) startup_timeout: Duration,
 }
@@ -785,6 +788,10 @@ pub(super) fn split_runtime_stage_load_request(
             kv_unified: resolved_config.kv_unified,
             swa_full: resolved_config.swa_full,
             cache_idle_slots: resolved_config.cache_idle_slots,
+            host_experts: skippy_protocol::HostExpertPolicy {
+                planned_layer_end: stage.host_expert_layer_end,
+                ..settings.host_experts
+            },
             activation_codec_policy: resolved_config.activation_codec_policy,
         },
         native_mtp_enabled: resolved_config.native_mtp_enabled,
@@ -884,6 +891,7 @@ pub(super) async fn split_generation_load_settings<'a>(
         runtime_options,
         embedded_openai,
         last_stage_decode_batch: resolved.throughput.last_stage_decode_batch,
+        host_experts: resolved.hardware.host_experts,
         load_mode,
         startup_timeout: lifecycle.startup_timeout,
     })

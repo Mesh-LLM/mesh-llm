@@ -646,6 +646,9 @@ pub struct MemoryInfo {
     /// Withheld by platform policy on unified-memory hosts (for example the 10% of RAM the Tegra collector keeps back); zero for discrete GPUs
     #[prost(uint64, optional, tag = "7")]
     pub platform_reserve_bytes: ::core::option::Option<u64>,
+    /// Introduced in v0.79.0; measured random-read throughput of the node's model store, used to price routed experts that page in from disk during split planning
+    #[prost(uint64, optional, tag = "8")]
+    pub model_store_read_bytes_per_second: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignedNodeOwnership {

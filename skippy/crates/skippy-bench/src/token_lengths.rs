@@ -94,6 +94,7 @@ pub fn token_lengths(args: TokenLengthsArgs) -> Result<()> {
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_runtime::SplitMode::Auto,
+        host_expert_layers: None,
         selected_backend_device: None,
         cache_type_k: skippy_runtime::GGML_TYPE_F16,
         cache_type_v: skippy_runtime::GGML_TYPE_F16,

@@ -450,6 +450,19 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         model_hardware.and_then(|hardware| hardware.split_mode.as_deref()),
         global_hardware.and_then(|hardware| hardware.split_mode.as_deref()),
     )?;
+    let host_experts = skippy_protocol::HostExpertPolicy {
+        cpu_moe: resolve_bool_or_auto(
+            model_hardware
+                .and_then(|hardware| hardware.cpu_moe.as_ref())
+                .or(global_hardware.and_then(|hardware| hardware.cpu_moe.as_ref())),
+            "hardware.cpu_moe",
+        )?,
+        n_cpu_moe: pick_owned(
+            model_hardware.and_then(|hardware| hardware.n_cpu_moe),
+            global_hardware.and_then(|hardware| hardware.n_cpu_moe),
+        ),
+        planned_layer_end: None,
+    };
     let safety_margin_gb = pick_owned(
         model_hardware.and_then(|hardware| hardware.safety_margin_gb),
         global_hardware.and_then(|hardware| hardware.safety_margin_gb),
@@ -490,6 +503,7 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         direct_io,
         main_gpu,
         split_mode,
+        host_experts,
         fit_target_mib,
         resolved_model_path,
         projector_path,
