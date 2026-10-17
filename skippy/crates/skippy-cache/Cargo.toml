@@ -31,6 +31,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_WindowsProgramming",
 ] }
 
+[dev-dependencies]
+blake3.workspace = true
+
 [features]
 # Evidence-only CubeCL spike (#1652): nothing in the library links CubeCL
 # unless this feature is on. The example is excluded from default builds.

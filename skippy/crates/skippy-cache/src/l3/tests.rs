@@ -1261,3 +1261,73 @@ fn gc_ignores_atomic_publish_temporary_files() {
         "GC removed an in-flight temporary file"
     );
 }
+
+#[test]
+fn restore_reads_one_pack_per_spill_and_reports_it() {
+    let root = temp_root("assemble-stats");
+    let store = store(&root, 0);
+    // Period 251 keeps every 4096-byte segment distinct, so the two spills
+    // cannot collapse into one content-addressed segment.
+    let payload: Vec<u8> = (0..16_384u32).map(|value| (value % 251) as u8).collect();
+    let segment_bytes = 4096;
+    let chunks = payload.chunks(segment_bytes).collect::<Vec<_>>();
+
+    // First turn: the first two segments land in one pack.
+    let first = store
+        .try_put_segments(&chunks[..2])
+        .expect("put first turn")
+        .expect("first turn admitted");
+    // Second turn: the rest land in a second pack.
+    let second = store
+        .try_put_segments(&chunks)
+        .expect("put second turn")
+        .expect("second turn admitted");
+
+    let mut manifest = HandoffManifest::new("blake3:test".to_string(), "full-state".into());
+    let mut offset = 0u64;
+    for (index, (stored, bytes)) in second.iter().zip(&chunks).enumerate() {
+        let bytes_len = bytes.len() as u64;
+        manifest.segments.push(HandoffSegmentRef {
+            index: index as u32,
+            offset,
+            bytes: bytes_len,
+            digest: stored.digest.clone(),
+            codec_identity: Some(SegmentCodecIdentity::raw(bytes_len)),
+            meta_json: None,
+        });
+        offset += bytes_len;
+    }
+    manifest.total_bytes = payload.len() as u64;
+    manifest.payload_digest = segment_digest(&payload);
+    store.commit(&manifest).expect("commit");
+    drop((first, second));
+
+    let (assembled, stats) = store.assemble_traced(&manifest).expect("assemble");
+
+    assert_eq!(assembled, payload);
+    assert_eq!(stats.segments, chunks.len() as u64);
+    assert_eq!(stats.packs, 2);
+    // The pack-major path issues one physical read per pack, not one per
+    // (pack, manifest position) pair.
+    assert_eq!(stats.physical_reads, 2);
+    assert_eq!(stats.bytes_read, payload.len() as u64);
+    assert_eq!(stats.loose_segment_reads, 0);
+    assert!(stats.read_nanos > 0);
+}
+
+#[test]
+fn eviction_reuses_recorded_footprints_without_rereading_manifests() {
+    let root = temp_root("footprint-eviction");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..8192u32).map(|value| value as u8).collect();
+    let manifest = commit_packed_payload(&store, &payload, 4096);
+    let usage = store.managed_usage_bytes().expect("usage");
+
+    // A prune to just under the current usage evicts the entry and collects
+    // its pack; the recorded footprint is what makes the pass a directory
+    // scan instead of a manifest parse.
+    let freed = store.enforce_budget_to(usage - 1).expect("enforce budget");
+    assert!(freed > 0, "no bytes freed");
+    assert!(!store.has_segment(&manifest.segments[0].digest));
+    assert_eq!(store.managed_usage_bytes().expect("usage after"), 0);
+}
