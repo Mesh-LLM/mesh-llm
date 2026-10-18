@@ -83,15 +83,18 @@ jobs:
             kill -0 $MPID 2>/dev/null || { echo "PROCESS DIED during startup"; break; }
             sleep 2
           done
-          if ! kill -0 $MPID 2>/dev/null; then echo "dense: process DEAD before chat"; tail -80 /tmp/dense.log | cut -c1-400; exit 1; fi
-          echo "dense: process alive, attempting chat"
-          curl -sv -m 120 http://127.0.0.1:9401/v1/chat/completions -H "Content-Type: application/json" \
-            -d '{"model":"dummy","messages":[{"role":"user","content":"Say Hello"}],"max_tokens":16}' 2>/tmp/dense-curl.err | head -c 400
+          if ! kill -0 $MPID 2>/dev/null; then echo "dense: process DEAD before chat"; fi
+          echo "=== dense.log (load diagnostics) ==="
+          tail -100 /tmp/dense.log | cut -c1-500 || true
+          echo "=== models endpoint ==="
+          curl -s -m 10 http://127.0.0.1:9401/v1/models | head -c 600 || true
           echo
-          echo "--- curl stderr ---"; tail -5 /tmp/dense-curl.err
-          kill $MPID 2>/dev/null; sleep 2; kill -9 $MPID 2>/dev/null
-          wait $MPID 2>/dev/null; echo "dense: probe done"
-          tail -30 /tmp/dense.log | cut -c1-400
+          echo "dense: attempting chat"
+          curl -s -m 120 http://127.0.0.1:9401/v1/chat/completions -H "Content-Type: application/json" \
+            -d '{"model":"dummy","messages":[{"role":"user","content":"Say Hello"}],"max_tokens":16}' | head -c 400 || true
+          echo
+          kill $MPID 2>/dev/null || true; sleep 2; kill -9 $MPID 2>/dev/null || true
+          echo "dense: probe done"
 
       - name: Probe 2 - recurrent model CPU serve + chat
         run: |
@@ -112,15 +115,18 @@ jobs:
             kill -0 $MPID 2>/dev/null || { echo "PROCESS DIED during startup"; break; }
             sleep 2
           done
-          if ! kill -0 $MPID 2>/dev/null; then echo "recurrent: process DEAD before chat"; tail -80 /tmp/rec.log | cut -c1-400; exit 1; fi
-          echo "recurrent: process alive, attempting chat"
-          curl -sv -m 120 http://127.0.0.1:9411/v1/chat/completions -H "Content-Type: application/json" \
-            -d '{"model":"dummy","messages":[{"role":"user","content":"Say Hello"}],"max_tokens":16}' 2>/tmp/rec-curl.err | head -c 400
+          if ! kill -0 $MPID 2>/dev/null; then echo "recurrent: process DEAD before chat"; fi
+          echo "=== rec.log (load diagnostics) ==="
+          tail -100 /tmp/rec.log | cut -c1-500 || true
+          echo "=== models endpoint ==="
+          curl -s -m 10 http://127.0.0.1:9411/v1/models | head -c 600 || true
           echo
-          echo "--- curl stderr ---"; tail -5 /tmp/rec-curl.err
-          kill $MPID 2>/dev/null; sleep 2; kill -9 $MPID 2>/dev/null
-          wait $MPID 2>/dev/null; echo "recurrent: probe done"
-          tail -30 /tmp/rec.log | cut -c1-400
+          echo "recurrent: attempting chat"
+          curl -s -m 120 http://127.0.0.1:9411/v1/chat/completions -H "Content-Type: application/json" \
+            -d '{"model":"dummy","messages":[{"role":"user","content":"Say Hello"}],"max_tokens":16}' | head -c 400 || true
+          echo
+          kill $MPID 2>/dev/null || true; sleep 2; kill -9 $MPID 2>/dev/null || true
+          echo "recurrent: probe done"
 
       - name: Probe 3 - two-node split smoke
         env:
