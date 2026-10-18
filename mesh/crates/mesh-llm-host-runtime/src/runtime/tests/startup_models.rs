@@ -961,6 +961,7 @@ fn test_build_serving_list_keeps_synthetic_local_ref() {
     assert_eq!(result.len(), 1);
 }
 
+mod catalog_lookup;
 mod cli_device_and_config_matching;
 mod local_required;
 

@@ -1543,7 +1543,25 @@ pub(super) fn runtime_model_capacity_for_path(
 pub(super) async fn find_remote_catalog_model_exact_blocking(
     query: String,
 ) -> Option<models::remote_catalog::RemoteCatalogModel> {
-    tokio::task::spawn_blocking(move || models::find_remote_catalog_model_exact(&query))
+    catalog_model_unless_local_file(query, |query| {
+        models::find_remote_catalog_model_exact(query)
+    })
+    .await
+}
+
+/// An existing local file is never a catalog entry, so it isn't looked up, as
+/// `skippy serve` does: the lookup fetches the catalog first.
+pub(super) async fn catalog_model_unless_local_file<F>(
+    query: String,
+    lookup: F,
+) -> Option<models::remote_catalog::RemoteCatalogModel>
+where
+    F: FnOnce(&str) -> Option<models::remote_catalog::RemoteCatalogModel> + Send + 'static,
+{
+    if Path::new(&query).exists() {
+        return None;
+    }
+    tokio::task::spawn_blocking(move || lookup(&query))
         .await
         .ok()
         .flatten()
