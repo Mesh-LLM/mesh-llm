@@ -181,8 +181,9 @@ public:
             if (!materialized) return 0;
             std::size_t total = materialized->execution_contract.size();
             for (const auto& profile : materialized->profiles) {
-                total += profile.activation_imports.size() + profile.activation_exports.size() +
-                         profile.state_effects.size();
+                total += materialized->activation_imports_of(profile).size() +
+                         materialized->activation_exports_of(profile).size() +
+                         materialized->state_effects_of(profile).size();
             }
             return total + materialized->resident_identities.size();
         }
@@ -414,8 +415,9 @@ std::size_t StageHarness::materialize_api() const {
     std::size_t total = materialized->execution_contract.size();
     total += materialized->resident_identities.size();
     for (const auto& profile : materialized->profiles) {
-        total += profile.activation_imports.size() + profile.activation_exports.size() +
-                 profile.state_effects.size();
+        total += materialized->activation_imports_of(profile).size() +
+                 materialized->activation_exports_of(profile).size() +
+                 materialized->state_effects_of(profile).size();
     }
     return total;
 }

@@ -180,6 +180,13 @@ struct OwnedProfile {
 /// Guards and geometry for one execution profile of a stage. The value spans
 /// borrow from the owning StagePlan's flat storage, so a profile is only ever
 /// obtained from a plan and never outlives it.
+/// A position in a plan's flat value storage: where a profile's values
+/// begin, and how many. Resolved to a span by the owning plan on access.
+struct ValueRange {
+    std::uint32_t offset = 0;
+    std::uint32_t count = 0;
+};
+
 struct PlanProfile {
     ProfileId id;
     GraphIdentity graph_identity;
@@ -197,10 +204,13 @@ struct PlanProfile {
     std::uint32_t outputs = 0;
     std::uint32_t recurrent_rollback_sequences = 0;
 
-    std::span<const FrontierValue> activation_imports;
-    std::span<const FrontierValue> activation_exports;
-    std::span<const FrontierValue> request_inputs;
-    std::span<const StateEffect> state_effects;
+    /// Positions in the owning plan's flat storage, not pointers. A span
+    /// stored here dangles the moment a later append grows the vector;
+    /// a position cannot.
+    ValueRange activation_imports;
+    ValueRange activation_exports;
+    ValueRange request_inputs;
+    ValueRange state_effects;
 };
 
 struct StagePlan;
@@ -241,6 +251,30 @@ struct StagePlan {
 
     std::vector<PlanProfile> profiles;
     std::vector<TensorSlice> resident_identities;
+
+    /// A profile's values as a span, resolved from the recorded position.
+    /// Spans are never stored: a stored span dangles when a later append
+    /// grows the flat vector underneath it.
+    [[nodiscard]] std::span<const FrontierValue>
+    activation_imports_of(const PlanProfile& profile) const noexcept {
+        return std::span{activation_imports}.subspan(profile.activation_imports.offset,
+                                                     profile.activation_imports.count);
+    }
+    [[nodiscard]] std::span<const FrontierValue>
+    activation_exports_of(const PlanProfile& profile) const noexcept {
+        return std::span{activation_exports}.subspan(profile.activation_exports.offset,
+                                                     profile.activation_exports.count);
+    }
+    [[nodiscard]] std::span<const FrontierValue>
+    request_inputs_of(const PlanProfile& profile) const noexcept {
+        return std::span{request_inputs}.subspan(profile.request_inputs.offset,
+                                                 profile.request_inputs.count);
+    }
+    [[nodiscard]] std::span<const StateEffect>
+    state_effects_of(const PlanProfile& profile) const noexcept {
+        return std::span{state_effects}.subspan(profile.state_effects.offset,
+                                                profile.state_effects.count);
+    }
 
     /// The bytes a slice refers to. The only reader for arena identities.
     /// Pointer arithmetic, not substr: a corrupt slice yields a short or empty
@@ -329,8 +363,8 @@ struct PlanSemantics {
                                                                 const ProfileId& profile);
 
 /// State effects of one profile at one layer, in plan order.
-[[nodiscard]] std::vector<StateEffect> state_effects_at(const PlanProfile& profile,
-                                                        std::int32_t layer);
+[[nodiscard]] std::vector<StateEffect>
+state_effects_at(const StagePlan& plan, const PlanProfile& profile, std::int32_t layer);
 
 /// Exact package tensor binding the planner needs.
 struct PackageTensor {

@@ -27,11 +27,11 @@ bool guards_match(const PlanProfile& left, const PlanProfile& right) {
 } // namespace
 
 std::vector<ValueIdentity> import_identities(const StagePlan& plan, const PlanProfile& profile) {
-    return identities_of(plan, profile.activation_imports);
+    return identities_of(plan, plan.activation_imports_of(profile));
 }
 
 std::vector<ValueIdentity> export_identities(const StagePlan& plan, const PlanProfile& profile) {
-    return identities_of(plan, profile.activation_exports);
+    return identities_of(plan, plan.activation_exports_of(profile));
 }
 
 std::optional<PlanFailure> validate_inputs(const StagePlannerInputs& inputs) {
@@ -62,7 +62,7 @@ std::expected<PlanSemantics, PlanError> summarize(const StagePlan& plan, const P
     if (found == plan.profiles.end()) return std::unexpected(PlanError::ProfileIdentityMismatch);
 
     PlanSemantics semantics;
-    for (const StateEffect& effect : found->state_effects) {
+    for (const StateEffect& effect : plan.state_effects_of(*found)) {
         if (std::ranges::find(semantics.state_kinds, effect.kind) == semantics.state_kinds.end()) {
             semantics.state_kinds.push_back(effect.kind);
         }
@@ -77,13 +77,15 @@ std::expected<PlanSemantics, PlanError> summarize(const StagePlan& plan, const P
         semantics.last_layer = std::max(semantics.last_layer, effect.layer);
     }
     std::ranges::sort(semantics.state_kinds);
-    semantics.frontier_values = found->activation_imports.size() + found->activation_exports.size();
+    semantics.frontier_values =
+        plan.activation_imports_of(*found).size() + plan.activation_exports_of(*found).size();
     return semantics;
 }
 
-std::vector<StateEffect> state_effects_at(const PlanProfile& profile, std::int32_t layer) {
+std::vector<StateEffect> state_effects_at(const StagePlan& plan, const PlanProfile& profile,
+                                          std::int32_t layer) {
     std::vector<StateEffect> effects;
-    std::ranges::copy_if(profile.state_effects, std::back_inserter(effects),
+    std::ranges::copy_if(plan.state_effects_of(profile), std::back_inserter(effects),
                          [layer](const StateEffect& effect) { return effect.layer == layer; });
     return effects;
 }
@@ -244,10 +246,26 @@ void StagePlan::append(OwnedProfile profile) {
         .sequences = profile.sequences,
         .outputs = profile.outputs,
         .recurrent_rollback_sequences = profile.recurrent_rollback_sequences,
-        .activation_imports = std::span{activation_imports}.subspan(imports),
-        .activation_exports = std::span{activation_exports}.subspan(exports),
-        .request_inputs = std::span{request_inputs}.subspan(requests),
-        .state_effects = std::span{state_effects}.subspan(effects),
+        .activation_imports =
+            ValueRange{
+                .offset = static_cast<std::uint32_t>(imports),
+                .count = static_cast<std::uint32_t>(activation_imports.size() - imports),
+            },
+        .activation_exports =
+            ValueRange{
+                .offset = static_cast<std::uint32_t>(exports),
+                .count = static_cast<std::uint32_t>(activation_exports.size() - exports),
+            },
+        .request_inputs =
+            ValueRange{
+                .offset = static_cast<std::uint32_t>(requests),
+                .count = static_cast<std::uint32_t>(request_inputs.size() - requests),
+            },
+        .state_effects =
+            ValueRange{
+                .offset = static_cast<std::uint32_t>(effects),
+                .count = static_cast<std::uint32_t>(state_effects.size() - effects),
+            },
     });
 }
 
@@ -301,15 +319,15 @@ StagePlan StagePlan::clone() const {
             .sequences = profile.sequences,
             .outputs = profile.outputs,
             .recurrent_rollback_sequences = profile.recurrent_rollback_sequences,
-            .activation_imports = owned_values(*this, profile.activation_imports),
-            .activation_exports = owned_values(*this, profile.activation_exports),
-            .request_inputs = owned_values(*this, profile.request_inputs),
-            .state_effects = {profile.state_effects.begin(), profile.state_effects.end()},
+            .activation_imports = owned_values(*this, activation_imports_of(profile)),
+            .activation_exports = owned_values(*this, activation_exports_of(profile)),
+            .request_inputs = owned_values(*this, request_inputs_of(profile)),
+            .state_effects = {state_effects_of(profile).begin(), state_effects_of(profile).end()},
         });
-        imports += profile.activation_imports.size();
-        exports += profile.activation_exports.size();
-        requests += profile.request_inputs.size();
-        effects += profile.state_effects.size();
+        imports += profile.activation_imports.count;
+        exports += profile.activation_exports.count;
+        requests += profile.request_inputs.count;
+        effects += profile.state_effects.count;
     }
     (void)imports;
     (void)exports;

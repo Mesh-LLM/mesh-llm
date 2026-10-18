@@ -23,9 +23,10 @@ std::expected<StageLoadConfig, PlanError> stage_load_config(const StagePlan& pla
                            [&](const TensorSlice& tensor) { return plan.view(tensor.slice); });
 
     // Identities and bindings are paired: the loader indexes them together.
-    config.activation_import_identities.reserve(found->activation_imports.size());
-    config.activation_import_bindings.reserve(found->activation_imports.size());
-    for (const FrontierValue& value : found->activation_imports) {
+    const auto import_values = plan.activation_imports_of(*found);
+    config.activation_import_identities.reserve(import_values.size());
+    config.activation_import_bindings.reserve(import_values.size());
+    for (const FrontierValue& value : import_values) {
         config.activation_import_identities.push_back(plan.view(value.identity.slice));
         config.activation_import_bindings.push_back(plan.view(value.binding.slice));
     }
@@ -38,20 +39,22 @@ std::expected<StageLoadConfig, PlanError> stage_load_config(const StagePlan& pla
         config.graph_configuration = found->graph_configuration.view();
         config.backend = found->backend.view();
         config.frontier_values = semantics->frontier_values;
-        config.state_effects = found->state_effects.size();
+        config.state_effects = plan.state_effects_of(*found).size();
         config.written_state_effects = semantics->written;
         config.recurrent_state = semantics->recurrent;
     }
 
-    config.activation_export_identities.reserve(found->activation_exports.size());
-    config.request_input_identities.reserve(found->request_inputs.size());
-    config.request_input_bindings.reserve(found->request_inputs.size());
-    for (const auto& input : found->request_inputs) {
+    const auto export_values = plan.activation_exports_of(*found);
+    config.activation_export_identities.reserve(export_values.size());
+    const auto request_values = plan.request_inputs_of(*found);
+    config.request_input_identities.reserve(request_values.size());
+    config.request_input_bindings.reserve(request_values.size());
+    for (const auto& input : request_values) {
         config.request_input_identities.push_back(plan.view(input.identity.slice));
         config.request_input_bindings.push_back(plan.view(input.binding.slice));
     }
-    config.activation_export_bindings.reserve(found->activation_exports.size());
-    for (const FrontierValue& value : found->activation_exports) {
+    config.activation_export_bindings.reserve(export_values.size());
+    for (const FrontierValue& value : export_values) {
         config.activation_export_identities.push_back(plan.view(value.identity.slice));
         config.activation_export_bindings.push_back(plan.view(value.binding.slice));
     }

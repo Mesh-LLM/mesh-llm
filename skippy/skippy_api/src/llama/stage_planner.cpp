@@ -289,20 +289,8 @@ std::expected<LayerRange, PlanFailure> StagePlanHandle::range() const {
     return LayerRange{.start = desc->layer_start, .end = desc->layer_end};
 }
 
-/// Per-profile value counts, so spans are taken only after every profile's
-/// values have been appended and the flat vectors can no longer reallocate.
-/// A span into a vector that later grows is a dangling pointer — the exact
-/// bug this structure exists to prevent.
-struct ProfileCounts {
-    std::uint32_t imports = 0;
-    std::uint32_t exports = 0;
-    std::uint32_t requests = 0;
-    std::uint32_t effects = 0;
-};
-
 std::optional<PlanFailure> materialize_profile(const skippy_stage_plan& plan, std::size_t index,
-                                               LayerRange range, StagePlan& into,
-                                               ProfileCounts& counts) {
+                                               LayerRange range, StagePlan& into) {
     skippy_stage_plan_profile_desc_v1 desc{};
     desc.abi_version = SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION;
     desc.struct_size = sizeof(desc);
@@ -373,10 +361,24 @@ std::optional<PlanFailure> materialize_profile(const skippy_stage_plan& plan, st
         return failure;
     }
 
-    counts.imports = static_cast<std::uint32_t>(into.activation_imports.size() - imports);
-    counts.exports = static_cast<std::uint32_t>(into.activation_exports.size() - exports);
-    counts.requests = static_cast<std::uint32_t>(into.request_inputs.size() - requests);
-    counts.effects = static_cast<std::uint32_t>(into.state_effects.size() - effects);
+    // Positions, not spans: a stored span dangles when a later profile's
+    // appends grow the flat vectors (StagePlan::append records the same way).
+    profile.activation_imports = ValueRange{
+        .offset = static_cast<std::uint32_t>(imports),
+        .count = static_cast<std::uint32_t>(into.activation_imports.size() - imports),
+    };
+    profile.activation_exports = ValueRange{
+        .offset = static_cast<std::uint32_t>(exports),
+        .count = static_cast<std::uint32_t>(into.activation_exports.size() - exports),
+    };
+    profile.request_inputs = ValueRange{
+        .offset = static_cast<std::uint32_t>(requests),
+        .count = static_cast<std::uint32_t>(into.request_inputs.size() - requests),
+    };
+    profile.state_effects = ValueRange{
+        .offset = static_cast<std::uint32_t>(effects),
+        .count = static_cast<std::uint32_t>(into.state_effects.size() - effects),
+    };
     into.profiles.push_back(std::move(profile));
     return std::nullopt;
 }
@@ -424,33 +426,11 @@ std::expected<StagePlan, PlanFailure> StagePlanHandle::materialize() const {
 
     const auto profile_count = static_cast<std::size_t>(desc->profile_count);
     plan.profiles.reserve(profile_count);
-    std::vector<ProfileCounts> counts(profile_count);
     for (const std::size_t index : std::views::iota(std::size_t{0}, profile_count)) {
-        if (auto failure = materialize_profile(*plan_, index, plan.range, plan, counts[index]);
+        if (auto failure = materialize_profile(*plan_, index, plan.range, plan);
             failure.has_value()) {
             return std::unexpected(*failure);
         }
-    }
-
-    // Phase two: every flat vector is final, so spans cannot dangle by growth.
-    // Offsets accumulate across profiles exactly as the appends did.
-    std::size_t imports = 0;
-    std::size_t exports = 0;
-    std::size_t requests = 0;
-    std::size_t effects = 0;
-    for (const std::size_t index : std::views::iota(std::size_t{0}, profile_count)) {
-        PlanProfile& profile = plan.profiles[index];
-        const ProfileCounts& count = counts[index];
-        profile.activation_imports =
-            std::span{plan.activation_imports}.subspan(imports, count.imports);
-        profile.activation_exports =
-            std::span{plan.activation_exports}.subspan(exports, count.exports);
-        profile.request_inputs = std::span{plan.request_inputs}.subspan(requests, count.requests);
-        profile.state_effects = std::span{plan.state_effects}.subspan(effects, count.effects);
-        imports += count.imports;
-        exports += count.exports;
-        requests += count.requests;
-        effects += count.effects;
     }
 
     if (auto failure = validate(plan); failure.has_value()) {

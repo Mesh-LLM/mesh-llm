@@ -300,8 +300,13 @@ just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare 
   profile 1's values reallocated the vector. One profile with values never
   reallocates — which is why Qwen (values on one profile) and every mocked
   test passed while BERT (values on every profile) segfaulted the bridge.
-  Take spans only after the last append; a two-phase build (append all
-  values, then set spans from recorded counts) makes the invariant structural.
+  Take positions, not pointers: profiles record `{offset, count}` ranges
+  and the owning plan resolves them to spans on access
+  (`activation_imports_of` and friends). The first fix (a two-phase
+  materialise) missed `StagePlan::append`, which had the same bug on the
+  incremental path — `clone()` dangled any earlier profile the moment a
+  later one grew the vectors. Stored positions make the whole class of
+  bug unrepresentable, at any call site, forever.
 - **A reverted harness silently un-fixes its own fairness.** The like-for-like
   loop above was lost when `benchmarks/` was reset to its committed state
   during a refactor; the row then read 0.7x for an evening while five wrong

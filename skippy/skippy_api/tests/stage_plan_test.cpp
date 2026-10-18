@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -264,11 +265,12 @@ TEST(StagePlanSemantics, StateEffectsAreFilteredByLayerInPlanOrder) {
     StagePlan value = plan({0, 6}, 6, {});
     value.append(std::move(entry));
 
-    const std::vector<StateEffect> layer_one = skippy::state_effects_at(value.profiles.front(), 1);
+    const std::vector<StateEffect> layer_one =
+        skippy::state_effects_at(value, value.profiles.front(), 1);
     ASSERT_EQ(layer_one.size(), 2U);
     EXPECT_EQ(layer_one[0].kind, StateKind::KvKey);
     EXPECT_EQ(layer_one[1].kind, StateKind::KvValue);
-    EXPECT_TRUE(skippy::state_effects_at(value.profiles.front(), 4).empty());
+    EXPECT_TRUE(skippy::state_effects_at(value, value.profiles.front(), 4).empty());
 }
 
 TEST(StagePlannerInputs, RejectsAPlannerWithoutShards) {
@@ -324,3 +326,31 @@ TEST(StagePlan, TerminalIsAboutTheLastLayerNotTheLastPlan) {
     EXPECT_TRUE(plan({6, 12}, 12, {profile({6, 12}, {}, {})}).terminal());
     EXPECT_FALSE(plan({0, 6}, 12, {profile({0, 6}, {}, {})}).terminal());
 }
+namespace {
+
+TEST(StagePlan, AppendingALaterProfileDoesNotDangleAnEarlierOne) {
+    // The regression for the dangling-span bug: profile 0's values were
+    // stored as spans, and profile 1's append reallocated the vector under
+    // them. Enough values to force growth past any small-buffer capacity.
+    StagePlan value = plan({0, 6}, 6, {});
+    std::vector<ValueIdentity> many;
+    many.reserve(64);
+    for (const std::size_t index : std::views::iota(std::size_t{0}, std::size_t{64})) {
+        many.push_back(ValueIdentity{"second." + std::to_string(index)});
+    }
+    std::vector<ValueIdentity> firsts;
+    firsts.push_back(ValueIdentity{"first"});
+    value.append(profile({0, 6}, firsts, {}));
+    value.append(profile({0, 6}, {}, std::move(many))); // same slice, 64 exports
+
+    const PlanProfile& early = value.profiles[0];
+    const PlanProfile& late = value.profiles[1];
+    ASSERT_EQ(value.activation_imports_of(early).size(), 1U);
+    EXPECT_EQ(value.view(value.activation_imports_of(early).front().identity.slice), "first");
+    ASSERT_EQ(value.request_inputs_of(late).size(), 0U);
+    ASSERT_EQ(value.activation_exports_of(late).size(), 64U);
+    EXPECT_EQ(value.view(value.activation_exports_of(late).back().identity.slice), "second.63");
+    EXPECT_FALSE(skippy::validate(value).has_value());
+}
+
+} // namespace

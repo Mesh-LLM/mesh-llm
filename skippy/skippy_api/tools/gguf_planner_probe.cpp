@@ -147,9 +147,10 @@ int main(int argc, char** argv) {
     for (const skippy::PlanProfile& profile : materialized->profiles) {
         const auto semantics = skippy::summarize(*materialized, profile.id);
         if (!semantics) continue;
-        std::cout << "profile " << profile.id.value << ": " << profile.state_effects.size()
-                  << " state effects, " << semantics->written << " written, layers ["
-                  << semantics->first_layer << ", " << semantics->last_layer
+        std::cout << "profile " << profile.id.value << ": "
+                  << materialized->state_effects_of(profile).size() << " state effects, "
+                  << semantics->written << " written, layers [" << semantics->first_layer << ", "
+                  << semantics->last_layer
                   << "], recurrent=" << (semantics->recurrent ? "yes" : "no")
                   << ", frontier=" << semantics->frontier_values << "\n";
     }
