@@ -857,9 +857,18 @@ model cadence, device gates and protected action references remain unchanged.
 - `ci-quality-slice.yml` — action/packaging/consistency contracts (including
   product-crate README presence, manifest descriptions, and local Markdown links), format,
   unused-dependency check (cargo-machete), bounded Clippy batches and
-  generated CLI inventory freshness.
+  generated CLI inventory freshness. The Clippy batch that holds
+  `mesh-llm-capsules-plugin` also runs the capsules plugin gates (mutants,
+  referee mutants, serde_json default nesting limit, no keys, vectors
+  SHA256SUMS, package twice), one `just plugin-capsules-gate` step each,
+  after its cache evidence.
 - `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, public
-  website build, and CLI explorer browser validation.
+  website build, and CLI explorer browser validation. The website job also
+  runs for the `plugin-capsules` domain (`plugin_capsules_changed`), because
+  the capsules plugin web UI gate needs the Rust toolchain in this job's
+  image. The website steps stay keyed on `website_changed` and the gate step
+  on `plugin_capsules_changed`, so a plugin-only change skips the website
+  steps.
 - `ci-ui-artifact-slice.yml` — one immutable console `dist` producer.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.

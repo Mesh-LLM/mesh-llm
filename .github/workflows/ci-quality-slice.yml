@@ -328,7 +328,10 @@ jobs:
     needs: runner_policy
     if: ${{ inputs.rust_changed && inputs.clippy_matrix != '[]' }}
     runs-on: ${{ needs.runner_policy.outputs.runner_8 }}
-    timeout-minutes: 60
+    # 60 minutes for Clippy plus the 85 minutes the capsules plugin gate
+    # steps declare (they run only in the batch that holds the plugin), so a
+    # slow gate hits its own step timeout first and is named in the log.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       max-parallel: ${{ inputs.clippy_max_parallel }}
