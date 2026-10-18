@@ -20,6 +20,7 @@
 #include "types.h"
 #include "workload.h"
 #include "workload_error.h"
+#include "workload_profile.h"
 
 #include "llama-cpp.h"
 #include "llama.h"
@@ -65,6 +66,11 @@ public:
     struct Traits {
         enum llama_pooling_type declared_pooling;
         std::uint32_t classifier_outputs;
+        /// Patch 0011's decision table, computed once here from the model's
+        /// facts: which workloads need embeddings, which is a reranker, and
+        /// whether shared state would have to serialize (it never does here —
+        /// sessions own private contexts).
+        WorkloadProfile profile;
         std::optional<RerankPromptSource> rerank_prompt;
         std::optional<Token> decoder_start;
     };

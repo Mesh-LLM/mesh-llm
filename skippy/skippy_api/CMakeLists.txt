@@ -162,6 +162,7 @@ if(SKIPPY_API_BUILD_TESTS)
     tests/family_test.cpp
     tests/stage_chain_test.cpp
       tests/stage_load_test.cpp
+      tests/workload_profile_test.cpp
   )
   target_compile_options(skippy_api_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   target_link_libraries(skippy_api_tests

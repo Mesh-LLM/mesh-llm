@@ -1,4 +1,5 @@
 #include "llama/backend.h"
+#include "workload_profile.h"
 
 #include "llama/stage_planner.h"
 
@@ -76,6 +77,17 @@ std::optional<enum llama_pooling_type> parse_pooling(const char* value) noexcept
 
 // The pooling a GGUF declares for itself. Read from metadata rather than from a
 // context, so a classifier model costs one context, not two.
+constexpr DeclaredPooling declared_pooling_of(enum llama_pooling_type pooling) noexcept {
+    switch (pooling) {
+    case LLAMA_POOLING_TYPE_NONE: return DeclaredPooling::None;
+    case LLAMA_POOLING_TYPE_MEAN: return DeclaredPooling::Mean;
+    case LLAMA_POOLING_TYPE_CLS: return DeclaredPooling::Cls;
+    case LLAMA_POOLING_TYPE_LAST: return DeclaredPooling::Last;
+    case LLAMA_POOLING_TYPE_RANK: return DeclaredPooling::Rank;
+    default: return DeclaredPooling::Unspecified;
+    }
+}
+
 enum llama_pooling_type model_pooling_type(const llama_model& model) {
     std::array<char, 64> architecture{};
     if (llama_model_meta_val_str(&model, "general.architecture", architecture.data(),
@@ -91,7 +103,7 @@ enum llama_pooling_type model_pooling_type(const llama_model& model) {
 }
 
 llama_context_params session_params(std::uint32_t max_tokens, enum llama_pooling_type pooling,
-                                    std::uint32_t sequences) {
+                                    std::uint32_t sequences, bool embeddings) {
     llama_context_params params = llama_context_default_params();
     // Whole input in one physical batch, as non-causal models require. The
     // context holds one max_tokens budget per sequence, so a batch call has
@@ -101,7 +113,10 @@ llama_context_params session_params(std::uint32_t max_tokens, enum llama_pooling
     params.n_batch = total;
     params.n_ubatch = total;
     params.n_seq_max = sequences;
-    params.embeddings = true;
+    // Patch 0011: only workloads that read embeddings pay to carry them. A
+    // bare causal decoder runs leaner; embedders, rerankers and encoder-only
+    // models turn them on.
+    params.embeddings = embeddings;
     params.pooling_type = pooling;
     return params;
 }
@@ -423,15 +438,21 @@ LlamaBackend::load_model(const ModelConfig& config) {
     const llama_vocab& vocab = *llama_model_get_vocab(model.get());
     const enum llama_pooling_type declared_pooling = model_pooling_type(*model);
     const std::uint32_t classifier_outputs = llama_model_n_cls_out(model.get());
-    const bool classifier_workload =
-        classifier_outputs > 0 && (declared_pooling == LLAMA_POOLING_TYPE_NONE ||
-                                   declared_pooling == LLAMA_POOLING_TYPE_UNSPECIFIED);
+    // Patch 0011's table, evaluated once: the facts are load-time properties.
+    const WorkloadProfile profile = classify(ModelFacts{
+        .has_encoder = llama_model_has_encoder(model.get()),
+        .has_decoder = llama_model_has_decoder(model.get()),
+        .classifier_outputs = classifier_outputs,
+        .declared_pooling = declared_pooling_of(declared_pooling),
+    });
+    const bool classifier_workload = profile.classifier_workload;
     const bool rerank_workload = classifier_workload || declared_pooling == LLAMA_POOLING_TYPE_RANK;
 
     try {
         LlamaModel::Traits traits{
             .declared_pooling = declared_pooling,
             .classifier_outputs = classifier_outputs,
+            .profile = profile,
             .rerank_prompt =
                 rerank_workload
                     ? std::optional<RerankPromptSource>{rerank_prompt_source(*model, vocab)}
@@ -451,7 +472,7 @@ LlamaBackend::load_model(const ModelConfig& config) {
                 session_params(warm.max_tokens,
                                classifier_workload ? LLAMA_POOLING_TYPE_RANK
                                                    : LLAMA_POOLING_TYPE_UNSPECIFIED,
-                               warm.sequences))}) {
+                               warm.sequences, profile.embedding_workload))}) {
             loaded->recycle(std::move(context), warm.max_tokens, warm.sequences);
         }
         return loaded;
@@ -479,9 +500,7 @@ LlamaBackend::create_session(LlamaModel& model, const SessionConfig& config) {
     // rerank case, and only rank pooling makes its output readable. Both facts
     // were settled at load; see LlamaModel::Traits.
     const LlamaModel::Traits& traits = model.traits();
-    const bool classifier_workload = traits.classifier_outputs > 0 &&
-                                     (traits.declared_pooling == LLAMA_POOLING_TYPE_NONE ||
-                                      traits.declared_pooling == LLAMA_POOLING_TYPE_UNSPECIFIED);
+    const bool classifier_workload = traits.profile.classifier_workload;
 
     // A released session of the same geometry already paid for the expensive
     // part; take its context back before building a new one.
@@ -491,7 +510,7 @@ LlamaBackend::create_session(LlamaModel& model, const SessionConfig& config) {
             &model.native(), session_params(config.max_tokens,
                                             classifier_workload ? LLAMA_POOLING_TYPE_RANK
                                                                 : LLAMA_POOLING_TYPE_UNSPECIFIED,
-                                            config.sequences)));
+                                            config.sequences, traits.profile.embedding_workload)));
         if (!context) return std::unexpected(RuntimeError::SessionCreationFailed);
     }
 
