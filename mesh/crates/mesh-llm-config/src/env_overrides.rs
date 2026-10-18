@@ -103,7 +103,7 @@ pub fn apply_env_overrides(config: &mut MeshConfig) -> Result<()> {
     if let Some(check) =
         resolve_no_update_check_override(std::env::var_os(MESH_LLM_NO_UPDATE_CHECK_ENV).as_deref())?
     {
-        config.updates.check = Some(check);
+        config.updates.check_override = Some(check);
     }
     Ok(())
 }

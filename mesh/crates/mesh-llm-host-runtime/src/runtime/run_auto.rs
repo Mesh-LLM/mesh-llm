@@ -313,18 +313,7 @@ pub(super) async fn run_runtime_cli(
 
     let mut config = plugin::load_config(options.config.as_deref())?;
 
-    // Finish the release check before startup continues.
-    if !checked_updates
-        && !options.command_is_update
-        && !options.command_uses_machine_output
-        && config.updates.check_enabled()
-        && let Some(notice) = autoupdate::check_for_update(crate::BUILD_VERSION).await
-    {
-        let _ = emit_event(OutputEvent::Info {
-            message: notice.message,
-            context: None,
-        });
-    }
+    super::startup_update_check::announce_newer_release(&options, checked_updates, &config).await;
 
     let effective_mode = resolve_effective_mode(&options, config.runtime.mode);
     if let Err(error) = check_mode_conflicts(&options, explicit_surface, config.runtime.mode) {

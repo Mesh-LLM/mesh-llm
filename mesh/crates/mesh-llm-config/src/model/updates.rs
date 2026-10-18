@@ -4,11 +4,15 @@
 pub struct UpdatesConfig {
     #[serde(default)]
     pub check: Option<bool>,
+    /// Set by `MESH_LLM_NO_UPDATE_CHECK` for this process only. Never saved,
+    /// so an applied config cannot write the variable into `config.toml`.
+    #[serde(skip)]
+    pub check_override: Option<bool>,
 }
 
 impl UpdatesConfig {
     pub fn check_enabled(&self) -> bool {
-        self.check != Some(false)
+        self.check_override.or(self.check) != Some(false)
     }
 }
 
@@ -29,5 +33,17 @@ mod tests {
         let config = parse_config_toml("[updates]\ncheck = false\n").unwrap();
         let reloaded = parse_config_toml(&config_to_toml(&config).unwrap()).unwrap();
         assert_eq!(reloaded.updates.check, Some(false));
+    }
+
+    #[test]
+    fn the_override_wins_but_is_never_saved() {
+        let mut config = parse_config_toml("[updates]\ncheck = true\n").unwrap();
+        config.updates.check_override = Some(false);
+        assert!(!config.updates.check_enabled());
+
+        let reloaded = parse_config_toml(&config_to_toml(&config).unwrap()).unwrap();
+        assert_eq!(reloaded.updates.check, Some(true));
+        assert_eq!(reloaded.updates.check_override, None);
+        assert!(reloaded.updates.check_enabled());
     }
 }

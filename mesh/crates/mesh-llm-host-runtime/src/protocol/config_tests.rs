@@ -16,7 +16,10 @@ fn config_sync_full_config_roundtrip() {
         owner_control: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
-        updates: mesh_llm_config::UpdatesConfig { check: Some(false) },
+        updates: mesh_llm_config::UpdatesConfig {
+            check: Some(false),
+            ..Default::default()
+        },
         defaults: None,
         runtime: Default::default(),
         models: vec![ModelConfigEntry {
@@ -83,4 +86,16 @@ fn config_sync_full_config_roundtrip() {
     assert_eq!(restored.plugins[0].allow_peer_blocks, Some(true));
     assert_eq!(restored.plugins[0].command.as_deref(), Some("mesh-llm"));
     assert_eq!(restored.plugins[0].args, vec!["--plugin"]);
+}
+
+#[test]
+fn config_sync_snapshot_leaves_out_the_update_check_override() {
+    let mut config = crate::plugin::MeshConfig::default();
+    config.updates.check_override = Some(false);
+
+    let restored = proto_config_to_mesh(&mesh_config_to_proto(&config));
+
+    assert_eq!(restored.updates.check, None);
+    assert_eq!(restored.updates.check_override, None);
+    assert!(restored.updates.check_enabled());
 }

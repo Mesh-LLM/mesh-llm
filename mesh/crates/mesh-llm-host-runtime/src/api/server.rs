@@ -123,22 +123,33 @@ async fn spawn_inflight_watcher(state: MeshApi) {
 }
 
 fn spawn_latest_version_check(state: MeshApi) {
-    tokio::spawn(async move {
-        if !state.inner.lock().await.update_check {
-            return;
-        }
-        let Some(latest) = crate::system::autoupdate::latest_release_version().await else {
-            return;
-        };
-        if !crate::system::autoupdate::version_newer(&latest, crate::VERSION) {
-            return;
-        }
-        {
-            let mut inner = state.inner.lock().await;
-            inner.latest_version = Some(latest);
-        }
-        state.push_status().await;
-    });
+    tokio::spawn(record_latest_version(
+        state,
+        crate::system::autoupdate::latest_release_version,
+    ));
+}
+
+/// Runs `fetch` and shows a newer release in the console, unless
+/// `updates.check` turns the check off.
+pub(super) async fn record_latest_version<F, Fut>(state: MeshApi, fetch: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
+    if !state.inner.lock().await.update_check {
+        return;
+    }
+    let Some(latest) = fetch().await else {
+        return;
+    };
+    if !crate::system::autoupdate::version_newer(&latest, crate::VERSION) {
+        return;
+    }
+    {
+        let mut inner = state.inner.lock().await;
+        inner.latest_version = Some(latest);
+    }
+    state.push_status().await;
 }
 
 async fn bind_management_listener(

@@ -62,6 +62,8 @@ mod split_readiness;
 mod state;
 pub(crate) mod status;
 
+#[cfg(test)]
+use self::server::record_latest_version;
 pub(crate) use self::server::start_with_listener;
 #[cfg(test)]
 pub(crate) use self::server::{handle_request, is_ui_only_route};
