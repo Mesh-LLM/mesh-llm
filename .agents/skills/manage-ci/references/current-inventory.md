@@ -1771,3 +1771,11 @@ there is no host-native benchmark fallback. The host's `HF_HOME` is mounted at
 the same path and owns all cached model, tokenizer and dataset downloads.
 See [AgentX](../../../../skippy/docs/AGENTX.md) for registration cutover, pinned
 inputs, smoke semantics and the distinction from GitHub trajectory qualification.
+
+`just skippy-attention-tests-build <backend>` builds the native attention
+reference harness, and `just skippy-attention-tests <backend> -b <device>` runs
+it on a leased GPU worker. CUDA uses `CUDA0`; Metal uses `MTL0`. The
+`kv_bounds_pattern` filter selects unified-cache mask regressions; the unfiltered
+matrix also exercises backend-specific variants. These are explicit hardware
+qualification commands, not additional CPU-only CI coverage. Their ownership,
+along with `skippy-cuda-readback-test`, is recorded in the Just layout fixture.

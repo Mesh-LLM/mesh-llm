@@ -159,7 +159,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
             if let Some(metadata) = scheduler_message.chat_sampling_metadata.as_deref() {
                 let sampling = runtime_sampling_config(
                     scheduler_message.sampling.as_ref(),
-                    runtime.kv_pool_tokens(),
+                    runtime.context_tokens_per_lane(),
                 );
                 runtime
                     .configure_chat_sampling(

@@ -17,6 +17,7 @@ use skippy_runtime::{
     parse_cache_type,
 };
 
+mod context_capacity;
 mod frame_operations;
 mod lane_lifecycle;
 pub mod lifecycle;
@@ -40,10 +41,8 @@ pub struct RuntimeState {
     layer_start: u32,
     layer_end: u32,
     lane_count: u32,
-    /// Size of the context's KV cell pool, in tokens (llama.cpp `n_ctx`). In
-    /// unified-KV mode every lane draws decode/prefill cells from this single
-    /// shared pool, so it is the real ceiling for scheduler admission — see
-    /// [`Self::kv_pool_tokens`].
+    /// Per-lane context limit. Native loading reserves this many tokens for
+    /// each lane; [`Self::kv_pool_tokens`] exposes their aggregate to admission.
     ctx_size: u32,
     /// High-water mark of lane indices ever handed out. Combined with
     /// [`Self::free_lane_indices`], the count of live lanes equals
@@ -283,16 +282,6 @@ impl RuntimeState {
 
     pub(crate) fn active_session_count(&self) -> usize {
         self.sessions.len()
-    }
-
-    /// Total KV cell pool available to this context, in tokens (`n_ctx`).
-    ///
-    /// In unified-KV mode all lanes share this single pool, so it is the real
-    /// token budget the iteration scheduler must admit against. Returns 0 for
-    /// the modelless test runtime, in which case callers should fall back to a
-    /// configured default.
-    pub fn kv_pool_tokens(&self) -> u32 {
-        self.ctx_size
     }
 
     #[cfg(test)]

@@ -43,7 +43,7 @@ fn resident_capacity_rejection_is_side_effect_free_and_retryable() {
         .expect("resident prefix cache enabled");
     let mut runtime = crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(
         config.lane_count,
-        8,
+        4, // Two lanes reserve the eight-token pool this test fills.
     );
     let before = runtime.session_stats();
 
@@ -91,7 +91,10 @@ fn resident_capacity_unknown_fails_closed() {
 
 #[test]
 fn resident_capacity_keeps_decode_watermark_separate_from_prompt_reservation() {
-    let config = prefix_cache_test_config();
+    let config = StageConfig {
+        lane_count: 1,
+        ..prefix_cache_test_config()
+    };
     let kv = KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
@@ -118,7 +121,8 @@ fn resident_capacity_keeps_decode_watermark_separate_from_prompt_reservation() {
 #[test]
 fn resident_capacity_admission_evicts_for_the_aggregate_active_four_wave() {
     let config = StageConfig {
-        ctx_size: 131_072,
+        // Native context is per lane: four 32k lanes reserve a 128k pool.
+        ctx_size: 32_768,
         lane_count: 4,
         kv_cache: Some(StageKvCacheConfig {
             max_entries: 32,
