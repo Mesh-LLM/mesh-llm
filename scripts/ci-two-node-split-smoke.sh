@@ -142,6 +142,11 @@ if [[ ! -x "$MESH_LLM" ]]; then
     exit 1
 fi
 
+# TEMPORARY DIAGNOSTIC (PR #2472 Linux CPU smoke crash): see
+# scripts/ci-native-crash-trace.sh.
+# shellcheck source=scripts/ci-native-crash-trace.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci-native-crash-trace.sh"
+
 RUNTIME_BUNDLE="${MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR:-$(cd "$(dirname "$MESH_LLM")" && pwd)/native-runtimes}"
 if [[ ! -d "$RUNTIME_BUNDLE" ]]; then
     echo "Missing packaged native runtime beside mesh-llm: $RUNTIME_BUNDLE" >&2
@@ -298,6 +303,13 @@ cleanup() {
     echo "--- client log tail ---"
     tail -1200 "$CLIENT_LOG" 2>/dev/null || true
     echo "--- end logs ---"
+    mesh_llm_symbolize_crash_logs "$SEED_LOG" "$WORKER_LOG" "$CLIENT_LOG"
+    for native_log in "$PROCESS_ROOT"/*/r/*/logs/*.log; do
+        [ -f "$native_log" ] || continue
+        echo "--- native runtime log tail: $native_log ---"
+        tail -80 "$native_log" 2>/dev/null || true
+        echo "--- end native runtime log ---"
+    done
     if [[ -z "${MESH_TWO_NODE_SPLIT_WORK_DIR:-}" ]]; then
         rm -rf "$WORK_DIR"
     fi
@@ -648,6 +660,8 @@ run_client_routing_probe() {
     grep -q 'data: \[DONE\]' "$probe_root/stream.txt"
     echo "Passive client routing and streaming validated against dense split topology"
 }
+
+mesh_llm_install_crash_trace >/dev/null || true
 
 SEED_PID="$(start_node seed "" "$SEED_API_PORT" "$SEED_CONSOLE_PORT" "$SEED_BIND_PORT" "$SEED_LOG")"
 
