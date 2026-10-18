@@ -110,16 +110,22 @@ fn continuation(response: &Response, index: usize) -> DynResult<String> {
         .ok_or_else(|| format!("prefix request {index} returned no assistant continuation").into())
 }
 
+// Only the first pair compares a cold prefill against a restore of the same
+// prompt. The growth pairs are not that comparison: their first member restores
+// a shallower checkpoint and prefills the rest of the suffix, so requiring it to
+// match a restore of a deeper checkpoint would compare two different
+// computation paths and flip on the same near-tie the cold check exists to
+// avoid. Their reuse growth is asserted by `validate`.
 fn same_continuations(outputs: &[String]) -> DynResult<()> {
-    for (pair, outputs) in outputs.as_chunks::<2>().0.iter().enumerate() {
-        if outputs[0] != outputs[1] {
-            let (first, repeat) = (pair * 2 + 1, pair * 2 + 2);
-            return Err(format!(
-                "warm request {repeat} diverged from uncached request {first}: {:?} != {:?}",
-                outputs[0], outputs[1]
-            )
-            .into());
-        }
+    let Some(pair) = outputs.as_chunks::<2>().0.first() else {
+        return Err("prefix probe requires at least one response pair".into());
+    };
+    if pair[0] != pair[1] {
+        return Err(format!(
+            "warm request 2 diverged from uncached request 1: {:?} != {:?}",
+            pair[0], pair[1]
+        )
+        .into());
     }
     Ok(())
 }
@@ -274,8 +280,18 @@ mod tests {
     fn warm_repeat_must_match_uncached_continuation() {
         let same = ["a", "a", "b", "b", "c", "c"].map(String::from);
         assert!(same_continuations(&same).is_ok());
-        let diverged = ["a", "a", "b", "x", "c", "c"].map(String::from);
+        let diverged = ["a", "x", "b", "b", "c", "c"].map(String::from);
         let error = same_continuations(&diverged).unwrap_err().to_string();
-        assert!(error.contains("warm request 4 diverged from uncached request 3"));
+        assert!(error.contains("warm request 2 diverged from uncached request 1"));
+    }
+
+    #[test]
+    fn growth_pairs_are_not_a_cold_restore_comparison() {
+        // Each growth pair's first member restores a shallower checkpoint and
+        // prefills the suffix; comparing it with a deeper restore is not the
+        // property this probe gates, so a difference there must not fail it.
+        let growth_differs = ["a", "a", "b", "c", "d", "e"].map(String::from);
+        assert!(same_continuations(&growth_differs).is_ok());
+        assert!(same_continuations(&[]).is_err());
     }
 }
