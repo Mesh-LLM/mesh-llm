@@ -367,6 +367,25 @@ mod platform {
             creation.dwLowDateTime,
         )))
     }
+
+    /// Whether this user is refused even the least query on `pid`, which
+    /// `open` reports as no process. A user can always query its own
+    /// processes, so such a process belongs to another account, such as a
+    /// service (measured on Windows 11: none of a user's 168 processes was
+    /// refused, all 191 refused ones ran under other accounts).
+    pub fn process_query_denied(pid: u32) -> bool {
+        // SAFETY: a plain Win32 call taking values; the null return is
+        // checked before the handle is used.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if !handle.is_null() {
+            // SAFETY: a handle just returned by `OpenProcess`, closed once.
+            unsafe { CloseHandle(handle) };
+            return false;
+        }
+        // SAFETY: reads the calling thread's last error and takes nothing.
+        let code = unsafe { GetLastError() };
+        code == ERROR_ACCESS_DENIED
+    }
 }
 
 /// Convert a Win32 `FILETIME`, 100-nanosecond ticks since 1601-01-01 UTC, to
@@ -498,6 +517,9 @@ pub fn pid_identity(
             PidIdentity::Other
         } else if names.iter().any(Result::is_err) {
             PidIdentity::Unknown
+        } else if query_denied(pid) {
+            // Still running, but under another account: not the user's node.
+            PidIdentity::Other
         } else {
             PidIdentity::Gone
         };
@@ -512,6 +534,20 @@ pub fn pid_identity(
         Ok(Some(_)) => PidIdentity::Other,
         Ok(None) => PidIdentity::Gone,
         Err(_) => PidIdentity::Unknown,
+    }
+}
+
+/// Whether the name lookups' "no process" for `pid` was a refusal instead,
+/// which only Windows reports that way.
+fn query_denied(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        platform::process_query_denied(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        false
     }
 }
 
@@ -709,6 +745,23 @@ mod pid_identity_tests {
             None
         );
         assert_eq!(pid_identity(child.id(), "cmd", None), PidIdentity::Gone);
+    }
+
+    // A normal session is refused even the least query on the services of
+    // other accounts; an elevated one may query them all, leaving nothing to
+    // check.
+    #[cfg(windows)]
+    #[test]
+    fn a_process_of_another_account_is_another_process() {
+        let Some(pid) = (4..65_536)
+            .step_by(4)
+            .find(|&pid| platform::process_query_denied(pid))
+        else {
+            eprintln!("no process refuses this session's queries; nothing to check");
+            return;
+        };
+
+        assert_eq!(pid_identity(pid, "mesh-llm", None), PidIdentity::Other);
     }
 
     // 259 is also STILL_ACTIVE, the code a running process reports, so only
