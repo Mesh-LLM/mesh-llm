@@ -13,6 +13,7 @@ pub(super) fn campaign(input: &Prepared, engine: Engine) -> DynResult<()> {
     hardware(input)?;
     let mut cells = Vec::new();
     let mut points = Vec::new();
+    let mut notes = Vec::new();
     let engine = engine.label();
     for &concurrency in input.profile.concurrencies() {
         inputs::recheck(input)?;
@@ -21,7 +22,14 @@ pub(super) fn campaign(input: &Prepared, engine: Engine) -> DynResult<()> {
         let mut cell: Prepared = serde_json::from_value(serde_json::to_value(input)?)?;
         cell.output = directory;
         execute(&cell, engine, concurrency)?;
-        cells.push(results::read(&cell, engine, concurrency)?);
+        let summary = results::read(&cell, engine, concurrency)?;
+        notes.push(format!(
+            "{engine} c{concurrency}: {} completed, {} cancelled at the phase deadline, {} errors",
+            summary["phase_outcome"]["completed"],
+            summary["phase_outcome"]["cancelled"],
+            summary["phase_outcome"]["errors"],
+        ));
+        cells.push(summary);
         points.push(results::point(&cell, concurrency)?);
         write(
             &input.output.join("results.json"),
@@ -29,6 +37,7 @@ pub(super) fn campaign(input: &Prepared, engine: Engine) -> DynResult<()> {
         )?;
     }
     if let Some(path) = std::env::var_os("JIANYANG_RESULT_PATH") {
+        notes.push(format!("AgentX local-corpus {} / {engine}; submission_valid=false refers to the upstream leaderboard. Full exports and memory measurements are in agentx.tar.gz.", input.profile.label()));
         // Local measurements belong in JY; leaderboard eligibility is independent.
         use sha2::Digest;
         let model_digest = if input.model.files.len() == 1 {
@@ -41,7 +50,7 @@ pub(super) fn campaign(input: &Prepared, engine: Engine) -> DynResult<()> {
         write(
             std::path::Path::new(&path),
             &json!({"points":points,
-                "notes":[format!("AgentX local-corpus {} / {engine}; submission_valid=false refers to the upstream leaderboard. Full exports and memory measurements are in agentx.tar.gz.", input.profile.label())],
+                "notes":notes,
                 "provenance":{"stack_commit":std::env::var("JIANYANG_COMMIT")?,"stack_name":engine,
                     "model_package_ref":input.model.registry_ref(),
                     "model_package_sha256":model_digest}

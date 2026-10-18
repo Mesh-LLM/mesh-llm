@@ -98,6 +98,10 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
     let path = input.output.join("upstream/profile_export_aiperf.json");
     let export: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
     validate(&export, input.profile)?;
+    let phase_outcome = super::phase_outcome::parse(
+        &std::fs::read_to_string(input.output.join("upstream/logs/aiperf.log"))?,
+        count(&export, "request_count")?,
+    )?;
     let memory: Value =
         serde_json::from_slice(&std::fs::read(input.output.join("memory-summary.json"))?)?;
     let summary = json!({
@@ -105,6 +109,7 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
         "engine":engine,"offered_sessions":concurrency,"generation_slots":concurrency,
         "context_tokens":262144,"total_context_tokens":262144_u64 * u64::from(concurrency),
         "submission_valid":false,"request_count":metric(&export,"request_count")?,
+        "phase_outcome":phase_outcome,
         "output_tok_s":metric(&export,"output_token_throughput")?,
         "ttft":export["time_to_first_token"],"itl":export["inter_token_latency"],"e2e":export["request_latency"],
         "errors":export["error_request_count"],"context_overflows":export["context_overflow_count"],

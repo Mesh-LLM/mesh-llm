@@ -57,11 +57,18 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
 pub(super) fn run(input: &Prepared, port: u16, concurrency: u32) -> DynResult<()> {
     ready(&input.root, port, &input.output)?;
     let executable = input.root.join("skippy/evals/agentx/.venv/bin/agentx");
-    let spec = command::spec(
+    let mut spec = command::spec(
         &input.root,
         executable.to_str().ok_or("AgentX executable")?,
         &arguments(input, port, concurrency),
     )?;
+    // A 1.0.7 mmap cache hit can finish dataset configuration before record
+    // processors subscribe, leaving completed requests without exported metrics.
+    // Rebuild the dataset before measurement for both engines; keep HF weights.
+    spec.environment.insert(
+        "AIPERF_DATASET_MMAP_CACHE_ENABLED".into(),
+        crate::process::Value::Public("false".into()),
+    );
     command::run(
         &spec,
         if input.profile == Profile::Smoke {

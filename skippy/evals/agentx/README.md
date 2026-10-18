@@ -61,3 +61,14 @@ Kernel timings establish the effect of a kernel change, not an end-to-end win
 against llama. Correctness and resident-prefix restore checks remain required.
 Label host RSS separately from GPU residency; missing GPU counters must remain
 unavailable rather than being replaced with host RSS.
+
+The runner records measured phase completions, deadline cancellations, and
+errors in each cell's `phase_outcome` and in the normal JY result notes. AgentX
+1.0.7's aggregate `was_cancelled=false` does not exclude requests cancelled
+during drain; the pinned harness's phase-complete log supplies those counts.
+Missing or inconsistent accounting fails result collection.
+
+Dataset mmap caching is disabled for both engines to avoid a 1.0.7 startup
+race that can leave record processors waiting for dataset configuration after
+a fast cache hit. This rebuilds trace inputs before measurement and preserves
+the host HF model cache. It is a workaround pending an upstream lifecycle fix.
