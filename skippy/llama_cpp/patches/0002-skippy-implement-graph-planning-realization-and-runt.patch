@@ -52,7 +52,7 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  871 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  119 +++
- src/skippy/state.cpp                    | 1167 ++++++++++++++++++++++
+ src/skippy/state.cpp                    | 1185 ++++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
  src/skippy/state_memory.cpp             |  116 +++
@@ -61,7 +61,7 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  372 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16061 insertions(+)
+ 57 files changed, 16079 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -13819,10 +13819,10 @@ index 000000000..2272a3fec
 +        std::string & error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..aa197340b
+index 000000000..4d6a2a68c
 --- /dev/null
 +++ b/src/skippy/state.cpp
-@@ -0,0 +1,1167 @@
+@@ -0,0 +1,1185 @@
 +#include "skippy/state.h"
 +#include "skippy/state_memory.h"
 +#include "skippy/errors.h"
@@ -13846,6 +13846,23 @@ index 000000000..aa197340b
 +#include <vector>
 +
 +extern "C" {
++
++// A hybrid or recurrent stage cannot be rebuilt from the partial
++// (recurrent + sliding-window) sequence state: the full-attention half of the
++// same stage is dropped, so a restored prefix decodes differently from an
++// uninterrupted prefill. Pay the larger payload to keep these checkpoints exact.
++static llama_state_seq_flags skippy_state_seq_flags(skippy_session * session) {
++    if (session == nullptr || session->ctx == nullptr) {
++        return LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
++    }
++    llama_memory_t memory = session->ctx->get_memory();
++    if (memory == nullptr) {
++        return LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
++    }
++    return skippy_memory_recurrent_adapter(memory) != nullptr
++            ? LLAMA_STATE_SEQ_FLAGS_NONE
++            : LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
++}
 +
 +static enum skippy_status skippy_validate_state_range(
 +        skippy_session * session,
@@ -13936,10 +13953,11 @@ index 000000000..aa197340b
 +    }
 +
 +    session->ctx->synchronize();
++    const llama_state_seq_flags state_flags = skippy_state_seq_flags(session);
 +    const size_t required = llama_state_seq_get_size_ext(
 +            session->ctx,
 +            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++            state_flags);
 +    if (out_bytes != nullptr) {
 +        *out_bytes = required;
 +    }
@@ -13956,7 +13974,7 @@ index 000000000..aa197340b
 +            static_cast<uint8_t *>(output),
 +            output_capacity,
 +            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++            state_flags);
 +    if (written != required) {
 +        if (out_bytes != nullptr) {
 +            *out_bytes = written;
@@ -13990,7 +14008,7 @@ index 000000000..aa197340b
 +            static_cast<const uint8_t *>(input),
 +            input_bytes,
 +            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++            skippy_state_seq_flags(session));
 +    if (read != input_bytes) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to import sequence state");
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
@@ -14135,7 +14153,7 @@ index 000000000..aa197340b
 +    const size_t bytes = llama_state_seq_get_size_ext(
 +            session->ctx,
 +            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++            LLAMA_STATE_SEQ_FLAGS_NONE);
 +    *out_bytes = bytes;
 +    if (bytes == 0) {
 +        return skippy_success(out_error);
@@ -14150,7 +14168,7 @@ index 000000000..aa197340b
 +            static_cast<uint8_t *>(output),
 +            output_capacity,
 +            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++            LLAMA_STATE_SEQ_FLAGS_NONE);
 +    if (written != bytes) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to export recurrent state");
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
@@ -14193,7 +14211,7 @@ index 000000000..aa197340b
 +            static_cast<const uint8_t *>(input),
 +            input_bytes,
 +            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++            LLAMA_STATE_SEQ_FLAGS_NONE);
 +    if (read != input_bytes) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to import recurrent state");
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
@@ -16524,5 +16542,5 @@ index 000000000..cc9279e7e
 +// attached from an earlier chat request.
 +void skippy_prepare_non_chat_workload(skippy_session * session);
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

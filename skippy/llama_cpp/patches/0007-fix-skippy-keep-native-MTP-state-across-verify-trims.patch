@@ -220,10 +220,10 @@ index d8276944d..3a147d14d 100644
 +        skippy_native_mtp_draft * out_mtp_draft,
 +        skippy_error ** out_error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index aa197340b..c4e2b0980 100644
+index 4d6a2a68c..0f9b3a27c 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -830,7 +830,7 @@ enum skippy_status skippy_trim_session(
+@@ -848,7 +848,7 @@ enum skippy_status skippy_trim_session(
      if (session->signal_history.size() > token_count) {
          session->signal_history.resize(static_cast<size_t>(token_count));
      }
@@ -268,3 +268,6 @@ index e078d867c..c8b6e163f 100644
              if (status != SKIPPY_STATUS_OK) {
                  return status;
              }
+-- 
+2.54.0 (Apple Git-157)
+

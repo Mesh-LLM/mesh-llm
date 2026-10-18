@@ -13,7 +13,7 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  common/chat.cpp                            | 126 ++++-
  common/chat.h                              |   5 +-
  common/ngram-cache.cpp                     | 158 +++++-
- common/peg-parser.cpp                      | 337 ++++++++++
+ common/peg-parser.cpp                      | 337 +++++++++++
  common/peg-parser.h                        |   8 +
  common/reasoning-budget.cpp                | 119 ++--
  common/reasoning-budget.h                  |  16 +-
@@ -23,7 +23,7 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  ggml/src/ggml-backend.cpp                  |  25 +-
  ggml/src/ggml-cuda/cachegen.cu             | 223 ++++++++
  ggml/src/ggml-cuda/cachegen.cuh            |  27 +
- ggml/src/ggml-cuda/ggml-cuda.cu            | 344 +++++++++++-
+ ggml/src/ggml-cuda/ggml-cuda.cu            | 344 ++++++++++-
  ggml/src/ggml-cuda/vendors/hip.h           |   1 +
  ggml/src/ggml-metal/CMakeLists.txt         |   1 +
  ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
@@ -31,11 +31,11 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 +++++++
- src/CMakeLists.txt                         | 620 ++++++++++++++++++++-
+ src/CMakeLists.txt                         | 629 ++++++++++++++++++++-
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3124 insertions(+), 127 deletions(-)
+ 31 files changed, 3133 insertions(+), 127 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -719,7 +719,7 @@ index dce54b364..6d97b2dd8 100644
          if (drafted_token == LLAMA_TOKEN_NULL) {
              drafted_token = try_draft(nc_static, ngram_static);
 diff --git a/common/peg-parser.cpp b/common/peg-parser.cpp
-index 8033f7e81..94a628b1b 100644
+index 8033f7e81..04242b919 100644
 --- a/common/peg-parser.cpp
 +++ b/common/peg-parser.cpp
 @@ -1814,6 +1814,343 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
@@ -2570,7 +2570,7 @@ index d1bce8bad..5b23ddf7f 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ struct ggml_metal_library {
+@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -3395,7 +3395,7 @@ index 000000000..728899e4b
 +    }
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2e8..e47cf0408 100644
+index 97250c2e8..528edfa99 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -47,6 +47,39 @@ set(LLAMA_CORE_SOURCES
@@ -3438,7 +3438,7 @@ index 97250c2e8..e47cf0408 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -60,19 +93,602 @@ set_target_properties(llama PROPERTIES
+@@ -60,19 +93,611 @@ set_target_properties(llama PROPERTIES
  )
  
  # exclude non-model sources from unity build
@@ -3725,6 +3725,15 @@ index 97250c2e8..e47cf0408 100644
 +    add_skippy_sampling_history_tests(gemma skippy-model-loader-fixtures dense)
 +    add_skippy_sampling_history_tests(qwen35 skippy-noalloc-qwen35-fixture recurrent)
 +    add_skippy_sampling_history_tests(granitehybrid skippy-noalloc-granite-hybrid-fixture recurrent)
++
++    function(add_skippy_sampling_history_state_tests family fixture state)
++        add_test(NAME skippy_sampling_history_${family}_state
++            COMMAND skippy-sampling-history
++                "${SKIPPY_MODEL_FIXTURE_DIR}/${family}-dense.gguf" state ${state})
++        set_tests_properties(skippy_sampling_history_${family}_state PROPERTIES
++            FIXTURES_REQUIRED ${fixture})
++    endfunction()
++    add_skippy_sampling_history_state_tests(granitehybrid skippy-noalloc-granite-hybrid-fixture recurrent)
 +
 +    add_test(
 +        NAME skippy_generate_qwen3_fixture
@@ -4151,5 +4160,5 @@ index 7436230f0..f9fe048ff 100644
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 
