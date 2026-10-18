@@ -1,0 +1,120 @@
+name: Debug Smoke Repro
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  repro:
+    runs-on: ubuntu-24.04
+    container: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+    defaults:
+      run:
+        shell: bash
+    env:
+      MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL: http://127.0.0.1:9/native-runtimes.json
+      RUST_BACKTRACE: full
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: f4fa3c384003193a6a3d90dbecb7edec701ef14e
+          persist-credentials: false
+
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Download CI product artifact from failed run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ci-artifacts/linux
+          gh run download 39087174138 --name ci-product-linux-amd64-cpu -D ci-artifacts/linux
+          ls -la ci-artifacts/linux
+
+      - name: Stage binary and runtime
+        run: |
+          mkdir -p target/release
+          cp ci-artifacts/linux/mesh-llm target/release/mesh-llm
+          chmod +x target/release/mesh-llm
+          cp -a ci-artifacts/linux/native-runtimes target/release/native-runtimes
+          find target/release/native-runtimes -name manifest.json | head -1
+
+      - name: Download smoke models
+        run: |
+          mkdir -p ~/.models
+          curl -sL --retry 3 -o ~/.models/SmolLM2-135M-Instruct-Q8_0.gguf \
+            "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf"
+          curl -sL --retry 3 -o ~/.models/granite-4.0-h-350m-Q4_K_M.gguf \
+            "https://huggingface.co/ibm-granite/granite-4.0-h-350m-GGUF/resolve/a864f823cce6e6048b5752e2816fe7a23987d790/granite-4.0-h-350m-Q4_K_M.gguf"
+          sha256sum ~/.models/*.gguf
+
+      - name: Core dumps on
+        run: |
+          ulimit -c unlimited
+          cat /proc/sys/kernel/core_pattern
+          echo "core.%p" | tee /proc/sys/kernel/core_pattern || true
+
+      - name: Probe 1 - dense model CPU serve + chat
+        run: |
+          set -x
+          env MESH_LLM_RUNTIME_ROOT=/tmp/rt-dense ./target/release/mesh-llm --log-format json serve \
+            --model "$HOME/.models/SmolLM2-135M-Instruct-Q8_0.gguf" --no-draft --device CPU \
+            --ctx-size 128 --port 9401 --console 9402 --headless > /tmp/dense.log 2>&1 &
+          MPID=$!
+          for i in $(seq 1 120); do
+            curl -s -m 2 http://127.0.0.1:9401/v1/models >/dev/null 2>&1 && break
+            kill -0 $MPID 2>/dev/null || { echo "PROCESS DIED during startup"; break; }
+            sleep 2
+          done
+          kill -0 $MPID 2>/dev/null && echo "dense: process alive" || echo "dense: process DEAD"
+          curl -s -m 120 http://127.0.0.1:9401/v1/chat/completions -H "Content-Type: application/json" \
+            -d '{"model":"dummy","messages":[{"role":"user","content":"Say Hello"}],"max_tokens":16}' | head -c 400
+          echo
+          wait $MPID || echo "dense: exit code $?"
+          tail -50 /tmp/dense.log | cut -c1-400
+
+      - name: Probe 2 - recurrent model CPU serve + chat
+        run: |
+          set -x
+          cat > /tmp/rec-config.toml << 'CFG'
+          version = 1
+
+          [defaults.model_fit]
+          batch = 128
+          ubatch = 128
+          CFG
+          env MESH_LLM_CONFIG=/tmp/rec-config.toml MESH_LLM_RUNTIME_ROOT=/tmp/rt-rec ./target/release/mesh-llm --log-format json serve \
+            --model "$HOME/.models/granite-4.0-h-350m-Q4_K_M.gguf" --no-draft --device CPU \
+            --ctx-size 128 --port 9411 --console 9412 --headless > /tmp/rec.log 2>&1 &
+          MPID=$!
+          for i in $(seq 1 120); do
+            curl -s -m 2 http://127.0.0.1:9411/v1/models >/dev/null 2>&1 && break
+            kill -0 $MPID 2>/dev/null || { echo "PROCESS DIED during startup"; break; }
+            sleep 2
+          done
+          kill -0 $MPID 2>/dev/null && echo "recurrent: process alive" || echo "recurrent: process DEAD"
+          curl -s -m 120 http://127.0.0.1:9411/v1/chat/completions -H "Content-Type: application/json" \
+            -d '{"model":"dummy","messages":[{"role":"user","content":"Say Hello"}],"max_tokens":16}' | head -c 400
+          echo
+          wait $MPID || echo "recurrent: exit code $?"
+          tail -50 /tmp/rec.log | cut -c1-400
+
+      - name: Probe 3 - two-node split smoke
+        env:
+          MESH_TWO_NODE_SPLIT_DURABLE_L3: "1"
+          MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED: "1"
+          MESH_TWO_NODE_SPLIT_RECURRENT_MODEL: ${{ format('{0}/.models/granite-4.0-h-350m-Q4_K_M.gguf', github.workspace) }}
+          MESH_TWO_NODE_SPLIT_RECURRENT_CTX_SIZE: "4096"
+          MESH_TWO_NODE_SPLIT_RECURRENT_EXPECTED_EXACT_PAYLOAD_KIND: kv-recurrent
+          MESH_TWO_NODE_SPLIT_READINESS_TIMEOUT_SECONDS: "240"
+        run: |
+          env MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$GITHUB_WORKSPACE/target/release/native-runtimes" \
+            MESH_TWO_NODE_SPLIT_DURABLE_L3=1 MESH_TWO_NODE_SPLIT_ALLOW_UNCERTIFIED=1 \
+            MESH_TWO_NODE_SPLIT_RECURRENT_MODEL="$HOME/.models/granite-4.0-h-350m-Q4_K_M.gguf" \
+            MESH_TWO_NODE_SPLIT_RECURRENT_CTX_SIZE=4096 \
+            MESH_TWO_NODE_SPLIT_RECURRENT_EXPECTED_EXACT_PAYLOAD_KIND=kv-recurrent \
+            MESH_TWO_NODE_SPLIT_READINESS_TIMEOUT_SECONDS=240 \
+            scripts/ci-two-node-split-smoke.sh ./target/release/mesh-llm target/release \
+            "$HOME/.models/SmolLM2-135M-Instruct-Q8_0.gguf" 2>&1 | tail -120
