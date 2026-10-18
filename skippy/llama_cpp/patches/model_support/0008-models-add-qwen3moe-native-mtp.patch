@@ -199,10 +199,15 @@ index fa6857599..6cf6effb4 100644
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
 diff --git a/src/models/models.h b/src/models/models.h
-index 1eaa9b576..31a0c3c23 100644
+index 1eaa9b576..5d89bebd1 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -592,6 +592,11 @@ struct llama_model_qwen3moe : public llama_model_base {
+@@ -644,10 +644,15 @@ struct llama_model_qwen3moe : public llama_model_base {
+     llama_model_qwen3moe(const struct llama_model_params & params) : llama_model_base(params) {}
+     void load_arch_hparams(llama_model_loader & ml) override;
+     void load_arch_tensors(llama_model_loader & ml) override;
+ 
+     struct graph : public llm_graph_context {
          graph(const llama_model & model, const llm_graph_params & params);
      };
  
@@ -213,9 +218,8 @@ index 1eaa9b576..31a0c3c23 100644
 +
      std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
  };
- 
 diff --git a/src/models/qwen3moe.cpp b/src/models/qwen3moe.cpp
-index 2198fcfb5..ab9c07068 100644
+index 2198fcfb5..37ddca4f2 100644
 --- a/src/models/qwen3moe.cpp
 +++ b/src/models/qwen3moe.cpp
 @@ -11,9 +11,15 @@ void llama_model_qwen3moe::load_arch_hparams(llama_model_loader & ml) {
@@ -383,7 +387,7 @@ index 2198fcfb5..ab9c07068 100644
 +    GGML_ASSERT(layer.nextn.hnorm   && "QWEN3MOE MTP block missing nextn.hnorm");
 +    GGML_ASSERT(layer.ffn_gate && layer.ffn_up && layer.ffn_down && "QWEN3MOE MTP block missing its dense FFN");
 +
-+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
++    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 +
 +    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
 +    ggml_set_input(inp->tokens);

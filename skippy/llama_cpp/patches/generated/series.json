@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "ab19aefaeced4ee4fbe1cfe4c224d51d729a132728f9aa7e402db5d3bfd4bcef",
+  "full_patch_sha256": "2f6cac48b366ba39338238d51a48a85afef497eee63187311ac2b8f5256101f7",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -681,7 +681,7 @@
         "qwen3-moe"
       ],
       "file": "0067-family-qwen3-moe.patch",
-      "sha256": "01d38627d47013fab60e31fae712b21307b75f45b910ba3beb86b7c19290e360",
+      "sha256": "d9a0c231c11dd83133b18c5f7fa747307e1eaa265bbb3252a3a5c96ebb7ee599",
       "sources": [
         "src/models/qwen3moe.cpp"
       ]
