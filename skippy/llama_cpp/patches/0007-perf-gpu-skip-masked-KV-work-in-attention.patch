@@ -1,21 +1,64 @@
-From 2d3dc0d1337b258060d7ab40698a69acb198cb0b Mon Sep 17 00:00:00 2001
+From 742528d999888a065a8ec57433f6766b7bb8048e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 18 Oct 2026 09:39:58 +1100
 Subject: [PATCH] perf(gpu): skip masked KV work in CUDA and Metal attention
 
 ---
- ggml/src/ggml-cuda/fattn-common.cuh  |  71 ++------------
- ggml/src/ggml-cuda/fattn-mask.cuh    |  62 ++++++++++++
+ ggml/src/ggml-cpu/ops.cpp            |  10 +-
+ ggml/src/ggml-cuda/fattn-common.cuh  |  71 ++-----------
+ ggml/src/ggml-cuda/fattn-mask.cuh    |  62 +++++++++++
  ggml/src/ggml-cuda/fattn-mma-f16.cuh |  18 ++--
  ggml/src/ggml-cuda/fattn-tile.cuh    |   6 +-
  ggml/src/ggml-cuda/fattn-vec.cuh     |  10 +-
  ggml/src/ggml-metal/kernels/fa.metal |   6 +-
  tests/test-backend-ops.cpp           |   5 +
- tests/test-flash-attn-kv-bounds.h    | 135 +++++++++++++++++++++++++++
- 8 files changed, 237 insertions(+), 76 deletions(-)
+ tests/test-flash-attn-kv-bounds.h    | 150 +++++++++++++++++++++++++++
+ 9 files changed, 259 insertions(+), 79 deletions(-)
  create mode 100644 ggml/src/ggml-cuda/fattn-mask.cuh
  create mode 100644 tests/test-flash-attn-kv-bounds.h
 
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index ba00a0a73..9ecb7cdef 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -8690,6 +8690,10 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+     ggml_vec_dot_t    const kq_vec_dot     = ggml_get_type_traits_cpu(k->type)->vec_dot;
+     ggml_to_float_t   const v_to_float     = ggml_get_type_traits(v->type)->to_float;
+ 
++    // Keep the test reference accumulation in FP32 even for FP16 storage.
++    // Repeated FP16 rounding across long KV rows can dominate GPU comparisons.
++    const bool accumulate_f16 = v->type == GGML_TYPE_F16 && !params->use_ref;
++
+     GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
+     GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
+ 
+@@ -8712,7 +8716,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+         ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
+         ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
+ 
+-        if (v->type == GGML_TYPE_F16) {
++        if (accumulate_f16) {
+             memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
+         } else {
+             memset(VKQ32, 0, DV*sizeof(float));
+@@ -8761,7 +8765,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+ 
+             const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
+ 
+-            if (v->type == GGML_TYPE_F16) {
++            if (accumulate_f16) {
+                 if (s > M) {
+                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
+                     M = s;
+@@ -8802,7 +8806,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+             S = S*ms + vs; // scale and increment sum with partial sum
+         }
+ 
+-        if (v->type == GGML_TYPE_F16) {
++        if (accumulate_f16) {
+             for (int64_t d = 0; d < DV; ++d) {
+                 VKQ32[d] = GGML_CPU_FP16_TO_FP32(VKQ16[d]);
+             }
 diff --git a/ggml/src/ggml-cuda/fattn-common.cuh b/ggml/src/ggml-cuda/fattn-common.cuh
 index 6d1ce52db..16f2ae55b 100644
 --- a/ggml/src/ggml-cuda/fattn-common.cuh
@@ -351,10 +394,10 @@ index 917faabfa..083b37a27 100644
      // note: same bytes either way, so a backend that indexes them differently shows it here
 diff --git a/tests/test-flash-attn-kv-bounds.h b/tests/test-flash-attn-kv-bounds.h
 new file mode 100644
-index 000000000..5f996c593
+index 000000000..ac16be2df
 --- /dev/null
 +++ b/tests/test-flash-attn-kv-bounds.h
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,150 @@
 +#pragma once
 +
 +// Exercise physical KV layouts that arise from unified caches. Each query has
@@ -429,6 +472,12 @@ index 000000000..5f996c593
 +                            case 7:
 +                                visible = true;
 +                                break;  // finite negative biases must remain live
++                            case 8:
++                                visible = k < 129 || k >= kv - 515;
++                                break;  // large interior hole with live endpoints
++                            case 9:
++                                visible = (q + s) % 2 ? k >= kv / 2 : k < kv / 2;
++                                break;  // each row sparse, but a two-row union is dense
 +                            default:
 +                                GGML_ABORT("invalid KV bounds pattern");
 +                        }
@@ -445,8 +494,17 @@ index 000000000..5f996c593
 +};
 +
 +static void add_flash_attn_kv_bounds_tests(std::vector<std::unique_ptr<test_case>> & tests) {
++    for (int pattern : { 7, 8, 9 }) {
++        for (int64_t queries : { 1, 2, 3 }) {
++            for (auto type : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
++                for (bool sinks : { false, true }) {
++                    tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, type, sinks, 65536));
++                }
++            }
++        }
++    }
 +    for (int pattern = 0; pattern < 8; ++pattern) {
-+        for (int64_t queries : { 1, 3, 17, 64 }) {
++        for (int64_t queries : { 1, 2, 3, 4, 17, 64 }) {
 +            for (int64_t streams : { 1, 2 }) {
 +                for (auto type : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
 +                    for (bool sinks : { false, true }) {
@@ -477,12 +535,12 @@ index 000000000..5f996c593
 +    }
 +    // Include dense masks and short contexts to expose classification overhead,
 +    // alongside long unified layouts with masked prefixes and interior holes.
-+    for (int pattern : { 0, 2, 4, 7 }) {
++    for (int pattern : { 0, 2, 3, 4, 7, 8, 9 }) {
 +        for (int64_t kv_size : { 1024, 4096, 16384, 65536 }) {
 +            if (kv_size < 4096 && pattern != 7) {
 +                continue;
 +            }
-+            for (int64_t queries : { 1, 3, 17 }) {
++            for (int64_t queries : { 1, 2, 3, 17 }) {
 +                for (auto type : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
 +                    tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, type, false, kv_size));
 +                }
