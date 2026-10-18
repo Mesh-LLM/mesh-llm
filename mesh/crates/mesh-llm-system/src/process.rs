@@ -205,9 +205,10 @@ fn parse_lstart_naive(s: &str) -> Option<chrono::NaiveDateTime> {
 #[cfg(windows)]
 mod platform {
     //! Process facts through the Win32 process API. Every query opens the
-    //! process with the least right that answers it,
-    //! `PROCESS_QUERY_LIMITED_INFORMATION`, which the same user holds without
-    //! any privilege.
+    //! process with `PROCESS_QUERY_LIMITED_INFORMATION`, which the same user
+    //! holds without any privilege, plus `PROCESS_SYNCHRONIZE` to tell an
+    //! exited process apart; when that is refused, with the query right
+    //! alone.
     //!
     //! Same contract as the Unix modules: a PID that names no process is
     //! `Ok(None)`, and so is one we are not allowed to query, as a `/proc`
@@ -228,14 +229,18 @@ mod platform {
     /// code a process may exit with, hence only a fallback.
     const STILL_ACTIVE: u32 = 259;
 
-    /// Owned process handle, closed on drop, and whether it may be waited on.
-    struct Process(HANDLE, bool);
+    /// Owned process handle, closed on drop.
+    struct Process {
+        handle: HANDLE,
+        /// The handle carries `PROCESS_SYNCHRONIZE`, so it may be waited on.
+        waitable: bool,
+    }
 
     impl Drop for Process {
         fn drop(&mut self) {
             // SAFETY: the handle came from a successful `OpenProcess` and is
             // closed exactly once, here.
-            unsafe { CloseHandle(self.0) };
+            unsafe { CloseHandle(self.handle) };
         }
     }
 
@@ -252,7 +257,10 @@ mod platform {
             // checked before the handle is used.
             let handle = unsafe { OpenProcess(access, 0, pid) };
             if !handle.is_null() {
-                let process = Process(handle, access & PROCESS_SYNCHRONIZE != 0);
+                let process = Process {
+                    handle,
+                    waitable: access & PROCESS_SYNCHRONIZE != 0,
+                };
                 // An exited process stays openable while any handle still
                 // references it, but names no running process any more, and
                 // its image name query fails (Win32 error 31, measured).
@@ -277,13 +285,13 @@ mod platform {
     /// right to wait, the exit code is the fallback, which a process that
     /// exited with code 259 would pass as still running.
     fn has_exited(process: &Process) -> bool {
-        if process.1 {
+        if process.waitable {
             // SAFETY: the handle carries SYNCHRONIZE; a zero timeout only polls.
-            return unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0;
+            return unsafe { WaitForSingleObject(process.handle, 0) } == WAIT_OBJECT_0;
         }
         let mut code = 0u32;
         // SAFETY: the handle carries query rights and `code` outlives the call.
-        let ok = unsafe { GetExitCodeProcess(process.0, &mut code) };
+        let ok = unsafe { GetExitCodeProcess(process.handle, &mut code) };
         ok != 0 && code != STILL_ACTIVE
     }
 
@@ -296,7 +304,7 @@ mod platform {
         // stores the written length back.
         let ok = unsafe {
             QueryFullProcessImageNameW(
-                process.0,
+                process.handle,
                 PROCESS_NAME_WIN32,
                 buffer.as_mut_ptr(),
                 &mut length,
@@ -340,8 +348,15 @@ mod platform {
         };
         let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
         // SAFETY: four valid out-pointers to stack values that outlive the call.
-        let ok =
-            unsafe { GetProcessTimes(process.0, &mut creation, &mut exit, &mut kernel, &mut user) };
+        let ok = unsafe {
+            GetProcessTimes(
+                process.handle,
+                &mut creation,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            )
+        };
         if ok == 0 {
             // SAFETY: as above.
             let code = unsafe { GetLastError() };

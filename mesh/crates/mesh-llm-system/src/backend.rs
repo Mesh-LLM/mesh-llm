@@ -190,12 +190,6 @@ pub enum TerminationOutcome {
     Failed,
 }
 
-impl TerminationOutcome {
-    pub fn is_success(self) -> bool {
-        !matches!(self, TerminationOutcome::Failed)
-    }
-}
-
 pub fn is_safe_kill_target(pid: u32) -> bool {
     pid > 1 && pid <= i32::MAX as u32
 }

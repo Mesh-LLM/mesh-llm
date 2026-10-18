@@ -240,59 +240,112 @@ pub(crate) fn run_stop() -> Result<()> {
     };
 
     let targets = discovery::collect_runtime_stop_targets(&root)?;
-    let mut killed = 0u32;
-    let mut failed = 0u32;
+    let mut tally = StopTally::default();
     for target in targets {
         let outcome = backend::terminate_process_blocking(
             target.pid,
             &target.expected_comm,
             target.expected_start_time,
         );
-        match outcome {
-            backend::TerminationOutcome::Graceful => {
-                writeln!(
-                    err,
-                    "  Terminated owner pid={} gracefully ({})",
-                    target.pid, target.label
-                )?;
-            }
-            backend::TerminationOutcome::Killed => {
-                writeln!(
-                    err,
-                    "  Force-killed owner pid={} ({})",
-                    target.pid, target.label
-                )?;
-            }
-            backend::TerminationOutcome::NotRunning => {
-                writeln!(
-                    err,
-                    "  Owner pid={} was already stopped ({})",
-                    target.pid, target.label
-                )?;
-            }
-            // A stale record whose id another process now holds: nothing of
-            // ours is running there.
-            backend::TerminationOutcome::NotOurs => continue,
-            backend::TerminationOutcome::Failed => {
-                writeln!(
-                    err,
-                    "  Could not stop owner pid={} ({})",
-                    target.pid, target.label
-                )?;
-                failed += 1;
-                continue;
-            }
-        }
-        killed += 1;
+        writeln!(err, "{}", tally.record(target.pid, &target.label, outcome))?;
     }
-
-    // A process that would not stop is still running, so never report
-    // "Nothing running." for it, and fail the command.
-    if failed > 0 {
-        anyhow::bail!("{failed} mesh-llm process(es) could not be stopped");
-    }
-    if killed == 0 {
-        writeln!(err, "Nothing running.")?;
+    if let Some(line) = tally.finish()? {
+        writeln!(err, "{line}")?;
     }
     Ok(())
+}
+
+/// What `mesh-llm stop` says about each owner, counted for the closing line.
+#[derive(Default)]
+struct StopTally {
+    stopped: u32,
+    failed: u32,
+}
+
+impl StopTally {
+    fn record(&mut self, pid: u32, label: &str, outcome: backend::TerminationOutcome) -> String {
+        match outcome {
+            backend::TerminationOutcome::Graceful => {
+                self.stopped += 1;
+                format!("  Terminated owner pid={pid} gracefully ({label})")
+            }
+            backend::TerminationOutcome::Killed => {
+                self.stopped += 1;
+                format!("  Force-killed owner pid={pid} ({label})")
+            }
+            backend::TerminationOutcome::NotRunning => {
+                self.stopped += 1;
+                format!("  Owner pid={pid} was already stopped ({label})")
+            }
+            // A stale record whose id another process now holds: nothing of
+            // ours runs there, but say so, since a node whose start time
+            // drifted past the tolerance would otherwise vanish silently.
+            backend::TerminationOutcome::NotOurs => {
+                format!("  pid={pid} now belongs to another process, left alone ({label})")
+            }
+            backend::TerminationOutcome::Failed => {
+                self.failed += 1;
+                format!("  Could not stop owner pid={pid} ({label})")
+            }
+        }
+    }
+
+    /// The closing line, or an error while an owner that would not stop is
+    /// still running: "Nothing running." would be false then.
+    fn finish(self) -> Result<Option<&'static str>> {
+        if self.failed > 0 {
+            anyhow::bail!("{} mesh-llm process(es) could not be stopped", self.failed);
+        }
+        Ok((self.stopped == 0).then_some("Nothing running."))
+    }
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+    use backend::TerminationOutcome;
+
+    #[test]
+    fn an_owner_that_would_not_stop_is_reported_and_fails_the_command() {
+        let mut tally = StopTally::default();
+
+        assert_eq!(
+            tally.record(7, "mesh-llm", TerminationOutcome::Failed),
+            "  Could not stop owner pid=7 (mesh-llm)"
+        );
+        assert_eq!(
+            tally.record(8, "mesh-llm", TerminationOutcome::Killed),
+            "  Force-killed owner pid=8 (mesh-llm)"
+        );
+        let error = tally.finish().expect_err("an owner is still running");
+        assert_eq!(
+            error.to_string(),
+            "1 mesh-llm process(es) could not be stopped"
+        );
+    }
+
+    #[test]
+    fn a_record_naming_another_process_is_reported_and_nothing_runs() {
+        let mut tally = StopTally::default();
+
+        assert_eq!(
+            tally.record(7, "mesh-llm", TerminationOutcome::NotOurs),
+            "  pid=7 now belongs to another process, left alone (mesh-llm)"
+        );
+        assert_eq!(tally.finish().expect("exit 0"), Some("Nothing running."));
+    }
+
+    #[test]
+    fn stopped_owners_replace_the_nothing_running_line() {
+        let mut tally = StopTally::default();
+
+        tally.record(7, "mesh-llm", TerminationOutcome::Graceful);
+        tally.record(8, "mesh-llm", TerminationOutcome::NotRunning);
+
+        assert_eq!(tally.finish().expect("exit 0"), None);
+        assert_eq!(
+            StopTally::default().finish().expect("exit 0"),
+            Some("Nothing running.")
+        );
+    }
 }
