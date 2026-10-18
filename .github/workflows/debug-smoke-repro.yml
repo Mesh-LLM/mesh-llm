@@ -144,4 +144,4 @@ jobs:
             MESH_TWO_NODE_SPLIT_RECURRENT_EXPECTED_EXACT_PAYLOAD_KIND=kv-recurrent \
             MESH_TWO_NODE_SPLIT_READINESS_TIMEOUT_SECONDS=240 \
             scripts/ci-two-node-split-smoke.sh ./target/release/mesh-llm target/release \
-            "$HOME/.models/SmolLM2-135M-Instruct-Q8_0.gguf" 2>&1 | tail -120
+            "$HOME/.models/SmolLM2-135M-Instruct-Q8_0.gguf" 2>&1 | tail -500
