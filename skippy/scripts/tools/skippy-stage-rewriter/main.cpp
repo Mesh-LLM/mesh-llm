@@ -1503,9 +1503,20 @@ public:
     const auto *owner_body =
         llvm::dyn_cast<CompoundStmt>(constructor->getBody());
 
+    // A base or delegating initializer may build the decoder graph before
+    // the (empty) constructor body runs, so the sidecar shortcut below only
+    // applies to constructors that initialize no base and delegate to no
+    // other constructor.
+    const bool initializes_builder = std::any_of(
+        constructor->init_begin(), constructor->init_end(),
+        [](const clang::CXXCtorInitializer *init) {
+          return init->isBaseInitializer() || init->isDelegatingInitializer();
+        });
+
     // A constructor that only prepares the shared helpers of a derived graph
     // builds no graph of its own, so it owns no decoder block to partition.
-    if (owner_body != nullptr && owner_body->body_empty()) {
+    if (owner_body != nullptr && owner_body->body_empty() &&
+        !initializes_builder) {
       report.verdict = "supported_auxiliary";
       report.proof.execution_scope = "final_stage_sidecar";
       report.proof.scope_evidence.emplace_back("helper_construction_only");
