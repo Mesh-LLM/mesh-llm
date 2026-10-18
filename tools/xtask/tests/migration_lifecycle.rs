@@ -71,6 +71,8 @@ mod runner_cleanup_contracts;
 mod selected_ref;
 #[path = "migration_lifecycle/support.rs"]
 mod support;
+#[path = "migration_lifecycle/upstream_release.rs"]
+mod upstream_release;
 
 #[path = "migration_lifecycle/agent_client_config_cli.rs"]
 mod agent_client_config_cli;
@@ -415,6 +417,3 @@ mod cache_family_moe_cli;
 #[cfg(unix)]
 #[path = "migration_lifecycle/mtp_cli.rs"]
 mod mtp_cli;
-
-#[path = "migration_lifecycle/wan_stage_deployment.rs"]
-mod wan_stage_deployment;

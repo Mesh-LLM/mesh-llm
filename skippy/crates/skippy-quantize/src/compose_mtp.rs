@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -94,7 +95,16 @@ pub(crate) fn run_compose_mtp(args: ComposeMtpArgs) -> Result<()> {
     let mut target = read_gguf_file_info(&args.target_shard)?;
     let mtp = read_gguf_file_info(&args.mtp_gguf)?;
     ensure!(!mtp.tensors.is_empty(), "MTP GGUF has no tensors");
-    let mut appended = prepare_mtp_tensors(&mtp, args.mtp_block)?;
+    let mut target_names: HashSet<String> = target
+        .tensors
+        .iter()
+        .map(|tensor| tensor.name.clone())
+        .collect();
+    if let Some(source) = args.metadata_shard.as_ref() {
+        let metadata = read_gguf_file_info(source)?;
+        target_names.extend(metadata.tensors.into_iter().map(|tensor| tensor.name));
+    }
+    let mut appended = prepare_mtp_tensors(&mtp, args.mtp_block, &target_names)?;
     let kv_overrides = parse_kv_overrides(&args.set_kv)?;
     let mut block_count = None;
     let metadata_shard = match (args.metadata_shard.as_ref(), args.metadata_output.as_ref()) {
@@ -411,9 +421,17 @@ fn overflow(key: &str, ty: &str) -> String {
     format!("{key} overflows {ty}")
 }
 
-fn prepare_mtp_tensors(mtp: &GgufFileInfo, mtp_block: u32) -> Result<Vec<TensorEntry>> {
+/// MTP-only drafts from the llama.cpp converter (`--mtp`) also carry the
+/// shared embedding, output norm and LM head so they load standalone. The
+/// target already owns those; appending them again would duplicate names.
+fn prepare_mtp_tensors(
+    mtp: &GgufFileInfo,
+    mtp_block: u32,
+    target_names: &HashSet<String>,
+) -> Result<Vec<TensorEntry>> {
     mtp.tensors
         .iter()
+        .filter(|tensor| tensor.name.starts_with("blk.") || !target_names.contains(&tensor.name))
         .map(|tensor| {
             let name = rename_mtp_tensor(&tensor.name, mtp_block)?;
             let byte_len =
@@ -899,12 +917,11 @@ mod tests {
             (data_start - bytes.len() as u64) as usize,
         ));
         // Patch offsets relative to data start, append data with alignment.
-        let cursor = 24 + kv.iter().map(serialized_kv_len).sum::<usize>();
+        let mut entry_start = 24 + kv.iter().map(serialized_kv_len).sum::<usize>();
         let mut data_cursor = 0_u64;
-        for (index, (name, dims, data)) in tensors.iter().enumerate() {
-            let entry_len = 8 + name.len() + 4 + 8 * dims.len() + 4 + 8;
-            let entry_start = cursor + index * entry_len;
+        for (name, dims, data) in tensors {
             let offset_patch = entry_start + 8 + name.len() + 4 + 8 * dims.len() + 4;
+            entry_start = offset_patch + 8;
             let offset_bytes = data_cursor.to_le_bytes();
             for (i, b) in offset_bytes.iter().enumerate() {
                 bytes[offset_patch + i] = *b;
@@ -915,7 +932,7 @@ mod tests {
                 0,
                 (padded - data.len() as u64) as usize,
             ));
-            data_cursor = padded;
+            data_cursor += padded;
         }
         std::fs::write(path, bytes).unwrap();
     }
@@ -1072,7 +1089,7 @@ mod tests {
             &[("blk.7.nextn.weight", vec![2], vec![1_u8; 8])],
         );
         let mtp = read_gguf_file_info(&mtp_path).unwrap();
-        assert!(prepare_mtp_tensors(&mtp, 88).is_err());
+        assert!(prepare_mtp_tensors(&mtp, 88, &HashSet::new()).is_err());
         // Drafts already positioned at the target block are accepted verbatim.
         write_fixture_gguf(
             &mtp_path,
@@ -1080,8 +1097,42 @@ mod tests {
             &[("blk.88.nextn.weight", vec![2], vec![1_u8; 8])],
         );
         let mtp = read_gguf_file_info(&mtp_path).unwrap();
-        let prepared = prepare_mtp_tensors(&mtp, 88).unwrap();
+        let prepared = prepare_mtp_tensors(&mtp, 88, &HashSet::new()).unwrap();
         assert_eq!(prepared[0].name, "blk.88.nextn.weight");
+    }
+
+    #[test]
+    fn skips_shared_tensors_the_target_already_carries() {
+        let dir = TempDir::new("shared");
+        let mtp_path = dir.path("mtp.gguf");
+        write_fixture_gguf(
+            &mtp_path,
+            &[GgufKv::u32("arch.block_count", 49)],
+            &[
+                ("blk.48.nextn.eh_proj.weight", vec![2], vec![1_u8; 8]),
+                ("output.weight", vec![2], vec![1_u8; 8]),
+                ("token_embd.weight", vec![2], vec![1_u8; 8]),
+                ("nextn.pre_projection.weight", vec![2], vec![1_u8; 8]),
+            ],
+        );
+        let mtp = read_gguf_file_info(&mtp_path).unwrap();
+        let target: HashSet<String> = [
+            "output.weight",
+            "token_embd.weight",
+            "blk.48.nextn.eh_proj.weight",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let names: Vec<String> = prepare_mtp_tensors(&mtp, 48, &target)
+            .unwrap()
+            .into_iter()
+            .map(|tensor| tensor.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["blk.48.nextn.eh_proj.weight", "nextn.pre_projection.weight"]
+        );
     }
 
     #[test]

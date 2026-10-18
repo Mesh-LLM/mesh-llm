@@ -61,14 +61,8 @@ impl Input {
         }
         if !self.mesh_source.is_empty() {
             revision_valid(&self.mesh_source)?;
-            if self.mesh_source != self.selected_revision
-                || !matches!(self.mode, Mode::Pinned)
-                || self.previous.is_some()
-            {
-                return Err(
-                    "selected source requires unchanged pinned-build without previous candidate"
-                        .into(),
-                );
+            if self.mesh_source != self.selected_revision || !matches!(self.mode, Mode::Pinned) {
+                return Err("selected source requires unchanged pinned-build".into());
             }
         } else if self.selected_revision != self.controller_revision {
             return Err("ordinary canary source must match the frozen controller revision".into());
@@ -92,7 +86,13 @@ impl Input {
             Mode::Verify => {
                 !pass.is_repair() && self.previous.is_some() && self.previous_feedback.is_none()
             }
-            Mode::Pinned => first && self.previous.is_none() && self.previous_feedback.is_none(),
+            Mode::Pinned => {
+                self.previous_feedback.is_none()
+                    && ((first && self.previous.is_none())
+                        || (!self.mesh_source.is_empty()
+                            && matches!(pass, PassId::Verify1)
+                            && self.previous.is_some()))
+            }
         };
         if !valid {
             return Err(

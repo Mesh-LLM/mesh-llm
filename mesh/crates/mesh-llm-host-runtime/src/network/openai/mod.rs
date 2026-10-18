@@ -31,5 +31,5 @@ mod payment_routing;
 pub(crate) use response::payment_recovery;
 
 #[cfg(all(test, feature = "payments"))]
-pub(crate) use response::paid::exchange as test_payment_exchange;
+pub(crate) use response::paid::start as test_metered_start;
 mod workload_routing;

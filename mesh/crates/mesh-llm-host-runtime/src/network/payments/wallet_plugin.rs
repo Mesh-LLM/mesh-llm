@@ -175,6 +175,8 @@ impl PluginWalletProvider {
         // Read the pin before contacting the plugin so a corrupt pin is
         // reported without provisioning anything.
         let pin = WalletPin::load(&self.payment_directory)?;
+        let started = std::time::Instant::now();
+        tracing::info!(target: "mesh_wallet", plugin = %self.plugin_name, "Wallet open started");
         let response: OpenResponse = self
             .call(
                 ops::OPEN,
@@ -224,6 +226,8 @@ impl PluginWalletProvider {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = response.features;
         self.identity_verified.store(true, Ordering::SeqCst);
+        tracing::info!(target: "mesh_wallet", plugin = %self.plugin_name,
+            duration_ms = started.elapsed().as_millis() as u64, "Wallet open finished");
         Ok(())
     }
 
@@ -265,7 +269,7 @@ impl PluginWalletProvider {
                 operation,
                 &input,
                 timeout,
-                if operation == ops::PAY {
+                if matches!(operation, ops::PAY | ops::CREATE_INVOICE) {
                     TransportReplay::Never
                 } else {
                     TransportReplay::Allow
@@ -339,15 +343,24 @@ impl WalletProvider for PluginWalletProvider {
                 self.plugin_name
             );
         }
-        self.call_reopening(
-            ops::CREATE_INVOICE,
-            &contract::CreateInvoiceRequest {
-                amount_msat,
-                expiry_secs,
-            },
-            QUERY_TIMEOUT,
-        )
-        .await
+        // Invoice creation mutates the wallet. A slow provider may already
+        // have minted the invoice: neither a host deadline nor transport
+        // replay can safely treat a missing reply as not-created.
+        let started = std::time::Instant::now();
+        let invoice: Invoice = self
+            .call_reopening(
+                ops::CREATE_INVOICE,
+                &contract::CreateInvoiceRequest {
+                    amount_msat,
+                    expiry_secs,
+                },
+                None,
+            )
+            .await?;
+        tracing::info!(target: "mesh_wallet", plugin = %self.plugin_name,
+            duration_ms = started.elapsed().as_millis() as u64,
+            payment_hash = %invoice.payment_hash, "Wallet invoice created");
+        Ok(invoice)
     }
 
     async fn pay(
@@ -425,3 +438,5 @@ impl WalletProvider for PluginWalletProvider {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transport_tests;

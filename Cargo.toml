@@ -74,7 +74,6 @@ members = [
     "skippy/crates/skippy-model-package",
     "skippy/crates/skippy-correctness",
     "skippy/crates/llama-spec-bench",
-    "skippy/crates/skippy-bench",
     "mesh/crates/mesh-mixture-of-agents",
     "mesh/crates/mesh-llm-moa-plugin",
     "tools/xtask",

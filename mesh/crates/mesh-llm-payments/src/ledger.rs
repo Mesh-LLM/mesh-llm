@@ -1,7 +1,8 @@
-//! SQLite owns approvals and reservations across processes and restarts.
+//! SQLite owns admissions and durable payment records across processes and restarts.
 
+pub mod metered;
+pub mod metered_invoices;
 mod migrations;
-pub mod receivables;
 pub mod wallet_switch;
 
 #[cfg(test)]
@@ -73,6 +74,21 @@ impl Ledger {
     pub fn set_policy(&self, policy: &Policy) -> Result<()> {
         policy.validate()?;
         self.set_setting("policy", &serde_json::to_string(policy)?)
+    }
+
+    /// The operator's minimum payment in msat (default 1 sat): the seller's
+    /// deposit and sub-minimum final round-up, and the largest seller minimum
+    /// this node will pay as a buyer.
+    pub fn min_payment_msat(&self) -> Result<u64> {
+        Ok(match self.get_setting("min_payment_msat")? {
+            Some(value) => value.parse()?,
+            None => mesh_llm_payments_types::metering::PAYMENT_FLOOR_MSAT,
+        })
+    }
+
+    pub fn set_min_payment_msat(&self, floor_msat: u64) -> Result<()> {
+        mesh_llm_payments_types::metering::validate_payment_floor(floor_msat)?;
+        self.set_setting("min_payment_msat", &floor_msat.to_string())
     }
 
     pub(crate) fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -151,61 +167,34 @@ impl Ledger {
     pub fn policy_status(&self, now_ms: u64) -> Result<serde_json::Value> {
         let policy = self.policy()?;
         let connection = self.lock()?;
-        let reserved: u64 = connection.query_row(
-            "SELECT COALESCE(SUM(MAX(cap-spent,0)),0) FROM requests WHERE state='approved'",
-            [],
-            |r| read_amount(r, 0),
-        )?;
-        let spent: u64 = connection.query_row(
-            "SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?",
-            [sql_amount(now_ms / DAY_MS)?],
-            |r| read_amount(r, 0),
-        )?;
+        let spent = settled_today(&connection, now_ms)?;
         let remaining = if policy.mode == ApprovalMode::Automatic {
-            policy
-                .daily_budget_msat
-                .unwrap_or(0)
-                .saturating_sub(spent)
-                .saturating_sub(reserved)
+            policy.daily_budget_msat.unwrap_or(0).saturating_sub(spent)
         } else {
             0
         };
         Ok(serde_json::json!({
             "mode": policy.mode, "daily_budget_msat": policy.daily_budget_msat,
-            "spent_today_msat": spent, "reserved_msat": reserved,
+            "spent_today_msat": spent,
             "remaining_daily_budget_msat": remaining,
         }))
     }
 
-    /// Reserve funds in an immediate transaction; independent processes cannot
-    /// authorize against the same unreserved balance or daily allowance.
-    pub fn available_budget(&self, balance_msat: u64, now_ms: u64) -> Result<u64> {
+    /// Daily admission allowance left after recorded settled payments. The wallet balance is not consulted: a
+    /// payment the wallet cannot make simply fails at payment time.
+    pub fn available_budget(&self, now_ms: u64) -> Result<u64> {
         let policy = self.policy()?;
-        let connection = self.lock()?;
-        let reserved: u64 = connection.query_row(
-            "SELECT COALESCE(SUM(MAX(cap-spent,0)),0) FROM requests WHERE state='approved'",
-            [],
-            |r| read_amount(r, 0),
-        )?;
-        let available = balance_msat.saturating_sub(reserved);
         if policy.mode == ApprovalMode::FreeOnly {
             return Ok(0);
         }
-        let spent: u64 = connection.query_row(
-            "SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?",
-            [sql_amount(now_ms / DAY_MS)?],
-            |r| read_amount(r, 0),
-        )?;
-        Ok(available.min(
-            policy
-                .daily_budget_msat
-                .unwrap_or(0)
-                .saturating_sub(spent)
-                .saturating_sub(reserved),
-        ))
+        let connection = self.lock()?;
+        Ok(policy
+            .daily_budget_msat
+            .unwrap_or(0)
+            .saturating_sub(settled_today(&connection, now_ms)?))
     }
 
-    pub fn approve(&self, id: &str, balance_msat: u64, now_ms: u64) -> Result<()> {
+    pub fn approve(&self, id: &str, now_ms: u64) -> Result<()> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (state, json): (String, String) =
@@ -220,16 +209,7 @@ impl Ledger {
             "request cannot be approved in state {state}"
         );
         let terms: RequestTerms = serde_json::from_str(&json)?;
-        ensure!(terms.expires_at_ms > now_ms, "input invoice has expired");
-        let reserved: u64 = transaction.query_row(
-            "SELECT COALESCE(SUM(MAX(cap-spent,0)),0) FROM requests WHERE state='approved'",
-            [],
-            |r| read_amount(r, 0),
-        )?;
-        ensure!(
-            terms.max_total_msat <= balance_msat.saturating_sub(reserved),
-            "insufficient unreserved wallet balance"
-        );
+        ensure!(terms.expires_at_ms > now_ms, "request terms have expired");
         let policy_json: Option<String> = transaction
             .query_row("SELECT value FROM settings WHERE key='policy'", [], |r| {
                 r.get(0)
@@ -246,14 +226,10 @@ impl Ledger {
         );
         if policy.mode == ApprovalMode::Automatic {
             policy.validate()?;
-            let spent: u64 = transaction.query_row("SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?", [sql_amount(now_ms / DAY_MS)?], |r| read_amount(r, 0))?;
-            let available = policy
-                .daily_budget_msat
-                .unwrap_or(0)
-                .saturating_sub(spent)
-                .saturating_sub(reserved);
+            // No reservation: approval only needs recorded budget left today.
+            // Already-approved work settles even if concurrent work overshoots.
             ensure!(
-                terms.max_total_msat <= available,
+                policy.daily_budget_msat.unwrap_or(0) > settled_today(&transaction, now_ms)?,
                 "daily payment budget exhausted"
             );
         }
@@ -262,22 +238,39 @@ impl Ledger {
         Ok(())
     }
 
-    /// Run only while opening the exclusively locked service, before live
-    /// approvals. A `prepared` charge is one for which `begin_submission` never
-    /// ran, so the wallet was never called and nothing is lost by failing it.
-    /// For an input charge (segment 0) there is also nothing to gain: the
-    /// seller's prefill state did not survive our restart, so paying now would
-    /// buy nothing. Output charges (segment 1) are left alone because the
-    /// seller has delivered and is owed; `pending` charges may have been
-    /// submitted and must be reconciled, never failed here. Explicit
-    /// `wallet send` requests are excluded: the user's intent to pay that
-    /// invoice does not expire with the process, and their resumption path
-    /// (`send` again) is idempotent by payment hash.
-    pub fn fail_unsubmitted_input_charges(&self) -> Result<()> {
+    /// Metered buyer only: on the seller's authoritative Complete, retire a
+    /// deposit charge that was never submitted (`prepared`) without the
+    /// failed-request cascade. A `pending` (possibly
+    /// submitted) deposit is untouched until wallet facts resolve it. Returns
+    /// whether a charge was retired; replays return `false`.
+    pub fn retire_unsubmitted_metered_deposit(&self, id: &str) -> Result<bool> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let metered: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/'||?1)",
+            [id],
+            |r| r.get(0),
+        )?;
+        ensure!(metered, "not a metered buyer request");
+        // `retired` is terminal and outside ('prepared','pending'), so
+        // reconcile ignores it and `finish` can complete the request.
+        let changed = tx.execute(
+            "UPDATE charges SET state='retired' WHERE request_id=?1 AND segment=0 AND state='prepared'",
+            [id],
+        )?;
+        tx.commit()?;
+        Ok(changed == 1)
+    }
+
+    /// Fail legacy input charges never submitted: paying now buys nothing.
+    /// Leave segment 1 and wallet-send alone. Metered requests are excluded:
+    /// their recovery observes existing charges without submitting prepared ones.
+    /// Run only while opening the exclusively locked service.
+    pub fn fail_unsubmitted_legacy_input_charges(&self) -> Result<()> {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "UPDATE charges SET state='failed' WHERE segment=0 AND state='prepared' AND request_id IN (SELECT id FROM requests WHERE json_extract(terms,'$.peer')!='wallet-send')",
+            "UPDATE charges SET state='failed' WHERE segment=0 AND state='prepared' AND request_id IN (SELECT id FROM requests WHERE json_extract(terms,'$.peer')!='wallet-send') AND NOT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/' || charges.request_id)",
             [],
         )?;
         finalize_terminal_requests(&tx)?;
@@ -285,14 +278,27 @@ impl Ledger {
         Ok(())
     }
 
-    /// Run only while opening the exclusively locked service, before live approvals.
+    /// Close no-charge approvals only at startup, before live approvals.
+    /// Exclude metered requests: trusted requests can owe a final invoice
+    /// without ever having a deposit charge.
     pub fn close_abandoned_approvals(&self) -> Result<()> {
-        self.lock()?.execute("UPDATE requests SET state='failed' WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id)", [])?;
+        self.lock()?.execute("UPDATE requests SET state='failed' WHERE state='approved' AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=requests.id) AND NOT EXISTS(SELECT 1 FROM settings WHERE key='metered-payer/'||requests.id)", [])?;
         Ok(())
     }
 
+    /// The terms of one request, if proposed.
+    pub fn request_terms(&self, id: &str) -> Result<Option<RequestTerms>> {
+        let connection = self.lock()?;
+        let terms: Option<String> = connection
+            .query_row("SELECT terms FROM requests WHERE id=?1", [id], |r| r.get(0))
+            .optional()?;
+        terms
+            .map(|terms| serde_json::from_str(&terms).map_err(Into::into))
+            .transpose()
+    }
+
     /// Serialize cancellation with approval and charge preparation in SQLite.
-    /// Any recorded charge retains ownership of settlement and its reservation.
+    /// Any recorded charge retains ownership of settlement.
     pub fn cancel_unstarted(&self, id: &str) -> Result<()> {
         self.lock()?.execute("UPDATE requests SET state='rejected' WHERE id=?1 AND state IN ('pending','approved') AND NOT EXISTS(SELECT 1 FROM charges WHERE request_id=?1)", [id])?;
         Ok(())
@@ -377,7 +383,7 @@ impl Ledger {
     }
 
     /// Commit intent before contacting the wallet. A segment/hash can never be
-    /// repurposed; errors leave the reservation held until reconciliation.
+    /// repurposed; errors retain the payment intent until reconciliation.
     pub fn prepare_charge(&self, charge: &Charge) -> Result<bool> {
         ensure!(
             charge.max_total_msat >= charge.amount_msat,
@@ -405,10 +411,10 @@ impl Ledger {
         charge
             .invoice
             .validate_payment(charge.amount_msat, crate::now_ms())?;
-        let (state, cap, spent): (String, u64, u64) = transaction.query_row(
-            "SELECT state,cap,spent FROM requests WHERE id=?",
+        let state: String = transaction.query_row(
+            "SELECT state FROM requests WHERE id=?",
             [&charge.request_id],
-            |r| Ok((r.get(0)?, read_amount(r, 1)?, read_amount(r, 2)?)),
+            |r| r.get(0),
         )?;
         ensure!(state == "approved", "request is not approved");
         let failed: bool = transaction.query_row(
@@ -417,15 +423,8 @@ impl Ledger {
             |r| r.get(0),
         )?;
         ensure!(!failed, "request has a failed payment");
-        let pending: u64 = transaction.query_row(
-            "SELECT COALESCE(SUM(max_total),0) FROM charges WHERE request_id=? AND state IN ('prepared','pending')",
-            [&charge.request_id],
-            |r| read_amount(r, 0),
-        )?;
-        ensure!(
-            charge.max_total_msat <= cap.saturating_sub(spent).saturating_sub(pending),
-            "request payment limit exceeded"
-        );
+        // Admission checks today's recorded spending. Approved work must
+        // settle even when other requests have since exhausted that allowance.
         transaction.execute("INSERT INTO charges(hash,request_id,segment,invoice,amount,max_total,state,total) VALUES (?1,?2,?3,?4,?5,?6,'prepared',0)", params![charge.invoice.payment_hash,charge.request_id,charge.segment,charge.invoice.bolt11,sql_amount(charge.amount_msat)?,sql_amount(charge.max_total_msat)?])?;
         transaction.commit()?;
         Ok(true)
@@ -548,4 +547,13 @@ fn read_amount(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     value
         .try_into()
         .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
+}
+
+/// Recorded successful payments settled today, including actual wallet fees.
+fn settled_today(connection: &rusqlite::Connection, now_ms: u64) -> Result<u64> {
+    Ok(connection.query_row(
+        "SELECT COALESCE(SUM(total),0) FROM charges WHERE state='succeeded' AND settled_day=?",
+        [sql_amount(now_ms / DAY_MS)?],
+        |r| read_amount(r, 0),
+    )?)
 }

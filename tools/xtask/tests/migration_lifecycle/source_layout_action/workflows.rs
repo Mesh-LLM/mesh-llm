@@ -267,7 +267,7 @@ fn current_nightly_pin_fragment_rejects_missing_and_ambiguous_layouts() {
         .split_once("pins=()")
         .unwrap()
         .1
-        .split_once("upstream=\"$UPSTREAM\"")
+        .split_once("upstream=\"$SELECTED_UPSTREAM\"")
         .unwrap()
         .0;
     let script = format!("pins=(){fragment}\nprintf '%s' \"$old\"\n");

@@ -271,4 +271,4 @@ Step 2 is complete when:
 2. Greedy output remains byte-identical to Skippy baseline.
 3. Stage telemetry reports batch size, accepted draft count, rejected draft
    count, commit count, trim count, and latency.
-4. `skippy-bench` artifacts show throughput versus Skippy baseline.
+4. Performance measurement artifacts show throughput versus Skippy baseline.

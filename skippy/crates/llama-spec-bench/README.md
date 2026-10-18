@@ -64,7 +64,7 @@ llama-spec-bench \
 llama-spec-bench \
   --target-model-path target.gguf \
   --draft-model-path draft.gguf \
-  --prompt-corpus skippy/crates/skippy-bench/corpora/kv_mixed_prompts.jsonl \
+  --prompt-corpus skippy/evals/corpora/kv_mixed_prompts.jsonl \
   --prompt-limit 20 \
   --json-out /tmp/spec-bench.json
 ```
@@ -84,4 +84,4 @@ speculative output mismatch makes the command fail.
 - per-prompt text previews and mismatch index
 
 The default corpus path is
-`skippy/crates/skippy-bench/corpora/kv_mixed_prompts.jsonl`.
+`skippy/evals/corpora/kv_mixed_prompts.jsonl`.
