@@ -1,0 +1,23 @@
+# A/B case manifest. One case per line, tab separated:
+# patch  class  case  benchmark_filter  acceptance  note
+#
+# acceptance: win | parity | pending | blocked-upstream
+#   win/parity     measured in this repository; run with `just skippy-ab <case>`
+#   pending        row not written yet
+#   blocked-upstream  needs a change in skippy/llama_cpp/patches, not here
+10	A	embed_512	^Embed/.*/512$	parity	
+10	A	tokenize_4096	^Tokenize/.*/4096$	parity	
+10	A	batch_build_512	^BatchBuild/.*/512$	win	
+10	A	normalize_768	^Normalize/.*/768$	win	
+10	B	batch_embed_8x8	^BatchEmbed/.*/8/8$	win	
+10	B	rerank_batch_8	^RerankBatch/.*/8$	win	
+10	A	model_load	^ModelLoad/	parity	
+10	A	session_create	^SessionCreate/	parity	
+10	A	session_create_cold	^SessionCreateCold	parity	
+2	A	stage_realize	^stage_realize	parity	
+1	A	stage_materialize	^stage_materialize	parity	
+8	A	stage_validate	^stage_validate	win	
+2	B	stage_chain	^stage_chain	pending	native reference fixture not written yet
+9	B	stage_boundary	^stage_boundary	blocked-upstream	needs a prepared-export token entry point: new ABI + per-family work in the patch queue
+3	B	stage_open_encoder	^stage_open	blocked-upstream	BERT stage install fails: attention.mask.0 has no owned request recipe (native)
+11	C	workload_classify	^ModelLoad/.*	parity	load-time derivation only; the ModelLoad row covers it (same native open), decisions tested in workload_profile_test
