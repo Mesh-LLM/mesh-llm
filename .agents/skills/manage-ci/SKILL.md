@@ -746,8 +746,9 @@ harness environment under `skippy/evals/agentx`. Local-corpus `submission_valid=
 not JY visibility. Emit standard JY serving points through registered repository
 templates. Separate engine and profile template keys prevent mixed-engine series
 and smoke/full comparisons. PR results remain provisional in JY's existing view.
-Concurrency sweeps must increase actual generation slots with offered sessions,
-preserve equal per-request context on both engines, and record both capacities.
+Default-serving concurrency sweeps vary offered sessions independently of the
+automatically planned context and Skippy parallelism. Record native allocation
+evidence separately from offered load; do not silently truncate traces to fit.
 Smoke must exercise the concurrent path before full sweeps. Changes to serving
 capacity require a new harness version rather than mixing queue-only results.
 Benchmark engines and the harness execute inside the same ARM64 CUDA container
@@ -763,7 +764,8 @@ change to the current template source, then sync and use `jy repos run` at the
 immutable PR source. Keep unrelated jobs and the production default ref intact.
 Move the source registration to Mesh after merge.
 
-AgentX version 3 sweeps 1, 2, 4, 8, 16, 32, 64 and 128 slots per engine job.
+AgentX version 4 sweeps 1, 2 and 4 offered sessions per engine job with automatic
+context on both engines and automatic Skippy parallelism; llama slots match offered sessions.
 Repeated comparisons order whole engine jobs ABBAAB on the same Spark. Preserve
-per-slot context, exclude drain cancellations from serving points, retain failed
+complete traces, exclude drain cancellations from serving points, retain failed
 cells, and continue only after confirmed child cleanup. Cache inputs are offline.

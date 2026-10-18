@@ -47,8 +47,10 @@ failure/cancellation, and resident-memory measurements.
 
 Skippy must match or beat llama on both CUDA and Metal before this performance
 work is considered complete. Qualify each backend independently with the same
-pinned Q4 weights, AgentX traces, context capacity per slot, sampling settings,
-and offered concurrency. Include both single-session and concurrent serving;
+pinned Q4 weights, AgentX traces, sampling settings,
+and offered concurrency. Default-serving comparisons let Skippy plan context and parallelism; llama
+plans context with explicit slots matching offered concurrency; record the realized capacities instead of assuming they
+match. Include both single-session and concurrent serving;
 a single-session win does not qualify concurrent serving.
 
 Run llama (A) and Skippy (B) in ABBAAB order on the same otherwise idle worker.

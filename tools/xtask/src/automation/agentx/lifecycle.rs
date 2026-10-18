@@ -35,11 +35,8 @@ fn server(
     port: u16,
     concurrency: u32,
 ) -> DynResult<process::ProcessSpec> {
-    // llama divides its context pool among slots; Skippy takes a per-lane size.
-    // Keep the complete 256k trace budget for every request on both engines.
-    let total_context = 262144_u32
-        .checked_mul(concurrency)
-        .ok_or("context capacity overflow")?;
+    // Skippy plans its own capacity. Preserve llama's explicit parallel setting:
+    // its auto-parallel mode also changes the baseline's unified-KV policy.
     let weights = input.weights.to_str().ok_or("weight path")?;
     let (binary, args) = if engine == "llama" {
         (
@@ -53,8 +50,6 @@ fn server(
                 "127.0.0.1",
                 "--port",
                 &port.to_string(),
-                "--ctx-size",
-                &total_context.to_string(),
                 "--parallel",
                 &concurrency.to_string(),
                 "--batch-size",
@@ -85,10 +80,6 @@ fn server(
                 &input.model.key,
                 "--bind-addr",
                 &format!("127.0.0.1:{port}"),
-                "--ctx-size",
-                "262144",
-                "--generation-concurrency",
-                &concurrency.to_string(),
                 "--batch-size",
                 "2048",
                 "--microbatch-size",
@@ -238,8 +229,9 @@ fn launch_identity(
         "binary_sha256":crate::product::digest::file_sha256(&server.executable).map_err(|error|error.error)?,
         "runtime_tree_sha256":crate::product::digest::tree_sha256(&runtime).map_err(|error|error.error)?,
         "harness_lock_sha256":crate::product::digest::file_sha256(&input.root.join("skippy/evals/agentx/uv.lock")).map_err(|error|error.error)?,
-        "context_tokens":262144,"total_context_tokens":262144_u64 * u64::from(concurrency),
-        "generation_slots":concurrency,"offered_sessions":concurrency,
+        "capacity_policy":super::capacity::policy(engine),
+        "context_tokens":null,"total_context_tokens":null,
+        "generation_slots":null,"offered_sessions":concurrency,
         "batch_tokens":2048,"microbatch_tokens":512,
         "speculation":false,"dataset_sha256":inputs::DATA_SHA,
         "llama_upstream":std::fs::read_to_string(input.root.join("skippy/llama_cpp/upstream.txt"))?.trim()
@@ -349,17 +341,14 @@ mod tests {
                     "{engine}: {pair:?}"
                 );
             }
-            let (slots, context) = if engine == "llama" {
-                ("--parallel", "524288")
+            for flag in ["--generation-concurrency", "--ctx-size"] {
+                assert!(!arguments.iter().any(|arg| arg == flag), "{engine}: {flag}");
+            }
+            if engine == "llama" {
+                assert!(arguments.windows(2).any(|args| args == ["--parallel", "2"]));
             } else {
-                ("--generation-concurrency", "262144")
-            };
-            assert!(arguments.windows(2).any(|args| args == [slots, "2"]));
-            assert!(
-                arguments
-                    .windows(2)
-                    .any(|args| args == ["--ctx-size", context])
-            );
+                assert!(!arguments.iter().any(|arg| arg == "--parallel"));
+            }
         }
     }
 }

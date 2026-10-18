@@ -1035,27 +1035,27 @@ templates:
       model: "${model}"
       profile: "smoke"
       engine: llama
-      context_tokens: 262144
-      generation_slots: matches_concurrency
+      context_policy: engine_default
+      generation_slots_policy: matches_concurrency
       batch_tokens: 2048
       microbatch_tokens: 512
       speculation: false
     description: >
       ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engine templates use
-      identical pinned GGUF weights and 256k context per generation slot. Smoke uses
+      identical pinned GGUF weights and automatic context. Skippy plans parallelism; llama slots match offered sessions. Smoke uses
       at least four traces, increasing to match concurrency, and 60 measured seconds per cell. Both profiles sweep
-      1, 2, 4, 8, 16, 32, 64 and 128 offered agent sessions with matching generation slots. Local-corpus exports retain upstream
+      1, 2 and 4 offered agent sessions independently of planned generation slots. Local-corpus exports retain upstream
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.7-local-smoke-3
+      version: agentx-1.0.7-local-smoke-4
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
         sha256: e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef
       seed: 42
       warmup_requests: 1
-      concurrency: [1, 2, 4, 8, 16, 32, 64, 128]
+      concurrency: [1, 2, 4]
       duration_s: 60
     build: |
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
@@ -1102,27 +1102,27 @@ templates:
       model: "${model}"
       profile: "benchmark"
       engine: llama
-      context_tokens: 262144
-      generation_slots: matches_concurrency
+      context_policy: engine_default
+      generation_slots_policy: matches_concurrency
       batch_tokens: 2048
       microbatch_tokens: 512
       speculation: false
     description: >
       ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engine templates use
-      identical pinned GGUF weights and 256k context per generation slot. Smoke uses
+      identical pinned GGUF weights and automatic context. Skippy plans parallelism; llama slots match offered sessions. Smoke uses
       at least four traces, increasing to match concurrency, and 60 measured seconds per cell. Both profiles sweep
-      1, 2, 4, 8, 16, 32, 64 and 128 offered agent sessions with matching generation slots. Local-corpus exports retain upstream
+      1, 2 and 4 offered agent sessions independently of planned generation slots. Local-corpus exports retain upstream
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.7-local-benchmark-3
+      version: agentx-1.0.7-local-benchmark-4
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
         sha256: e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef
       seed: 42
       warmup_requests: 10
-      concurrency: [1, 2, 4, 8, 16, 32, 64, 128]
+      concurrency: [1, 2, 4]
       duration_s: 3600
     build: |
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
@@ -1169,27 +1169,27 @@ templates:
       model: "${model}"
       profile: "smoke"
       engine: skippy
-      context_tokens: 262144
-      generation_slots: matches_concurrency
+      context_policy: engine_default
+      generation_slots_policy: engine_default
       batch_tokens: 2048
       microbatch_tokens: 512
       speculation: false
     description: >
       ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engine templates use
-      identical pinned GGUF weights and 256k context per generation slot. Smoke uses
+      identical pinned GGUF weights and automatic context. Skippy plans parallelism; llama slots match offered sessions. Smoke uses
       at least four traces, increasing to match concurrency, and 60 measured seconds per cell. Both profiles sweep
-      1, 2, 4, 8, 16, 32, 64 and 128 offered agent sessions with matching generation slots. Local-corpus exports retain upstream
+      1, 2 and 4 offered agent sessions independently of planned generation slots. Local-corpus exports retain upstream
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.7-local-smoke-3
+      version: agentx-1.0.7-local-smoke-4
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
         sha256: e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef
       seed: 42
       warmup_requests: 1
-      concurrency: [1, 2, 4, 8, 16, 32, 64, 128]
+      concurrency: [1, 2, 4]
       duration_s: 60
     build: |
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
@@ -1236,27 +1236,27 @@ templates:
       model: "${model}"
       profile: "benchmark"
       engine: skippy
-      context_tokens: 262144
-      generation_slots: matches_concurrency
+      context_policy: engine_default
+      generation_slots_policy: engine_default
       batch_tokens: 2048
       microbatch_tokens: 512
       speculation: false
     description: >
       ARM64 GPU container with pinned AgentX 1.0.7 and the published 256k Weka traces. Both engine templates use
-      identical pinned GGUF weights and 256k context per generation slot. Smoke uses
+      identical pinned GGUF weights and automatic context. Skippy plans parallelism; llama slots match offered sessions. Smoke uses
       at least four traces, increasing to match concurrency, and 60 measured seconds per cell. Both profiles sweep
-      1, 2, 4, 8, 16, 32, 64 and 128 offered agent sessions with matching generation slots. Local-corpus exports retain upstream
+      1, 2 and 4 offered agent sessions independently of planned generation slots. Local-corpus exports retain upstream
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.7-local-benchmark-3
+      version: agentx-1.0.7-local-benchmark-4
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
         sha256: e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef
       seed: 42
       warmup_requests: 10
-      concurrency: [1, 2, 4, 8, 16, 32, 64, 128]
+      concurrency: [1, 2, 4]
       duration_s: 3600
     build: |
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"

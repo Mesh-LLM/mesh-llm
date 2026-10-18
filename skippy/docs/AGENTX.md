@@ -117,26 +117,27 @@ submitting the smoke, and submit the benchmark only after the smoke passes.
 | Setting | Smoke | Benchmark |
 |---|---|---|
 | Parent traces | First max(4, concurrency), complete | All 393, complete |
-| Offered agent sessions | 1, 2, 4, 8, 16, 32, 64, 128 | 1, 2, 4, 8, 16, 32, 64, 128 |
+| Offered agent sessions | 1, 2, 4 | 1, 2, 4 |
 | Measured time per engine / concurrency | 60 seconds | Upstream 3,600 seconds |
 | Warmup requests per lane | 1 | Upstream 10 |
 | Trajectory starting ratio | 0–0 | Upstream 0.25–0.75 |
 | Random seed | 42 | 42 |
-| Resident generation slots | Matches offered sessions | Matches offered sessions |
-| Context per slot / KV precision | 262,144 / F16 | 262,144 / F16 |
+| Resident generation slots | Skippy auto; llama matches offered load | Skippy auto; llama matches offered load |
+| Context per slot / KV precision | Engine default / F16 | Engine default / F16 |
 | Logical batch / microbatch tokens | 2,048 / 512 | 2,048 / 512 |
 
-Both profiles now increase actual generation capacity with offered concurrency.
-Subagents can still queue additional requests. llama.cpp receives an aggregate
-context pool of `262144 * slots`; Skippy receives 262144 per lane. Both retain
-the full context budget for every request. The sweep attempts all eight levels.
-High concurrency can exceed Spark memory;
-failed levels retain logs and status. Subsequent levels continue only after
-confirmed process cleanup. Successful earlier levels remain recorded.
-There is no context shortening, automatic weight quantization, or fallback on
-allocation failure. Harness version 3 separates the expanded sweep and unlimited
-harness drain
-(with a bounded outer lifecycle) from previous measurements.
+Both profiles sweep offered request concurrency independently of serving capacity.
+Neither engine receives a context override. Skippy plans context and parallelism;
+llama keeps explicit slots matching offered concurrency to preserve the baseline
+KV policy while automatically sizing context. These are
+default-serving comparisons, not equal-capacity kernel comparisons.
+Native context allocation observations are retained in each summary, with raw
+server logs preserved; missing observations remain unavailable. Do not infer
+execution slots from offered concurrency or native sequence reservations.
+Context overflow and failed requests invalidate a cell; traces are not silently
+truncated to fit a plan. Failed cells retain evidence, and subsequent levels
+continue only after confirmed cleanup. Harness version 4 separates these
+measurements from the previous fixed-context sweep.
 Skippy's in-memory prefix retention target is explicitly 8 GiB, with disk
 caching off; exact snapshots can exceed that target. llama-server retains its
 per-slot prompt caches. These cache policies are recorded in launch arguments.

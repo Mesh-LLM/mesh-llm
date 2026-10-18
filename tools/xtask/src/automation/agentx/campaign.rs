@@ -33,8 +33,9 @@ pub(super) fn run(input: &Prepared, engine: Engine) -> DynResult<()> {
                 let status = failure_status(&cell.output);
                 notes.push(format!("{engine} c{concurrency}: {status}; see cell logs"));
                 cells.push(json!({"engine":engine,"concurrency":concurrency,
-                    "status":status,"error":error.to_string(),"context_tokens":262144,
-                    "generation_slots":concurrency}));
+                    "status":status,"error":error.to_string(),
+                    "capacity_policy":super::capacity::policy(engine),
+                    "native_capacity":super::capacity::read(&cell.output)}));
             }
         }
         publish(input, engine, &cells, &points, &notes)?;
@@ -141,7 +142,7 @@ mod tests {
             super::super::Profile::Smoke,
             super::super::Profile::Benchmark,
         ] {
-            assert_eq!(profile.concurrencies(), &[1, 2, 4, 8, 16, 32, 64, 128]);
+            assert_eq!(profile.concurrencies(), &[1, 2, 4]);
         }
     }
     #[test]

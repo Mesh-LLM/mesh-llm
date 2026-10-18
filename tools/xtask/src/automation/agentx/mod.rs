@@ -1,5 +1,6 @@
 //! AgentX owns its workload, provenance and lifecycle independently of replay-matrix.
 mod campaign;
+mod capacity;
 mod command;
 mod container;
 mod inputs;
@@ -34,8 +35,8 @@ impl Profile {
         }
     }
     fn concurrencies(self) -> &'static [u32] {
-        // Capacity failures never shrink the per-request context.
-        &[1, 2, 4, 8, 16, 32, 64, 128]
+        // Offered load is independent of engine-planned serving capacity.
+        &[1, 2, 4]
     }
 }
 #[derive(Clone, Copy)]

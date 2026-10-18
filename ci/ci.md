@@ -2018,7 +2018,7 @@ See [AgentX operations](../skippy/docs/AGENTX.md) for registration migration and
 validity. This replaces the Jianyang `agentic-replay` entry; the separately
 owned GitHub trajectory qualification workflow is unchanged.
 
-AgentX v3 expands each engine job to concurrency 1, 2, 4, 8, 16, 32, 64 and 128.
+AgentX v4 sweeps offered concurrency 1, 2 and 4 with automatic context and Skippy parallelism (llama slots match offered sessions).
 Whole-sweep ABBAAB ordering uses six existing engine jobs per model; it does not
 add JY features or mix engines within a result series. Capacity failures retain
 cell evidence and do not erase earlier successful levels.

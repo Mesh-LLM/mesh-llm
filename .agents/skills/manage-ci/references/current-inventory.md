@@ -1780,7 +1780,7 @@ matrix also exercises backend-specific variants. These are explicit hardware
 qualification commands, not additional CPU-only CI coverage. Their ownership,
 along with `skippy-cuda-readback-test`, is recorded in the Just layout fixture.
 
-AgentX harness version 3 retains the four engine/profile template keys and sweeps
-1, 2, 4, 8, 16, 32, 64 and 128 generation slots. Whole-job ABBAAB repeats are
+AgentX harness version 4 retains the four engine/profile template keys and sweeps
+1, 2 and 4 offered sessions with automatic context and Skippy parallelism (llama slots match offered sessions). Whole-job ABBAAB repeats are
 submitted per model on one Spark. Input cache misses fail offline; cancelled
 cells are excluded from serving points and failed cells retain evidence.
