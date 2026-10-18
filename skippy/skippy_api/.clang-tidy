@@ -1,0 +1,22 @@
+# Disabled by judgment, not by accident:
+#   braces-around-statements            single-statement guards stay one line
+#   performance-enum-size               vocabulary types mirror native widths
+#   convert-member-functions-to-static  backend members keep instance shape
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  readability-*,
+  -modernize-use-trailing-return-type,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -readability-braces-around-statements,
+  -performance-enum-size,
+  -readability-convert-member-functions-to-static
+HeaderFilterRegex: '.*/skippy_api/(include|src)/.*'
+WarningsAsErrors: ''
+
+CheckOptions:
+  bugprone-easily-swappable-parameters.MinimumLength: 3
+  readability-redundant-member-init.IgnoreBaseInCopyConstructors: true
