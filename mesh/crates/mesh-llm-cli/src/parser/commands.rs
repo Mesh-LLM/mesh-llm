@@ -1091,6 +1091,9 @@ pub enum Command {
         /// API port for mesh-llm (default: 9337)
         #[arg(long, default_value = "9337")]
         port: u16,
+        /// Console port of the mesh-llm node, which serves the MCP tools the agent gets (default: 3131)
+        #[arg(long, default_value = "3131")]
+        console: u16,
     },
     /// Launch Claude Code with mesh-llm as the inference provider.
     ///
@@ -1103,6 +1106,9 @@ pub enum Command {
         /// API port for mesh-llm (default: 9337)
         #[arg(long, default_value = "9337")]
         port: u16,
+        /// Console port of the mesh-llm node, which serves the MCP tools the agent gets (default: 3131)
+        #[arg(long, default_value = "3131")]
+        console: u16,
     },
     /// Launch pi with mesh-llm as the inference provider.
     ///

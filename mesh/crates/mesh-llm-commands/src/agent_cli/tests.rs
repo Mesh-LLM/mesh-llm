@@ -3,10 +3,10 @@ use super::{
     OPENCODE_OUTPUT_LIMIT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
     build_opencode_launch_spec_with_limits, build_pi_provider_config,
     build_pi_provider_config_with_limits, cleanup_mesh_child, configure_claude_launch_command,
-    configure_opencode_launch_command, merge_goose_mcp_config, mesh_mcp_claude_config_json,
-    normalize_opencode_host, opencode_missing_binary_guidance, pi_missing_binary_guidance,
-    resolve_opencode_config_path_from_home, write_opencode_config_for_test,
-    write_pi_config_for_test, write_pi_config_to_path,
+    configure_opencode_launch_command, local_mcp_url, merge_goose_mcp_config,
+    mesh_mcp_claude_config_json, normalize_opencode_host, opencode_missing_binary_guidance,
+    pi_missing_binary_guidance, resolve_opencode_config_path_from_home,
+    write_opencode_config_for_test, write_pi_config_for_test, write_pi_config_to_path,
 };
 
 const LOCAL_OPENCODE_HOST: &str = "127.0.0.1:9337";
@@ -1072,4 +1072,10 @@ async fn remote_inventory_fetch_preserves_context_with_served_id() {
     assert_eq!(chosen, "org/remote:Q4");
     assert_eq!(inventory.context_limit(&chosen), 16384);
     server.await.unwrap();
+}
+
+#[test]
+fn local_mcp_url_follows_the_console_port() {
+    assert_eq!(local_mcp_url(3131), DEFAULT_MESH_MCP_URL);
+    assert_eq!(local_mcp_url(13131), "http://127.0.0.1:13131/mcp");
 }
