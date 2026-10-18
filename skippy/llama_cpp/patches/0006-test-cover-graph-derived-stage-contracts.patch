@@ -18,7 +18,7 @@ Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  624 +++++++
- src/skippy/tests/sampling_history.cpp         |  346 ++++
+ src/skippy/tests/sampling_history.cpp         |  400 ++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -37,7 +37,7 @@ Subject: [PATCH 6/6] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 33 files changed, 9376 insertions(+), 32 deletions(-)
+ 33 files changed, 9430 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5766,16 +5766,17 @@ index 000000000..8c9e3288b
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..c7d816ca7
+index 000000000..abd61f505
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,346 @@
+@@ -0,0 +1,400 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "llama-model.h"
 +
 +#include <cstdio>
 +#include <cstdlib>
++#include <cmath>
 +#include <cstring>
 +#include <vector>
 +
@@ -6051,13 +6052,41 @@ index 000000000..c7d816ca7
 +    ok(status, error);
 +}
 +
++skippy_sampling_config greedy_config() {
++    skippy_sampling_config config{};
++    config.version = 1;
++    config.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    config.repeat_penalty = 1.0f;
++    config.temperature = 0.0f;
++    config.top_k = 1;
++    config.reasoning_budget_tokens = -1;
++    return config;
++}
++
++// Decode one token and return the logits it produced.
++std::vector<float> decode_logits(skippy_session * session, llama_token token) {
++    const auto sampling = greedy_config();
++    llama_token predicted = -1;
++    size_t bytes = 0;
++    skippy_error * error = nullptr;
++    const auto status = skippy_decode_step_sampled(session, token, &sampling,
++            nullptr, 0, nullptr, 0, &bytes, &predicted, &error);
++    ok(status, error);
++    const float * logits = llama_get_logits_ith(session->ctx, -1);
++    CHECK(logits != nullptr);
++    const int32_t n_vocab = static_cast<int32_t>(session->stage_model->model->vocab.n_tokens());
++    return std::vector<float>(logits, logits + n_vocab);
++}
++
 +// A declared-exact stage checkpoint must be reconstructible from its export
 +// alone. LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY is an alias of
 +// LLAMA_STATE_SEQ_FLAGS_SWA_ONLY: it writes the recurrent and sliding-window
 +// half of a hybrid memory and nothing from a full-attention KV cache, so a
 +// session restored from that half carries no full-attention cells and decodes a
 +// different continuation from an uninterrupted prefill. Compare the attention
-+// page the restored session exposes with the source's page byte for byte.
++// page the restored session exposes with the source's page, and the next-token
++// logits of a restored prefix with those of the same prefix prefilled from
++// scratch.
 +void state_round_trip(skippy_model * model) {
 +    const std::vector<llama_token> prefix(128, 1);
 +    auto * source = create(model);
@@ -6074,6 +6103,31 @@ index 000000000..c7d816ca7
 +    CHECK(restored_page.size() == source_page.size());
 +    CHECK(std::memcmp(restored_page.data(), source_page.data(), source_page.size()) == 0);
 +    release(restored);
++
++    const std::vector<llama_token> suffix(8, 2);
++    auto * cold = create(model);
++    prefill(cold, prefix);
++    prefill(cold, suffix);
++    const auto cold_logits = decode_logits(cold, suffix.back());
++    release(cold);
++    auto * warm = create(model);
++    restore_recurrent(warm, recurrent, prefix);
++    prefill(warm, suffix);
++    const auto warm_logits = decode_logits(warm, suffix.back());
++    release(warm);
++    CHECK(cold_logits.size() == warm_logits.size());
++    float max_delta = 0.0f;
++    size_t differing = 0;
++    for (size_t i = 0; i < cold_logits.size(); ++i) {
++        const float delta = std::fabs(cold_logits[i] - warm_logits[i]);
++        if (delta != 0.0f) {
++            ++differing;
++        }
++        max_delta = std::max(max_delta, delta);
++    }
++    std::fprintf(stderr, "state round trip: max|dlogit| = %.9g, differing = %zu/%zu\n",
++            max_delta, differing, cold_logits.size());
++    CHECK(max_delta == 0.0f);
 +}
 +
 +} // namespace
