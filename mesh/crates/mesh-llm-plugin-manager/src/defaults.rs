@@ -6,10 +6,9 @@
 //! records default ownership, so a new release's copy replaces only
 //! default-managed installs.
 
+use crate::bundled::install_bundled_default;
 use crate::catalog::PinnedRelease;
-use crate::install::{
-    InstallOutcome, PluginInstallOptions, PluginProgressReporter, install_bundled_default,
-};
+use crate::install::{InstallOutcome, PluginInstallOptions, PluginProgressReporter};
 use crate::store::{InstalledPluginMetadata, PluginStore};
 use std::collections::BTreeSet;
 
@@ -432,7 +431,7 @@ mod tests {
             archive.append_data(&mut header, path, data).unwrap();
         }
         archive.into_inner().unwrap().finish().unwrap();
-        let digest = crate::install::tests_sha256_file(&archive_path);
+        let digest = crate::bundled::tests_sha256_file(&archive_path);
         let pins: &'static [(&'static str, &'static str)] =
             Box::leak(vec![(LINUX, &*Box::leak(digest.into_boxed_str()))].into_boxed_slice());
         DefaultPlugin {

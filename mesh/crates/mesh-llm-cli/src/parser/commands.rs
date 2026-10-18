@@ -893,6 +893,12 @@ pub struct Cli {
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
     pub nostr_discovery: bool,
+
+    /// Don't install the default plugins when this node starts.
+    /// Same as MESH_LLM_NO_DEFAULT_PLUGINS=1. Hidden; kept so existing
+    /// `serve` and `client` invocations still parse.
+    #[arg(long, hide = true)]
+    pub no_default_plugins: bool,
 }
 
 #[derive(Subcommand, Debug)]

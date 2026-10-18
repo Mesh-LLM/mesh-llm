@@ -1760,7 +1760,7 @@ async fn run_auto_inner(
     register_pre_accept_local_source_policies(&config, &startup_specs);
     // The default plugins come from this release's bundled copy, never a
     // download, and are installed before plugins are resolved.
-    super::default_plugins::provision_bundled_defaults_at_start(&config);
+    super::default_plugins::provision_bundled_defaults_at_start(&config, &options);
     let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(

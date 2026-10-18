@@ -209,6 +209,26 @@ mod tests {
     }
 
     #[test]
+    fn serve_and_client_still_take_the_hidden_no_default_plugins_flag() {
+        for surface in ["serve", "client"] {
+            let normalized = super::normalize_runtime_surface_args(
+                ["mesh-llm", surface, "--headless", "--no-default-plugins"]
+                    .into_iter()
+                    .map(std::ffi::OsString::from)
+                    .collect::<Vec<_>>(),
+            );
+            let cli = Cli::try_parse_from(normalized.normalized)
+                .unwrap_or_else(|error| panic!("{surface} --no-default-plugins: {error}"));
+            assert!(cli.headless);
+            assert!(cli.no_default_plugins, "{surface}");
+        }
+        let help = <Cli as clap::CommandFactory>::command()
+            .render_long_help()
+            .to_string();
+        assert!(!help.contains("--no-default-plugins"));
+    }
+
+    #[test]
     fn kv_cache_lifecycle_commands_parse_exact_model_identity_and_confirmation() {
         let cli = Cli::try_parse_from([
             "mesh-llm",

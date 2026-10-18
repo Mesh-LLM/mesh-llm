@@ -7,7 +7,7 @@ use sha2::Digest;
 
 use crate::{
     archive::{ExtractedPluginArchive, extract_plugin_archive},
-    catalog::{PinnedRelease, PluginCatalog, is_sha256_hex},
+    catalog::PluginCatalog,
     github::{GitHubReleaseAsset, GitHubReleaseClient},
     select_plugin_asset,
     source_ref::{
@@ -112,123 +112,7 @@ pub async fn install_plugin(
 ) -> Result<InstallOutcome> {
     let parsed = parse_install_ref(reference)?;
     let resolved = resolve_install_source(parsed, options, progress).await?;
-    install_resolved_plugin(resolved, options, progress, None, None).await
-}
-
-/// Install default plugin `name` at `pin` from this release's bundled copy
-/// (`options.bundled_plugins_dir`), the release archive the release pipeline
-/// verified. The archive must match `pin`, a pin held in reviewed code,
-/// before anything is extracted. Nothing is ever downloaded: `Ok(None)` when
-/// the release bundles no copy for this platform.
-pub fn install_bundled_default(
-    name: &str,
-    pin: PinnedRelease<'_>,
-    options: &PluginInstallOptions,
-    progress: &mut impl PluginProgressReporter,
-) -> Result<Option<InstallOutcome>> {
-    if !is_sha256_hex(pin.sha256) {
-        bail!(
-            "default plugin '{name}' {} pins no SHA-256 for {} ({:?}); not installed",
-            pin.version,
-            options.target.triple(),
-            pin.sha256
-        );
-    }
-    let asset = crate::bundled::bundled_archive_name(name, pin.version, options.target.triple());
-    let Some(archive_path) = options
-        .bundled_plugins_dir
-        .as_ref()
-        .map(|dir| dir.join(&asset))
-        .filter(|path| path.is_file())
-    else {
-        return Ok(None);
-    };
-    let (verified_archive, digest) = copy_and_hash_bundled_archive(&archive_path)?;
-    if digest != pin.sha256 {
-        bail!(
-            "the bundled {asset} is {digest}, not the reviewed {} {}; not installed",
-            pin.version,
-            pin.sha256
-        );
-    }
-    progress.report(PluginProgressEvent::Extracting {
-        asset: asset.clone(),
-    });
-    let store = PluginStore::new(&options.store_root);
-    let current = store.load_optional(name)?;
-    let extracted = extract_for_install(verified_archive.path(), ArchiveExt::TarGz, name, options)?;
-    let metadata = InstalledPluginMetadata {
-        name: name.to_string(),
-        source_repository: format!("bundled:{}", archive_path.display()),
-        installed_version: pin.version.to_string(),
-        target_triple: options.target.triple().to_string(),
-        downloaded_asset_name: asset,
-        install_path: extracted.install_path,
-        enabled: current.as_ref().map(|item| item.enabled).unwrap_or(true),
-        default_managed: true,
-        manifest: extracted.manifest,
-        last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
-        last_status: current.as_ref().and_then(|item| item.last_status.clone()),
-        last_error: None,
-    };
-    store.save(&metadata)?;
-    progress.report(PluginProgressEvent::Installed {
-        name: metadata.name.clone(),
-        version: metadata.installed_version.clone(),
-    });
-    Ok(Some(InstallOutcome {
-        metadata,
-        changed: true,
-    }))
-}
-
-/// For tests elsewhere in the crate: the digest a bundled archive must match.
-#[cfg(test)]
-pub(crate) fn tests_sha256_file(path: &std::path::Path) -> String {
-    sha256_file(path).unwrap()
-}
-
-#[cfg(test)]
-fn sha256_file(path: &std::path::Path) -> Result<String> {
-    let mut file =
-        fs::File::open(path).with_context(|| format!("open bundled plugin {}", path.display()))?;
-    let mut hasher = sha2::Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = std::io::Read::read(&mut file, &mut buffer)
-            .with_context(|| format!("read bundled plugin {}", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-fn copy_and_hash_bundled_archive(
-    path: &std::path::Path,
-) -> Result<(tempfile::NamedTempFile, String)> {
-    let mut source =
-        fs::File::open(path).with_context(|| format!("open bundled plugin {}", path.display()))?;
-    let mut verified_archive = tempfile::NamedTempFile::new()
-        .context("create private temporary copy of bundled plugin")?;
-    let mut hasher = sha2::Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = std::io::Read::read(&mut source, &mut buffer)
-            .with_context(|| format!("read bundled plugin {}", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        verified_archive
-            .write_all(&buffer[..read])
-            .context("copy bundled plugin to private temporary file")?;
-        hasher.update(&buffer[..read]);
-    }
-    verified_archive
-        .flush()
-        .context("flush private temporary copy of bundled plugin")?;
-    Ok((verified_archive, hex::encode(hasher.finalize())))
+    install_resolved_plugin(resolved, options, progress, None).await
 }
 
 pub fn install_plugin_archive(
@@ -290,7 +174,7 @@ pub fn install_plugin_archive(
 /// Every install path extracts through here, so the executable it checks is
 /// named for `options.target`, as `InstalledPluginMetadata::executable_path`
 /// names the one the host launches.
-fn extract_for_install(
+pub(crate) fn extract_for_install(
     archive_path: &std::path::Path,
     archive_ext: ArchiveExt,
     name: &str,
@@ -341,12 +225,13 @@ pub async fn update_plugin(
         })?;
         // A default moves only to the copy this release bundles; it is never
         // downloaded.
-        return install_bundled_default(name, pin, options, progress)?.with_context(|| {
-            format!(
-                "default plugin '{name}' has no bundled copy in this install; \
+        return crate::bundled::install_bundled_default(name, pin, options, progress)?
+            .with_context(|| {
+                format!(
+                    "default plugin '{name}' has no bundled copy in this install; \
                  a default plugin is never downloaded"
-            )
-        });
+                )
+            });
     }
     let source = GitHubPluginSource::from_url(&current.source_repository)?;
     let resolved = ResolvedInstallSource {
@@ -354,7 +239,7 @@ pub async fn update_plugin(
         source,
         version: None,
     };
-    install_resolved_plugin(resolved, options, progress, Some(current), None).await
+    install_resolved_plugin(resolved, options, progress, Some(current)).await
 }
 
 struct ResolvedInstallSource {
@@ -396,7 +281,6 @@ async fn install_resolved_plugin(
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
     current: Option<InstalledPluginMetadata>,
-    pinned_sha256: Option<&str>,
 ) -> Result<InstallOutcome> {
     let release_client = GitHubReleaseClient::new()?;
     progress.report(PluginProgressEvent::ResolvingGitHub {
@@ -432,8 +316,7 @@ async fn install_resolved_plugin(
     let asset = release
         .asset_by_name(&selected.name)
         .with_context(|| format!("selected asset '{}' missing from release", selected.name))?;
-    let archive_path =
-        download_asset(release_client.http_client(), asset, pinned_sha256, progress).await?;
+    let archive_path = download_asset(release_client.http_client(), asset, progress).await?;
 
     progress.report(PluginProgressEvent::Extracting {
         asset: asset.name.clone(),
@@ -446,7 +329,7 @@ async fn install_resolved_plugin(
     )?;
     let _ = fs::remove_file(&archive_path);
 
-    let mut metadata = build_installed_metadata(
+    let metadata = build_installed_metadata(
         &resolved,
         &release.tag_name,
         asset,
@@ -454,9 +337,6 @@ async fn install_resolved_plugin(
         extracted,
         current.as_ref(),
     );
-    if pinned_sha256.is_some() {
-        metadata.default_managed = true;
-    }
     PluginStore::new(&options.store_root).save(&metadata)?;
 
     if let Some(current) = current {
@@ -505,7 +385,6 @@ fn build_installed_metadata(
 async fn download_asset(
     client: &Client,
     asset: &GitHubReleaseAsset,
-    pinned_sha256: Option<&str>,
     progress: &mut impl PluginProgressReporter,
 ) -> Result<PathBuf> {
     required_plugin_asset_sha256(asset)?;
@@ -546,7 +425,7 @@ async fn download_asset(
     }
     temp.flush()
         .with_context(|| format!("flush plugin asset temp file {}", temp.path().display()))?;
-    verify_plugin_asset_checksum(asset, pinned_sha256, hasher)?;
+    verify_plugin_asset_checksum(asset, hasher)?;
     let (_file, path) = temp.keep().context("persist plugin asset temp path")?;
     progress.report(PluginProgressEvent::DownloadFinished {
         asset: asset.name.clone(),
@@ -554,28 +433,15 @@ async fn download_asset(
     Ok(path)
 }
 
-/// Check a downloaded archive against GitHub's reported digest and, for a
-/// pinned install, against the pin too: a release asset replaced after it was
-/// pinned matches GitHub's new digest but not the pin, and is refused.
-fn verify_plugin_asset_checksum(
-    asset: &GitHubReleaseAsset,
-    pinned_sha256: Option<&str>,
-    hasher: sha2::Sha256,
-) -> Result<()> {
+/// Check a downloaded archive against GitHub's reported digest. A default
+/// plugin is never downloaded; its pin is checked on the bundled copy
+/// (`crate::bundled::install_bundled_default`).
+fn verify_plugin_asset_checksum(asset: &GitHubReleaseAsset, hasher: sha2::Sha256) -> Result<()> {
     let expected = required_plugin_asset_sha256(asset)?;
     let actual = hex::encode(hasher.finalize());
     if actual != expected {
         bail!(
             "plugin asset checksum mismatch for {}: expected {expected}, got {actual}",
-            asset.name
-        );
-    }
-    if let Some(pinned) = pinned_sha256
-        && actual != pinned
-    {
-        bail!(
-            "plugin asset {} does not match its pinned sha256: pinned {pinned}, got {actual}; \
-             not installed",
             asset.name
         );
     }
@@ -984,91 +850,9 @@ mod tests {
         let mut hasher = sha2::Sha256::new();
         hasher.update(b"modified plugin archive");
 
-        let error = verify_plugin_asset_checksum(&asset, None, hasher)
+        let error = verify_plugin_asset_checksum(&asset, hasher)
             .expect_err("modified plugin asset must fail verification");
         assert!(error.to_string().contains("checksum mismatch"), "{error:?}");
-    }
-
-    fn sha256_of(bytes: &[u8]) -> sha2::Sha256 {
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(bytes);
-        hasher
-    }
-
-    fn release_asset(digest_hex: &str) -> GitHubReleaseAsset {
-        GitHubReleaseAsset {
-            name: "demo-v1.0.0-x86_64-unknown-linux-gnu.tar.gz".to_string(),
-            browser_download_url: "https://example.invalid/demo.tar.gz".to_string(),
-            size: None,
-            digest: Some(format!("sha256:{digest_hex}")),
-        }
-    }
-
-    #[test]
-    fn a_default_archive_matching_its_pin_is_verified_then_loads() {
-        let temp = TempDir::new().unwrap();
-        let archive_path = temp.path().join("demo.tar.gz");
-        let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
-        write_tar_gz(
-            &archive_path,
-            "demo",
-            &[
-                ("plugin.toml", b"name = \"demo\""),
-                (executable_name.as_str(), b"executable"),
-            ],
-        )
-        .unwrap();
-        let bytes = fs::read(&archive_path).unwrap();
-        let pinned = hex::encode(sha2::Sha256::digest(&bytes));
-
-        verify_plugin_asset_checksum(&release_asset(&pinned), Some(&pinned), sha256_of(&bytes))
-            .expect("an archive matching its pin is accepted");
-        let extracted = extract_plugin_archive(
-            &archive_path,
-            ArchiveExt::TarGz,
-            std::env::consts::EXE_SUFFIX,
-            "demo",
-            &temp.path().join("installed"),
-        )
-        .expect("the verified archive extracts");
-        assert!(extracted.install_path.join(&executable_name).exists());
-    }
-
-    #[test]
-    fn a_bundled_archive_copy_keeps_the_bytes_that_were_hashed() {
-        let temp = TempDir::new().unwrap();
-        let archive_path = temp.path().join("demo.tar.gz");
-        let pinned_bytes = b"verified plugin archive";
-        fs::write(&archive_path, pinned_bytes).unwrap();
-
-        let (verified_archive, digest) = copy_and_hash_bundled_archive(&archive_path).unwrap();
-        fs::write(&archive_path, b"replacement plugin archive").unwrap();
-
-        assert_ne!(verified_archive.path(), archive_path);
-        assert_eq!(digest, hex::encode(sha2::Sha256::digest(pinned_bytes)));
-        assert_eq!(fs::read(verified_archive.path()).unwrap(), pinned_bytes);
-    }
-
-    #[test]
-    fn a_default_archive_not_matching_its_pin_is_refused_even_when_github_agrees() {
-        let pinned = hex::encode(sha2::Sha256::digest(b"archive as released"));
-        let replaced = hex::encode(sha2::Sha256::digest(b"archive swapped later"));
-
-        let error = verify_plugin_asset_checksum(
-            &release_asset(&replaced),
-            Some(&pinned),
-            sha256_of(b"archive swapped later"),
-        )
-        .expect_err("a pin mismatch must fail verification");
-        let message = error.to_string();
-        assert!(
-            message.contains("does not match its pinned sha256"),
-            "{message}"
-        );
-        assert!(
-            message.contains(&pinned) && message.contains(&replaced),
-            "{message}"
-        );
     }
 
     #[test]
@@ -1129,38 +913,6 @@ mod tests {
             let outcome =
                 install_plugin_archive("demo", "0.1.0", &archive_path, &options, &mut |_| {})
                     .unwrap_or_else(|error| panic!("{os}/{arch}: {error:#}"));
-
-            assert_eq!(
-                outcome.metadata.executable_path(),
-                outcome.metadata.install_path.join(executable),
-                "{os}/{arch}"
-            );
-            assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
-        }
-    }
-
-    #[test]
-    fn a_bundled_default_for_another_target_installs_and_its_executable_is_where_the_host_looks() {
-        for (os, arch, executable) in TARGETS {
-            let temp = TempDir::new().unwrap();
-            let options = options_for(temp.path(), os, arch);
-            let bundle = temp.path().join("bundle");
-            fs::create_dir_all(&bundle).unwrap();
-            let archive_path = bundle.join(crate::bundled::bundled_archive_name(
-                "demo",
-                "0.1.0",
-                options.target.triple(),
-            ));
-            write_archive_with(&archive_path, executable);
-            let digest = sha256_file(&archive_path).unwrap();
-            let pin = PinnedRelease {
-                version: "0.1.0",
-                sha256: &digest,
-            };
-
-            let outcome = install_bundled_default("demo", pin, &options, &mut |_| {})
-                .unwrap_or_else(|error| panic!("{os}/{arch}: {error:#}"))
-                .unwrap_or_else(|| panic!("{os}/{arch}: the bundled copy was not found"));
 
             assert_eq!(
                 outcome.metadata.executable_path(),

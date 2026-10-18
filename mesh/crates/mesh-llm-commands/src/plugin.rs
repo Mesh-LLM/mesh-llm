@@ -3,8 +3,8 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use mesh_llm_plugin_manager::defaults::{
-    DEFAULT_PLUGINS, DefaultPluginOutcome, default_plugin, default_plugins_opted_out,
-    provision_bundled_defaults, turn_off_defaults,
+    DEFAULT_PLUGINS, DefaultPluginOutcome, NO_DEFAULT_PLUGINS_ENV, default_plugin,
+    default_plugins_opted_out, provision_bundled_defaults, turn_off_defaults,
 };
 use mesh_llm_plugin_manager::install::install_plugin_archive;
 use mesh_llm_plugin_manager::{
@@ -91,6 +91,12 @@ fn operator_run_plugins(entries: &[mesh_llm_config::PluginConfigEntry]) -> BTree
         .collect()
 }
 
+/// What `plugins install-defaults` says when the environment turns the
+/// defaults off, instead of a silent exit 0.
+fn turned_off_by_environment_line() -> String {
+    format!("ℹ️  Default plugins not installed: {NO_DEFAULT_PLUGINS_ENV} turns them off here")
+}
+
 fn configured_operator_plugins(config_path: Option<&Path>) -> Result<BTreeSet<String>> {
     let config = mesh_llm_config::load_config(config_path)?;
     Ok(operator_run_plugins(&config.plugins))
@@ -98,7 +104,15 @@ fn configured_operator_plugins(config_path: Option<&Path>) -> Result<BTreeSet<St
 
 /// Install the defaults from this release's bundled copy; never downloads.
 fn install_defaults(config_path: Option<&Path>) -> Result<()> {
-    if default_plugins_opted_out() || DEFAULT_PLUGINS.is_empty() {
+    if default_plugins_opted_out() {
+        writeln!(
+            mesh_llm_events::console_err(),
+            "{}",
+            turned_off_by_environment_line()
+        )?;
+        return Ok(());
+    }
+    if DEFAULT_PLUGINS.is_empty() {
         return Ok(());
     }
     let options = PluginInstallOptions::from_env()?;
@@ -804,6 +818,13 @@ url = "unix:///run/remote.sock"
         delete_in(&store, "mine", &mut err).unwrap();
         assert!(!store.default_turned_off("mine"));
         assert!(!String::from_utf8(err).unwrap().contains("default plugin"));
+    }
+
+    #[test]
+    fn install_defaults_turned_off_by_the_environment_says_so() {
+        let line = turned_off_by_environment_line();
+        assert!(line.contains("MESH_LLM_NO_DEFAULT_PLUGINS"), "{line}");
+        assert!(line.contains("not installed"), "{line}");
     }
 
     #[test]

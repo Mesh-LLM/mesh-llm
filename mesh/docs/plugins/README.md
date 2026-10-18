@@ -553,10 +553,12 @@ beside the `mesh-llm` binary; native packages keep it at
   install-defaults`, the host installs each default from that bundled copy,
   after checking the archive against the compiled pin. Both are local and
   quick; neither makes a network call.
-- **No bundled copy:** a missing copy is reported ("this install carries no
-  bundled copy"). Nothing is downloaded instead, and there is no fallback. A
-  digest mismatch is refused. Release archives do not carry a `plugins/`
-  directory yet, so until they do every install reports this.
+- **No bundled copy:** a missing copy is reported. With no `plugins/`
+  directory at all ("this install bundles no plugins") it is an info line;
+  a `plugins/` directory without the archive is a warning. Nothing is
+  downloaded instead, and there is no fallback. A digest mismatch is refused.
+  Release archives do not carry a `plugins/` directory yet, so until they do
+  every install reports the info line.
 - **Windows:** the list pins no Windows build, so the default reports "no
   reviewed release for this platform".
 
@@ -565,8 +567,8 @@ run `mesh-llm plugins install-defaults --off`. Each records the choice in the pl
 an installed default is disabled, and one that is not installed is recorded as
 turned off, so no later start installs it. The record is per plugin: it
 covers the defaults the build that wrote it lists, not a default a later
-release adds. `MESH_LLM_NO_DEFAULT_PLUGINS=1`
-skips defaults for the processes that see it. Provisioning prints one line for
+release adds. `MESH_LLM_NO_DEFAULT_PLUGINS=1`, or `--no-default-plugins` on
+`serve` or `client`, skips defaults for the processes that see it. Provisioning prints one line for
 a default it leaves alone: one you run from your own `[[plugin]]` entry or
 install, one disabled or turned off, a platform with no reviewed release, or
 an install with no bundled copy.

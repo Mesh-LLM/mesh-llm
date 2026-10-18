@@ -6,7 +6,8 @@
 //! Local only: the archive comes from the release (`plugins/`), is checked
 //! against the reviewed pin, and is never downloaded; a missing copy is
 //! reported, not fetched. A node always starts, with or without its defaults.
-//! `MESH_LLM_NO_DEFAULT_PLUGINS=1` skips it; `mesh-llm plugins install-defaults
+//! `MESH_LLM_NO_DEFAULT_PLUGINS=1` (or `--no-default-plugins` on `serve` or
+//! `client`) skips it; `mesh-llm plugins install-defaults
 //! --off` (and `mesh-llm update --no-default-plugins`) turns the defaults off
 //! for good.
 
@@ -17,12 +18,16 @@ use mesh_llm_plugin_manager::defaults::{
 };
 use mesh_llm_plugin_manager::{PluginInstallOptions, PluginProgressEvent};
 
+use super::RuntimeOptions;
 use crate::plugin;
 
 /// Install the defaults from the bundled copy, then let plugins be resolved
 /// from `config` as before.
-pub(super) fn provision_bundled_defaults_at_start(config: &plugin::MeshConfig) {
-    if DEFAULT_PLUGINS.is_empty() || default_plugins_opted_out() {
+pub(super) fn provision_bundled_defaults_at_start(
+    config: &plugin::MeshConfig,
+    options: &RuntimeOptions,
+) {
+    if DEFAULT_PLUGINS.is_empty() || options.no_default_plugins || default_plugins_opted_out() {
         return;
     }
     let options = match PluginInstallOptions::from_env() {
@@ -40,8 +45,12 @@ pub(super) fn provision_bundled_defaults_at_start(config: &plugin::MeshConfig) {
         &options,
         &mut progress,
     );
+    let has_bundle_dir = options
+        .bundled_plugins_dir
+        .as_ref()
+        .is_some_and(|dir| dir.is_dir());
     for (name, outcome) in outcomes {
-        log_outcome(name, outcome);
+        log_outcome(name, outcome, has_bundle_dir);
     }
 }
 
@@ -57,7 +66,7 @@ fn operator_run_plugins(config: &plugin::MeshConfig) -> BTreeSet<String> {
         .collect()
 }
 
-fn log_outcome(name: &str, outcome: DefaultPluginOutcome) {
+fn log_outcome(name: &str, outcome: DefaultPluginOutcome, has_bundle_dir: bool) {
     // Output events, not `tracing`: the runtime's default log filter drops
     // host-runtime info and warnings, and an operator should see what a
     // start installed and how to undo it.
@@ -73,12 +82,7 @@ fn log_outcome(name: &str, outcome: DefaultPluginOutcome) {
         DefaultPluginOutcome::NotInstalled(reason) => {
             return warn(format!("Default plugin {name} not installed: {reason}"));
         }
-        DefaultPluginOutcome::NotBundled => {
-            return warn(format!(
-                "Default plugin {name} not installed: this install carries no bundled copy, \
-                 and a default plugin is never downloaded"
-            ));
-        }
+        DefaultPluginOutcome::NotBundled => not_bundled_event(name, has_bundle_dir),
         // Nothing to do, or the operator's choice: a node is silent about it
         // on every start.
         DefaultPluginOutcome::AlreadyCurrent
@@ -88,6 +92,30 @@ fn log_outcome(name: &str, outcome: DefaultPluginOutcome) {
         | DefaultPluginOutcome::UnsupportedPlatform => return,
     };
     let _ = mesh_llm_events::emit_event(event);
+}
+
+/// An install with no `plugins/` directory at all (a source build, or a
+/// release that bundles nothing yet) is told so as `Info`; a `Warning` only
+/// when the directory exists but lacks this default's archive.
+fn not_bundled_event(name: &str, has_bundle_dir: bool) -> mesh_llm_events::OutputEvent {
+    let context = Some("default_plugins".to_string());
+    if has_bundle_dir {
+        mesh_llm_events::OutputEvent::Warning {
+            message: format!(
+                "Default plugin {name} not installed: this install's bundled plugins carry \
+                 no copy of it, and a default plugin is never downloaded"
+            ),
+            context,
+        }
+    } else {
+        mesh_llm_events::OutputEvent::Info {
+            message: format!(
+                "Default plugin {name} not installed: this install bundles no plugins, \
+                 and a default plugin is never downloaded"
+            ),
+            context,
+        }
+    }
 }
 
 fn warn(message: String) {
@@ -124,5 +152,17 @@ url = "unix:///run/remote.sock"
         assert!(!configured.contains("capsules"));
         assert!(configured.contains("operator-run"));
         assert!(configured.contains("remote"));
+    }
+
+    #[test]
+    fn no_bundle_dir_is_info_and_a_bundle_dir_missing_the_archive_is_a_warning() {
+        assert!(matches!(
+            not_bundled_event("capsules", false),
+            mesh_llm_events::OutputEvent::Info { .. }
+        ));
+        assert!(matches!(
+            not_bundled_event("capsules", true),
+            mesh_llm_events::OutputEvent::Warning { .. }
+        ));
     }
 }
