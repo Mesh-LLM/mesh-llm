@@ -1,0 +1,45 @@
+# Repository-owned Jianyang templates: every-frontier split verification.
+#
+# Runs `just skippy-frontier-matrix` against a pinned small model so every
+# stage frontier of the graph is exercised (splits, activation transport,
+# state effects) — the per-boundary coverage the canary's fixed-shape family
+# rows do not provide. Results land in the mesh-llm Benchmarks series named
+# per job; provisional on PR refs, pinned for certify runs.
+
+version: 1
+
+build: |
+  # KEEP THE MACHINE AWAKE: builds run before any command holds it up.
+  caffeinate -dimsu -w $$ 2>/dev/null || true
+  # Backend-correct build, per the agentx template lessons: the release recipe
+  # must select the backend from the machine, or a GB10 silently serves CPU
+  # numbers that look exactly like GPU ones.
+  case "$(uname -s)" in
+    Darwin) backend=metal ;;
+    Linux)
+      case "$(uname -m)" in
+        aarch64) backend=cuda ;;
+        *) backend=cpu ;;
+      esac
+      ;;
+    *) backend=cpu ;;
+  esac
+  just skippy release-build 2>/dev/null || just release-build
+  echo "built for backend: $backend"
+
+# Smoke: full every-frontier matrix on a small dense model, one frontier per
+# row in the results series. Runs on PR refs; provisional.
+split-frontier-smoke: |
+  caffeinate -dimsu -w $$ 2>/dev/null || true
+  model="${SKIPPY_FRONTIER_MODEL:-unsloth/SmolLM2-135M-Instruct-GGUF}"
+  just skippy-frontier-matrix "$model" --json
+
+# Certify: pinned model set including a hybrid/recurrent leg (frontier-local
+# recurrent-state defects are the historical failure class), same binary for
+# both columns, named baseline ref in the job arguments.
+split-frontier-certify: |
+  caffeinate -dimsu -w $$ 2>/dev/null || true
+  dense="${SKIPPY_FRONTIER_DENSE:-unsloth/SmolLM2-135M-Instruct-GGUF}"
+  hybrid="${SKIPPY_FRONTIER_HYBRID:-ibm-granite/granite-4.0-h-350m-GGUF}"
+  just skippy-frontier-matrix "$dense" --json
+  just skippy-frontier-matrix "$hybrid" --json
