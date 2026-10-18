@@ -14,6 +14,8 @@ pub(super) struct DecodeMessageArgs {
     pub(super) decode_step: usize,
     pub(super) current: i32,
     pub(super) sampling: Option<WireSamplingConfig>,
+    /// Native MTP drafts the final stage should propose; zero asks for none.
+    pub(super) native_mtp_draft_tokens: usize,
 }
 
 pub(super) fn embedded_decode_message(
@@ -26,6 +28,7 @@ pub(super) fn embedded_decode_message(
         base_pos_start: args.pos_start,
         sampling: args.sampling,
         sideband_capacity: 1,
+        native_mtp_draft_tokens: args.native_mtp_draft_tokens,
     })?;
     message.update_at_pos(
         args.decode_step,
@@ -43,6 +46,7 @@ pub(super) struct ReusableDecodeMessageArgs {
     pub(super) base_pos_start: usize,
     pub(super) sampling: Option<WireSamplingConfig>,
     pub(super) sideband_capacity: usize,
+    pub(super) native_mtp_draft_tokens: usize,
 }
 
 pub(super) struct ReusableDecodeMessage {
@@ -54,6 +58,7 @@ impl ReusableDecodeMessage {
     pub(super) fn new(args: ReusableDecodeMessageArgs) -> InferenceResult<Self> {
         let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
         state.seq_id = 0;
+        state.set_native_mtp_draft_tokens(args.native_mtp_draft_tokens);
         state.prompt_token_count = i32::try_from(args.prompt_token_count)
             .map_err(|_| InferenceError::backend("prompt token count exceeds i32"))?;
         state.source_stage_index = -1;
@@ -129,6 +134,7 @@ pub(super) struct VerifyWindowMessageArgs<'a> {
     pub(super) decode_step: usize,
     pub(super) tokens: &'a [i32],
     pub(super) sampling: Option<WireSamplingConfig>,
+    pub(super) native_mtp_draft_tokens: usize,
 }
 
 pub(super) fn embedded_verify_window_message(
@@ -141,6 +147,10 @@ pub(super) fn embedded_verify_window_message(
     }
     let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
     state.seq_id = args.window_id;
+    state.set_native_mtp_draft_tokens(args.native_mtp_draft_tokens);
+    // The verify loop commits a rejected window's correction token, so a
+    // draft that follows it is usable as the next proposal.
+    state.set_accepts_native_mtp_draft_after_correction(args.native_mtp_draft_tokens > 0);
     state.prompt_token_count = i32::try_from(args.prompt_token_count)
         .map_err(|_| InferenceError::backend("prompt token count exceeds i32"))?;
     state.decode_step = i32::try_from(args.decode_step)
@@ -318,6 +328,7 @@ pub(super) struct RestorePrefillDecodeMessageArgs<'a> {
     pub(super) current: i32,
     pub(super) sampling: Option<WireSamplingConfig>,
     pub(super) chat_sampling_metadata: Option<&'a str>,
+    pub(super) native_mtp_draft_tokens: usize,
 }
 
 pub(super) fn embedded_restore_prefill_decode_message(
@@ -325,6 +336,7 @@ pub(super) fn embedded_restore_prefill_decode_message(
 ) -> InferenceResult<StageWireMessage> {
     let mut state = StageStateHeader::new(WireMessageKind::TryRestorePrefillDecode);
     state.seq_id = 0;
+    state.set_native_mtp_draft_tokens(args.native_mtp_draft_tokens);
     state.prompt_token_count = i32::try_from(args.prompt_token_count)
         .map_err(|_| InferenceError::backend("prompt token count exceeds i32"))?;
     state.decode_step = i32::try_from(args.decode_step)

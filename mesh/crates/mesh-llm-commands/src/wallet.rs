@@ -40,8 +40,8 @@ pub async fn run(command: &WalletCommand, port: u16, config: Option<&Path>) -> R
                 bail!(
                     "mesh-llm is not running on port {port}; wallet operations need the running \
                      node because only it owns the wallet plugin. Start `mesh-llm` and retry. \
-                     (ledger-only commands such as policy, pricing, pending, blocked, \
-                     unblock and unpin work offline)"
+                     (ledger-only commands such as policy, pricing, min-payment, pending, \
+                     blocked, unblock and unpin work offline)"
                 );
             }
             let directory = if let Some(config) = config {
@@ -122,13 +122,29 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                 })
                 .transpose()?,
         },
+        WalletCommand::MinPayment { sats } => ControlCommand::MinPayment {
+            value_msat: sats
+                .map(|sats| sats.checked_mul(1000).context("minimum payment overflow"))
+                .transpose()?,
+        },
         WalletCommand::Pricing {
             model,
             input_msat_per_million,
             output_msat_per_million,
+            cache_discount_percent,
             free,
         } => {
-            if let Some(model) = model {
+            if let (Some(model), Some(percent), None, None) = (
+                model,
+                cache_discount_percent,
+                input_msat_per_million,
+                output_msat_per_million,
+            ) {
+                ControlCommand::SetCacheDiscount {
+                    model: model.clone(),
+                    percent: *percent,
+                }
+            } else if let Some(model) = model {
                 ControlCommand::SetPricing {
                     model: model.clone(),
                     value: if *free {
@@ -137,6 +153,7 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                         Some(Pricing {
                             input_msat_per_million: input_msat_per_million.unwrap_or(500),
                             output_msat_per_million: output_msat_per_million.unwrap_or(1500),
+                            cache_discount_percent: cache_discount_percent.unwrap_or(0),
                         })
                     },
                 }

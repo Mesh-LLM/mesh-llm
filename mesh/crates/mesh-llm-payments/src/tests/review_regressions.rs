@@ -39,10 +39,7 @@ async fn declined_and_failed_sends_release_budget_without_manual_finish() -> Res
             Some("failed")
         );
         assert_eq!(service.ledger.requests()?[0].state, "failed");
-        assert_eq!(
-            service.ledger.available_budget(100_000, crate::now_ms())?,
-            1000
-        );
+        assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
         service.reconcile_pending().await?;
         assert!(service.control(send(&invoice)).await.is_err());
         assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
@@ -62,10 +59,7 @@ async fn send_recovery_closes_success_and_failure_after_restart() -> Result<()> 
             let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
             automatic(&service)?;
             assert!(service.control(send(&invoice)).await.is_err());
-            assert_eq!(
-                service.ledger.available_budget(100_000, crate::now_ms())?,
-                300
-            );
+            assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
         }
         let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
         service.reconcile_pending().await?;
@@ -74,7 +68,7 @@ async fn send_recovery_closes_success_and_failure_after_restart() -> Result<()> 
             if failed { "failed" } else { "completed" }
         );
         assert_eq!(
-            service.ledger.available_budget(100_000, crate::now_ms())?,
+            service.ledger.available_budget(crate::now_ms())?,
             if failed { 1000 } else { 390 }
         );
         assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
@@ -102,16 +96,10 @@ async fn unindexed_uncertain_payment_is_retried_but_never_released_before_expiry
     // payment hash); the rejection leaves the charge pending, not failed.
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 3);
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        300
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
     wallet.hide_payments.store(false, Ordering::SeqCst);
     service.reconcile_pending().await?;
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        390
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 390);
     Ok(())
 }
 
@@ -133,47 +121,6 @@ async fn prepared_output_payment_can_resume_without_resubmitting_started_payment
     service.pay_charge(&charge).await?;
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     assert_eq!(service.ledger.requests()?[0].spent_msat, 610);
-    Ok(())
-}
-
-#[tokio::test]
-async fn prepared_input_payment_is_failed_on_reopen_without_a_wallet_call() -> Result<()> {
-    // Segment 0 and still `prepared`: `begin_submission` never ran, so the
-    // wallet was never called, and the seller's prefill state did not survive
-    // our restart. Paying it would buy nothing; fail it and release the
-    // reservation instead.
-    let dir = tempfile::tempdir()?;
-    let wallet = Arc::new(MockWallet::default());
-    let charge = charge("unsent", 0, 5, 600, 700);
-    {
-        let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-        automatic(&service)?;
-        service.await_authorization(&terms("unsent", 700)).await?;
-        service.ledger.prepare_charge(&charge)?;
-        assert_eq!(
-            service.ledger.available_budget(100_000, crate::now_ms())?,
-            300
-        );
-    }
-    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-    service.reconcile_pending().await?;
-    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        service
-            .ledger
-            .charge_state(&charge.invoice.payment_hash)?
-            .as_deref(),
-        Some("failed")
-    );
-    assert_eq!(service.ledger.requests()?[0].state, "failed");
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        1000,
-        "the request's reservation is released"
-    );
-    // The closed authorization cannot be reused to pay after the fact.
-    assert!(service.pay_charge(&charge).await.is_err());
-    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
     Ok(())
 }
 
@@ -239,8 +186,8 @@ async fn prepared_wallet_send_survives_reopen() -> Result<()> {
             pricing: Pricing {
                 input_msat_per_million: 1,
                 output_msat_per_million: 1,
+                cache_discount_percent: 0,
             },
-            input_tokens: 0,
             max_output_tokens: 1,
             max_total_msat: 200,
             expires_at_ms: invoice.expires_at_ms,
@@ -309,10 +256,7 @@ async fn failed_inference_invoice_and_invalid_amount_create_no_send_reservations
         .await;
     assert!(result.is_err());
     assert_eq!(service.ledger.requests()?.len(), 1);
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        1000
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
@@ -341,62 +285,9 @@ async fn already_paid_send_repairs_legacy_phantom_authorizations() -> Result<()>
             service.ledger.request_state(&id)?.as_deref(),
             Some(if approved { "completed" } else { "rejected" })
         );
-        assert_eq!(
-            service.ledger.available_budget(100_000, crate::now_ms())?,
-            100_000
-        );
+        assert_eq!(service.ledger.available_budget(crate::now_ms())?, 100_000);
         assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn uninvoiced_debt_blocks_admission_after_crash_and_invoice_failure() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let wallet = Arc::new(MockWallet::default());
-    let pricing = terms("debt", 1000).pricing;
-    {
-        let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-        service
-            .ledger
-            .begin_serving("debt", "debtor", &pricing, 8)?;
-        let input = super::recovery_boundaries::record_input(&service, "debt", "debtor")?;
-        service.ledger.mark_received(&input.payment_hash)?;
-        service.ledger.record_delivered_tokens("debt", 3)?;
-    }
-    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
-    assert!(
-        service
-            .ledger
-            .begin_serving("second", "debtor", &pricing, 8)
-            .is_err()
-    );
-    service
-        .ledger
-        .begin_serving("unrelated", "other", &pricing, 8)?;
-    wallet.invoice_unavailable.store(true, Ordering::SeqCst);
-    assert!(service.recover_output_debt().await.is_err());
-    assert!(
-        service
-            .ledger
-            .begin_serving("third", "debtor", &pricing, 8)
-            .is_err()
-    );
-    wallet.invoice_unavailable.store(false, Ordering::SeqCst);
-    service.recover_output_debt().await?;
-    let invoices = service.ledger.unpaid_invoices("debtor")?;
-    assert_eq!(invoices.len(), 1);
-    assert!(service.ledger.unpaid_invoices("other")?.is_empty());
-    assert!(
-        service
-            .ledger
-            .begin_serving("fourth", "debtor", &pricing, 8)
-            .is_err()
-    );
-    service.ledger.mark_received(&invoices[0].payment_hash)?;
-    service
-        .ledger
-        .begin_serving("settled", "debtor", &pricing, 8)?;
     Ok(())
 }
 
@@ -421,18 +312,12 @@ async fn failed_charge_does_not_release_an_uncertain_sibling() -> Result<()> {
             .await
             .is_err()
     );
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        0
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
     wallet.reject_submission.store(false, Ordering::SeqCst);
     wallet.pay(&pending.invoice, 100, 200).await?;
     service.reconcile_pending().await?;
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        890
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 890);
     assert_eq!(service.ledger.requests()?[0].state, "failed");
     Ok(())
 }

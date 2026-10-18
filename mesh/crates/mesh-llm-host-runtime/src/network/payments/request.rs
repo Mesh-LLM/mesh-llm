@@ -1,9 +1,13 @@
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
+/// Output tokens a paid request may produce when the caller set no limit.
+pub(crate) const DEFAULT_OUTPUT_ALLOWANCE: u32 = 16_384;
+
 pub(crate) struct PaidRequest {
     pub model: String,
-    pub max_tokens: Option<u32>,
+    /// The caller's output limit, or [`DEFAULT_OUTPUT_ALLOWANCE`].
+    pub max_tokens: u32,
     pub path: String,
     pub body: Value,
     pub intent: Option<mesh_llm_payments_types::intent::PaymentIntent>,
@@ -60,10 +64,33 @@ impl PaidRequest {
         } else {
             read_limit("max_tokens")?
         };
-        // Preserve normal inference defaults and caller limits. The backend
-        // reports its resolved context allowance after tokenizing the prompt.
+        // Preserve the caller's output limit; only an omitted limit gets the
+        // default forwarded to the backend. This is not derived from spending.
+        let max_tokens = match max_tokens {
+            Some(limit) => limit,
+            None => {
+                let key = if path == "/v1/chat/completions" {
+                    "max_completion_tokens"
+                } else {
+                    "max_tokens"
+                };
+                body.as_object_mut()
+                    .context("request must be an object")?
+                    .insert(key.into(), Value::from(DEFAULT_OUTPUT_ALLOWANCE));
+                DEFAULT_OUTPUT_ALLOWANCE
+            }
+        };
         if body.get("stream").and_then(Value::as_bool) == Some(true) {
-            body["stream_options"] = serde_json::json!({"include_usage": true});
+            let options = body
+                .as_object_mut()
+                .context("request must be an object")?
+                .entry("stream_options")
+                .or_insert_with(|| serde_json::json!({}));
+            if options.is_null() {
+                *options = serde_json::json!({});
+            }
+            let options = options.as_object_mut().context("invalid stream options")?;
+            options.insert("include_usage".into(), Value::Bool(true));
         }
         Ok(Self {
             model,
@@ -74,16 +101,6 @@ impl PaidRequest {
         })
     }
 
-    pub fn validate_output_allowance(&self, tokens: u64) -> Result<()> {
-        ensure!(
-            tokens > 0 && tokens <= u64::from(self.max_tokens.unwrap_or(u32::MAX)),
-            "backend output allowance exceeds caller limit"
-        );
-        Ok(())
-    }
-
-    /// Address the local backend by its internal model name. The public
-    /// `model` stays unchanged for pricing, terms and invoices.
     pub fn use_backend_model(&mut self, backend_model: &str) {
         if backend_model != self.model {
             self.body["model"] = Value::String(backend_model.to_owned());
@@ -92,7 +109,7 @@ impl PaidRequest {
 
     pub fn backend_http(&self, request_id: &str) -> Result<Vec<u8>> {
         let bytes = serde_json::to_vec(&self.body)?;
-        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nConnection: close\r\nx-request-id: {}\r\nContent-Length: {}\r\n\r\n", self.path, request_id, bytes.len()).into_bytes();
+        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nx-request-id: {}\r\nContent-Length: {}\r\n\r\n", self.path, request_id, bytes.len()).into_bytes();
         raw.extend(bytes);
         Ok(raw)
     }
@@ -148,35 +165,35 @@ mod tests {
     }
 
     #[test]
-    fn payments_allow_large_explicit_limits_and_context_clamping() {
+    fn payments_keep_explicit_limits_and_bound_unlimited_requests() {
         let parsed = PaidRequest::parse(b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"m\",\"max_completion_tokens\":65536,\"max_tokens\":8}").unwrap();
-        assert_eq!(parsed.max_tokens, Some(65_536));
+        assert_eq!(parsed.max_tokens, 65_536);
         assert_eq!(parsed.body["max_tokens"], 8);
         assert_eq!(parsed.body["max_completion_tokens"], 65_536);
-        parsed.validate_output_allowance(6000).unwrap();
-        assert!(parsed.validate_output_allowance(65_537).is_err());
-        assert!(parsed.validate_output_allowance(0).is_err());
         let parsed = PaidRequest::parse(b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"m\",\"max_completion_tokens\":null,\"max_tokens\":8192}").unwrap();
-        assert_eq!(parsed.max_tokens, Some(8192));
+        assert_eq!(parsed.max_tokens, 8192);
+        // No caller limit: the default allowance bounds the backend too.
         let parsed = PaidRequest::parse(
             b"POST /v1/completions HTTP/1.1\r\n\r\n{\"model\":\"m\",\"max_tokens\":null}",
         )
         .unwrap();
-        assert_eq!(parsed.max_tokens, None);
-        assert!(
-            parsed
-                .validate_output_allowance(u64::from(u32::MAX) + 1)
-                .is_err()
+        assert_eq!(parsed.max_tokens, DEFAULT_OUTPUT_ALLOWANCE);
+        assert_eq!(parsed.body["max_tokens"], DEFAULT_OUTPUT_ALLOWANCE);
+        let parsed =
+            PaidRequest::parse(b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"m\"}")
+                .unwrap();
+        assert_eq!(
+            parsed.body["max_completion_tokens"],
+            DEFAULT_OUTPUT_ALLOWANCE
         );
+        assert!(parsed.body.get("max_tokens").is_none());
     }
 
     #[test]
-    fn payments_preserve_backend_defaults_and_strip_caller_identity_headers() {
+    fn payments_strip_caller_identity_headers() {
         let parsed = PaidRequest::parse(b"POST /v1/chat/completions HTTP/1.1\r\nx-request-id: attacker\r\nAuthorization: secret\r\n\r\n{\"model\":\"model\",\"stream\":true}").unwrap();
-        assert_eq!(parsed.max_tokens, None);
+        assert_eq!(parsed.max_tokens, DEFAULT_OUTPUT_ALLOWANCE);
         assert!(parsed.body.get("max_tokens").is_none());
-        assert!(parsed.body.get("max_completion_tokens").is_none());
-        parsed.validate_output_allowance(65_536).unwrap();
         let forwarded = String::from_utf8(parsed.backend_http("trusted-id").unwrap()).unwrap();
         assert!(!forwarded.contains("attacker"));
         assert!(!forwarded.contains("secret"));
@@ -205,5 +222,84 @@ mod tests {
         let body = &raw[raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..];
         let body: Value = serde_json::from_slice(body).unwrap();
         assert_eq!(body["model"], "local-gguf/sha256-abc");
+    }
+    #[test]
+    fn backend_stream_requests_include_usage_without_losing_options() {
+        let parsed = PaidRequest::parse(b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"m\",\"stream\":true,\"stream_options\":{\"include_usage\":false,\"other\":true}}").unwrap();
+        assert_eq!(parsed.body["stream_options"]["include_usage"], true);
+        assert_eq!(parsed.body["stream_options"]["other"], true);
+        for options in [
+            "",
+            ",\"stream_options\":null",
+            ",\"stream_options\":{\"include_usage\":true}",
+        ] {
+            let raw = format!(
+                "POST /v1/chat/completions HTTP/1.1\r\n\r\n{{\"model\":\"m\",\"stream\":true{options}}}"
+            );
+            let parsed = PaidRequest::parse(raw.as_bytes()).unwrap();
+            assert_eq!(parsed.body["stream_options"]["include_usage"], true);
+        }
+        let raw = parsed.backend_http("id").unwrap();
+        let raw = String::from_utf8(raw).unwrap();
+        assert!(raw.contains("Accept-Encoding: identity\r\n"));
+        assert!(raw.contains("Connection: close\r\n"));
+    }
+    #[tokio::test]
+    async fn backend_stream_opt_in_reaches_usage_collector_over_http() {
+        use mesh_llm_payments_types::metering::MeteredUsage;
+        use mesh_llm_payments_types::response_usage::{ResponseEvidence, ResponseUsage};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let backend = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            let mut byte = [0_u8; 1];
+            loop {
+                socket.read_exact(&mut byte).await.unwrap();
+                received.extend(byte);
+                let mut headers = [httparse::EMPTY_HEADER; 64];
+                let mut request = httparse::Request::new(&mut headers);
+                if let httparse::Status::Complete(offset) = request.parse(&received).unwrap() {
+                    let length: usize = request
+                        .headers
+                        .iter()
+                        .find(|header| header.name.eq_ignore_ascii_case("content-length"))
+                        .map(|header| std::str::from_utf8(header.value).unwrap().parse().unwrap())
+                        .unwrap();
+                    if received.len() == offset + length {
+                        let body: Value = serde_json::from_slice(&received[offset..]).unwrap();
+                        assert_eq!(body["stream_options"]["include_usage"], true);
+                        assert_eq!(body["stream"], true);
+                        break;
+                    }
+                }
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n").await.unwrap();
+        });
+        let request = PaidRequest::parse(
+            b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"m\",\"stream\":true}",
+        )
+        .unwrap();
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket
+            .write_all(&request.backend_http("id").unwrap())
+            .await
+            .unwrap();
+        let mut collector = ResponseUsage::default();
+        let mut byte = [0_u8; 1];
+        while socket.read(&mut byte).await.unwrap() != 0 {
+            collector.observe(&byte);
+        }
+        collector.finish();
+        assert_eq!(
+            collector.evidence(),
+            ResponseEvidence::Reported(MeteredUsage {
+                prompt_tokens: 5,
+                completion_tokens: 2,
+                cached_tokens: 0,
+            })
+        );
+        backend.await.unwrap();
     }
 }

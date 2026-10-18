@@ -1,0 +1,510 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Sat, 10 Oct 2026 16:37:38 +0100
+Subject: [PATCH] models: add Qwen3-MoE native MTP
+
+Load an appended NextN block for qwen3moe and build its draft graph, so a
+Qwen3-MoE checkpoint with a trained multi-token-prediction head drafts
+through the existing native MTP sidecar path, unsplit and on the final
+stage of a split.
+
+The head is one dense Qwen3 decoder layer (attention shaped like the
+trunk's, SwiGLU FFN sized by its own tensors) fed by
+eh_proj([enorm(e_{t+1}); hnorm(h_t)]), where h_t is the trunk's post-norm
+hidden state. Logits come from the shared LM head after shared_head_norm;
+deeper drafts chain on the layer output before that norm, which is what
+the MTP graph exposes as its NextN hidden state.
+
+The trunk keeps every row's post-norm hidden state when NextN outputs are
+unmasked. The converter appends a head stored beside the checkpoint as
+mtp.safetensors + mtp_config.json, swapping proj's input halves into the
+GGUF eh_proj concat order, and --mtp exports it as a draft sidecar. A
+synthetic fixture certifies the integrated stage program and its drafts.
+---
+ conversion/qwen.py         |  98 ++++++++++++++++
+ gguf-py/gguf/constants.py  |  10 ++
+ include/skippy/common.h    |   2 +-
+ src/CMakeLists.txt         |   8 ++
+ src/models/models.h        |   5 +
+ src/models/qwen3moe.cpp    | 227 ++++++++++++++++++++++++++++++++++---
+ tests/test-llama-archs.cpp |   2 +-
+ 7 files changed, 332 insertions(+), 20 deletions(-)
+
+diff --git a/conversion/qwen.py b/conversion/qwen.py
+index 43d2fb466..b935e6630 100644
+--- a/conversion/qwen.py
++++ b/conversion/qwen.py
+@@ -258,12 +258,110 @@ class Qwen3Model(Qwen2Model):
+ @ModelBase.register("Qwen3MoeForCausalLM")
+ @ModelBase.example("Qwen/Qwen3-30B-A3B")
+ class Qwen3MoeModel(Qwen2MoeModel):
++    """Qwen3-MoE, optionally with an appended native MTP head.
++
++    The head is a separately trained module stored beside the checkpoint as
++    `mtp.safetensors` + `mtp_config.json` (keys `hnorm`, `enorm`, `proj`,
++    `layer.*` as an HF Qwen3DecoderLayer with a dense MLP, and `norm`). It is
++    emitted as NextN block `num_hidden_layers`: z = proj([hnorm(h); enorm(e)]),
++    so `proj`'s two input halves are swapped into the GGUF `eh_proj` order,
++    which concatenates [enorm(e); hnorm(h)]."""
++
+     model_arch = gguf.MODEL_ARCH.QWEN3MOE
++    supports_mtp_export = True
++
++    MTP_HEAD_WEIGHTS = "mtp.safetensors"
++    MTP_HEAD_CONFIG = "mtp_config.json"
++    MTP_HEAD_RENAMES = {
++        "hnorm.weight": "hnorm.weight",
++        "enorm.weight": "enorm.weight",
++        "proj.weight":  "eh_proj.weight",
++        "norm.weight":  "shared_head.norm.weight",
++    }
++    _has_mtp_head = False
+ 
+     def __init__(self, *args, **kwargs):
+         super().__init__(*args, **kwargs)
+         hparams = ModelBase.load_hparams(self.dir_model, False)
+         self.origin_hf_arch = hparams.get('architectures', [None])[0]
++        self._n_main_layers = self.hparams["num_hidden_layers"]
++        if self._has_mtp_head:
++            self.block_count = self._n_main_layers + 1
++            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
++        elif self.mtp_only:
++            raise ValueError(f"--mtp needs {self.MTP_HEAD_WEIGHTS} and {self.MTP_HEAD_CONFIG} in {self.dir_model}")
++
++    @classmethod
++    def filter_tensors(cls, item):
++        if (titem := super().filter_tensors(item)) is None:
++            return None
++        if cls.mtp_only and titem[0] not in ("model.embed_tokens.weight", "model.norm.weight", "lm_head.weight"):
++            return None
++        return titem
++
++    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
++        tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)
++        head_path = self.dir_model / self.MTP_HEAD_WEIGHTS
++        self._has_mtp_head = not self.no_mtp and remote_hf_model_id is None and head_path.is_file()
++        if not self._has_mtp_head:
++            return tensors
++        self._check_mtp_head_config()
++        il = self.hparams["num_hidden_layers"]
++        with gguf.utility.SafetensorsLocal(head_path) as head:
++            for key in head.keys():
++                if key in self.MTP_HEAD_RENAMES:
++                    name = f"model.layers.{il}.{self.MTP_HEAD_RENAMES[key]}"
++                elif key.startswith("layer."):
++                    name = f"model.layers.{il}.{key.removeprefix('layer.')}"
++                else:
++                    raise ValueError(f"unexpected tensor {key!r} in {head_path}")
++                data = head[key]
++                if self.lazy:
++                    tensors[name] = lambda data=data: LazyTorchTensor.from_local_tensor(data)
++                else:
++                    dtype = LazyTorchTensor._dtype_str_map[data.dtype]
++                    tensors[name] = lambda data=data, dtype=dtype: torch.from_numpy(data.mmap_bytes()).view(dtype).reshape(data.shape)
++        logger.info(f"gguf: appending MTP head from {head_path} as NextN block {il}")
++        return tensors
++
++    def _check_mtp_head_config(self):
++        with open(self.dir_model / self.MTP_HEAD_CONFIG, encoding="utf-8") as f:
++            head = json.load(f)
++        trunk_head_dim = self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
++        for key, want in (("hidden_size", self.hparams["hidden_size"]),
++                          ("num_attention_heads", self.hparams["num_attention_heads"]),
++                          ("num_key_value_heads", self.hparams["num_key_value_heads"]),
++                          ("head_dim", trunk_head_dim),
++                          ("rope_theta", self.hparams.get("rope_theta")),
++                          ("rms_norm_eps", self.hparams["rms_norm_eps"]),
++                          ("vocab_size", self.hparams["vocab_size"])):
++            got = head.get(key, want)
++            if got != want:
++                raise ValueError(f"MTP head {key}={got!r} does not match the trunk's {want!r}")
++        if head.get("attention_bias", False):
++            raise ValueError("MTP head attention bias is not supported for qwen3moe")
++
++    def set_gguf_parameters(self):
++        super().set_gguf_parameters()
++        if self._has_mtp_head:
++            self.gguf_writer.add_nextn_predict_layers(self.block_count - self._n_main_layers)
++
++    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
++        if self._has_mtp_head and bid == self._n_main_layers and name.endswith(".eh_proj.weight"):
++            d = data_torch.shape[1] // 2
++            data_torch = torch.cat((data_torch[:, d:], data_torch[:, :d]), dim=1)
++        yield from super().modify_tensors(data_torch, name, bid)
++
++    def prepare_metadata(self, vocab_only: bool):
++        from_dir = self.fname_out.is_dir()
++        super().prepare_metadata(vocab_only=vocab_only)
++        if not self.mtp_only or not from_dir:
++            return
++        output_type: str = self.ftype.name.partition("_")[2]  # ty: ignore[unresolved-attribute]
++        fname_default: str = gguf.naming_convention(
++            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # ty: ignore[unresolved-attribute]
++            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # ty: ignore[unresolved-attribute]
++        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
+ 
+     def set_vocab(self):
+         # deal with intern-s1
+diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
+index a39d046fe..5a7beb09b 100644
+--- a/gguf-py/gguf/constants.py
++++ b/gguf-py/gguf/constants.py
+@@ -2770,6 +2770,16 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+         MODEL_TENSOR.FFN_GATE_EXP,
+         MODEL_TENSOR.FFN_DOWN_EXP,
+         MODEL_TENSOR.FFN_UP_EXP,
++        # appended NextN block (dense FFN)
++        MODEL_TENSOR.FFN_GATE,
++        MODEL_TENSOR.FFN_DOWN,
++        MODEL_TENSOR.FFN_UP,
++        MODEL_TENSOR.NEXTN_EH_PROJ,
++        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
++        MODEL_TENSOR.NEXTN_ENORM,
++        MODEL_TENSOR.NEXTN_HNORM,
++        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
++        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+     ],
+     MODEL_ARCH.QWEN3NEXT: [
+         MODEL_TENSOR.TOKEN_EMBD,
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 2fc90a14e..5180a2531 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 70
++#define SKIPPY_ABI_VERSION_PATCH 71
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index fa6857599..6cf6effb4 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -199,6 +199,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     add_test(NAME skippy_glm_dsa_mtp COMMAND skippy-profile-residency
+         "${GLM_DSA_MTP_FIXTURE_DIR}/dense-mtp.gguf")
+     set_tests_properties(skippy_glm_dsa_mtp PROPERTIES FIXTURES_REQUIRED glm-dsa-mtp-model)
++    set(QWEN3MOE_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/qwen3moe-mtp-models")
++    file(MAKE_DIRECTORY "${QWEN3MOE_MTP_FIXTURE_DIR}")
++    add_test(NAME skippy_generate_qwen3moe_mtp COMMAND skippy-model-fixture-generator
++        --arch qwen3moe --seed 42 --dense-mtp --out "${QWEN3MOE_MTP_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_qwen3moe_mtp PROPERTIES FIXTURES_SETUP qwen3moe-mtp-model)
++    add_test(NAME skippy_qwen3moe_mtp COMMAND skippy-profile-residency
++        "${QWEN3MOE_MTP_FIXTURE_DIR}/dense-mtp.gguf")
++    set_tests_properties(skippy_qwen3moe_mtp PROPERTIES FIXTURES_REQUIRED qwen3moe-mtp-model)
+     set(MULTIDEPTH_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/multidepth-mtp-models")
+     file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
+     add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
+diff --git a/src/models/models.h b/src/models/models.h
+index 1eaa9b576..31a0c3c23 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -592,6 +592,11 @@ struct llama_model_qwen3moe : public llama_model_base {
+         graph(const llama_model & model, const llm_graph_params & params);
+     };
+ 
++    // Appended NextN block: one Qwen3 decoder layer with a dense SwiGLU FFN.
++    struct graph_mtp : public llm_graph_context {
++        graph_mtp(const llama_model & model, const llm_graph_params & params);
++    };
++
+     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+ };
+ 
+diff --git a/src/models/qwen3moe.cpp b/src/models/qwen3moe.cpp
+index 2198fcfb5..ab9c07068 100644
+--- a/src/models/qwen3moe.cpp
++++ b/src/models/qwen3moe.cpp
+@@ -11,9 +11,15 @@ void llama_model_qwen3moe::load_arch_hparams(llama_model_loader & ml) {
+     }
+ }
+ 
+-void llama_model_qwen3moe::load_arch_tensors(llama_model_loader &) {
++void llama_model_qwen3moe::load_arch_tensors(llama_model_loader & ml) {
+     LLAMA_LOAD_LOCALS;
+ 
++    // An MTP-only GGUF (a draft sidecar) carries the appended NextN block and
++    // the shared embedding/head tensors, but no trunk layers.
++    const bool mtp_only   = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
++    const int trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
++    const int mtp_flags   = !ml.load_mtp ? TENSOR_SKIP : 0;
++
+     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+ 
+     // output
+@@ -24,38 +30,76 @@ void llama_model_qwen3moe::load_arch_tensors(llama_model_loader &) {
+         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+     }
+ 
++    if (n_expert == 0) {
++        throw std::runtime_error("n_expert must be > 0 for QWEN3MOE");
++    }
++    if (n_expert_used == 0) {
++        throw std::runtime_error("n_expert_used must be > 0 for QWEN3MOE");
++    }
++
+     for (int i = 0; i < n_layer; ++i) {
+         auto & layer = layers[i];
+ 
+-        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
++        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, trunk_flags);
++
++        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_gqa, n_embd_gqa, trunk_flags);
++        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, trunk_flags);
+ 
+-        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_gqa, n_embd_gqa, 0);
+-        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
++        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, trunk_flags);
++        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, trunk_flags);
+ 
+-        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+-        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
++        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, trunk_flags);
+ 
+-        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
++        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, trunk_flags);
+ 
+-        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
++        // MoE branch
++        const int64_t n_ff_exp = hparams.n_ff_exp() ? hparams.n_ff_exp() : n_ff / n_expert_used;
++
++        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, trunk_flags);
++        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, trunk_flags);
++        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, trunk_flags);
++    }
+ 
+-        if (n_expert == 0) {
+-            throw std::runtime_error("n_expert must be > 0 for QWEN3MOE");
++    for (int i = n_layer; i < n_layer_all; ++i) {
++        auto & layer = layers[i];
++
++        // The NextN block is a dense Qwen3 decoder layer. Its FFN width is a
++        // property of the trained head, not of the trunk, so read it from the
++        // tensor, falling back to feed_forward_length and then the expert width.
++        int64_t n_ff_mtp = hparams.n_ff(i);
++        if (const ggml_tensor * meta = ml.get_tensor_meta(tn(LLM_TENSOR_FFN_GATE, "weight", i).str().c_str())) {
++            n_ff_mtp = meta->ne[1];
+         }
+-        if (n_expert_used == 0) {
+-            throw std::runtime_error("n_expert_used must be > 0 for QWEN3MOE");
++        if (n_ff_mtp == 0) {
++            n_ff_mtp = hparams.n_ff_exp();
+         }
+ 
+-        // MoE branch
+-        const int64_t n_ff_exp = hparams.n_ff_exp() ? hparams.n_ff_exp() : n_ff / n_expert_used;
++        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, mtp_flags);
+ 
+-        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+-        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
+-        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
++        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_gqa, n_embd_gqa, mtp_flags);
++        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, mtp_flags);
++
++        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, mtp_flags);
++        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, mtp_flags);
++
++        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, mtp_flags);
++        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff_mtp}, mtp_flags);
++        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff_mtp}, mtp_flags);
++        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff_mtp, n_embd},   mtp_flags);
++
++        layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ,          "weight", i), {2 * n_embd, n_embd}, mtp_flags);
++        layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,            "weight", i), {n_embd},              mtp_flags);
++        layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,            "weight", i), {n_embd},              mtp_flags);
++        layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", i), {n_embd, n_vocab},     mtp_flags | TENSOR_NOT_REQUIRED);
++        layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), {n_embd, n_vocab},     mtp_flags | TENSOR_NOT_REQUIRED);
++        layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), {n_embd},              mtp_flags | TENSOR_NOT_REQUIRED);
+     }
+ }
+ 
+ std::unique_ptr<llm_graph_context> llama_model_qwen3moe::build_arch_graph(const llm_graph_params & params) const {
++    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
++        return std::make_unique<graph_mtp>(*this, params);
++    }
+     return std::make_unique<graph>(*this, params);
+ }
+ 
+@@ -120,7 +164,9 @@ llama_model_qwen3moe::graph::graph(const llama_model & model, const llm_graph_pa
+                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+         }
+-        if (il == n_layer - 1 && inp_out_ids) {
++        // With unmasked NextN outputs every row's hidden state is kept for
++        // the MTP head, so output rows are selected after the final norm.
++        if (il == n_layer - 1 && inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
+             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -166,6 +212,14 @@ llama_model_qwen3moe::graph::graph(const llama_model & model, const llm_graph_pa
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
+ 
++    // The post-norm hidden state feeds both the LM head and the MTP head.
++    cb(cur, "h_nextn", -1);
++    res->t_h_nextn = cur;
++
++    if (cparams.embeddings_nextn && !cparams.embeddings_nextn_masked && inp_out_ids) {
++        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
++    }
++
+     cb(cur, "result_norm", -1);
+     res->t_embd = cur;
+ 
+@@ -175,3 +229,140 @@ llama_model_qwen3moe::graph::graph(const llama_model & model, const llm_graph_pa
+     cb(cur, "result_output", -1);
+     res->t_logits = cur;
+ }
++
++// LLM_GRAPH_TYPE_DECODER_MTP draft head for Qwen3-MoE:
++//
++//   z  = eh_proj([enorm(e_{t+1}); hnorm(h_t)])
++//   z' = dense Qwen3 decoder layer(z)
++//   logits(t+2) = output(shared_head_norm(z'))
++//
++// h_t is the trunk's post-norm hidden state. Deeper drafts chain on z', the
++// layer output before shared_head_norm, which is what t_h_nextn exposes.
++llama_model_qwen3moe::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
++    : llm_graph_context(params) {
++    GGML_ASSERT(hparams.n_layer_nextn == 1 && "QWEN3MOE MTP supports a single NextN block");
++
++    const int64_t n_embd_head = hparams.n_embd_head_v();
++    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
++    GGML_ASSERT(n_embd_head == n_rot);
++
++    const int il = hparams.n_layer();
++    const auto & layer = model.layers[il];
++
++    GGML_ASSERT(layer.nextn.eh_proj && "QWEN3MOE MTP block missing nextn.eh_proj");
++    GGML_ASSERT(layer.nextn.enorm   && "QWEN3MOE MTP block missing nextn.enorm");
++    GGML_ASSERT(layer.nextn.hnorm   && "QWEN3MOE MTP block missing nextn.hnorm");
++    GGML_ASSERT(layer.ffn_gate && layer.ffn_up && layer.ffn_down && "QWEN3MOE MTP block missing its dense FFN");
++
++    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
++
++    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
++    ggml_set_input(inp->tokens);
++
++    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
++    ggml_set_input(inp->embd);
++
++    ggml_tensor * tok_embd;
++    if (ubatch.token) {
++        ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
++        tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
++    } else {
++        tok_embd = inp->embd;
++    }
++    cb(tok_embd, "mtp_tok_embd", il);
++
++    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
++    ggml_set_input(inp->h);
++    ggml_set_name(inp->h, "mtp_h_input");
++
++    ggml_tensor * h_embd = inp->h;
++
++    res->add_input(std::move(inp));
++
++    ggml_tensor * inp_pos     = build_inp_pos();
++    ggml_tensor * inp_out_ids = build_inp_out_ids();
++
++    auto * inp_attn = build_attn_inp_kv();
++
++    ggml_tensor * h_norm = build_norm(h_embd, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
++    cb(h_norm, "mtp_hnorm", il);
++
++    ggml_tensor * e_norm = build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, il);
++    cb(e_norm, "mtp_enorm", il);
++
++    ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, /*dim=*/ 0);
++    cb(concat, "mtp_concat", il);
++
++    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
++    cb(cur, "mtp_eh_proj", il);
++
++    ggml_tensor * inpSA = cur;
++
++    cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
++    cb(cur, "mtp_attn_norm", il);
++
++    {
++        auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head, n_head, n_head_kv, il);
++
++        Qcur = build_norm(Qcur, layer.attn_q_norm, nullptr, LLM_NORM_RMS, il);
++        cb(Qcur, "mtp_Qcur_normed", il);
++
++        Qcur = ggml_rope_ext(
++                ctx0, Qcur, inp_pos, nullptr,
++                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
++                ext_factor, attn_factor, beta_fast, beta_slow);
++
++        Kcur = build_norm(Kcur, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
++        cb(Kcur, "mtp_Kcur_normed", il);
++
++        Kcur = ggml_rope_ext(
++                ctx0, Kcur, inp_pos, nullptr,
++                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
++                ext_factor, attn_factor, beta_fast, beta_slow);
++
++        cb(Qcur, "mtp_Qcur", il);
++        cb(Kcur, "mtp_Kcur", il);
++        cb(Vcur, "mtp_Vcur", il);
++
++        cur = build_attn(inp_attn,
++                layer.wo, layer.wo_b, layer.wo_s,
++                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
++    }
++    cb(cur, "mtp_attn_out", il);
++
++    ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
++    cb(ffn_inp, "mtp_ffn_inp", il);
++
++    cur = build_norm(ffn_inp, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
++    cb(cur, "mtp_ffn_norm", il);
++
++    cur = build_ffn(cur,
++            layer.ffn_up,   nullptr, layer.ffn_up_s,
++            layer.ffn_gate, nullptr, layer.ffn_gate_s,
++            layer.ffn_down, nullptr, layer.ffn_down_s,
++            nullptr,
++            LLM_FFN_SILU, LLM_FFN_PAR, il);
++    cb(cur, "mtp_ffn_out", il);
++
++    cur = ggml_add(ctx0, cur, ffn_inp);
++
++    // z' (before the head norm) is the hidden state the next draft depth reads.
++    cb(cur, "h_nextn", -1);
++    res->t_h_nextn = cur;
++
++    ggml_tensor * head_norm_w = layer.nextn.shared_head_norm ? layer.nextn.shared_head_norm : model.output_norm;
++    GGML_ASSERT(head_norm_w && "QWEN3MOE MTP: missing both nextn.shared_head_norm and output_norm");
++
++    cur = ggml_get_rows(ctx0, cur, inp_out_ids);
++    cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
++    cb(cur, "mtp_shared_head_norm", -1);
++
++    ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
++    ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
++    GGML_ASSERT(head_w && "QWEN3MOE MTP: missing LM head (nextn.shared_head_head or model.output)");
++    cur = build_lora_mm(head_w, cur, head_s);
++    cb(cur, "result_output", -1);
++
++    res->t_logits = cur;
++    ggml_build_forward_expand(gf, cur);
++}
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index 69313f903..4f7ea31ac 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -1265,7 +1265,7 @@ int main(int argc, char ** argv) {
+             if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
+             auto gguf = get_gguf_ctx(arch,
+                     arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3 ||
+-                            arch == LLM_ARCH_GLM_DSA,
++                            arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_QWEN3MOE,
+                     glm_dsa_indexshare_fixture::DEFAULT,
+                     256, 8, false, 2 + dense_mtp_depth, 256);
+             llama_model_saver metadata(arch, gguf.get());

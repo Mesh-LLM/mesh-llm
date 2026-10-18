@@ -224,7 +224,6 @@ async fn prepare_model_candidates(
     let payment_ranked = crate::network::openai::payment_routing::rank(
         node,
         model,
-        (request.body_len_bytes as u64).div_ceil(4),
         u64::from(request.completion_tokens.unwrap_or(256)),
         &mut ranked,
         request.body_json.as_ref(),

@@ -1,16 +1,19 @@
-use anyhow::{Context, Result, bail, ensure};
+//! Buyer side of the token-metered exchange, for locally originated paid
+//! requests: admission at the request, deposit before any backend work,
+//! unchanged streaming, settlement from the seller's reported usage. Every
+//! ledger and wallet step goes through the `payments.v1` provider; the
+//! buyer's own spending cap is local policy and never leaves this node.
+
+mod exchange;
+
+use anyhow::{Result, bail, ensure};
 use mesh_llm_payments_types::contract::{
-    AuthorizeRequest, CancelRequest, CancelStage, Empty, IdRequest, PayInputRequest,
-    SettleOutputRequest, ops,
+    CancelRequest, CancelStage, Empty, RoutingBudgetRequest, RoutingBudgetResponse, ops,
 };
-use mesh_llm_payments_types::{
-    RequestTerms,
-    intent::PaymentIntent,
-    pricing::Pricing,
-    wire::{self, Frame},
-};
-use mesh_llm_wallet::provider::Transaction;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream};
+use mesh_llm_payments_types::metered_wire::{self as wire, AdmissionTerms, Frame};
+use mesh_llm_payments_types::metering::validate_payment_floor;
+use mesh_llm_payments_types::{RequestTerms, intent::PaymentIntent, pricing::Pricing};
+use tokio::io::{AsyncRead, AsyncWriteExt, DuplexStream};
 
 use super::{
     common::{ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult},
@@ -18,6 +21,8 @@ use super::{
 };
 use crate::network::payments::{client::Payments, request::PaidRequest};
 use crate::{mesh::Node, network::openai::client_stream::ClientStream};
+
+pub(crate) use exchange::settle;
 
 pub(super) async fn route(
     node: &Node,
@@ -45,7 +50,7 @@ pub(super) async fn route(
         }
         Err(_) => return payment_error(client, "could not start paid inference").await,
     };
-    let _cancel_on_drop = CancelOnDrop(cancel);
+    let mut cancel_on_drop = CancelOnDrop(Some(cancel));
     tokio::select! {
         result = &mut ready => if result.is_err() { return payment_error(client, "payment was not authorized").await; },
         _ = client.wait_for_response_disconnect() => return RouteAttemptResult::ClientDisconnected,
@@ -63,6 +68,13 @@ pub(super) async fn route(
         logging.route_observer,
     )
     .await;
+    // Only the application going away cancels the exchange. Every other
+    // outcome means the exchange itself ended HTTP delivery (a full response,
+    // or a settlement with no output), and it goes on to settle uncancelled
+    // so a seller that delivered nothing is still held to it.
+    if !matches!(result, RouteAttemptResult::ClientDisconnected) {
+        cancel_on_drop.disarm();
+    }
     // Once a paid exchange starts, ordinary transport/quality retries must not
     // create a second bill. A failed attempt is terminal for this HTTP request.
     match result {
@@ -114,14 +126,21 @@ pub(super) async fn payment_error(client: &mut ClientStream, message: &str) -> R
     }
 }
 
-struct CancelOnDrop(tokio::sync::watch::Sender<bool>);
+struct CancelOnDrop(Option<tokio::sync::watch::Sender<bool>>);
+impl CancelOnDrop {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        let _ = self.0.send(true);
+        if let Some(cancel) = &self.0 {
+            let _ = cancel.send(true);
+        }
     }
 }
 
-type StartedExchange = (
+pub(crate) type StartedExchange = (
     DuplexStream,
     tokio::sync::oneshot::Receiver<()>,
     tokio::sync::watch::Sender<bool>,
@@ -138,7 +157,16 @@ impl std::fmt::Display for PrePaymentTransportFailure {
 }
 impl std::error::Error for PrePaymentTransportFailure {}
 
-async fn start(
+/// Seller admissions are read within this bound; a seller that does not
+/// answer has not charged anything yet. Preserve the previous initial-invoice
+/// allowance for wallet startup and queued admissions, without assuming a
+/// typical provider latency. Client disconnect in `route` still cancels this wait.
+const ADMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// How long an accepted admission stays approved in the ledger.
+const AUTHORIZATION_LIFETIME_MS: u64 = 3_600_000;
+
+pub(crate) async fn start(
     node: &Node,
     peer: iroh::EndpointId,
     raw: &[u8],
@@ -146,27 +174,22 @@ async fn start(
     exchange_id: Option<&str>,
 ) -> Result<StartedExchange> {
     let request = PaidRequest::parse(raw)?;
+    let payments = Payments::for_node(node).await?;
+    let cap = admission_eligibility(&payments, &request, &price).await?;
+    let id = uuid::Uuid::new_v4().to_string();
     let (mut send, mut recv) = node
         .open_http_tunnel(peer)
         .await
-        .map_err(|_| PrePaymentTransportFailure)?;
-    let payments = crate::network::payments::client::Payments::for_node(node).await?;
-    ensure!(
-        effective_intent(&payments, &request)
-            .await?
-            .permits(&price, 0),
-        "paid inference is excluded by spending policy or request restriction"
-    );
-    // Read the balance for approval during the seller's prefill. If a
-    // concurrent payment settles in between, the balance overstates the
-    // funds, but the wallet still refuses any payment it cannot afford.
-    let id = uuid::Uuid::new_v4().to_string();
-    let _: Empty = payments
-        .call(ops::PREFETCH, &IdRequest { id: id.clone() })
-        .await?;
+        .map_err(|error| {
+            tracing::warn!(seller = %peer.fmt_short(), %error, "could not open paid tunnel; trying another target");
+            PrePaymentTransportFailure
+        })?;
     send.write_all(wire::HTTP_UPGRADE)
         .await
-        .map_err(|_| PrePaymentTransportFailure)?;
+        .map_err(|error| {
+            tracing::warn!(seller = %peer.fmt_short(), %error, "could not send paid upgrade; trying another target");
+            PrePaymentTransportFailure
+        })?;
     wire::write(
         &mut send,
         &Frame::Request {
@@ -178,34 +201,45 @@ async fn start(
     )
     .await
     .map_err(|_| PrePaymentTransportFailure)?;
-    // Prefill/invoice receipt happens before spawning anything that can pay.
-    let initial = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        read_initial_invoice(&mut recv),
-    )
-    .await
-    .map_err(|_| PrePaymentTransportFailure)??;
-    if let Err(error) = validate_initial_invoice(&payments, &request, &price, &id, &initial).await {
-        cancel(&payments, &id, CancelStage::Unstarted).await;
-        return Err(error);
-    }
+    // Nothing that can pay exists before the admission is validated.
+    let initial = tokio::time::timeout(ADMISSION_TIMEOUT, read_admission(&mut recv))
+        .await
+        .map_err(|_| PrePaymentTransportFailure)??;
+    let (terms, deposit) = match validate_admission(initial, &request, &price, &id) {
+        Ok(admission) => admission,
+        Err(error) => {
+            cancel(&payments, &id, CancelStage::Unstarted).await;
+            return Err(error);
+        }
+    };
     let (pipe, mut output) = tokio::io::duplex(64 * 1024);
     let (ready, wait_ready) = tokio::sync::oneshot::channel();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
     let evidence = exchange_id.map(|id| (node.clone(), id.to_owned()));
     let strike_node = node.clone();
     let classification = cancellation.clone();
+    let accepted = exchange::Accepted {
+        payments,
+        local: RequestTerms {
+            exchange_id: exchange_id.map(str::to_owned),
+            id,
+            peer: peer.to_string(),
+            payee: deposit.as_ref().map(|invoice| invoice.payee.clone()),
+            model: terms.model.clone(),
+            pricing: price,
+            max_output_tokens: u64::from(request.max_tokens),
+            max_total_msat: cap,
+            expires_at_ms: mesh_llm_wallet::now_ms() + AUTHORIZATION_LIFETIME_MS,
+        },
+        terms,
+        deposit,
+    };
     tokio::spawn(async move {
         let mut progress = ExchangeProgress::default();
-        let result = exchange_tracked(
-            payments,
-            peer,
-            id,
-            request,
-            price,
+        let result = exchange::run(
+            accepted,
             send,
             recv,
-            initial,
             &mut output,
             ready,
             cancellation,
@@ -214,7 +248,7 @@ async fn start(
         )
         .await;
         // The exchange's own cancellation branch can lose a race with a
-        // provider read error, so let the live watch value decide whether this
+        // seller read error, so let the live watch value decide whether this
         // request was cancelled rather than whichever branch happened to run.
         progress.observe_cancellation(&classification);
         if result.is_err() && progress.paid_undelivered() {
@@ -223,85 +257,126 @@ async fn start(
         if result.is_err() {
             // Static logging only: invoices, prompt contents, and hashes are
             // operator data and do not belong in ordinary runtime logs.
-            tracing::warn!("paid inference exchange interrupted; durable settlement retained");
+            tracing::warn!("metered inference exchange interrupted; durable settlement retained");
         }
     });
     Ok((pipe, wait_ready, cancel))
 }
 
-async fn read_initial_invoice(recv: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
+/// Check paid eligibility and advertised rates before requesting admission.
+/// The returned value preserves the legacy terms field, not a settlement cap.
+/// Daily spending is checked again when the provider durably approves admission;
+/// accepted work settles at the admitted rates without reserving budget.
+async fn admission_eligibility(
+    payments: &Payments,
+    request: &PaidRequest,
+    price: &Pricing,
+) -> Result<u64> {
+    let budget: RoutingBudgetResponse = payments
+        .call(
+            ops::ROUTING_BUDGET,
+            &RoutingBudgetRequest {
+                request_intent: request
+                    .intent
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+            },
+        )
+        .await?;
+    let PaymentIntent::AllowPaid { max_total_msat, .. } = budget.intent else {
+        bail!("paid inference is excluded by spending policy or request restriction");
+    };
+    let cap = max_total_msat;
+    ensure!(
+        budget.available_msat > 0 && budget.intent.permits(price),
+        "seller prices or remaining budget exceed the spending policy"
+    );
+    Ok(cap)
+}
+
+async fn read_admission(recv: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
+    // Nothing is charged before admission, so any unreadable reply is
+    // retryable. That includes an older seller that does not know this
+    // protocol and answers with plain HTTP bytes.
     let frame = wire::read(recv).await.map_err(|error| {
-        if error.downcast_ref::<std::io::Error>().is_some() {
-            anyhow::Error::from(PrePaymentTransportFailure)
-        } else {
-            error
-        }
+        tracing::warn!(%error, "unreadable payment admission; trying another target");
+        anyhow::Error::from(PrePaymentTransportFailure)
     })?;
-    // A provider-side prefill failure cannot have charged this payer: no
-    // invoice has been accepted and no payment task has been spawned.
-    if matches!(frame, Frame::Error { .. }) {
+    // A seller-side refusal or failure here cannot have charged this buyer:
+    // no admission has been accepted and no payment task has been spawned.
+    if let Frame::Error { message } = &frame {
+        tracing::warn!(seller_message = %message, "seller refused paid admission; trying another target");
         return Err(PrePaymentTransportFailure.into());
     }
     Ok(frame)
 }
 
-async fn validate_initial_invoice(
-    payments: &Payments,
+/// The admission must restate exactly what was asked, at the frozen price,
+/// with a deposit that is either absent or the single defined share.
+fn validate_admission(
+    frame: Frame,
     request: &PaidRequest,
     price: &Pricing,
     id: &str,
-    initial: &Frame,
-) -> Result<(u64, u64)> {
-    let Frame::InputInvoice { terms, invoice } = initial else {
-        bail!("expected input invoice");
+) -> Result<(AdmissionTerms, Option<mesh_llm_wallet::invoice::Invoice>)> {
+    let Frame::Admission { terms, invoice } = frame else {
+        bail!("expected admission");
     };
     ensure!(
         terms.id == id && terms.model == request.model && terms.pricing == *price,
-        "payment terms mismatch"
+        "admission terms mismatch"
     );
+    // The payment service also refuses a seller minimum above this node's own.
+    validate_payment_floor(terms.min_payment_msat)?;
     ensure!(
-        terms.input_tokens > 0 && terms.input_tokens <= 131_072,
-        "invalid input count"
+        terms.deposit_msat == 0 || terms.deposit_msat == terms.min_payment_msat,
+        "deposit mismatch"
     );
-    request.validate_output_allowance(terms.max_output_tokens)?;
-    let input_amount = price.input_charge(terms.input_tokens)?;
-    let total = price.request_cap_msat(input_amount, terms.max_output_tokens)?;
-    ensure!(
-        terms.max_total_msat == total && terms.expires_at_ms == invoice.expires_at_ms,
-        "payment limit mismatch"
-    );
-    ensure!(
-        effective_intent(payments, request)
-            .await?
-            .permits(price, total),
-        "paid inference is excluded by spending policy or request restriction"
-    );
-    invoice.validate_payment(input_amount, mesh_llm_wallet::now_ms())?;
-    ensure!(
-        invoice.amount_msat == Some(input_amount),
-        "fixed-amount inference invoice required"
-    );
-    Ok((input_amount, total))
+    match &invoice {
+        Some(invoice) => {
+            ensure!(
+                terms.deposit_msat > 0 && invoice.amount_msat == Some(terms.deposit_msat),
+                "deposit invoice mismatch"
+            );
+            invoice.validate_payment(terms.deposit_msat, mesh_llm_wallet::now_ms())?;
+        }
+        None => ensure!(terms.deposit_msat == 0, "deposit invoice missing"),
+    }
+    Ok((terms, invoice))
+}
+
+/// Best-effort release of a request that never started paying.
+async fn cancel(payments: &Payments, id: &str, stage: CancelStage) {
+    let _ = payments
+        .call::<_, Empty>(
+            ops::CANCEL,
+            &CancelRequest {
+                id: id.to_owned(),
+                stage,
+            },
+        )
+        .await;
 }
 
 /// What a paid exchange had done when it ended, for the payee blocklist.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ExchangeProgress {
-    input_settled: bool,
-    output_delivered: bool,
-    cancelled: bool,
+    pub(super) deposit_settled: bool,
+    pub(super) output_delivered: bool,
+    pub(super) cancelled: bool,
 }
 
 impl ExchangeProgress {
-    /// Our input payment settled, the provider sent no output and we did not
-    /// cancel: it took the prefill charge and delivered nothing, whether it
+    /// Our deposit settled, the seller sent no output and we did not cancel:
+    /// it took the deposit and delivered nothing, whether it
     /// hung up mid-exchange or closed the exchange with no output at all. An
     /// empty completion is indistinguishable from the second case here, which
     /// is a bounded false positive the strike threshold tames. What this must
     /// never blame the provider for is a failure after it delivered output, or
     /// after we cancelled it.
     pub(crate) fn paid_undelivered(&self) -> bool {
-        self.input_settled && !self.output_delivered && !self.cancelled
+        self.deposit_settled && !self.output_delivered && !self.cancelled
     }
 
     /// Adopt the live cancellation state. A client disconnect and a provider
@@ -335,282 +410,35 @@ async fn record_paid_undelivered(node: &Node, peer: iroh::EndpointId) {
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn exchange(
-    payments: Payments,
-    peer: iroh::EndpointId,
-    id: String,
-    request: PaidRequest,
-    price: Pricing,
-    send: impl AsyncWrite + Unpin,
-    recv: impl AsyncRead + Unpin,
-    initial: Frame,
-    output: &mut DuplexStream,
-    ready: tokio::sync::oneshot::Sender<()>,
-    cancellation: tokio::sync::watch::Receiver<bool>,
-    evidence: Option<(Node, String)>,
-) -> Result<()> {
-    exchange_tracked(
-        payments,
-        peer,
-        id,
-        request,
-        price,
-        send,
-        recv,
-        initial,
-        output,
-        ready,
-        cancellation,
-        evidence,
-        &mut ExchangeProgress::default(),
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn exchange_tracked(
-    payments: Payments,
-    peer: iroh::EndpointId,
-    id: String,
-    request: PaidRequest,
-    price: Pricing,
-    mut send: impl AsyncWrite + Unpin,
-    mut recv: impl AsyncRead + Unpin,
-    initial: Frame,
-    output: &mut DuplexStream,
-    ready: tokio::sync::oneshot::Sender<()>,
-    mut cancellation: tokio::sync::watch::Receiver<bool>,
-    evidence: Option<(Node, String)>,
-    progress: &mut ExchangeProgress,
-) -> Result<()> {
-    let (_input_amount, total) =
-        match validate_initial_invoice(&payments, &request, &price, &id, &initial).await {
-            Ok(amounts) => amounts,
-            Err(error) => {
-                cancel(&payments, &id, CancelStage::Unstarted).await;
-                return Err(error);
-            }
-        };
-    let Frame::InputInvoice { mut terms, invoice } = initial else {
-        bail!("expected input invoice");
-    };
-    // Peer identity is from authenticated QUIC, never a peer-supplied field.
-    terms.exchange_id = evidence.as_ref().map(|(_, id)| id.clone());
-    terms.peer = peer.to_string();
-    terms.payee = Some(invoice.payee.clone());
-    authorize_terms(
-        &payments,
-        &request,
-        &price,
-        total,
-        &terms,
-        &mut send,
-        &mut cancellation,
-    )
-    .await?;
-    let observations =
-        crate::network::payments::lifecycle::Observations::for_exchange(evidence.as_ref(), &terms)
-            .await;
-    observations.accepted(terms.max_total_msat);
-    observations.invoice(0, &invoice);
-    let mut accounted_msat = 0u64;
-    // Start durable submission and terminal reconciliation, then read the
-    // provider stream concurrently. The provider releases output only after
-    // its own receiving wallet sees the payment arrive, so the payer's later
-    // terminal observation must not become a second delivery gate.
-    let payment_client = payments.clone();
-    let pay_input = PayInputRequest {
-        terms: terms.clone(),
-        invoice,
-    };
-    let mut input_payment = tokio::spawn(async move {
-        payment_client
-            .call::<_, Transaction>(ops::PAY_INPUT, &pay_input)
-            .await
-    });
-    let mut input_settled = false;
-    let _ = ready.send(());
-    let mut cancelled = false;
-    let mut output_settled = false;
-    loop {
-        let reading = wire::read(&mut recv);
-        tokio::pin!(reading);
-        let frame = loop {
-            tokio::select! {
-                result = &mut input_payment, if !input_settled => {
-                    let payment = result.context("input payment task failed")??;
-                    accounted_msat = accounted_msat.saturating_add(payment.amount_msat).saturating_add(payment.fee_msat);
-                    observations.settled(0, &payment);
-                    input_settled = true;
-                    progress.input_settled = true;
-                }
-                frame = &mut reading => break frame?,
-                _ = cancellation.changed(), if !cancelled => {
-                    cancelled = true;
-                    progress.cancelled = true;
-                    wire::write(&mut send, &Frame::Cancel).await?;
-                }
-            }
-        };
-        match frame {
-            Frame::Output { bytes } => {
-                ensure!(!output_settled, "output after final invoice");
-                progress.output_delivered |= !bytes.is_empty();
-                if !cancelled && output.write_all(&bytes).await.is_err() {
-                    cancelled = true;
-                    progress.cancelled = true;
-                    wire::write(&mut send, &Frame::Cancel).await?;
-                }
-            }
-            Frame::OutputInvoice {
-                request_id,
-                tokens,
-                invoice,
-            } => {
-                ensure!(
-                    !output_settled && request_id == id,
-                    "unexpected output invoice"
-                );
-                observations.invoice(1, &invoice);
-                let payment = settle_output(&payments, &terms, tokens, invoice).await?;
-                accounted_msat = accounted_msat
-                    .saturating_add(payment.amount_msat)
-                    .saturating_add(payment.fee_msat);
-                observations.settled(1, &payment);
-                output_settled = true;
-            }
-            Frame::Complete => {
-                if !input_settled {
-                    let payment = input_payment.await.context("input payment task failed")??;
-                    accounted_msat = accounted_msat
-                        .saturating_add(payment.amount_msat)
-                        .saturating_add(payment.fee_msat);
-                    observations.settled(0, &payment);
-                    progress.input_settled = true;
-                }
-                let _: Empty = payments
-                    .call(ops::FINISH, &IdRequest { id: id.clone() })
-                    .await?;
-                observations.final_amount(accounted_msat);
-                // Closing the exchange does not make it a delivery: a provider
-                // that ends it having sent no output kept the input charge and
-                // returned nothing, which is the abuse this blocklist is for.
-                ensure!(
-                    cancelled || progress.output_delivered,
-                    "provider completed the exchange without delivering output"
-                );
-                return Ok(());
-            }
-            _ => bail!("invalid payment exchange frame"),
-        }
-    }
-}
-
-/// Durably approve `terms`, then re-check spending policy before any payment.
-async fn authorize_terms(
-    payments: &Payments,
-    request: &PaidRequest,
-    price: &Pricing,
-    total: u64,
-    terms: &RequestTerms,
-    send: &mut (impl AsyncWrite + Unpin),
-    cancellation: &mut tokio::sync::watch::Receiver<bool>,
-) -> Result<()> {
-    let authorize = AuthorizeRequest {
-        terms: terms.clone(),
-    };
-    tokio::select! {
-        result = payments.call::<_, Empty>(ops::AUTHORIZE, &authorize) => { result?; }
-        _ = cancellation.changed() => {
-            cancel(payments, &terms.id, CancelStage::Unstarted).await;
-            let _ = wire::write(send, &Frame::Cancel).await;
-            bail!("application disconnected before approval");
-        }
-    }
-    if !effective_intent(payments, request)
-        .await?
-        .permits(price, total)
-    {
-        payments
-            .call::<_, Empty>(
-                ops::CANCEL,
-                &CancelRequest {
-                    id: terms.id.clone(),
-                    stage: CancelStage::Authorization,
-                },
-            )
-            .await?;
-        let _ = wire::write(send, &Frame::Cancel).await;
-        bail!("spending policy or request restriction changed before submission");
-    }
-    Ok(())
-}
-
-pub(crate) async fn settle_output(
-    payments: &Payments,
-    terms: &RequestTerms,
-    tokens: u64,
-    invoice: mesh_llm_wallet::invoice::Invoice,
-) -> Result<Transaction> {
-    payments
-        .call(
-            ops::SETTLE_OUTPUT,
-            &SettleOutputRequest {
-                terms: terms.clone(),
-                tokens,
-                invoice,
-            },
-        )
-        .await
-}
-
-/// Best-effort release of a request that never started paying.
-async fn cancel(payments: &Payments, id: &str, stage: CancelStage) {
-    let _ = payments
-        .call::<_, Empty>(
-            ops::CANCEL,
-            &CancelRequest {
-                id: id.to_owned(),
-                stage,
-            },
-        )
-        .await;
-}
-
-pub(super) async fn effective_intent(
-    payments: &Payments,
-    request: &PaidRequest,
-) -> Result<PaymentIntent> {
-    let profile: PaymentIntent = payments.call(ops::PAYMENT_INTENT, &Empty {}).await?;
-    Ok(request
-        .intent
-        .as_ref()
-        .map_or_else(|| profile.clone(), |request| profile.restrict(request)))
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn initial_transport_drop_is_retryable_but_malformed_frame_is_terminal() -> Result<()> {
+    async fn any_unreadable_admission_is_retryable() -> Result<()> {
         let (writer, mut reader) = tokio::io::duplex(64);
         drop(writer);
         assert!(
-            read_initial_invoice(&mut reader)
+            read_admission(&mut reader)
                 .await
                 .unwrap_err()
                 .is::<PrePaymentTransportFailure>()
         );
-        let (mut writer, mut reader) = tokio::io::duplex(64);
-        writer.write_all(&[0, 0, 0, 1, b'!']).await?;
-        assert!(
-            !read_initial_invoice(&mut reader)
-                .await
-                .unwrap_err()
-                .is::<PrePaymentTransportFailure>()
-        );
+        // A malformed frame, and an older seller answering in plain HTTP
+        // (parsed as a huge frame length), both fall back to another target.
+        for reply in [
+            &[0, 0, 0, 1, b'!'][..],
+            b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n",
+        ] {
+            let (mut writer, mut reader) = tokio::io::duplex(256);
+            writer.write_all(reply).await?;
+            drop(writer);
+            assert!(
+                read_admission(&mut reader)
+                    .await
+                    .unwrap_err()
+                    .is::<PrePaymentTransportFailure>()
+            );
+        }
         Ok(())
     }
 
@@ -639,6 +467,7 @@ mod tests {
                 Pricing {
                     input_msat_per_million: 1,
                     output_msat_per_million: 1,
+                    cache_discount_percent: 0,
                 },
                 RouteAttemptLoggingContext {
                     exchange_id: None,
@@ -686,13 +515,10 @@ mod tests {
     #[test]
     fn a_strike_needs_a_settled_input_payment_and_no_delivered_output() {
         let settled = ExchangeProgress {
-            input_settled: true,
+            deposit_settled: true,
             ..ExchangeProgress::default()
         };
-        assert!(
-            settled.paid_undelivered(),
-            "took the prefill charge, no output"
-        );
+        assert!(settled.paid_undelivered(), "took the deposit, no output");
         for progress in [
             // The provider sent output, so it delivered what we paid for even
             // if the exchange then failed on our side.
@@ -705,7 +531,7 @@ mod tests {
                 cancelled: true,
                 ..settled.clone()
             },
-            // The input payment never settled: this is a pre-payment failure,
+            // The deposit never settled: this is a pre-payment failure,
             // which the existing target-health cooldown already covers.
             ExchangeProgress::default(),
         ] {
@@ -717,7 +543,7 @@ mod tests {
     fn a_cancellation_that_arrives_after_the_read_error_still_exempts_the_provider() {
         let (cancel, cancellation) = tokio::sync::watch::channel(false);
         let mut progress = ExchangeProgress {
-            input_settled: true,
+            deposit_settled: true,
             ..ExchangeProgress::default()
         };
         // The read-error branch won the race and returned before the

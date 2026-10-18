@@ -48,6 +48,7 @@ fn restore_prefill_decode_message_carries_chat_sampling_metadata() {
         current: 104,
         sampling: Some(sampling.clone()),
         chat_sampling_metadata: Some(metadata),
+        native_mtp_draft_tokens: 0,
     })
     .unwrap();
 
@@ -63,6 +64,7 @@ fn restore_prefill_decode_message_carries_chat_sampling_metadata() {
     assert_eq!(decoded.tokens, vec![101, 102, 103, 104]);
     assert_eq!(decoded.sampling, Some(sampling));
     assert_eq!(decoded.chat_sampling_metadata.as_deref(), Some(metadata));
+    assert_eq!(decoded.state.native_mtp_draft_tokens(), Some(0));
 }
 
 #[test]
@@ -79,11 +81,14 @@ fn reusable_decode_message_updates_hot_path_fields() {
         base_pos_start: 4,
         sampling: Some(sampling.clone()),
         sideband_capacity: 4,
+        native_mtp_draft_tokens: 3,
     })
     .unwrap();
 
     let first = message.update(0, 104).unwrap();
     assert_eq!(first.kind, WireMessageKind::DecodeEmbd);
+    assert_eq!(first.state.native_mtp_draft_tokens(), Some(3));
+    assert!(first.state.matches_kind(WireMessageKind::DecodeEmbd));
     assert_eq!(first.request_id, 11);
     assert_eq!(first.session_id, 13);
     assert_eq!(first.sampling, Some(sampling.clone()));
