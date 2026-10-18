@@ -44,10 +44,14 @@ jobs:
 
       - name: Stage binary and runtime
         run: |
+          find ci-artifacts -maxdepth 4 | head -20
+          bin_src=$(find ci-artifacts -name mesh-llm -type f | head -1)
+          rt_src=$(find ci-artifacts -type d -name native-runtimes | head -1)
+          echo "bin: $bin_src ; runtime: $rt_src"
           mkdir -p target/release
-          cp ci-artifacts/linux/mesh-llm target/release/mesh-llm
+          cp "$bin_src" target/release/mesh-llm
           chmod +x target/release/mesh-llm
-          cp -a ci-artifacts/linux/native-runtimes target/release/native-runtimes
+          cp -a "$rt_src" target/release/native-runtimes
           find target/release/native-runtimes -name manifest.json | head -1
 
       - name: Download smoke models
