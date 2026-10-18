@@ -150,6 +150,7 @@ mod tests {
     use crate::uninstall::tests::{env, options};
     use crate::uninstall::{UninstallPlatform, plan_uninstall};
 
+    #[cfg(windows)]
     fn empty_outcome() -> UninstallOutcome {
         UninstallOutcome {
             dry_run: false,
