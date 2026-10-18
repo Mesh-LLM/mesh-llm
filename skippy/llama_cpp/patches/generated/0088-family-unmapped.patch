@@ -113,27 +113,6 @@ index 85f06098a173c77025d50f9367513d5ed34018a4..d4ca79e860bc5e04302a964150676a88
      }
  
      cur = inpL;
-diff --git a/src/models/clef.cpp b/src/models/clef.cpp
-index cd2889b2251c7fd89365da55e00ce3efe0e1470d..9399f40a17ce0ccaf9d8a22539f2ced1e2c0796e 100644
---- a/src/models/clef.cpp
-+++ b/src/models/clef.cpp
-@@ -265,6 +265,8 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
-     res->add_input(std::move(inp_decision_ptr));
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         ggml_tensor * inpSA = inpL;
- 
-         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
-@@ -296,6 +298,7 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
-         cb(cur, "l_out", il);
- 
-         inpL = cur;
-+        end_block(inpL, il);
-     }
- 
-     cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);
 diff --git a/src/models/codeshell.cpp b/src/models/codeshell.cpp
 index be1e576197bc27fd296f38a8707cbbe934ec9dee..cd1ef5d5069f7193b086090c4efd91bacc380ca1 100644
 --- a/src/models/codeshell.cpp
@@ -457,27 +436,6 @@ index 2c7fa6750941582a9c7974a19c38e6cb6648e821..fa33ef779c0d103b3d061f515a4375fa
      }
  
      cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);
-diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
-index a1b7229507301e9d8af41b437bc5394ff4f9bd64..41510930a0bed0101885488f05e1601db2550f94 100644
---- a/src/models/glm5-next.cpp
-+++ b/src/models/glm5-next.cpp
-@@ -706,6 +706,8 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
-     ggml_tensor * prev_sel = nullptr;
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         const auto & layer = model.layers[il];
- 
-         ggml_tensor * residual = inpL;
-@@ -771,6 +773,7 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
-         inpL = build_hc_post(cur, residual, post, comb, il);
-         inpL = build_cvec(inpL, il);
-         cb(inpL, "l_out", il);
-+        end_block(inpL, il);
-     }
- 
-     // narrow to the output tokens, then collapse the streams
 diff --git a/src/models/gpt2.cpp b/src/models/gpt2.cpp
 index d6ca64744f492733612d3854e869e42ce1d52774..c4eaf3cb1668a397af5ae5b2757426ecc04e9796 100644
 --- a/src/models/gpt2.cpp
@@ -562,27 +520,6 @@ index 25e40abf7bef16ba692a96b75c8a6c460c6a90bf..d1e80572192e2028329217b1a65516b5
      }
  
      // prune to the requested output rows once, after all HC streams are done
-diff --git a/src/models/k2-horizon.cpp b/src/models/k2-horizon.cpp
-index 845940913f621ee9b62fc98429927d82f02312ba..43eacc7d764b5e7c6baf5cc17d276596a845d343 100644
---- a/src/models/k2-horizon.cpp
-+++ b/src/models/k2-horizon.cpp
-@@ -229,6 +229,8 @@ llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_
-     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         const auto & layer = model.layers[il];
- 
-         res->t_layer_inp[il] = inpL;
-@@ -347,6 +349,7 @@ llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_
- 
-         // input for next layer
-         inpL = cur;
-+        end_block(inpL, il);
-     }
- 
-     cur = k2_horizon_group_rms_norm(ctx0, inpL, model.output_norm, hparams.n_norm_groups, hparams.f_norm_rms_eps);
 diff --git a/src/models/llada-moe.cpp b/src/models/llada-moe.cpp
 index 0930cfb3cf78a55e4bb9c19dc72d86f249826dd4..6606531e8e86bcacf90e49ba9137dc75b853b273 100644
 --- a/src/models/llada-moe.cpp
@@ -625,27 +562,6 @@ index 1277e9dd7cbe77651115a4d51044af466577b58f..2ceeacb9179f1b728e46eb0919cd0a19
      }
      cur = inpL;
  
-diff --git a/src/models/maion-coder.cpp b/src/models/maion-coder.cpp
-index bb3ebabc7ed3b0205bbd5f025f30f3d570615cad..3ad1bbf55e5c6bf4b7fe507c86a5992647e0cec0 100644
---- a/src/models/maion-coder.cpp
-+++ b/src/models/maion-coder.cpp
-@@ -82,6 +82,8 @@ llama_model_maion_coder::graph::graph(const llama_model & model, const llm_graph
-     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        begin_block(inpL, il);
-+
-         // export per-layer input hidden state so speculative drafts (e.g. dflash/eagle3) can read it
-         res->t_layer_inp[il] = inpL;
- 
-@@ -138,6 +140,7 @@ llama_model_maion_coder::graph::graph(const llama_model & model, const llm_graph
-         cur = ggml_add(ctx0, cur, ffn_inp);
-         cur = build_cvec(cur, il);
-         inpL = cur;
-+        end_block(inpL, il);
-     }
- 
-     ggml_tensor * cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
 diff --git a/src/models/maple.cpp b/src/models/maple.cpp
 index 9568c647589c555a33f2f1214f0fe9ca90b64f02..5e2b031e738b06a019c086ee816e8c310e0dd4d3 100644
 --- a/src/models/maple.cpp

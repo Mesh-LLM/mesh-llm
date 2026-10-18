@@ -1,0 +1,861 @@
+From 2f5e3e4bbab44227890d565e17bd93005b420b2f Mon Sep 17 00:00:00 2001
+From: Daniel Han <danielhanchen@gmail.com>
+Date: Sun, 18 Oct 2026 11:49:00 +1100
+Subject: [PATCH 2/3] model: add Beam (Reflection) (#30670)
+
+Port 01fc3aae8 onto the mesh-llm llama.cpp pin. GGUF-conversion python is omitted; the pinned tree needs load, chat-template and staged-graph support. The arch enum and name table keep both Inkling and Beam.
+---
+ common/chat.cpp                |   7 +
+ common/jinja/value.cpp         |   9 ++
+ common/parsers/harmony-xml.cpp | 207 ++++++++++++++++++++++++++
+ common/parsers/parsers.h       |   2 +
+ common/parsers/sources.cmake   |   1 +
+ src/llama-arch.cpp             |   1 +
+ src/llama-arch.h               |   1 +
+ src/llama-graph.cpp            |  26 +++-
+ src/llama-graph.h              |   7 +-
+ src/llama-hparams.h            |   2 +
+ src/llama-model.cpp            |  11 +-
+ src/llama-model.h              |   1 +
+ src/llama-vocab.cpp            |   5 +-
+ src/models/beam.cpp            | 261 +++++++++++++++++++++++++++++++++
+ src/models/models.h            |  13 ++
+ tests/test-jinja.cpp           |   6 +
+ tests/test-llama-archs.cpp     |  21 +++
+ 17 files changed, 570 insertions(+), 11 deletions(-)
+ create mode 100644 common/parsers/harmony-xml.cpp
+ create mode 100644 src/models/beam.cpp
+
+diff --git a/common/chat.cpp b/common/chat.cpp
+index ded63a95b..d2fad8f29 100644
+--- a/common/chat.cpp
++++ b/common/chat.cpp
+@@ -1218,6 +1218,13 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const
+         return common_chat_params_init_llm_jp_harmony;
+     }
+ 
++    // Harmony XML tool calls, checked before the GPT-OSS JSON calls
++    if (src.find("<|channel|>") != std::string::npos && src.find("<|constrain|>xml") != std::string::npos &&
++        src.find("rfl:parameter") != std::string::npos) {
++        LOG_DBG("Using specialized template: Harmony XML\n");
++        return common_chat_params_init_harmony_xml;
++    }
++
+     // GPT-OSS - has unique channel-based structure that needs dedicated handler
+     if (src.find("<|channel|>") != std::string::npos) {
+         LOG_DBG("Using specialized template: GPT-OSS\n");
+diff --git a/common/jinja/value.cpp b/common/jinja/value.cpp
+index 0ecbbf8a8..a1dc9691b 100644
+--- a/common/jinja/value.cpp
++++ b/common/jinja/value.cpp
+@@ -1299,6 +1299,15 @@ const func_builtins & value_object_t::get_builtins() const {
+             }
+             return result;
+         }},
++        {"list", [](const func_args & args) -> value {
++            args.ensure_vals<value_object>();
++            const auto & obj = args.get_pos(0)->as_ordered_object();
++            auto result = mk_val<value_array>();
++            for (const auto & pair : obj) {
++                result->push_back(pair.first);
++            }
++            return result;
++        }},
+         {"values", [](const func_args & args) -> value {
+             args.ensure_vals<value_object>();
+             const auto & obj = args.get_pos(0)->as_ordered_object();
+diff --git a/common/parsers/harmony-xml.cpp b/common/parsers/harmony-xml.cpp
+new file mode 100644
+index 000000000..bf05fac5d
+--- /dev/null
++++ b/common/parsers/harmony-xml.cpp
+@@ -0,0 +1,207 @@
++#include "parsers.h"
++
++// Harmony with XML tool calls: <|start|>assistant to=NAME<|channel|>analysis <|constrain|>xml<|message|><rfl:parameter name="KEY">\nVALUE\n</rfl:parameter>
++common_chat_params common_chat_params_init_harmony_xml(const common_chat_template &          tmpl,
++                                                       const autoparser::generation_params & inputs) {
++    common_chat_params data;
++
++    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
++    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
++    data.message_delimiters = {
++        { COMMON_CHAT_ROLE_ASSISTANT, "<|start|>assistant" },
++        { COMMON_CHAT_ROLE_USER,      "<|start|>user"      },
++        { COMMON_CHAT_ROLE_SYSTEM,    "<|start|>developer" },
++        { COMMON_CHAT_ROLE_SYSTEM,    "<|start|>system"    },
++    };
++
++    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
++    data.supports_thinking = true;
++
++    data.thinking_start_tag = "<|channel|>analysis<|message|>";
++    data.thinking_end_tags  = {"<|end|>"};
++
++    // EOG text must reach the parser: an XML call has no closing tag of its own
++    static const std::vector<std::string> EOG = {
++        "<|call|>", "<|return|>", "<|endoftext|>", "<|im_end|>", "<|fim_pad|>", "<|repo_name|>", "<|file_sep|>",
++    };
++
++    data.preserved_tokens = {
++        "<|channel|>", "<|constrain|>", "<|message|>", "<|start|>", "<|end|>",
++    };
++    data.preserved_tokens.insert(data.preserved_tokens.end(), EOG.begin(), EOG.end());
++
++    if (inputs.has_continuation()) {
++        const auto & msg = inputs.continue_msg;
++
++        data.generation_prompt = "<|start|>assistant<|channel|>analysis<|message|>" + msg.reasoning_content;
++        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
++            data.generation_prompt += "<|end|><|start|>assistant<|channel|>final<|message|>" + msg.render_content();
++        }
++
++        data.prompt.append(data.generation_prompt);
++    }
++
++    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
++    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
++    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
++    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
++
++    static const std::string PARAM_OPEN  = "<rfl:parameter name=\"";
++    static const std::string PARAM_CLOSE = "\n</rfl:parameter>";
++
++    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
++        auto start = p.rule("start", p.literal("<|start|>assistant"));
++
++        auto eog = p.choice();
++        for (const auto & tok : EOG) {
++            eog |= p.literal(tok);
++        }
++        auto with_eog = [&](std::vector<std::string> delims) {
++            delims.insert(delims.end(), EOG.begin(), EOG.end());
++            return delims;
++        };
++
++        auto analysis_open  = p.literal("<|channel|>analysis<|message|>");
++        auto analysis_body  = p.until_one_of(with_eog({ "<|end|>", "<|constrain|><|start|>assistant", "<|start|>assistant" }));
++        auto analysis_close = p.optional(p.literal("<|end|>") | p.literal("<|constrain|>") | eog);
++        if (extract_reasoning) {
++            p.rule("analysis", analysis_open + p.reasoning(analysis_body) + analysis_close);
++        } else {
++            p.rule("analysis", p.atomic(p.content(analysis_open)) + p.content(analysis_body + analysis_close));
++        }
++        auto analysis = p.ref("analysis");
++
++        auto final_msg = p.rule("final",
++            p.literal("<|channel|>final<|message|>") +
++            p.content(p.until_one_of(with_eog({ "<|end|>" }))) +
++            p.optional(p.literal("<|end|>") | eog));
++
++        if (has_response_format) {
++            auto constrain_type = p.chars("[A-Za-z0-9_-]", 1, -1);
++            auto constraint     = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
++            auto response_format = p.rule("response-format",
++                p.literal("<|channel|>final") + constraint + p.literal("<|message|>") +
++                p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)) +
++                p.optional(p.literal("<|end|>") | eog));
++
++            return start + p.zero_or_more(analysis + start) + response_format;
++        }
++
++        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
++            // tolerate a missing closing tag
++            std::vector<std::string> value_ends = with_eog({ PARAM_OPEN, "<|end|>" });
++            std::vector<std::string> string_ends = { PARAM_CLOSE };
++            auto next_open = p.choice();
++            for (const auto & e : value_ends) {
++                string_ends.push_back("\n" + e);
++                next_open |= p.literal(e);
++            }
++            auto arg_close = p.tool_arg_close(p.gbnf(
++                p.literal(PARAM_CLOSE) | (p.literal("\n") + p.peek(p.optional(p.literal("\n")) + next_open)),
++                gbnf_format_literal("\n") + " " + gbnf_format_literal(PARAM_CLOSE.substr(1)) + "?"));
++            auto arg_string = p.rule("rfl-arg-string",
++                p.ac(p.tool_arg_string_value(p.until_one_of(string_ends)) + arg_close, PARAM_CLOSE));
++            auto arg_sep = p.optional(p.literal("\n"));
++
++            std::string call_close_gbnf = gbnf_format_literal("<|end|>");
++            for (const auto & tok : EOG) {
++                call_close_gbnf += " | " + gbnf_format_literal(tok);
++            }
++            auto call_close = p.gbnf(p.literal("<|end|>") | eog | p.peek(p.literal("<|start|>assistant")),
++                "(" + call_close_gbnf + ")?");
++
++            auto tool_choice = p.choice();
++            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
++                const auto & function = tool.at("function");
++                std::string  name     = function.at("name");
++
++                std::vector<common_peg_parser> arg_rules;
++                foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
++                    auto rule_name = "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index);
++                    auto arg_open  = p.tool_arg_open(p.literal(PARAM_OPEN) + p.tool_arg_name(p.literal(param.name)) + p.literal("\">\n"));
++
++                    auto types     = param.schema->value_types();
++                    auto arg_value = p.eps();
++                    if (!types.has(common_chat_schema::TYPE_STRING) &&
++                        (types.has(common_chat_schema::TYPE_OBJECT) || types.has(common_chat_schema::TYPE_ARRAY))) {
++                        // the schema grammar fixes the key order, and the model writes keys in its own order
++                        arg_value = p.tool_arg_json_value(p.json()) + arg_close;
++                    } else if (!types.has(common_chat_schema::TYPE_STRING)) {
++                        arg_value = p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
++                    } else if (types.is_only(common_chat_schema::TYPE_STRING)) {
++                        arg_value = arg_string;
++                    } else {
++                        // grammar keeps only the string rule; the parser tries JSON first to type the value
++                        auto json_value = p.choice();
++                        if (types.has(common_chat_schema::TYPE_OBJECT)) {
++                            json_value |= p.json_object();
++                        }
++                        if (types.has(common_chat_schema::TYPE_ARRAY)) {
++                            json_value |= p.json_array();
++                        }
++                        if (types.has(common_chat_schema::TYPE_NUMBER) || types.has(common_chat_schema::TYPE_INTEGER)) {
++                            json_value |= p.json_number();
++                        }
++                        if (types.has(common_chat_schema::TYPE_BOOLEAN)) {
++                            json_value |= p.json_bool();
++                        }
++                        if (types.has(common_chat_schema::TYPE_NULL)) {
++                            json_value |= p.json_null();
++                        }
++                        arg_value = p.gbnf(p.atomic(p.tool_arg_json_value(json_value) + arg_close) | arg_string, "rfl-arg-string");
++                    }
++
++                    arg_rules.push_back(p.rule(rule_name, p.tool_arg(arg_open + arg_value)));
++                });
++
++                if (arg_rules.empty()) {
++                    auto any_name = p.chars("[^\"\\n<]", 1, -1);
++                    arg_rules.push_back(p.rule("tool-" + std::to_string(tool_index) + "-arg-any",
++                        p.tool_arg(p.tool_arg_open(p.literal(PARAM_OPEN) + p.tool_arg_name(any_name) + p.literal("\">\n")) + arg_string)));
++                }
++
++                auto args = p.zero_or_more(p.choice(arg_rules) + arg_sep);
++
++                auto call = p.tool(
++                    p.tool_open(p.literal(" to=") + p.tool_name(p.literal(name)) +
++                                p.literal("<|channel|>analysis <|constrain|>xml<|message|>")) +
++                    p.tool_args(args) +
++                    p.tool_close(call_close));
++
++                tool_choice |= p.rule("tool-" + std::to_string(tool_index), call);
++            });
++
++            auto tool_calls = inputs.parallel_tool_calls
++                ? tool_choice + p.zero_or_more(start + tool_choice)
++                : tool_choice;
++            auto tool_call = p.trigger_rule("tool-call", tool_calls);
++
++            if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
++                return start + p.zero_or_more(analysis + start) + tool_call;
++            }
++
++            return start + p.zero_or_more(analysis + start) + (tool_call | final_msg | p.content(p.rest()));
++        }
++
++        auto unsolicited = p.rule("unsolicited", p.atomic(p.literal(" to=") + p.rest()));
++
++        // output without a channel header is returned as content instead of failing the request
++        return start + p.zero_or_more(analysis + start) + (final_msg | unsolicited | p.content(p.rest()));
++    });
++
++    if (include_grammar) {
++        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
++        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
++            data.parser.build_grammar(builder, data.grammar_lazy);
++        });
++
++        if (data.grammar_lazy) {
++            data.grammar_triggers = {
++                { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^\\s+to$" },
++                { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant(\\s+to)" },
++            };
++        }
++    }
++
++    return data;
++}
+diff --git a/common/parsers/parsers.h b/common/parsers/parsers.h
+index 95f358cbd..499b42107 100644
+--- a/common/parsers/parsers.h
++++ b/common/parsers/parsers.h
+@@ -59,6 +59,8 @@ common_chat_params common_chat_params_init_gigachat_v3(const common_chat_templat
+ 
+ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+ 
++common_chat_params common_chat_params_init_harmony_xml(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
++
+ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+ 
+ common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+diff --git a/common/parsers/sources.cmake b/common/parsers/sources.cmake
+index 50b98256b..7bbf85a85 100644
+--- a/common/parsers/sources.cmake
++++ b/common/parsers/sources.cmake
+@@ -9,6 +9,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
+     ${CMAKE_CURRENT_LIST_DIR}/gemma4.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/gigachat-v3.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/gpt-oss.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/harmony-xml.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/k2-horizon.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/kimi-k2.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/kimi-k3.cpp
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index 3ac30ffc9..7b98fdb0b 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -168,6 +168,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+     { LLM_ARCH_POCKETTTS,        "pockettts"        },
+     { LLM_ARCH_K2_HORIZON,       "k2-horizon"       },
+     { LLM_ARCH_INKLING,          "inkling"          },
++    { LLM_ARCH_BEAM,             "beam"             },
+     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
+ };
+ 
+diff --git a/src/llama-arch.h b/src/llama-arch.h
+index 22883c1cf..7c2432b95 100644
+--- a/src/llama-arch.h
++++ b/src/llama-arch.h
+@@ -173,6 +173,7 @@ enum llm_arch {
+     LLM_ARCH_HRM_TEXT,
+     LLM_ARCH_K2_HORIZON,
+     LLM_ARCH_INKLING,
++    LLM_ARCH_BEAM,
+     LLM_ARCH_UNKNOWN,
+ };
+ 
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index e9f1cfc67..70b3ca120 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -271,17 +271,31 @@ void llm_graph_input_attn_temp::set_input(const llama_ubatch * ubatch) {
+         GGML_ASSERT(n_attn_temp_floor_scale != 0);
+ 
+         std::vector<float> attn_scale_data(n_tokens, 0.0f);
+-        for (int i = 0; i < n_tokens; ++i) {
+-            const float pos = ubatch->pos[i];
+-            attn_scale_data[i] = std::log(
+-                std::floor((pos + f_attn_temp_offset) / n_attn_temp_floor_scale) + 1.0
+-            ) * f_attn_temp_scale + 1.0;
++        if (attn_temp_pow) {
++            // (1 + (pos + offset) / length) ^ power
++            for (int i = 0; i < n_tokens; ++i) {
++                const double pos = ubatch->pos[i];
++                attn_scale_data[i] = (float) std::exp((double) f_attn_temp_scale *
++                    std::log1p((pos + f_attn_temp_offset) / (double) n_attn_temp_floor_scale));
++            }
++        } else {
++            for (int i = 0; i < n_tokens; ++i) {
++                const float pos = ubatch->pos[i];
++                attn_scale_data[i] = std::log(
++                    std::floor((pos + f_attn_temp_offset) / n_attn_temp_floor_scale) + 1.0
++                ) * f_attn_temp_scale + 1.0;
++            }
+         }
+ 
+         ggml_backend_tensor_set(attn_scale, attn_scale_data.data(), 0, n_tokens*ggml_element_size(attn_scale));
+     }
+ }
+ 
++bool llm_graph_input_attn_temp::can_reuse(const llm_graph_params & params) {
++    // only the power form opts in; the log form keeps no reuse
++    return attn_temp_pow && attn_scale != nullptr && attn_scale->ne[2] == params.ubatch.n_tokens;
++}
++
+ void llm_graph_input_pos_bucket::set_input(const llama_ubatch * ubatch) {
+     if (pos_bucket) {
+         const int64_t n_tokens = ubatch->n_tokens;
+@@ -3247,7 +3261,7 @@ ggml_tensor * llm_graph_context::build_inp_pos() const {
+ }
+ 
+ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
+-    auto inp = std::make_unique<llm_graph_input_attn_temp>(hparams.n_attn_temp_floor_scale, hparams.f_attn_temp_scale, hparams.f_attn_temp_offset);
++    auto inp = std::make_unique<llm_graph_input_attn_temp>(hparams.n_attn_temp_floor_scale, hparams.f_attn_temp_scale, hparams.f_attn_temp_offset, hparams.attn_temp_pow);
+ 
+     auto & cur = inp->attn_scale;
+ 
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index 9a21bc478..83e6025c6 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -269,17 +269,20 @@ public:
+ // temperature tuning, used by llama4
+ class llm_graph_input_attn_temp : public llm_graph_input_i {
+ public:
+-    llm_graph_input_attn_temp(uint32_t n_attn_temp_floor_scale, float f_attn_temp_scale, float f_attn_temp_offset)
+-        : n_attn_temp_floor_scale(n_attn_temp_floor_scale), f_attn_temp_scale(f_attn_temp_scale), f_attn_temp_offset(f_attn_temp_offset) {}
++    llm_graph_input_attn_temp(uint32_t n_attn_temp_floor_scale, float f_attn_temp_scale, float f_attn_temp_offset, bool attn_temp_pow = false)
++        : n_attn_temp_floor_scale(n_attn_temp_floor_scale), f_attn_temp_scale(f_attn_temp_scale), f_attn_temp_offset(f_attn_temp_offset), attn_temp_pow(attn_temp_pow) {}
+     virtual ~llm_graph_input_attn_temp() = default;
+ 
+     void set_input(const llama_ubatch * ubatch) override;
+ 
++    bool can_reuse(const llm_graph_params & params) override;
++
+     ggml_tensor * attn_scale = nullptr; // F32 [n_batch]
+ 
+     const uint32_t n_attn_temp_floor_scale;
+     const float    f_attn_temp_scale;
+     const float    f_attn_temp_offset;
++    const bool     attn_temp_pow;
+ };
+ 
+ class llm_graph_input_pos_bucket : public llm_graph_input_i {
+diff --git a/src/llama-hparams.h b/src/llama-hparams.h
+index f58587abd..5071cf8ed 100644
+--- a/src/llama-hparams.h
++++ b/src/llama-hparams.h
+@@ -289,6 +289,8 @@ struct llama_hparams {
+     uint32_t n_attn_temp_floor_scale = 0;
+     float    f_attn_temp_scale       = 0.0f;
+     float    f_attn_temp_offset      = 0.0f; // offset position index
++    // use (1 + (pos + offset) / floor_scale) ^ scale instead of the llama4 log form
++    bool     attn_temp_pow           = false;
+ 
+     // gemma3n altup
+     uint32_t n_altup      = 4; // altup_num_inputs
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index fc3dd04ac..dc9bd9639 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -323,6 +323,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+             return new llama_model_minimax_m3(params);
+         case LLM_ARCH_HRM_TEXT:
+             return new llama_model_hrm_text(params);
++        case LLM_ARCH_BEAM:
++            return new llama_model_beam(params);
+         case LLM_ARCH_COGVLM:
+             return new llama_model_cogvlm(params);
+         case LLM_ARCH_PANGU_EMBED:
+@@ -413,6 +415,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
+     static const std::regex pattern_idx_cache       ("cache_idx_(k|v)_l\\d*");
+     static const std::regex pattern_dsv4_state      ("dsv4_(csa|hca|lid)_state_(kv|score)_l\\d*");
+     static const std::regex pattern_attn_sinks      ("blk\\.\\d*\\.attn_sinks.weight");
++    static const std::regex pattern_attn_gate_bias  ("blk\\.\\d*\\.attn_gate\\.bias");
+     static const std::regex pattern_attn_out_weight ("blk\\.\\d*\\.attn_output.weight");
+     static const std::regex pattern_attn_out_bias   ("blk\\.\\d*\\.attn_output.bias");
+     static const std::regex pattern_attn_out_a_weight("blk\\.\\d*\\.attn_output_a\\.weight");
+@@ -558,7 +561,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
+         if (std::regex_match(tensor_name, pattern_qk_norm)) {
+             return get_tensor_config_impl(tensor->ne[1] == 1 ? GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
+         }
+-        if (std::regex_match(tensor_name, pattern_kv_cache) || std::regex_match(tensor_name, pattern_attn_sinks)) {
++        if (std::regex_match(tensor_name, pattern_kv_cache) || std::regex_match(tensor_name, pattern_attn_sinks) ||
++                std::regex_match(tensor_name, pattern_attn_gate_bias)) {
+             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_output.weight");
+         }
+         if (std::regex_match(tensor_name, pattern_attn_out_weight)) {
+@@ -757,6 +761,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
+ 
+             const int64_t granularity_q    = std::lcm(n_embd_q, blck_size_perf);
+             const int64_t granularity_head = granularity_q / hparams.n_embd_head_k(il); // for tensors with one value per head
++            if (std::regex_match(tensor_name, pattern_attn_gate_bias)) {
++                GGML_ASSERT(segments.size() == 1);
++                return {granularity_head};
++            }
+             if (std::regex_match(tensor_name, pattern_attn_sinks)) {
+                 GGML_ASSERT(segments.size() == 1);
+                 if (is_dsv4) {
+@@ -3761,6 +3769,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_MELLUM:
+         case LLM_ARCH_MAPLE:
+         case LLM_ARCH_HRM_TEXT:
++        case LLM_ARCH_BEAM:
+             return LLAMA_ROPE_TYPE_NEOX;
+ 
+         case LLM_ARCH_DFLASH:
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 4721c2754..c6e5c701b 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -310,6 +310,7 @@ struct llama_layer {
+     struct ggml_tensor * wv_enc    = nullptr;
+     struct ggml_tensor * wo_enc    = nullptr;
+     struct ggml_tensor * wqkv_gate = nullptr;
++    struct ggml_tensor * wqkv_gate_b = nullptr;
+     // K2 Horizon MoVA
+     struct ggml_tensor * attn_v_gate   = nullptr;
+     struct ggml_tensor * attn_v_gate_b = nullptr;
+diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
+index 30f676c97..814de0c99 100644
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -3152,9 +3152,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+             }
+         }
+ 
+-        // gemma4 and plamo have a normal </s> token, unlike paddleocr
++        // gemma4, plamo and beam have a normal </s> token, unlike paddleocr
+         {
+-            bool has_normal_s_marker = false;
++            // beam's tool call marker is not an EOG token, so it is looked up in the whole vocab
++            bool has_normal_s_marker = token_to_id.count("<rfl:parameter name=\"") > 0;
+             bool has_s = false;
+ 
+             llama_token s_id = LLAMA_TOKEN_NULL;
+diff --git a/src/models/beam.cpp b/src/models/beam.cpp
+new file mode 100644
+index 000000000..55817dd48
+--- /dev/null
++++ b/src/models/beam.cpp
+@@ -0,0 +1,261 @@
++#include "models.h"
++
++void llama_model_beam::load_arch_hparams(llama_model_loader & ml) {
++    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
++    ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
++    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
++    ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
++    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale);
++    ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm);
++    hparams.f_final_logit_softcapping = 0.0f; // absent key = no softcap (default is 30)
++    ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,           hparams.f_final_logit_softcapping, false);
++
++    if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
++        hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
++    }
++    if (hparams.n_layer_dense_lead > hparams.n_layer()) {
++        throw std::runtime_error("beam: leading_dense_block_count exceeds the layer count");
++    }
++
++    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
++    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD; // masked iff p1 - p0 >= n_swa
++    uint32_t n_pattern = 0;
++    ml.get_arr_n(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, n_pattern);
++    if (hparams.n_swa == 0 || n_pattern != hparams.n_layer_all) {
++        throw std::runtime_error("beam: requires a positive sliding window and a sliding window pattern for each layer");
++    }
++    ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
++    if (!hparams.is_swa_any()) {
++        throw std::runtime_error("beam: sliding window pattern has no sliding window layer");
++    }
++
++    // full layers are NoPE
++    hparams.rope_pattern = hparams.is_swa_impl;
++    hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
++    hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
++    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
++
++    // NoPE query scale uses pos + 1
++    hparams.f_attn_temp_scale = 0.1f;
++    hparams.attn_temp_length  = 2048;
++    ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE,  hparams.f_attn_temp_scale, false);
++    ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_LENGTH, hparams.attn_temp_length,  false);
++    if (hparams.f_attn_temp_scale == 0.0f) {
++        throw std::runtime_error("beam: attention.temperature_scale must be nonzero");
++    }
++    if (hparams.attn_temp_length == 0) {
++        throw std::runtime_error("beam: attention.temperature_length must be positive");
++    }
++    hparams.n_attn_temp_floor_scale = hparams.attn_temp_length;
++    hparams.f_attn_temp_offset      = 1.0f;
++    hparams.attn_temp_pow           = true;
++
++    switch (hparams.n_layer()) {
++        case 52: type = LLM_TYPE_UNKNOWN; break;
++        default: type = LLM_TYPE_UNKNOWN;
++    }
++}
++
++void llama_model_beam::load_arch_tensors(llama_model_loader &) {
++    LLAMA_LOAD_LOCALS;
++
++    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
++
++    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
++    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
++    if (output == NULL) {
++        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
++    }
++
++    for (int i = 0; i < n_layer; ++i) {
++        auto & layer = layers[i];
++
++        layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
++        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
++
++        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
++        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
++
++        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
++        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
++
++        layer.wqkv_gate   = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
++        layer.wqkv_gate_b = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "bias",   i), {n_head}, 0);
++
++        layer.ffn_norm      = create_tensor(tn(LLM_TENSOR_FFN_NORM,      "weight", i), {n_embd}, 0);
++        layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
++
++        if ((uint32_t) i < hparams.n_layer_dense_lead) {
++            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
++            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
++            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
++        } else {
++            const int64_t n_ff_exp = hparams.n_ff_exp(i);
++
++            layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, 0);
++            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, 0);
++
++            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
++            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd, n_expert}, 0);
++            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
++        }
++    }
++}
++
++std::unique_ptr<llm_graph_context> llama_model_beam::build_arch_graph(const llm_graph_params & params) const {
++    return std::make_unique<graph>(*this, params);
++}
++
++static ggml_tensor * beam_residual_add(ggml_context * ctx, ggml_tensor * h, ggml_tensor * r, int i) {
++    const float h_scale = (float) (1.0 / std::sqrt((double) i));
++    const float r_scale = (float) std::sqrt((double) (i - 1) / (double) i);
++    return ggml_add(ctx, ggml_scale(ctx, h, h_scale), ggml_scale(ctx, r, r_scale));
++}
++
++llama_model_beam::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
++    const int64_t n_embd_head = hparams.n_embd_head_v();
++    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
++
++    ggml_tensor * cur;
++    ggml_tensor * inpL;
++
++    inpL = build_inp_embd(model.tok_embd);
++
++    ggml_tensor * inp_pos = build_inp_pos();
++
++    bool has_nope = false;
++    for (int il = 0; il < n_layer; ++il) {
++        has_nope = has_nope || !hparams.is_swa(il);
++    }
++    ggml_tensor * inp_attn_scale = has_nope ? build_inp_attn_scale() : nullptr;
++
++    auto * inp_attn = build_attn_inp_kv_iswa();
++
++    ggml_tensor * inp_out_ids = build_inp_out_ids();
++
++    const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
++
++    for (int il = 0; il < n_layer; ++il) {
++        const auto & layer = model.layers[il];
++
++        const bool is_swa = hparams.is_swa(il);
++
++        ggml_tensor * inpSA = inpL;
++
++        cur = build_norm(inpL, layer.attn_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "attn_norm", il);
++
++        {
++            ggml_tensor * attn_inp = cur;
++
++            auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head, n_head, n_head_kv, il);
++
++            Qcur = build_norm(Qcur, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
++            Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
++            cb(Qcur, "Qcur_normed", il);
++            cb(Kcur, "Kcur_normed", il);
++
++            if (is_swa) {
++                const float freq_base_l  = model.get_rope_freq_base (cparams, il);
++                const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
++
++                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
++                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
++                        ext_factor, attn_factor, beta_fast, beta_slow);
++                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
++                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
++                        ext_factor, attn_factor, beta_fast, beta_slow);
++                cb(Qcur, "Qcur_rope", il);
++                cb(Kcur, "Kcur_rope", il);
++            } else {
++                Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
++                cb(Qcur, "Qcur_scaled", il);
++            }
++
++            cur = build_attn(inp_attn,
++                    NULL, NULL, NULL, // o_proj is applied after the gate
++                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
++            cb(cur, "attn_out", il);
++
++            ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, attn_inp);
++            cb(gate, "attn_gate_proj", il);
++            gate = ggml_reshape_3d(ctx0, gate, n_embd_head, n_head, n_tokens);
++            gate = ggml_add(ctx0, gate, ggml_reshape_3d(ctx0, layer.wqkv_gate_b, 1, n_head, 1));
++            gate = ggml_sigmoid(ctx0, gate);
++            gate = ggml_reshape_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
++            cb(gate, "attn_gate_sig", il);
++
++            cur = ggml_mul(ctx0, cur, gate);
++            cb(cur, "attn_gated", il);
++
++            cur = build_lora_mm(layer.wo, cur, layer.wo_s);
++            cb(cur, "attn_o_proj", il);
++        }
++
++        cur = build_norm(cur, layer.attn_post_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "attn_post_norm", il);
++
++        if (il == n_layer - 1 && inp_out_ids) {
++            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
++            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
++        }
++
++        const int i_attn = 2 * (il + 1);
++        ggml_tensor * ffn_inp = beam_residual_add(ctx0, cur, inpSA, i_attn);
++        cb(ffn_inp, "ffn_inp", il);
++
++        cur = build_norm(ffn_inp, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "ffn_norm", il);
++
++        if ((uint32_t) il < hparams.n_layer_dense_lead) {
++            cur = build_ffn(cur,
++                    layer.ffn_up,   NULL, NULL,
++                    layer.ffn_gate, NULL, NULL,
++                    layer.ffn_down, NULL, NULL,
++                    NULL,
++                    LLM_FFN_SILU, LLM_FFN_PAR, il);
++            cb(cur, "ffn_out", il);
++        } else {
++            cur = build_moe_ffn(cur,
++                    layer.ffn_gate_inp,
++                    layer.ffn_up_exps,
++                    layer.ffn_gate_exps,
++                    layer.ffn_down_exps,
++                    layer.ffn_exp_probs_b,
++                    n_expert, n_expert_used,
++                    LLM_FFN_SILU,
++                    hparams.expert_weights_norm,
++                    hparams.expert_weights_scale,
++                    (llama_expert_gating_func_type) hparams.expert_gating_func,
++                    il);
++            cb(cur, "ffn_moe_out", il);
++        }
++
++        cur = build_norm(cur, layer.ffn_post_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "ffn_post_norm", il);
++
++        cur = beam_residual_add(ctx0, cur, ffn_inp, i_attn + 1);
++
++        cur = build_cvec(cur, il);
++        cb(cur, "l_out", il);
++
++        inpL = cur;
++    }
++
++    cur = inpL;
++
++    cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
++    cb(cur, "result_norm", -1);
++    res->t_embd = cur;
++
++    cur = build_lora_mm(model.output, cur, model.output_s);
++
++    if (hparams.f_final_logit_softcapping != 0.0f) {
++        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
++        cur = ggml_tanh(ctx0, cur);
++        cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
++    }
++
++    cb(cur, "result_output", -1);
++    res->t_logits = cur;
++}
+diff --git a/src/models/models.h b/src/models/models.h
+index 830f7c371..6dddbb00f 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -2096,6 +2096,19 @@ struct llama_model_afmoe : public llama_model_base {
+ };
+ 
+ 
++struct llama_model_beam : public llama_model_base {
++    llama_model_beam(const struct llama_model_params & params) : llama_model_base(params) {}
++    void load_arch_hparams(llama_model_loader & ml) override;
++    void load_arch_tensors(llama_model_loader & ml) override;
++
++    struct graph : public llm_graph_context {
++        graph(const llama_model & model, const llm_graph_params & params);
++    };
++
++    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
++};
++
++
+ struct llama_model_laguna : public llama_model_base {
+     llama_model_laguna(const struct llama_model_params & params) : llama_model_base(params) {}
+     void load_arch_hparams(llama_model_loader & ml) override;
+diff --git a/tests/test-jinja.cpp b/tests/test-jinja.cpp
+index 7132c9e22..1dacf1702 100644
+--- a/tests/test-jinja.cpp
++++ b/tests/test-jinja.cpp
+@@ -2011,6 +2011,12 @@ static void test_object_methods(testing & t) {
+         "a b "
+     );
+ 
++    test_template(t, "object | list",
++        "{{ (obj | list) == ['b', 'a'] }} {{ obj | list | join(',') }}",
++        {{"obj", {{"b", 1}, {"a", 2}}}},
++        "True b,a"
++    );
++
+     test_template(t, "object.values()",
+         "{% for v in obj.values() %}{{ v }} {% endfor %}",
+         {{"obj", {{"a", 1}, {"b", 2}}}},
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index 8faccf5ca..4e5433448 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -232,6 +232,11 @@ static gguf_context_ptr get_gguf_ctx(
+     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER) {
+         n_head_kv = 2; // GQA coverage
+     }
++    if (arch == LLM_ARCH_BEAM) {
++        n_head    = 4;
++        n_head_kv = 2;
++        n_layer   = 4;
++    }
+     const uint32_t n_embd_head = n_embd / n_head;
+ 
+     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llm_arch_name(arch));
+@@ -341,6 +346,13 @@ static gguf_context_ptr get_gguf_ctx(
+ 
+     if (arch == LLM_ARCH_MAION_CODER) {
+         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>{1, 1, 0, 0});
++    } else if (arch == LLM_ARCH_BEAM) {
++        std::vector<uint32_t> pattern;
++        pattern.reserve(n_layer);
++        for (uint32_t il = 0; il < n_layer; il++) {
++            pattern.push_back(il % 2);
++        }
++        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
+     } else if (arch == LLM_ARCH_GEMMA4) {
+         ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,      n_embd/2);
+         ms.add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,      uint32_t(0));
+@@ -542,6 +554,14 @@ static gguf_context_ptr get_gguf_ctx(
+         }
+     }
+ 
++    if (arch == LLM_ARCH_BEAM) {
++        ms.add_kv(LLM_KV_EXPERT_COUNT,            uint32_t(8));
++        ms.add_kv(LLM_KV_EXPERT_GROUP_COUNT,      uint32_t(4));
++        ms.add_kv(LLM_KV_EXPERT_GROUP_USED_COUNT, uint32_t(2));
++        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,    2.5f);
++        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,     true);
++    }
++
+     if (arch == LLM_ARCH_MAION_CODER) {
+         ms.add_kv(LLM_KV_MOE_LATENT_SIZE, n_embd / 2);
+         ms.add_kv(LLM_KV_EXPERT_COUNT, uint32_t(4));
+@@ -877,6 +897,7 @@ static bool moe_mandatory(const llm_arch arch) {
+         case LLM_ARCH_BAILINGMOE3:
+         case LLM_ARCH_DOTS1:
+         case LLM_ARCH_AFMOE:
++        case LLM_ARCH_BEAM:
+         case LLM_ARCH_ERNIE4_5:
+         case LLM_ARCH_ERNIE4_5_MOE:
+         case LLM_ARCH_HUNYUAN_MOE:
+-- 
+2.54.0 (Apple Git-157)
+

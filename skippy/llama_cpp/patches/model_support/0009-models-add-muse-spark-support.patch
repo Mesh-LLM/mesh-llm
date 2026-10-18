@@ -1,0 +1,1551 @@
+From 6ecd06383be06c3970f163414c0c1185e4251476 Mon Sep 17 00:00:00 2001
+From: Pascal <admin@serveurperso.com>
+Date: Sun, 18 Oct 2026 11:48:56 +1100
+Subject: [PATCH 1/3] model: add Muse Spark Open (text, vision and audio)
+
+Port ba3c05f71 onto the mesh-llm llama.cpp pin. GGUF-conversion python is omitted; the pinned tree needs load, chat-template and staged-graph support. Resolutions keep both the Inkling dMel audio preprocessor and the Muse Spark audio preprocessor, and keep both projector types out of the standard-layer load path.
+---
+ common/chat.cpp                        |   6 +
+ common/parsers/muse-spark.cpp          | 146 +++++++++++++++
+ common/parsers/parsers.h               |   1 +
+ common/parsers/sources.cmake           |   1 +
+ models/templates/muse-spark.jinja      | 228 +++++++++++++++++++++++
+ src/llama-arch.cpp                     |  14 ++
+ src/llama-arch.h                       |   8 +
+ src/llama-graph.cpp                    |  19 +-
+ src/llama-graph.h                      |   8 +-
+ src/llama-hparams.h                    |   3 +
+ src/llama-model-saver.cpp              |   1 +
+ src/llama-model.cpp                    |   4 +
+ src/llama-model.h                      |  11 ++
+ src/llama-quant.cpp                    |  21 +++
+ src/llama-vocab.cpp                    |   1 +
+ src/models/models.h                    |  13 ++
+ src/models/muse-spark.cpp              | 238 +++++++++++++++++++++++++
+ tests/test-chat.cpp                    |  44 +++++
+ tests/test-llama-archs.cpp             |  15 +-
+ tools/mtmd/CMakeLists.txt              |   1 +
+ tools/mtmd/clip-impl.h                 |   7 +
+ tools/mtmd/clip-model.h                |  26 +++
+ tools/mtmd/clip.cpp                    |  75 +++++++-
+ tools/mtmd/models/models.h             |   5 +
+ tools/mtmd/models/muse-spark-audio.cpp |  66 +++++++
+ tools/mtmd/mtmd-audio.cpp              |  20 +++
+ tools/mtmd/mtmd-audio.h                |   6 +
+ tools/mtmd/mtmd.cpp                    |   6 +
+ 28 files changed, 986 insertions(+), 8 deletions(-)
+ create mode 100644 common/parsers/muse-spark.cpp
+ create mode 100644 models/templates/muse-spark.jinja
+ create mode 100644 src/models/muse-spark.cpp
+ create mode 100644 tools/mtmd/models/muse-spark-audio.cpp
+
+diff --git a/common/chat.cpp b/common/chat.cpp
+index f526789a7..ded63a95b 100644
+--- a/common/chat.cpp
++++ b/common/chat.cpp
+@@ -1224,6 +1224,12 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const
+         return common_chat_params_init_gpt_oss;
+     }
+ 
++    // Muse Spark shares the Muse recipient protocol and adds a commentary recipient.
++    if (src.find("to=commentary") != std::string::npos && src.find("<|eom|>") != std::string::npos) {
++        LOG_DBG("Using specialized template: Muse Spark\n");
++        return common_chat_params_init_muse_spark;
++    }
++
+     // Muse Glimmer format using " to=<recipient>" recipients and <|eom|>/<|eot|> message terminators.
+     if (src.find("<atem:function_calls>") != std::string::npos && src.find("<|eom|>") != std::string::npos) {
+         LOG_DBG("Using specialized template: Muse Glimmer\n");
+diff --git a/common/parsers/muse-spark.cpp b/common/parsers/muse-spark.cpp
+new file mode 100644
+index 000000000..577090aa5
+--- /dev/null
++++ b/common/parsers/muse-spark.cpp
+@@ -0,0 +1,146 @@
++#include "parsers.h"
++
++// An assistant turn is rendered as one or more messages, each
++// "<|start|>assistant to=<recipient><|message|>{content}{END}" where END is
++// <|eom|> (more messages follow) or <|eot|> (end of turn):
++//   - chain-of-thought:  to=self, terminated by <|eom|>
++//   - user facing aside: to=commentary, terminated by <|eom|>
++//   - final answer:      to=user, terminated by <|eot|>
++// A commentary message carries content the user sees while the assistant keeps
++// working, typically before or between tool calls.
++// The generation prompt is just "<|start|>assistant"; the model emits its own
++// " to=...<|message|>".
++common_chat_params common_chat_params_init_muse_spark(const common_chat_template &          tmpl,
++                                                               const autoparser::generation_params & inputs) {
++    common_chat_params data;
++
++    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
++    data.generation_prompt = "<|start|>assistant";
++    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
++    data.supports_thinking = true;
++
++    data.preserved_tokens = {
++        "<|start|>", "<|message|>", "<|eom|>", "<|eot|>",
++        // ATEM tool-call markup emitted on " to=<tool>" turns.
++        "<atem:function_calls>", "<atem:invoke", "<atem:parameter", "</atem:parameter>",
++        "</atem:invoke>", "</atem:function_calls>",
++    };
++
++    data.message_delimiters = {
++        { COMMON_CHAT_ROLE_ASSISTANT, "<|start|>assistant" },
++        { COMMON_CHAT_ROLE_USER,      "<|start|>user"      },
++        { COMMON_CHAT_ROLE_SYSTEM,    "<|start|>system"    },
++        { COMMON_CHAT_ROLE_TOOL,      "<|start|>tool"      },
++    };
++
++    if (inputs.has_continuation()) {
++        const auto & msg = inputs.continue_msg;
++
++        data.generation_prompt = "<|start|>assistant to=self<|message|>" + msg.reasoning_content;
++        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
++            data.generation_prompt += "<|eom|><|start|>assistant to=user<|message|>" + msg.render_content();
++        }
++
++        data.prompt.append(data.generation_prompt);
++    }
++
++    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
++
++    auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
++    // Constrained grammar whenever tools are offered.
++    auto include_grammar = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
++
++    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
++        auto start = p.rule("start", p.literal("<|start|>assistant"));
++
++        if (!extract_reasoning && !include_grammar) {
++            return start + p.content(p.rest());
++        }
++
++        if (extract_reasoning) {
++            p.rule("analysis", p.literal(" to=self<|message|>") + p.reasoning(p.until("<|eom|>")) + p.literal("<|eom|>"));
++        } else {
++            p.rule("analysis", p.literal(" to=self<|message|>") + p.content(p.until("<|eom|>")) + p.literal("<|eom|>"));
++        }
++        auto analysis = p.ref("analysis");
++
++        // Commentary is user facing content emitted mid turn, so it reads as
++        // content and always ends on <|eom|>.
++        auto preamble = p.rule("preamble", p.literal(" to=commentary<|message|>") +
++                                               p.content(p.until("<|eom|>")) + p.literal("<|eom|>"));
++
++        auto aside = p.rule("aside", analysis | preamble);
++
++        auto recipient  = p.optional(p.literal(" to=user"));
++        auto final_msg  = p.rule("final", recipient + p.literal("<|message|>") +
++                                              p.content(p.until_one_of({ "<|eot|>", "<|eom|>" })));
++
++        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
++            auto string_value = p.ac(
++                p.tool_arg_string_value(p.until("</atem:parameter>")) + p.tool_arg_close(p.literal("</atem:parameter>")),
++                "</atem:parameter>");
++
++            auto tool_choice = p.choice();
++            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
++                const auto &      function = tool.at("function");
++                const std::string name     = function.at("name");
++
++                std::vector<common_peg_parser> arg_rules;
++                foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & prop, const common_chat_schema_document_ptr & doc) {
++                    auto value_parser = p.eps();
++                    if (prop.schema->may_be_string()) {
++                        value_parser = string_value;
++                    } else {
++                        value_parser = p.tool_arg_json_value(
++                                p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index) + "-schema", doc, *prop.schema))
++                            + p.tool_arg_close(p.literal("</atem:parameter>"));
++                    }
++
++                    arg_rules.push_back(p.tool_arg(
++                        p.tool_arg_open(p.literal("<atem:parameter name=\"") + p.tool_arg_name(p.literal(prop.name)) + p.literal("\">")) +
++                        value_parser));
++                });
++
++                auto args = p.eps();
++                if (!arg_rules.empty()) {
++                    args = p.zero_or_more(p.choice(arg_rules) + p.space());
++                }
++
++                auto tool_parser = p.tool(
++                    p.tool_open(p.literal(" to=") + p.until("<|message|>") +
++                                p.literal("<|message|><atem:function_calls>") + p.space() +
++                                p.literal("<atem:invoke name=\"") + p.tool_name(p.literal(name)) + p.literal("\">") + p.space())
++                    << p.tool_args(args)
++                    << p.tool_close(p.literal("</atem:invoke>") + p.space() + p.literal("</atem:function_calls>")));
++
++                tool_choice |= p.rule("tool-" + std::to_string(tool_index), tool_parser);
++            });
++
++            auto tool_calls = inputs.parallel_tool_calls
++                ? p.trigger_rule("tool-call", tool_choice + p.zero_or_more(p.literal("<|eom|>") + start + tool_choice))
++                : p.trigger_rule("tool-call", tool_choice);
++
++
++            if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
++                return p.zero_or_more(start + aside) + start + tool_calls;
++            }
++            auto trailing_calls = p.optional(p.literal("<|eom|>") + start + tool_calls);
++            return p.zero_or_more(start + aside) + start + (tool_calls | (final_msg + trailing_calls));
++        }
++
++        return p.zero_or_more(start + aside) + start + final_msg;
++    });
++
++    if (include_grammar) {
++        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
++        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
++            data.parser.build_grammar(builder, data.grammar_lazy);
++        });
++        data.grammar_triggers = {
++            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
++              "<\\|start\\|>assistant( to=(?!self<\\|message\\|>)(?!commentary<\\|message\\|>)(?!user<\\|message\\|>)[^<]*?<\\|message\\|>)" },
++        };
++    }
++
++    return data;
++}
+diff --git a/common/parsers/parsers.h b/common/parsers/parsers.h
+index c9362b6e7..95f358cbd 100644
+--- a/common/parsers/parsers.h
++++ b/common/parsers/parsers.h
+@@ -81,6 +81,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
+ common_chat_params common_chat_params_init_ministral_3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+ 
+ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
++common_chat_params common_chat_params_init_muse_spark(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+ 
+ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+ 
+diff --git a/common/parsers/sources.cmake b/common/parsers/sources.cmake
+index d7dc6edc9..50b98256b 100644
+--- a/common/parsers/sources.cmake
++++ b/common/parsers/sources.cmake
+@@ -20,6 +20,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
+     ${CMAKE_CURRENT_LIST_DIR}/minimax-m3.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/ministral3.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/muse-glimmer.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/muse-spark.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/qwen3-coder.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/translate-gemma.cpp
+ )
+diff --git a/models/templates/muse-spark.jinja b/models/templates/muse-spark.jinja
+new file mode 100644
+index 000000000..8fc6c8df2
+--- /dev/null
++++ b/models/templates/muse-spark.jinja
+@@ -0,0 +1,228 @@
++{%- set tools = tools | default(none) -%}
++{%- set add_generation_prompt = add_generation_prompt | default(false) -%}
++{%- set reasoning_effort = reasoning_effort | default(none) -%}
++{%- set disable_reasoning = disable_reasoning | default(false) -%}
++{%- set cutoff_date = cutoff_date | default('2026-01-04') -%}
++{%- set current_date = current_date | default(strftime_now('%Y-%m-%d') if strftime_now is defined else none) -%}
++{%- set reasoning_effort_map = {'minimal': 1, 'low': 16, 'medium': 64, 'high': 256} -%}
++
++{#- Neutralise control sequences in caller-supplied text so it cannot be
++    tokenized as structure. "<|" is broken because every special token has the
++    form "<|...|>"; the bare media placeholders are broken because the
++    multimodal processor rewrites them positionally and a literal one in text
++    would desynchronise placeholders from the attached media. -#}
++{%- macro esc(value) -%}
++    {{- value | string
++        | replace('<|', '< |')
++        | replace('<image>', '< image>')
++        | replace('<video>', '< video>')
++        | replace('<audio>', '< audio>') -}}
++{%- endmacro -%}
++
++{%- macro esc_header(value) -%}
++    {{- esc(value) | replace('\r', ' ') | replace('\n', ' ') -}}
++{%- endmacro -%}
++
++{%- macro esc_attr(value) -%}
++    {{- esc_header(value)
++        | replace('&', '&amp;')
++        | replace('"', '&quot;')
++        | replace("'", '&#39;')
++        | replace('<', '&lt;')
++        | replace('>', '&gt;') -}}
++{%- endmacro -%}
++
++{%- macro render_content(content) -%}
++    {%- if content is string -%}
++        {{- esc(content | trim) -}}
++    {%- elif content is not none -%}
++        {%- for part in content -%}
++            {%- set part_type = part.get('type', '') -%}
++            {%- if part_type in ['image', 'input_image', 'image_url'] -%}
++                {{- '<|patch|>' -}}
++            {%- elif part_type in ['video', 'input_video', 'video_url'] -%}
++                {{- '<|video|>' -}}
++            {%- elif part_type in ['audio', 'input_audio', 'audio_url'] -%}
++                {{- '<|audio|>' -}}
++            {%- elif part_type in ['text', 'input_text', 'output_text'] -%}
++                {{- esc(part.get('text', '') | trim) -}}
++            {%- endif -%}
++        {%- endfor -%}
++    {%- endif -%}
++{%- endmacro -%}
++
++{%- macro render_atem(tc) -%}
++    {%- set args = tc.function.arguments -%}
++    {%- if args is not mapping -%}
++        {{- raise_exception('This chat template requires tool_call.function.arguments to be a dict (mapping). The jinja sandbox has no JSON parser, so deserialize the arguments string before calling apply_chat_template.') -}}
++    {%- endif -%}
++    {{- '<atem:function_calls>\n<atem:invoke name="' -}}{{- esc_attr(tc.function.name) -}}{{- '">\n' -}}
++    {%- for k, v in args.items() -%}
++        {{- '<atem:parameter name="' -}}{{- esc_attr(k) -}}{{- '">' -}}
++        {%- if v is boolean -%}
++            {%- if v -%}
++                true
++            {%- else -%}
++                false
++            {%- endif -%}
++        {%- elif v is none -%}
++            null
++        {%- elif v is mapping or (v is iterable and v is not string) -%}
++            {{- esc(v | tojson) -}}
++        {%- else -%}
++            {{- esc(v) -}}
++        {%- endif -%}
++        {{- '</atem:parameter>\n' -}}
++    {%- endfor -%}
++    {{- '</atem:invoke>\n</atem:function_calls>' -}}
++{%- endmacro -%}
++
++{%- macro render_tool_defs(tools) -%}
++    {{- 'In this environment you have access to a set of tools you can use to answer the user\'s question.\n\n' -}}
++    {{- 'You can invoke a function by writing a "<atem:function_calls>" block like the following as part of your reply to the user:\n' -}}
++    {{- '<atem:function_calls>\n<atem:invoke name="$FUNCTION_NAME">\n<atem:parameter name="$PARAMETER_NAME">$PARAMETER_VALUE</atem:parameter>\n...\n</atem:invoke>\n</atem:function_calls>\n\n' -}}
++    {{- 'String and scalar parameters should be specified as is, while lists and objects should use JSON format. Note that spaces for string values are not stripped. The output is not expected to be valid XML and is parsed with regular expressions.\n' -}}
++    {{- 'Here are the functions available in JSONSchema format:\n' -}}
++    {{- '// Tool metadata\n{"name": "", "description": ""}\n' -}}
++    {{- '// Function schemas' -}}
++    {%- for tool in tools -%}
++        {%- set fn = tool.function if tool.function is defined else tool -%}
++        {{- '\n{"name": ' -}}{{- fn.name | tojson -}}
++        {{- ', "description": ' -}}{{- (fn.description if fn.description is defined and fn.description else '') | tojson -}}
++        {{- ', "parameters": ' -}}{{- (fn.parameters if fn.parameters is defined and fn.parameters else {}) | tojson -}}{{- '}' -}}
++    {%- endfor -%}
++    {{- '\n\n' -}}
++    {{- 'Here are examples of how to call functions in the tool set. To make parallel tool calls, emit each call as its own message (one tool call per message) in consecutive messages, as shown below:\n' -}}
++    {{- '(If the tool namespace is not specified, invoke the function directly as `example_function_name_1` rather than `example_tool_name_1.example_function_name_1`)\n\n' -}}
++    {{- 'to=example_tool_name_1.example_function_name_1\n\n' -}}
++    {{- '<atem:function_calls>\n<atem:invoke name="example_tool_name_1.example_function_name_1">\n' -}}
++    {{- '<atem:parameter name="example_parameter_1">value_1</atem:parameter>\n' -}}
++    {{- '</atem:invoke>\n</atem:function_calls>\n\n' -}}
++    {{- 'to=example_tool_name_2.example_function_name_2\n\n' -}}
++    {{- '<atem:function_calls>\n<atem:invoke name="example_tool_name_2.example_function_name_2">\n' -}}
++    {{- '<atem:parameter name="example_parameter_2">This is the value for the second parameter\nthat can span\n"multiple" lines\n</atem:parameter>\n' -}}
++    {{- '<atem:parameter name="example_parameter_3">value_3</atem:parameter>\n' -}}
++    {{- '</atem:invoke>\n</atem:function_calls>' -}}
++{%- endmacro -%}
++
++{%- macro render_valid_recipients(tools) -%}
++    {%- set rns = namespace(recipients=[]) -%}
++    {{- 'Use the appropriate recipient for each message:\n\n' -}}
++    {%- if not disable_reasoning -%}
++        {%- set rns.recipients = rns.recipients + ['"self"'] -%}
++        {{- '- "self": private reasoning and tool planning.\n' -}}
++    {%- endif -%}
++    {%- set rns.recipients = rns.recipients + ['"commentary"'] -%}
++    {{- '- "commentary": user-visible intermediate updates while the assistant will continue working, including messages sent to the user before or between tool calls.\n' -}}
++    {%- if tools -%}
++        {%- set first_tool = tools | first -%}
++        {%- set first_fn = (first_tool.function if first_tool.function is defined else first_tool).name -%}
++        {%- set rns.recipients = rns.recipients + ['"[func_name] (e.g., ' ~ esc_header(first_fn) ~ ')"'] -%}
++        {{- '- "tool" or "[tool name]": the name of the tool to call.\n' -}}
++    {%- endif -%}
++    {%- set rns.recipients = rns.recipients + ['"user"'] -%}
++    {{- '- "user": messages that end the assistant turn, such as a completed response or clarification question that waits for the user\'s reply; do not use for pre-tool updates or partial responses.\n' -}}
++    {{- '\n# Valid recipients: ' ~ rns.recipients | join(', ') ~ '.' -}}
++{%- endmacro -%}
++
++{{- bos_token -}}
++{%- set ns = namespace(instructions=none, rest=messages) -%}
++{%- if messages and messages[0]['role'] in ['system', 'developer'] -%}
++    {%- set ns.instructions = render_content(messages[0]['content'])
++          | replace('Reasoning effort', 'Reasoning strength')
++          | replace('Reasoning Effort', 'Reasoning Strength')
++          | replace('reasoning effort', 'reasoning strength')
++          | replace('REASONING EFFORT', 'REASONING STRENGTH') -%}
++    {%- set ns.rest = messages[1:] -%}
++{%- endif -%}
++{%- set sys = namespace(parts=['You are a helpful AI assistant.', 'Knowledge cutoff: ' ~ cutoff_date ~ '.']) -%}
++{%- if current_date -%}
++    {%- set sys.parts = sys.parts + ['Current date: ' ~ current_date ~ '.'] -%}
++{%- endif -%}
++{%- if ns.instructions -%}
++    {%- set sys.parts = sys.parts + [ns.instructions] -%}
++{%- endif -%}
++{%- if tools -%}
++    {%- set sys.parts = sys.parts + [render_tool_defs(tools) | trim] -%}
++{%- endif -%}
++{%- if not disable_reasoning and reasoning_effort in reasoning_effort_map and 'reasoning strength:' not in ((ns.instructions if ns.instructions else '') | lower) -%}
++    {%- set sys.parts = sys.parts + ['Reasoning strength: ' ~ reasoning_effort_map[reasoning_effort] ~ '.'] -%}
++{%- endif -%}
++{%- set sys.parts = sys.parts + [render_valid_recipients(tools) | trim] -%}
++{{- '<|start|>system<|message|>' ~ sys.parts | join('\n\n') ~ '<|eot|>' -}}
++{%- for message in ns.rest -%}
++    {%- set role = message['role'] -%}
++    {%- set end_token = '<|eom|>' if (not loop.last and ns.rest[loop.index0 + 1]['role'] == role) else '<|eot|>' -%}
++    {%- if role in ['system', 'developer'] -%}
++        {{- '<|start|>' + role + '<|message|>' -}}
++        {{- render_content(message['content']) -}}
++        {{- '<|eot|>' -}}
++    {%- elif role == 'user' -%}
++        {{- '<|start|>user<|message|>' -}}
++        {%- if message.get('render_timestamp') and message.get('timestamp') -%}
++            {%- set ts = message['timestamp'] -%}
++            {%- if ts is string -%}
++                {{- '[' ~ esc_header(ts) ~ '] ' -}}
++            {%- elif ts.strftime is defined -%}
++                {{- '[' ~ (ts.strftime('%a %Y-%m-%d %H:%M %Z') | trim) ~ '] ' -}}
++            {%- endif -%}
++        {%- endif -%}
++        {{- render_content(message['content']) -}}
++        {{- '<|eot|>' -}}
++    {%- elif role == 'tool' -%}
++        {%- set tname = message.get('name') -%}
++        {%- if not tname -%}
++            {%- set tcid = message.get('tool_call_id') -%}
++            {%- set tns = namespace(name=tcid if tcid else '') -%}
++            {%- for m in messages -%}
++                {%- if m.get('tool_calls') -%}
++                    {%- for tc in m['tool_calls'] -%}
++                        {%- if tcid is not none and tc.id is defined and tc.id == tcid -%}
++                            {%- set tns.name = tc.function.name -%}
++                        {%- endif -%}
++                    {%- endfor -%}
++                {%- endif -%}
++            {%- endfor -%}
++            {%- set tname = tns.name -%}
++        {%- endif -%}
++        {%- if not tname -%}
++            {{- raise_exception('tool message has no name and no matching tool_call_id') -}}
++        {%- endif -%}
++        {{- '<|start|>tool ' -}}{{- esc_header(tname) -}}{{- '<|message|><tool_output name="' -}}{{- esc_attr(tname) -}}{{- '">\n' -}}
++        {{- render_content(message['content']) -}}
++        {{- '\n</tool_output><|eot|>' -}}
++    {%- elif role == 'assistant' -%}
++        {%- set reasoning = message.get('reasoning_content') or message.get('reasoning') -%}
++        {%- if reasoning -%}
++            {{- '<|start|>assistant to=self<|message|>' -}}{{- esc(reasoning) -}}{{- '<|eom|>' -}}
++        {%- endif -%}
++        {%- set body = render_content(message.get('content')) -%}
++        {%- if message.get('tool_calls') -%}
++            {%- if body -%}
++                {{- '<|start|>assistant to=commentary<|message|>' + body + '<|eom|>' -}}
++            {%- endif -%}
++            {%- for tc in message['tool_calls'] -%}
++                {{- '<|start|>assistant to=' -}}{{- esc_header(tc.function.name) -}}{{- '<|message|>' -}}
++                {{- render_atem(tc) -}}
++                {{- (end_token if loop.last else '<|eom|>') -}}
++            {%- endfor -%}
++        {%- elif body or not reasoning -%}
++            {%- set recipient = message.get('recipient') or 'user' -%}
++            {%- if recipient == 'user' -%}
++                {%- set end_turn = true -%}
++            {%- elif recipient in ['self', 'commentary'] -%}
++                {%- set end_turn = false -%}
++            {%- elif message.get('end_turn') is not none -%}
++                {%- set end_turn = message.get('end_turn') -%}
++            {%- else -%}
++                {%- set end_turn = false -%}
++            {%- endif -%}
++            {{- '<|start|>assistant to=' -}}{{- esc_header(recipient) -}}{{- '<|message|>' -}}
++            {{- body -}}
++            {{- ('<|eot|>' if end_turn else '<|eom|>') -}}
++        {%- endif -%}
++    {%- endif -%}
++{%- endfor -%}
++{%- if add_generation_prompt -%}
++    {{- '<|start|>assistant' -}}
++{%- endif -%}
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index 14180f11f..3ac30ffc9 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -79,6 +79,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+     { LLM_ARCH_OLMO2,            "olmo2"            },
+     { LLM_ARCH_OLMOE,            "olmoe"            },
+     { LLM_ARCH_MUSE_GLIMMER,     "muse-glimmer"     },
++    { LLM_ARCH_MUSE_SPARK,       "muse-spark"       },
+     { LLM_ARCH_OPENELM,          "openelm"          },
+     { LLM_ARCH_ARCTIC,           "arctic"           },
+     { LLM_ARCH_DEEPSEEK,         "deepseek"         },
+@@ -231,6 +232,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+     { LLM_KV_EXPERTS_PER_GROUP,                 "%s.experts_per_group"                 },
+     { LLM_KV_MOE_EVERY_N_LAYERS,                "%s.moe_every_n_layers"                },
+     { LLM_KV_MOE_LATENT_SIZE,                   "%s.moe_latent_size"                   },
++    { LLM_KV_POST_NORM_EPS,                     "%s.post_norm_epsilon"                 },
+     { LLM_KV_NEXTN_PREDICT_LAYERS,              "%s.nextn_predict_layers"              },
+     { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                },
+     { LLM_KV_DEEPSTACK_MAPPING,                 "%s.deepstack_mapping"                 },
+@@ -527,6 +529,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+     { LLM_TENSOR_ATTN_Q_NORM,                            "blk.%d.attn_q_norm" },
+     { LLM_TENSOR_ATTN_K_NORM,                            "blk.%d.attn_k_norm" },
+     { LLM_TENSOR_ATTN_GATE,                              "blk.%d.attn_gate" },
++    { LLM_TENSOR_ATTN_RESID_ALPHA,                       "blk.%d.attn_resid_alpha" },
++    { LLM_TENSOR_ATTN_RESID_BETA,                        "blk.%d.attn_resid_beta" },
+     { LLM_TENSOR_FFN_POST_NORM,                          "blk.%d.post_ffw_norm" },
+     { LLM_TENSOR_FFN_POST_NORM_1,                        "blk.%d.post_ffw_norm_1" },
+     { LLM_TENSOR_FFN_POST_NORM_2,                        "blk.%d.post_ffw_norm_2" },
+@@ -538,6 +542,10 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+     { LLM_TENSOR_FFN_EXP_PROBS_B_VL,                     "blk.%d.exp_probs_b_vl" },
+     { LLM_TENSOR_FFN_LATENT_DOWN,                        "blk.%d.ffn_latent_down" },
+     { LLM_TENSOR_FFN_LATENT_UP,                          "blk.%d.ffn_latent_up" },
++    { LLM_TENSOR_FFN_PRE_EXP_NORM,                       "blk.%d.ffn_pre_exp_norm" },
++    { LLM_TENSOR_FFN_POST_EXP_NORM,                      "blk.%d.ffn_post_exp_norm" },
++    { LLM_TENSOR_FFN_RESID_ALPHA,                        "blk.%d.ffn_resid_alpha" },
++    { LLM_TENSOR_FFN_RESID_BETA,                         "blk.%d.ffn_resid_beta" },
+     { LLM_TENSOR_ATTN_NORM_2,                            "blk.%d.attn_norm_2" },
+     { LLM_TENSOR_ATTN_QKV,                               "blk.%d.attn_qkv" },
+     { LLM_TENSOR_LAYER_OUT_NORM,                         "blk.%d.layer_output_norm" },
+@@ -905,6 +913,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+     {LLM_TENSOR_ATTN_QKV,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_ATTN_OUT,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_ATTN_GATE,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_ATTN_RESID_ALPHA,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
++    {LLM_TENSOR_ATTN_RESID_BETA,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+     {LLM_TENSOR_FFN_GATE,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_FFN_DOWN,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_FFN_UP,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+@@ -1164,6 +1174,10 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+     // latent projections feed ggml_mul_mat, the buft probe must use MUL_MAT to keep them on GPU
+     {LLM_TENSOR_FFN_LATENT_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_FFN_LATENT_UP,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
++    {LLM_TENSOR_FFN_PRE_EXP_NORM,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
++    {LLM_TENSOR_FFN_POST_EXP_NORM,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
++    {LLM_TENSOR_FFN_RESID_ALPHA,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
++    {LLM_TENSOR_FFN_RESID_BETA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+     {LLM_TENSOR_MASKED_EMBD_CENTROIDS,      {LLM_TENSOR_LAYER_INPUT,     GGML_OP_NONE}},
+     {LLM_TENSOR_MASKED_EMBD_ORDERING,       {LLM_TENSOR_LAYER_INPUT,     GGML_OP_NONE}},
+     // eagle3
+diff --git a/src/llama-arch.h b/src/llama-arch.h
+index 24e8e7af8..22883c1cf 100644
+--- a/src/llama-arch.h
++++ b/src/llama-arch.h
+@@ -84,6 +84,7 @@ enum llm_arch {
+     LLM_ARCH_OLMO2,
+     LLM_ARCH_OLMOE,
+     LLM_ARCH_MUSE_GLIMMER,
++    LLM_ARCH_MUSE_SPARK,
+     LLM_ARCH_OPENELM,
+     LLM_ARCH_ARCTIC,
+     LLM_ARCH_DEEPSEEK,
+@@ -236,6 +237,7 @@ enum llm_kv {
+     LLM_KV_EXPERTS_PER_GROUP,
+     LLM_KV_MOE_EVERY_N_LAYERS,
+     LLM_KV_MOE_LATENT_SIZE,
++    LLM_KV_POST_NORM_EPS,
+     LLM_KV_NEXTN_PREDICT_LAYERS,
+     LLM_KV_NUM_DEEPSTACK_LAYERS,
+     LLM_KV_DEEPSTACK_MAPPING,
+@@ -524,6 +526,8 @@ enum llm_tensor {
+     LLM_TENSOR_ATTN_ROT_EMBD,
+     LLM_TENSOR_ATTN_SINKS,
+     LLM_TENSOR_ATTN_GATE,
++    LLM_TENSOR_ATTN_RESID_ALPHA,
++    LLM_TENSOR_ATTN_RESID_BETA,
+     LLM_TENSOR_FFN_GATE_INP,
+     LLM_TENSOR_FFN_GATE_INP_SHEXP,
+     LLM_TENSOR_FFN_NORM,
+@@ -557,6 +561,10 @@ enum llm_tensor {
+     LLM_TENSOR_FFN_EXP_PROBS_B_VL,
+     LLM_TENSOR_FFN_LATENT_DOWN,
+     LLM_TENSOR_FFN_LATENT_UP,
++    LLM_TENSOR_FFN_PRE_EXP_NORM,
++    LLM_TENSOR_FFN_POST_EXP_NORM,
++    LLM_TENSOR_FFN_RESID_ALPHA,
++    LLM_TENSOR_FFN_RESID_BETA,
+     LLM_TENSOR_ATTN_Q_NORM,
+     LLM_TENSOR_ATTN_K_NORM,
+     LLM_TENSOR_LAYER_OUT_NORM,
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 569b27022..e9f1cfc67 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2576,7 +2576,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+          ggml_tensor * up_exps_s,
+          ggml_tensor * gate_exps_s,
+          ggml_tensor * down_exps_s,
+-         ggml_tensor * selected_experts_in) const {
++         ggml_tensor * selected_experts_in,
++         ggml_tensor * post_exp_norm,
++               float   post_exp_norm_eps) const {
+     return build_moe_ffn(
+         cur,
+         gate_inp,  /* gate_inp_b  */ nullptr,
+@@ -2597,7 +2599,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         up_exps_s,
+         gate_exps_s,
+         down_exps_s,
+-        selected_experts_in
++        selected_experts_in,
++        post_exp_norm,
++        post_exp_norm_eps
+     );
+ }
+ 
+@@ -2625,7 +2629,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+          ggml_tensor * up_exps_s,
+          ggml_tensor * gate_exps_s,
+          ggml_tensor * down_exps_s,
+-         ggml_tensor * selected_experts_in) const {
++         ggml_tensor * selected_experts_in,
++         ggml_tensor * post_exp_norm,
++               float   post_exp_norm_eps) const {
+     const int64_t n_embd   = cur->ne[0];
+     const int64_t n_tokens = cur->ne[1];
+     const auto top_k = [&](ggml_tensor * value, int64_t k) {
+@@ -2935,6 +2941,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         cb(experts, "ffn_moe_down_biased", il);
+     }
+ 
++    // an expert output can be scaled by a norm weight, then normalized, before the router weights apply
++    if (post_exp_norm) {
++        experts = ggml_mul(ctx0, experts, post_exp_norm);
++        experts = ggml_rms_norm(ctx0, experts, post_exp_norm_eps);
++        cb(experts, "ffn_moe_post_exp_norm", il);
++    }
++
+     if (!weight_before_ffn) {
+         experts = ggml_mul(ctx0, experts, weights);
+         cb(experts, "ffn_moe_weighted", il);
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index a4ffee4e5..9a21bc478 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -1364,7 +1364,9 @@ struct llm_graph_context {
+              ggml_tensor * up_exps_s = nullptr,
+              ggml_tensor * gate_exps_s = nullptr,
+              ggml_tensor * down_exps_s = nullptr,
+-             ggml_tensor * selected_experts_in = nullptr) const;
++             ggml_tensor * selected_experts_in = nullptr,
++             ggml_tensor * post_exp_norm = nullptr,
++                   float   post_exp_norm_eps = 1e-5f) const;
+ 
+     ggml_tensor * build_moe_ffn(
+              ggml_tensor * cur,
+@@ -1390,7 +1392,9 @@ struct llm_graph_context {
+              ggml_tensor * up_exps_s = nullptr,
+              ggml_tensor * gate_exps_s = nullptr,
+              ggml_tensor * down_exps_s = nullptr,
+-             ggml_tensor * selected_experts_in = nullptr) const;
++             ggml_tensor * selected_experts_in = nullptr,
++             ggml_tensor * post_exp_norm = nullptr,
++                   float   post_exp_norm_eps = 1e-5f) const;
+ 
+     // the slots of the selected experts in the MoE cache, nullptr if the experts of the layer are not read from the cache
+     ggml_tensor * build_moe_cache_slots(
+diff --git a/src/llama-hparams.h b/src/llama-hparams.h
+index bc30ead2f..f58587abd 100644
+--- a/src/llama-hparams.h
++++ b/src/llama-hparams.h
+@@ -150,6 +150,9 @@ struct llama_hparams {
+     float f_norm_rms_eps;
+     float f_norm_group_eps;
+ 
++    // post norms use their own epsilon
++    float f_post_norm_eps = 0.0f;
++
+     float f_attn_logit_softcapping   = 50.0f;
+     float f_router_logit_softcapping = 30.0f;
+     float f_final_logit_softcapping  = 30.0f;
+diff --git a/src/llama-model-saver.cpp b/src/llama-model-saver.cpp
+index 01a9b98d8..656453247 100644
+--- a/src/llama-model-saver.cpp
++++ b/src/llama-model-saver.cpp
+@@ -282,6 +282,7 @@ void llama_model_saver::add_kv_from_model() {
+     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,            hparams.n_embd_head_v_full);
+     add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,           hparams.f_norm_eps);
+     add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
++    add_kv(LLM_KV_POST_NORM_EPS,                     hparams.f_post_norm_eps);
+     add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,           hparams.f_norm_group_eps);
+     add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,        hparams.n_norm_groups);
+     add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      hparams.n_value_expert);
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 5992b1989..fc3dd04ac 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -189,6 +189,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+             return new llama_model_olmoe(params);
+         case LLM_ARCH_MUSE_GLIMMER:
+             return new llama_model_muse_glimmer(params);
++        case LLM_ARCH_MUSE_SPARK:
++            return new llama_model_muse_spark(params);
+         case LLM_ARCH_OPENELM:
+             return new llama_model_openelm(params);
+         case LLM_ARCH_GPTNEOX:
+@@ -999,6 +1001,7 @@ const char * llm_type_name(llm_type type) {
+         case LLM_TYPE_16x3_8B:       return "16x3.8B";
+         case LLM_TYPE_10B_128x3_66B: return "10B+128x3.66B";
+         case LLM_TYPE_57B_A14B:      return "57B.A14B";
++        case LLM_TYPE_816B_A42B:     return "816B.A42B";
+         case LLM_TYPE_17B_16E:       return "17Bx16E (Scout)";
+         case LLM_TYPE_17B_128E:      return "17Bx128E (Maverick)";
+         case LLM_TYPE_A13B:          return "A13B";
+@@ -3646,6 +3649,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_DEEPSEEK32:
+         case LLM_ARCH_DEEPSEEK4:
+         case LLM_ARCH_MUSE_GLIMMER:
++        case LLM_ARCH_MUSE_SPARK:
+         case LLM_ARCH_PLM:
+         case LLM_ARCH_CHATGLM:
+         case LLM_ARCH_GRANITE:
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 11cc9aa82..4721c2754 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -114,6 +114,7 @@ enum llm_type {
+     LLM_TYPE_16x3_8B,
+     LLM_TYPE_10B_128x3_66B,
+     LLM_TYPE_57B_A14B,
++    LLM_TYPE_816B_A42B,
+     LLM_TYPE_17B_16E, // llama4 Scout
+     LLM_TYPE_17B_128E, // llama4 Maverick
+     LLM_TYPE_A13B,
+@@ -361,6 +362,16 @@ struct llama_layer {
+     struct ggml_tensor * ffn_latent_down = nullptr;
+     struct ggml_tensor * ffn_latent_up   = nullptr;
+ 
++    // ff MoE norms around the experts, in latent space
++    struct ggml_tensor * ffn_pre_exp_norm  = nullptr;
++    struct ggml_tensor * ffn_post_exp_norm = nullptr;
++
++    // norm preserving residual coefficients
++    struct ggml_tensor * attn_resid_alpha = nullptr;
++    struct ggml_tensor * attn_resid_beta  = nullptr;
++    struct ggml_tensor * ffn_resid_alpha  = nullptr;
++    struct ggml_tensor * ffn_resid_beta   = nullptr;
++
+     // ff shared expert (shexp)
+     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
+     struct ggml_tensor * ffn_gate_shexp     = nullptr;
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index 9992659d8..4dc883f2d 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -31,9 +31,11 @@ enum class tensor_category {
+     ATTENTION_QKV,
+     ATTENTION_KV_B,
+     ATTENTION_OUTPUT,
++    ATTENTION_GATE,
+     FFN_UP,
+     FFN_GATE,
+     FFN_DOWN,
++    FFN_LATENT,
+     OUTPUT,
+     OTHER
+ };
+@@ -147,6 +149,12 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
+     if (tensor_name.find("ffn_gate") != std::string::npos) {
+         return tensor_category::FFN_GATE;
+     }
++    if (tensor_name.find("ffn_latent") != std::string::npos) {
++        return tensor_category::FFN_LATENT;
++    }
++    if (tensor_name.find("attn_gate.weight") != std::string::npos) {
++        return tensor_category::ATTENTION_GATE;
++    }
+     if (tensor_name.find("ffn_down") != std::string::npos) {
+         return tensor_category::FFN_DOWN;
+     }
+@@ -501,6 +509,19 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type
+         }
+     }
+ 
++    // bumping to q8_0 is preferred since these tensors are not really big
++    // TODO: nemotron 3 super shares ffn_latent and afmoe, bailingmoe3, dots3note, hy-v4, kimi-k3 and laguna share attn_gate.
++    //       Widening the guard is likely a win there too, but it changes their files, so it wants a perplexity comparison per architecture first.
++    if (arch == LLM_ARCH_MUSE_SPARK &&
++        (category == tensor_category::FFN_LATENT || category == tensor_category::ATTENTION_GATE)) {
++        auto bits_per_weight = [](ggml_type t) {
++            return 8.0 * ggml_type_size(t) / ggml_blck_size(t);
++        };
++        if (ggml_is_quantized(new_type) && bits_per_weight(new_type) < bits_per_weight(GGML_TYPE_Q8_0)) {
++            new_type = GGML_TYPE_Q8_0;
++        }
++    }
++
+     // for arches that share the same tensor between the token embeddings and the output, we quantize the token embeddings
+     // with the quantization of the output tensor
+     if (category == tensor_category::OUTPUT || (qs.has_tied_embeddings && category == tensor_category::TOKEN_EMBD)) {
+diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
+index a800d3ff3..30f676c97 100644
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -3039,6 +3039,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+ 
+             if (false
+                     || t.first == "<|eot_id|>"
++                    || t.first == "<|eot|>"    // muse-spark
+                     || t.first == "<|im_end|>"
+                     || t.first == "<|end|>"
+                     || t.first == "<|return|>" // o200k_harmony
+diff --git a/src/models/models.h b/src/models/models.h
+index 1eaa9b576..830f7c371 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -1214,6 +1214,19 @@ struct llama_model_olmoe : public llama_model_base {
+ };
+ 
+ 
++struct llama_model_muse_spark : public llama_model_base {
++    llama_model_muse_spark(const struct llama_model_params & params) : llama_model_base(params) {}
++    void load_arch_hparams(llama_model_loader & ml) override;
++    void load_arch_tensors(llama_model_loader & ml) override;
++
++    struct graph : public llm_graph_context {
++        graph(const llama_model & model, const llm_graph_params & params);
++    };
++
++    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
++};
++
++
+ struct llama_model_muse_glimmer : public llama_model_base {
+     llama_model_muse_glimmer(const struct llama_model_params & params) : llama_model_base(params) {}
+     void load_arch_hparams(llama_model_loader & ml) override;
+diff --git a/src/models/muse-spark.cpp b/src/models/muse-spark.cpp
+new file mode 100644
+index 000000000..5842ecb98
+--- /dev/null
++++ b/src/models/muse-spark.cpp
+@@ -0,0 +1,238 @@
++#include "models.h"
++
++void llama_model_muse_spark::load_arch_hparams(llama_model_loader & ml) {
++    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
++    ml.get_key(LLM_KV_POST_NORM_EPS,               hparams.f_post_norm_eps);
++    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
++    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa);
++    ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping);
++    ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
++    ml.get_key(LLM_KV_MOE_LATENT_SIZE,             hparams.moe_latent_size);
++    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
++    ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
++    ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm);
++    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
++
++    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
++    ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
++
++    switch (hparams.n_layer()) {
++        case 62: type = LLM_TYPE_816B_A42B; break;
++        default: type = LLM_TYPE_UNKNOWN;
++    }
++}
++
++void llama_model_muse_spark::load_arch_tensors(llama_model_loader &) {
++    LLAMA_LOAD_LOCALS;
++
++    const int64_t n_embd_moe = hparams.moe_latent_size;
++    const int64_t n_ff_exp   = hparams.n_ff_exp();
++
++    tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
++    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
++    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
++
++    for (int i = 0; i < n_layer; ++i) {
++        auto & layer = layers[i];
++
++        // Pre-attention norm. All block norms hold a delta folded at conversion time.
++        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
++
++        // Q/K/V/O projections.
++        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
++        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
++
++        // QK-norm. Weights are synthesized at conversion to absorb the metap scale.
++        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
++        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
++
++        // Attention output gate: sigmoid(gate) * attn_out before o_proj.
++        layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
++
++        // Norm preserving residual: alpha scales the stream, beta the branch.
++        layer.attn_resid_alpha = create_tensor(tn(LLM_TENSOR_ATTN_RESID_ALPHA, "weight", i), {n_embd}, 0);
++        layer.attn_resid_beta  = create_tensor(tn(LLM_TENSOR_ATTN_RESID_BETA,  "weight", i), {n_embd}, 0);
++
++        layer.ffn_norm       = create_tensor(tn(LLM_TENSOR_FFN_NORM,       "weight", i), {n_embd}, 0);
++        layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM,  "weight", i), {n_embd}, 0);
++        layer.ffn_resid_alpha = create_tensor(tn(LLM_TENSOR_FFN_RESID_ALPHA, "weight", i), {n_embd}, 0);
++        layer.ffn_resid_beta  = create_tensor(tn(LLM_TENSOR_FFN_RESID_BETA,  "weight", i), {n_embd}, 0);
++
++        // Every layer routes. The router reads the full stream, the experts run
++        // in a latent space entered by ffn_latent_down and left by ffn_latent_up.
++        layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,   "weight", i), {n_embd, n_expert}, 0);
++        layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
++
++        layer.ffn_latent_down = create_tensor(tn(LLM_TENSOR_FFN_LATENT_DOWN, "weight", i), {n_embd, n_embd_moe}, 0);
++        layer.ffn_latent_up   = create_tensor(tn(LLM_TENSOR_FFN_LATENT_UP,   "weight", i), {n_embd_moe, n_embd}, 0);
++
++        layer.ffn_pre_exp_norm  = create_tensor(tn(LLM_TENSOR_FFN_PRE_EXP_NORM,  "weight", i), {n_embd_moe}, 0);
++        layer.ffn_post_exp_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_EXP_NORM, "weight", i), {n_embd_moe}, 0);
++
++        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd_moe, n_ff_exp, n_expert}, 0);
++        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd_moe, n_ff_exp, n_expert}, 0);
++        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd_moe, n_expert}, 0);
++    }
++}
++
++llama_model_muse_spark::graph::graph(const llama_model & model, const llm_graph_params & params)
++    : llm_graph_context(params) {
++    const int64_t n_embd_head = hparams.n_embd_head_v();
++    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
++
++    ggml_tensor * cur;
++    ggml_tensor * inpL;
++
++    inpL = build_inp_embd(model.tok_embd);
++    inpL = build_norm(inpL, nullptr, nullptr, LLM_NORM_RMS, -1);
++    cb(inpL, "embd_norm", -1);
++
++    ggml_tensor * inp_pos = build_inp_pos();
++    auto * inp_attn = build_attn_inp_kv_iswa();
++    ggml_tensor * inp_out_ids = build_inp_out_ids();
++
++    const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
++
++    for (int il = 0; il < n_layer; ++il) {
++        res->t_layer_inp[il] = inpL;
++
++        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
++        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
++
++        ggml_tensor * inpSA = inpL;
++
++        // RoPE runs on the SWA layers, NoPE on the global ones.
++        const bool use_rope = hparams.is_swa(il);
++
++        cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "attn_norm", il);
++
++        {
++            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
++                    n_embd_head, n_head, n_head_kv, il);
++
++            ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, cur);
++            cb(gate, "attn_gate_proj", il);
++
++            // attn_q_norm carries the metap scale, attn_k_norm is identity.
++            Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
++            Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
++            cb(Qcur, "Qcur_normed", il);
++            cb(Kcur, "Kcur_normed", il);
++
++            if (use_rope) {
++                Qcur = ggml_rope_ext(
++                        ctx0, Qcur, inp_pos, nullptr,
++                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
++                        ext_factor, attn_factor, beta_fast, beta_slow);
++                cb(Qcur, "Qcur_rope", il);
++
++                Kcur = ggml_rope_ext(
++                        ctx0, Kcur, inp_pos, nullptr,
++                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
++                        ext_factor, attn_factor, beta_fast, beta_slow);
++                cb(Kcur, "Kcur_rope", il);
++            }
++
++            cur = build_attn(inp_attn,
++                    NULL, NULL, NULL,
++                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
++            cb(cur, "attn_out", il);
++
++            // Weightless norm on the attention output, applied per head.
++            cur = ggml_reshape_3d(ctx0, cur, n_embd_head, n_head, n_tokens);
++            cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
++            cur = ggml_reshape_2d(ctx0, cur, n_embd_head * n_head, n_tokens);
++            cb(cur, "attn_o_norm", il);
++
++            gate = ggml_sigmoid(ctx0, gate);
++            cb(gate, "attn_gate_sig", il);
++            cur = ggml_mul(ctx0, cur, gate);
++            cb(cur, "attn_gated", il);
++
++            cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
++            cb(cur, "attn_o_proj", il);
++        }
++
++        // Post-attention norm holds no weight.
++        cur = ggml_rms_norm(ctx0, cur, hparams.f_post_norm_eps);
++        cb(cur, "attn_post_norm", il);
++
++        if (il == n_layer - 1 && inp_out_ids) {
++            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
++            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
++        }
++
++        ggml_tensor * ffn_inp = ggml_add(ctx0,
++                ggml_mul(ctx0, inpSA, model.layers[il].attn_resid_alpha),
++                ggml_mul(ctx0, cur,   model.layers[il].attn_resid_beta));
++        cb(ffn_inp, "ffn_inp", il);
++
++        cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "ffn_norm", il);
++
++        // Enter the latent space, run the experts, leave it.
++        ggml_tensor * moe_inp = build_lora_mm(model.layers[il].ffn_latent_down, cur);
++        cb(moe_inp, "ffn_latent_down", il);
++
++        moe_inp = build_norm(moe_inp, model.layers[il].ffn_pre_exp_norm, NULL, LLM_NORM_RMS, il);
++        cb(moe_inp, "ffn_pre_exp_norm", il);
++
++        // The router reads the full stream, not the latent one.
++        ggml_tensor * router_logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
++        cb(router_logits, "ffn_moe_logits", il);
++
++        ggml_tensor * moe_out = build_moe_ffn(moe_inp,
++                model.layers[il].ffn_gate_inp,
++                model.layers[il].ffn_up_exps,
++                model.layers[il].ffn_gate_exps,
++                model.layers[il].ffn_down_exps,
++                model.layers[il].ffn_exp_probs_b,
++                n_expert, n_expert_used,
++                LLM_FFN_SILU, hparams.expert_weights_norm, hparams.expert_weights_scale,
++                (llama_expert_gating_func_type) hparams.expert_gating_func,
++                il,
++                router_logits,
++                nullptr, nullptr, nullptr, nullptr, nullptr,
++                model.layers[il].ffn_post_exp_norm, hparams.f_post_norm_eps);
++        cb(moe_out, "ffn_moe_out", il);
++
++        cur = build_lora_mm(model.layers[il].ffn_latent_up, moe_out);
++        cb(cur, "ffn_latent_up", il);
++
++        // Post-FFN norm scales the input, then normalizes.
++        cur = ggml_mul(ctx0, cur, model.layers[il].ffn_post_norm);
++        cur = ggml_rms_norm(ctx0, cur, hparams.f_post_norm_eps);
++        cb(cur, "ffn_post_norm", il);
++
++        cur = ggml_add(ctx0,
++                ggml_mul(ctx0, ffn_inp, model.layers[il].ffn_resid_alpha),
++                ggml_mul(ctx0, cur,     model.layers[il].ffn_resid_beta));
++        cur = build_cvec(cur, il);
++        cb(cur, "l_out", il);
++
++        inpL = cur;
++    }
++
++    cur = inpL;
++
++    cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
++    cb(cur, "result_norm", -1);
++    res->t_embd = cur;
++
++    cur = build_lora_mm(model.output, cur, model.output_s);
++    cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
++
++    if (hparams.f_final_logit_softcapping) {
++        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
++        cur = ggml_tanh(ctx0, cur);
++        cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
++    }
++
++    cb(cur, "result_output", -1);
++    res->t_logits = cur;
++}
++
++std::unique_ptr<llm_graph_context> llama_model_muse_spark::build_arch_graph(const llm_graph_params & params) const {
++    return std::make_unique<graph>(*this, params);
++}
+diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
+index 57887bc73..812ca17fc 100644
+--- a/tests/test-chat.cpp
++++ b/tests/test-chat.cpp
+@@ -6881,6 +6881,50 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+             .run();
+     }
+ 
++    // Muse Spark format tests
++    {
++        auto tst = peg_tester("models/templates/muse-spark.jinja", detailed_debug);
++
++        const std::string call_markup =
++            "<atem:function_calls>\n"
++            "<atem:invoke name=\"special_function\">\n"
++            "<atem:parameter name=\"arg1\">1</atem:parameter>\n"
++            "</atem:invoke>\n"
++            "</atem:function_calls>";
++
++        // A plain answer behaves as it does for Muse Glimmer
++        tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eot|>")
++            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
++            .expect(message_assist)
++            .run();
++
++        // A commentary message is user facing content, not reasoning
++        tst.test(" to=commentary<|message|>Hello, world!\nWhat's up?<|eom|>"
++                 "<|start|>assistant to=user<|message|>Done!<|eot|>")
++            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
++            .expect_content("Hello, world!\nWhat's up?Done!")
++            .run();
++
++        // Commentary announces the work, then the tool call follows in the same generation
++        tst.test(" to=commentary<|message|>Let me look that up.<|eom|>"
++                 "<|start|>assistant to=special_function<|message|>" +
++                 call_markup)
++            .tools({ special_function_tool })
++            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
++            .expect(message_with_content_and_tool_call("Let me look that up.", "special_function",
++                                                       "{\"arg1\":1}"))
++            .run();
++
++        // Reasoning still reaches the reasoning channel with commentary in the picture
++        tst.test(" to=self<|message|>Thinking.<|eom|>"
++                 "<|start|>assistant to=commentary<|message|>Working on it.<|eom|>"
++                 "<|start|>assistant to=user<|message|>Hello!<|eot|>")
++            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
++            .expect_reasoning("Thinking.")
++            .expect_content("Working on it.Hello!")
++            .run();
++    }
++
+     // GPT-OSS format tests
+     {
+         auto tst = peg_tester("models/templates/openai-gpt-oss-120b.jinja", detailed_debug);
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index 69313f903..8faccf5ca 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -229,7 +229,7 @@ static gguf_context_ptr get_gguf_ctx(
+     uint32_t n_head_kv = n_head;
+     if (arch == LLM_ARCH_QWEN3) {
+         n_head_kv = 1; // MQA coverage
+-    } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER) {
++    } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER) {
+         n_head_kv = 2; // GQA coverage
+     }
+     const uint32_t n_embd_head = n_embd / n_head;
+@@ -350,7 +350,8 @@ static gguf_context_ptr get_gguf_ctx(
+         // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
+         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
+     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
+-            arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_MAPLE ||
++            arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
++            arch == LLM_ARCH_MAPLE ||
+             // diffusion-gemma needs a mix: with every layer sliding, the non-SWA mask
+             // is built and used by nothing, so ggml-alloc never gives it a buffer and
+             // set_input dereferences a null one. A real model has both kinds of layer.
+@@ -365,6 +366,15 @@ static gguf_context_ptr get_gguf_ctx(
+         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(2));
+     }
+ 
++    if (arch == LLM_ARCH_MUSE_SPARK) {
++        ms.add_kv(LLM_KV_POST_NORM_EPS,           1e-5f);
++        ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,      10000.0f);
++        ms.add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING, 30.0f);
++        ms.add_kv(LLM_KV_MOE_LATENT_SIZE,         n_embd/2);
++        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,    1.0f);
++        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,     true);
++    }
++
+     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
+     // indexer head count is independent of the main attention head count.
+     if (arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT) {
+@@ -891,6 +901,7 @@ static bool moe_mandatory(const llm_arch arch) {
+         case LLM_ARCH_MELLUM:
+         case LLM_ARCH_LAGUNA:
+         case LLM_ARCH_MAPLE:
++        case LLM_ARCH_MUSE_SPARK:
+             return true;
+         default:
+             return false;
+diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
+index 860f6d3ea..5b8e2c4f5 100644
+--- a/tools/mtmd/CMakeLists.txt
++++ b/tools/mtmd/CMakeLists.txt
+@@ -49,6 +49,7 @@ add_library(mtmd
+             models/nemotron-v2-vl.cpp
+             models/nemotron-omni.cpp
+             models/muse-glimmer.cpp
++            models/muse-spark-audio.cpp
+             models/llama4.cpp
+             models/llava.cpp
+             models/minicpmv.cpp
+diff --git a/tools/mtmd/clip-impl.h b/tools/mtmd/clip-impl.h
+index f936f3ceb..92ee9f6f0 100644
+--- a/tools/mtmd/clip-impl.h
++++ b/tools/mtmd/clip-impl.h
+@@ -85,6 +85,9 @@
+ #define KEY_A_PROJ_STACK_FACTOR    "clip.audio.projector.stack_factor"
+ #define KEY_A_CHUNK_SIZE           "clip.audio.chunk_size"
+ #define KEY_A_CONV_KERNEL_SIZE     "clip.audio.conv_kernel_size"
++#define KEY_A_HIDDEN_SIZES         "clip.audio.hidden_sizes"
++#define KEY_A_PATCH_SIZES          "clip.audio.patch_sizes"
++#define KEY_A_DEPTHS               "clip.audio.depths"
+ #define KEY_A_MAX_POS_EMB          "clip.audio.max_pos_emb"
+ #define KEY_A_PROJ_WINDOW_SIZE     "clip.audio.projector.window_size"
+ #define KEY_A_PROJ_DOWNSAMPLE_RATE "clip.audio.projector.downsample_rate"
+@@ -369,6 +372,8 @@
+ #define TN_A_INP_PROJ        "a.input_projection.%s"
+ #define TN_A_CONV1D          "a.conv1d.%d.%s"
+ #define TN_A_CONV1D_NORM     "a.conv1d.%d.norm.%s"
++#define TN_A_PATCH           "a.patch.%d.%s"
++#define TN_A_PATCH_NORM      "a.patch.%d.norm.%s"
+ #define TN_A_OUT_PROJ        "a.pre_encode.out.%s"
+ #define TN_A_ATTN_PRE_NORM   "%s.blk.%d.attn_pre_norm.%s"
+ #define TN_A_ATTN_POST_NORM  "%s.blk.%d.attn_post_norm.%s"
+@@ -523,6 +528,7 @@ enum projector_type {
+     PROJECTOR_TYPE_POCKETTTS_GEN,
+     PROJECTOR_TYPE_MUSE_GLIMMER,
+     PROJECTOR_TYPE_COHERE2V,
++    PROJECTOR_TYPE_MUSE_SPARK_AUDIO,
+     PROJECTOR_TYPE_UNKNOWN,
+ };
+ 
+@@ -596,6 +602,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
+     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
+     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
+     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
++    { PROJECTOR_TYPE_MUSE_SPARK_AUDIO,  "muse-spark-audio"},
+ };
+ 
+ static projector_type clip_projector_type_from_string(const std::string & str) {
+diff --git a/tools/mtmd/clip-model.h b/tools/mtmd/clip-model.h
+index bef80ac73..7e7ce0b38 100644
+--- a/tools/mtmd/clip-model.h
++++ b/tools/mtmd/clip-model.h
+@@ -134,6 +134,20 @@ struct clip_hparams {
+     int32_t audio_proj_downsample_rate = 0;
+     int32_t audio_proj_head_count      = 0;
+ 
++    // audio pyramid (muse-spark): widths, folded samples and blocks per stage
++    std::vector<int32_t> audio_hidden_sizes;
++    std::vector<int32_t> audio_patch_sizes;
++    std::vector<int32_t> audio_depths;
++
++    int32_t audio_samples_per_token() const {
++        int64_t n = 1;
++        for (int32_t p : audio_patch_sizes) {
++            n *= p;
++            GGML_ASSERT(n >= 1 && n <= (1 << 20));
++        }
++        return (int32_t) n;
++    }
++
+     // audio-to-mel preprocessor params
+     int32_t audio_chunk_len   = -1; // in seconds
+     int32_t audio_sample_rate = -1;
+@@ -283,6 +297,10 @@ struct clip_layer {
+ 
+     ggml_tensor * ff_post_norm_w = nullptr;
+ 
++    // depthwise causal conv block (muse-spark audio), conv_norm_w is declared below
++    ggml_tensor * conv_w = nullptr;
++    ggml_tensor * conv_b = nullptr;
++
+     // layer scale (no bias)
+     ggml_tensor * ls_1_w   = nullptr;
+     ggml_tensor * ls_2_w   = nullptr;
+@@ -597,6 +615,14 @@ struct clip_model {
+ 
+     std::vector<clip_layer> layers;
+ 
++    // one patch embedder per audio pyramid stage (muse-spark)
++    struct audio_patch {
++        ggml_tensor * proj_w = nullptr;
++        ggml_tensor * proj_b = nullptr;
++        ggml_tensor * norm_w = nullptr;
++    };
++    std::vector<audio_patch> a_patches;
++
+     int32_t n_deepstack_layers = 0; // used by Qwen3-VL, calculated from clip_layer
+ 
+     ggml_tensor * post_ln_w;
+diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
+index 38ace4b1a..4fc4c5f4d 100644
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -1063,6 +1063,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
+             {
+                 builder = std::make_unique<clip_graph_whisper_enc>(ctx, img);
+             } break;
++        case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
++            {
++                builder = std::make_unique<clip_graph_muse_spark_audio>(ctx, img);
++            } break;
+         case PROJECTOR_TYPE_KIMIVL:
+             {
+                 builder = std::make_unique<clip_graph_kimivl>(ctx, img);
+@@ -1794,6 +1798,33 @@ struct clip_model_loader {
+                         hparams.set_limit_image_tokens(8, 576);
+                         hparams.set_warmup_n_tokens(16*16);
+                     } break;
++                case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
++                    {
++                        hparams.audio_sample_rate = 24000; // mono waveform, no frontend
++                        get_u32(KEY_A_CONV_KERNEL_SIZE, hparams.audio_conv_kernel_size, true);
++                        get_arr_int(KEY_A_HIDDEN_SIZES, hparams.audio_hidden_sizes, true);
++                        get_arr_int(KEY_A_PATCH_SIZES,  hparams.audio_patch_sizes,  true);
++                        get_arr_int(KEY_A_DEPTHS,       hparams.audio_depths,       true);
++
++                        // the graph indexes the three arrays by stage and model.layers by the running depth sum
++                        const size_t n_stage = hparams.audio_patch_sizes.size();
++                        GGML_ASSERT(n_stage > 0);
++                        GGML_ASSERT(hparams.audio_hidden_sizes.size() == n_stage);
++                        GGML_ASSERT(hparams.audio_depths.size() == n_stage);
++                        GGML_ASSERT(hparams.n_mel_bins == 1);
++                        GGML_ASSERT(hparams.audio_conv_kernel_size >= 1);
++
++                        int64_t n_blocks = 0;
++                        for (size_t i = 0; i < n_stage; ++i) {
++                            GGML_ASSERT(hparams.audio_hidden_sizes[i] >= 1);
++                            GGML_ASSERT(hparams.audio_depths[i] >= 0);
++                            n_blocks += hparams.audio_depths[i];
++                        }
++                        if (n_blocks != hparams.n_layer) {
++                            throw std::runtime_error(string_format("%s: sum of audio depths (%" PRId64 ") does not match n_layer (%d)\n", __func__, n_blocks, hparams.n_layer));
++                        }
++                        hparams.warmup_audio_size = hparams.audio_samples_per_token();
++                    } break;
+                 case PROJECTOR_TYPE_MUSE_GLIMMER:
+                     {
+                         hparams.n_merge = 2; // pixel-shuffle downsample after the ViT
+@@ -2206,7 +2237,9 @@ struct clip_model_loader {
+                 // GEMMA4UA is encoder-free: it uses n_mel_bins as a raw-waveform frame size (640) and has no FFT/filterbank, so the mel-range and FFT
+                 // checks below do not apply to it.
+                 // pocket-tts is encoder-free in the same sense: mimi convolves the raw waveform
++                // Muse Spark is encoder-free in the same sense: its conv pyramid reads the raw waveform, one channel takes the place of the mel bins
+                 const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA &&
++                                       model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
+                                        model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC;
+ 
+                 // Validate audio hparams loaded from GGUF metadata
+@@ -2368,7 +2401,8 @@ struct clip_model_loader {
+             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
+             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
+             model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
+-            model.proj_type != PROJECTOR_TYPE_INKLING);
++            model.proj_type != PROJECTOR_TYPE_INKLING &&
++            model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO);
+ 
+         // layers
+         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
+@@ -2656,6 +2690,38 @@ struct clip_model_loader {
+                     model.mm_merger_fc2_w = get_tensor(string_format(TN_MM_MERGER_FC2, "weight"));
+                     model.mm_merger_fc2_b = get_tensor(string_format(TN_MM_MERGER_FC2, "bias"));
+                 } break;
++            case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
++                {
++                    model.layers.resize(hparams.n_layer);
++                    model.a_patches.resize(hparams.audio_patch_sizes.size());
++                    for (size_t i = 0; i < model.a_patches.size(); ++i) {
++                        auto & pe = model.a_patches[i];
++                        pe.proj_w = get_tensor(string_format(TN_A_PATCH,      (int) i, "weight"));
++                        pe.proj_b = get_tensor(string_format(TN_A_PATCH,      (int) i, "bias"));
++                        pe.norm_w = get_tensor(string_format(TN_A_PATCH_NORM, (int) i, "weight"));
++                        if (pe.proj_w->ne[1] != hparams.audio_hidden_sizes[i]) {
++                            throw std::runtime_error(string_format("%s: audio stage %zu projection has width %" PRId64 ", expected %d\n", __func__, i, pe.proj_w->ne[1], hparams.audio_hidden_sizes[i]));
++                        }
++                    }
++
++                    for (int il = 0; il < hparams.n_layer; ++il) {
++                        auto & layer = model.layers[il];
++                        layer.conv_w      = get_tensor(string_format(TN_CONV1D, il, "weight"));
++                        layer.conv_b      = get_tensor(string_format(TN_CONV1D, il, "bias"));
++                        layer.conv_norm_w = get_tensor(string_format(TN_A_CONV1D_NORM, il, "weight"));
++                        layer.ff_up_w     = get_tensor(string_format(TN_FFN_UP,   "a", il, "weight"));
++                        layer.ff_up_b     = get_tensor(string_format(TN_FFN_UP,   "a", il, "bias"));
++                        layer.ff_down_w   = get_tensor(string_format(TN_FFN_DOWN, "a", il, "weight"));
++                        layer.ff_down_b   = get_tensor(string_format(TN_FFN_DOWN, "a", il, "bias"));
++                    }
++
++                    // pre_ln and post_ln come from the generic path above, where they are optional
++                    if (!model.pre_ln_w || !model.post_ln_w) {
++                        throw std::runtime_error(string_format("%s: missing pre_ln or post_ln weight\n", __func__));
++                    }
++                    model.mm_fc_w   = get_tensor(string_format(TN_MM_AUDIO_FC, "weight"));
++                    model.mm_fc_b   = get_tensor(string_format(TN_MM_AUDIO_FC, "bias"));
++                } break;
+             case PROJECTOR_TYPE_MUSE_GLIMMER:
+                 {
+                     // 3-linear MLP: fc -> erf-GELU -> proj -> erf-GELU -> vision_proj (into LLM residual dim)
+@@ -4445,6 +4511,11 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
+                     n_patches = n_patches_y * n_patches_x;
+                 }
+             } break;
++        case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
++            {
++                const int64_t fold = ctx->model.hparams.audio_samples_per_token();
++                n_patches = (int) ((img->nx() + fold - 1) / fold);
++            } break;
+         case PROJECTOR_TYPE_VOXTRAL:
+         case PROJECTOR_TYPE_ULTRAVOX:
+         case PROJECTOR_TYPE_QWEN2A:
+@@ -5515,6 +5586,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+         case PROJECTOR_TYPE_COGVLM:
+         case PROJECTOR_TYPE_YASA2:
+         case PROJECTOR_TYPE_GEMMA4UA:
++        case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
+         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
+             {
+                 // do nothing
+@@ -6217,6 +6289,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
+         case PROJECTOR_TYPE_GEMMA4UA:
+             return ctx->model.mm_input_proj_w->ne[1];
+         case PROJECTOR_TYPE_IDEFICS3:
++        case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
+             return ctx->model.mm_fc_w->ne[1];
+         case PROJECTOR_TYPE_ULTRAVOX:
+         case PROJECTOR_TYPE_VOXTRAL:
+diff --git a/tools/mtmd/models/models.h b/tools/mtmd/models/models.h
+index fbedb1b71..4acdd8196 100644
+--- a/tools/mtmd/models/models.h
++++ b/tools/mtmd/models/models.h
+@@ -189,6 +189,11 @@ struct clip_graph_granite_speech : clip_graph {
+     ggml_cgraph * build() override;
+ };
+ 
++struct clip_graph_muse_spark_audio : clip_graph {
++    clip_graph_muse_spark_audio(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
++    ggml_cgraph * build() override;
++};
++
+ struct clip_graph_gemma4a : clip_graph {
+     clip_graph_gemma4a(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+     ggml_cgraph * build() override;
+diff --git a/tools/mtmd/models/muse-spark-audio.cpp b/tools/mtmd/models/muse-spark-audio.cpp
+new file mode 100644
+index 000000000..d5340d5f9
+--- /dev/null
++++ b/tools/mtmd/models/muse-spark-audio.cpp
+@@ -0,0 +1,66 @@
++#include "models.h"
++
++// Muse Spark audio tower: a causal conv pyramid over the raw waveform, no attention and no spectrogram
++// each stage folds `patch` samples into the channel dim, projects, then runs `depth` residual blocks (depthwise causal conv, RMS norm, GELU MLP)
++ggml_cgraph * clip_graph_muse_spark_audio::build() {
++    const int kernel = hparams.audio_conv_kernel_size;
++    const int n_stage = (int) hparams.audio_patch_sizes.size();
++
++    // shape [1, n_samples], so the first stage folds the same way as the others
++    ggml_tensor * cur = build_inp_raw(1);
++    cur = ggml_reshape_2d(ctx0, cur, 1, img.nx());
++    cb(cur, "inp_raw", -1);
++
++    int bid = 0;
++    for (int stage = 0; stage < n_stage; ++stage) {
++        const int patch = hparams.audio_patch_sizes[stage];
++        const auto & pe = model.a_patches[stage];
++
++        // fold `patch` positions into the channel dim
++        cur = ggml_reshape_2d(ctx0, cur, cur->ne[0] * patch, cur->ne[1] / patch);
++        cb(cur, "patch_folded", stage);
++
++        GGML_ASSERT(pe.proj_w->ne[1] == hparams.audio_hidden_sizes[stage]);
++        cur = ggml_mul_mat(ctx0, pe.proj_w, cur);
++        cur = ggml_add(ctx0, cur, pe.proj_b);
++        cur = build_norm(cur, pe.norm_w, nullptr, NORM_TYPE_RMS, hparams.eps, stage);
++        cb(cur, "patch_embd", stage);
++
++        for (int i = 0; i < hparams.audio_depths[stage]; ++i, ++bid) {
++            const auto & layer = model.layers[bid];
++            ggml_tensor * residual = cur;
++
++            // depthwise conv over time, pad on the left so it is causal
++            ggml_tensor * conv = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
++            conv = ggml_pad_ext(ctx0, conv, kernel - 1, 0, 0, 0, 0, 0, 0, 0);
++            conv = ggml_conv_1d_dw(ctx0, layer.conv_w, conv, 1, 0, 1);
++            conv = ggml_cont(ctx0, ggml_transpose(ctx0, conv));
++            conv = ggml_add(ctx0, conv, layer.conv_b);
++            cb(conv, "conv", bid);
++
++            cur = build_norm(conv, layer.conv_norm_w, nullptr, NORM_TYPE_RMS, hparams.eps, bid);
++
++            cur = build_ffn(cur,
++                layer.ff_up_w, layer.ff_up_b,
++                nullptr, nullptr,
++                layer.ff_down_w, layer.ff_down_b,
++                FFN_GELU_ERF, bid);
++            cb(cur, "ffn_out", bid);
++
++            cur = ggml_add(ctx0, cur, residual);
++            cb(cur, "block_out", bid);
++        }
++    }
++
++    cur = build_norm(cur, model.pre_ln_w, nullptr, NORM_TYPE_RMS, hparams.eps, -1);
++    cb(cur, "enc_norm", -1);
++
++    // straight into the text hidden size, no adapter
++    cur = ggml_mul_mat(ctx0, model.mm_fc_w, cur);
++    cur = ggml_add(ctx0, cur, model.mm_fc_b);
++    cur = build_norm(cur, model.post_ln_w, nullptr, NORM_TYPE_RMS, hparams.eps, -1);
++    cb(cur, "projected", -1);
++
++    ggml_build_forward_expand(gf, cur);
++    return gf;
++}
+diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
+index d75c03cb5..d6b544045 100644
+--- a/tools/mtmd/mtmd-audio.cpp
++++ b/tools/mtmd/mtmd-audio.cpp
+@@ -1667,3 +1667,23 @@ bool mtmd_audio_preprocessor_pockettts::preprocess(const float *
+     output.push_back(std::move(out));
+     return true;
+ }
++
++// Muse Spark reads the raw waveform: pass the samples through, zero padded to a whole number of embeddings
++bool mtmd_audio_preprocessor_muse_spark_audio::preprocess(
++        const float * samples,
++        size_t n_samples,
++        std::vector<mtmd_audio_mel> & output) const {
++    const int64_t fold     = hparams.audio_samples_per_token();
++    const int64_t n_padded = ((int64_t) n_samples + fold - 1) / fold * fold;
++
++    mtmd_audio_mel mel;
++    mel.n_len     = n_padded;
++    mel.n_len_org = (int64_t) n_samples;
++    mel.n_mel     = 1;
++    mel.data.assign((size_t) n_padded, 0.0f);
++    std::copy(samples, samples + n_samples, mel.data.begin());
++
++    output.clear();
++    output.push_back(std::move(mel));
++    return true;
++}
+diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
+index 9e7c8da55..38f5cca9d 100644
+--- a/tools/mtmd/mtmd-audio.h
++++ b/tools/mtmd/mtmd-audio.h
+@@ -80,6 +80,12 @@ private:
+     mtmd_audio_cache cache;
+ };
+ 
++struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
++    mtmd_audio_preprocessor_muse_spark_audio(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
++    void initialize() override {}
++    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
++};
++
+ struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
+     mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+     mtmd_audio_preprocessor_conformer(const clip_hparams & hparams) : mtmd_audio_preprocessor(hparams) {}
+diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
+index ef113a3a0..c4dcf567a 100644
+--- a/tools/mtmd/mtmd.cpp
++++ b/tools/mtmd/mtmd.cpp
+@@ -1022,6 +1022,12 @@ struct mtmd_context {
+                     aud_end = "<|audio_eos|>";
+                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
+                 } break;
++            case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
++                {
++                    aud_beg = "<|soft_audio_start|>";
++                    aud_end = "<|soft_audio_end|>";
++                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_muse_spark_audio>(ctx_a);
++                } break;
+             case PROJECTOR_TYPE_QWEN3A:
+                 {
+                     aud_beg = "<|audio_start|>";
+-- 
+2.54.0 (Apple Git-157)
+

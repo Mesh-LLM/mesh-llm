@@ -6,3 +6,6 @@
 0006-models-add-laya-decision-model-support.patch
 0007-fix-muse-glimmer-implicit-reasoning-continuations.patch
 0008-models-add-qwen3moe-native-mtp.patch
+0009-models-add-muse-spark-support.patch
+0010-models-add-beam-support.patch
+0011-models-add-kolibri-1-support.patch
