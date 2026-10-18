@@ -762,3 +762,8 @@ Before the Mesh PR merges, register the AgentX blocks through a configuration-on
 change to the current template source, then sync and use `jy repos run` at the
 immutable PR source. Keep unrelated jobs and the production default ref intact.
 Move the source registration to Mesh after merge.
+
+AgentX version 3 sweeps 1, 2, 4, 8, 16, 32, 64 and 128 slots per engine job.
+Repeated comparisons order whole engine jobs ABBAAB on the same Spark. Preserve
+per-slot context, exclude drain cancellations from serving points, retain failed
+cells, and continue only after confirmed child cleanup. Cache inputs are offline.

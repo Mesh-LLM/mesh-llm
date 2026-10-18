@@ -1,9 +1,11 @@
 //! AgentX owns its workload, provenance and lifecycle independently of replay-matrix.
+mod campaign;
 mod command;
 mod container;
 mod inputs;
 mod lifecycle;
 mod memory;
+mod overlap;
 mod phase_outcome;
 mod results;
 mod workload;
@@ -32,12 +34,8 @@ impl Profile {
         }
     }
     fn concurrencies(self) -> &'static [u32] {
-        // Smoke must exercise the same concurrent serving path as full runs.
-        // Full 256k F16 contexts per slot must fit the 128 GiB Spark,
-        // including dense attention models. Higher capacities need qualification.
-        match self {
-            Self::Smoke | Self::Benchmark => &[1, 2],
-        }
+        // Capacity failures never shrink the per-request context.
+        &[1, 2, 4, 8, 16, 32, 64, 128]
     }
 }
 #[derive(Clone, Copy)]
@@ -139,7 +137,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
                 parsed.last("--model").ok_or("missing model")?,
                 profile,
             );
-            let result = prepared.and_then(|prepared| lifecycle::campaign(&prepared, engine));
+            let result = prepared.and_then(|prepared| campaign::run(&prepared, engine));
             let archive = results::archive(&output);
             result?;
             archive

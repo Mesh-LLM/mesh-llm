@@ -16,7 +16,22 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
         &input.model.key,
         "--tokenizer",
     ]);
-    args.push(input.model.tokenizer.clone());
+    // Use the pinned host-cache tokenizer without contacting HF.
+    let cache = std::env::var_os("HF_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| input.root.join(".cache/huggingface"));
+    args.push(
+        cache
+            .join("hub")
+            .join(format!(
+                "models--{}",
+                input.model.tokenizer.replace('/', "--")
+            ))
+            .join("snapshots")
+            .join(&input.model.tokenizer_revision)
+            .to_string_lossy()
+            .into_owned(),
+    );
     args.extend(command::strings(&[
         "--tokenizer-revision",
         &input.model.tokenizer_revision,
@@ -35,13 +50,18 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
         "--concurrency",
         &concurrency.to_string(),
         "--unsafe-override",
+        "--benchmark-grace-period",
+        "inf",
+        "--export-level",
+        "records",
+        "--export-http-trace",
         "--output-artifact-dir",
     ]));
     args.push(input.output.join("upstream").to_string_lossy().into());
     if input.profile == Profile::Smoke {
         args.extend(command::strings(&[
             "--num-dataset-entries",
-            "4",
+            &concurrency.max(4).to_string(),
             "--benchmark-duration",
             "60",
             "--warmup-requests-per-lane",
@@ -136,7 +156,18 @@ mod tests {
                 .iter()
                 .any(|arg| arg == "--max-context-length" || arg == "--output-tokens")
         );
+        let wide = arguments(&input, 8080, 128);
+        assert!(
+            wide.windows(2)
+                .any(|args| args == ["--num-dataset-entries", "128"])
+        );
+        assert!(wide.windows(2).any(|args| args == ["--concurrency", "128"]));
+        assert!(
+            wide.windows(2)
+                .any(|args| args == ["--benchmark-grace-period", "inf"])
+        );
         input.profile = Profile::Benchmark;
+
         let full = arguments(&input, 8080, 8);
         assert!(
             !full

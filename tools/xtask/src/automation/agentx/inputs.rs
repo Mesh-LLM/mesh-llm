@@ -99,11 +99,12 @@ fn download(
         ]));
     }
     let log = output.join(log_name);
-    command::run(
-        &command::spec(root, hf.to_str().ok_or("hf path")?, &args)?,
-        7200,
-        &log,
-    )?;
+    let mut spec = command::spec(root, hf.to_str().ok_or("hf path")?, &args)?;
+    spec.environment.insert(
+        "HF_HUB_OFFLINE".into(),
+        crate::process::Value::Public("1".into()),
+    );
+    command::run(&spec, 60, &log)?;
     cached_path(&std::fs::read_to_string(log.with_extension("stdout.log"))?)
 }
 
@@ -138,7 +139,7 @@ pub(super) fn recheck(prepared: &Prepared) -> DynResult<()> {
 }
 fn materialize(source: &Path, destination: &Path, profile: Profile) -> DynResult<()> {
     std::fs::create_dir(destination)?;
-    let limit = if profile == Profile::Smoke { 4 } else { 393 };
+    let limit = if profile == Profile::Smoke { 128 } else { 393 };
     let mut ids = Vec::new();
     for (index, line) in BufReader::new(std::fs::File::open(source)?)
         .lines()
@@ -169,12 +170,12 @@ mod tests {
     fn smoke_preserves_complete_rows_and_selects_exact_prefix() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("corpus.jsonl");
-        let rows: Vec<_> = (0..5).map(|index| format!(r#"{{"id":"trace-{index}","requests":[{{"type":"subagent","id":"child"}},{{"out":100000}}]}}"#)).collect();
+        let rows: Vec<_> = (0..129).map(|index| format!(r#"{{"id":"trace-{index}","requests":[{{"type":"subagent","id":"child"}},{{"out":100000}}]}}"#)).collect();
         std::fs::write(&source, rows.join("\n")).unwrap();
         let target = temp.path().join("selected");
         materialize(&source, &target, Profile::Smoke).unwrap();
-        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 4);
-        for (index, row) in rows.iter().take(4).enumerate() {
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 128);
+        for (index, row) in rows.iter().take(128).enumerate() {
             assert_eq!(
                 std::fs::read_to_string(target.join(format!("{index:04}.json"))).unwrap(),
                 *row
@@ -183,10 +184,7 @@ mod tests {
         let cohort: serde_json::Value =
             serde_json::from_slice(&std::fs::read(temp.path().join("cohort.json")).unwrap())
                 .unwrap();
-        assert_eq!(
-            cohort["trace_ids"],
-            serde_json::json!(["trace-0", "trace-1", "trace-2", "trace-3"])
-        );
+        assert_eq!(cohort["trace_ids"].as_array().unwrap().len(), 128);
     }
     #[test]
     fn corrupted_download_fails_before_use() {

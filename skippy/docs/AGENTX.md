@@ -75,11 +75,11 @@ also enforces the remaining JY deadline if the host controller disappears.
 
 The output directory must be new. `HF_HOME` must already exist on the host.
 Weights, tokenizers and the dataset use the standard HF blobs/snapshots cache;
-existing pinned files are reused and missing files download into that same host
-cache. There is no separate weight copy or `--local-dir` download. Snapshot paths
+only existing pinned files are admitted; missing files fail offline. There is no
+separate weight copy or `--local-dir` download. Snapshot paths
 are preserved so split GGUF shards resolve their siblings correctly.
-Downloads precede measurement and
-verify every weight shard against [models.json](../evals/agentx/models.json).
+Cache admission precedes measurement and
+verifies every weight shard against [models.json](../evals/agentx/models.json).
 No projector is needed for these text-only traces. Tokenizers have independent
 immutable Hugging Face revisions.
 
@@ -116,8 +116,8 @@ submitting the smoke, and submit the benchmark only after the smoke passes.
 
 | Setting | Smoke | Benchmark |
 |---|---|---|
-| Parent traces | First 4, complete | All 393, complete |
-| Offered agent sessions | 1, 2 | 1, 2 |
+| Parent traces | First max(4, concurrency), complete | All 393, complete |
+| Offered agent sessions | 1, 2, 4, 8, 16, 32, 64, 128 | 1, 2, 4, 8, 16, 32, 64, 128 |
 | Measured time per engine / concurrency | 60 seconds | Upstream 3,600 seconds |
 | Warmup requests per lane | 1 | Upstream 10 |
 | Trajectory starting ratio | 0–0 | Upstream 0.25–0.75 |
@@ -129,12 +129,14 @@ submitting the smoke, and submit the benchmark only after the smoke passes.
 Both profiles now increase actual generation capacity with offered concurrency.
 Subagents can still queue additional requests. llama.cpp receives an aggregate
 context pool of `262144 * slots`; Skippy receives 262144 per lane. Both retain
-the full context budget for every request. The initial Spark sweep is bounded
-to one and two slots, including for dense attention models; four and eight full
-F16 contexts need separate memory qualification on the 128 GiB machine.
+the full context budget for every request. The sweep attempts all eight levels.
+High concurrency can exceed Spark memory;
+failed levels retain logs and status. Subsequent levels continue only after
+confirmed process cleanup. Successful earlier levels remain recorded.
 There is no context shortening, automatic weight quantization, or fallback on
-allocation failure. Harness version 2 separates these measurements
-from version 1's single-slot queueing experiment.
+allocation failure. Harness version 3 separates the expanded sweep and unlimited
+harness drain
+(with a bounded outer lifecycle) from previous measurements.
 Skippy's in-memory prefix retention target is explicitly 8 GiB, with disk
 caching off; exact snapshots can exceed that target. llama-server retains its
 per-slot prompt caches. These cache policies are recorded in launch arguments.
@@ -213,3 +215,18 @@ must not be presented as steady-state performance.
 
 The older GitHub trusted-main trajectory qualification workflow is a separate
 consumer of the replay machinery; this change replaces the Jianyang job only.
+
+## Repeated sweep campaigns
+
+For each model, submit six independent engine sweeps in ABBAAB order: llama,
+Skippy, Skippy, llama, llama, Skippy. Pin all six to the same Spark and source.
+Four models produce 24 jobs and 192 attempted cells. Ordering applies to whole
+sweeps, not individual concurrency levels. Smoke is one sweep per engine.
+
+Each cell writes results and phase accounting before the next starts. Cancelled
+requests exclude that cell from serving points; all-failed sweeps retain outcome
+counters without invented zero-throughput measurements. JY ingests results at
+job completion; intermediate files and logs are evidence, not live chart updates.
+Request overlap is not proof of concurrent GPU decode. Full record and HTTP
+timing exports are retained for overlap analysis. GPU residency remains
+unavailable where the driver does not supply it; host RSS is separate.

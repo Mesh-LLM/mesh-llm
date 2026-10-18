@@ -1763,7 +1763,7 @@ Split parity continues to use native planner evidence and binary stage servers.
 its `agentic-replay` entry with four `agentx-{engine}-{profile}` templates. Other entries are migrated unchanged.
 Its model choices are four pinned Q4_K_M cases: dense attention, hybrid dense,
 attention MoE and hybrid MoE; result keys include the quantization.
-Both profiles' harness version 2 sweeps one and two actual generation slots with
+Both profiles' harness version 3 sweeps 1, 2, 4, 8, 16, 32, 64 and 128 slots with
 262,144 context tokens per slot; version 1 varied only offered sessions.
 The benchmark executes in a source-labelled ARM64 CUDA Docker image on the
 leased Spark. JY's template owns image build and the Rust container lifecycle;
@@ -1779,3 +1779,8 @@ it on a leased GPU worker. CUDA uses `CUDA0`; Metal uses `MTL0`. The
 matrix also exercises backend-specific variants. These are explicit hardware
 qualification commands, not additional CPU-only CI coverage. Their ownership,
 along with `skippy-cuda-readback-test`, is recorded in the Just layout fixture.
+
+AgentX harness version 3 retains the four engine/profile template keys and sweeps
+1, 2, 4, 8, 16, 32, 64 and 128 generation slots. Whole-job ABBAAB repeats are
+submitted per model on one Spark. Input cache misses fail offline; cancelled
+cells are excluded from serving points and failed cells retain evidence.

@@ -1,4 +1,4 @@
-use super::{Engine, Prepared, Profile, command, inputs, results, write};
+use super::{Prepared, Profile, command, inputs, write};
 use crate::{
     command::DynResult,
     process::{
@@ -9,57 +9,7 @@ use crate::{
 use serde_json::json;
 use std::time::Duration;
 
-pub(super) fn campaign(input: &Prepared, engine: Engine) -> DynResult<()> {
-    hardware(input)?;
-    let mut cells = Vec::new();
-    let mut points = Vec::new();
-    let mut notes = Vec::new();
-    let engine = engine.label();
-    for &concurrency in input.profile.concurrencies() {
-        inputs::recheck(input)?;
-        let directory = input.output.join(format!("{engine}-c{concurrency}"));
-        std::fs::create_dir(&directory)?;
-        let mut cell: Prepared = serde_json::from_value(serde_json::to_value(input)?)?;
-        cell.output = directory;
-        execute(&cell, engine, concurrency)?;
-        let summary = results::read(&cell, engine, concurrency)?;
-        notes.push(format!(
-            "{engine} c{concurrency}: {} completed, {} cancelled at the phase deadline, {} errors",
-            summary["phase_outcome"]["completed"],
-            summary["phase_outcome"]["cancelled"],
-            summary["phase_outcome"]["errors"],
-        ));
-        cells.push(summary);
-        points.push(results::point(&cell, concurrency)?);
-        write(
-            &input.output.join("results.json"),
-            &json!({"profile":input.profile,"model":input.model,"cells":cells}),
-        )?;
-    }
-    if let Some(path) = std::env::var_os("JIANYANG_RESULT_PATH") {
-        notes.push(format!("AgentX local-corpus {} / {engine}; submission_valid=false refers to the upstream leaderboard. Full exports and memory measurements are in agentx.tar.gz.", input.profile.label()));
-        // Local measurements belong in JY; leaderboard eligibility is independent.
-        use sha2::Digest;
-        let model_digest = if input.model.files.len() == 1 {
-            input.model.files[0].sha256.clone()
-        } else {
-            hex::encode(sha2::Sha256::digest(serde_json::to_vec(
-                &input.model.files,
-            )?))
-        };
-        write(
-            std::path::Path::new(&path),
-            &json!({"points":points,
-                "notes":notes,
-                "provenance":{"stack_commit":std::env::var("JIANYANG_COMMIT")?,"stack_name":engine,
-                    "model_package_ref":input.model.registry_ref(),
-                    "model_package_sha256":model_digest}
-            }),
-        )?;
-    }
-    Ok(())
-}
-fn hardware(input: &Prepared) -> DynResult<()> {
+pub(super) fn hardware(input: &Prepared) -> DynResult<()> {
     if std::env::consts::OS != "linux" || std::env::consts::ARCH != "aarch64" {
         return Err("AgentX job requires a Linux aarch64 DGX Spark".into());
     }
@@ -185,7 +135,7 @@ fn server(
     );
     Ok(spec)
 }
-fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynResult<()> {
+pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynResult<()> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     write(&input.output.join("worker.json"), input)?;
@@ -256,7 +206,7 @@ fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynResult<()> {
         });
     write(
         &input.output.join("lifecycle.json"),
-        &json!({"clean":clean,"outcome":format!("{:?}",report.outcome)}),
+        &json!({"clean":clean,"cleanup_complete":report.members.iter().all(|m| m.process.cleanup.complete),"outcome":format!("{:?}",report.outcome)}),
     )?;
     if !clean {
         return Err(format!("{engine} c{concurrency} failed; partial artifacts retained").into());

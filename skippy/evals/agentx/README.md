@@ -14,10 +14,11 @@ After merging, update the repository registration to read its own
 `skippy/evals/agentx/templates.yaml` (`templates_repo: null`), then `jy repos sync mesh-llm`.
 Do not sync a partial inventory: sync replaces all installed entries.
 
-For a pre-merge run, use Jianyang's `renderRepoJob` with this validated template
-and the immutable PR SHA, then submit that rendered specification with `jy
-submit`. This uses the same renderer as repository launches and leaves the live
-registration unchanged. See [AgentX operations](../../docs/AGENTX.md).
+For a pre-merge benchmark, update the four AgentX blocks in the currently
+registered Jianyang template source through a configuration-only PR, sync, and
+launch with `jy repos run` at the immutable Mesh PR SHA. A locally rendered
+`jy submit` specification lacks the repository association required by the
+benchmark pages. See [AgentX operations](../../docs/AGENTX.md).
 
 ## Attention kernel regression checks
 

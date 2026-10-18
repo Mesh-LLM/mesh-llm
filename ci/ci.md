@@ -2008,8 +2008,8 @@ Each emits standard JY points through a real repository-template launch;
 engine and profile results have separate existing benchmark views.
 The four Q4_K_M model choices cover dense attention, hybrid dense, attention MoE
 and hybrid MoE, with distinct quantization-bearing result keys.
-Both profiles' harness version 2 matches generation slots to offered concurrency
-(one and two), preserving 262,144 context tokens per slot on both engines.
+Both profiles' harness version 3 matches generation slots to offered concurrency
+(1, 2, 4, 8, 16, 32, 64 and 128), preserving 262,144 context tokens per slot on both engines.
 JY builds and runs one source-labelled ARM64 CUDA Docker image on the Spark;
 both engines and the harness run inside it, with the host's NFS-backed `HF_HOME`
 bind-mounted at the same path and mounted JY artifacts,
@@ -2017,3 +2017,8 @@ an immutable image ID, explicit container removal and an internal deadline.
 See [AgentX operations](../skippy/docs/AGENTX.md) for registration migration and
 validity. This replaces the Jianyang `agentic-replay` entry; the separately
 owned GitHub trajectory qualification workflow is unchanged.
+
+AgentX v3 expands each engine job to concurrency 1, 2, 4, 8, 16, 32, 64 and 128.
+Whole-sweep ABBAAB ordering uses six existing engine jobs per model; it does not
+add JY features or mix engines within a result series. Capacity failures retain
+cell evidence and do not erase earlier successful levels.
