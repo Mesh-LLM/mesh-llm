@@ -1503,20 +1503,16 @@ public:
     const auto *owner_body =
         llvm::dyn_cast<CompoundStmt>(constructor->getBody());
 
-    // A base or delegating initializer may build the decoder graph before
-    // the (empty) constructor body runs, so the sidecar shortcut below only
-    // applies to constructors that initialize no base and delegate to no
-    // other constructor.
-    const bool initializes_builder = std::any_of(
-        constructor->init_begin(), constructor->init_end(),
-        [](const clang::CXXCtorInitializer *init) {
-          return init->isBaseInitializer() || init->isDelegatingInitializer();
-        });
-
     // A constructor that only prepares the shared helpers of a derived graph
     // builds no graph of its own, so it owns no decoder block to partition.
-    if (owner_body != nullptr && owner_body->body_empty() &&
-        !initializes_builder) {
+    // A delegated decoder body is always a statement in this constructor's own
+    // body, so an empty body owns no block here whatever a base or delegating
+    // initializer sets up; that initializer's own builder is analysed where it
+    // is defined. Upstream uses this idiom for helper-only graph variants
+    // (glm5-next's `no_build` constructor), so an initializer must not turn an
+    // empty body into a decoder candidate with no embedding producer of its
+    // own: that fails generation for the whole model family.
+    if (owner_body != nullptr && owner_body->body_empty()) {
       report.verdict = "supported_auxiliary";
       report.proof.execution_scope = "final_stage_sidecar";
       report.proof.scope_evidence.emplace_back("helper_construction_only");
