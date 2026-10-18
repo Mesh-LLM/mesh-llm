@@ -161,8 +161,20 @@ fn read_terminated_lines(mut input: impl BufRead) -> DynResult<Vec<String>> {
     Ok(files)
 }
 
+/// A changed path in the `/`-separated form git prints. A path typed on
+/// Windows uses `\`, and lines piped from PowerShell end in CRLF, whose `\r`
+/// `read_terminated_lines` keeps; either can make a path silently miss its
+/// owner or its escalation.
+fn changed_path(file: &str) -> String {
+    file.strip_suffix('\r').unwrap_or(file).replace('\\', "/")
+}
+
 fn select(cwd: &Path, files: &[String]) -> DynResult<CheckReport> {
-    let signals = Signals::scan(files);
+    let files = files
+        .iter()
+        .map(|file| changed_path(file))
+        .collect::<Vec<_>>();
+    let signals = Signals::scan(&files);
     if signals.escalate {
         return Ok(CheckReport::success(signals.all_workspace()));
     }
@@ -222,6 +234,25 @@ mod tests {
     fn migration_repository_affected_reads_only_terminated_lines() {
         let lines = read_terminated_lines(&b"a\n\nb\r\nc"[..]).expect("in-memory read");
         assert_eq!(lines, ["a", "b\r"]);
+    }
+
+    #[test]
+    fn migration_repository_affected_accepts_windows_changed_paths() {
+        let metadata = serde_json::json!({
+            "workspace_root": "/ws",
+            "packages": [
+                {"name": "a", "manifest_path": "/ws/crates/a/Cargo.toml", "dependencies": []}
+            ]
+        });
+        let graph = CrateGraph::parse(metadata.to_string().as_bytes()).expect("valid metadata");
+        assert_eq!(
+            graph.owner(&changed_path("crates\\a\\src\\lib.rs")),
+            Some("a")
+        );
+        assert_eq!(graph.owner(&changed_path("crates/a\r")), Some("a"));
+        assert!(Signals::scan(&[changed_path("Cargo.lock\r")]).escalate);
+        assert!(Signals::scan(&[changed_path("scripts\\build-llama.sh")]).escalate);
+        assert_eq!(changed_path("crates/a/src/lib.rs"), "crates/a/src/lib.rs");
     }
 
     #[test]
