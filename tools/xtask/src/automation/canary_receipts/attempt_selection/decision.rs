@@ -1,5 +1,6 @@
 use super::*;
 
+#[derive(PartialEq)]
 pub(super) struct Candidate {
     pub(super) head: String,
     package: String,

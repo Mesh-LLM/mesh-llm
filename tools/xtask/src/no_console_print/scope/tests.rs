@@ -90,16 +90,16 @@ fn metadata_with_dependency(kind: Option<&str>) -> CargoMetadata {
         })
     };
     serde_json::from_value(serde_json::json!({
-        "workspace_members": ["mesh-llm", "middle", "skippy-bench"],
+        "workspace_members": ["mesh-llm", "middle", "metrics-server"],
         "packages": [
             package("mesh-llm", serde_json::json!([
                 {"name": "middle", "req": "*", "kind": null}
             ])),
             package("middle", serde_json::json!([
-                {"name": "skippy-bench", "req": "*", "kind": kind,
+                {"name": "metrics-server", "req": "*", "kind": kind,
                  "optional": true, "target": "cfg(windows)", "rename": "bench_alias"}
             ])),
-            package("skippy-bench", serde_json::json!([]))
+            package("metrics-server", serde_json::json!([]))
         ]
     }))
     .unwrap()
@@ -110,7 +110,7 @@ fn dependency_guard_catches_transitive_optional_platform_and_renamed_dependencie
     let error = check_metadata(&metadata_with_dependency(None))
         .unwrap_err()
         .to_string();
-    assert!(error.contains("skippy-bench"), "{error}");
+    assert!(error.contains("metrics-server"), "{error}");
     for kind in ["dev", "build"] {
         check_metadata(&metadata_with_dependency(Some(kind))).unwrap();
     }

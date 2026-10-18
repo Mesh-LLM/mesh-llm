@@ -9,6 +9,9 @@ pub struct NativeMtpDraft {
 }
 
 impl NativeMtpDraft {
+    /// Most draft tokens one native MTP proposal can return.
+    pub const MAX_TOKENS: usize = skippy_ffi::NATIVE_MTP_MAX_DRAFT_TOKENS;
+
     pub(crate) fn from_raw(raw: RawNativeMtpDraft) -> Option<Self> {
         if !raw.available || raw.version != NATIVE_MTP_DRAFT_VERSION {
             return None;

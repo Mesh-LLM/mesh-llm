@@ -252,6 +252,46 @@ fn windows_catalog_changes_select_unit_row_without_product_builds() -> TestResul
     }
     Ok(())
 }
+#[test]
+fn patch_queue_changes_select_the_windows_probe_row() -> TestResult {
+    let stage = Stage::new("windows-probes")?;
+    let path = stage.search_path()?;
+    let case: Value =
+        serde_json::from_slice(&fs::read(fixture_root().join("cases/runtime.json"))?)?;
+    let mut input = case["input"].clone();
+    input["changed_files"] = serde_json::json!([
+        "skippy/llama_cpp/patches/0064-ggml-size-the-scheduler-split-context-for-the-graph.patch"
+    ]);
+    input["workspace_packages"] =
+        serde_json::json!([{"name": "skippy-ffi", "path": "skippy/crates/skippy-ffi"}]);
+    input["affected_crates"] = serde_json::json!(["skippy-ffi"]);
+    let bytes = serde_json::to_vec(&input)?;
+    let output = Run {
+        args: &[],
+        stdin: &bytes,
+        path: &path,
+    }
+    .ported()?;
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let plan: Value = serde_json::from_slice(&output.stdout)?;
+    assert!(
+        plan["required_slices"]
+            .as_array()
+            .ok_or("required slices")?
+            .iter()
+            .any(|slice| slice == "platform-checks")
+    );
+    let rows = plan["matrices"]["platform_checks"]
+        .as_array()
+        .ok_or("platform checks")?;
+    assert_eq!(
+        rows.iter().map(|row| &row["id"]).collect::<Vec<_>>(),
+        ["windows-skippy-probes"]
+    );
+    // ci-platform-checks-slice.yml reads both from the planned row.
+    assert!(rows[0]["ctest_parallel"].is_u64() && rows[0]["timeout_minutes"].is_u64());
+    Ok(())
+}
 frozen_case!(migration_ci_plan_rejects_unknown_path, "fail-unknown-path");
 frozen_case!(
     migration_ci_plan_rejects_unknown_input_field,

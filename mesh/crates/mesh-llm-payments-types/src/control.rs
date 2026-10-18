@@ -68,6 +68,18 @@ pub enum ControlCommand {
         value: Option<Policy>,
     },
     Pricing,
+    /// Show, or set, the minimum Lightning payment in msat (default 1 sat):
+    /// the seller's deposit and the amount a smaller positive final is raised
+    /// to, and the largest seller minimum this node pays. Ledger-only.
+    MinPayment {
+        #[serde(default)]
+        value_msat: Option<u64>,
+    },
+    /// Patch only the cached-input discount of an already priced model.
+    SetCacheDiscount {
+        model: String,
+        percent: u8,
+    },
     SetPricing {
         model: String,
         value: Option<Pricing>,

@@ -949,6 +949,7 @@ impl StageOpenAiBackend {
                 base_pos_start: prefill.token_count,
                 sampling: wire_sampling.clone(),
                 sideband_capacity: 1,
+                native_mtp_draft_tokens: 0,
             })?;
 
             while decoded_tokens < max_tokens as usize {

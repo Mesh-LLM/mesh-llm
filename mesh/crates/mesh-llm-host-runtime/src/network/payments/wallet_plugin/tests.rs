@@ -214,7 +214,7 @@ fn transaction(hash: &str, status: PaymentStatus) -> Transaction {
     }
 }
 
-fn sample_invoice() -> mesh_llm_wallet::invoice::Invoice {
+pub(super) fn sample_invoice() -> mesh_llm_wallet::invoice::Invoice {
     // Reuse the payments crate's signed test invoice helper shape: build one
     // directly so this module does not depend on private test helpers.
     use bitcoin::secp256k1::{Secp256k1, SecretKey};

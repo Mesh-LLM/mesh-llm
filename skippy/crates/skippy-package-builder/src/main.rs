@@ -196,6 +196,7 @@ fn run_with_output(args: Args, output: &mut dyn std::io::Write) -> Result<()> {
             generation_defaults,
             resume_existing_artifacts,
             max_artifact_bytes,
+            native_mtp_draft_depth,
         } => package_v2::write_package(
             model,
             out_dir,
@@ -219,6 +220,7 @@ fn run_with_output(args: Args, output: &mut dyn std::io::Write) -> Result<()> {
                 generation_defaults,
                 resume_existing_artifacts,
                 max_artifact_bytes,
+                native_mtp_draft_depth,
             },
         ),
         Command::VerifyPackageV2 {

@@ -250,3 +250,7 @@ fn actual_aggregate_failed_graph_cannot_publish_green_with_complete_receipts() {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "handoff_cli/feedback_command.rs"]
 mod feedback_command;
+
+#[cfg(unix)]
+#[path = "handoff_cli/selected_publication.rs"]
+mod selected_publication;

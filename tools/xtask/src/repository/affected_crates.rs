@@ -92,7 +92,6 @@ const WORKSPACE_MEMBERS: &[&str] = &[
     "skippy-model-package",
     "skippy-correctness",
     "llama-spec-bench",
-    "skippy-bench",
     "trajectory-reader",
     "xtask",
 ];

@@ -240,7 +240,7 @@ impl Node {
             decode_batch_policy_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
             #[cfg(feature = "payments")]
-            lightning_offers: data.lightning_offers,
+            lightning_offers: data.lightning_offers.into(),
             cache_affinity: data.cache_affinity,
             latency_ms: None,
             latency_source: None,

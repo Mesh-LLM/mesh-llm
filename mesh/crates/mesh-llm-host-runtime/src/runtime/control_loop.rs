@@ -143,7 +143,15 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
     let mut eligible_startup_models = Vec::new();
     if !shutdown_requested {
         for spec in &eligible_startup_specs {
-            match resolve_eager_startup_models(options, config, std::slice::from_ref(spec)).await {
+            let resolved = tokio::select! {
+                biased;
+                _ = crate::sdk::embedded_shutdown::cancelled() => {
+                    shutdown_requested = true;
+                    break;
+                }
+                result = resolve_eager_startup_models(options, config, std::slice::from_ref(spec)) => result,
+            };
+            match resolved {
                 Ok(mut models) => {
                     let model_ref = spec.model_ref.to_string_lossy();
                     if let Some((intent_id, _, _)) =
@@ -411,7 +419,14 @@ pub(super) async fn run_auto_handle_control_request(
 
     match cmd {
         api::RuntimeControlRequest::Join { invite_token, resp } => {
-            let result = ctx.node.join_with_retry(&invite_token).await;
+            let result = tokio::select! {
+                biased;
+                _ = crate::sdk::embedded_shutdown::cancelled() => {
+                    let _ = resp.send(Err(anyhow::anyhow!("embedded runtime is shutting down")));
+                    return true;
+                }
+                result = ctx.node.join_with_retry(&invite_token) => result,
+            };
             let _ = resp.send(result);
             false
         }
@@ -746,6 +761,12 @@ pub(super) async fn run_auto_runtime_event_loop(
         .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            biased;
+            _ = crate::sdk::embedded_shutdown::cancelled() => {
+                ctx.startup_ready_reporter.mark_shutdown_requested();
+                emit_shutdown(None).await;
+                break;
+            }
             _ = dashboard_context_usage_tick.tick() => {
                 let updates = ctx.runtime_models
                     .iter()
