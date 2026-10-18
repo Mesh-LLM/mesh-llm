@@ -272,9 +272,18 @@ if [[ -n "$ATTESTATION_PUBLIC_KEY_FILE" && "$RUNTIME_ATTESTATION_STATUS" != "$AT
     exit 1
 fi
 
+CLIENT_REPEATS="${MESH_COMPAT_CLIENT_REPEATS:-5}"
+for client_attempt in $(seq 1 "$CLIENT_REPEATS"); do
+    echo "diagnostic: client sequence attempt ${client_attempt}/${CLIENT_REPEATS}"
+    kill -0 "$MESH_PID" 2>/dev/null || {
+        echo "diagnostic: product exited before client attempt ${client_attempt}" >&2
+        exit 1
+    }
+
 "${automation[@]}" automation smoke-observation sdk-client --client openai --python "$SDK_PYTHON" --base-url "$BASE_URL" --timeout-secs "${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}" --receipt "$SDK_EVIDENCE_DIR/openai-sdk.json"
 "${automation[@]}" automation smoke-observation sdk-client --client litellm --python "$SDK_PYTHON" --base-url "$BASE_URL" --model "$MODEL_ID" --timeout-secs "${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}" --receipt "$SDK_EVIDENCE_DIR/litellm-sdk.json"
 "${automation[@]}" automation smoke-observation sdk-client --client langchain --python "$SDK_PYTHON" --base-url "$BASE_URL" --model "$MODEL_ID" --timeout-secs "${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}" --receipt "$SDK_EVIDENCE_DIR/langchain-sdk.json"
 NODE_PATH="${NODE_PATH:-$(npm root -g 2>/dev/null || true)}" node scripts/ci-openai-node-smoke.cjs --base-url "$BASE_URL"
+done
 
 echo "OpenAI compatibility smoke passed"
