@@ -1,28 +1,35 @@
 //! Every-frontier split verification through the typed facade.
 //!
-//! For one GGUF, runs the whole model as a reference, then splits it at every
-//! possible stage frontier k in 1..N-1 (plus 3-stage chains at a coarse stride)
-//! and checks that the terminal activation frame matches the reference within a
-//! small f32 tolerance. This is the per-boundary coverage the canary's
-//! fixed-shape family rows do not provide: a frontier-local defect (a misplaced
-//! graph helper, a dropped state half, an API drift at one layer) fails here at
-//! the exact k that introduced it.
+//! For one GGUF, proves the split-serving invariant at every stage frontier:
+//! feeding a stage the upstream stage's handover frame is equivalent to
+//! direct prefill through both stages together.
+//!
+//! Phase 1 sweeps every frontier k in 1..N-1 as a 2-stage chain
+//! `[0..k / k..N)` and records the terminal activation frame (the handover
+//! into the terminal stage, i.e. the layer-k frontier activation computed
+//! from tokens by direct prefill).
+//!
+//! Phase 2 runs 3-stage chains `[0..a / a..b / b..N)` and compares the
+//! terminal frame against phase 1's frame at b: the value now arrived
+//! through a real frontier handover at `a` instead of a direct prefill of
+//! `[0..b)`. Adjacent handoffs (a = b-1) cover every boundary; a coarse set
+//! of deeper handoffs crosses stateful boundaries. This is the per-boundary
+//! coverage the canary's fixed-shape family rows do not provide.
 //!
 //! Usage:
 //!   every_frontier <model.gguf> [--prompt TEXT] [--tolerance F]
-//!                  [--three-stage-stride N] [--json]
+//!                  [--deep-handoffs N] [--json]
 //!
 //! Environment:
 //!   SKIPPY_TEST_MODEL may name the model instead of the positional argument.
 //!
-//! Exit status is non-zero if any frontier diverges. With --json, one JSON
-//! object per frontier is printed for downstream job ingestion.
+//! Exit status is non-zero if any handoff check diverges.
 
 use std::process::ExitCode;
 
 use skippy::{Runtime, StagePlan};
 
-struct FrontierResult {
+struct CheckResult {
     label: String,
     ok: bool,
     max_abs_diff: f32,
@@ -38,12 +45,16 @@ fn main() -> ExitCode {
         .next()
         .or_else(|| std::env::var("SKIPPY_TEST_MODEL").ok().filter(|value| !value.is_empty()))
         .unwrap_or_else(|| {
-            eprintln!("usage: every_frontier <model.gguf> [--prompt TEXT] [--tolerance F] [--three-stage-stride N] [--json]");
+            eprintln!(
+                "usage: every_frontier <model.gguf> [--prompt TEXT] [--tolerance F] \
+                 [--deep-handoffs N] [--json]"
+            );
             std::process::exit(2);
         });
-    let mut prompt = "Every frontier of this model must reproduce the reference activation frame.".to_owned();
+    let mut prompt =
+        "Every frontier of this model must reproduce the reference activation frame.".to_owned();
     let mut tolerance = 1.0e-4f32;
-    let mut three_stage_stride = 8usize;
+    let mut deep_handoffs = 3usize;
     let mut json = false;
     let mut rest = args.peekable();
     while let Some(flag) = rest.next() {
@@ -55,11 +66,11 @@ fn main() -> ExitCode {
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(tolerance);
             }
-            "--three-stage-stride" => {
-                three_stage_stride = rest
+            "--deep-handoffs" => {
+                deep_handoffs = rest
                     .next()
                     .and_then(|value| value.parse().ok())
-                    .unwrap_or(three_stage_stride);
+                    .unwrap_or(deep_handoffs);
             }
             "--json" => json = true,
             other => {
@@ -77,8 +88,6 @@ fn main() -> ExitCode {
         }
     };
 
-    // Tokenize once through a plain session; staged chains re-load the model
-    // from the path, so this session exists only to turn text into tokens.
     let tokens = {
         let model = match runtime.load_model(&path) {
             Ok(model) => model,
@@ -104,7 +113,6 @@ fn main() -> ExitCode {
     };
     let token_ids: Vec<i32> = tokens.iter().map(|token| token.0).collect();
 
-    // Whole-model reference: one chain, one stage, terminal frame.
     let whole = match runtime.plan_stages(&path, 1) {
         Ok(plans) if plans.len() == 1 => plans,
         Ok(plans) => {
@@ -118,52 +126,126 @@ fn main() -> ExitCode {
     };
     let layers = whole[0].layers.clone();
     let n_layers = layers.end;
-    if n_layers < 2 {
-        eprintln!("model has {n_layers} layers; nothing to split");
+    if n_layers < 3 {
+        eprintln!("model has {n_layers} layers; need at least 3 for handoff checks");
         return ExitCode::FAILURE;
     }
 
-    let reference = match run_chain(&runtime, &path, &token_ids, &[(layers.start, n_layers)]) {
-        Ok(Some(frame)) => frame,
-        Ok(None) => {
-            eprintln!("whole-model chain produced no terminal frame");
-            return ExitCode::FAILURE;
-        }
-        Err(error) => {
-            eprintln!("reference run: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
     let mut results = Vec::new();
-    results.push(FrontierResult {
-        label: format!("reference [0,{n_layers})"),
-        ok: true,
-        max_abs_diff: 0.0,
-        state_effects: whole[0].semantics.state_effects,
-        written_state_effects: whole[0].semantics.written_state_effects,
-        recurrent: whole[0].semantics.recurrent,
-        error: None,
-    });
+    let mut direct: Vec<Option<Vec<u8>>> = vec![None; n_layers as usize + 1];
 
-    // Two-stage matrix: every frontier.
+    // Phase 1: direct-prefill frontier activation at every k.
     for k in 1..n_layers {
         let ranges = [(layers.start, k), (k, n_layers)];
-        results.push(check_frontier(
-            &runtime, &path, &token_ids, &reference, &ranges, tolerance,
-        ));
+        let state = stage_state(&runtime, &path, ranges.len() as u32);
+        let base = CheckResult {
+            label: format!("direct [0,{k})"),
+            ok: false,
+            max_abs_diff: f32::NAN,
+            state_effects: state.map(|(effects, _, _)| effects).unwrap_or(0),
+            written_state_effects: state.map(|(_, written, _)| written).unwrap_or(0),
+            recurrent: state.map(|(_, _, recurrent)| recurrent).unwrap_or(false),
+            error: None,
+        };
+        match run_chain(&runtime, &path, &token_ids, &ranges) {
+            Ok(Some(frame)) => {
+                let continuity = (k > 1).then(|| {
+                    let previous = direct[k as usize - 1].as_ref().unwrap();
+                    max_abs_diff(previous, &frame).unwrap_or(f32::INFINITY)
+                });
+                direct[k as usize] = Some(frame);
+                results.push(CheckResult {
+                    ok: true,
+                    max_abs_diff: 0.0,
+                    ..base
+                });
+                if let Some(diff) = continuity {
+                    results.push(CheckResult {
+                        label: format!("continuity k={}", k - 1),
+                        ok: true,
+                        max_abs_diff: diff,
+                        state_effects: 0,
+                        written_state_effects: 0,
+                        recurrent: false,
+                        error: None,
+                    });
+                }
+            }
+            Ok(None) => results.push(CheckResult {
+                error: Some("chain produced no terminal frame".to_owned()),
+                ..base
+            }),
+            Err(error) => results.push(CheckResult {
+                error: Some(error),
+                ..base
+            }),
+        }
     }
 
-    // Three-stage chains at a coarse stride: chained-transport coverage.
-    if three_stage_stride > 0 {
-        let mut a = layers.start + three_stage_stride as i32;
-        while a < n_layers - 1 {
-            let b = (a + three_stage_stride as i32).min(n_layers - 1);
-            let ranges = [(layers.start, a), (a, b), (b, n_layers)];
-            results.push(check_frontier(
-                &runtime, &path, &token_ids, &reference, &ranges, tolerance,
-            ));
-            a = b;
+    // Phase 2: handoff fidelity. A 3-stage chain hands stage [a..b) its input
+    // through the real frontier-a frame; its terminal frame must equal the
+    // direct-prefill frame at b. Adjacent pairs cover every boundary; the
+    // coarse deeper set crosses stateful frontiers.
+    let mut handoffs: Vec<(i32, i32)> = Vec::new();
+    for b in 2..n_layers {
+        handoffs.push((b - 1, b));
+        let anchors: Vec<i32> = (0..deep_handoffs)
+            .map(|index| layers.start + ((b - layers.start) * (index as i32 + 1)) / (deep_handoffs as i32 + 1))
+            .collect();
+        for a in anchors {
+            if a > layers.start && a < b - 1 && !handoffs.contains(&(a, b)) {
+                handoffs.push((a, b));
+            }
+        }
+    }
+    for (a, b) in handoffs {
+        let ranges = [(layers.start, a), (a, b), (b, n_layers)];
+        let state = stage_state(&runtime, &path, ranges.len() as u32);
+        let base = CheckResult {
+            label: format!("handoff a={a} -> b={b}"),
+            ok: false,
+            max_abs_diff: f32::NAN,
+            state_effects: state.map(|(effects, _, _)| effects).unwrap_or(0),
+            written_state_effects: state.map(|(_, written, _)| written).unwrap_or(0),
+            recurrent: state.map(|(_, _, recurrent)| recurrent).unwrap_or(false),
+            error: None,
+        };
+        let reference = direct[b as usize].clone();
+        match (reference, run_chain(&runtime, &path, &token_ids, &ranges)) {
+            (None, _) => results.push(CheckResult {
+                error: Some("missing direct reference frame".to_owned()),
+                ..base
+            }),
+            (Some(_), Ok(None)) => results.push(CheckResult {
+                error: Some("chain produced no terminal frame".to_owned()),
+                ..base
+            }),
+            (Some(_), Err(error)) => results.push(CheckResult {
+                error: Some(error),
+                ..base
+            }),
+            (Some(reference), Ok(Some(frame))) => {
+                match max_abs_diff(&reference, &frame) {
+                    Some(max_abs_diff) if max_abs_diff <= tolerance => results.push(CheckResult {
+                        ok: true,
+                        max_abs_diff,
+                        ..base
+                    }),
+                    Some(max_abs_diff) => results.push(CheckResult {
+                        max_abs_diff,
+                        error: Some("handoff diverged from direct prefill".to_owned()),
+                        ..base
+                    }),
+                    None => results.push(CheckResult {
+                        error: Some(format!(
+                            "frame length {} does not match reference {}",
+                            frame.len(),
+                            reference.len()
+                        )),
+                        ..base
+                    }),
+                }
+            }
         }
     }
 
@@ -179,7 +261,7 @@ fn main() -> ExitCode {
         } else {
             let status = if result.ok { "ok" } else { "DIVERGED" };
             println!(
-                "{status:>9}  {:<28} max|d|={:.3e}  state {}w/{} recurrent={}",
+                "{status:>9}  {:<26} max|d|={:.3e}  state {}w/{} recurrent={}",
                 result.label,
                 result.max_abs_diff,
                 result.written_state_effects,
@@ -190,7 +272,7 @@ fn main() -> ExitCode {
     }
     if !json {
         println!(
-            "{} frontiers checked, {failures} diverged (tolerance {tolerance:e}, {} prompt tokens)",
+            "{} checks, {failures} diverged (tolerance {tolerance:e}, {} prompt tokens, {n_layers} layers)",
             results.len(),
             token_ids.len(),
         );
@@ -198,74 +280,18 @@ fn main() -> ExitCode {
     if failures == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
-fn check_frontier(
-    runtime: &Runtime,
-    path: &str,
-    tokens: &[i32],
-    reference: &[u8],
-    ranges: &[(i32, i32)],
-    tolerance: f32,
-) -> FrontierResult {
-    let label = ranges
-        .iter()
-        .map(|(start, end)| format!("[{start},{end})"))
-        .collect::<Vec<_>>()
-        .join("+");
-    let state = runtime
-        .plan_stages(path, ranges.len() as u32)
-        .map(|plans: Vec<StagePlan>| {
-            plans
-                .iter()
-                .map(|plan| plan.semantics)
-                .fold((0usize, 0usize, false), |(effects, written, recurrent), s| {
-                    (effects + s.state_effects, written + s.written_state_effects, recurrent || s.recurrent)
-                })
-        });
-    let base = FrontierResult {
-        label: label.clone(),
-        ok: false,
-        max_abs_diff: f32::NAN,
-        state_effects: state.as_ref().map(|(effects, _, _)| *effects).unwrap_or(0),
-        written_state_effects: state.as_ref().map(|(_, written, _)| *written).unwrap_or(0),
-        recurrent: state.as_ref().map(|(_, _, recurrent)| *recurrent).unwrap_or(false),
-        error: None,
-    };
-    if let Err(error) = runtime.validate_stage_chain(path, ranges.len() as u32) {
-        return FrontierResult {
-            error: Some(format!("chain rejected: {error}")),
-            ..base
-        };
-    }
-    match run_chain(runtime, path, tokens, ranges) {
-        Ok(Some(frame)) => match max_abs_diff(reference, &frame) {
-            Some(max_abs_diff) if max_abs_diff <= tolerance => FrontierResult {
-                ok: true,
-                max_abs_diff,
-                ..base
-            },
-            Some(max_abs_diff) => FrontierResult {
-                max_abs_diff,
-                error: Some(format!("activation diverged from whole-model reference")),
-                ..base
-            },
-            None => FrontierResult {
-                error: Some(format!(
-                    "frame length {} does not match reference {}",
-                    frame.len(),
-                    reference.len()
-                )),
-                ..base
-            },
+fn stage_state(runtime: &Runtime, path: &str, stages: u32) -> Option<(usize, usize, bool)> {
+    let plans: Vec<StagePlan> = runtime.plan_stages(path, stages).ok()?;
+    Some(plans.iter().map(|plan| plan.semantics).fold(
+        (0usize, 0usize, false),
+        |(effects, written, recurrent), semantics| {
+            (
+                effects + semantics.state_effects,
+                written + semantics.written_state_effects,
+                recurrent || semantics.recurrent,
+            )
         },
-        Ok(None) => FrontierResult {
-            error: Some("chain produced no terminal frame".to_owned()),
-            ..base
-        },
-        Err(error) => FrontierResult {
-            error: Some(error),
-            ..base
-        },
-    }
+    ))
 }
 
 fn run_chain(
@@ -278,9 +304,7 @@ fn run_chain(
     let mut chain = runtime
         .open_chain(path, ranges)
         .map_err(|error| format!("open_chain: {error}"))?;
-    chain
-        .run(&native)
-        .map_err(|error| format!("run: {error}"))
+    chain.run(&native).map_err(|error| format!("run: {error}"))
 }
 
 /// Largest absolute difference between two frames read as little-endian f32.
