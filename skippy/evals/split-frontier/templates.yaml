@@ -1,45 +1,124 @@
 # Repository-owned Jianyang templates: every-frontier split verification.
 #
-# Runs `just skippy-frontier-matrix` against a pinned small model so every
-# stage frontier of the graph is exercised (splits, activation transport,
-# state effects) — the per-boundary coverage the canary's fixed-shape family
-# rows do not provide. Results land in the mesh-llm Benchmarks series named
-# per job; provisional on PR refs, pinned for certify runs.
+# For one GGUF, `just skippy-frontier-matrix` proves the split-serving
+# invariant at every stage frontier: direct-prefill frontier activations at
+# every k, then 3-stage chains that deliver the frontier-a frame through a
+# real handover and must return the direct frame at b. Frontier-local defects
+# (misplaced graph helpers, dropped state halves, per-layer API drift) fail at
+# the exact boundary that introduced them — coverage the canary's fixed-shape
+# family rows do not provide. Results land in the mesh-llm Benchmarks series;
+# provisional on PR refs.
 
 version: 1
 
+# Backend-correct build, per the agentx template lessons: the build must
+# select the backend from the machine, or a GB10 silently serves CPU numbers
+# that look exactly like GPU ones. The facade example builds llama and ggml
+# as shared libraries inside Cargo's OUT_DIR and finds them by rpath.
 build: |
-  # KEEP THE MACHINE AWAKE: builds run before any command holds it up.
-  caffeinate -dimsu -w $$ 2>/dev/null || true
-  # Backend-correct build, per the agentx template lessons: the release recipe
-  # must select the backend from the machine, or a GB10 silently serves CPU
-  # numbers that look exactly like GPU ones.
+  export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+  cd "${repo_dir}"
+  if [[ ! -d skippy/skippy_api/.deps/llama.cpp/src/skippy ]]; then
+    scripts/prepare-llama.sh pinned
+  fi
   case "$(uname -s)" in
     Darwin) backend=metal ;;
-    Linux)
-      case "$(uname -m)" in
-        aarch64) backend=cuda ;;
-        *) backend=cpu ;;
-      esac
-      ;;
-    *) backend=cpu ;;
+    Linux)  backend=cuda ;;
+    *)      backend=cpu ;;
   esac
-  just skippy release-build 2>/dev/null || just release-build
-  echo "built for backend: $backend"
+  echo "building split-frontier example for backend: $backend"
+  (
+    cd skippy/skippy-api-rs
+    cargo build --locked -p skippy --example every_frontier --release
+  )
 
-# Smoke: full every-frontier matrix on a small dense model, one frontier per
-# row in the results series. Runs on PR refs; provisional.
-split-frontier-smoke: |
-  caffeinate -dimsu -w $$ 2>/dev/null || true
-  model="${SKIPPY_FRONTIER_MODEL:-unsloth/SmolLM2-135M-Instruct-GGUF}"
-  just skippy-frontier-matrix "$model" --json
+templates:
+  - key: split-frontier-smoke
+    name: Split frontier smoke (every boundary, small dense model)
+    group: Benchmarks
+    priority: 20
+    description: >
+      Full every-frontier matrix on SmolLM2-135M Q8_0 through the typed skippy_api
+      facade: every 2-stage frontier plus 3-stage handoff chains, terminal
+      activation compared bit-exact against direct prefill. Emits one JSON row
+      per check for the Benchmarks series.
+    labels:
+      job: split-frontier
+      profile: smoke
+    flags:
+      job: split-frontier
+      profile: smoke
+    env:
+      SKIPPY_TEST_REQUIRE_MODELS: "1"
+    models:
+      - ref: "${model}"
+        delivery: stream
+    inputs:
+      - key: model
+        label: Model
+        kind: choice
+        default: 'hf:unsloth/SmolLM2-135M-Instruct-GGUF@9e6855bc4be717fca1ef21360a1db4b29d5c559a#SmolLM2-135M-Instruct-Q8_0.gguf'
+        choices:
+          - {label: SmolLM2 135M dense Q8_0, value: 'hf:unsloth/SmolLM2-135M-Instruct-GGUF@9e6855bc4be717fca1ef21360a1db4b29d5c559a#SmolLM2-135M-Instruct-Q8_0.gguf'}
+    command: |
+      export PATH="$HOME/.cargo/bin:$PATH"
+      cd "${repo_dir}/skippy/skippy-api-rs"
+      SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
+        ./target/release/examples/every_frontier "${model}" --json
+    target:
+      executor: lab
+      nodes: [spark-james, spark-db08]
+    budget:
+      max_usd: 0
+      max_duration_s: 2700
+      grace_s: 60
 
-# Certify: pinned model set including a hybrid/recurrent leg (frontier-local
-# recurrent-state defects are the historical failure class), same binary for
-# both columns, named baseline ref in the job arguments.
-split-frontier-certify: |
-  caffeinate -dimsu -w $$ 2>/dev/null || true
-  dense="${SKIPPY_FRONTIER_DENSE:-unsloth/SmolLM2-135M-Instruct-GGUF}"
-  hybrid="${SKIPPY_FRONTIER_HYBRID:-ibm-granite/granite-4.0-h-350m-GGUF}"
-  just skippy-frontier-matrix "$dense" --json
-  just skippy-frontier-matrix "$hybrid" --json
+  - key: split-frontier-certify
+    name: Split frontier certify (dense + hybrid recurrent legs)
+    group: Benchmarks
+    priority: 10
+    description: >
+      Every-frontier matrix on the dense smoke model plus the mandatory hybrid
+      leg (granite-4.0-h-350m): recurrent-state frontiers are the historical
+      failure class, and dense-only coverage misses them. For pin bumps and
+      model_support patches; both legs must be bit-exact before certification.
+    labels:
+      job: split-frontier
+      profile: certify
+    flags:
+      job: split-frontier
+      profile: certify
+    env:
+      SKIPPY_TEST_REQUIRE_MODELS: "1"
+    models:
+      - ref: "${model}"
+        delivery: stream
+      - ref: "${hybrid}"
+        delivery: stream
+    inputs:
+      - key: model
+        label: Dense model
+        kind: choice
+        default: 'hf:unsloth/SmolLM2-135M-Instruct-GGUF@9e6855bc4be717fca1ef21360a1db4b29d5c559a#SmolLM2-135M-Instruct-Q8_0.gguf'
+        choices:
+          - {label: SmolLM2 135M dense Q8_0, value: 'hf:unsloth/SmolLM2-135M-Instruct-GGUF@9e6855bc4be717fca1ef21360a1db4b29d5c559a#SmolLM2-135M-Instruct-Q8_0.gguf'}
+      - key: hybrid
+        label: Hybrid model
+        kind: choice
+        default: 'hf:ibm-granite/granite-4.0-h-350m-GGUF@a864f823cce6e6048b5752e2816fe7a23987d790#granite-4.0-h-350m-Q4_K_M.gguf'
+        choices:
+          - {label: Granite 4.0 H 350M hybrid Q4_K_M, value: 'hf:ibm-granite/granite-4.0-h-350m-GGUF@a864f823cce6e6048b5752e2816fe7a23987d790#granite-4.0-h-350m-Q4_K_M.gguf'}
+    command: |
+      export PATH="$HOME/.cargo/bin:$PATH"
+      cd "${repo_dir}/skippy/skippy-api-rs"
+      SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
+        ./target/release/examples/every_frontier "${model}" --json
+      SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
+        ./target/release/examples/every_frontier "${hybrid}" --json
+    target:
+      executor: lab
+      nodes: [spark-james, spark-db08]
+    budget:
+      max_usd: 0
+      max_duration_s: 3600
+      grace_s: 60
