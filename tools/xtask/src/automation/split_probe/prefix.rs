@@ -6,20 +6,33 @@ use std::{fs, path::Path};
 #[error("all follow-up requests are cold")]
 pub(super) struct Cold;
 
-pub(super) fn payloads(model: &str, output: &Path, nonce: &str) -> DynResult<()> {
+// A repeated ladder leaves the next token on an argmax near-tie, so comparing
+// one greedy token between an uncached prefill and a restored prefix measures
+// float accumulation order rather than the restored state. End every prompt
+// with a terminator whose continuation has a wide margin: a restored prefix
+// must still produce the same continuation, and losing state still shows here.
+const TERMINATOR: &str = " The capital of France is";
+
+fn prompts(nonce: &str) -> Vec<String> {
     let mut prompt = format!(
         "Split prefix cache smoke shared context {nonce}. {}",
         "Every request keeps these tokens in the same order. ".repeat(48)
     );
-    for (pair, extension) in [
+    [
         "First extension block remains reusable by later prompts. ",
         "Second extension block makes the reusable prefix longer. ",
         "Third extension block proves reuse keeps growing. ",
     ]
     .iter()
-    .enumerate()
-    {
+    .map(|extension| {
         prompt.push_str(&extension.repeat(16));
+        format!("{prompt}{TERMINATOR}")
+    })
+    .collect()
+}
+
+pub(super) fn payloads(model: &str, output: &Path, nonce: &str) -> DynResult<()> {
+    for (pair, prompt) in prompts(nonce).into_iter().enumerate() {
         for repeat in 0..2 {
             let payload = serde_json::json!({"model":model,"messages":[{"role":"user","content":prompt}],"user":format!("ci-split-prefix-growth-{nonce}"),"stream":false,"max_tokens":1,"temperature":0});
             fs::write(
@@ -75,7 +88,9 @@ fn validate(metrics: &[(u64, u64)], kind: &str) -> DynResult<()> {
     }
     // Resident capacity pressure can evict the deepest checkpoint, so a valid
     // repeat may leave a suffix uncached. Output equality in `verify` proves the
-    // restored prefix still leads to the same continuation as the uncached request.
+    // restored prefix still leads to the same continuation as the uncached
+    // request; the payloads end on a decisive terminator, so that equality tests
+    // the restored state instead of which side of a near-tie the logits land on.
     for pair in metrics.as_chunks::<2>().0 {
         if pair[0].1 >= pair[0].0 || pair[1].1 <= pair[0].1 {
             return Err("growth suffix or repeated restore failed".into());
@@ -242,6 +257,19 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn prompts_end_on_a_decisive_terminator() {
+        let prompts = super::prompts("nonce");
+        assert_eq!(prompts.len(), 3);
+        assert!(
+            prompts
+                .iter()
+                .all(|prompt| prompt.ends_with(super::TERMINATOR))
+        );
+        assert!(prompts[0].len() < prompts[1].len() && prompts[1].len() < prompts[2].len());
+        assert!(prompts[0].contains("shared context nonce."));
+    }
+
     #[test]
     fn warm_repeat_must_match_uncached_continuation() {
         let same = ["a", "a", "b", "b", "c", "c"].map(String::from);
