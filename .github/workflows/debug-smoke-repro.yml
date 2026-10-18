@@ -33,7 +33,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p ci-artifacts/linux
-          gh run download 39087174138 --name ci-product-linux-amd64-cpu -D ci-artifacts/linux
+          artifact_id=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/Mesh-LLM/mesh-llm/actions/runs/39087174138/artifacts?per_page=100" \
+            | python3 -c "import json,sys; arts=json.load(sys.stdin)['artifacts']; print([a['id'] for a in arts if a['name']=='ci-product-linux-amd64-cpu'][0])")
+          echo "artifact id: $artifact_id"
+          curl -sL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/Mesh-LLM/mesh-llm/actions/artifacts/$artifact_id/zip" -o /tmp/product.zip
+          cd ci-artifacts/linux && unzip -q /tmp/product.zip && cd ../..
           ls -la ci-artifacts/linux
 
       - name: Stage binary and runtime
