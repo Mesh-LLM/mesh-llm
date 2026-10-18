@@ -245,3 +245,300 @@ skippy-layer-package-fetch *ARGS:
 [positional-arguments]
 decisions-smoke *ARGS:
     @just automation-run automation decisions-smoke "$@"
+
+
+
+# --- skippy_api recipes ------------------------------------------------------
+
+skippy-llama-api-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="${SKIPPY_LLAMA_API_BUILD_DIR:-target/skippy-llama-api-build}"
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Debug \
+      -DSKIPPY_API_BUILD_TESTS=ON \
+      -DSKIPPY_LINK_COMPILE_COMMANDS=ON \
+      -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
+    cmake --build "$build_dir" --parallel
+    ctest --test-dir "$build_dir" --output-on-failure --no-tests=error
+
+skippy-llama-api-bench:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="${SKIPPY_LLAMA_API_BENCH_BUILD_DIR:-target/skippy-llama-api-bench}"
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DSKIPPY_API_BUILD_TESTS=OFF \
+      -DSKIPPY_API_BUILD_BENCHMARKS=ON \
+      -DSKIPPY_LINK_COMPILE_COMMANDS=ON \
+      -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
+    cmake --build "$build_dir" --target skippy_api_benchmarks --parallel
+    "$build_dir/skippy_api_benchmarks" \
+      --benchmark_min_time=0.5s \
+      --benchmark_repetitions=5 \
+      --benchmark_report_aggregates_only=true
+
+# Same benchmark, but print the old-vs-new speedup table instead of raw rows.
+[unix]
+[positional-arguments]
+skippy-llama-api-ffi-bench-compare model="" *ARGS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    model="$1"
+    shift
+    while [[ $# -gt 0 && -z "$1" ]]; do shift; done
+    report="$(mktemp -t skippy-ffi-vs-api)"
+    trap 'rm -f "$report"' EXIT
+    just skippy-llama-api-ffi-bench "$model" \
+      --benchmark_format=json \
+      --benchmark_out="$report" \
+      "$@" >/dev/null
+    python3 skippy/skippy_api/benchmarks/compare_benchmarks.py "$report"
+
+# Stage planner probe: proves a GGUF is a valid single-shard package and prints
+# what planning costs. Optional layer count and [start, end) stage range.
+[unix]
+[positional-arguments]
+skippy-llama-api-planner-probe model *ARGS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="target/skippy-planner-probe"
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DSKIPPY_API_BUILD_PLANNER_PROBE=ON \
+      -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
+    cmake --build "$build_dir" --target skippy_api_planner_probe --parallel
+    "$build_dir/skippy_api_planner_probe" "$@"
+
+# Everything a skippy_api/skippy-api-rs checkpoint must pass.
+# Models are optional; pass both to include the real-model Rust tests.
+[unix]
+[positional-arguments]
+skippy-api-verify embed_model="" reranker_model="" *ARGS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    embed="$1"
+    if [[ $# -gt 0 ]]; then shift; fi
+    reranker="$1"
+    if [[ $# -gt 0 ]]; then shift; fi
+    printf '%s\n' '== clang-format' >&2
+    just skippy-llama-api-format-check
+    printf '%s\n' '== clang-tidy' >&2
+    just skippy-llama-api-tidy '*'
+    printf '%s\n' '== C++ tests' >&2
+    just skippy-llama-api-test
+    printf '%s\n' '== Rust tests' >&2
+    just skippy-api-rs-e2e "$embed" "$reranker"
+    printf '%s\n' 'ok: skippy_api is ready to commit' >&2
+
+# Verify, stage the API sources, and commit. Message must be a Conventional Commit.
+[unix]
+[positional-arguments]
+skippy-api-checkpoint message="" embed_model="" reranker_model="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${1:-}" ]]; then
+      printf '%s\n' 'usage: just skippy-api-checkpoint "<conventional commit subject>" [embed.gguf] [reranker.gguf]' >&2
+      exit 1
+    fi
+    subject="$1"
+    if [[ $# -gt 0 ]]; then shift; fi
+    embed="${1:-}"
+    if [[ $# -gt 0 ]]; then shift; fi
+    reranker="${1:-}"
+    just skippy-api-verify "$embed" "$reranker"
+    git add skippy/skippy_api skippy/skippy-api-rs just/skippy.just .gitignore
+    if git diff --cached --quiet; then
+      printf '%s\n' 'nothing staged; tree already matches the checkpoint' >&2
+      exit 0
+    fi
+    git status --short
+    git commit -m "$subject"
+    git --no-pager log -1 --oneline
+
+# End-to-end Rust tests: real GGUF through llama.cpp, no mocks.
+# skippy-api-rs-e2e <embed-model.gguf> <reranker-model.gguf> [cargo test args]
+[unix]
+[positional-arguments]
+skippy-api-rs-e2e embed_model="" reranker_model="" *ARGS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    embed="$1"
+    if [[ $# -gt 0 ]]; then shift; fi
+    reranker="$1"
+    if [[ $# -gt 0 ]]; then shift; fi
+    while [[ $# -gt 0 && -z "$1" ]]; do shift; done
+    if [[ -d /opt/homebrew/opt/lld/bin ]]; then
+      export PATH="/opt/homebrew/opt/lld/bin:$PATH"
+    fi
+    cd skippy/skippy-api-rs
+    # With both models supplied, a skipped test is a failure: this is the run CI
+    # should use. One model may be passed to cover a single workload locally.
+    if [[ -n "$embed" && -n "$reranker" ]]; then
+      export SKIPPY_TEST_REQUIRE_MODELS=1
+    fi
+    # The workspace config points rustc at sccache; these tests link the native
+    # library through the crate's own build script, so run rustc directly.
+    RUSTC_WRAPPER= \
+    SKIPPY_TEST_MODEL="$embed" \
+    SKIPPY_TEST_RERANKER="$reranker" \
+      cargo test "$@"
+
+# Run one A/B case from the patch manifest (list cases with no argument).
+[unix]
+[positional-arguments]
+skippy-ab case="" model="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    manifest="skippy/skippy_api/benchmarks/cases.txt"
+    if [ -z "{{ case }}" ]; then
+        awk -F'\t' '!/^#/ && NF>=5 {printf "%-4s %-2s %-24s %-18s %s\n", $1, $2, $3, $5, $6}' "$manifest"
+        exit 0
+    fi
+    row=$(awk -F'\t' -v want="{{ case }}" '!/^#/ && $3==want {print; exit}' "$manifest")
+    if [ -z "$row" ]; then
+        echo "no such case: {{ case }}" >&2
+        exit 1
+    fi
+    filter=$(printf '%s' "$row" | cut -f4)
+    expected=$(printf '%s' "$row" | cut -f5)
+    note=$(printf '%s' "$row" | cut -f6)
+    if [ "$expected" = "pending" ]; then
+        echo "{{ case }}: pending${note:+ — $note}"
+        exit 0
+    fi
+    if [ "$expected" = "blocked-upstream" ]; then
+        echo "{{ case }}: blocked-upstream${note:+ — $note}"
+        echo "  work belongs in skippy/llama_cpp/patches, not in skippy_api (see AGENTS.md)"
+        exit 0
+    fi
+    if [ -z "{{ model }}" ]; then
+        echo "{{ case }} needs a model: just skippy-ab {{ case }} <model.gguf>" >&2
+        exit 1
+    fi
+    out=$(mktemp -t skippy-ab).json
+    SKIPPY_BENCH_MODEL={{ model }} \
+        ./target/skippy-llama-api-ffi-bench/skippy_api_ffi_benchmarks \
+        --benchmark_filter="$filter" \
+        --benchmark_min_time=0.3s --benchmark_repetitions=5 \
+        --benchmark_enable_random_interleaving=true \
+        --benchmark_format=json --benchmark_out="$out" >/dev/null 2>&1
+    python3 skippy/skippy_api/benchmarks/compare_benchmarks.py "$out" | sed "s/^/  /"
+    echo "{{ case }}: acceptance=$expected"
+
+# Run the old C ABI against the skippy_api facade on one model (model=<gguf>).
+[unix]
+[positional-arguments]
+skippy-llama-api-ffi-bench model="" *ARGS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Positional, not interpolated: a filter such as 'Embed|Tokenize' must
+    # reach the binary as one argument instead of becoming a shell pipeline.
+    model="$1"
+    shift
+    # just passes an empty placeholder for unset trailing parameters; an empty
+    # argument would reach google benchmark as an unknown flag.
+    while [[ $# -gt 0 && -z "$1" ]]; do shift; done
+    build_dir="${SKIPPY_LLAMA_API_FFI_BENCH_BUILD_DIR:-target/skippy-llama-api-ffi-bench}"
+    llama_source="{{absolute_path(llama_dir)}}"
+    if [[ ! -f "$llama_source/include/skippy/workloads.h" ]]; then
+      scripts/prepare-llama.sh pinned
+    fi
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DSKIPPY_API_BUILD_BENCHMARKS=ON \
+      -DSKIPPY_API_BUILD_FFI_BENCHMARKS=ON \
+      -DSKIPPY_LLAMA_SOURCE_DIR="$llama_source"
+    cmake --build "$build_dir" --target skippy_api_ffi_benchmarks --parallel
+    if [[ -z "$model" ]]; then
+      printf '%s\n' 'no model= given: only BatchBuild and Normalize will run' >&2
+    fi
+    # Interleaved repetitions: running every FFI case before every API case
+    # lets GPU clocks drift and fakes a few percent of difference.
+    SKIPPY_BENCH_MODEL="$model" "$build_dir/skippy_api_ffi_benchmarks" \
+      --benchmark_min_time=0.5s \
+      --benchmark_repetitions=5 \
+      --benchmark_enable_random_interleaving=true \
+      "$@"
+
+skippy-llama-api-compdb:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="${SKIPPY_LLAMA_API_BUILD_DIR:-target/skippy-llama-api-build}"
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Debug \
+      -DSKIPPY_API_BUILD_TESTS=ON \
+      -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
+
+skippy-llama-api-format:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="${SKIPPY_LLAMA_API_BUILD_DIR:-target/skippy-llama-api-build}"
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Debug \
+      -DSKIPPY_API_BUILD_TESTS=ON \
+      -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
+    cmake --build "$build_dir" --target format
+
+skippy-llama-api-format-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="${SKIPPY_LLAMA_API_BUILD_DIR:-target/skippy-llama-api-build}"
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Debug \
+      -DSKIPPY_API_BUILD_TESTS=ON \
+      -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
+    cmake --build "$build_dir" --target format-check
+
+# Fails on any finding. Pass check names to narrow the gate, e.g. `bugprone-*`.
+[positional-arguments]
+skippy-llama-api-tidy *CHECKS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    repo_root="$(pwd)"
+    build_dir="${SKIPPY_LLAMA_API_TIDY_BUILD_DIR:-target/skippy-llama-api-tidy}"
+    case "$build_dir" in
+      /*) build_path="$build_dir" ;;
+      *) build_path="$repo_root/$build_dir" ;;
+    esac
+    tidy="${SKIPPY_CLANG_TIDY:-$(command -v clang-tidy || true)}"
+    if [[ -z "$tidy" && -x /opt/homebrew/opt/llvm/bin/clang-tidy ]]; then
+      tidy=/opt/homebrew/opt/llvm/bin/clang-tidy
+    fi
+    if [[ -z "$tidy" ]]; then
+      printf '%s\n' 'clang-tidy not found; set SKIPPY_CLANG_TIDY to its path' >&2
+      exit 1
+    fi
+    checks="${1:-}"
+    if [[ $# -gt 0 ]]; then shift; fi
+    # Configure only: the compile database is written by CMake, and the direct
+    # run below is the gate. Building through CXX_CLANG_TIDY would also
+    # escalate newer-clang diagnostics in the tests, which is not this gate.
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=Debug \
+      -DSKIPPY_API_BUILD_TESTS=OFF \
+      -DSKIPPY_API_BUILD_BENCHMARKS=OFF \
+      -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
+    cd skippy/skippy_api
+    "$tidy" -p "$build_path" --warnings-as-errors="${checks:-*}" \
+      $(find src -name '*.cpp' | sort)
+
+# just skippy-llama-api-sanitize                 -> address;undefined
+# just skippy-llama-api-sanitize thread
+# just skippy-llama-api-sanitize "memory"        (Clang only)
+skippy-llama-api-sanitize sanitizers="address;undefined":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sanitizers='{{sanitizers}}'
+    build_dir="target/skippy-llama-api-san-${sanitizers//;/-}"
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DSKIPPY_API_BUILD_TESTS=ON \
+      -DSKIPPY_SANITIZERS="$sanitizers" \
+      -DSKIPPY_LINK_COMPILE_COMMANDS=ON \
+      -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}"
+    cmake --build "$build_dir" --parallel
+    export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1:abort_on_error=1}"
+    export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=1}"
+    export TSAN_OPTIONS="${TSAN_OPTIONS:-halt_on_error=1}"
+    ctest --test-dir "$build_dir" --output-on-failure --no-tests=error
