@@ -45,7 +45,7 @@ jobs:
       - name: Stage binary and runtime
         run: |
           find ci-artifacts -maxdepth 4 | head -20
-          tar tzf ci-artifacts/linux/product-input.tar.gz | head -10
+          tar tzf ci-artifacts/linux/product-input.tar.gz
           mkdir -p product-input && tar xzf ci-artifacts/linux/product-input.tar.gz -C product-input
           bin_src=$(find product-input -name mesh-llm -type f | head -1)
           rt_src=$(find product-input -type d -name native-runtimes | head -1)
