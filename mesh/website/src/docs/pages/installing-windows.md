@@ -31,7 +31,8 @@ When setup installs the optional background service, a per-user scheduled task
 named `mesh-llm` starts it at your logon, with no console window and no
 administrator rights. It restarts the node after a failure (after 5 seconds,
 then doubling, up to five restarts in a row) and writes its output to
-`%LOCALAPPDATA%\mesh-llm\logs\service.log`. The task runs while you are logged
+`%LOCALAPPDATA%\mesh-llm\logs\service.log`, keeping the part before in
+`service.previous.log` once it passes 10 MiB. The task runs while you are logged
 in, not before logon. Do not start a second foreground copy on the same ports;
 stop the task with `schtasks /End /TN mesh-llm` before switching to foreground
 operation, and start it again with `schtasks /Run /TN mesh-llm`.

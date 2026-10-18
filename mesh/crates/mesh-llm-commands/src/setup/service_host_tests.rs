@@ -1,7 +1,7 @@
-use super::service_host::{
+use super::service_host::{parse_service_host_record, render_service_host_record};
+use super::service_supervisor::{
     Backoff, ConsoleHost, FIRST_RESTART_DELAY, HostOutcome, MAX_RESTARTS, RestartDecision,
-    RunningServe, STABLE_RUN, ServeExit, ServeLauncher, parse_service_host_record,
-    render_service_host_record, supervise,
+    RunningServe, STABLE_RUN, ServeExit, ServeLauncher, supervise,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -103,6 +103,8 @@ impl RunningServe for FakeServe {
 
 #[derive(Default)]
 struct FakeLauncher {
+    /// Launches that fail to start before `runs` begin.
+    failed_starts: usize,
     runs: VecDeque<(Option<usize>, ServeExit)>,
     launches: usize,
     stopped: Rc<Cell<bool>>,
@@ -122,6 +124,10 @@ impl ServeLauncher for FakeLauncher {
 
     fn launch(&mut self) -> io::Result<FakeServe> {
         self.launches += 1;
+        if self.failed_starts > 0 {
+            self.failed_starts -= 1;
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
         let (polls, exit) = self
             .runs
             .pop_front()
@@ -168,6 +174,42 @@ fn supervise_restarts_a_failing_serve_until_it_exits_cleanly() {
     assert!(log.contains("mesh-llm serve exited with code 1; restarting in 5 s (restart 1 of 5)"));
     assert!(log.contains("mesh-llm serve exited with code 1; restarting in 10 s (restart 2 of 5)"));
     assert!(log.contains("mesh-llm serve exited cleanly"));
+}
+
+#[test]
+fn supervise_retries_a_serve_that_could_not_be_started() {
+    let mut launcher = FakeLauncher {
+        failed_starts: 1,
+        ..FakeLauncher::exiting([ServeExit::Success])
+    };
+    let host = FakeHost::default();
+    let mut log = Vec::new();
+
+    let outcome = supervise(&mut launcher, &host, &mut backoff(), &mut log).expect("supervise");
+
+    assert_eq!(outcome, HostOutcome::ServeExited);
+    assert_eq!(launcher.launches, 2);
+    assert_eq!(*host.waits.borrow(), vec![Duration::from_secs(5)]);
+    let log = String::from_utf8(log).expect("log is UTF-8");
+    assert!(log.contains("could not start mesh-llm serve: permission denied"));
+    assert!(
+        log.contains("mesh-llm serve could not be started; restarting in 5 s (restart 1 of 5)")
+    );
+}
+
+#[test]
+fn supervise_gives_up_on_a_serve_that_never_starts() {
+    let mut launcher = FakeLauncher {
+        failed_starts: 6,
+        ..FakeLauncher::default()
+    };
+    let host = FakeHost::default();
+    let mut log = Vec::new();
+
+    let outcome = supervise(&mut launcher, &host, &mut backoff(), &mut log).expect("supervise");
+
+    assert_eq!(outcome, HostOutcome::GaveUp(ServeExit::NotStarted));
+    assert_eq!(launcher.launches, 6);
 }
 
 #[test]

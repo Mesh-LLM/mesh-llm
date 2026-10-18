@@ -179,9 +179,6 @@ mod tests {
     fn ending_the_job_holder_ends_its_children() {
         if let Some(pid_file) = std::env::var_os("MESH_LLM_PROCESS_LIFETIME_PID_FILE") {
             end_children_with_current_process().expect("join the job");
-            // Never waited on: it has to outlive this process for the job to
-            // be what ends it.
-            #[allow(clippy::zombie_processes)]
             let grandchild = Command::new("ping")
                 .args(["-n", "60", "127.0.0.1"])
                 .stdin(Stdio::null())
@@ -189,7 +186,11 @@ mod tests {
                 .stderr(Stdio::null())
                 .spawn()
                 .expect("spawn the grandchild");
-            std::fs::write(pid_file, grandchild.id().to_string()).expect("write the pid");
+            let pid = grandchild.id();
+            // Dropped, never waited on: it has to outlive this process for
+            // the job to be what ends it.
+            drop(grandchild);
+            std::fs::write(pid_file, pid.to_string()).expect("write the pid");
             return;
         }
         let temp = tempfile::tempdir().expect("tempdir");

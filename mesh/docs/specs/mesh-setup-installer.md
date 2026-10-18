@@ -98,10 +98,12 @@ The task runs `conhost.exe --headless` from the binary's directory with the
 hidden `mesh-llm service-host` subcommand, so no console window shows, at task
 priority 4, which gives the node the CPU, I/O and memory priority of a `serve`
 started from a terminal (the default, 7, would run it below normal). The
-service host runs `mesh-llm serve` with its output appended to
-`%LOCALAPPDATA%\mesh-llm\logs\service.log`, restarts it after a failure with an
-exponential backoff (5 seconds, doubling, five restarts in a row, counted
-afresh after ten minutes of running), and stops it when the task ends: ending a
+service host runs `mesh-llm serve` with its output copied into
+`%LOCALAPPDATA%\mesh-llm\logs\service.log`, restarts it after a failure,
+including a start that fails, with an exponential backoff (5 seconds, doubling,
+five restarts in a row, counted afresh after ten minutes of running), and stops
+it when the task ends. The log moves to `service.previous.log` at each start
+and once it would pass 10 MiB, so the two stay under 20 MiB. Ending a
 task only ends its own process, so the service host watches that console host
 and holds the node in a kill-on-close job. The node reads its TOML config and
 `invite.token` beside it; Windows has no `service.env`. When the user has no

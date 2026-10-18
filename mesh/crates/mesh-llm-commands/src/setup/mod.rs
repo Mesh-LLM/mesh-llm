@@ -13,6 +13,9 @@ pub(crate) mod service_host;
 mod service_host_windows;
 pub(crate) mod service_paths;
 pub(crate) mod service_runner;
+// Only the Windows service host runs it; its tests run everywhere.
+#[cfg(any(windows, test))]
+mod service_supervisor;
 mod service_templates;
 pub(crate) mod summary;
 
