@@ -21,14 +21,17 @@ impl StageOpenAiBackend {
             .kv
             .as_ref()
             .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent);
-        let resume_scheduler_decode = prompt_prefill_sample.is_some()
-            && !state.stopped
-            && state.decoded_tokens < request.max_tokens as usize
-            && self.linear_proposal_ingress.is_none()
+        let resume_scheduler_decode = self.linear_proposal_ingress.is_none()
             && self.draft.is_none()
             && !request.native_mtp_enabled
             && !state.generation_hooks_active;
-        if resume_scheduler_decode && !recurrent_checkpoint_required {
+        if scheduler_resume_ready(
+            resume_scheduler_decode,
+            !recurrent_checkpoint_required,
+            state.stopped,
+            state.decoded_tokens,
+            request.max_tokens,
+        ) {
             return self.resume_prefilled_decode(
                 request,
                 session_id,
@@ -100,10 +103,13 @@ impl StageOpenAiBackend {
             if control == TokenControl::Stop {
                 break;
             }
-            if resume_scheduler_decode
-                && first_post_decode_checkpoint_attempted
-                && state.decoded_tokens < request.max_tokens as usize
-            {
+            if scheduler_resume_ready(
+                resume_scheduler_decode,
+                first_post_decode_checkpoint_attempted,
+                state.stopped,
+                state.decoded_tokens,
+                request.max_tokens,
+            ) {
                 return self.resume_prefilled_decode(
                     request,
                     session_id,
@@ -157,5 +163,47 @@ impl StageOpenAiBackend {
             let _ = self.record_post_decode_exact_state(request, session_id, state);
         }
         Ok(model_generation_elapsed)
+    }
+}
+
+/// A cached dense prefill leaves its last prompt token for serial decode.
+/// Once that produces a token, it can join the same decode batches as a
+/// request sampled during prefill. Never resume an empty generated history.
+fn scheduler_resume_ready(
+    eligible: bool,
+    checkpoint_attempted: bool,
+    stopped: bool,
+    decoded_tokens: usize,
+    max_tokens: u32,
+) -> bool {
+    eligible
+        && checkpoint_attempted
+        && !stopped
+        && decoded_tokens > 0
+        && decoded_tokens < max_tokens as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scheduler_resume_ready;
+
+    #[test]
+    fn cached_dense_decode_hands_off_after_its_first_token() {
+        assert!(!scheduler_resume_ready(true, true, false, 0, 8));
+        assert!(scheduler_resume_ready(true, true, false, 1, 8));
+    }
+
+    #[test]
+    fn recurrent_decode_waits_for_checkpoint_attempt() {
+        assert!(!scheduler_resume_ready(true, false, false, 1, 8));
+        assert!(scheduler_resume_ready(true, true, false, 1, 8));
+    }
+
+    #[test]
+    fn handoff_preserves_feature_and_completion_gates() {
+        assert!(!scheduler_resume_ready(false, true, false, 1, 8));
+        assert!(!scheduler_resume_ready(true, true, true, 1, 8));
+        assert!(!scheduler_resume_ready(true, true, false, 1, 1));
+        assert!(!scheduler_resume_ready(true, true, false, 0, 0));
     }
 }

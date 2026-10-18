@@ -347,6 +347,8 @@ fn embedded_openai_backend_with_scheduler(
         );
         args.telemetry.emit("stage.kv_payload_selected", attrs);
     }
+    let prompt_model = Arc::new(super::prompt_model::CachedPromptModel::default());
+    prompt_model.initialize(&args.runtime);
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
@@ -362,6 +364,7 @@ fn embedded_openai_backend_with_scheduler(
     let backend: Arc<dyn InferenceBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         workload: Default::default(),
+        prompt_model,
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),
         model_id: model_id.clone(),

@@ -1231,6 +1231,7 @@ pub(super) fn hooks_test_backend(
     StageOpenAiBackend {
         runtime: runtime.clone(),
         workload: Default::default(),
+        prompt_model: Default::default(),
         config: config.clone(),
         telemetry,
         model_id: "hooks-test-model".to_string(),

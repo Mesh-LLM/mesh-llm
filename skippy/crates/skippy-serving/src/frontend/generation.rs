@@ -4,6 +4,7 @@ mod draft_runner;
 mod incremental_text;
 mod parsing;
 mod persistent_lanes;
+mod prompt_model;
 mod queue;
 mod request_defaults;
 mod server;

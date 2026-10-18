@@ -286,6 +286,7 @@ fn recurrent_test_backend_with_lanes(
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         workload: Default::default(),
+        prompt_model: Default::default(),
         config,
         telemetry,
         model_id: backend_model_id.to_string(),
@@ -343,6 +344,7 @@ fn local_generation_signal_window_uses_configured_value() {
     let backend = StageOpenAiBackend {
         runtime,
         workload: Default::default(),
+        prompt_model: Default::default(),
         config,
         telemetry,
         model_id: "signal-window-test".to_string(),
@@ -827,6 +829,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         workload: Default::default(),
+        prompt_model: Default::default(),
         config,
         telemetry,
         model_id: "generation-receipt-test".to_string(),

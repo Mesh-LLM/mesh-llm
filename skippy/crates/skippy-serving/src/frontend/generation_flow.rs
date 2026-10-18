@@ -286,7 +286,7 @@ impl StageOpenAiBackend {
         let mut receipt_cancelled = false;
         let mut receipt_model_generation_elapsed = None;
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
+            TextGenerationCollector::new(self.prompt_model_reader(), stop_values, on_text_chunk)?
                 .with_emulation_stop(emulation_active)
                 .with_ignore_eos(sampling.ignore_eos);
         let (result, mut session_cleanup) = LocalSessionCleanupGuard::run(
@@ -684,7 +684,7 @@ impl StageOpenAiBackend {
             .map(String::as_str)
             .collect::<Vec<_>>();
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
+            TextGenerationCollector::new(self.prompt_model_reader(), stop_values, on_text_chunk)?
                 .with_emulation_stop(request.emulation_active)
                 .with_ignore_eos(request.sampling.ignore_eos);
         let session_id = request.ids.session_id;
