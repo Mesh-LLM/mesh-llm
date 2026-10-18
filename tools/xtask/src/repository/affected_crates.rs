@@ -255,6 +255,46 @@ mod tests {
     }
 
     #[test]
+    fn migration_repository_affected_select_takes_windows_changed_paths() {
+        // Escalation is decided before Cargo runs.
+        for file in ["Cargo.lock\r", "scripts\\build-llama.sh"] {
+            let report = select(Path::new("."), &[file.to_owned()]).expect("select");
+            assert!(
+                report.stdout.contains("\"all_rust\": true"),
+                "{file:?}: {}",
+                report.stdout
+            );
+        }
+
+        // Ownership comes from Cargo metadata, here of a one-crate workspace.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let crate_dir = temp.path().join("crates").join("a");
+        std::fs::create_dir_all(crate_dir.join("src")).expect("crate dir");
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\"]\nresolver = \"2\"\n",
+        )
+        .expect("workspace manifest");
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("crate manifest");
+        std::fs::write(crate_dir.join("src").join("lib.rs"), "").expect("lib.rs");
+        for file in ["crates\\a\\src\\lib.rs", "crates/a\r"] {
+            let report = select(temp.path(), &[file.to_owned()]).expect("select");
+            let selection: serde_json::Value =
+                serde_json::from_str(&report.stdout).expect("selection JSON");
+            assert_eq!(
+                selection["test_crates"],
+                serde_json::json!(["a"]),
+                "{file:?}: {}",
+                report.stdout
+            );
+        }
+    }
+
+    #[test]
     fn migration_repository_affected_fallback_list_matches_script() {
         let script = include_str!("../../../../scripts/affected-crates.sh");
         let (_, rest) = script
