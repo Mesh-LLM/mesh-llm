@@ -539,6 +539,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    WiringEntry {
+        path: "runtime.native_runtime.download",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
     runtime::KV_CACHE_DISK_MODE,
     runtime::KV_CACHE_DISK_DIRECTORY,
     runtime::KV_CACHE_DISK_BUDGET_MIB,
