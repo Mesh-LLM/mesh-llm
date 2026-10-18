@@ -313,3 +313,57 @@ fn migration_ci_plan_real_catalogs_plan_every_profile() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn capsules_plugin_change_plans_its_gate_slices() -> TestResult {
+    // Given: the checked-in catalogs and a ready pull request that only
+    // touches the capsules plugin crate.
+    let stage = Stage::new("capsules-plugin")?;
+    let path = stage.search_path()?;
+    let root = repository_root();
+    let root = root.to_str().ok_or("non-UTF8 checkout")?;
+    let crate_dir = "mesh/crates/mesh-llm-capsules-plugin";
+    let input = serde_json::json!({
+        "profile": "pr-ready",
+        "event_name": "pull_request",
+        "source_sha": "a".repeat(40),
+        "base_sha": "b".repeat(40),
+        "changed_files": [format!("{crate_dir}/src/main.rs")],
+        "affected_crates": ["mesh-llm-capsules-plugin"],
+        "workspace_packages": [{"name": "mesh-llm-capsules-plugin", "path": crate_dir}],
+    });
+    let bytes = serde_json::to_vec(&input)?;
+    // When: the planner routes it.
+    let output = Run {
+        args: &["--manifest-root", root],
+        stdin: &bytes,
+        path: &path,
+    }
+    .ported()?;
+    // Then: the plugin domain selects quality (most gates, in the Clippy
+    // batch) and web (the web UI gate), next to the rust domain's slices.
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let plan: Value = serde_json::from_slice(&output.stdout)?;
+    let domains = plan["domains"].as_array().ok_or("domains")?;
+    assert!(domains.iter().any(|domain| domain == "plugin-capsules"));
+    let mut slices = plan["required_slices"]
+        .as_array()
+        .ok_or("required slices")?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    slices.sort_unstable();
+    assert_eq!(slices, ["quality", "rust-tests", "static-abi", "web"]);
+    assert!(
+        plan["matrices"]["clippy"]
+            .as_array()
+            .ok_or("Clippy batches")?
+            .iter()
+            .any(
+                |batch| batch["crates"].as_array().is_some_and(|crates| crates
+                    .iter()
+                    .any(|name| name == "mesh-llm-capsules-plugin"))
+            )
+    );
+    Ok(())
+}

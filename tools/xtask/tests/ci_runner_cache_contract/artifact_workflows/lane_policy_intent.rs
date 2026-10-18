@@ -205,9 +205,33 @@ fn graph_critical_matrix_failfast_follows_pr_profile_and_web_control_changes() {
         }
     }
     let doc = document("ci-website-lane.yml");
-    for signal in ["ui", "website"] {
-        assert_eq!(input(job(&doc,"web"),&format!("{signal}_changed")),Some(format!("${{{{ fromJson(inputs.lane_plan_json).signals.{signal}_changed || contains(fromJson(inputs.lane_plan_json).domains, 'ci-control') }}}}").as_str()));
+    let plan = "fromJson(inputs.lane_plan_json)";
+    for (signal, changed) in [
+        ("ui", format!("{plan}.signals.ui_changed")),
+        ("website", format!("{plan}.signals.website_changed")),
+        (
+            "plugin_capsules",
+            format!("contains({plan}.domains, 'plugin-capsules')"),
+        ),
+    ] {
+        assert_eq!(
+            input(job(&doc, "web"), &format!("{signal}_changed")),
+            Some(
+                format!("${{{{ {changed} || contains({plan}.domains, 'ci-control') }}}}").as_str()
+            )
+        );
     }
+    // The capsules plugin's web UI gate rides the website job.
+    let web = document("ci-web-slice.yml");
+    let website = job(&web, "website");
+    assert_eq!(
+        text(website, "if"),
+        Some("${{ inputs.website_changed || inputs.plugin_capsules_changed }}")
+    );
+    assert_eq!(
+        text(named(website, "Capsules plugin gate: web UI"), "if"),
+        Some("${{ inputs.plugin_capsules_changed }}")
+    );
 }
 #[test]
 fn graph_controller_optional_summary_and_trusted_hf_secret_boundaries_are_declared() {
