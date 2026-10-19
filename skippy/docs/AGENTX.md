@@ -166,7 +166,7 @@ truncated to fit a plan. Failed cells retain evidence, and subsequent levels
 continue only after confirmed cleanup. Any failed or incomplete cell fails the
 job after the sweep; valid earlier points and explicit failure counts are still
 copied from the container into the JY result. A green job therefore requires
-every requested cell to complete. Harness version 4 separates these
+every requested cell to complete. Harness versions 4 and later separate these
 measurements from the previous fixed-context sweep.
 Skippy's in-memory prefix retention target is explicitly 8 GiB, with disk
 caching off; exact snapshots can exceed that target. llama-server retains its
@@ -196,6 +196,14 @@ tokenizer synthesis, server readiness, warmup, outstanding-request drain, and
 cleanup add time. A single cell has a bounded 80-minute lifecycle for smoke;
 the job has a 24-hour hard deadline shared with container build and preparation. These are
 failure ceilings, not runtime estimates.
+
+Smoke version 5 uses upstream `--burst-phase-starts` so each lane's first
+profiling request is eligible immediately. The previous c4 smoke's recorded
+first-request spacing was 81.4 seconds, exceeding its 60-second sending window
+and admitting only three profiling requests. The burst changes phase-start
+spacing only; subsequent inter-turn delays and trace contents remain intact.
+Full benchmark version 4 retains upstream phase-start spacing. Compare versions
+separately and verify observed HTTP overlap before claiming concurrency coverage.
 
 ## Corpus and validity
 

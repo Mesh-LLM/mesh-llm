@@ -145,6 +145,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Unload { name, port } => run_drop(name, *port).await,
         Command::Status { port } => run_status(*port).await,
         Command::Stop => run_stop(),
+        Command::ServiceHost => mesh_llm_commands::setup::run_service_host(),
         Command::Discover {
             name,
             model,
@@ -256,16 +257,29 @@ async fn run_plugin_command(command: &mesh_llm_cli::PluginCommand, cli: &Cli) ->
     match command {
         mesh_llm_cli::PluginCommand::List => {
             let rows = resolved_plugin_list_rows(cli)?;
-            mesh_llm_commands::plugin::run_plugin_command(command, Some(&rows)).await?;
+            mesh_llm_commands::plugin::run_plugin_command(
+                command,
+                Some(&rows),
+                cli.config.as_deref(),
+            )
+            .await?;
         }
         mesh_llm_cli::PluginCommand::Info { .. } => {
-            if !mesh_llm_commands::plugin::run_plugin_command(command, None).await? {
+            if !mesh_llm_commands::plugin::run_plugin_command(command, None, cli.config.as_deref())
+                .await?
+            {
                 let rows = resolved_plugin_list_rows(cli)?;
-                mesh_llm_commands::plugin::run_plugin_command(command, Some(&rows)).await?;
+                mesh_llm_commands::plugin::run_plugin_command(
+                    command,
+                    Some(&rows),
+                    cli.config.as_deref(),
+                )
+                .await?;
             }
         }
         _ => {
-            mesh_llm_commands::plugin::run_plugin_command(command, None).await?;
+            mesh_llm_commands::plugin::run_plugin_command(command, None, cli.config.as_deref())
+                .await?;
         }
     }
     Ok(())

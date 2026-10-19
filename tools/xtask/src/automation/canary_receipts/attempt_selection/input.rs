@@ -63,6 +63,10 @@ pub(super) struct JobOutputs {
 #[derive(Debug, Deserialize)]
 pub(super) struct Attempts {
     #[serde(default)]
+    repair_1: Option<Job>,
+    #[serde(default)]
+    verify_1: Option<Job>,
+    #[serde(default)]
     attempt_1: Option<Job>,
     #[serde(default)]
     attempt_2: Option<Job>,
@@ -72,6 +76,25 @@ pub(super) struct Attempts {
     other: BTreeMap<String, serde::de::IgnoredAny>,
 }
 impl Attempts {
+    pub(super) fn selected_verification(&self) -> DynResult<super::decision::Candidate> {
+        let repair = self
+            .repair_1
+            .as_ref()
+            .ok_or("selected publication lacks candidate pass")?;
+        let verify = self
+            .verify_1
+            .as_ref()
+            .ok_or("selected publication lacks independent pass")?;
+        repair.validate()?;
+        verify.validate()?;
+        if repair.outputs.identity == verify.outputs.identity {
+            return Err("selected publication requires separate build identities".into());
+        }
+        match super::select_attempt(true, repair, verify)? {
+            super::decision::AttemptDecision::Green(candidate) => Ok(candidate),
+            _ => Err("selected publication requires two complete green passes".into()),
+        }
+    }
     pub(super) fn validate_slots(&self) -> DynResult<()> {
         if self.other.keys().any(|key| key.starts_with("attempt_")) {
             return Err("canary selection supports only attempt_1, attempt_2 and attempt_3".into());

@@ -131,3 +131,20 @@ fn selected_compiler_bootstrap_authority_and_masked_owner_execution_are_rejected
     *field_mut(step, "run") = Node::Scalar(run);
     assert!(check(&workflows).is_err());
 }
+
+#[test]
+fn selected_action_cannot_be_unbound_or_omit_native_admission() {
+    for replacement in ["certify-and-publish", "$UNTRUSTED_ACTION"] {
+        let mut workflows = actual();
+        let step = resolve(&mut workflows);
+        *field_mut(field_mut(step, "env"), "MESH_ACTION") = Node::Scalar(replacement.into());
+        assert!(check(&workflows).is_err());
+    }
+    let mut workflows = actual();
+    let step = resolve(&mut workflows);
+    let run = field(step, "run")
+        .unwrap()
+        .replace("--action \"${MESH_ACTION:-certify}\"", "--action certify");
+    *field_mut(step, "run") = Node::Scalar(run);
+    assert!(check(&workflows).is_err());
+}

@@ -91,3 +91,4 @@ include!("openai_smoke.rs");
 include!("ui_routes.rs");
 include!("runtime_events_v1.rs");
 include!("runtime_capabilities_parity.rs");
+include!("latest_version.rs");

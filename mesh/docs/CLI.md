@@ -89,7 +89,7 @@ mesh-llm client --auto
 Use this to finish a fresh install after the executable is on your `PATH`.
 
 `mesh-llm setup` downloads and configures the native runtime, can install and
-enable the background service on supported macOS and Linux machines, and only
+enable the background service on macOS, Linux, and Windows, and only
 shows the GitHub star prompt when it is interactive and eligible. The star
 prompt defaults to Yes, and `--yes` or `--no-interactive` skip it without
 starring anything. Default output is concise; use `--verbose` when you want
@@ -114,7 +114,8 @@ Switches:
 - `--skip-runtime`: skip downloading or configuring the native runtime.
 - `--verbose`: print detailed service paths, commands, log locations, and setup status.
 
-On Windows, `--service` is unsupported.
+On Windows, the background service is a per-user scheduled task that starts at
+logon without elevation; see [Installing on Windows](../website/src/docs/pages/installing-windows.md).
 
 ### `uninstall`
 
@@ -476,7 +477,11 @@ Switches:
 - `--version <VERSION>`: install a specific release tag or version, for example `v0.60.0`.
 - `--flavor <FLAVOR>`: install or switch to a specific release bundle flavor (`cpu`, `cuda`, `rocm`, `vulkan`, or `metal`).
 - `--detect-flavor`: re-detect the best host backend flavor before selecting the release bundle. Cannot be combined with `--flavor`.
+- `--no-default-plugins`: turn off the default plugins the running build lists, so the updated node does not install them from its release's bundled copy until `mesh-llm plugins enable NAME` (same as `mesh-llm plugins install-defaults --off`). See [Default Plugins](plugins/README.md#default-plugins).
 - `--auto-update`: available on most commands; when set, mesh-llm checks for a newer bundled release before proceeding.
+
+Without `--auto-update`, mesh-llm checks for a newer release and only shows it: as a notice at startup, and as the latest version in the web console.
+Set `updates.check = false` in `config.toml` to turn these checks off, for example when a package manager updates mesh-llm. `MESH_LLM_NO_UPDATE_CHECK=1` does the same for one process and overrides the setting (`0` turns the checks back on).
 
 
 ### `release-attestation inspect`
@@ -844,7 +849,8 @@ Subcommands:
 - `plugins disable <NAME>`: keep an installed plugin on disk but prevent host
   startup from launching it.
 - `plugins delete <NAME>`: remove the installed archive contents and local
-  metadata.
+  metadata. A deleted default plugin stays removed: the installers and
+  `mesh-llm update` do not install it again until `plugins enable <NAME>`.
 - `plugins info <NAME>`: show source, version, target, path, and latest known
   status for an installed or configured plugin.
 - `plugins search [QUERY]`: search the configured plugin catalog.

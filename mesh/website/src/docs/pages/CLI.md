@@ -174,7 +174,7 @@ needed.
 Use this to finish a fresh install after the executable is on your `PATH`.
 
 `mesh-llm setup` downloads and configures the native runtime, can install and
-enable the background service on supported macOS and Linux machines, and only
+enable the background service on macOS, Linux, and Windows, and only
 shows the GitHub star prompt when it is interactive and eligible. The star
 prompt defaults to Yes, and `--yes` or `--no-interactive` skip it without
 starring anything. Default output is concise; use `--verbose` when you want
@@ -199,7 +199,8 @@ Switches:
 - `--skip-runtime`: skip downloading or configuring the native runtime.
 - `--verbose`: print detailed service paths, commands, log locations, and setup status.
 
-On Windows, `--service` is unsupported.
+On Windows, the background service is a per-user scheduled task that starts at
+logon without elevation; see [Installing on Windows](/docs/pages/installing-windows/).
 
 ### `uninstall`
 

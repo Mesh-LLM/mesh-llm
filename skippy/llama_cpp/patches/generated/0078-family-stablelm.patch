@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/stablelm.cpp b/src/models/stablelm.cpp
-index bf6087b87960da66787c09fe37114526e7821e4a..0140e7e4f22bd006cbebda6e76e03c41521490e1 100644
+index 5189a460687cb3a50d2f503b3c48467334b7ec0c..08f8e26c853e825d124e38441cf08755825e7570 100644
 --- a/src/models/stablelm.cpp
 +++ b/src/models/stablelm.cpp
 @@ -66,6 +66,8 @@ llama_model_stablelm::graph::graph(const llama_model & model, const llm_graph_pa

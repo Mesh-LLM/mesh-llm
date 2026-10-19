@@ -16,7 +16,11 @@ use crate::{
 };
 
 mod blocking;
+mod buying;
 mod failure_boundaries;
+mod historical_recovery;
+mod metered_service;
+mod metered_settlement;
 mod payment_notifications;
 mod provisioning;
 mod recovery_boundaries;
@@ -54,8 +58,8 @@ fn terms(id: &str, cap: u64) -> RequestTerms {
         pricing: Pricing {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
+            cache_discount_percent: 0,
         },
-        input_tokens: 100,
         max_output_tokens: 100,
         max_total_msat: cap,
         expires_at_ms: crate::now_ms() + 3_600_000,
@@ -112,9 +116,11 @@ impl WalletProvider for MockWallet {
             !self.invoice_unavailable.load(Ordering::SeqCst),
             "invoice service unavailable"
         );
-        self.invoice_expiries.lock().unwrap().push(expiry_secs);
+        let mut expiries = self.invoice_expiries.lock().unwrap();
+        expiries.push(expiry_secs);
+        // Distinct hashes per issued invoice, as a real wallet produces.
         Ok(invoice_with_expiry(
-            200,
+            200 + u8::try_from(expiries.len()).unwrap(),
             amount.unwrap_or(1000),
             u64::from(expiry_secs),
         ))
@@ -273,10 +279,7 @@ async fn a_fee_above_the_headroom_still_counts_against_the_daily_budget() {
 
     assert_eq!(service.ledger.requests().unwrap()[0].spent_msat, 600);
     assert_eq!(
-        service
-            .ledger
-            .available_budget(100_000, crate::now_ms())
-            .unwrap(),
+        service.ledger.available_budget(crate::now_ms()).unwrap(),
         10_000 - 600,
         "the real fee, not the authorized headroom, is what the budget loses"
     );
@@ -333,10 +336,7 @@ async fn output_payment_uses_the_original_authorization_and_actual_fees() {
     service.ledger.finish("one").unwrap();
     assert_eq!(service.ledger.requests().unwrap()[0].spent_msat, 520);
     assert_eq!(
-        service
-            .ledger
-            .available_budget(100_000, crate::now_ms())
-            .unwrap(),
+        service.ledger.available_budget(crate::now_ms()).unwrap(),
         480
     );
 }
@@ -352,7 +352,7 @@ fn duplicate_segments_and_hashes_cannot_change_the_debit() {
         })
         .unwrap();
     ledger.propose(&terms("one", 1000)).unwrap();
-    ledger.approve("one", 100_000, crate::now_ms()).unwrap();
+    ledger.approve("one", crate::now_ms()).unwrap();
     let original = charge("one", 0, 1, 100, 200);
     assert!(ledger.prepare_charge(&original).unwrap());
     assert!(!ledger.prepare_charge(&original).unwrap());
@@ -362,10 +362,11 @@ fn duplicate_segments_and_hashes_cannot_change_the_debit() {
     changed = original.clone();
     changed.segment = 1;
     assert!(ledger.prepare_charge(&changed).is_err());
+    // A distinct final charge is not constrained by the legacy request cap.
     assert!(
         ledger
             .prepare_charge(&charge("one", 1, 2, 900, 1000))
-            .is_err()
+            .unwrap()
     );
 }
 
@@ -380,29 +381,6 @@ fn invoices_reject_peer_metadata_substitution_and_amount_changes() {
     );
     invoice.payment_hash = "00".repeat(32);
     assert!(invoice.validate_payment(100, crate::now_ms()).is_err());
-}
-
-#[test]
-fn committed_output_debt_survives_process_restart() {
-    let dir = tempfile::tempdir().unwrap();
-    let price = terms("one", 1000).pricing;
-    {
-        let service =
-            PaymentService::with_provider(dir.path(), Arc::new(MockWallet::default())).unwrap();
-        service
-            .ledger
-            .begin_serving("one", "peer", &price, 2)
-            .unwrap();
-        service.ledger.record_delivered_tokens("one", 2).unwrap();
-        service.ledger.record_delivered_tokens("one", 2).unwrap();
-        assert!(service.ledger.record_delivered_tokens("one", 3).is_err());
-    }
-    let service =
-        PaymentService::with_provider(dir.path(), Arc::new(MockWallet::default())).unwrap();
-    let (_, _, tokens, finished) = service.ledger.serving_account("one").unwrap();
-    assert_eq!(tokens, 2);
-    assert!(finished);
-    assert!(service.ledger.record_delivered_tokens("one", 3).is_err());
 }
 
 #[tokio::test]
@@ -443,18 +421,13 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
         service.ledger.payment_intent()?,
         PaymentIntent::AllowPaid { .. }
     ));
+    // Approval reserves nothing: a second request fits alongside.
     service.await_authorization(&terms("paid", 700)).await?;
-    assert!(
-        service
-            .await_authorization(&terms("over", 400))
-            .await
-            .is_err()
-    );
+    service.await_authorization(&terms("also", 400)).await?;
     let status = service
         .control(ControlCommand::Policy { value: None })
         .await?;
-    assert_eq!(status["reserved_msat"], 700);
-    assert_eq!(status["remaining_daily_budget_msat"], 300);
+    assert_eq!(status["remaining_daily_budget_msat"], 1000);
     service
         .control(ControlCommand::Policy {
             value: Some(Policy::default()),
@@ -473,8 +446,39 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
         .control(ControlCommand::Policy { value: None })
         .await?;
     assert_eq!(status["spent_today_msat"], 110);
-    assert_eq!(status["reserved_msat"], 0);
     assert_eq!(status["remaining_daily_budget_msat"], 0);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn min_payment_control_reads_defaults_sets_and_validates_offline() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let service = PaymentService::open(dir.path())?;
+    let read = service
+        .control(mesh_llm_payments_types::control::ControlCommand::MinPayment { value_msat: None })
+        .await?;
+    assert_eq!(read["min_payment_msat"], 1000);
+    let set = service
+        .control(
+            mesh_llm_payments_types::control::ControlCommand::MinPayment {
+                value_msat: Some(5000),
+            },
+        )
+        .await?;
+    assert_eq!(set["min_payment_msat"], 5000);
+    for invalid in [0, 1_000_001] {
+        assert!(
+            service
+                .control(
+                    mesh_llm_payments_types::control::ControlCommand::MinPayment {
+                        value_msat: Some(invalid),
+                    }
+                )
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(service.ledger.min_payment_msat()?, 5000);
     Ok(())
 }

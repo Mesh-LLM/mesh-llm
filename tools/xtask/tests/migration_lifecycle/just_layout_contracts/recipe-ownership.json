@@ -77,7 +77,6 @@
       "skippy-release",
       "skippy-rewriter-build",
       "skippy-rewriter-test",
-      "skippy-wan-lab-build-bins",
       "skippy-workload-oracles-build",
       "snapshot-promoter-release-build",
       "spec-bench"

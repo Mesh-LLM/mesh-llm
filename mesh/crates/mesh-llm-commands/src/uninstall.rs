@@ -1,3 +1,5 @@
+mod windows_task;
+
 use crate::terminal::{self, ConfirmDefault, style_muted, style_ok, style_warn};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -30,6 +32,8 @@ pub struct UninstallEnvironment {
     pub home_dir: PathBuf,
     pub config_root: PathBuf,
     pub cache_root: PathBuf,
+    /// Machine-local data root (`%LOCALAPPDATA%` on Windows).
+    pub local_data_root: PathBuf,
     pub binary_path: PathBuf,
     pub user_id: String,
 }
@@ -53,6 +57,12 @@ pub enum UninstallStep {
         user_id: String,
         plist_path: PathBuf,
     },
+    /// End and delete the Windows scheduled task, if it is registered, and
+    /// stop the service host it recorded if that still runs.
+    RemoveScheduledTask {
+        service_host_record: PathBuf,
+        binary_name: String,
+    },
     RemovePath {
         path: PathBuf,
         purpose: RemovePurpose,
@@ -71,6 +81,8 @@ pub enum RemovePurpose {
     ServiceRunner,
     ServiceConfigDir,
     LaunchdLogs,
+    ScheduledTaskDefinition,
+    WindowsServiceLogs,
     NativeRuntimeCache,
     ConfigAndIdentity,
 }
@@ -97,6 +109,7 @@ pub fn detect_uninstall_environment(binary_path: Option<PathBuf>) -> Result<Unin
         dirs::home_dir().context("could not determine the home directory for uninstall")?;
     let config_root = dirs::config_dir().unwrap_or_else(|| home_dir.join(".config"));
     let cache_root = dirs::cache_dir().unwrap_or_else(|| home_dir.join(".cache"));
+    let local_data_root = dirs::data_local_dir().unwrap_or_else(|| home_dir.join(".local/share"));
     let binary_path = match binary_path {
         Some(path) => path,
         None => std::env::current_exe()
@@ -112,13 +125,18 @@ pub fn detect_uninstall_environment(binary_path: Option<PathBuf>) -> Result<Unin
         home_dir,
         config_root,
         cache_root,
+        local_data_root,
         binary_path,
         user_id,
     })
 }
 
 pub fn plan_uninstall(options: &UninstallOptions, env: &UninstallEnvironment) -> UninstallPlan {
-    let mut steps = vec![UninstallStep::StopProcesses];
+    let mut steps = Vec::new();
+    if env.platform == UninstallPlatform::Windows {
+        steps.push(windows_task::remove_task_step(env));
+    }
+    steps.push(UninstallStep::StopProcesses);
     match env.platform {
         UninstallPlatform::Linux => {
             steps.push(UninstallStep::DisableSystemdUserService);
@@ -149,7 +167,8 @@ pub fn plan_uninstall(options: &UninstallOptions, env: &UninstallEnvironment) ->
                 purpose: RemovePurpose::LaunchdLogs,
             });
         }
-        UninstallPlatform::Windows | UninstallPlatform::Other => {}
+        UninstallPlatform::Windows => steps.extend(windows_task::task_file_steps(env)),
+        UninstallPlatform::Other => {}
     }
     if !options.keep_service_files {
         let service_config_dir = env.config_root.join("mesh-llm");
@@ -278,6 +297,12 @@ where
                     outcome,
                 );
             }
+        }
+        UninstallStep::RemoveScheduledTask {
+            service_host_record,
+            binary_name,
+        } => {
+            windows_task::remove_scheduled_task(service_host_record, binary_name, outcome);
         }
         UninstallStep::RemovePath { path, purpose } => {
             remove_path(path, *purpose, outcome)
@@ -587,6 +612,9 @@ fn step_label(step: &UninstallStep) -> String {
         }
         UninstallStep::ReloadSystemdUser => "reload systemd user units".to_string(),
         UninstallStep::BootoutLaunchdAgent { .. } => "boot out launchd agent".to_string(),
+        UninstallStep::RemoveScheduledTask { .. } => {
+            "end and delete the scheduled task".to_string()
+        }
         UninstallStep::RemovePath { path, purpose } => {
             format!("remove {}: {}", purpose_label(*purpose), path.display())
         }
@@ -602,6 +630,8 @@ fn purpose_label(purpose: RemovePurpose) -> &'static str {
         RemovePurpose::ServiceRunner => "service runner",
         RemovePurpose::ServiceConfigDir => "service config directory if empty",
         RemovePurpose::LaunchdLogs => "launchd logs",
+        RemovePurpose::ScheduledTaskDefinition => "scheduled task definition",
+        RemovePurpose::WindowsServiceLogs => "service logs",
         RemovePurpose::NativeRuntimeCache => "native runtime cache",
         RemovePurpose::ConfigAndIdentity => "configuration and identity",
     }
@@ -650,18 +680,19 @@ mod tests {
             .collect()
     }
 
-    fn env(temp: &Path, platform: UninstallPlatform) -> UninstallEnvironment {
+    pub(super) fn env(temp: &Path, platform: UninstallPlatform) -> UninstallEnvironment {
         UninstallEnvironment {
             platform,
             home_dir: temp.join("home"),
             config_root: temp.join("config"),
             cache_root: temp.join("cache"),
+            local_data_root: temp.join("local"),
             binary_path: temp.join("bin/mesh-llm"),
             user_id: "501".to_string(),
         }
     }
 
-    fn options() -> UninstallOptions {
+    pub(super) fn options() -> UninstallOptions {
         UninstallOptions {
             dry_run: false,
             yes: true,

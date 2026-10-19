@@ -435,17 +435,24 @@ impl StageSession {
     }
 
     pub fn export_recurrent_state(&mut self) -> Result<Vec<u8>> {
+        self.export_recurrent_payload(false)
+    }
+
+    /// Export cache-side state while keeping full-attention KV in the lane.
+    /// Pair this payload with resident attention or separately exported KV pages.
+    pub fn export_recurrent_cache_state(&mut self) -> Result<Vec<u8>> {
+        self.export_recurrent_payload(true)
+    }
+
+    fn export_recurrent_payload(&mut self, cache_side: bool) -> Result<Vec<u8>> {
+        let export = if cache_side {
+            skippy_ffi::skippy_export_recurrent_cache_state
+        } else {
+            skippy_ffi::skippy_export_recurrent_state
+        };
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_export_recurrent_state(
-                self.raw,
-                ptr::null_mut(),
-                0,
-                &mut bytes,
-                &mut error,
-            )
-        };
+        let status = unsafe { export(self.raw, ptr::null_mut(), 0, &mut bytes, &mut error) };
         if status != Status::BufferTooSmall && status != Status::Ok {
             ensure_ok(status, error)?;
         } else {
@@ -456,7 +463,7 @@ impl StageSession {
         let mut written = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_export_recurrent_state(
+            export(
                 self.raw,
                 payload.as_mut_ptr().cast(),
                 payload.len(),
@@ -470,16 +477,28 @@ impl StageSession {
     }
 
     pub fn import_recurrent_state(&mut self, input: &[u8]) -> Result<()> {
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_import_recurrent_state(
-                self.raw,
-                input.as_ptr().cast(),
-                input.len(),
-                &mut error,
-            )
+        self.import_recurrent_payload(input, false)
+    }
+
+    fn import_recurrent_payload(&mut self, input: &[u8], cache_side: bool) -> Result<()> {
+        let import = if cache_side {
+            skippy_ffi::skippy_import_recurrent_cache_state
+        } else {
+            skippy_ffi::skippy_import_recurrent_state
         };
+        let mut error = ptr::null_mut();
+        let status = unsafe { import(self.raw, input.as_ptr().cast(), input.len(), &mut error) };
         ensure_ok(status, error)
+    }
+
+    /// Restore cache-side state after its matching attention KV is available.
+    pub fn import_recurrent_cache_state_for_token_count(
+        &mut self,
+        input: &[u8],
+        token_count: u64,
+    ) -> Result<()> {
+        self.import_recurrent_payload(input, true)?;
+        self.set_position(token_count)
     }
 
     /// Whether the live lane still covers a complete recurrent checkpoint.

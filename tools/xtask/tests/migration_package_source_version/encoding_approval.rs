@@ -49,7 +49,7 @@ const VALID_SOURCES: [(&str, &[u8], &[u8]); 2] = [
     (
         "abi",
         include_bytes!("../../../../skippy/crates/skippy-ffi/src/lib.rs"),
-        b"0.1.72\n",
+        b"0.1.73\n",
     ),
 ];
 

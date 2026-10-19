@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/deepseek2.cpp b/src/models/deepseek2.cpp
-index deca865279782278c9ac12e5da3382de74cf9944..022f01554603967f8b709c7e430288a01cf4a05f 100644
+index 5fd24d105f22d8f4f21ff8686619987a2769d649..40f6e9acd06a428af8dd51ca995b8d30f25b684c 100644
 --- a/src/models/deepseek2.cpp
 +++ b/src/models/deepseek2.cpp
-@@ -463,6 +463,8 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+@@ -457,6 +457,8 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index deca865279782278c9ac12e5da3382de74cf9944..022f01554603967f8b709c7e430288a0
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -688,6 +690,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+@@ -682,6 +684,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
  
          // input for next layer
          inpL = cur;

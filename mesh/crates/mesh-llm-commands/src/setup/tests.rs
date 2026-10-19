@@ -1,7 +1,7 @@
 use super::{
     SetupConfirmPrompt, SetupEnvironment, SetupGitHubStarPlan, SetupGitHubStarSkipReason,
-    SetupOptions, SetupPlanError, SetupPlatform, SetupPrompter, SetupRuntimePlan, SetupServicePlan,
-    SetupStep, plan_setup,
+    SetupOptions, SetupPlatform, SetupPrompter, SetupRuntimePlan, SetupServicePlan, SetupStep,
+    plan_setup,
 };
 use std::collections::VecDeque;
 
@@ -138,7 +138,7 @@ fn no_service_flag_skips_service_without_prompt() {
 }
 
 #[test]
-fn windows_service_flag_is_an_unsupported_error() {
+fn windows_service_flag_plans_the_service_install() {
     let options = SetupOptions {
         service: true,
         ..SetupOptions::default()
@@ -149,16 +149,25 @@ fn windows_service_flag_is_an_unsupported_error() {
     };
     let mut prompter = FakePrompter::default();
 
-    let error =
-        plan_setup(options, environment, &mut prompter).expect_err("windows service must fail");
+    let plan = plan_setup(options, environment, &mut prompter).expect("plan should succeed");
 
-    assert_eq!(
-        error,
-        SetupPlanError::UnsupportedService {
-            platform: SetupPlatform::Windows,
-        }
-    );
+    assert_eq!(plan.service, SetupServicePlan::Install);
     assert!(prompter.prompts.is_empty());
+}
+
+#[test]
+fn windows_interactive_setup_offers_the_service() {
+    let environment = SetupEnvironment {
+        platform: SetupPlatform::Windows,
+        interactive: true,
+    };
+    let mut prompter = FakePrompter::with_replies([Some(true)]);
+
+    let plan = plan_setup(SetupOptions::default(), environment, &mut prompter)
+        .expect("plan should succeed");
+
+    assert_eq!(plan.service, SetupServicePlan::Install);
+    assert_eq!(prompter.prompts.len(), 1);
 }
 
 #[test]

@@ -60,7 +60,13 @@ comparison as unqualified, and investigate regressions per model and
 concurrency rather than hiding them in an aggregate. Compare completed work
 and inspect grace-period cancellations before declaring a winner.
 
-Smoke uses a 60-second dispatch window and drains outstanding requests. A turn
+Smoke version 5 uses a 60-second dispatch window and drains outstanding requests.
+Upstream `--burst-phase-starts` makes every lane's first profiling request
+eligible immediately; subsequent recorded inter-turn delays remain intact.
+Without it, the pinned c4 cohort spreads initial requests over 81.4 seconds,
+leaving its fourth lane outside the smoke window. Full benchmark version 4
+keeps upstream phase-start spacing; do not combine these workload versions.
+A turn
 near that boundary can be included in one repetition and excluded from another,
 so the same trace seed does not guarantee identical completed work. Check trace
 IDs and turn indices before comparing short-run throughput. Offered sessions

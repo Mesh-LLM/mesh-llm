@@ -582,6 +582,16 @@ pub type LlamaPerfContextFn = unsafe extern "C" fn(ctx: *mut Opaque) -> LlamaPer
 /// real load, and nothing on the host could see it before: the counter stopped
 /// at the C++ boundary, so the reuse hit rate had to be inferred from
 /// throughput deltas.
+///
+/// The layout must track the pinned upstream header exactly. `llama_perf_context`
+/// returns this struct by value, so the caller supplies the destination slot: a
+/// mirror that is *smaller* than the upstream struct does not fail to link or
+/// return obviously wrong numbers, it makes native code write past the
+/// destination. That is exactly what the v0.7.0 pin did — upstream added
+/// `n_reallocs_same`/`n_reallocs_diff` (52 payload bytes, 56 with tail padding,
+/// against this mirror's previous 48), and the resulting eight-byte stack
+/// overwrite surfaced as a SIGSEGV in the status reader that happens to call
+/// `llama_perf_context`, not as a wrong counter value.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct LlamaPerfContextData {
@@ -592,4 +602,8 @@ pub struct LlamaPerfContextData {
     pub n_p_eval: i32,
     pub n_eval: i32,
     pub n_reused: i32,
+    /// Graph reallocations during inference with an unchanged graph size.
+    pub n_reallocs_same: i32,
+    /// Graph reallocations during inference with a changed graph size.
+    pub n_reallocs_diff: i32,
 }

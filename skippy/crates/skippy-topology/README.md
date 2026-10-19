@@ -59,7 +59,7 @@ runtime substitute for the loaded model's capabilities.
 - infer advisory capabilities for known dense/recurrent families
 
 Use this crate before `skippy-package-builder`, mesh stage deployment,
-`skippy plan-split`, or `skippy-bench` commits to a runnable stage layout. When new
+or `skippy plan-split` commits to a runnable stage layout. When new
 peers or devices make a better split possible, mesh replans by preparing the
 replacement topology, waiting for readiness, and only then publishing the new
 stage-0 route.

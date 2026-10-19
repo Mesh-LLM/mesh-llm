@@ -15,7 +15,6 @@ pub(crate) fn print_usage() {
     );
     println!("  cargo xtool automation endpoint-model-discovery --help");
     println!("  cargo xtool automation wan-observation --help");
-    println!("  cargo xtool automation wan-stage-deployment --help");
     println!("  cargo xtool automation system-one-cases --help");
     println!("  cargo xtool automation system-one-smoke --help");
     println!("  cargo xtool automation decisions-smoke --help");
@@ -134,7 +133,6 @@ pub(crate) enum CliCommand<'a> {
     WorkloadSmoke(&'a [String]),
     Stability(&'a [String]),
     WanObservation(&'a [String]),
-    WanStageDeployment(&'a [String]),
     SystemOneCases(&'a [String]),
     SystemOneSmoke(&'a [String]),
     DecisionsSmoke(&'a [String]),
@@ -374,11 +372,6 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "system-one-smoke" => {
                 CliCommand::SystemOneSmoke(rest)
-            }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "wan-stage-deployment" =>
-            {
-                CliCommand::WanStageDeployment(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "wan-observation" => {
                 CliCommand::WanObservation(rest)

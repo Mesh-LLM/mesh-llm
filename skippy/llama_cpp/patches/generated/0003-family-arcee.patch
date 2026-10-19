@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/arcee.cpp b/src/models/arcee.cpp
-index 9536e7c5d4291ef33923ed8bf1b739ee7b1beefe..f3a11e989627b2a4255d1e889fa663eaebb8be17 100644
+index 81e3b828f7e26090eb5a00d5324ea9fd82dc6a9d..c65db4bd6ad6f19ff9b7e9a48d3683d65a698bc9 100644
 --- a/src/models/arcee.cpp
 +++ b/src/models/arcee.cpp
 @@ -66,6 +66,8 @@ llama_model_arcee::graph::graph(const llama_model & model, const llm_graph_param

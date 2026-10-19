@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/mistral3.cpp b/src/models/mistral3.cpp
-index 9a8e3f9a50b79820b583e5e66712fd9d956762d5..59265dea0f254812eac261fd409f5dbb92447c13 100644
+index 484e1b698ac507e49eb756a9bf2218a655e2c238..43928e6b7045971f3d54becd76d50d32508a9655 100644
 --- a/src/models/mistral3.cpp
 +++ b/src/models/mistral3.cpp
 @@ -117,6 +117,8 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa

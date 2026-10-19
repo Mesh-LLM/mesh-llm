@@ -584,13 +584,20 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+The final publisher must use an explicit `!cancelled()` status condition,
+require successful source resolution and final selection, and require
+`publish=true`. Optional repair and retry jobs may be skipped after a green
+pass; their skipped status must not suppress publication through GitHub's
+implicit `success()` condition.
+
 Default upstream selection uses GitHub's latest published stable release of
 `ggml-org/llama.cpp`, never an unqualified `master` tip or a `b*` prerelease.
 The hosted resolver validates the release and peels its tag to an exact commit
 before any hardware work. Missing releases, malformed metadata, moved tags or
 API failures stop resolution without a fallback. Record the release tag and
 commit in the run summary. An explicit full `upstream_sha` remains an operator
-override; `mesh_ref` keeps its existing certify-only semantics. Upstream release
+override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and-publish`
+adds independent verification and publication of the unchanged selected commit. Upstream release
 qualification never replaces the complete candidate and independent family
 passes required before publishing an upgrade PR. Only the hosted upstream
 selection step may receive the read-only GitHub token for public upstream API
@@ -627,7 +634,11 @@ Manual `mesh_ref` is an explicitly authorized trusted-code path, not a PR
 runner exception. Keep the workflow/controller on protected main, resolve only
 same-repository branch-reachable commits once, and bind the controller and
 selected source independently in every handoff. Certify the selected revision's
-existing pin and patches without repair or publication. Selected build scripts
+existing pin and patches without repair. Default `mesh_action=certify` does not
+publish. Explicit `mesh_action=certify-and-publish` requires a complete candidate
+pass and a fresh independent build and complete family pass on the same frozen
+selected commit before publishing that exact commit as a PR to main. It never
+changes the selected pin or invokes coding repair. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 
@@ -764,8 +775,12 @@ change to the current template source, then sync and use `jy repos run` at the
 immutable PR source. Keep unrelated jobs and the production default ref intact.
 Move the source registration to Mesh after merge.
 
-AgentX version 4 sweeps 1, 2 and 4 offered sessions per engine job with automatic
+AgentX sweeps 1, 2 and 4 offered sessions per engine job with automatic
 context on both engines and automatic Skippy parallelism; llama slots match offered sessions.
+Smoke version 5 uses upstream `--burst-phase-starts` so every lane's first
+profiling request is eligible inside its 60-second sending window. Subsequent
+recorded inter-turn delays remain intact. Full benchmark version 4 preserves
+upstream phase-start spacing. Keep these workload versions separate.
 Repeated comparisons order whole engine jobs ABBAAB on the same Spark. Preserve
 complete traces, exclude drain cancellations from serving points, retain failed
 cells, and continue only after confirmed child cleanup. Cache inputs are offline.

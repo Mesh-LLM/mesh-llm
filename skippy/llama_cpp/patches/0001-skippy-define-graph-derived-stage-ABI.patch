@@ -1,4 +1,4 @@
-From c84dbec0417e96964aebc204c7871cbdac2a460b Mon Sep 17 00:00:00 2001
+From 68285b165368bff4fd3f387c6f2151fd7966fb3b Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): define graph-derived native ABI
@@ -17,10 +17,10 @@ Subject: [PATCH] feat(skippy): define graph-derived native ABI
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
  include/skippy/stage_plan.h           | 252 ++++++++++++++++++++++
- include/skippy/state.h                | 243 ++++++++++++++++++++++
+ include/skippy/state.h                | 268 ++++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2129 insertions(+)
+ 16 files changed, 2154 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -147,7 +147,7 @@ index 000000000..673c1d81c
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..b9b5259af
+index 000000000..b8818a75b
 --- /dev/null
 +++ b/include/skippy/common.h
 @@ -0,0 +1,146 @@
@@ -199,7 +199,7 @@ index 000000000..b9b5259af
 +
 +#define SKIPPY_ABI_VERSION_MAJOR 0
 +#define SKIPPY_ABI_VERSION_MINOR 1
-+#define SKIPPY_ABI_VERSION_PATCH 68
++#define SKIPPY_ABI_VERSION_PATCH 73
 +
 +#if defined(_MSC_VER)
 +#define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -1826,10 +1826,10 @@ index 000000000..962674190
 +#endif // SKIPPY_STAGE_PLAN_H
 diff --git a/include/skippy/state.h b/include/skippy/state.h
 new file mode 100644
-index 000000000..c03abaf55
+index 000000000..dcdd70b10
 --- /dev/null
 +++ b/include/skippy/state.h
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,268 @@
 +#ifndef SKIPPY_STATE_H
 +#define SKIPPY_STATE_H
 +
@@ -1994,6 +1994,31 @@ index 000000000..c03abaf55
 +
 +/** @brief Imports recurrent state into a session. */
 +LLAMA_API enum skippy_status skippy_import_recurrent_state(
++        struct skippy_session * session,
++        const void * input,
++        size_t input_bytes,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Exports recurrent and bounded sliding-window state for a KV cache entry.
++ * Omits full-attention KV. The caller must retain that KV in the live lane or
++ * export matching KV pages separately. This is not a standalone checkpoint;
++ * use skippy_export_full_state or skippy_export_recurrent_state for that.
++ */
++LLAMA_API enum skippy_status skippy_export_recurrent_cache_state(
++        struct skippy_session * session,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Restores a cache-side recurrent payload without replacing full-attention KV.
++ * Accepts only skippy_export_recurrent_cache_state payloads. Matching attention
++ * KV must already be resident or restored from the entry's KV pages. The caller
++ * must restore the matching logical position and token history before decode.
++ */
++LLAMA_API enum skippy_status skippy_import_recurrent_cache_state(
 +        struct skippy_session * session,
 +        const void * input,
 +        size_t input_bytes,

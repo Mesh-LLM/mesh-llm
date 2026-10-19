@@ -42,6 +42,7 @@ impl Case {
                 generation_defaults: None,
                 resume_existing_artifacts: false,
                 max_artifact_bytes: None,
+                native_mtp_draft_depth: None,
             },
         )
         .unwrap();

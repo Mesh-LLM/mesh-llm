@@ -66,7 +66,7 @@ impl RuntimeState {
         if !lane.session.has_resident_recurrent_prefix(count) {
             return Ok(None);
         }
-        let recurrent = lane.session.export_recurrent_state()?;
+        let recurrent = lane.session.export_recurrent_cache_state()?;
         anyhow::ensure!(
             !recurrent.is_empty(),
             "resident checkpoint has no recurrent state"
@@ -185,7 +185,7 @@ impl RuntimeState {
         // speculative verify state; trim then removes only the obsolete suffix.
         let restored = lane
             .session
-            .import_recurrent_state_for_token_count(&checkpoint.recurrent, count as u64)
+            .import_recurrent_cache_state_for_token_count(&checkpoint.recurrent, count as u64)
             .and_then(|()| lane.session.trim_session(count as u64))
             .and_then(|()| {
                 lane.session

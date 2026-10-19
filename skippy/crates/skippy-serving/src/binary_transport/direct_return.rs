@@ -902,6 +902,7 @@ mod tests {
             native_mtp_draft: Some(skippy_protocol::binary::StageNativeMtpDraft {
                 token_ids: vec![43],
                 proposal_compute_us: 123,
+                follows_correction: false,
             }),
             window: skippy_protocol::binary::StageReplyWindow { window_id: 7 },
             stats: Default::default(),
@@ -917,6 +918,7 @@ mod tests {
             Some(skippy_protocol::binary::StageNativeMtpDraft {
                 token_ids: vec![43],
                 proposal_compute_us: 123,
+                follows_correction: false,
             })
         );
         assert_eq!(received.window.window_id, 7);

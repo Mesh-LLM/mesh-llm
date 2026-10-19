@@ -630,6 +630,21 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_export_recurrent_cache_state(
+        session: *mut Session,
+        output: *mut c_void,
+        output_capacity: usize,
+        out_bytes: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_import_recurrent_cache_state(
+        session: *mut Session,
+        input: *const c_void,
+        input_bytes: usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_session_has_resident_recurrent_prefix(
         session: *const Session,
         token_count: u64,

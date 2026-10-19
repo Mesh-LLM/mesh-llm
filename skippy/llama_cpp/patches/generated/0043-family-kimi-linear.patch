@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/kimi-linear.cpp b/src/models/kimi-linear.cpp
-index 60a0e9732d2ecdc219ab68b267678cd688b96818..a6671ae4f1f4f371e1901a300ce6b5343ac524a0 100644
+index af3ae5d9a4fa3066656c64f89dcf893bb3d4459c..bbced3b591d59f519405b9d63503e618fdf56e18 100644
 --- a/src/models/kimi-linear.cpp
 +++ b/src/models/kimi-linear.cpp
 @@ -277,6 +277,8 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph

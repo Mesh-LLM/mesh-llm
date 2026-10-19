@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/rwkv6.cpp b/src/models/rwkv6.cpp
-index ef58f3e470e9cda2d0a190dbd58b033f04b38ea4..d3879ff18684624b6bd64ede83b838d37ffe4358 100644
+index c2ae9290984796f06e089ef34cbfbc938cd053dc..12e39034e2c0ea37b638d87ea3bd4e24eeda4cba 100644
 --- a/src/models/rwkv6.cpp
 +++ b/src/models/rwkv6.cpp
 @@ -110,6 +110,8 @@ llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_param
@@ -30,7 +30,7 @@ index ef58f3e470e9cda2d0a190dbd58b033f04b38ea4..d3879ff18684624b6bd64ede83b838d3
      cur = inpL;
      cur = build_norm(cur, model.output_norm, model.output_norm_b, LLM_NORM, -1);
 diff --git a/src/models/rwkv6qwen2.cpp b/src/models/rwkv6qwen2.cpp
-index 6c7db514435e72f794ec07859231df80607e03d1..03676002eb320042dd81b1836e25c0b536f1a6e8 100644
+index 0e5561c1957ab73dd41d6eb2856fab61e124489f..2f1fc2380acde3e37ddeaffdb59f2fe6033ac5b3 100644
 --- a/src/models/rwkv6qwen2.cpp
 +++ b/src/models/rwkv6qwen2.cpp
 @@ -98,6 +98,8 @@ llama_model_rwkv6qwen2::graph::graph(const llama_model & model, const llm_graph_

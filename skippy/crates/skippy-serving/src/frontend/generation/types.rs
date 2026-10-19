@@ -193,6 +193,17 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) ids: &'a InferenceGenerationIds,
 }
 
+impl EmbeddedStageZeroGeneration<'_> {
+    /// Draft depth to request of the final stage on decode and verify messages.
+    pub(in crate::frontend) fn native_mtp_draft_tokens(&self) -> usize {
+        if self.native_mtp_enabled {
+            self.speculative.native_mtp.max_draft_tokens
+        } else {
+            0
+        }
+    }
+}
+
 pub(in crate::frontend) struct SplitMultimodalGeneration<'a> {
     pub(in crate::frontend) prompt: PreparedGenerationPrompt,
     pub(in crate::frontend) max_tokens: GenerationTokenLimit,

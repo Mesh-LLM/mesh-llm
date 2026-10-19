@@ -130,7 +130,7 @@ without falling back to `master`. The hosted selection step alone receives
 the workflow's read-only GitHub token; the lookup has a 120-second total budget.
 An explicit full `upstream_sha` bypasses release lookup; empty or `latest` selects
 the stable release. `mesh_ref` skips upstream selection entirely and retains
-its certify-only contract. This selection policy does not replace our full
+its existing-pin contract; publication requires explicit `mesh_action=certify-and-publish`. This selection policy does not replace our full
 upgrade certification or independent verification. All
 candidate builds compile native tests with `--build-only`, then the generated
 patch checker owns one full native CTest pass after patch equality and
@@ -157,9 +157,18 @@ stops without invoking Goose and denies publication.
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
 or full commit SHA. Resolution freezes the SHA once, requires it to be reachable
 from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
-cannot be combined with this input. Keep the Actions workflow ref on `main`;
-selecting `mesh_ref` always runs a complete certify-only pass, without Goose,
-source repair, an independent upgrade-verification pass, or PR publication.
+cannot be combined with this input. Keep the Actions workflow ref on `main`.
+The default `mesh_action=certify` runs one complete pass without repair or
+publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
+fresh independent build and complete family pass on the same frozen commit.
+Only two green passes permit the hosted publisher to create a PR to `main`
+with that exact commit. Both modes keep its existing pin and never invoke Goose.
+The independent selected build admits the digest-bound first-pass package; each
+pass has separate build directories and evidence. Failed certification publishes
+no branch or PR. Publication refuses a selected revision with no diff from main's
+merge base. Closing an earlier PR and merging the replacement remain operator actions.
+The publisher explicitly checks `!cancelled()`, successful `resolve` and `result`
+jobs, and `publish=true`, so skipped optional repair attempts do not suppress it.
 The approved Rust source-plan API uses the current controller planner for every
 selected SHA; source build scripts and the battery remain selected-source code.
 Rust `gguf_metadata` yields `metadata_admitted`; other modes stay `pending`, with downgrade rejection.
@@ -172,11 +181,18 @@ reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
 Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
 
-To certify a recovered branch after this workflow is on main:
+To certify a recovered branch without publication:
 
 ```sh
 gh workflow run llama-upstream-canary.yml --ref main \
   -f mesh_ref=scammed/recover-llama-pin-35582541955
+```
+
+To independently certify and publish a trusted revision:
+
+```sh
+gh workflow run llama-upstream-canary.yml --ref main \
+  -f mesh_ref=FULL_MESH_COMMIT_SHA -f mesh_action=certify-and-publish
 ```
 
 The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;
@@ -265,6 +281,16 @@ compilation. Reconciliation retains valid candidate failures from the initial
 pass and emits automatic-repair input only when the remaining failures are
 proved candidate-class; it binds that evidence to the producer identity and
 exact candidate package.
+The memory receipt records admission and continuous guard outcomes separately
+from the battery exit. An admitted, guarded battery that exits with a failing
+family result is candidate-class; a failed admission, guard, cancellation, or
+cleanup remains infrastructure-class.
+Projector smokes request up to 256 tokens with reasoning disabled and require a
+parsed, user-visible image answer. Reasoning-only output and raw chat protocol
+markers fail the smoke, including for Muse-Glimmer's split stage.
+Hybrid and recurrent decoders synchronize an async backend graph before
+advancing to another internal microbatch. This preserves recurrent state
+ordering without moving model layers off the selected GPU.
 
 `cargo xtool automation family-battery-policy` validates the versioned JSON family policy
 before native compilation: the three core parity lanes for certified causal
@@ -1365,7 +1391,7 @@ Split-certification roster generation now targets `skippy/crates/skippy-api/src/
 The release-bound recipe build script and admission checks move with this neutral
 owner; canary generation/check commands and enforcement policy are unchanged.
 
-The standalone command now lives in `skippy-cli` (binary `skippy`); `skippy-serving` is the Clap-free embedded service library. CLI source is included in Docker prechecks, affected-crate selection, split-serving ownership and the publish roster after its server dependency. Certification, benchmark, smoke and WAN lab launches use the new binary. `just skippy-cli-build` and `just skippy-cli-release-build` select the dynamic-runtime CLI.
+The standalone command now lives in `skippy-cli` (binary `skippy`); `skippy-serving` is the Clap-free embedded service library. CLI source is included in Docker prechecks, affected-crate selection, split-serving ownership and the publish roster after its server dependency. Certification, smoke and interactive launches use the new binary. `just skippy-cli-build` and `just skippy-cli-release-build` select the dynamic-runtime CLI.
 
 Mesh raw byte-stream interfaces and TCP/QUIC relay are owned by
 `mesh-llm-transport`, consumed by the host and client. The runtime-product
@@ -1501,8 +1527,9 @@ than reported as a family failure; the evidence records whether and how long the
 worker waited. Available memory is macOS free + inactive + speculative pages;
 purgeable pages are not counted twice. A reserve violation or monitoring failure
 stops only this family's process group and fails certification.
-`memory-admission.json` retains the estimate and host observations even on
-failure. Sampling cannot guarantee that instantaneous allocations never cross
+`memory-admission.json` retains the estimate, host observations, admission
+status, continuous guard status, and output capture status even when the battery exits nonzero.
+Sampling cannot guarantee that instantaneous allocations never cross
 the reserve. Unrelated workloads must leave enough headroom at admission;
 labels alone are insufficient.
 
@@ -1757,6 +1784,16 @@ stage serializer are removed. The server derives cache capabilities from its
 loaded native graph and memory; tests supply only public resource/cache budgets.
 Split parity continues to use native planner evidence and binary stage servers.
 
+Skippy benchmark retirement removes `skippy-bench` from current workspace and
+native crate lists, and removes its research-source preparation step from Rust
+test batches. The WAN Docker lab and its deployment contracts are retired.
+Metrics-server and interactive/debug recipes remain maintained. Frozen legacy
+planner fixtures continue to describe their historical workspace inputs.
+The protected ownership catalog retains its historical `skippy-bench` domain
+entries: PR admission requires byte-for-byte equality with main. Removing a
+workspace member does not require changing these domain mappings; catalog
+cleanup must follow the separate protected-catalog rollout procedure.
+
 ## Jianyang AgentX templates
 
 `skippy/evals/agentx/templates.yaml` carries the repository-owned Jianyang inventory, replacing
@@ -1780,7 +1817,10 @@ matrix also exercises backend-specific variants. These are explicit hardware
 qualification commands, not additional CPU-only CI coverage. Their ownership,
 along with `skippy-cuda-readback-test`, is recorded in the Just layout fixture.
 
-AgentX harness version 4 retains the four engine/profile template keys and sweeps
+AgentX retains the four engine/profile template keys and sweeps
 1, 2 and 4 offered sessions with automatic context and Skippy parallelism (llama slots match offered sessions). Whole-job ABBAAB repeats are
 submitted per model on one Spark. Input cache misses fail offline; cancelled
 cells are excluded from serving points and failed cells retain evidence.
+Smoke harness version 5 bursts the first request on each lane using upstream
+`--burst-phase-starts`; later trace delays remain unchanged. Full benchmark
+version 4 retains upstream phase-start spacing.

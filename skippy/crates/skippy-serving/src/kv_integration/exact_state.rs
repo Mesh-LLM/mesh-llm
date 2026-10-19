@@ -264,7 +264,7 @@ impl KvStageIntegration {
                             // import, only a position to finalize.
                             runtime.set_session_position(session_id, token_count)?;
                         } else {
-                            runtime.import_recurrent_state_for_token_count(
+                            runtime.import_recurrent_cache_state_for_token_count(
                                 session_id,
                                 recurrent.as_ref(),
                                 token_count,
@@ -540,7 +540,7 @@ impl KvStageIntegration {
                     Err(error) if is_native_kv_unavailable(&error) => None,
                     Err(error) => return Err(error),
                 };
-                let recurrent = match runtime.export_recurrent_state(session_id) {
+                let recurrent = match runtime.export_recurrent_cache_state(session_id) {
                     Ok(recurrent) => recurrent,
                     // A known-dense model has no recurrent memory to export;
                     // its snapshot is legitimately empty.
@@ -827,7 +827,7 @@ impl KvStageIntegration {
                 if recurrent.is_empty() {
                     runtime.set_session_position(session_id, token_count)?;
                 } else {
-                    runtime.import_recurrent_state_for_token_count(
+                    runtime.import_recurrent_cache_state_for_token_count(
                         session_id,
                         recurrent.as_ref(),
                         token_count,

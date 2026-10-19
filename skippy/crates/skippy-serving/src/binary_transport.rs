@@ -4,6 +4,7 @@ pub(crate) mod binary_messaging;
 pub(crate) mod direct_return;
 pub(crate) mod forwarding;
 mod kv_eviction;
+mod native_mtp_reply;
 mod options;
 mod peer_sampling;
 mod preconnect;

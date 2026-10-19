@@ -66,6 +66,10 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
             "60",
             "--warmup-requests-per-lane",
             "1",
+            // Recorded first-request spacing can exceed the entire smoke
+            // window (81.4s in the pinned c4 cohort). Admit every lane at the
+            // phase boundary while preserving later inter-turn delays.
+            "--burst-phase-starts",
             "--trajectory-start-min-ratio",
             "0",
             "--trajectory-start-max-ratio",
@@ -184,6 +188,7 @@ mod tests {
                 .iter()
                 .any(|arg| arg == "--max-context-length" || arg == "--output-tokens")
         );
+        assert!(smoke.iter().any(|arg| arg == "--burst-phase-starts"));
         let wide = arguments(&input, 8080, 128);
         assert!(
             wide.windows(2)
@@ -197,11 +202,10 @@ mod tests {
         input.profile = Profile::Benchmark;
 
         let full = arguments(&input, 8080, 8);
-        assert!(
-            !full
-                .iter()
-                .any(|arg| arg == "--benchmark-duration" || arg == "--num-dataset-entries")
-        );
+        assert!(!full.iter().any(|arg| matches!(
+            arg.as_str(),
+            "--benchmark-duration" | "--num-dataset-entries" | "--burst-phase-starts"
+        )));
         assert!(full.windows(2).any(|args| args == ["--concurrency", "8"]));
     }
 }

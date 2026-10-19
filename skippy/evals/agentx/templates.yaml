@@ -1048,7 +1048,7 @@ templates:
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.7-local-smoke-4
+      version: agentx-1.0.7-local-smoke-5
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
@@ -1182,7 +1182,7 @@ templates:
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.7-local-smoke-4
+      version: agentx-1.0.7-local-smoke-5
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740

@@ -4,7 +4,11 @@ use mesh_llm_plugin::{LocalStream, read_envelope, write_envelope};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-async fn serve(mut stream: LocalStream, calls: Arc<AtomicUsize>) -> Result<()> {
+async fn serve(
+    mut stream: LocalStream,
+    calls: Arc<AtomicUsize>,
+    received: Option<Arc<tokio::sync::Notify>>,
+) -> Result<()> {
     loop {
         let incoming = read_envelope(&mut stream).await?;
         let payload = match incoming.payload {
@@ -19,6 +23,12 @@ async fn serve(mut stream: LocalStream, calls: Arc<AtomicUsize>) -> Result<()> {
                 })
             }
             Some(proto::envelope::Payload::InvokeServiceRequest(_)) => {
+                if let Some(received) = &received {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    received.notify_one();
+                    // Keep reading so shutdown closes the stream, but never reply.
+                    continue;
+                }
                 if calls.fetch_add(1, Ordering::SeqCst) == 0 {
                     // The operation was received, but its reply is lost.
                     return Ok(());
@@ -52,7 +62,7 @@ async fn exercise(operation: &str, replay: bool) {
         let starts = starts.clone();
         Arc::new(move |stream| {
             starts.fetch_add(1, Ordering::SeqCst);
-            Box::pin(serve(stream, calls.clone()))
+            Box::pin(serve(stream, calls.clone(), None))
         })
     };
     let plugin = crate::plugin::runtime::tests::in_process_plugin("replay-fixture", runner);
@@ -99,4 +109,56 @@ async fn lost_wallet_lookup_reply_keeps_existing_retry_behavior() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_does_not_restart_an_outstanding_replayable_request() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let received = Arc::new(tokio::sync::Notify::new());
+    let runner: InProcessPluginRunner = {
+        let starts = starts.clone();
+        let received = received.clone();
+        Arc::new(move |stream| {
+            starts.fetch_add(1, Ordering::SeqCst);
+            Box::pin(serve(
+                stream,
+                Arc::new(AtomicUsize::new(0)),
+                Some(received.clone()),
+            ))
+        })
+    };
+    let plugin = Arc::new(crate::plugin::runtime::tests::in_process_plugin(
+        "replay-fixture",
+        runner,
+    ));
+    let caller = plugin.clone();
+    let request = tokio::spawn(async move {
+        caller
+            .call_tool_with_replay(
+                "wallet_lookup",
+                "{}",
+                Some(std::time::Duration::from_secs(1)),
+                TransportReplay::Allow,
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), received.notified())
+        .await
+        .unwrap();
+    plugin.shutdown().await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), request)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    assert!(plugin.call_tool("wallet_lookup", "{}").await.is_err());
+    let count = starts.load(Ordering::SeqCst);
+    assert!(plugin.runtime.lock().await.is_none());
+    plugin.shutdown().await;
+    assert_eq!(
+        count, 1,
+        "shutdown must not resurrect the runner through replay"
+    );
 }

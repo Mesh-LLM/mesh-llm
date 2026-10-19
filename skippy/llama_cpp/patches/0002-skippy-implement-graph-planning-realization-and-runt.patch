@@ -1,4 +1,4 @@
-From a4d9a77b61f7646dacb32795db3928163030b193 Mon Sep 17 00:00:00 2001
+From 566be2cc0361f37ac6f99bab7e87a5806c089251 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -28,14 +28,15 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/graph_identity.cpp           | 1092 +++++++++++++++++++++
  src/skippy/graph_identity.h             |   71 ++
  src/skippy/model_lifecycle.cpp          |  155 +++
- src/skippy/model_load_config.cpp        |  194 ++++
- src/skippy/model_load_config_internal.h |   25 +
- src/skippy/model_loading.cpp            | 1193 +++++++++++++++++++++++
+ src/skippy/model_load_config.cpp        |  213 ++++
+ src/skippy/model_load_config_internal.h |   35 +
+ src/skippy/model_loading.cpp            | 1191 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  463 +++++++++
  src/skippy/package_tensor_binding.cpp   |  120 +++
  src/skippy/package_tensor_binding.h     |   27 +
+ src/skippy/recurrent_state.cpp          |  124 +++
  src/skippy/rerank_template.h            |   36 +
  src/skippy/runtime_support.h            |   50 +
  src/skippy/runtime_types.h              |  182 ++++
@@ -47,21 +48,21 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_execution_contract.cpp |   72 ++
  src/skippy/stage_execution_contract.h   |   15 +
- src/skippy/stage_plan.cpp               |  701 +++++++++++++
+ src/skippy/stage_plan.cpp               |  709 ++++++++++++++
  src/skippy/stage_realization.cpp        |  293 ++++++
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  871 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  119 +++
- src/skippy/state.cpp                    | 1168 ++++++++++++++++++++++
+ src/skippy/state.cpp                    | 1071 ++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
- src/skippy/state_memory.cpp             |  139 +++
- src/skippy/state_memory.h               |   16 +
+ src/skippy/state_memory.cpp             |  157 +++
+ src/skippy/state_memory.h               |   20 +
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  270 +++++
- src/skippy/workloads.cpp                |  371 +++++++
+ src/skippy/workloads.cpp                |  372 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16080 insertions(+)
+ 58 files changed, 16165 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -94,6 +95,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  create mode 100644 src/skippy/model_source.cpp
  create mode 100644 src/skippy/package_tensor_binding.cpp
  create mode 100644 src/skippy/package_tensor_binding.h
+ create mode 100644 src/skippy/recurrent_state.cpp
  create mode 100644 src/skippy/rerank_template.h
  create mode 100644 src/skippy/runtime_support.h
  create mode 100644 src/skippy/runtime_types.h
@@ -6048,10 +6050,10 @@ index 000000000..caa9fcd6d
 +} // extern "C"
 diff --git a/src/skippy/model_load_config.cpp b/src/skippy/model_load_config.cpp
 new file mode 100644
-index 000000000..22aa384f8
+index 000000000..2e8d3c4ed
 --- /dev/null
 +++ b/src/skippy/model_load_config.cpp
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,213 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -6246,12 +6248,31 @@ index 000000000..22aa384f8
 +        params.op_offload = config->op_offload == SKIPPY_TRISTATE_TRUE;
 +    }
 +}
++
++skippy_context_capabilities skippy_context_capabilities_of(const llama_model * model) {
++    skippy_context_capabilities capabilities;
++    if (model == nullptr) {
++        return capabilities;
++    }
++    const bool encoder_decoder = llama_model_has_encoder(model) && llama_model_has_decoder(model);
++    // A classifier workload serves the pooled classifier projection. A model
++    // that also carries a generation head keeps its logits, because upstream
++    // drops the LM head when a context runs in pooled embeddings mode.
++    capabilities.classifier = (model->cls != nullptr || model->cls_out != nullptr) &&
++                              model->output == nullptr;
++    capabilities.pooled_embeddings = !encoder_decoder &&
++            (capabilities.classifier ||
++             (llama_model_has_encoder(model) ||
++              (model->hparams.pooling_type != LLAMA_POOLING_TYPE_NONE &&
++               model->hparams.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED)));
++    return capabilities;
++}
 diff --git a/src/skippy/model_load_config_internal.h b/src/skippy/model_load_config_internal.h
 new file mode 100644
-index 000000000..0f7c83139
+index 000000000..554d2bdd3
 --- /dev/null
 +++ b/src/skippy/model_load_config_internal.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,35 @@
 +#pragma once
 +
 +#include "skippy/common.h"
@@ -6277,12 +6298,22 @@ index 000000000..0f7c83139
 +void skippy_apply_context_hardware_config(
 +        const skippy_runtime_config * config,
 +        llama_context_params & params);
++
++// Model-derived context capabilities. The runtime derives its embedding and
++// classifier mode from the loaded model, and stage planning must observe the
++// same graph shape, so both read them through this one helper.
++struct skippy_context_capabilities {
++    bool classifier        = false;
++    bool pooled_embeddings = false;
++};
++struct llama_model;
++skippy_context_capabilities skippy_context_capabilities_of(const llama_model * model);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..a110c9c6e
+index 000000000..708f8d392
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,1193 @@
+@@ -0,0 +1,1191 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -6305,6 +6336,7 @@ index 000000000..a110c9c6e
 +#include "llama-memory-recurrent.h"
 +#include "llama-model.h"
 +#include "llama-model-loader.h"
++#include "model_load_config_internal.h"
 +#include "skippy/graph_identity.h"
 +#include "../vendor/nlohmann/json.hpp"
 +
@@ -6915,12 +6947,9 @@ index 000000000..a110c9c6e
 +    }
 +
 +    const bool encoder_decoder = llama_model_has_encoder(model) && llama_model_has_decoder(model);
-+    const bool classifier_workload = model->cls != nullptr || model->cls_out != nullptr;
-+    const bool embedding_workload = !encoder_decoder &&
-+            (classifier_workload ||
-+             (llama_model_has_encoder(model) ||
-+              (model->hparams.pooling_type != LLAMA_POOLING_TYPE_NONE &&
-+               model->hparams.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED)));
++    const auto capabilities = skippy_context_capabilities_of(model);
++    const bool classifier_workload = capabilities.classifier;
++    const bool embedding_workload = capabilities.pooled_embeddings;
 +    const uint32_t configured_lane_count = config != nullptr && config->lane_count > 0
 +        ? static_cast<uint32_t>(config->lane_count)
 +        : 1;
@@ -8936,6 +8965,136 @@ index 000000000..751048af8
 +        const std::vector<skippy_package_tensor_binding_input> & inputs,
 +        std::vector<skippy_parameter_binding> & bindings,
 +        std::string & error);
+diff --git a/src/skippy/recurrent_state.cpp b/src/skippy/recurrent_state.cpp
+new file mode 100644
+index 000000000..b7461b386
+--- /dev/null
++++ b/src/skippy/recurrent_state.cpp
+@@ -0,0 +1,124 @@
++#include "skippy/state.h"
++#include "skippy/state_memory.h"
++#include "skippy/errors.h"
++#include "skippy/runtime_types.h"
++#include "llama-memory-recurrent.h"
++
++static enum skippy_status export_recurrent(
++        struct skippy_session * session,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error,
++        llama_state_seq_flags flags) {
++    if (out_bytes == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "out_bytes is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    *out_bytes = 0;
++    skippy_error * recurrent_error = nullptr;
++    llama_memory_recurrent * recurrent = skippy_recurrent_memory_checked(session, &recurrent_error);
++    if (recurrent_error != nullptr) {
++        if (out_error != nullptr) {
++            *out_error = recurrent_error;
++        } else {
++            skippy_error_free(recurrent_error);
++        }
++        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    if (recurrent == nullptr) {
++        return skippy_success(out_error);
++    }
++
++    session->ctx->synchronize();
++    const size_t bytes = llama_state_seq_get_size_ext(
++            session->ctx,
++            session->seq_id,
++            flags);
++    *out_bytes = bytes;
++    if (bytes == 0) {
++        return skippy_success(out_error);
++    }
++    if (output == nullptr || output_capacity < bytes) {
++        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "recurrent state output buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++
++    const size_t written = llama_state_seq_get_data_ext(
++            session->ctx,
++            static_cast<uint8_t *>(output),
++            output_capacity,
++            session->seq_id,
++            flags);
++    if (written != bytes) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to export recurrent state");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
++    return skippy_success(out_error);
++}
++
++static enum skippy_status import_recurrent(
++        struct skippy_session * session,
++        const void * input,
++        size_t input_bytes,
++        struct skippy_error ** out_error,
++        llama_state_seq_flags flags) {
++    if (input_bytes == 0) {
++        return skippy_success(out_error);
++    }
++    if (input == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "recurrent state input is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    skippy_error * recurrent_error = nullptr;
++    llama_memory_recurrent * recurrent = skippy_recurrent_memory_checked(session, &recurrent_error);
++    if (recurrent_error != nullptr) {
++        if (out_error != nullptr) {
++            *out_error = recurrent_error;
++        } else {
++            skippy_error_free(recurrent_error);
++        }
++        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    if (recurrent == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime has no recurrent memory");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++
++    session->ctx->synchronize();
++    const size_t read = llama_state_seq_set_data_ext(
++            session->ctx,
++            static_cast<const uint8_t *>(input),
++            input_bytes,
++            session->seq_id,
++            flags);
++    if (read != input_bytes) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to import recurrent state");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    session->ctx->synchronize();
++
++    return skippy_success(out_error);
++}
++
++extern "C" {
++enum skippy_status skippy_export_recurrent_state(skippy_session * session, void * output,
++        size_t capacity, size_t * bytes, skippy_error ** error) {
++    return export_recurrent(session, output, capacity, bytes, error, LLAMA_STATE_SEQ_FLAGS_NONE);
++}
++enum skippy_status skippy_import_recurrent_state(skippy_session * session, const void * input,
++        size_t bytes, skippy_error ** error) {
++    return import_recurrent(session, input, bytes, error, LLAMA_STATE_SEQ_FLAGS_NONE);
++}
++enum skippy_status skippy_export_recurrent_cache_state(skippy_session * session, void * output,
++        size_t capacity, size_t * bytes, skippy_error ** error) {
++    return export_recurrent(session, output, capacity, bytes, error, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++}
++enum skippy_status skippy_import_recurrent_cache_state(skippy_session * session, const void * input,
++        size_t bytes, skippy_error ** error) {
++    return import_recurrent(session, input, bytes, error, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++}
++}
 diff --git a/src/skippy/rerank_template.h b/src/skippy/rerank_template.h
 new file mode 100644
 index 000000000..f0c3b2ea7
@@ -11780,15 +11939,16 @@ index 000000000..bcb56cdd7
 +                                            bool                              embedding_input = false);
 diff --git a/src/skippy/stage_plan.cpp b/src/skippy/stage_plan.cpp
 new file mode 100644
-index 000000000..d5c645d38
+index 000000000..380e1eaad
 --- /dev/null
 +++ b/src/skippy/stage_plan.cpp
-@@ -0,0 +1,701 @@
+@@ -0,0 +1,709 @@
 +#include "skippy/stage_plan.h"
 +
 +#include "errors.h"
 +#include "graph_build_inputs.h"
 +#include "graph_identity.h"
++#include "model_load_config_internal.h"
 +#include "package_tensor_binding.h"
 +#include "stage_slice_plan.h"
 +#include "../vendor/nlohmann/json.hpp"
@@ -12073,6 +12233,13 @@ index 000000000..d5c645d38
 +    params.n_threads_batch = 1;
 +    // Resolve graph capabilities through the ordinary context, as execution does.
 +    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
++    // A classifier or pooled embedding context runs without the LM head, so the
++    // profile must observe the same model-derived context mode as the runtime.
++    const auto capabilities = skippy_context_capabilities_of(planner.model.get());
++    if (capabilities.classifier) {
++        params.pooling_type = LLAMA_POOLING_TYPE_RANK;
++    }
++    params.embeddings = capabilities.pooled_embeddings;
 +    // Semantic planning must observe the model graph before backend rewrites.
 +    params.op_offload = false;
 +    const skippy_graph_build_inputs build_inputs{};
@@ -13815,10 +13982,10 @@ index 000000000..2272a3fec
 +        std::string & error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..b41f289f6
+index 000000000..3ac83226b
 --- /dev/null
 +++ b/src/skippy/state.cpp
-@@ -0,0 +1,1168 @@
+@@ -0,0 +1,1071 @@
 +#include "skippy/state.h"
 +#include "skippy/state_memory.h"
 +#include "skippy/errors.h"
@@ -13842,6 +14009,23 @@ index 000000000..b41f289f6
 +#include <vector>
 +
 +extern "C" {
++
++// A hybrid or recurrent stage cannot be rebuilt from the partial
++// (recurrent + sliding-window) sequence state: the full-attention half of the
++// same stage is dropped, so a restored prefix decodes differently from an
++// uninterrupted prefill. Pay the larger payload to keep these checkpoints exact.
++static llama_state_seq_flags skippy_state_seq_flags(skippy_session * session) {
++    if (session == nullptr || session->ctx == nullptr) {
++        return LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
++    }
++    llama_memory_t memory = session->ctx->get_memory();
++    if (memory == nullptr) {
++        return LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
++    }
++    return skippy_memory_recurrent_adapter(memory) != nullptr
++            ? LLAMA_STATE_SEQ_FLAGS_NONE
++            : LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
++}
 +
 +static enum skippy_status skippy_validate_state_range(
 +        skippy_session * session,
@@ -13933,10 +14117,11 @@ index 000000000..b41f289f6
 +    }
 +
 +    session->ctx->synchronize();
++    const llama_state_seq_flags state_flags = skippy_state_seq_flags(session);
 +    const size_t required = llama_state_seq_get_size_ext(
 +            session->ctx,
 +            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++            state_flags);
 +    if (out_bytes != nullptr) {
 +        *out_bytes = required;
 +    }
@@ -13953,7 +14138,7 @@ index 000000000..b41f289f6
 +            static_cast<uint8_t *>(output),
 +            output_capacity,
 +            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++            state_flags);
 +    if (written != required) {
 +        if (out_bytes != nullptr) {
 +            *out_bytes = written;
@@ -13987,7 +14172,7 @@ index 000000000..b41f289f6
 +            static_cast<const uint8_t *>(input),
 +            input_bytes,
 +            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++            skippy_state_seq_flags(session));
 +    if (read != input_bytes) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to import sequence state");
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
@@ -14081,121 +14266,6 @@ index 000000000..b41f289f6
 +        return status;
 +    }
 +    skippy_update_session_state_after_import(session, imported_position, true);
-+
-+    return skippy_success(out_error);
-+}
-+
-+static llama_memory_recurrent * skippy_get_recurrent_memory(
-+        skippy_session * session,
-+        skippy_error ** out_error) {
-+    if (session == nullptr || session->ctx == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
-+        return nullptr;
-+    }
-+
-+    llama_memory_t memory = session->ctx->get_memory();
-+    if (memory == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
-+        return nullptr;
-+    }
-+
-+    return skippy_memory_recurrent_adapter(memory);
-+}
-+
-+enum skippy_status skippy_export_recurrent_state(
-+        struct skippy_session * session,
-+        void * output,
-+        size_t output_capacity,
-+        size_t * out_bytes,
-+        struct skippy_error ** out_error) {
-+    if (out_bytes == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "out_bytes is required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    *out_bytes = 0;
-+    skippy_error * recurrent_error = nullptr;
-+    llama_memory_recurrent * recurrent = skippy_get_recurrent_memory(session, &recurrent_error);
-+    if (recurrent_error != nullptr) {
-+        if (out_error != nullptr) {
-+            *out_error = recurrent_error;
-+        } else {
-+            skippy_error_free(recurrent_error);
-+        }
-+        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    if (recurrent == nullptr) {
-+        return skippy_success(out_error);
-+    }
-+
-+    session->ctx->synchronize();
-+    const size_t bytes = llama_state_seq_get_size_ext(
-+            session->ctx,
-+            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-+    *out_bytes = bytes;
-+    if (bytes == 0) {
-+        return skippy_success(out_error);
-+    }
-+    if (output == nullptr || output_capacity < bytes) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "recurrent state output buffer is too small");
-+        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
-+    }
-+
-+    const size_t written = llama_state_seq_get_data_ext(
-+            session->ctx,
-+            static_cast<uint8_t *>(output),
-+            output_capacity,
-+            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-+    if (written != bytes) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to export recurrent state");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+
-+    return skippy_success(out_error);
-+}
-+
-+enum skippy_status skippy_import_recurrent_state(
-+        struct skippy_session * session,
-+        const void * input,
-+        size_t input_bytes,
-+        struct skippy_error ** out_error) {
-+    if (input_bytes == 0) {
-+        return skippy_success(out_error);
-+    }
-+    if (input == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "recurrent state input is required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    skippy_error * recurrent_error = nullptr;
-+    llama_memory_recurrent * recurrent = skippy_get_recurrent_memory(session, &recurrent_error);
-+    if (recurrent_error != nullptr) {
-+        if (out_error != nullptr) {
-+            *out_error = recurrent_error;
-+        } else {
-+            skippy_error_free(recurrent_error);
-+        }
-+        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    if (recurrent == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime has no recurrent memory");
-+        return SKIPPY_STATUS_UNSUPPORTED;
-+    }
-+
-+    session->ctx->synchronize();
-+    const size_t read = llama_state_seq_set_data_ext(
-+            session->ctx,
-+            static_cast<const uint8_t *>(input),
-+            input_bytes,
-+            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-+    if (read != input_bytes) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to import recurrent state");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    session->ctx->synchronize();
 +
 +    return skippy_success(out_error);
 +}
@@ -14695,7 +14765,7 @@ index 000000000..b41f289f6
 +    }
 +
 +    skippy_error * recurrent_error = nullptr;
-+    llama_memory_recurrent * recurrent = skippy_get_recurrent_memory(session, &recurrent_error);
++    llama_memory_recurrent * recurrent = skippy_recurrent_memory_checked(session, &recurrent_error);
 +    if (recurrent_error != nullptr) {
 +        if (out_error != nullptr) {
 +            *out_error = recurrent_error;
@@ -15525,12 +15595,13 @@ index 000000000..5bb6b779b
 +        std::string & error);
 diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
 new file mode 100644
-index 000000000..fb3c2ca2f
+index 000000000..0dee78d02
 --- /dev/null
 +++ b/src/skippy/state_memory.cpp
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,157 @@
 +#include "skippy/state_memory.h"
 +#include "skippy/state.h"
++#include "skippy/errors.h"
 +#include "skippy/runtime_types.h"
 +#include "llama-kv-cache.h"
 +#include "llama-kv-cache-iswa.h"
@@ -15668,12 +15739,29 @@ index 000000000..fb3c2ca2f
 +                skippy_memory_cache_capabilities(model->ctx->get_memory()))
 +            : 0;
 +}
++
++llama_memory_recurrent * skippy_recurrent_memory_checked(
++        skippy_session * session,
++        skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
++        return nullptr;
++    }
++
++    llama_memory_t memory = session->ctx->get_memory();
++    if (memory == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
++        return nullptr;
++    }
++
++    return skippy_memory_recurrent_adapter(memory);
++}
 diff --git a/src/skippy/state_memory.h b/src/skippy/state_memory.h
 new file mode 100644
-index 000000000..4875cf398
+index 000000000..67ad1ea99
 --- /dev/null
 +++ b/src/skippy/state_memory.h
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,20 @@
 +#pragma once
 +
 +#include "../llama-memory.h"
@@ -15690,6 +15778,10 @@ index 000000000..4875cf398
 +llama_memory_recurrent * skippy_memory_recurrent_adapter(llama_memory_t memory);
 +uint32_t skippy_memory_cache_capabilities(llama_memory_t memory);
 +uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result);
++
++struct skippy_session;
++struct skippy_error;
++llama_memory_recurrent * skippy_recurrent_memory_checked(skippy_session * session, skippy_error ** error);
 diff --git a/src/skippy/tokenization.cpp b/src/skippy/tokenization.cpp
 new file mode 100644
 index 000000000..54753a161
@@ -16153,14 +16245,15 @@ index 000000000..e078d867c
 +} // extern "C"
 diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
 new file mode 100644
-index 000000000..be5c49fa0
+index 000000000..82919e864
 --- /dev/null
 +++ b/src/skippy/workloads.cpp
-@@ -0,0 +1,371 @@
+@@ -0,0 +1,372 @@
 +#include "skippy/workloads.h"
 +
 +#include "llama.h"
 +#include "llama-model.h"
++#include "model_load_config_internal.h"
 +#include "skippy/errors.h"
 +#include "skippy/rerank_template.h"
 +#include "skippy/runtime_support.h"
@@ -16183,7 +16276,7 @@ index 000000000..be5c49fa0
 +    const bool                    has_decoder = llama_model_has_decoder(model->model);
 +    const enum llama_pooling_type pooling     = llama_pooling_type(model->ctx);
 +
-+    if (model->model->cls != nullptr || model->model->cls_out != nullptr || pooling == LLAMA_POOLING_TYPE_RANK) {
++    if (skippy_context_capabilities_of(model->model).classifier || pooling == LLAMA_POOLING_TYPE_RANK) {
 +        return SKIPPY_WORKLOAD_RERANK;
 +    }
 +    if (has_encoder && has_decoder) {

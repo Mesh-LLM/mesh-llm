@@ -27,3 +27,25 @@ pub mod native_runtime {
     };
     pub use skippy_runtime_install::*;
 }
+
+/// Entry point for a host binary that the engine re-execs as a built-in
+/// plugin (`<exe> --plugin <name>`), such as the blobstore.
+#[cfg(feature = "serving")]
+pub mod plugin {
+    pub use mesh_llm_host_runtime::plugin::run_plugin_process;
+}
+
+/// Payment control and data types for driving the engine's payments over
+/// its control API: policy, pricing, invoices and wallet status.
+#[cfg(feature = "payments")]
+pub mod payments {
+    pub use mesh_llm_payments::{control, invoice, ledger, pricing, wallet};
+}
+
+/// Node identity keys on disk.
+#[cfg(feature = "identity")]
+pub use mesh_llm_identity as identity;
+
+/// Install plugin archives into the local plugin store.
+#[cfg(feature = "plugin-install")]
+pub use mesh_llm_plugin_manager as plugin_install;

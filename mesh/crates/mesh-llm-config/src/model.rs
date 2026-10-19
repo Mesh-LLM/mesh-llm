@@ -3,6 +3,7 @@ mod multimodal;
 mod profile;
 mod runtime;
 mod schema_types;
+mod updates;
 
 pub use built_in_schema::{
     BuiltInConfigPathResolution, built_in_config_schema_descriptor, built_in_config_settings,
@@ -16,6 +17,7 @@ pub use runtime::{
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
 };
 pub use schema_types::*;
+pub use updates::UpdatesConfig;
 
 pub use mesh_llm_types::runtime::ModelRuntimeKind;
 use serde::ser::SerializeStruct;
@@ -40,6 +42,8 @@ pub struct MeshConfig {
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub analytics: AnalyticsConfig,
+    #[serde(default)]
+    pub updates: UpdatesConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -1190,6 +1194,8 @@ struct RawMeshConfig {
     #[serde(default)]
     analytics: AnalyticsConfig,
     #[serde(default)]
+    updates: UpdatesConfig,
+    #[serde(default)]
     logging: LoggingConfig,
     #[serde(default)]
     defaults: Option<ModelConfigDefaults>,
@@ -1299,6 +1305,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             owner_control: raw.owner_control,
             telemetry: raw.telemetry,
             analytics: raw.analytics,
+            updates: raw.updates,
             logging: raw.logging,
             defaults: raw.defaults,
             runtime: raw.runtime,

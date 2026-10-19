@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/glm4-moe.cpp b/src/models/glm4-moe.cpp
-index d5372e160f6afaf5d66e6dd6396e42becf5aac28..f8b0ed5784b9524c8c006b281aeeac0b6eaef6e1 100644
+index f3c263de3376719bbeff8f061dfceaeeb478475b..304d1689303666d7b86f2ddb3a7662a149bf928f 100644
 --- a/src/models/glm4-moe.cpp
 +++ b/src/models/glm4-moe.cpp
-@@ -311,6 +311,8 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -305,6 +305,8 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
  
      // NextN layers are processed by graph_mtp.
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index d5372e160f6afaf5d66e6dd6396e42becf5aac28..f8b0ed5784b9524c8c006b281aeeac0b
          ggml_tensor * inpSA = inpL;
  
          // Pre-attention norm
-@@ -415,6 +417,7 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -409,6 +411,7 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
  
          // input for next layer
          inpL = cur;

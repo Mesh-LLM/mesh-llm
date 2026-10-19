@@ -59,7 +59,6 @@ pub(crate) mod suffix_proposer;
 pub(crate) mod tls_fixture;
 pub(crate) mod ui_build;
 pub(crate) mod wan_observation;
-pub(crate) mod wan_stage_deployment;
 pub(crate) use crate::command_interrupt;
 pub(crate) mod daemon_readiness;
 pub(crate) mod hf_converted_artifact;

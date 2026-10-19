@@ -1,6 +1,5 @@
 use super::*;
 use crate::control::ControlCommand;
-use crate::ledger::receivables::Receivable;
 use crate::provisioning::WalletPin;
 
 const PEER: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -11,24 +10,6 @@ fn pin() -> WalletPin {
         wallet_id: "w1".into(),
         provider: "lexe".into(),
         network: "mainnet".into(),
-    }
-}
-
-fn unpaid(request_id: &str, invoice: Invoice) -> Receivable {
-    Receivable {
-        request_id: request_id.into(),
-        peer: PEER.into(),
-        segment: 0,
-        invoice,
-        tokens: 10,
-        paid: false,
-    }
-}
-
-fn pricing() -> Pricing {
-    Pricing {
-        input_msat_per_million: 1000,
-        output_msat_per_million: 1000,
     }
 }
 
@@ -51,10 +32,7 @@ async fn unpin_is_refused_while_an_issued_invoice_is_unpaid() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let service = PaymentService::open(dir.path())?;
     pin().store(dir.path())?;
-    service.ledger.begin_serving("req", PEER, &pricing(), 10)?;
-    service
-        .ledger
-        .record_receivable(&unpaid("req", invoice(1, 100)))?;
+    super::blocking::unpaid_final(&service, "req", PEER, 1)?;
 
     let error = service
         .control(ControlCommand::Unpin)
@@ -74,10 +52,7 @@ async fn an_unpaid_invoice_blocks_until_it_is_forgiven() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let service = PaymentService::open(dir.path())?;
     pin().store(dir.path())?;
-    service.ledger.begin_serving("req", PEER, &pricing(), 10)?;
-    service
-        .ledger
-        .record_receivable(&unpaid("req", invoice(1, 100)))?;
+    super::blocking::unpaid_final(&service, "req", PEER, 1)?;
     assert_eq!(
         service
             .ledger
@@ -104,7 +79,7 @@ async fn unpin_is_refused_while_an_outgoing_payment_is_unresolved() -> Result<()
         daily_budget_msat: Some(100_000),
     })?;
     service.ledger.propose(&terms("one", 1000))?;
-    service.ledger.approve("one", 100_000, crate::now_ms())?;
+    service.ledger.approve("one", crate::now_ms())?;
     let pending = charge("one", 0, 1, 100, 200);
     assert!(service.ledger.prepare_charge(&pending)?);
 

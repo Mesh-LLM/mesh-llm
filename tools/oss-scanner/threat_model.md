@@ -31,7 +31,7 @@ are intentional and not vulnerabilities.
 - `ci/`, `.github/`, `just/`, `Justfile`, `tools/xtask` — build, lint and release automation.
 - `mesh/evals/`, `skippy/evals/`, `mesh/deploy/`, `mesh/website/`, `mesh/docs/`,
   `skippy/docs/`, `install.sh`, `install.ps1`.
-- `mesh/crates/mesh-llm-test-harness`, `skippy/crates/skippy-bench`,
+- `mesh/crates/mesh-llm-test-harness`,
   `skippy-gpu-bench`, `llama-spec-bench`, and any `benches/`, `tests/`, `examples/`,
   or `#[cfg(test)]` code. Test-only panics, unwraps and weak randomness are fine.
 - `skippy/llama_cpp/` and other vendored third-party code — report upstream, unless

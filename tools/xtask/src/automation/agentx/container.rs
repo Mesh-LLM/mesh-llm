@@ -174,10 +174,13 @@ fn create_args(
         "--mount",
         &mount(&launch.artifacts, "/artifacts")?,
         "--mount",
-        &mount(
-            &launch.hf_home,
-            launch.hf_home.to_str().ok_or("HF_HOME path")?,
-        )?,
+        &format!(
+            "{},readonly",
+            mount(
+                &launch.hf_home,
+                launch.hf_home.to_str().ok_or("HF_HOME path")?,
+            )?
+        ),
         "--env",
         &format!("HF_HOME={}", launch.hf_home.display()),
         "--env",
@@ -307,10 +310,8 @@ mod tests {
                     .any(|pair| pair == ["--engine", engine.label()])
             );
             assert!(args.windows(2).any(|pair| pair == ["--gpus", "all"]));
-            assert!(
-                args.iter().any(|arg| arg
-                    == "type=bind,source=/mnt/lab/huggingface,target=/mnt/lab/huggingface")
-            );
+            assert!(args.iter().any(|arg| arg
+                == "type=bind,source=/mnt/lab/huggingface,target=/mnt/lab/huggingface,readonly"));
         }
     }
     #[test]

@@ -259,6 +259,167 @@ fn native_checkpoint_decode_matches_across_batch_shapes() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_long_decode_batches_preserve_both_continuations() -> Result<()> {
+    compare_long_decode_batches(32)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_single_token_microbatches_preserve_both_continuations() -> Result<()> {
+    compare_long_decode_batches(1)
+}
+
+#[test]
+#[ignore = "requires a full-attention hybrid SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_recurrent_cache_payload_excludes_attention_growth() -> Result<()> {
+    let (backend, _) = recurrent_test_backend_with_lanes(
+        "cache-payload",
+        "cache-payload",
+        256,
+        (32, 32, 2),
+        8,
+        512,
+        None,
+    )?;
+    let mut runtime = backend.runtime.lock().unwrap();
+    let mut sizes = Vec::new();
+    for _ in 0..2 {
+        for _ in 0..2 {
+            iterate(
+                &mut runtime,
+                &["payload"],
+                &[&[1; 32]],
+                IterationBatchPhase::Prefill,
+            )?;
+        }
+        sizes.push((
+            runtime.export_recurrent_cache_state("payload")?.len(),
+            runtime.export_full_state("payload")?.len(),
+        ));
+    }
+    assert!(sizes[0].0 > 0, "the fixture must contain recurrent state");
+    assert_eq!(
+        sizes[0].0, sizes[1].0,
+        "resident side state must not grow with full-attention KV"
+    );
+    assert!(
+        sizes[0].1 < sizes[1].1,
+        "the full checkpoint must retain growing attention KV"
+    );
+    assert!(sizes[1].0 < sizes[1].1);
+    Ok(())
+}
+
+fn compare_long_decode_batches(microbatch: u32) -> Result<()> {
+    let (backend, _) = recurrent_test_backend_with_lanes(
+        "long-decode-shapes",
+        "long-decode-shapes",
+        256,
+        (32, microbatch, 2),
+        8,
+        512,
+        None,
+    )?;
+    let mut runtime = backend.runtime.lock().unwrap();
+    let sessions = ["long-shape-0", "long-shape-1"];
+    let prompts = [(1..=64).collect::<Vec<_>>(), (1..=64).rev().collect()];
+    let mut starts = Vec::new();
+    let mut checkpoints = Vec::new();
+    for (session, prompt) in sessions.iter().zip(&prompts) {
+        let mut predicted = None;
+        for chunk in prompt.chunks(32) {
+            predicted = Some(
+                iterate(
+                    &mut runtime,
+                    &[*session],
+                    &[chunk],
+                    IterationBatchPhase::Prefill,
+                )?[0],
+            );
+        }
+        starts.push(predicted.expect("nonempty prompt"));
+        checkpoints.push(runtime.export_full_state(session)?);
+    }
+    // Match the serving regression: the first lane stops at three tokens while
+    // the second continues to eight. Comparing only the first decode step
+    // misses accumulated recurrent-state differences near the end of a turn.
+    let together = long_decode(&mut runtime, &sessions, &starts, true)?;
+    restore(&mut runtime, &sessions, &prompts, &checkpoints)?;
+    let replay = long_decode(&mut runtime, &sessions, &starts, true)?;
+    assert_eq!(
+        together.tokens, replay.tokens,
+        "same-shape checkpoint replay, ubatch={microbatch}"
+    );
+    restore(&mut runtime, &sessions, &prompts, &checkpoints)?;
+    let separate = long_decode(&mut runtime, &sessions, &starts, false)?;
+    assert_eq!(
+        together.tokens,
+        separate.tokens,
+        "concurrent versus serial decode, ubatch={microbatch}; terminal signals: together={:?}, separate={:?}; recurrent byte differences={}",
+        together.terminal_signal,
+        separate.terminal_signal,
+        together
+            .recurrent
+            .iter()
+            .zip(&separate.recurrent)
+            .filter(|(a, b)| a != b)
+            .count()
+    );
+    Ok(())
+}
+
+struct LongDecode {
+    tokens: Vec<Vec<i32>>,
+    terminal_signal: skippy_runtime::TokenSignal,
+    recurrent: Vec<u8>,
+}
+
+fn long_decode(
+    runtime: &mut RuntimeState,
+    sessions: &[&str; 2],
+    starts: &[i32],
+    together: bool,
+) -> Result<LongDecode> {
+    let mut outputs: Vec<_> = starts.iter().map(|&token| vec![token]).collect();
+    for step in 1..8 {
+        let active: &[usize] = if step < 3 { &[0, 1] } else { &[1] };
+        let names: Vec<_> = active.iter().map(|&index| sessions[index]).collect();
+        let inputs: Vec<_> = active
+            .iter()
+            .map(|&index| [*outputs[index].last().unwrap()])
+            .collect();
+        let tokens: Vec<_> = inputs.iter().map(|input| input.as_slice()).collect();
+        let next = if together {
+            iterate(runtime, &names, &tokens, IterationBatchPhase::Decode)?
+        } else {
+            let mut next = Vec::new();
+            for (name, token) in names.iter().zip(&tokens) {
+                next.extend(iterate(
+                    runtime,
+                    &[*name],
+                    &[*token],
+                    IterationBatchPhase::Decode,
+                )?);
+            }
+            next
+        };
+        for (&index, token) in active.iter().zip(next) {
+            outputs[index].push(token);
+        }
+    }
+    // At the terminal step only lane 1 has run; its signal refers to the last
+    // native logit row. Do not read earlier lanes through the last-row API.
+    let terminal_signal = runtime.last_token_signal(sessions[1])?;
+    assert_eq!(terminal_signal.top_token, *outputs[1].last().unwrap());
+    Ok(LongDecode {
+        tokens: outputs,
+        terminal_signal,
+        recurrent: runtime.export_recurrent_cache_state(sessions[1])?,
+    })
+}
+
 fn restore(
     runtime: &mut RuntimeState,
     sessions: &[&str],

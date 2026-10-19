@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/cohere2.cpp b/src/models/cohere2.cpp
-index 7ad5244e427c587c29a2f830f2e6ec61974bad27..359cce82665471899b25f35e744134943dca512b 100644
+index 969b4ef05a8ed033d16016fd1ac6b14a5af31d87..1cbde791128b03f619e257bad818f3cb4d9a86e8 100644
 --- a/src/models/cohere2.cpp
 +++ b/src/models/cohere2.cpp
 @@ -67,6 +67,8 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
