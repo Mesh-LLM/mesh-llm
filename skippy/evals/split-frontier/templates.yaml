@@ -69,7 +69,13 @@ templates:
           - {label: SmolLM2 135M dense Q8_0, value: 'hf:unsloth/SmolLM2-135M-Instruct-GGUF@9e6855bc4be717fca1ef21360a1db4b29d5c559a#SmolLM2-135M-Instruct-Q8_0.gguf'}
     command: |
       export PATH="$HOME/.cargo/bin:$PATH"
-      cd "${repo_dir}/skippy/skippy-api-rs"
+      cd ${repo_dir}/skippy/skippy-api-rs
+      # The example links shared llama/ggml from the Cargo build tree; Linux needs an
+      # explicit search path (macOS resolves the dylibs by absolute install_name).
+      lib=$(find target/release/build -name 'libllama.so.*' 2>/dev/null | head -n1)
+      if [ -n "$lib" ]; then
+        export LD_LIBRARY_PATH="$(dirname "$lib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      fi
       SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
         ./target/release/examples/every_frontier "${model}" --json
     target:
@@ -145,7 +151,13 @@ templates:
           - {label: Granite 4.0 H 350M hybrid Q4_K_M, value: 'hf:ibm-granite/granite-4.0-h-350m-GGUF@a864f823cce6e6048b5752e2816fe7a23987d790#granite-4.0-h-350m-Q4_K_M.gguf'}
     command: |
       export PATH="$HOME/.cargo/bin:$PATH"
-      cd "${repo_dir}/skippy/skippy-api-rs"
+      cd ${repo_dir}/skippy/skippy-api-rs
+      # The example links shared llama/ggml from the Cargo build tree; Linux needs an
+      # explicit search path (macOS resolves the dylibs by absolute install_name).
+      lib=$(find target/release/build -name 'libllama.so.*' 2>/dev/null | head -n1)
+      if [ -n "$lib" ]; then
+        export LD_LIBRARY_PATH="$(dirname "$lib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      fi
       SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
         ./target/release/examples/every_frontier "${model}" --json
       SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \

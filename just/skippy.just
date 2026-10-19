@@ -368,6 +368,14 @@ skippy-frontier-matrix model="" *ARGS="":
       exit 1
     fi
     model="$1"; shift || true
+    # Shared llama/ggml libs stay in the Cargo build tree and the skippy-sys
+    # build script's rpath emission does not reach dependent examples, so Linux
+    # needs an explicit search path (macOS finds the dylibs via absolute
+    # install_name). First Linux run died on libllama.so.0 without this.
+    lib=$(find target/debug/build -name 'libllama.so.*' 2>/dev/null | head -n1)
+    if [ -n "$lib" ]; then
+        export LD_LIBRARY_PATH="$(dirname "$lib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
     cargo run --locked -p skippy --example every_frontier -- "$model" "$@"
 
 # End-to-end Rust tests: real GGUF through llama.cpp, no mocks.
