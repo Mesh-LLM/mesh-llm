@@ -56,8 +56,8 @@ Cache retention is best effort under pressure; refused demotions contribute to
 the existing failed-record lifecycle and dropped-record counters.
 
 Model-backed cache tests support static linkage and the `dynamic-native-runtime`
-feature. For the latter, `SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_LIBRARY` must point
-to the native library produced by `just skippy-release` from the tested source.
+feature. For the latter, `SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_BUNDLE` must point
+to the runtime bundle produced by `just skippy-release` from the tested source.
 Select pinned weights with `SKIPPY_RECURRENT_CACHE_TEST_MODEL` and
 `SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS`; set
 `SKIPPY_RECURRENT_CACHE_TEST_GPU_LAYERS=99` to exercise GPU offload.

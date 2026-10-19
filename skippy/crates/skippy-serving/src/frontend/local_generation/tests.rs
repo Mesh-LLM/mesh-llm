@@ -197,11 +197,26 @@ fn recurrent_test_backend_with_lanes(
 ) -> Result<(StageOpenAiBackend, SpeculativeDecodeConfig)> {
     #[cfg(feature = "dynamic-native-runtime")]
     if !skippy_runtime::native_runtime_loaded() {
-        let library = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_LIBRARY")
-            .ok_or_else(|| anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_LIBRARY must name a native library built from this source revision"))?;
+        let directory = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_BUNDLE")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_BUNDLE must name a native bundle built from this source revision"))?;
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("manifest.json"))?)?;
+        let libraries = manifest["runtime"]["libraries"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("native test bundle has no library list"))?
+            .iter()
+            .map(|path| {
+                path.as_str()
+                    .map(|path| directory.join(path))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("native test bundle library path is not a string")
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
         // SAFETY: this explicit native test input must be produced by the same
         // source's `just skippy-release` build, never a downloaded release.
-        unsafe { skippy_runtime::load_native_runtime_library(library)? };
+        unsafe { skippy_runtime::load_native_runtime_libraries(libraries)? };
     }
     let model_path = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL").ok_or_else(|| {
         anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_MODEL is required for this ignored test")
