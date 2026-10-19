@@ -167,6 +167,15 @@ fn run_layout(
 ) -> Result<()> {
     let root = scratch_root(layout);
     let _ = std::fs::remove_dir_all(&root);
+    // Removing the directory after `store` drops keeps failures from leaving
+    // multi-GiB pack trees behind.
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(root.clone());
     let store = HandoffSegmentStore::open(&root, 0).context("open profile store")?;
     let mut cache = SegmentCache::default();
 
@@ -244,13 +253,17 @@ fn run_layout(
         payload.len() == loaded.total_bytes as usize,
         "assembled payload has the wrong length"
     );
-    anyhow::ensure!(
-        skippy_cache::composition_root(
-            loaded.segmentation_id.as_deref().unwrap_or_default(),
-            &loaded.segments,
-        )? == loaded.payload_digest,
-        "assembled payload does not match its manifest"
-    );
+    // Compare the assembled bytes against the segments this run generated.
+    // Recomputing the root from the manifest would only prove the manifest is
+    // self-consistent; this catches a scatter that put a valid segment at the
+    // wrong offset.
+    for segment in segment_plan(blocks, loaded.token_count, options.window_rows) {
+        let start = segment.offset as usize;
+        anyhow::ensure!(
+            payload.get(start..start + segment.bytes) == Some(cache.get(&segment)),
+            "assembled payload differs at offset {start}"
+        );
+    }
 
     let amplification = committed as f64 / manifest.total_bytes.max(1) as f64;
     println!(
@@ -263,11 +276,10 @@ fn run_layout(
     );
     println!(
         "  write {:.2}s, committed {:.3} GiB, write amplification {amplification:.3}x, \
-         payload hashing {:.3}s ({:.1} GiB/s over {:.2} GiB spilled)",
+         composition roots {:.3}s over {:.2} GiB spilled",
         write_elapsed.as_secs_f64(),
         committed as f64 / GIB,
         spill_hash_nanos as f64 / 1e9,
-        spilled_bytes as f64 / GIB / (spill_hash_nanos as f64 / 1e9).max(1e-9),
         spilled_bytes as f64 / GIB,
     );
     println!(
@@ -284,13 +296,13 @@ fn run_layout(
     );
     let verify_gbs = stats.bytes as f64 / GIB / (stats.verify_nanos as f64 / 1e9).max(1e-9);
     let hash_gbs = stats.hashed_bytes as f64 / GIB / (stats.hash_nanos as f64 / 1e9).max(1e-9);
-    let cpu_nanos = stats.read_nanos + stats.verify_nanos + stats.hash_nanos;
+    let hash_cpu_nanos = stats.verify_nanos + stats.hash_nanos;
     println!(
         "  hash: {:.3}s verifying segments ({verify_gbs:.1} GiB/s CPU), \
          {:.3}s on the payload digest ({hash_gbs:.1} GiB/s); hash CPU is {:.0}% of wall",
         stats.verify_nanos as f64 / 1e9,
         stats.hash_nanos as f64 / 1e9,
-        cpu_nanos as f64 / stats.total_nanos.max(1) as f64 * 100.0,
+        hash_cpu_nanos as f64 / stats.total_nanos.max(1) as f64 * 100.0,
     );
     println!(
         "  read {:.3} GiB ({:.1}% over payload), {:.0}% of wall time inside pack reads, \
@@ -317,7 +329,6 @@ fn run_layout(
     }
 
     drop(store);
-    let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }
 
@@ -360,7 +371,6 @@ fn spill(
             codec_identity: Some(SegmentCodecIdentity::raw(bytes_len)),
             meta_json: None,
         });
-        let _ = bytes;
     }
     manifest.total_bytes = plan
         .last()

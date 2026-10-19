@@ -642,7 +642,10 @@ impl L3Tier {
         manifest.payload_digest = composition_root(&segmentation, &manifest.segments)?;
         manifest.segmentation_id = Some(segmentation);
         let payload_digest = manifest.payload_digest.clone();
-        let exclusive_bytes = serde_json::to_vec(&manifest)
+        // Charge the bytes the commit will actually write. Serializing the
+        // segment table to JSON here would both overstate the cost and redo
+        // work the binary container exists to avoid.
+        let exclusive_bytes = crate::encode_manifest_container(&manifest)
             .map(|bytes| bytes.len() as u64)
             .unwrap_or_default();
         let benefit_key = benefit_entry_key(namespace, token_ids);
@@ -1441,6 +1444,45 @@ mod tests {
         assert_eq!(status.activity.evictions, 0);
         assert_eq!(status.activity.corrupt_entries, 0);
         assert_eq!(status.activity.last_error, None);
+    }
+
+    #[test]
+    fn legacy_json_entries_stay_locatable_and_clearable() {
+        let root = temp_root("legacy-json-tier");
+        let tier = L3Tier::open(&root, 0, "blake3:legacy".to_string(), 4096).unwrap();
+        let bytes: Vec<u8> = (0..8192u32).map(|value| (value % 251) as u8).collect();
+        let payload = ExactStatePayload::full_state(bytes);
+        tier.spill("ns", &[1, 2, 3], &payload, None, None).unwrap();
+
+        // An upgrade leaves the entry under its legacy name. Prefix links still
+        // point at the digest, so lookup and clear must resolve that name.
+        let mut renamed = 0;
+        for entry in std::fs::read_dir(root.join("manifests")).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "manifest")
+            {
+                std::fs::rename(&path, path.with_extension("json")).unwrap();
+                renamed += 1;
+            }
+        }
+        assert_eq!(renamed, 1, "spill must write exactly one manifest");
+
+        let location = tier
+            .locate_longest("ns", &[1, 2, 3], 8)
+            .unwrap()
+            .expect("a legacy entry must stay locatable");
+        let fill = tier.load(&location).unwrap();
+        assert_eq!(fill.payload.byte_len(), payload.byte_len());
+
+        assert!(tier.store().clear().unwrap() > 0);
+        assert_eq!(tier.store().list_manifests().unwrap().len(), 0);
+        assert_eq!(
+            std::fs::read_dir(root.join("manifests")).unwrap().count(),
+            0,
+            "clear must remove the legacy entry, not leave it on disk"
+        );
     }
 
     #[test]

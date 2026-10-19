@@ -221,7 +221,7 @@ fn unframe(bytes: &[u8], kind: u8) -> Result<&[u8]> {
     Ok(&bytes[5..])
 }
 
-fn digest_to_bytes(digest: &str) -> Result<[u8; 32]> {
+pub(super) fn digest_to_bytes(digest: &str) -> Result<[u8; 32]> {
     let raw = digest.as_bytes();
     if raw.len() != 64 {
         bail!("segment digest is not 64 hex characters");

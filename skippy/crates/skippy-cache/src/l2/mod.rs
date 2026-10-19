@@ -717,13 +717,14 @@ impl L2Tier {
             })
             .collect();
         let mirror = ExactStatePayloadMirror::from_manifest(&manifest)?;
-        self.admit(
+        self.admit_with_key(
             cache_key,
             token_count,
             expected_payload_digest.to_string(),
             &wire,
             mirror,
             origin,
+            source.key_kind == crate::l3::KeyKind::WireBlake3,
         )
     }
 
@@ -756,19 +757,48 @@ impl L2Tier {
         mirror: ExactStatePayloadMirror,
         origin: L2Origin,
     ) -> Result<Vec<L2Eviction>, L2InsertRefusal> {
+        self.admit_with_key(
+            cache_key,
+            token_count,
+            payload_digest,
+            wire,
+            mirror,
+            origin,
+            true,
+        )
+    }
+
+    /// Admission for a payload whose key has already been verified by the
+    /// caller — a composition-root fill checked slice-by-slice and against its
+    /// root. `wire_digest_is_key` is false for those, because their key is a
+    /// root over segments, not BLAKE3 over the payload.
+    #[allow(clippy::too_many_arguments)]
+    fn admit_with_key(
+        &self,
+        cache_key: String,
+        token_count: u64,
+        payload_digest: String,
+        wire: &[u8],
+        mirror: ExactStatePayloadMirror,
+        origin: L2Origin,
+        wire_digest_is_key: bool,
+    ) -> Result<Vec<L2Eviction>, L2InsertRefusal> {
         if !is_valid_digest(&payload_digest) {
             self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
             return Err(L2InsertRefusal::MalformedDigest);
         }
-        // The one integrity check on the whole wire: it must hash to the
-        // claimed manifest-key digest.
-        let actual = segment_digest(wire);
-        if actual != payload_digest {
-            self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
-            return Err(L2InsertRefusal::DigestMismatch {
-                expected: payload_digest,
-                actual,
-            });
+        // The integrity check on the whole wire for a wire-digest key: it must
+        // hash to the claimed key. Composition-root keys were verified from
+        // their segments and root before this call.
+        if wire_digest_is_key {
+            let actual = segment_digest(wire);
+            if actual != payload_digest {
+                self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
+                return Err(L2InsertRefusal::DigestMismatch {
+                    expected: payload_digest,
+                    actual,
+                });
+            }
         }
         let payload_bytes = mirror.byte_len();
         if payload_bytes == 0 {
@@ -1397,6 +1427,37 @@ mod tests {
         manifest
     }
 
+    /// A composition-root source manifest: the key is a root over the ordered
+    /// segment list, not BLAKE3 over the payload.
+    fn root_source(wire: &[u8]) -> crate::l3::HandoffManifest {
+        let mut manifest = crate::l3::HandoffManifest::new(String::new(), "full-state".to_string());
+        manifest.key_kind = crate::l3::KeyKind::CompositionRoot;
+        manifest.segmentation_id = Some("blake3:l2-test-segmentation".to_string());
+        manifest.total_bytes = wire.len() as u64;
+        manifest.segments = wire
+            .chunks(64)
+            .enumerate()
+            .scan(0u64, |offset, (index, chunk)| {
+                let start = *offset;
+                *offset = offset.saturating_add(chunk.len() as u64);
+                Some(crate::l3::HandoffSegmentRef {
+                    index: index as u32,
+                    offset: start,
+                    bytes: chunk.len() as u64,
+                    digest: segment_digest(chunk),
+                    codec_identity: Some(crate::l3::SegmentCodecIdentity::raw(chunk.len() as u64)),
+                    meta_json: None,
+                })
+            })
+            .collect();
+        manifest.payload_digest = crate::l3::composition_root(
+            manifest.segmentation_id.as_deref().expect("segmentation"),
+            &manifest.segments,
+        )
+        .expect("root");
+        manifest
+    }
+
     fn wire(len: usize, fill: u8) -> (Vec<u8>, String) {
         // Position-dependent bytes so equal-length slices are never equal
         // content: segment digests stay distinct across the wire.
@@ -1522,6 +1583,30 @@ mod tests {
                 .as_ref(),
             recurrent.as_slice()
         );
+    }
+
+    #[test]
+    fn composition_root_payloads_are_admitted_not_rejected() {
+        // The key is a root over segments, so it can never equal BLAKE3(wire).
+        // Admission must trust the verified segments + root instead of
+        // re-hashing the payload, or L2 silently never fills from L3.
+        let tier = L2Tier::new(1 << 20);
+        let key = key("ns", &[42]);
+        let (bytes, _) = wire(512, 9);
+        let source = root_source(&bytes);
+        tier.admit_payload(
+            key.clone(),
+            4,
+            &source,
+            &ExactStatePayload::full_state(bytes.clone()),
+            None,
+            L2Origin::FromL3,
+        )
+        .expect("composition-root admission must be accepted");
+        assert_eq!(tier.stats().entries, 1);
+        assert_eq!(tier.stats().admission_rejects, 0);
+        let hit = tier.get(&key).expect("admitted entry must be readable");
+        assert_eq!(hit.payload_digest, source.payload_digest);
     }
 
     #[test]

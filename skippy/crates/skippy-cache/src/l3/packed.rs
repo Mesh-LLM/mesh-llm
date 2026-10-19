@@ -594,9 +594,13 @@ impl PackedSegmentStore {
         }
 
         let workers = read_workers(runs.len());
-        let mut buffers: Vec<Option<Vec<u8>>> = (0..runs.len()).map(|_| None).collect();
-        if workers <= 1 {
-            for (index, run) in runs.iter().enumerate() {
+        // Reads run as one concurrent wave; each run is scattered into the
+        // payload as soon as its worker finishes, so at most a worker's worth
+        // of scratch bytes is alive at once. Batching the wave instead (read
+        // all, then scatter all) halves throughput, and keeping every run
+        // alive doubles peak memory.
+        if workers <= 1 || runs.len() == 1 {
+            for run in &runs {
                 let mut bytes = Vec::new();
                 self.read_pack_run(
                     run,
@@ -605,20 +609,28 @@ impl PackedSegmentStore {
                     &mut bytes,
                     accounting,
                 )?;
-                buffers[index] = Some(bytes);
+                self.scatter_pack_run(
+                    run,
+                    packs[run.pack_digest_index],
+                    &bytes,
+                    requests,
+                    base,
+                    output,
+                )?;
             }
         } else {
             let next = std::sync::atomic::AtomicUsize::new(0);
-            let outcomes = std::thread::scope(|scope| {
+            let (sender, receiver) =
+                std::sync::mpsc::sync_channel::<(usize, Result<Vec<u8>, PackedReadError>)>(workers);
+            std::thread::scope(|scope| {
                 let mut handles = Vec::with_capacity(workers);
                 for _ in 0..workers {
                     let next = &next;
                     let runs = &runs;
                     let packs = &packs;
+                    let sender = sender.clone();
                     handles.push(scope.spawn(move || {
                         let mut local = ReadAccounting::default();
-                        let mut produced: Vec<(usize, Result<Vec<u8>, PackedReadError>)> =
-                            Vec::new();
                         loop {
                             let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             if index >= runs.len() {
@@ -626,93 +638,64 @@ impl PackedSegmentStore {
                             }
                             let run = &runs[index];
                             let mut bytes = Vec::new();
-                            match self.read_pack_run(
-                                run,
-                                packs[run.pack_digest_index],
-                                requests,
-                                &mut bytes,
-                                &mut local,
-                            ) {
-                                Ok(()) => produced.push((index, Ok(bytes))),
-                                Err(error) => {
-                                    produced.push((index, Err(error)));
-                                    break;
-                                }
+                            let outcome = self
+                                .read_pack_run(
+                                    run,
+                                    packs[run.pack_digest_index],
+                                    requests,
+                                    &mut bytes,
+                                    &mut local,
+                                )
+                                .map(|()| bytes);
+                            let failed = outcome.is_err();
+                            if sender.send((index, outcome)).is_err() || failed {
+                                break;
                             }
                         }
-                        (local, produced)
+                        local
                     }));
                 }
-                handles
-                    .into_iter()
-                    .map(|handle| {
-                        handle.join().unwrap_or_else(|_| {
-                            (
-                                ReadAccounting::default(),
-                                vec![(
-                                    0,
-                                    Err(PackedReadError {
-                                        pack_digest: String::new(),
-                                        error: anyhow::anyhow!("packed read worker panicked"),
-                                    }),
-                                )],
-                            )
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            });
-            for (local, produced) in outcomes {
-                merge_accounting(accounting, &local);
-                for (index, outcome) in produced {
-                    let bytes = outcome?;
-                    buffers[index] = Some(bytes);
-                }
-            }
-        }
+                drop(sender);
 
-        for (run, buffer) in runs.iter().zip(buffers.iter_mut()) {
-            let bytes = buffer.take().ok_or_else(|| PackedReadError {
-                pack_digest: packs[run.pack_digest_index].to_string(),
-                error: anyhow::anyhow!("packed run was never read"),
+                // Scatter on this thread as results arrive; `output` has a
+                // single writer by construction. A failure stops the loop,
+                // drops the receiver so blocked senders wake, then joins.
+                let mut failure: Option<PackedReadError> = None;
+                while let Ok((index, outcome)) = receiver.recv() {
+                    match outcome {
+                        Ok(bytes) => {
+                            let run = &runs[index];
+                            if let Err(error) = self.scatter_pack_run(
+                                run,
+                                packs[run.pack_digest_index],
+                                &bytes,
+                                requests,
+                                base,
+                                output,
+                            ) {
+                                failure = Some(error);
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                }
+                drop(receiver);
+                let accountings = handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap_or_default())
+                    .collect::<Vec<ReadAccounting>>();
+                for local in accountings {
+                    merge_accounting(accounting, &local);
+                }
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+                Ok(())
             })?;
-            for request_index in &run.requests {
-                let request = &requests[*request_index];
-                let len = usize::try_from(request.bytes).map_err(|error| PackedReadError {
-                    pack_digest: packs[run.pack_digest_index].to_string(),
-                    error: error.into(),
-                })?;
-                let offset = usize::try_from(request.location.offset - run.pack_offset).map_err(
-                    |error| PackedReadError {
-                        pack_digest: packs[run.pack_digest_index].to_string(),
-                        error: error.into(),
-                    },
-                )?;
-                let slice = bytes
-                    .get(offset..offset + len)
-                    .ok_or_else(|| PackedReadError {
-                        pack_digest: packs[run.pack_digest_index].to_string(),
-                        error: anyhow::anyhow!("packed run is shorter than its segments"),
-                    })?;
-                let output_offset =
-                    usize::try_from(request.output_offset).map_err(|error| PackedReadError {
-                        pack_digest: packs[run.pack_digest_index].to_string(),
-                        error: error.into(),
-                    })?;
-                let start = base
-                    .checked_add(output_offset)
-                    .ok_or_else(|| PackedReadError {
-                        pack_digest: packs[run.pack_digest_index].to_string(),
-                        error: anyhow::anyhow!("packed segment offset overflows"),
-                    })?;
-                let destination =
-                    output
-                        .get_mut(start..start + len)
-                        .ok_or_else(|| PackedReadError {
-                            pack_digest: packs[run.pack_digest_index].to_string(),
-                            error: anyhow::anyhow!("packed segment range exceeds payload"),
-                        })?;
-                destination.copy_from_slice(slice);
-            }
         }
         if let Some(hasher) = payload_hasher.as_deref_mut() {
             let started = std::time::Instant::now();
@@ -721,6 +704,58 @@ impl PackedSegmentStore {
                 .hash_nanos
                 .saturating_add(started.elapsed().as_nanos() as u64);
             accounting.hashed_bytes = accounting.hashed_bytes.saturating_add((end - base) as u64);
+        }
+        Ok(())
+    }
+
+    /// Copy one run's bytes into their payload ranges.
+    fn scatter_pack_run(
+        &self,
+        run: &PackRun,
+        pack_digest: &str,
+        bytes: &[u8],
+        requests: &[PackedReadRequest<'_>],
+        base: usize,
+        output: &mut [u8],
+    ) -> Result<(), PackedReadError> {
+        for request_index in &run.requests {
+            let request = &requests[*request_index];
+            let len = usize::try_from(request.bytes).map_err(|error| PackedReadError {
+                pack_digest: pack_digest.to_string(),
+                error: error.into(),
+            })?;
+            let physical =
+                usize::try_from(request.location.offset - run.pack_offset).map_err(|error| {
+                    PackedReadError {
+                        pack_digest: pack_digest.to_string(),
+                        error: error.into(),
+                    }
+                })?;
+            let slice = bytes
+                .get(physical..physical + len)
+                .ok_or_else(|| PackedReadError {
+                    pack_digest: pack_digest.to_string(),
+                    error: anyhow::anyhow!("packed run is shorter than its segments"),
+                })?;
+            let output_offset =
+                usize::try_from(request.output_offset).map_err(|error| PackedReadError {
+                    pack_digest: pack_digest.to_string(),
+                    error: error.into(),
+                })?;
+            let start = base
+                .checked_add(output_offset)
+                .ok_or_else(|| PackedReadError {
+                    pack_digest: pack_digest.to_string(),
+                    error: anyhow::anyhow!("packed segment offset overflows"),
+                })?;
+            let destination =
+                output
+                    .get_mut(start..start + len)
+                    .ok_or_else(|| PackedReadError {
+                        pack_digest: pack_digest.to_string(),
+                        error: anyhow::anyhow!("packed segment range exceeds payload"),
+                    })?;
+            destination.copy_from_slice(slice);
         }
         Ok(())
     }

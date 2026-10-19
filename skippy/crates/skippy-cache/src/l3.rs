@@ -34,6 +34,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::fsinfo;
 
+use footprint::ManifestFootprint;
+
+mod footprint;
+mod identity;
 mod manifest_codec;
 mod packed;
 use packed::{PACK_DIR, PACK_INDEX_DIR, PackedReadRequest, PackedSegmentStore};
@@ -770,17 +774,6 @@ pub struct HandoffSegmentStore {
     packed: PackedSegmentStore,
 }
 
-/// What one manifest owns, aggregated by object rather than by segment.
-#[derive(Debug, Clone, Default)]
-struct ManifestFootprint {
-    model_identity: String,
-    manifest_bytes: u64,
-    /// Pack digest -> (segments referenced, pack size).
-    packs: std::collections::HashMap<String, (usize, u64)>,
-    /// Segment digest -> (references, segment bytes) for unpacksed segments.
-    loose: std::collections::HashMap<String, (usize, u64)>,
-}
-
 pub fn segment_digest(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
@@ -801,86 +794,7 @@ pub fn is_manifest_container(bytes: &[u8]) -> bool {
     manifest_codec::looks_binary(bytes)
 }
 
-/// Identity of a geometry cutting scheme.
-///
-/// Excludes row count: the scheme describes how a payload is cut, not how long
-/// this entry is. Two entries of different lengths cut the same way share an
-/// id, which is what lets a longer prefix reuse a shorter one's segments.
-pub fn geometry_segmentation_id(geometry: &PayloadGeometry) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"skippy-kv/segmentation/1");
-    hasher.update(&geometry.window_rows.to_le_bytes());
-    hasher.update(&geometry.tail_bytes.to_le_bytes());
-    for block in &geometry.blocks {
-        hasher.update(&block.stride.to_le_bytes());
-        hasher.update(&[match block.kind {
-            GeometryKind::Key => 0,
-            GeometryKind::Value => 1,
-            GeometryKind::KeyIndex => 2,
-        }]);
-        hasher.update(&block.layer.to_le_bytes());
-        hasher.update(&block.column.to_le_bytes());
-    }
-    hasher.finalize().to_hex().to_string()
-}
-
-/// Identity of the fixed-size fallback cutting scheme.
-pub fn fixed_segmentation_id(segment_bytes: u64) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"skippy-kv/segmentation/1");
-    hasher.update(b"fixed");
-    hasher.update(&segment_bytes.to_le_bytes());
-    hasher.finalize().to_hex().to_string()
-}
-
-/// Composition root over the ordered segment list.
-///
-/// Binds offsets, lengths, codec identity and content without hashing payload
-/// bytes: every byte is already bound by its segment digest, and order is
-/// implied by position. Metadata (`token_count`, `expected_tokens`,
-/// `kv_desc_json`, calibration) is deliberately out of the root, matching the
-/// wire-digest semantics where two entries with identical bytes and different
-/// metadata already share a key.
-pub fn composition_root(segmentation_id: &str, segments: &[HandoffSegmentRef]) -> Result<String> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"skippy-kv/root/1");
-    hasher.update(segmentation_id.as_bytes());
-    hasher.update(&[0u8]);
-    for segment in segments {
-        hasher.update(&segment.offset.to_le_bytes());
-        hasher.update(&segment.bytes.to_le_bytes());
-        let (name, version) = segment
-            .codec_identity
-            .as_ref()
-            .map(|identity| (identity.name.as_str(), identity.version))
-            .unwrap_or((CODEC_RAW, CODEC_RAW_VERSION));
-        hasher.update(name.as_bytes());
-        hasher.update(&[0u8]);
-        hasher.update(&version.to_le_bytes());
-        // Hash the digest's raw bytes, not its hex spelling, so a binary
-        // manifest and a JSON manifest produce the same root.
-        hasher.update(&digest_bytes(&segment.digest)?);
-    }
-    Ok(hasher.finalize().to_hex().to_string())
-}
-
-fn digest_bytes(digest: &str) -> Result<[u8; 32]> {
-    let bytes = digest.as_bytes();
-    if bytes.len() != 64 {
-        bail!("segment digest is not 64 hex characters");
-    }
-    let mut out = [0u8; 32];
-    for (index, chunk) in bytes.as_chunks::<2>().0.iter().enumerate() {
-        let high = (chunk[0] as char)
-            .to_digit(16)
-            .context("segment digest is not hex")?;
-        let low = (chunk[1] as char)
-            .to_digit(16)
-            .context("segment digest is not hex")?;
-        out[index] = ((high << 4) | low) as u8;
-    }
-    Ok(out)
-}
+pub use identity::{composition_root, fixed_segmentation_id, geometry_segmentation_id};
 
 fn acquire_root_lock(root: &Path) -> Result<fs::File> {
     let path = root.join(ROOT_LOCK_FILE);
@@ -1032,12 +946,15 @@ impl HandoffSegmentStore {
                 .saturating_add(remove_temporary_files(&self.root.join(directory))?);
         }
 
+        let mut quarantined = Vec::new();
         for key in self.list_manifests()? {
             if self.validate_committed_manifest(&key).is_err() {
                 self.quarantine(&self.existing_manifest_path(&key))?;
+                quarantined.push(key);
                 report.quarantined_manifests += 1;
             }
         }
+        self.forget_footprints(&quarantined);
         self.rebuild_packed_index()?;
         report.removed_prefix_links = self.remove_dangling_prefix_links()?;
         report.removed_orphan_bytes = self.collect_unreferenced_segments()?;
@@ -1249,13 +1166,16 @@ impl HandoffSegmentStore {
             Err(error) => return Err(error.into()),
         };
         let payload_digest = String::from_utf8(bytes).context("malformed prefix link")?;
-        let manifest_path = self.manifest_path(&payload_digest);
+        // Legacy entries live at `<digest>.json`; the resolver keeps them
+        // readable instead of turning a live prefix into a permanent miss.
+        let manifest_path = self.existing_manifest_path(&payload_digest);
         match fs::read(&manifest_path) {
             Ok(bytes) => {
                 let manifest = match decode_manifest(&payload_digest, &bytes) {
                     Ok(manifest) => manifest,
                     Err(_) => {
                         self.quarantine(&manifest_path)?;
+                        self.forget_footprints(std::slice::from_ref(&payload_digest));
                         let _ = fs::remove_file(&path);
                         self.invalidate_usage();
                         return Ok(None);
@@ -1605,19 +1525,21 @@ impl HandoffSegmentStore {
         decode_manifest(payload_digest, &bytes)
     }
 
-    /// Newest manifest key, optionally restricted to legacy JSON entries.
+    /// Newest manifest key, optionally restricted to wire-digest entries.
     ///
-    /// A peer that asked for JSON must receive an entry its own decoder can
-    /// verify: handing it a composition-root entry would transcode a key its
-    /// admission re-hash rejects. Scoping the "newest" answer keeps that a
-    /// clean miss instead.
-    pub fn newest_manifest(&self, legacy_json_only: bool) -> Result<Option<String>> {
+    /// A peer that asked for JSON can only verify a wire-digest key: handing
+    /// it a composition-root entry would transcode a key its own admission
+    /// re-hash rejects. The filter is on `key_kind`, not the file extension,
+    /// because a legacy-shaped file is not the property that matters.
+    pub fn newest_manifest(&self, wire_key_only: bool) -> Result<Option<String>> {
         for key in self.list_manifests()? {
-            let path = self.existing_manifest_path(&key);
-            let is_json = path
-                .extension()
-                .is_some_and(|extension| extension == "json");
-            if !legacy_json_only || is_json {
+            if !wire_key_only {
+                return Ok(Some(key));
+            }
+            if self
+                .load_manifest(&key)
+                .is_ok_and(|manifest| manifest.key_kind == KeyKind::WireBlake3)
+            {
                 return Ok(Some(key));
             }
         }
@@ -1655,143 +1577,6 @@ impl HandoffSegmentStore {
     /// digest, the tiling, and the whole-payload digest.
     pub fn assemble(&self, manifest: &HandoffManifest) -> Result<Vec<u8>> {
         self.assemble_traced(manifest).map(|(payload, _)| payload)
-    }
-
-    /// Record what a committed manifest owns, aggregated by pack.
-    fn record_footprint(
-        &self,
-        manifest: &HandoffManifest,
-        locations: &[Option<packed::PackedSegmentLocation>],
-        manifest_bytes: u64,
-    ) {
-        let mut footprint = ManifestFootprint {
-            model_identity: manifest.model_identity.clone(),
-            manifest_bytes,
-            ..ManifestFootprint::default()
-        };
-        for (segment, location) in manifest.segments.iter().zip(locations) {
-            match location {
-                Some(location) => {
-                    let pack_bytes = footprint
-                        .packs
-                        .get(&location.pack_digest)
-                        .map(|(_, bytes)| *bytes)
-                        .unwrap_or_else(|| {
-                            fs::metadata(self.packed.pack_path(&location.pack_digest))
-                                .map(|metadata| metadata.len())
-                                .unwrap_or(0)
-                        });
-                    let entry = footprint
-                        .packs
-                        .entry(location.pack_digest.clone())
-                        .or_insert((0, pack_bytes));
-                    entry.0 += 1;
-                }
-                None => {
-                    let entry = footprint
-                        .loose
-                        .entry(segment.digest.clone())
-                        .or_insert((0, segment.bytes));
-                    entry.0 += 1;
-                }
-            }
-        }
-        self.footprints
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(manifest.payload_digest.clone(), footprint);
-    }
-
-    /// The cached footprint for one manifest, rebuilt from disk on a miss.
-    fn manifest_footprint(&self, key: &str) -> Result<ManifestFootprint> {
-        let cache_enabled = std::env::var("SKIPPY_L3_FOOTPRINT_CACHE")
-            .map(|value| value != "off" && value != "0")
-            .unwrap_or(true);
-        let cached = if cache_enabled {
-            self.footprints
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(key)
-                .cloned()
-        } else {
-            None
-        };
-        if let Some(footprint) = cached {
-            // Only trust the cache while the manifest on disk still has the
-            // size it had when the footprint was recorded. A manifest that
-            // was truncated or replaced must be re-read, so GC fails on it
-            // instead of deleting state behind an unreadable entry.
-            let on_disk = fs::metadata(self.existing_manifest_path(key))
-                .map(|metadata| metadata.len())
-                .unwrap_or(0);
-            if on_disk > 0 && on_disk == footprint.manifest_bytes {
-                return Ok(footprint);
-            }
-            self.footprints
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(key);
-        }
-        let manifest = self.load_manifest(key)?;
-        let locations = self
-            .packed
-            .load_manifest_index(key, manifest.segments.len())?;
-        let manifest_bytes = fs::metadata(self.existing_manifest_path(key))
-            .map(|metadata| metadata.len())
-            .unwrap_or(0);
-        let footprint = {
-            let mut footprint = ManifestFootprint {
-                model_identity: manifest.model_identity.clone(),
-                manifest_bytes,
-                ..ManifestFootprint::default()
-            };
-            for (segment, location) in manifest.segments.iter().zip(&locations) {
-                match location {
-                    Some(location) => {
-                        let pack_bytes = footprint
-                            .packs
-                            .get(&location.pack_digest)
-                            .map(|(_, bytes)| *bytes)
-                            .unwrap_or_else(|| {
-                                fs::metadata(self.packed.pack_path(&location.pack_digest))
-                                    .map(|metadata| metadata.len())
-                                    .unwrap_or(0)
-                            });
-                        let entry = footprint
-                            .packs
-                            .entry(location.pack_digest.clone())
-                            .or_insert((0, pack_bytes));
-                        entry.0 += 1;
-                    }
-                    None => {
-                        let entry = footprint
-                            .loose
-                            .entry(segment.digest.clone())
-                            .or_insert((0, segment.bytes));
-                        entry.0 += 1;
-                    }
-                }
-            }
-            footprint
-        };
-        self.footprints
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(key.to_string(), footprint.clone());
-        Ok(footprint)
-    }
-
-    fn forget_footprints(&self, keys: &[String]) {
-        if keys.is_empty() {
-            return;
-        }
-        let mut footprints = self
-            .footprints
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for key in keys {
-            footprints.remove(key);
-        }
     }
 
     /// As [`Self::assemble`], returning what the restore cost.
@@ -2106,6 +1891,7 @@ impl HandoffSegmentStore {
             }
         }
         if !removed.is_empty() {
+            self.forget_footprints(&removed);
             self.remove_dangling_prefix_links()?;
             self.collect_unreferenced_segments()?;
         }
@@ -2301,6 +2087,7 @@ impl HandoffSegmentStore {
         // Files are about to be removed or rewritten in bulk.
         self.invalidate_usage();
         let before = self.managed_usage_bytes()?;
+        let mut removed = Vec::new();
         for key in self.list_manifests()? {
             if self.is_pinned(&key) {
                 continue;
@@ -2313,9 +2100,11 @@ impl HandoffSegmentStore {
                     continue;
                 }
             }
-            let path = self.manifest_path(&key);
+            // Legacy entries live at `<digest>.json`; clearing must reach them
+            // too, or `clear` would report a freed store that still holds them.
+            let path = self.existing_manifest_path(&key);
             match fs::remove_file(&path) {
-                Ok(()) => {}
+                Ok(()) => removed.push(key.clone()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => {
                     return Err(error).with_context(|| format!("failed to clear manifest {key}"));
@@ -2323,6 +2112,7 @@ impl HandoffSegmentStore {
             }
             self.packed.remove_manifest_index(&key)?;
         }
+        self.forget_footprints(&removed);
         self.remove_dangling_prefix_links()?;
         self.collect_unreferenced_segments()?;
         let after = self.managed_usage_bytes()?;

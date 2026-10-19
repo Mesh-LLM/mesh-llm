@@ -140,11 +140,19 @@ fn serve_connection_with_timeout(
             frame_kind::GET_MANIFEST => {
                 let request: GetManifestHeader =
                     serde_json::from_value(header).context("malformed manifest request")?;
+                let json_requester = request.encoding == ManifestEncoding::Json;
                 let key = match request.key {
                     Some(key) => Some(key),
-                    None => store.newest_manifest(request.encoding == ManifestEncoding::Json)?,
+                    None => store.newest_manifest(json_requester)?,
                 };
-                let manifest = key.and_then(|key| store.load_manifest(&key).ok());
+                let manifest = key
+                    .and_then(|key| store.load_manifest(&key).ok())
+                    // A JSON requester can only verify a wire-digest key; a
+                    // composition-root entry is a clean miss for it rather
+                    // than a transcode its admission would reject.
+                    .filter(|manifest| {
+                        !json_requester || manifest.key_kind == crate::KeyKind::WireBlake3
+                    });
                 match request.encoding {
                     ManifestEncoding::Json => write_frame(
                         &mut writer,
