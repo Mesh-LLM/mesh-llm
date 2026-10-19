@@ -171,7 +171,9 @@ When a patch you are porting would work better if llama itself changed:
    cost you measured.
 2. **Record it as upstream-shaped work** in the manifest entry
    (`benchmarks/cases.txt`, acceptance `blocked-upstream`) and in the README's
-   "not covered" section, so it is visible rather than lost.
+   "not covered" section, so it is visible rather than lost. Append the
+   finding — with its evidence — to `UPSTREAM.md`, the ledger of upstream
+   opportunities; a discovery made while porting must survive the PR.
 3. **Port what can be done outside llama**, and say plainly which half is not:
    for example the prepared-export work (`PreparedExport`) removes our per-hop
    allocation and descriptor rebuild, while llama still maps parts internally —

@@ -19,6 +19,8 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -156,6 +158,26 @@ inline std::expected<void, std::string> skip_metadata(Reader& reader, std::uint6
     return {};
 }
 
+/// Reads one tensor extent and keeps it representable: a value past INT64_MAX
+/// would alias to a negative dimension once stored, and a running element
+/// product that wraps silently disables every downstream size check — the
+/// exact shape of the upstream ggml_nelements overflow (CVE-2026-33298, see
+/// UPSTREAM.md). `elements` carries the product across calls.
+inline std::optional<std::string> read_extent(Reader& reader, std::int64_t& out,
+                                              std::uint64_t& elements) {
+    std::uint64_t extent = 0;
+    if (auto ok = reader.read(extent); !ok) return ok.error();
+    if (extent > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        return "tensor dimension not representable";
+    }
+    if (extent != 0 && elements > std::numeric_limits<std::uint64_t>::max() / extent) {
+        return "tensor extent product overflows";
+    }
+    elements *= extent;
+    out = static_cast<std::int64_t>(extent);
+    return std::nullopt;
+}
+
 inline std::expected<std::vector<TensorInfo>, std::string> read_tensors(Reader& reader,
                                                                         std::uint64_t count) {
     if (count > kMaxInventoryEntries) return std::unexpected("implausible tensor count");
@@ -169,10 +191,11 @@ inline std::expected<std::vector<TensorInfo>, std::string> read_tensors(Reader& 
         if (auto ok = reader.read(info.dimension_count); !ok) return std::unexpected(ok.error());
         if (info.dimension_count > 4) return std::unexpected("tensor rank above four");
         if (info.dimension_count == 0) return std::unexpected("tensor rank below one");
+        std::uint64_t elements = 1;
         for (std::uint32_t dim = 0; dim < info.dimension_count; ++dim) {
-            std::uint64_t extent = 0;
-            if (auto ok = reader.read(extent); !ok) return std::unexpected(ok.error());
-            info.dimensions[dim] = static_cast<std::int64_t>(extent);
+            if (auto failure = read_extent(reader, info.dimensions[dim], elements)) {
+                return std::unexpected(*failure);
+            }
         }
         if (auto ok = reader.read(info.type); !ok) return std::unexpected(ok.error());
         if (auto ok = reader.read(info.offset); !ok) return std::unexpected(ok.error());

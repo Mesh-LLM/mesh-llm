@@ -196,4 +196,42 @@ TEST(InventoryParser, ParsesATensorWithAllFourDimensions) {
     EXPECT_EQ((*inventory)[0].name, "t0");
 }
 
+TEST(InventoryParser, RejectsDimensionsWhoseProductWrapsToZero) {
+    // 2^32 * 2^32 * 2^16 * 2^16 = 2^96 wraps a 64-bit element product to
+    // zero. Upstream's gguf.cpp accepts this today because its
+    // representability guard multiplies first and checks second
+    // (CVE-2026-33298 family, see UPSTREAM.md); our parser must reject it.
+    std::vector<std::uint8_t> bytes = header(1, 0);
+    put64(bytes, 2); // name length
+    bytes.push_back('t');
+    bytes.push_back('0');
+    put32(bytes, 4); // rank
+    for (const std::uint64_t dim : {1ULL << 32, 1ULL << 32, 1ULL << 16, 1ULL << 16}) {
+        put64(bytes, dim);
+    }
+    put32(bytes, 0); // ggml type F32
+    put64(bytes, 0); // offset
+    const std::string path = write_temp(bytes, "wrap-to-zero");
+    const auto inventory = read_inventory(path);
+    std::remove(path.c_str());
+    ASSERT_FALSE(inventory.has_value());
+}
+
+TEST(InventoryParser, RejectsADimensionPastInt64) {
+    // A stored extent must survive the int64_t cast; 2^63 would alias to a
+    // negative dimension.
+    std::vector<std::uint8_t> bytes = header(1, 0);
+    put64(bytes, 2); // name length
+    bytes.push_back('t');
+    bytes.push_back('0');
+    put32(bytes, 1); // rank
+    put64(bytes, 1ULL << 63);
+    put32(bytes, 0); // ggml type F32
+    put64(bytes, 0); // offset
+    const std::string path = write_temp(bytes, "dim-past-int64");
+    const auto inventory = read_inventory(path);
+    std::remove(path.c_str());
+    ASSERT_FALSE(inventory.has_value());
+}
+
 } // namespace
