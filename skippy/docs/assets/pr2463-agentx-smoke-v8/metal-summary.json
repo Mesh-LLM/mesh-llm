@@ -1,0 +1,231 @@
+{
+  "model": "Qwen3.5-4B Q4_K_M",
+  "harness": "AgentX 1.0.12.post1, smoke v8",
+  "source": "b69c011b173877f2731ed1f96a7cd71c5274c5e9",
+  "job": "job_ftcgs0zpg1bkgbb",
+  "run": "run_yv0t36hgj207d2f",
+  "summary": [
+    {
+      "engine": "llama",
+      "c": 1,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        2
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 3.966351275634399,
+        "min": 3.9663233152783404,
+        "max": 3.966362909373857
+      },
+      "derived_decode_tok_s": {
+        "median": 64.38728397279519,
+        "min": 63.09115223605456,
+        "max": 79.35688224234964
+      },
+      "ttft_p50_s": {
+        "median": 22.8146234375,
+        "min": 22.802075999999996,
+        "max": 22.8172866455
+      },
+      "ttft_p95_s": {
+        "median": 42.89677338125,
+        "min": 42.874108987499994,
+        "max": 42.90106146455
+      },
+      "peak_completed_rss_gib": 11.297042846679688,
+      "peak_completed_footprint_gib": 9.02866517007351
+    },
+    {
+      "engine": "llama",
+      "c": 2,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        2
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 5.942595445769227,
+        "min": 5.905246669164426,
+        "max": 5.943165371869307
+      },
+      "derived_decode_tok_s": {
+        "median": 13.822146309363802,
+        "min": 13.705682391855268,
+        "max": 13.824941005892187
+      },
+      "ttft_p50_s": {
+        "median": 53.121853687,
+        "min": 53.106108833499995,
+        "max": 53.1231387505
+      },
+      "ttft_p95_s": {
+        "median": 72.9260855806,
+        "min": 72.91728484585,
+        "max": 72.93382966285
+      },
+      "peak_completed_rss_gib": 19.471954345703125,
+      "peak_completed_footprint_gib": 17.188918828964233
+    },
+    {
+      "engine": "llama",
+      "c": 4,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        5
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 15.569135371274045,
+        "min": 15.561911231728352,
+        "max": 15.575806424481664
+      },
+      "derived_decode_tok_s": {
+        "median": 8.837688748344988,
+        "min": 8.832936166980238,
+        "max": 8.843075003716548
+      },
+      "ttft_p50_s": {
+        "median": 49.028559541999996,
+        "min": 49.003745125,
+        "max": 49.041096584
+      },
+      "ttft_p95_s": {
+        "median": 123.0904158416,
+        "min": 123.0730490836,
+        "max": 123.12866011619998
+      },
+      "peak_completed_rss_gib": 36.156036376953125,
+      "peak_completed_footprint_gib": 33.8736537322402
+    },
+    {
+      "engine": "skippy",
+      "c": 1,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        2
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 3.9663637025858507,
+        "min": 3.9663625127679794,
+        "max": 3.9663914652055055
+      },
+      "derived_decode_tok_s": {
+        "median": 81.62949867869669,
+        "min": 81.44120295500666,
+        "max": 81.74736416733805
+      },
+      "ttft_p50_s": {
+        "median": 23.0832530835,
+        "min": 23.078342375000002,
+        "max": 23.0893130835
+      },
+      "ttft_p95_s": {
+        "median": 43.385158783049995,
+        "min": 43.37473448779999,
+        "max": 43.40252705804999
+      },
+      "peak_completed_rss_gib": 20.414779663085938,
+      "peak_completed_footprint_gib": 18.16520767658949
+    },
+    {
+      "engine": "skippy",
+      "c": 2,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        2
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 6.110453332999263,
+        "min": 6.093976123425087,
+        "max": 6.111542084945975
+      },
+      "derived_decode_tok_s": {
+        "median": 14.399805117317662,
+        "min": 14.377328026248097,
+        "max": 14.442242040932019
+      },
+      "ttft_p50_s": {
+        "median": 55.73963152099999,
+        "min": 55.724286396,
+        "max": 55.876194229
+      },
+      "ttft_p95_s": {
+        "median": 78.06969623989998,
+        "min": 78.06135682739999,
+        "max": 78.2875081723
+      },
+      "peak_completed_rss_gib": 20.701065063476562,
+      "peak_completed_footprint_gib": 18.45141687244177
+    },
+    {
+      "engine": "skippy",
+      "c": 4,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        5
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 16.130248709477495,
+        "min": 16.1076878298872,
+        "max": 16.155149778269262
+      },
+      "derived_decode_tok_s": {
+        "median": 7.437628949123113,
+        "min": 7.426125890362336,
+        "max": 7.449373109351439
+      },
+      "ttft_p50_s": {
+        "median": 51.230633624999996,
+        "min": 51.157419791,
+        "max": 51.297517207999995
+      },
+      "ttft_p95_s": {
+        "median": 126.46791094139998,
+        "min": 126.18129676639998,
+        "max": 126.56667786659999
+      },
+      "peak_completed_rss_gib": 24.773727416992188,
+      "peak_completed_footprint_gib": 22.17775348573923
+    }
+  ]
+}

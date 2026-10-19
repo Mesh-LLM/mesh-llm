@@ -1,0 +1,231 @@
+{
+  "model": "Qwen3.5-4B Q4_K_M",
+  "harness": "AgentX 1.0.12.post1, smoke v8",
+  "source": "75888c37a793996d095738ee9d93946aac6a48d3",
+  "job": "job_m9p74x3qr8ba95k",
+  "run": "run_naaje5tnp8004yv",
+  "summary": [
+    {
+      "engine": "llama",
+      "c": 1,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        4
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 8.851697777395085,
+        "min": 8.82301465135174,
+        "max": 8.88160710401319
+      },
+      "derived_decode_tok_s": {
+        "median": 39.49787160766788,
+        "min": 38.8494298470094,
+        "max": 39.52713601387889
+      },
+      "ttft_p50_s": {
+        "median": 0.432642297,
+        "min": 0.4175731475,
+        "max": 0.442050623
+      },
+      "ttft_p95_s": {
+        "median": 14.159150011499994,
+        "min": 14.046283703999993,
+        "max": 14.178190415899993
+      },
+      "peak_completed_rss_gib": 1.8112983703613281,
+      "peak_completed_footprint_gib": null
+    },
+    {
+      "engine": "llama",
+      "c": 2,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        4
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 21.999780461738297,
+        "min": 21.869208835644628,
+        "max": 22.176561708694972
+      },
+      "derived_decode_tok_s": {
+        "median": 33.32727240997997,
+        "min": 32.83900882435523,
+        "max": 40.58291366111826
+      },
+      "ttft_p50_s": {
+        "median": 6.7904859945,
+        "min": 6.773457998,
+        "max": 9.485968835
+      },
+      "ttft_p95_s": {
+        "median": 26.667898318799995,
+        "min": 26.651887205299992,
+        "max": 27.273430958049993
+      },
+      "peak_completed_rss_gib": 5.822654724121094,
+      "peak_completed_footprint_gib": null
+    },
+    {
+      "engine": "llama",
+      "c": 4,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        5
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 25.854548498697735,
+        "min": 24.738763020759436,
+        "max": 25.907058935984203
+      },
+      "derived_decode_tok_s": {
+        "median": 13.979357304576427,
+        "min": 12.524791194144823,
+        "max": 14.208474796645534
+      },
+      "ttft_p50_s": {
+        "median": 26.899588256999998,
+        "min": 20.836968281999997,
+        "max": 39.600041514
+      },
+      "ttft_p95_s": {
+        "median": 50.8275988706,
+        "min": 50.04197846619999,
+        "max": 51.76890005219999
+      },
+      "peak_completed_rss_gib": 2.3099822998046875,
+      "peak_completed_footprint_gib": null
+    },
+    {
+      "engine": "skippy",
+      "c": 1,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        4
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 8.829642743272087,
+        "min": 8.823969444573525,
+        "max": 8.836819163077264
+      },
+      "derived_decode_tok_s": {
+        "median": 40.30329353107012,
+        "min": 40.24887919533957,
+        "max": 40.32870452870649
+      },
+      "ttft_p50_s": {
+        "median": 0.410532067,
+        "min": 0.40664765999999997,
+        "max": 0.4159411775
+      },
+      "ttft_p95_s": {
+        "median": 14.592959061099995,
+        "min": 14.562078359099994,
+        "max": 14.638072998599993
+      },
+      "peak_completed_rss_gib": 2.0482025146484375,
+      "peak_completed_footprint_gib": null
+    },
+    {
+      "engine": "skippy",
+      "c": 2,
+      "attempts": 3,
+      "completed": 2,
+      "failed": 1,
+      "requests": [
+        3
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 11.516308833110205,
+        "min": 11.51618706449986,
+        "max": 11.516430601720549
+      },
+      "derived_decode_tok_s": {
+        "median": 29.010597525599415,
+        "min": 28.925816936661686,
+        "max": 29.09537811453714
+      },
+      "ttft_p50_s": {
+        "median": 11.972191557499999,
+        "min": 11.918729638999999,
+        "max": 12.025653475999999
+      },
+      "ttft_p95_s": {
+        "median": 32.2168607774,
+        "min": 32.1636533987,
+        "max": 32.270068156099995
+      },
+      "peak_completed_rss_gib": 2.2702293395996094,
+      "peak_completed_footprint_gib": null
+    },
+    {
+      "engine": "skippy",
+      "c": 4,
+      "attempts": 3,
+      "completed": 3,
+      "failed": 0,
+      "requests": [
+        5
+      ],
+      "errors": 0,
+      "cancelled": 0,
+      "cohort_sha256": [
+        "03a629cd14fe7d6b648a48255d29d4ee410b4f17b1dc3b769bdf3ad951a4d053"
+      ],
+      "output_tok_s": {
+        "median": 23.248332628781064,
+        "min": 23.23855927956969,
+        "max": 23.350857809243823
+      },
+      "derived_decode_tok_s": {
+        "median": 9.831692802644366,
+        "min": 8.784785911798073,
+        "max": 10.977764301631147
+      },
+      "ttft_p50_s": {
+        "median": 23.160390421,
+        "min": 22.798011473,
+        "max": 24.237349867
+      },
+      "ttft_p95_s": {
+        "median": 61.978857030399986,
+        "min": 61.09875797779999,
+        "max": 62.54799987839999
+      },
+      "peak_completed_rss_gib": 6.107200622558594,
+      "peak_completed_footprint_gib": null
+    }
+  ]
+}
