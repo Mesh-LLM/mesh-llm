@@ -43,8 +43,14 @@ the unified KV allocation. The turn does not hold the runtime or scheduler
 worker: decode continues between native chunks. Waiting respects the request's
 cancellation and cache-operation deadline; errors and unwinding release the turn.
 
-The service estimator learns from native batch execution, counts shared work
+The service estimator learns from completed native execution, counts shared work
 once, and reduces outstanding work as tokens execute or cached prefixes restore.
+A nonblocking context activity marker tracks asynchronous submissions and fences
+on every backend. Native-call durations accumulate until completion; lock waits
+and gaps between calls are excluded. Mixed prefill/decode intervals, failed work
+and intervals interrupted by unobserved cache operations do not train a pure
+phase rate. These estimates measure occupied service time, not GPU kernel time;
+completion tracking adds no synchronization barriers.
 Its predicted load is advisory: uncertain EOS, cache hits and batch shapes must
 not reject valid work. Actual queue deadlines, queue capacity, cancellation and
 native memory admission remain enforced.
@@ -221,7 +227,7 @@ deadline handling.
   at once and defaults to the config's KV-derived `lane_count`.
   `--generation-queue-capacity` independently bounds additional waiting
   requests (default `clamp(8 * lanes, 16, 256)`), while
-  `--generation-admission-timeout-secs` can bound predicted and actual queue
+  `--generation-admission-timeout-secs` bounds actual queue
   wait; the default `0` waits until client cancellation so capacity pressure
   drains through the bounded queue instead of rejecting accepted work. KV
   restore and prefill-record work runs on a separate

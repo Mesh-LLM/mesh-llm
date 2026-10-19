@@ -85,16 +85,19 @@ impl SchedulerWorker {
             .map_err(openai_backend_error);
         let hold = hold_started.elapsed();
         let runtime_lock_hold_ms = hold.as_secs_f64() * 1_000.0;
+        let completed = runtime.take_completed_execution();
         drop(runtime);
         self.record_compute(hold);
         if result.is_ok() {
-            self.service_estimator.observe_execution(
-                GenerationAdmissionWork {
-                    prompt_tokens: (token_count - decode_steps) as u64,
-                    decode_tokens: decode_steps as u64,
-                },
-                hold,
-            );
+            if let Some(completed) = completed {
+                self.service_estimator.observe_execution(
+                    GenerationAdmissionWork {
+                        prompt_tokens: completed.prompt_tokens,
+                        decode_tokens: completed.decode_tokens,
+                    },
+                    completed.elapsed,
+                );
+            }
             for (request, _) in &runnable {
                 let prefill = request.phase == IterationBatchPhase::Prefill;
                 self.service_estimator.advance(
@@ -231,11 +234,11 @@ impl SchedulerWorker {
             })
             .collect::<Vec<_>>();
         let result = runtime.iteration_batch_sampled(&requests);
+        let completed = runtime.take_completed_execution();
         drop(runtime);
         let elapsed = hold_started.elapsed();
         self.record_compute(elapsed);
         if result.is_ok() {
-            let mut executed = GenerationAdmissionWork::default();
             for work in &plan.work {
                 let decode = work.phase == IterationPhase::Decode;
                 let progress = GenerationAdmissionWork {
@@ -246,11 +249,17 @@ impl SchedulerWorker {
                         u64::from(work.sample_last)
                     },
                 };
-                executed.prompt_tokens += progress.prompt_tokens;
-                executed.decode_tokens += u64::from(decode);
                 self.service_estimator.advance(&work.sequence_id, progress);
             }
-            self.service_estimator.observe_execution(executed, elapsed);
+            if let Some(completed) = completed {
+                self.service_estimator.observe_execution(
+                    GenerationAdmissionWork {
+                        prompt_tokens: completed.prompt_tokens,
+                        decode_tokens: completed.decode_tokens,
+                    },
+                    completed.elapsed,
+                );
+            }
         }
 
         let decode_steps = plan

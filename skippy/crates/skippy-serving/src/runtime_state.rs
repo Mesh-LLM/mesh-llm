@@ -18,8 +18,10 @@ use skippy_runtime::{
 };
 
 mod context_capacity;
+mod execution_accounting;
 mod frame_operations;
 mod idle_retention;
+mod iteration_execution;
 mod lane_lifecycle;
 pub mod lifecycle;
 pub mod panic_recovery;
@@ -37,6 +39,8 @@ pub struct RuntimeLaunchOverrides {
 }
 
 pub struct RuntimeState {
+    execution_accounting: execution_accounting::ExecutionAccounting,
+    completed_execution: Option<execution_accounting::CompletedExecution>,
     pub model: StageModel,
     compute_meter: Arc<crate::compute_meter::StageComputeMeter>,
     layer_start: u32,
@@ -240,6 +244,8 @@ impl RuntimeState {
             resident_recurrent_requests: BTreeSet::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
+            execution_accounting: Default::default(),
+            completed_execution: None,
             modelless_for_test: true,
         }
     }
@@ -385,6 +391,8 @@ fn runtime_from_loaded_model(
         resident_recurrent_requests: BTreeSet::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),
+        execution_accounting: Default::default(),
+        completed_execution: None,
         #[cfg(test)]
         modelless_for_test: false,
     })))

@@ -1,4 +1,4 @@
-From e4fc94699ef2003426a65828ce403f2b370cc585 Mon Sep 17 00:00:00 2001
+From 6795594a4f373f89230822f502ddad6a4694b556 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -18,7 +18,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  624 +++++++
- src/skippy/tests/sampling_history.cpp         |  338 ++++
+ src/skippy/tests/sampling_history.cpp         |  349 ++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9437 insertions(+), 33 deletions(-)
+ 34 files changed, 9448 insertions(+), 33 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5772,10 +5772,10 @@ index 000000000..8c9e3288b
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..28d783979
+index 000000000..16684e942
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,349 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "llama-model.h"
@@ -5940,6 +5940,8 @@ index 000000000..28d783979
 +}
 +
 +void queued_prefill(skippy_session * session, const std::vector<llama_token> & tokens) {
++    const auto before = skippy_model_execution_epoch(session->stage_model);
++    CHECK(skippy_model_execution_epoch(nullptr) == 0);
 +    skippy_iteration_request request{};
 +    request.session = session;
 +    request.token_ids = tokens.data();
@@ -5951,6 +5953,10 @@ index 000000000..28d783979
 +    ok(status, error);
 +    CHECK(count == 0);
 +    CHECK(session->stage_model->context_work_pending.load());
++    const auto after = skippy_model_execution_epoch(session->stage_model);
++    CHECK(after != before);
++    CHECK((after & 1) != 0);
++    CHECK(skippy_model_execution_epoch(session->stage_model) == after);
 +}
 +
 +void queued_prefill_state_parity(skippy_model * model) {
@@ -5971,15 +5977,20 @@ index 000000000..28d783979
 +    CHECK(queued->n_past == 128);
 +    CHECK(queued->token_history.size() == 128);
 +    // Export must fence queued execution and serialize exactly the same state.
++    const auto pending_epoch = skippy_model_execution_epoch(model);
 +    snapshot actual(queued, true);
++    CHECK(skippy_model_execution_epoch(model) != pending_epoch);
++    CHECK((skippy_model_execution_epoch(model) & 1) == 0);
 +    CHECK(actual.payload == expected.payload);
 +    CHECK(iteration(queued, sampling, {3}) == predicted);
 +    CHECK(!queued->stage_model->context_work_pending.load());
++    CHECK((skippy_model_execution_epoch(model) & 1) == 0);
 +    queued_prefill(queued, first);
 +    skippy_error * error = nullptr;
 +    const auto status = skippy_session_reset(queued, &error);
 +    ok(status, error);
 +    CHECK(!queued->stage_model->context_work_pending.load());
++    CHECK((skippy_model_execution_epoch(model) & 1) == 0);
 +    CHECK(queued->n_past == 0);
 +    queued_prefill(queued, first);
 +    queued_prefill(queued, second);

@@ -236,6 +236,7 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_model_execution_epoch(model: *const Model) -> u64;
     pub fn skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
     pub fn llama_perf_context(ctx: *mut Opaque) -> LlamaPerfContextData;
 

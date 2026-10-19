@@ -29,6 +29,7 @@ use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMod
 use skippy_runtime::SamplingConfig;
 
 mod native_cache_concurrency;
+mod native_execution_accounting;
 mod recurrent_concurrency;
 mod recurrent_early_stop;
 mod recurrent_verification;

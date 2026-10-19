@@ -187,6 +187,7 @@ dynamic_symbols! {
     skippy_model_open_from_parts(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_open_from_source(metadata_gguf: *const c_void, metadata_gguf_size: usize, source: *const ModelTensorSourceV1, quantization_ftype: i32, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
+    skippy_model_execution_epoch(model: *const Model) -> u64;
     skippy_model_llama_model(model: *const Model) -> *const Opaque;
     skippy_model_output_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
     skippy_model_input_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;

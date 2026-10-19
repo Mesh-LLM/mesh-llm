@@ -1,4 +1,4 @@
-From de480e8c0dd28448164638b919e317cb7049d3c1 Mon Sep 17 00:00:00 2001
+From c84dbec0417e96964aebc204c7871cbdac2a460b Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): define graph-derived native ABI
@@ -6,21 +6,21 @@ Subject: [PATCH] feat(skippy): define graph-derived native ABI
 ---
  include/skippy.h                      |  29 +++
  include/skippy/activation.h           |  66 ++++++
- include/skippy/common.h               | 146 ++++++++++++++
- include/skippy/devices.h              |  56 ++++++
- include/skippy/events.h               | 229 +++++++++++++++++++++
- include/skippy/execution.h            | 264 ++++++++++++++++++++++++
+ include/skippy/common.h               | 146 +++++++++++++
+ include/skippy/devices.h              |  56 +++++
+ include/skippy/events.h               | 229 ++++++++++++++++++++
+ include/skippy/execution.h            | 264 +++++++++++++++++++++++
  include/skippy/model_package.h        |  93 +++++++++
  include/skippy/model_source.h         |  84 ++++++++
- include/skippy/runtime.h              | 277 ++++++++++++++++++++++++++
+ include/skippy/runtime.h              | 289 ++++++++++++++++++++++++++
  include/skippy/sampling.h             |  76 +++++++
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
- include/skippy/stage_plan.h           | 252 +++++++++++++++++++++++
+ include/skippy/stage_plan.h           | 252 ++++++++++++++++++++++
  include/skippy/state.h                | 243 ++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2117 insertions(+)
+ 16 files changed, 2129 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -1055,10 +1055,10 @@ index 000000000..5d77f4804
 +#endif // SKIPPY_MODEL_SOURCE_H
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 new file mode 100644
-index 000000000..799bdca2d
+index 000000000..2486a85b3
 --- /dev/null
 +++ b/include/skippy/runtime.h
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,289 @@
 +#ifndef SKIPPY_RUNTIME_H
 +#define SKIPPY_RUNTIME_H
 +
@@ -1099,6 +1099,18 @@ index 000000000..799bdca2d
 +struct skippy_model;
 +struct skippy_session;
 +struct skippy_activation_boundary_desc;
++
++/**
++ * @brief Reads context execution activity without synchronizing the device.
++ *
++ * Bit zero indicates potentially pending device work. The remaining bits change
++ * on submission and synchronization, including state transfer fences. Equality
++ * detects intervening activity; callers must not interpret the numeric delta.
++ * Read under the same external serialization as model/session mutations. A null
++ * model returns zero. This is an activity marker, not a GPU duration or counter
++ * of completed tokens.
++ */
++LLAMA_API uint64_t skippy_model_execution_epoch(const struct skippy_model * model);
 +
 +/** @brief Model, stage, memory, cache, device, and family-policy load options. */
 +struct skippy_runtime_config {

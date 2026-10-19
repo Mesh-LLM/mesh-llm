@@ -142,8 +142,9 @@ impl GenerationServiceEstimator {
         }
     }
 
-    /// Called once per successful native batch, excluding lock/queue waits.
-    /// Mixed batches advance work but do not contaminate either pure-phase rate.
+    /// Called only for completed native execution epochs, excluding lock/queue waits.
+    /// An epoch may span several asynchronous batches. Mixed epochs never train
+    /// a pure-phase rate, even when the final batch itself contains only decode.
     pub(in crate::frontend) fn observe_execution(
         &self,
         work: GenerationAdmissionWork,

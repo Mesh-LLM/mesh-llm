@@ -1,4 +1,4 @@
-From 467bb0ba15c009debb628e777c15197bddf99209 Mon Sep 17 00:00:00 2001
+From abab3931af995477298d6505d575631d76c6244b Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -42,7 +42,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/sampling.cpp                 | 1128 +++++++++++++++++++++
  src/skippy/sampling_internal.h          |   70 ++
  src/skippy/sampling_vocab.cpp           |   74 ++
- src/skippy/session.cpp                  |  539 ++++++++++
+ src/skippy/session.cpp                  |  549 +++++++++++
  src/skippy/speculative_decoding.cpp     |  568 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_execution_contract.cpp |   72 ++
@@ -61,7 +61,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  371 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16069 insertions(+)
+ 57 files changed, 16079 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -10514,10 +10514,10 @@ index 000000000..baf83db44
 +}
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..a089530b0
+index 000000000..2a0d98641
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,539 @@
+@@ -0,0 +1,549 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -10637,12 +10637,18 @@ index 000000000..a089530b0
 +void skippy_mark_context_work_pending(skippy_model * model) {
 +    if (model != nullptr) {
 +        model->context_work_pending.store(true, std::memory_order_release);
++        if (model->ctx != nullptr) {
++            model->ctx->mark_execution_pending();
++        }
 +    }
 +}
 +
 +void skippy_mark_context_synchronized(skippy_model * model) {
 +    if (model != nullptr) {
 +        model->context_work_pending.store(false, std::memory_order_release);
++        if (model->ctx != nullptr) {
++            model->ctx->mark_execution_complete();
++        }
 +    }
 +}
 +
@@ -10699,6 +10705,10 @@ index 000000000..a089530b0
 +    }
 +    *out_session = session;
 +    return skippy_success(out_error);
++}
++
++uint64_t skippy_model_execution_epoch(const struct skippy_model * model) {
++    return model != nullptr && model->ctx != nullptr ? model->ctx->get_execution_epoch() : 0;
 +}
 +
 +struct llama_context * skippy_session_llama_context(
