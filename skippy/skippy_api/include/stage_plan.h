@@ -16,6 +16,7 @@
  * `[start, end)`.
  */
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <expected>
@@ -254,26 +255,36 @@ struct StagePlan {
 
     /// A profile's values as a span, resolved from the recorded position.
     /// Spans are never stored: a stored span dangles when a later append
-    /// grows the flat vector underneath it.
+    /// grows the flat vector underneath it. Like view(), the bounds are
+    /// pointer arithmetic, not subspan: a corrupt position yields a short
+    /// or empty span rather than an out_of_range thrown out of noexcept.
     [[nodiscard]] std::span<const FrontierValue>
     activation_imports_of(const PlanProfile& profile) const noexcept {
-        return std::span{activation_imports}.subspan(profile.activation_imports.offset,
-                                                     profile.activation_imports.count);
+        return tail(activation_imports, profile.activation_imports.offset,
+                    profile.activation_imports.count);
     }
     [[nodiscard]] std::span<const FrontierValue>
     activation_exports_of(const PlanProfile& profile) const noexcept {
-        return std::span{activation_exports}.subspan(profile.activation_exports.offset,
-                                                     profile.activation_exports.count);
+        return tail(activation_exports, profile.activation_exports.offset,
+                    profile.activation_exports.count);
     }
     [[nodiscard]] std::span<const FrontierValue>
     request_inputs_of(const PlanProfile& profile) const noexcept {
-        return std::span{request_inputs}.subspan(profile.request_inputs.offset,
-                                                 profile.request_inputs.count);
+        return tail(request_inputs, profile.request_inputs.offset, profile.request_inputs.count);
     }
     [[nodiscard]] std::span<const StateEffect>
     state_effects_of(const PlanProfile& profile) const noexcept {
-        return std::span{state_effects}.subspan(profile.state_effects.offset,
-                                                profile.state_effects.count);
+        return tail(state_effects, profile.state_effects.offset, profile.state_effects.count);
+    }
+
+    /// The tail of `values` starting at `offset`, clamped to what exists.
+    /// The nothrow sibling of subspan: a corrupt position reads short
+    /// rather than throwing out of a noexcept accessor.
+    template <typename T>
+    [[nodiscard]] static std::span<const T> tail(const std::vector<T>& values, std::size_t offset,
+                                                 std::size_t count) noexcept {
+        const auto at = std::min(offset, values.size());
+        return std::span{values}.subspan(at, std::min(count, values.size() - at));
     }
 
     /// The bytes a slice refers to. The only reader for arena identities.

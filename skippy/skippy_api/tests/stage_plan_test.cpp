@@ -1,6 +1,7 @@
 #include "stage_plan.h"
 
 #include <gtest/gtest.h>
+#include <limits>
 
 #include <ranges>
 #include <string>
@@ -351,6 +352,41 @@ TEST(StagePlan, AppendingALaterProfileDoesNotDangleAnEarlierOne) {
     ASSERT_EQ(value.activation_exports_of(late).size(), 64U);
     EXPECT_EQ(value.view(value.activation_exports_of(late).back().identity.slice), "second.63");
     EXPECT_FALSE(skippy::validate(value).has_value());
+}
+
+TEST(StagePlan, CorruptValuePositionsReadShortInsteadOfThrowing) {
+    // Regression for the noexcept bug: these accessors resolved a profile's
+    // recorded position with subspan, which throws std::out_of_range when the
+    // position is corrupt — out of a noexcept function, that is
+    // std::terminate. The contract is view()'s: a corrupt position yields a
+    // short or empty span.
+    StagePlan value = plan({0, 6}, 6, {});
+    std::vector<ValueIdentity> firsts;
+    firsts.push_back(ValueIdentity{"first"});
+    value.append(profile({0, 6}, firsts, {}));
+    PlanProfile& corrupt = value.profiles[0];
+
+    // A count past the end of a one-element store clamps to that element.
+    corrupt.activation_imports.offset = 0;
+    corrupt.activation_imports.count = std::numeric_limits<std::uint32_t>::max();
+    ASSERT_EQ(value.activation_imports_of(corrupt).size(), 1U);
+    EXPECT_EQ(value.view(value.activation_imports_of(corrupt).front().identity.slice), "first");
+
+    // An offset past the end of an occupied store clamps to empty.
+    corrupt.activation_imports.offset = std::numeric_limits<std::uint32_t>::max();
+    corrupt.activation_imports.count = 1;
+    EXPECT_TRUE(value.activation_imports_of(corrupt).empty());
+
+    // Empty stores clamp the same way instead of throwing.
+    corrupt.activation_exports.offset = 2;
+    corrupt.activation_exports.count = 3;
+    corrupt.request_inputs.offset = std::numeric_limits<std::uint32_t>::max();
+    corrupt.request_inputs.count = std::numeric_limits<std::uint32_t>::max();
+    corrupt.state_effects.offset = 1;
+    corrupt.state_effects.count = 4;
+    EXPECT_TRUE(value.activation_exports_of(corrupt).empty());
+    EXPECT_TRUE(value.request_inputs_of(corrupt).empty());
+    EXPECT_TRUE(value.state_effects_of(corrupt).empty());
 }
 
 } // namespace

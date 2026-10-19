@@ -68,6 +68,16 @@ thing that survives it.
   (`LlamaSession::last_backend_error` is the pattern).
 - **`bool` is only a yes/no predicate** (`contains`, `guards_match`, `ranges_join`).
   Never an error channel, never a placeholder, never "did it work".
+- **`noexcept` is a terminate contract, not a style choice.** An exception
+  escaping a `noexcept` function calls `std::terminate` — it is not an error
+  path, and the compiler will not warn you that the body can throw. Every
+  `noexcept` body must be nothrow all the way down: stored positions resolve by
+  clamping pointer arithmetic (`StagePlan::tail` and `view()` are the pattern),
+  never by `subspan`/`at`/`substr` over values that came from outside; and an
+  allocation that must happen inside a failure handler gets its own
+  `catch (...)` so the OOM reporter cannot itself OOM (`LlamaSession::run_pass`
+  recording `last_backend_error_` is the pattern). If a function can
+  legitimately fail, it returns `expected`/`optional` and is not `noexcept`.
 - **Strong types for identities.** `ProfileId`, `TensorId`, `ValueIdentity`,
   `LayerRange` — not bare strings and ints that can be swapped by accident.
 - **Constrain at the type where you can.** A parser that takes `const char*` and
@@ -291,6 +301,17 @@ just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare 
 
 ## Traps that have already bitten us
 
+- **A throwing `std` call inside `noexcept` is `std::terminate` on the worst
+  day, and nothing tests it.** The four `StagePlan` value accessors resolved a
+  profile's recorded `{offset, count}` with `std::span::subspan`, which throws
+  `std::out_of_range` when the position is corrupt — out of a `noexcept`
+  function that is a process crash, not an error. Every test passed because
+  valid plans never hit the branch, and the compiler cannot see the throw.
+  Same shape, softer landing: `run_pass`'s catch handler assigned
+  `failure.what()` into a `std::string`, so the OOM reporter itself could
+  `bad_alloc` out of `noexcept`. Rule: `noexcept` accessors over stored
+  positions clamp via pointer arithmetic (`StagePlan::tail`, `view()`), and
+  allocations inside failure handlers get their own `catch (...)`.
 - **Do not trust the compiler to catch a polarity flip.** Converting
   `expected<void, E>` → `optional<E>` turns `if (!valid) return valid;` from
   "propagate the failure" into "swallow it". Six tests passed while validation

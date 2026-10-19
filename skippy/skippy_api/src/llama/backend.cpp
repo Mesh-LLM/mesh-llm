@@ -287,7 +287,15 @@ std::int32_t LlamaSession::run_pass(Pass pass) noexcept {
     } catch (const std::exception& failure) {
         // The backend's own message survives into the failure rather than
         // collapsing OOM, Metal errors and everything else into one code.
-        last_backend_error_ = failure.what();
+        // Recording it must not throw out of noexcept either: if the process
+        // is out of memory the message is dropped and the failure code kept.
+        try {
+            last_backend_error_ = failure.what();
+        } catch (...) {
+            // Out of memory recording the message: drop any stale text and
+            // keep the failure code; clear() is noexcept.
+            last_backend_error_.clear();
+        }
         return -1;
     }
 }

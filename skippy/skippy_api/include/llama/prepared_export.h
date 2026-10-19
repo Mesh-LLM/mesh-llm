@@ -11,6 +11,7 @@
 
 #include "skippy.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <span>
 #include <vector>
@@ -37,7 +38,10 @@ public:
         return std::span<const std::byte>{buffer_.data(), written_};
     }
 
-    void set_written(std::size_t size) noexcept { written_ = size; }
+    /// Reports the frame size written by the native call, clamped to the
+    /// buffer: a lying descriptor yields a short frame, never a span that
+    /// outruns its storage.
+    void set_written(std::size_t size) noexcept { written_ = std::min(size, buffer_.size()); }
     [[nodiscard]] std::size_t capacity() const noexcept { return buffer_.size(); }
 
     /// Descriptor shaped for this stage's export; written by the native call.
