@@ -150,7 +150,10 @@ case "$1 ${2:-}" in
   'api --method') [[ "$3" == DELETE ]] ;;
   'api '*)
     if [[ "$2" == repos/*/commits/*/pulls ]]; then
-      if [[ "$FIXTURE_MERGED_PR" == 1 ]]; then printf '%s\n' "$FIXTURE_URL"; fi
+      if [[ "$FIXTURE_LOOKUP_FAILURE" == 1 ]]; then exit 19; fi
+      if [[ "$FIXTURE_MERGED_PR" == 1 && "$2" == "repos/fixture/repository/commits/$FIXTURE_HEAD/pulls" && "$*" == *'.merged_at != null and .head.sha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and .base.ref == "main" and .head.repo.full_name == "fixture/repository"'* ]]; then
+        printf '%s\n' "$FIXTURE_URL"
+      fi
     else
       printf '%s\n' "$FIXTURE_HEAD"
     fi
@@ -187,6 +190,7 @@ esac
         reconcile: bool,
         filter_failure: bool,
         merged: bool,
+        lookup_failure: bool,
     ) -> Output {
         Command::new("/bin/bash")
             .arg(self.root.join("scripts/llama-canary-publish.sh"))
@@ -214,6 +218,10 @@ esac
             .env("FIXTURE_RECONCILE", if reconcile { "1" } else { "0" })
             .env("FIXTURE_MERGED_PR", if merged { "1" } else { "0" })
             .env(
+                "FIXTURE_LOOKUP_FAILURE",
+                if lookup_failure { "1" } else { "0" },
+            )
+            .env(
                 "FIXTURE_REDACTOR_FAILURE",
                 if filter_failure { "1" } else { "0" },
             )
@@ -238,6 +246,7 @@ fn actual_publisher_uses_frozen_redactor_and_preserves_success_failure_and_recon
             create,
             reconcile,
             filter_failure,
+            false,
             false,
         );
         assert_eq!(output.status.success(), success, "{output:?}");
@@ -269,7 +278,7 @@ fn actual_publisher_uses_frozen_redactor_and_preserves_success_failure_and_recon
 fn actual_publisher_refuses_unprepared_controllers_before_git_or_publication() {
     for owner in ["", "relative-controller", "/fixture/missing-controller"] {
         let fixture = Publisher::new();
-        let output = fixture.invoke(owner, 0, 0, false, false, false);
+        let output = fixture.invoke(owner, 0, 0, false, false, false, false);
         assert!(!output.status.success());
         assert!(!fixture.root.join("trace").exists());
         assert!(!fixture.root.join("forbidden").exists());
@@ -281,9 +290,40 @@ fn actual_publisher_refuses_unprepared_controllers_before_git_or_publication() {
 #[test]
 fn actual_publisher_reconciles_exact_merged_head_without_pushing() {
     let fixture = Publisher::new();
-    let output = fixture.invoke(fixture.owner.to_str().unwrap(), 0, 0, false, false, true);
+    let output = fixture.invoke(
+        fixture.owner.to_str().unwrap(),
+        0,
+        0,
+        false,
+        false,
+        true,
+        false,
+    );
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("already merged"));
+    let trace = fs::read_to_string(fixture.root.join("trace")).unwrap();
+    assert!(trace.contains("commits/"), "{trace}");
+    assert!(
+        !trace.contains("push ") && !trace.contains("pr create"),
+        "{trace}"
+    );
+    assert_eq!(fs::read_dir(&fixture.runner).unwrap().count(), 0);
+}
+
+#[test]
+fn actual_publisher_stops_before_publication_when_merged_lookup_fails() {
+    let fixture = Publisher::new();
+    let output = fixture.invoke(
+        fixture.owner.to_str().unwrap(),
+        0,
+        0,
+        false,
+        false,
+        false,
+        true,
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not check merged canary PRs"));
     let trace = fs::read_to_string(fixture.root.join("trace")).unwrap();
     assert!(trace.contains("commits/"), "{trace}");
     assert!(

@@ -170,9 +170,13 @@ trap 'cleanup_before_pr 143' TERM
 
 # A selected source may have merged while its long certification was running.
 # Reconcile that exact head instead of opening a duplicate repair PR.
-merged_pr="$(gh_read gh api "repos/${REPOSITORY}/commits/${CERTIFIED_SHA}/pulls" \
+if ! merged_pr="$(gh_read gh api "repos/${REPOSITORY}/commits/${CERTIFIED_SHA}/pulls" \
   --jq ".[] | select(.merged_at != null and .head.sha == \"$CERTIFIED_SHA\" and .base.ref == \"main\" and .head.repo.full_name == \"$REPOSITORY\") | .html_url" \
-  2>/dev/null | head -n 1 || true)"
+  2>/dev/null)"; then
+  echo "could not check merged canary PRs for certified head $CERTIFIED_SHA" >&2
+  exit 1
+fi
+merged_pr="${merged_pr%%$'\n'*}"
 if [[ -n "$merged_pr" ]]; then
   published=1
   trap - EXIT INT TERM
