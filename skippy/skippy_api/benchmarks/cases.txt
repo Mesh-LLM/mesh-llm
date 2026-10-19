@@ -26,3 +26,4 @@
 3	B	stage_open_encoder	^stage_open	blocked-upstream	BERT stage install fails: attention.mask.0 has no owned request recipe (native)
 11	C	workload_classify	^ModelLoad/.*	parity	load-time derivation only; the ModelLoad row covers it (same native open), decisions tested in workload_profile_test
 12	B	sampling_suppress	^SamplingSuppress/	win	bitmap scan vs the hand-written find-per-candidate reference; no model needed, outputs gated equal
+13	C	sampling_eligible	^SamplingEligible/	win	boundary-rule row: both sides run the same bitmap selection and gate outputs; the facade's spelling also measures 8x faster than the native transcription

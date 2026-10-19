@@ -9,7 +9,7 @@ include/            public headers; the only part consumers include
   runtime.h           RuntimeBackend concept, NativeRuntime registry, handles
   types.h             Token / SequenceId / TokenIndex, zero-copy token views
   workload.h          workload classification and pooling
-  sampling_suppress.h vocab-declared token suppression policy (patch 0012)
+  sampling_suppress.h vocab-declared token suppression policy (patches 0012/0013)
   embed.h             embed() and embed_batch()
   rerank.h            rerank() and rerank_batch()
   encode.h            encode_prompt()
@@ -80,6 +80,19 @@ just skippy-api-checkpoint "feat(skippy-api): ..." <embed.gguf> <reranker.gguf>
 `.gitignore`, then commits with the subject you pass. Both accept the models
 as optional arguments — without them the Rust tests run unit-only, and
 `SKIPPY_TEST_REQUIRE_MODELS` is left unset so they skip rather than fail.
+
+## Not covered
+
+Patch 0013's native half — the `LLAMA_TOKEN_NULL` rejection at the runtime's
+own sampling, verification, and MTP-propose boundaries — lives in
+`skippy/llama_cpp/patches` and has no counterpart here: this library has no
+sampling, verification, or speculative-decoding call sites to guard. What is
+ported is the rule those call sites apply (`eligible_token`), for C++ callers
+composing `greedy_among_allowed` with a model's declared suppress set. The
+Rust surface of the capability is the model accessor (`Model::suppress_tokens`,
+patch 0012); the selection and its exhaustion handling stay with the Rust
+caller, and crossing the FFI per sampled token would cost more than the check
+guards.
 
 ## Working on this library
 
