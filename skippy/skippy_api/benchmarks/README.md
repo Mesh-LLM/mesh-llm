@@ -20,6 +20,7 @@ google-benchmark report.
 
 | `SamplingSuppress` | hand-written find-per-candidate merge + greedy (pre-0012 spelling) | `apply_vocab_suppress` + `greedy_among_allowed` (bitmap) |
 | `SamplingEligible` | the post-0012 native sampler entry plus the call-site `LLAMA_TOKEN_NULL` check | `greedy_among_allowed` through `eligible_token` |
+| `SamplingStore` | `skippy_store_sampled_token` plus the batch store loop (store-or-reject, publish nothing partial) | `eligible_tokens` all-or-nothing batch boundary |
 Both sides link the *same* patched llama.cpp build, load the same GGUF, and run
 with the same geometry (`n_ctx = n_batch = n_ubatch = 512`, one sequence, all
 layers offloaded, flash-attention AUTO). The harness embeds one 64-token input

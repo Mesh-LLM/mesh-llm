@@ -27,3 +27,4 @@
 11	C	workload_classify	^ModelLoad/.*	parity	load-time derivation only; the ModelLoad row covers it (same native open), decisions tested in workload_profile_test
 12	B	sampling_suppress	^SamplingSuppress/	win	bitmap scan vs the hand-written find-per-candidate reference; no model needed, outputs gated equal
 13	C	sampling_eligible	^SamplingEligible/	win	boundary-rule row: both sides run the same bitmap selection and gate outputs; the facade's spelling also measures 8x faster than the native transcription
+14	C	sampling_store	^SamplingStore/	win	store-boundary row: identical work both sides (reserve + 64 stores + reject branch); 1.10x on a ~50ns fixed-cost row, reproduced across two 15-rep interleaved runs
