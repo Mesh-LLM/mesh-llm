@@ -777,10 +777,22 @@ Move the source registration to Mesh after merge.
 
 AgentX sweeps 1, 2 and 4 offered sessions per engine job with automatic
 context on both engines and automatic Skippy parallelism; llama slots match offered sessions.
-Smoke version 5 uses upstream `--burst-phase-starts` so every lane's first
+Smoke version 6 uses upstream `--burst-phase-starts` so every lane's first
 profiling request is eligible inside its 60-second sending window. Subsequent
-recorded inter-turn delays remain intact. Full benchmark version 4 preserves
+recorded inter-turn delays remain intact. Full benchmark version 5 preserves
 upstream phase-start spacing. Keep these workload versions separate.
 Repeated comparisons order whole engine jobs ABBAAB on the same Spark. Preserve
 complete traces, exclude drain cancellations from serving points, retain failed
 cells, and continue only after confirmed child cleanup. Cache inputs are offline.
+
+AgentX smoke version 6 and full benchmark version 5 apply the same upstream
+`--max-context-length 131072` filter to both engines before selecting traces.
+AgentX excludes a whole trace if any parent or subagent turn's recorded input
+plus requested output exceeds the limit (zero recorded output reserves one token).
+No retained requests, outputs, or subagent topology are truncated. The root
+`cohort.json` records every source trace's peak, digest, and eligibility; each
+cell records the selected cohort digest and excluded count. This is a common
+recorded-token budget, not a server-context override or a rendered chat-template
+token guarantee. Unexpected wire overflows still invalidate a cell. Compare
+only matching cohort digests and completed raw trace/turn sets. Older workload
+versions remain separate. Skippy keeps its automatic planner and 128K cap.

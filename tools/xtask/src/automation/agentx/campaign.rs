@@ -14,6 +14,7 @@ pub(super) fn run(input: &Prepared, engine: Engine) -> DynResult<()> {
         let mut cell: Prepared = serde_json::from_value(serde_json::to_value(input)?)?;
         cell.output = input.output.join(format!("{engine}-c{concurrency}"));
         std::fs::create_dir(&cell.output)?;
+        let cohort = super::trace_context::record(&cell, concurrency)?;
         let outcome = lifecycle::execute(&cell, engine, concurrency)
             .and_then(|()| results::read(&cell, engine, concurrency));
         match outcome {
@@ -38,6 +39,7 @@ pub(super) fn run(input: &Prepared, engine: Engine) -> DynResult<()> {
                 notes.push(format!("{engine} c{concurrency}: {status}; see cell logs"));
                 cells.push(json!({"engine":engine,"concurrency":concurrency,
                     "status":status,"error":error.to_string(),
+                    "cohort":cohort,
                     "context_support":context_support,
                     "memory":std::fs::read(cell.output.join("memory-summary.json")).ok()
                         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()),
@@ -112,7 +114,7 @@ fn publish(
 ) -> DynResult<()> {
     write(
         &input.output.join("results.json"),
-        &json!({"profile":input.profile,"model":input.model,"cells":cells}),
+        &json!({"profile":input.profile,"harness_version":input.profile.harness_version(),"model":input.model,"cells":cells}),
     )?;
     let Some(path) = std::env::var_os("JIANYANG_RESULT_PATH") else {
         return Ok(());

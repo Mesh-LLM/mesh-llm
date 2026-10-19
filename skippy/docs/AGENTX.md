@@ -143,7 +143,7 @@ submitting the smoke, and submit the benchmark only after the smoke passes.
 
 | Setting | Smoke | Benchmark |
 |---|---|---|
-| Parent traces | First max(4, concurrency), complete | All 393, complete |
+| Parent traces | First max(4, concurrency) eligible traces from 128 candidates (36 eligible) | All 83 eligible traces from 393 candidates |
 | Offered agent sessions | 1, 2, 4 | 1, 2, 4 |
 | Measured time per engine / concurrency | 60 seconds | Upstream 3,600 seconds |
 | Warmup requests per lane | 1 | Upstream 10 |
@@ -162,7 +162,9 @@ Native context allocation observations are retained in each summary, with raw
 server logs preserved; missing observations remain unavailable. Do not infer
 execution slots from offered concurrency or native sequence reservations.
 Skippy retains its automatic 131,072-token per-request cap even when the model
-supports a longer native context. Context-only rejections are reported as
+supports a longer native context. Both engines filter whole traces to the same
+recorded input-plus-output budget before measurement. Exclusions are retained
+in the corpus manifest. Unexpected runtime context-only rejections are reported as
 `unsupported_context`, with overflow counts and diagnostic paths retained.
 These cells contribute no serving point or paired throughput comparison;
 their memory is labelled as a partial attempt. Mixed failures and inconsistent
@@ -202,12 +204,12 @@ cleanup add time. A single cell has a bounded 80-minute lifecycle for smoke;
 the job has a 24-hour hard deadline shared with container build and preparation. These are
 failure ceilings, not runtime estimates.
 
-Smoke version 5 uses upstream `--burst-phase-starts` so each lane's first
+Smoke version 6 uses upstream `--burst-phase-starts` so each lane's first
 profiling request is eligible immediately. The previous c4 smoke's recorded
 first-request spacing was 81.4 seconds, exceeding its 60-second sending window
 and admitting only three profiling requests. The burst changes phase-start
 spacing only; subsequent inter-turn delays and trace contents remain intact.
-Full benchmark version 4 retains upstream phase-start spacing. Compare versions
+Full benchmark version 5 retains upstream phase-start spacing. Compare versions
 separately and verify observed HTTP overlap before claiming concurrency coverage.
 
 ## Corpus and validity
@@ -217,8 +219,10 @@ The workload is SemiAnalysis's published 256k Weka corpus:
 `8fecd2fc56694469f758f0afbbb6335ad3043740`, SHA-256
 `e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef`.
 The runner verifies the original JSONL, then writes each selected row as a
-complete Weka JSON trace without rewriting its requests. `cohort.json` records
-the exact selected IDs. Parent/child relationships remain upstream-owned.
+complete Weka JSON trace without rewriting its requests. The root `cohort.json`
+records the candidate IDs and context eligibility; each cell's `cohort.json`
+records the filtered selection and its digest. Parent/child relationships remain
+upstream-owned.
 
 AgentX 1.0.7's public loader does not expose a dataset revision option. We use
 its stock local Weka loader and `--unsafe-override` with our independently
@@ -235,6 +239,19 @@ totals and latency distributions in milliseconds. Smoke and full profiles have
 different template keys and harness fingerprints. Engine templates are separate
 because JY's existing chart series distinguish concurrency, not engine identity.
 Raw cell names remain `agentx/MODEL/ENGINE/PROFILE/cN`.
+
+AgentX smoke version 6 and full benchmark version 5 apply the same upstream
+`--max-context-length 131072` filter to both engines before selecting traces.
+AgentX excludes a whole trace if any parent or subagent turn's recorded input
+plus requested output exceeds the limit (zero recorded output reserves one token).
+No retained requests, outputs, or subagent topology are truncated. The root
+`cohort.json` records every source trace's peak, digest, and eligibility; each
+cell records the selected cohort digest and excluded count. Preflight exclusions
+are workload scope, not failed requests. This is a common
+recorded-token budget, not a server-context override or a rendered chat-template
+token guarantee. Unexpected wire overflows still invalidate a cell. Compare
+only matching cohort digests and completed raw trace/turn sets. Older workload
+versions remain separate. Skippy keeps its automatic planner and 128K cap.
 
 ## Evidence and acceptance
 
@@ -268,7 +285,7 @@ consumer of the replay machinery; this change replaces the Jianyang job only.
 
 For each model, submit six independent engine sweeps in ABBAAB order: llama,
 Skippy, Skippy, llama, llama, Skippy. Pin all six to the same Spark and source.
-Four models produce 24 jobs and 192 attempted cells. Ordering applies to whole
+Four models produce 24 jobs and 72 attempted cells. Ordering applies to whole
 sweeps, not individual concurrency levels. Smoke is one sweep per engine.
 
 Each cell writes results and phase accounting before the next starts. Cancelled

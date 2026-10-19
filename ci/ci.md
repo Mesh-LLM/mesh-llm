@@ -2070,9 +2070,21 @@ validity. This replaces the Jianyang `agentic-replay` entry; the separately
 owned GitHub trajectory qualification workflow is unchanged.
 
 AgentX sweeps offered concurrency 1, 2 and 4 with automatic context and Skippy parallelism (llama slots match offered sessions).
-Smoke version 5 starts each lane immediately with upstream
+Smoke version 6 starts each lane immediately with upstream
 `--burst-phase-starts`, then preserves subsequent recorded delays. Full benchmark
-version 4 retains upstream phase-start spacing.
+version 5 retains upstream phase-start spacing.
 Whole-sweep ABBAAB ordering uses six existing engine jobs per model; it does not
 add JY features or mix engines within a result series. Capacity failures retain
 cell evidence and do not erase earlier successful levels.
+
+AgentX smoke version 6 and full benchmark version 5 apply the same upstream
+`--max-context-length 131072` filter to both engines before selecting traces.
+AgentX excludes a whole trace if any parent or subagent turn's recorded input
+plus requested output exceeds the limit (zero recorded output reserves one token).
+No retained requests, outputs, or subagent topology are truncated. The root
+`cohort.json` records every source trace's peak, digest, and eligibility; each
+cell records the selected cohort digest and excluded count. This is a common
+recorded-token budget, not a server-context override or a rendered chat-template
+token guarantee. Unexpected wire overflows still invalidate a cell. Compare
+only matching cohort digests and completed raw trace/turn sets. Older workload
+versions remain separate. Skippy keeps its automatic planner and 128K cap.

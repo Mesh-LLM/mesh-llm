@@ -39,6 +39,10 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
     args.extend(command::strings(&[
         "--custom-dataset-type",
         "weka_trace",
+        // Upstream drops whole traces before selecting the first N eligible
+        // entries, including parent and child input + requested output.
+        "--max-context-length",
+        &super::trace_context::LIMIT.to_string(),
         "--input-file",
     ]));
     args.push(input.dataset.to_string_lossy().into());
@@ -183,10 +187,13 @@ mod tests {
         ] {
             assert!(smoke.windows(2).any(|args| args == pair));
         }
+        assert!(!smoke.iter().any(|arg| arg == "--synthesis-max-isl"
+            || arg == "--synthesis-max-osl"
+            || arg == "--output-tokens"));
         assert!(
-            !smoke
-                .iter()
-                .any(|arg| arg == "--max-context-length" || arg == "--output-tokens")
+            smoke
+                .windows(2)
+                .any(|args| args == ["--max-context-length", "131072"])
         );
         assert!(smoke.iter().any(|arg| arg == "--burst-phase-starts"));
         let wide = arguments(&input, 8080, 128);
@@ -207,5 +214,9 @@ mod tests {
             "--benchmark-duration" | "--num-dataset-entries" | "--burst-phase-starts"
         )));
         assert!(full.windows(2).any(|args| args == ["--concurrency", "8"]));
+        assert!(
+            full.windows(2)
+                .any(|args| args == ["--max-context-length", "131072"])
+        );
     }
 }

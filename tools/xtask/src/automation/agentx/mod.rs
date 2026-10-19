@@ -11,6 +11,7 @@ mod memory;
 mod overlap;
 mod phase_outcome;
 mod results;
+mod trace_context;
 mod workload;
 use crate::{command::DynResult, repository::check_args::Grammar};
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,12 @@ pub(super) enum Profile {
     Benchmark,
 }
 impl Profile {
+    fn harness_version(self) -> &'static str {
+        match self {
+            Self::Smoke => "agentx-1.0.7-local-smoke-6",
+            Self::Benchmark => "agentx-1.0.7-local-benchmark-5",
+        }
+    }
     fn label(self) -> &'static str {
         match self {
             Self::Smoke => "smoke",

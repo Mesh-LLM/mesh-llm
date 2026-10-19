@@ -137,6 +137,7 @@ fn materialize(source: &Path, destination: &Path, profile: Profile) -> DynResult
     std::fs::create_dir(destination)?;
     let limit = if profile == Profile::Smoke { 128 } else { 393 };
     let mut ids = Vec::new();
+    let mut trace_context = Vec::new();
     for (index, line) in BufReader::new(std::fs::File::open(source)?)
         .lines()
         .take(limit)
@@ -145,6 +146,7 @@ fn materialize(source: &Path, destination: &Path, profile: Profile) -> DynResult
         let line = line?;
         let trace: serde_json::Value = serde_json::from_str(&line)?;
         ids.push(trace["id"].as_str().ok_or("trace ID missing")?.to_owned());
+        trace_context.push(super::trace_context::describe(&trace, line.as_bytes())?);
         std::fs::write(destination.join(format!("{index:04}.json")), line)?;
     }
     if ids.len() != limit {
@@ -155,7 +157,7 @@ fn materialize(source: &Path, destination: &Path, profile: Profile) -> DynResult
             .parent()
             .ok_or("trace parent")?
             .join("cohort.json"),
-        &serde_json::json!({"dataset_repo":DATA_REPO,"dataset_revision":DATA_REVISION,"dataset_sha256":DATA_SHA,"trace_ids":ids}),
+        &serde_json::json!({"dataset_repo":DATA_REPO,"dataset_revision":DATA_REVISION,"dataset_sha256":DATA_SHA,"trace_ids":ids,"trace_context":trace_context}),
     )
 }
 
@@ -166,7 +168,7 @@ mod tests {
     fn smoke_preserves_complete_rows_and_selects_exact_prefix() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("corpus.jsonl");
-        let rows: Vec<_> = (0..129).map(|index| format!(r#"{{"id":"trace-{index}","requests":[{{"type":"subagent","id":"child"}},{{"out":100000}}]}}"#)).collect();
+        let rows: Vec<_> = (0..129).map(|index| format!(r#"{{"id":"trace-{index}","requests":[{{"type":"subagent","id":"child","requests":[{{"type":"s","in":120000,"out":20000}}]}},{{"type":"n","in":10,"out":100000}}]}}"#)).collect();
         std::fs::write(&source, rows.join("\n")).unwrap();
         let target = temp.path().join("selected");
         materialize(&source, &target, Profile::Smoke).unwrap();
@@ -181,6 +183,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(temp.path().join("cohort.json")).unwrap())
                 .unwrap();
         assert_eq!(cohort["trace_ids"].as_array().unwrap().len(), 128);
+        assert_eq!(cohort["trace_context"][0]["status"], "unsupported_context");
     }
     #[test]
     fn corrupted_download_fails_before_use() {

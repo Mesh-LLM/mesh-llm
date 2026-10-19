@@ -1824,6 +1824,18 @@ AgentX retains the four engine/profile template keys and sweeps
 1, 2 and 4 offered sessions with automatic context and Skippy parallelism (llama slots match offered sessions). Whole-job ABBAAB repeats are
 submitted per model on one Spark. Input cache misses fail offline; cancelled
 cells are excluded from serving points and failed cells retain evidence.
-Smoke harness version 5 bursts the first request on each lane using upstream
+Smoke harness version 6 bursts the first request on each lane using upstream
 `--burst-phase-starts`; later trace delays remain unchanged. Full benchmark
-version 4 retains upstream phase-start spacing.
+version 5 retains upstream phase-start spacing.
+
+AgentX smoke version 6 and full benchmark version 5 apply the same upstream
+`--max-context-length 131072` filter to both engines before selecting traces.
+AgentX excludes a whole trace if any parent or subagent turn's recorded input
+plus requested output exceeds the limit (zero recorded output reserves one token).
+No retained requests, outputs, or subagent topology are truncated. The root
+`cohort.json` records every source trace's peak, digest, and eligibility; each
+cell records the selected cohort digest and excluded count. This is a common
+recorded-token budget, not a server-context override or a rendered chat-template
+token guarantee. Unexpected wire overflows still invalidate a cell. Compare
+only matching cohort digests and completed raw trace/turn sets. Older workload
+versions remain separate. Skippy keeps its automatic planner and 128K cap.

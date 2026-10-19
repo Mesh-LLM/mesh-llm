@@ -63,11 +63,11 @@ comparison as unqualified, and investigate regressions per model and
 concurrency rather than hiding them in an aggregate. Compare completed work
 and inspect grace-period cancellations before declaring a winner.
 
-Smoke version 5 uses a 60-second dispatch window and drains outstanding requests.
+Smoke version 6 uses a 60-second dispatch window and drains outstanding requests.
 Upstream `--burst-phase-starts` makes every lane's first profiling request
 eligible immediately; subsequent recorded inter-turn delays remain intact.
 Without it, the pinned c4 cohort spreads initial requests over 81.4 seconds,
-leaving its fourth lane outside the smoke window. Full benchmark version 4
+leaving its fourth lane outside the smoke window. Full benchmark version 5
 keeps upstream phase-start spacing; do not combine these workload versions.
 A turn
 near that boundary can be included in one repetition and excluded from another,
@@ -89,9 +89,11 @@ errors in each cell's `phase_outcome` and in the normal JY result notes. AgentX
 during drain; the pinned harness's phase-complete log supplies those counts.
 Missing or inconsistent accounting fails result collection.
 
-Skippy retains its automatic 128K per-request context cap. Longer traces remain
-in the workload and are reported as `unsupported_context` when explicit upstream
-overflow counts and phase accounting explain all rejected requests. Such cells
+Skippy retains its automatic 128K per-request context cap. Longer traces are
+excluded from both engines before measurement and listed as `unsupported_context`
+in the corpus manifest. Unexpected runtime overflows are still classified as
+`unsupported_context` only when explicit upstream overflow counts and phase
+accounting explain all rejected requests. Such cells
 retain their logs, overflow counts and partial-attempt memory evidence, but emit
 no serving points or paired throughput comparison. The sweep remains incomplete
 and returns a nonzero exit status. Mixed request errors, cancellations, crashes
@@ -101,3 +103,16 @@ Dataset mmap caching is disabled for both engines to avoid a 1.0.7 startup
 race that can leave record processors waiting for dataset configuration after
 a fast cache hit. This rebuilds trace inputs before measurement and preserves
 the host HF model cache. It is a workaround pending an upstream lifecycle fix.
+
+AgentX smoke version 6 and full benchmark version 5 apply the same upstream
+`--max-context-length 131072` filter to both engines before selecting traces.
+AgentX excludes a whole trace if any parent or subagent turn's recorded input
+plus requested output exceeds the limit (zero recorded output reserves one token).
+No retained requests, outputs, or subagent topology are truncated. The root
+`cohort.json` records every source trace's peak, digest, and eligibility; each
+cell records the selected cohort digest and excluded count. Preflight exclusions
+are workload scope, not failed requests. This is a common
+recorded-token budget, not a server-context override or a rendered chat-template
+token guarantee. Unexpected wire overflows still invalidate a cell. Compare
+only matching cohort digests and completed raw trace/turn sets. Older workload
+versions remain separate. Skippy keeps its automatic planner and 128K cap.
