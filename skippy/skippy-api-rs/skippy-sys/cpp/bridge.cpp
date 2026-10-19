@@ -497,6 +497,26 @@ ModelResult Bridge::load_model(rust::Str path) noexcept {
     });
 }
 
+rust::Vec<std::int32_t> Bridge::suppress_tokens(const Model& model) const noexcept {
+    // The visitor must copy out of the span it is handed: with_model returns
+    // whatever the visitor returns, and the span itself only lives as long as
+    // the model borrow inside the call.
+    const auto suppressed = impl_->runtime.with_model(model, [](const llama::LlamaModel& native) {
+        std::vector<std::int32_t> ids;
+        const auto declared = native.suppress_tokens();
+        ids.reserve(declared.size());
+        std::ranges::for_each(declared,
+                              [&](Token token) { ids.push_back(std::to_underlying(token)); });
+        return ids;
+    });
+    rust::Vec<std::int32_t> tokens;
+    if (!suppressed) return tokens;
+    tokens.reserve(suppressed->size());
+    for (const std::int32_t id : *suppressed)
+        tokens.push_back(id);
+    return tokens;
+}
+
 RuntimeStatus Bridge::unload_model(Model& model) noexcept {
     return guarded<RuntimeStatus>(
         [&] { return to_plain_status<RuntimeStatus>(impl_->runtime.unload_model(model)); });

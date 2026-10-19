@@ -81,6 +81,11 @@ public:
         WorkloadProfile profile;
         std::optional<RerankPromptSource> rerank_prompt;
         std::optional<Token> decoder_start;
+        /// Patch 0012: the vocab's declared suppress tokens
+        /// (`tokenizer.ggml.suppress_tokens`), gathered once here. The
+        /// library never links a sampler — a caller holding logits merges
+        /// these through sampling_suppress.h to honor the declaration.
+        std::vector<Token> suppress_tokens;
     };
 
     LlamaModel(llama_model_ptr model, Traits traits) noexcept;
@@ -96,6 +101,9 @@ public:
         return embedding_dimensions_;
     }
     [[nodiscard]] const Traits& traits() const noexcept { return traits_; }
+    [[nodiscard]] std::span<const Token> suppress_tokens() const noexcept {
+        return traits_.suppress_tokens;
+    }
 
 private:
     friend class LlamaBackend;

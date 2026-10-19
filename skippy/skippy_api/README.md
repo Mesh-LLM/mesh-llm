@@ -9,6 +9,7 @@ include/            public headers; the only part consumers include
   runtime.h           RuntimeBackend concept, NativeRuntime registry, handles
   types.h             Token / SequenceId / TokenIndex, zero-copy token views
   workload.h          workload classification and pooling
+  sampling_suppress.h vocab-declared token suppression policy (patch 0012)
   embed.h             embed() and embed_batch()
   rerank.h            rerank() and rerank_batch()
   encode.h            encode_prompt()
