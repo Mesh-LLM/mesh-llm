@@ -3,6 +3,7 @@ mod campaign;
 mod capacity;
 mod command;
 mod container;
+mod context_support;
 mod hardware;
 mod inputs;
 mod lifecycle;

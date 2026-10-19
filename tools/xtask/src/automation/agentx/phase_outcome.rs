@@ -11,6 +11,29 @@ pub(super) struct PhaseOutcome {
 }
 
 pub(super) fn parse(log: &str, expected_completed: u64) -> DynResult<PhaseOutcome> {
+    let outcome = parse_counts(log, expected_completed)?;
+    if outcome.errors != 0 {
+        return Err("AgentX profiling phase contains request errors".into());
+    }
+    Ok(outcome)
+}
+
+pub(super) fn context_limited(
+    log: &str,
+    completed: u64,
+    overflows: u64,
+) -> DynResult<PhaseOutcome> {
+    let total = completed
+        .checked_add(overflows)
+        .ok_or("request count overflow")?;
+    let outcome = parse_counts(log, total)?;
+    if overflows == 0 || outcome.errors != overflows || outcome.cancelled != 0 {
+        return Err("context overflows do not account for all unsuccessful requests".into());
+    }
+    Ok(outcome)
+}
+
+fn parse_counts(log: &str, expected_completed: u64) -> DynResult<PhaseOutcome> {
     let mut outcome = PhaseOutcome::default();
     let mut phases = 0;
     for line in log.lines() {
@@ -42,9 +65,6 @@ pub(super) fn parse(log: &str, expected_completed: u64) -> DynResult<PhaseOutcom
         return Err(
             "AgentX phase accounting missing or disagrees with exported completions".into(),
         );
-    }
-    if outcome.errors != 0 {
-        return Err("AgentX profiling phase contains request errors".into());
     }
     Ok(outcome)
 }

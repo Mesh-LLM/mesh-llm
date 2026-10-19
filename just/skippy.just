@@ -137,21 +137,34 @@ skippy-cuda-readback-test:
     ctest --test-dir "$build_dir" --output-on-failure --no-tests=error \
       -R '^test-cuda-host-readback(-unpinned)?$'
 
+# Locate attention tests using the native source/backend/architecture build identity.
+[unix]
+skippy-attention-tests-dir backend="cpu":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir=$(env -u LLAMA_BUILD_DIR -u LLAMA_STAGE_BUILD_DIR -u SKIPPY_LLAMA_BUILD_DIR \
+      LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static \
+      scripts/build-llama.sh --print-build-dir)
+    printf '%s-attention-tests\n' "$build_dir"
+
 # Build the native attention correctness harness without requiring an accelerator.
 [unix]
 skippy-attention-tests-build backend="cpu":
     #!/usr/bin/env bash
     set -euo pipefail
-    build_dir="$PWD/.deps/llama-build/build-attention-tests-{{ backend }}"
     scripts/prepare-llama.sh pinned
+    build_dir=$(just --quiet skippy-attention-tests-dir "{{ backend }}")
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_FULL_REPLAY=ON \
-      LLAMA_STAGE_BUILD_DIR="$build_dir" scripts/build-llama.sh --build-only
+      LLAMA_BUILD_DIR="$build_dir" LLAMA_STAGE_BUILD_DIR="$build_dir" scripts/build-llama.sh --build-only
     cmake --build "$build_dir" --target test-backend-ops
 
 # Compare attention against CPU reference (CUDA: -b CUDA0; Metal: -b MTL0).
 [unix]
 skippy-attention-tests backend="cuda" *ARGS="": (skippy-attention-tests-build backend)
-    .deps/llama-build/build-attention-tests-{{ backend }}/bin/test-backend-ops -o FLASH_ATTN_EXT {{ ARGS }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir=$(just --quiet skippy-attention-tests-dir "{{ backend }}")
+    "$build_dir/bin/test-backend-ops" -o FLASH_ATTN_EXT {{ ARGS }}
 
 # Replay every retained and current native Skippy gate without broad upstream tests.
 [unix]

@@ -161,8 +161,13 @@ default-serving comparisons, not equal-capacity kernel comparisons.
 Native context allocation observations are retained in each summary, with raw
 server logs preserved; missing observations remain unavailable. Do not infer
 execution slots from offered concurrency or native sequence reservations.
-Context overflow and failed requests invalidate a cell; traces are not silently
-truncated to fit a plan. Failed cells retain evidence, and subsequent levels
+Skippy retains its automatic 131,072-token per-request cap even when the model
+supports a longer native context. Context-only rejections are reported as
+`unsupported_context`, with overflow counts and diagnostic paths retained.
+These cells contribute no serving point or paired throughput comparison;
+their memory is labelled as a partial attempt. Mixed failures and inconsistent
+accounting remain failures. Traces are never truncated to fit a plan.
+Unsupported and failed cells retain evidence, and subsequent levels
 continue only after confirmed cleanup. Any failed or incomplete cell fails the
 job after the sweep; valid earlier points and explicit failure counts are still
 copied from the container into the JY result. A green job therefore requires

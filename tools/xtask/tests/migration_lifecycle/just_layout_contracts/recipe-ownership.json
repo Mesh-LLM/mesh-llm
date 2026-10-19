@@ -60,6 +60,7 @@
       "skippy",
       "skippy-attention-tests",
       "skippy-attention-tests-build",
+      "skippy-attention-tests-dir",
       "skippy-cli-build",
       "skippy-cli-release-build",
       "skippy-cuda-readback-test",

@@ -35,8 +35,11 @@ cases separately; a backend filter that executes zero cases is not a pass.
 The targeted cases cover concurrent masks, shared-prefix holes, alignment,
 empty rows with attention sinks, finite biases, and F16/Q8 KV storage.
 
-After building, kernel performance cases are available through
-`.deps/llama-build/build-attention-tests-<backend>/bin/test-backend-ops perf
+After building, locate the harness with `just skippy-attention-tests-dir <backend>`.
+Its directory includes the patched native revision, backend and configured GPU
+architecture so changed native revisions cannot reuse stale test objects.
+Run kernel performance cases with
+`"$(just --quiet skippy-attention-tests-dir <backend>)/bin/test-backend-ops" perf
 -o FLASH_ATTN_EXT -b <device> -p kv_bounds_pattern`. Compare baseline and
 candidate in ABBAAB order, including fully visible masks and short contexts.
 Kernel checks supplement real-model serving tests with fresh requests and
@@ -85,6 +88,14 @@ errors in each cell's `phase_outcome` and in the normal JY result notes. AgentX
 1.0.7's aggregate `was_cancelled=false` does not exclude requests cancelled
 during drain; the pinned harness's phase-complete log supplies those counts.
 Missing or inconsistent accounting fails result collection.
+
+Skippy retains its automatic 128K per-request context cap. Longer traces remain
+in the workload and are reported as `unsupported_context` when explicit upstream
+overflow counts and phase accounting explain all rejected requests. Such cells
+retain their logs, overflow counts and partial-attempt memory evidence, but emit
+no serving points or paired throughput comparison. The sweep remains incomplete
+and returns a nonzero exit status. Mixed request errors, cancellations, crashes
+and missing evidence remain failures; a context rejection must not hide them.
 
 Dataset mmap caching is disabled for both engines to avoid a 1.0.7 startup
 race that can leave record processors waiting for dataset configuration after

@@ -30,10 +30,18 @@ pub(super) fn run(input: &Prepared, engine: Engine) -> DynResult<()> {
                 cells.push(summary);
             }
             Err(error) => {
-                let status = failure_status(&cell.output);
+                let mut status = failure_status(&cell.output);
+                let context_support = super::context_support::evidence(&cell.output);
+                if status == "failed" && context_support.is_some() {
+                    status = "unsupported_context";
+                }
                 notes.push(format!("{engine} c{concurrency}: {status}; see cell logs"));
                 cells.push(json!({"engine":engine,"concurrency":concurrency,
                     "status":status,"error":error.to_string(),
+                    "context_support":context_support,
+                    "memory":std::fs::read(cell.output.join("memory-summary.json")).ok()
+                        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()),
+                    "memory_scope":"partial_attempt_not_comparable_to_completed_cells",
                     "capacity_policy":super::capacity::policy(engine),
                     "native_capacity":super::capacity::read(&cell.output)}));
             }
@@ -123,6 +131,7 @@ fn publish(
         std::path::Path::new(&path),
         &json!({"points":points,"notes":notes,
         "quality":{"sweep":{"cells_finished":cells.len(),"cells_complete":points.len(),
+            "cells_unsupported_context":cells.iter().filter(|cell| cell["status"] == "unsupported_context").count(),
             "cells_incomplete_or_failed":cells.len()-points.len()}},
         "provenance":{"stack_commit":std::env::var("JIANYANG_COMMIT")?,
             "stack_name":engine,"model_package_ref":input.model.registry_ref(),

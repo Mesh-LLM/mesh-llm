@@ -1812,7 +1812,10 @@ inputs, smoke semantics and the distinction from GitHub trajectory qualification
 `just skippy-attention-tests-build <backend>` builds the native attention
 reference harness, and `just skippy-attention-tests <backend> -b <device>` runs
 it on a leased GPU worker. CUDA uses `CUDA0`; Metal uses `MTL0`. The
-`kv_bounds_pattern` filter selects unified-cache mask regressions; the unfiltered
+`skippy-attention-tests-dir` locator resolves a separate test directory from
+the canonical native revision/backend/configured GPU architecture identity.
+Build and run recipes share it to prevent stale objects after native changes.
+The `kv_bounds_pattern` filter selects unified-cache mask regressions; the unfiltered
 matrix also exercises backend-specific variants. These are explicit hardware
 qualification commands, not additional CPU-only CI coverage. Their ownership,
 along with `skippy-cuda-readback-test`, is recorded in the Just layout fixture.
