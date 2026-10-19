@@ -58,8 +58,11 @@ templates:
     env:
       SKIPPY_TEST_REQUIRE_MODELS: "1"
     models:
+      # Resolved on the node to the absolute GGUF path and exported as $SMOKE_MODEL —
+      # the input value itself is the hf: ref, which is not a path.
       - ref: "${model}"
         delivery: stream
+        env: SMOKE_MODEL
     inputs:
       - key: model
         label: Model
@@ -77,7 +80,7 @@ templates:
         export LD_LIBRARY_PATH="$(dirname "$lib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
       fi
       SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
-        ./target/release/examples/every_frontier "${model}" --json
+        ./target/release/examples/every_frontier "$SMOKE_MODEL" --json
     target:
       executor: lab
       nodes: [spark-james, spark-db08]
@@ -134,8 +137,10 @@ templates:
     models:
       - ref: "${model}"
         delivery: stream
+        env: DENSE_MODEL
       - ref: "${hybrid}"
         delivery: stream
+        env: HYBRID_MODEL
     inputs:
       - key: model
         label: Dense model
@@ -159,9 +164,9 @@ templates:
         export LD_LIBRARY_PATH="$(dirname "$lib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
       fi
       SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
-        ./target/release/examples/every_frontier "${model}" --json
+        ./target/release/examples/every_frontier "$DENSE_MODEL" --json
       SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
-        ./target/release/examples/every_frontier "${hybrid}" --json
+        ./target/release/examples/every_frontier "$HYBRID_MODEL" --json
     target:
       executor: lab
       nodes: [spark-james, spark-db08]
