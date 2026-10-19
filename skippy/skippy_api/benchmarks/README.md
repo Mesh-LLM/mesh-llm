@@ -18,6 +18,7 @@ google-benchmark report.
 | `RerankBatch` | B separate `skippy_session_rerank` calls | `rerank_batch` — one query, B documents, one decode |
 | `SamplingSuppress/N` | native-equivalent merge and per-call bitmap greedy scan | `apply_vocab_suppress` and `greedy_among_allowed` |
 | `SamplingEligible` | native-equivalent bitmap selection and call-site `LLAMA_TOKEN_NULL` check | `greedy_among_allowed` through `eligible_token` |
+| `SamplingStore` | `skippy_store_sampled_token` plus all-or-nothing batch store loop | `eligible_tokens` all-or-nothing batch boundary |
 | `stage_chain` | *row pending: the gate compares identical inputs; must compare the C-ABI chain's terminal frame against `StageChain::prefill`'s before timing* | `StageChain` prefill |
 
 Both sides link the *same* patched llama.cpp build, load the same GGUF, and run

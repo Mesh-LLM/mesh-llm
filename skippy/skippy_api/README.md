@@ -9,7 +9,7 @@ include/            public headers; the only part consumers include
   runtime.h           RuntimeBackend concept, NativeRuntime registry, handles
   types.h             Token / SequenceId / TokenIndex, zero-copy token views
   workload.h          workload classification and pooling
-  sampling_suppress.h vocab-declared token suppression policy (patches 0012/0013)
+  sampling_suppress.h vocab-declared token suppression policy (patches 0012/0013/0014)
   embed.h             embed() and embed_batch()
   rerank.h            rerank() and rerank_batch()
   encode.h            encode_prompt()
@@ -83,12 +83,14 @@ as optional arguments — without them the Rust tests run unit-only, and
 
 ## Not covered
 
-Patch 0013's native half — the `LLAMA_TOKEN_NULL` rejection at the runtime's
-own sampling, verification, and MTP-propose boundaries — lives in
-`skippy/llama_cpp/patches` and has no counterpart here: this library has no
-sampling, verification, or speculative-decoding call sites to guard. What is
-ported is the rule those call sites apply (`eligible_token`), for C++ callers
-composing `greedy_among_allowed` with a model's declared suppress set. The
+Patch 0013/0014's native half — the `LLAMA_TOKEN_NULL`/negative-id rejection
+applied at the runtime's own sampling, verification, batch-iteration, and
+MTP-propose boundaries — lives in `skippy/llama_cpp/patches` and has no
+counterpart here: this library has no sampling, verification, or
+speculative-decoding call sites to guard. What is ported are the rules those
+call sites apply (`eligible_token` over a selection or a raw id, and the
+all-or-nothing `eligible_tokens` batch boundary), for C++ callers composing
+`greedy_among_allowed` with a model's declared suppress set. The
 Rust surface of the capability is the model accessor (`Model::suppress_tokens`,
 patch 0012); the selection and its exhaustion handling stay with the Rust
 caller, and crossing the FFI per sampled token would cost more than the check

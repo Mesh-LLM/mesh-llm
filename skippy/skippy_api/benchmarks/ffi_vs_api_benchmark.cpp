@@ -892,6 +892,85 @@ template <bool UseFfi> void SamplingEligible(benchmark::State& state) {
 }
 
 // ---------------------------------------------------------------------------
+// Sampling store (patch 0014): one store rule at every execution boundary.
+// The selections are precomputed — this row measures the store boundary, not
+// the selection (SamplingEligible owns that comparison):
+//   FFI: skippy_store_sampled_token plus the batch store loop the native
+//        iteration paths wrap it in; a rejection publishes nothing partial.
+//   API: eligible_tokens, the facade's all-or-nothing batch boundary.
+// ---------------------------------------------------------------------------
+
+struct LegacyStore {
+    std::vector<llama_token> tokens;
+    bool published = false;
+};
+
+// skippy_store_sampled_token (patch 0014: any negative id is a rejection)
+// wrapped in the store loop the execution paths spell: store-or-reject each
+// row, and a rejection discards the partial batch.
+SKIPPY_NOINLINE LegacyStore store_batch_legacy(const std::vector<llama_token>& sampled) {
+    LegacyStore store;
+    store.tokens.reserve(sampled.size());
+    for (const llama_token token : sampled) {
+        if (token < 0) return store;
+        store.tokens.push_back(token);
+    }
+    store.published = true;
+    return store;
+}
+
+template <bool UseFfi> void SamplingStore(benchmark::State& state) {
+    const auto batch = static_cast<std::size_t>(state.range(0));
+    std::vector<llama_token> ffi_sampled;
+    std::vector<std::optional<skippy::Token>> api_sampled;
+    ffi_sampled.reserve(batch);
+    api_sampled.reserve(batch);
+    for (std::size_t index = 0; index < batch; ++index) {
+        const auto id = static_cast<llama_token>((index * 997 + 5) % 30592);
+        ffi_sampled.push_back(id);
+        api_sampled.push_back(skippy::Token{id});
+    }
+
+    // Gate on outputs first: an eligible batch must publish identical tokens,
+    // and a batch with one exhausted row must be rejected whole by both.
+    const auto published = skippy::eligible_tokens(api_sampled);
+    const LegacyStore legacy = store_batch_legacy(ffi_sampled);
+    if (!published.has_value() || !legacy.published || published->size() != legacy.tokens.size()) {
+        state.SkipWithError("eligible batch disagrees between FFI and API");
+        return;
+    }
+    for (std::size_t index = 0; index < batch; ++index) {
+        if (static_cast<std::int32_t>((*published)[index]) != legacy.tokens[index]) {
+            state.SkipWithError("published tokens disagree between FFI and API");
+            return;
+        }
+    }
+    std::vector<llama_token> ffi_tainted = ffi_sampled;
+    ffi_tainted[batch / 2] = LLAMA_TOKEN_NULL;
+    std::vector<std::optional<skippy::Token>> api_tainted = api_sampled;
+    api_tainted[batch / 2] = std::nullopt;
+    if (skippy::eligible_tokens(api_tainted).has_value() ||
+        store_batch_legacy(ffi_tainted).published) {
+        state.SkipWithError("exhausted batch disagrees between FFI and API");
+        return;
+    }
+
+    for (auto _ : state) {
+        if constexpr (UseFfi) {
+            LegacyStore stored = store_batch_legacy(ffi_sampled);
+            benchmark::DoNotOptimize(stored.tokens.data());
+            benchmark::DoNotOptimize(stored.published);
+        } else {
+            const auto stored = skippy::eligible_tokens(api_sampled);
+            benchmark::DoNotOptimize(&stored);
+        }
+        benchmark::ClobberMemory();
+    }
+
+    state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(batch));
+}
+
+// ---------------------------------------------------------------------------
 // Session create/release: the model stays loaded.
 //   FFI: claims a lane on the model's shared context (cheap).
 //   API: builds a dedicated llama_context per session (n_ctx = 512).
@@ -1568,6 +1647,9 @@ BENCHMARK_TEMPLATE(SamplingEligible, false)
     ->Name("SamplingEligible/API")
     ->Arg(32000)
     ->UseRealTime();
+
+BENCHMARK_TEMPLATE(SamplingStore, true)->Name("SamplingStore/FFI")->Arg(64)->UseRealTime();
+BENCHMARK_TEMPLATE(SamplingStore, false)->Name("SamplingStore/API")->Arg(64)->UseRealTime();
 BENCHMARK_TEMPLATE(ModelLoad, true)
     ->Name("ModelLoad/FFI")
     ->Iterations(1)

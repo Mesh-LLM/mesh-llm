@@ -599,6 +599,16 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   over `getQualifiedNameAsString()` anchored on `std::(…)$` never matches. Rule: TYPE-RULES §1
   "born red on the real artefact" — the first fixture is the tree's own violation, run on the gate's
   toolchain, and `std::` names are matched with `hasName`/`hasAnyName`.
+- **A `const` local handed to `DoNotOptimize` selects the deprecated overload.**
+  Bitten while adding the `SamplingEligible` row: declaring a benchmark local
+  `const` (`const llama_token sampled = ...`) and passing it to
+  `benchmark::DoNotOptimize` fails the build under `-Werror`, because google
+  benchmark deprecates its `Tp const&` overload and a const lvalue can only
+  bind to it — non-const lvalues bind to the plain `Tp&` overload and pointers
+  to `Tp*`, neither deprecated. Nothing else in the file warns, so the error
+  reads like a mystery three lines at a time. Rule: benchmark locals passed to
+  `DoNotOptimize` are non-const lvalues (as every pre-existing row already
+  spells), or are passed by address.
 
 ## Where things stand
 
