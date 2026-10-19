@@ -2965,8 +2965,8 @@ index b7dfadef4..3281d8801 100644
 +        }
 +    }
 +    // MLA caches (DeepSeek/GLM indexers) hold no V stream: their page carries an empty V
-+    // payload and the CacheGen encoder emits no V records for it, so V tiles must not be
-+    // consumed. Fail closed if a page mixes layers with and without a V stream.
++    // payload and no V records, so V tiles must not be consumed. The mixed-stream check below
++    // is unreachable today (stage_import_kv_page rejects a V mismatch first) but stays fail-closed.
 +    const bool has_v_payload = desc.v_row_bytes != 0 || desc.v_element_bytes != 0;
 +    for (const auto * layer : selected) {
 +        const bool layer_has_v = layer->v_stream.size() > strm && layer->v_stream[strm] != nullptr;
