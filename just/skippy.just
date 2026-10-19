@@ -356,6 +356,28 @@ skippy-api-checkpoint message="" embed_model="" reranker_model="":
     git commit -m "$subject"
     git --no-pager log -1 --oneline
 
+# Every-frontier split verification: every stage boundary of a model, with
+# the terminal activation frame compared against the whole-model reference.
+# Cheap on small models (seconds); intended for pin bumps and model_support
+# patches, where frontier-local regressions historically slip past the canary.
+skippy-frontier-matrix model="" *ARGS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${1:-}" ]]; then
+      printf '%s\n' 'usage: just skippy-frontier-matrix <model.gguf> [--prompt TEXT] [--tolerance F] [--three-stage-stride N] [--json]' >&2
+      exit 1
+    fi
+    model="$1"; shift || true
+    # Shared llama/ggml libs stay in the Cargo build tree and the skippy-sys
+    # build script's rpath emission does not reach dependent examples, so Linux
+    # needs an explicit search path (macOS finds the dylibs via absolute
+    # install_name). First Linux run died on libllama.so.0 without this.
+    lib=$(find target/debug/build -name 'libllama.so.*' 2>/dev/null | head -n1)
+    if [ -n "$lib" ]; then
+        export LD_LIBRARY_PATH="$(dirname "$lib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+    cargo run --locked -p skippy --example every_frontier -- "$model" "$@"
+
 # End-to-end Rust tests: real GGUF through llama.cpp, no mocks.
 # skippy-api-rs-e2e <embed-model.gguf> <reranker-model.gguf> [cargo test args]
 [unix]

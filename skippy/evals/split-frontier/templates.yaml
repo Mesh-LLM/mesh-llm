@@ -1,0 +1,176 @@
+# Repository-owned Jianyang templates: every-frontier split verification.
+#
+# For one GGUF, `just skippy-frontier-matrix` proves the split-serving
+# invariant at every stage frontier: direct-prefill frontier activations at
+# every k, then 3-stage chains that deliver the frontier-a frame through a
+# real handover and must return the direct frame at b. Frontier-local defects
+# (misplaced graph helpers, dropped state halves, per-layer API drift) fail at
+# the exact boundary that introduced them — coverage the canary's fixed-shape
+# family rows do not provide. Results land in the mesh-llm Benchmarks series;
+# provisional on PR refs.
+
+version: 1
+
+templates:
+  - key: split-frontier-smoke
+    name: Split frontier smoke (every boundary, small dense model)
+    group: Benchmarks
+    priority: 20
+    # Self-contained build per template: a template-level build overrides the
+    # file-level one at sync, so the example never inherits a file-level build that
+    # targets the wrong product (the jianyang interim copy's file-level build runs
+    # `just release-host-build`, which dies on the fleet's older just — this example
+    # needs no just at all).
+    build: |
+      # KEEP THE MACHINE AWAKE FOR THE BUILD (Darwin only): a build this long dies on
+      # "no heartbeat for 300s" if the box sleeps mid-build. $$ is the top-level PID
+      # even in this subshell, so one caffeinate covers build and command.
+      if [ "$(uname -s)" = Darwin ] && command -v caffeinate >/dev/null 2>&1; then
+        caffeinate -dimsu -w $$ &
+        echo "holding this Mac awake for the build (caffeinate pid $!)"
+      fi
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd ${repo_dir}
+      if [[ ! -d skippy/skippy_api/.deps/llama.cpp/src/skippy ]]; then
+        scripts/prepare-llama.sh pinned
+      fi
+      case "$(uname -s)" in
+        Darwin) backend=metal ;;
+        Linux)  backend=cuda ;;
+        *)      backend=cpu ;;
+      esac
+      echo "building split-frontier example for backend: $backend"
+      (
+        cd skippy/skippy-api-rs
+        cargo build --locked -p skippy --example every_frontier --release
+      )
+    description: >
+      Full every-frontier matrix on SmolLM2-135M Q8_0 through the typed skippy_api
+      facade: every 2-stage frontier plus 3-stage handoff chains, terminal
+      activation compared bit-exact against direct prefill. Emits one JSON row
+      per check for the Benchmarks series.
+    labels:
+      job: split-frontier
+      profile: smoke
+    flags:
+      job: split-frontier
+      profile: smoke
+    env:
+      SKIPPY_TEST_REQUIRE_MODELS: "1"
+    models:
+      # Resolved on the node to the absolute GGUF path and exported as $SMOKE_MODEL —
+      # the input value itself is the hf: ref, which is not a path.
+      - ref: "${model}"
+        delivery: stream
+        env: SMOKE_MODEL
+    inputs:
+      - key: model
+        label: Model
+        kind: choice
+        default: 'hf:unsloth/SmolLM2-135M-Instruct-GGUF@9e6855bc4be717fca1ef21360a1db4b29d5c559a#SmolLM2-135M-Instruct-Q8_0.gguf'
+        choices:
+          - {label: SmolLM2 135M dense Q8_0, value: 'hf:unsloth/SmolLM2-135M-Instruct-GGUF@9e6855bc4be717fca1ef21360a1db4b29d5c559a#SmolLM2-135M-Instruct-Q8_0.gguf'}
+    command: |
+      export PATH="$HOME/.cargo/bin:$PATH"
+      cd ${repo_dir}/skippy/skippy-api-rs
+      # The example links shared llama/ggml from the Cargo build tree; Linux needs an
+      # explicit search path (macOS resolves the dylibs by absolute install_name).
+      lib=$(find target/release/build -name 'libllama.so.*' 2>/dev/null | head -n1)
+      if [ -n "$lib" ]; then
+        export LD_LIBRARY_PATH="$(dirname "$lib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      fi
+      SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
+        ./target/release/examples/every_frontier "$SMOKE_MODEL" --json
+    target:
+      executor: lab
+      nodes: [spark-james, spark-db08]
+    budget:
+      max_usd: 0
+      max_duration_s: 2700
+      grace_s: 60
+
+  - key: split-frontier-certify
+    name: Split frontier certify (dense + hybrid recurrent legs)
+    group: Benchmarks
+    priority: 20
+    # Self-contained build per template: a template-level build overrides the
+    # file-level one at sync, so the example never inherits a file-level build that
+    # targets the wrong product (the jianyang interim copy's file-level build runs
+    # `just release-host-build`, which dies on the fleet's older just — this example
+    # needs no just at all).
+    build: |
+      # KEEP THE MACHINE AWAKE FOR THE BUILD (Darwin only): a build this long dies on
+      # "no heartbeat for 300s" if the box sleeps mid-build. $$ is the top-level PID
+      # even in this subshell, so one caffeinate covers build and command.
+      if [ "$(uname -s)" = Darwin ] && command -v caffeinate >/dev/null 2>&1; then
+        caffeinate -dimsu -w $$ &
+        echo "holding this Mac awake for the build (caffeinate pid $!)"
+      fi
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd ${repo_dir}
+      if [[ ! -d skippy/skippy_api/.deps/llama.cpp/src/skippy ]]; then
+        scripts/prepare-llama.sh pinned
+      fi
+      case "$(uname -s)" in
+        Darwin) backend=metal ;;
+        Linux)  backend=cuda ;;
+        *)      backend=cpu ;;
+      esac
+      echo "building split-frontier example for backend: $backend"
+      (
+        cd skippy/skippy-api-rs
+        cargo build --locked -p skippy --example every_frontier --release
+      )
+    description: >
+      Every-frontier matrix on the dense smoke model plus the mandatory hybrid
+      leg (granite-4.0-h-350m): recurrent-state frontiers are the historical
+      failure class, and dense-only coverage misses them. For pin bumps and
+      model_support patches; both legs must be bit-exact before certification.
+    labels:
+      job: split-frontier
+      profile: certify
+    flags:
+      job: split-frontier
+      profile: certify
+    env:
+      SKIPPY_TEST_REQUIRE_MODELS: "1"
+    models:
+      - ref: "${model}"
+        delivery: stream
+        env: DENSE_MODEL
+      - ref: "${hybrid}"
+        delivery: stream
+        env: HYBRID_MODEL
+    inputs:
+      - key: model
+        label: Dense model
+        kind: choice
+        default: 'hf:unsloth/SmolLM2-135M-Instruct-GGUF@9e6855bc4be717fca1ef21360a1db4b29d5c559a#SmolLM2-135M-Instruct-Q8_0.gguf'
+        choices:
+          - {label: SmolLM2 135M dense Q8_0, value: 'hf:unsloth/SmolLM2-135M-Instruct-GGUF@9e6855bc4be717fca1ef21360a1db4b29d5c559a#SmolLM2-135M-Instruct-Q8_0.gguf'}
+      - key: hybrid
+        label: Hybrid model
+        kind: choice
+        default: 'hf:ibm-granite/granite-4.0-h-350m-GGUF@a864f823cce6e6048b5752e2816fe7a23987d790#granite-4.0-h-350m-Q4_K_M.gguf'
+        choices:
+          - {label: Granite 4.0 H 350M hybrid Q4_K_M, value: 'hf:ibm-granite/granite-4.0-h-350m-GGUF@a864f823cce6e6048b5752e2816fe7a23987d790#granite-4.0-h-350m-Q4_K_M.gguf'}
+    command: |
+      export PATH="$HOME/.cargo/bin:$PATH"
+      cd ${repo_dir}/skippy/skippy-api-rs
+      # The example links shared llama/ggml from the Cargo build tree; Linux needs an
+      # explicit search path (macOS resolves the dylibs by absolute install_name).
+      lib=$(find target/release/build -name 'libllama.so.*' 2>/dev/null | head -n1)
+      if [ -n "$lib" ]; then
+        export LD_LIBRARY_PATH="$(dirname "$lib")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      fi
+      SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
+        ./target/release/examples/every_frontier "$DENSE_MODEL" --json
+      SKIPPY_LLAMA_SOURCE_DIR="${repo_dir}/skippy/skippy_api/.deps/llama.cpp" \
+        ./target/release/examples/every_frontier "$HYBRID_MODEL" --json
+    target:
+      executor: lab
+      nodes: [spark-james, spark-db08]
+    budget:
+      max_usd: 0
+      max_duration_s: 3600
+      grace_s: 60
