@@ -24,6 +24,7 @@
 #include "normalize.h"
 #include "rerank.h"
 #include "runtime.h"
+#include "sampling_suppress.h"
 #include "stage_load.h"
 #include "stage_sink.h"
 #include "types.h"
@@ -666,6 +667,113 @@ template <bool UseFfi> void Normalize(benchmark::State& state) {
     }
 
     state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(dimensions));
+}
+
+// ---------------------------------------------------------------------------
+// Sampling suppression (patch 0012): a vocab's declared suppress tokens
+// override caller logit biases, and greedy selection skips them. No model is
+// needed — the suppress set is synthetic, sized like a real one.
+//   FFI: the loops a native caller writes by hand (find per candidate).
+//   API: the facade's policy helpers (bitmap, then one scan).
+// ---------------------------------------------------------------------------
+
+SKIPPY_NOINLINE std::vector<llama_logit_bias>
+suppress_merge_legacy(std::vector<llama_logit_bias> biases, const llama_token* suppress,
+                      std::int32_t count) {
+    if (suppress == nullptr || count <= 0) return biases;
+    const llama_token* suppress_end = suppress + count;
+    biases.erase(std::remove_if(biases.begin(), biases.end(),
+                                [=](const llama_logit_bias& bias) {
+                                    return std::find(suppress, suppress_end, bias.token) !=
+                                           suppress_end;
+                                }),
+                 biases.end());
+    for (const llama_token* token = suppress; token != suppress_end; ++token) {
+        biases.push_back({*token, -INFINITY});
+    }
+    return biases;
+}
+
+SKIPPY_NOINLINE llama_token suppress_greedy_legacy(const float* logits, std::int32_t n_vocab,
+                                                   const llama_token* suppress,
+                                                   std::int32_t count) {
+    llama_token best = LLAMA_TOKEN_NULL;
+    float best_logit = -std::numeric_limits<float>::infinity();
+    for (llama_token token = 0; token < n_vocab; ++token) {
+        if (suppress != nullptr && count > 0 &&
+            std::find(suppress, suppress + count, token) != suppress + count) {
+            continue;
+        }
+        if (best == LLAMA_TOKEN_NULL || logits[token] > best_logit) {
+            best_logit = logits[token];
+            best = token;
+        }
+    }
+    return best;
+}
+
+template <bool UseFfi> void SamplingSuppress(benchmark::State& state) {
+    const auto vocab_size = static_cast<std::int32_t>(state.range(0));
+    std::vector<float> logits(static_cast<std::size_t>(vocab_size));
+    for (std::int32_t token = 0; token < vocab_size; ++token) {
+        logits[static_cast<std::size_t>(token)] =
+            static_cast<float>((token * 7919) % 9973) / 9973.0F;
+    }
+    std::vector<llama_token> ffi_suppress;
+    std::vector<skippy::Token> api_suppress;
+    for (std::int32_t index = 0; index < 128; ++index) {
+        const auto token = static_cast<std::int32_t>((index * 5077 + 3) % vocab_size);
+        ffi_suppress.push_back(token);
+        api_suppress.push_back(skippy::Token{token});
+    }
+    std::vector<llama_logit_bias> ffi_biases;
+    std::vector<skippy::LogitBias> api_biases;
+    for (std::int32_t index = 0; index < 32; ++index) {
+        const auto token = static_cast<std::int32_t>((index * 613 + 5) % vocab_size);
+        ffi_biases.push_back({token, static_cast<float>(index)});
+        api_biases.push_back(
+            skippy::LogitBias{.token = skippy::Token{token}, .bias = static_cast<float>(index)});
+    }
+
+    // Gate on outputs first: both sides must merge identically and agree on
+    // the chosen token, or this row does not count.
+    const auto ffi_merged = suppress_merge_legacy(ffi_biases, ffi_suppress.data(),
+                                                  static_cast<std::int32_t>(ffi_suppress.size()));
+    const auto api_merged = skippy::apply_vocab_suppress(api_biases, api_suppress);
+    const auto ffi_best = suppress_greedy_legacy(logits.data(), vocab_size, ffi_suppress.data(),
+                                                 static_cast<std::int32_t>(ffi_suppress.size()));
+    const auto api_best = skippy::greedy_among_allowed(logits, api_suppress);
+    if (!api_best.has_value() || ffi_best != static_cast<std::int32_t>(*api_best) ||
+        ffi_merged.size() != api_merged.size()) {
+        state.SkipWithError("suppression policy disagrees between FFI and API");
+        return;
+    }
+    for (std::size_t index = 0; index < ffi_merged.size(); ++index) {
+        if (ffi_merged[index].token != static_cast<std::int32_t>(api_merged[index].token) ||
+            ffi_merged[index].bias != api_merged[index].bias) {
+            state.SkipWithError("suppression merge disagrees between FFI and API");
+            return;
+        }
+    }
+
+    for (auto _ : state) {
+        if constexpr (UseFfi) {
+            auto merged = suppress_merge_legacy(ffi_biases, ffi_suppress.data(),
+                                                static_cast<std::int32_t>(ffi_suppress.size()));
+            auto best = suppress_greedy_legacy(logits.data(), vocab_size, ffi_suppress.data(),
+                                               static_cast<std::int32_t>(ffi_suppress.size()));
+            benchmark::DoNotOptimize(merged.data());
+            benchmark::DoNotOptimize(best);
+        } else {
+            auto merged = skippy::apply_vocab_suppress(api_biases, api_suppress);
+            const auto best = skippy::greedy_among_allowed(logits, api_suppress);
+            benchmark::DoNotOptimize(merged.data());
+            benchmark::DoNotOptimize(&best);
+        }
+        benchmark::ClobberMemory();
+    }
+
+    state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(vocab_size));
 }
 
 // ---------------------------------------------------------------------------
@@ -1333,6 +1441,12 @@ BENCHMARK_TEMPLATE(BatchEmbed, false)
 
 BENCHMARK_TEMPLATE(RerankBatch, true)->Name("RerankBatch/FFI")->Arg(8)->UseRealTime();
 BENCHMARK_TEMPLATE(RerankBatch, false)->Name("RerankBatch/API")->Arg(8)->UseRealTime();
+
+BENCHMARK_TEMPLATE(SamplingSuppress, true)->Name("SamplingSuppress/FFI")->Arg(32000)->UseRealTime();
+BENCHMARK_TEMPLATE(SamplingSuppress, false)
+    ->Name("SamplingSuppress/API")
+    ->Arg(32000)
+    ->UseRealTime();
 
 BENCHMARK_TEMPLATE(ModelLoad, true)
     ->Name("ModelLoad/FFI")

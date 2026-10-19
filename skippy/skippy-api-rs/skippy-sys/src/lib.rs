@@ -254,6 +254,10 @@ pub mod ffi {
 
         fn workload(self: &Bridge, session: &Session) -> WorkloadResult;
 
+        /// The model's declared vocab suppress tokens (patch 0012); empty when
+        /// the GGUF declares none.
+        fn suppress_tokens(self: &Bridge, model: &Model) -> Vec<i32>;
+
         /// Replaces the contents of `tokens`.
         fn tokenize(self: Pin<&mut Bridge>, session: &Session, text: &str, tokens: &mut Vec<i32>) -> WorkloadStatus;
 

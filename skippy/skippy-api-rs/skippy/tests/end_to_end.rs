@@ -319,6 +319,24 @@ fn an_architecture_outside_the_family_table_is_not_a_reranker() {
 }
 
 // ---------------------------------------------------------------------------
+// Vocab suppress tokens (patch 0012): the declaration is a model fact, read
+// once at load and handed to the caller that owns sampling.
+// ---------------------------------------------------------------------------
+
+/// No local fixture declares `tokenizer.ggml.suppress_tokens`, and neither do
+/// most real GGUFs — the expected answer is an empty typed set, not an error
+/// or a sentinel id.
+#[test]
+fn a_model_without_declared_suppress_tokens_reports_an_empty_set() {
+    let Some((runtime, path)) = embedder() else {
+        return;
+    };
+    let model = runtime.load_model(&path).expect("load embedder");
+    let suppressed: Vec<Token> = model.suppress_tokens();
+    assert!(suppressed.is_empty(), "MiniLM declares no suppress tokens: {suppressed:?}");
+}
+
+// ---------------------------------------------------------------------------
 // Buffer contracts: what the caller's memory looks like afterwards.
 // Mirrors EmbedTest.NormalisesIntoTheCallerBufferAndReturnsAViewOfIt and
 // EmbedTest.ExactCapacityIsEnough.

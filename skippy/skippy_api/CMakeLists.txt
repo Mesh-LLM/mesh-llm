@@ -165,6 +165,7 @@ if(SKIPPY_API_BUILD_TESTS)
     tests/stage_chain_test.cpp
       tests/stage_load_test.cpp
       tests/workload_profile_test.cpp
+      tests/sampling_suppress_test.cpp
       tests/borrow_stress_test.cpp
       tests/inventory_parser_test.cpp
       tests/type_contracts_test.cpp

@@ -123,6 +123,10 @@ public:
 
     [[nodiscard]] WorkloadResult workload(const Session& session) const noexcept;
 
+    /// The model's declared vocab suppress tokens (patch 0012), as native ids.
+    /// Empty when the GGUF declares none.
+    [[nodiscard]] rust::Vec<std::int32_t> suppress_tokens(const Model& model) const noexcept;
+
     // Replaces the contents of `tokens`.
     [[nodiscard]] WorkloadStatus tokenize(const Session& session, rust::Str text,
                                           rust::Vec<std::int32_t>& tokens) noexcept;
