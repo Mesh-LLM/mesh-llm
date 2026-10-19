@@ -76,6 +76,10 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
 }
 pub(super) fn run(input: &Prepared, port: u16, concurrency: u32) -> DynResult<()> {
     ready(&input.root, port, &input.output)?;
+    // JY's macOS work directory exceeds sockaddr_un's 103-byte path limit
+    // after AgentX appends its temporary directory and ZMQ socket names.
+    // Own a short private directory until the supervised harness has stopped.
+    let ipc = ipc_directory()?;
     let executable = input.root.join("skippy/evals/agentx/.venv/bin/agentx");
     let mut spec = command::spec(
         &input.root,
@@ -89,6 +93,10 @@ pub(super) fn run(input: &Prepared, port: u16, concurrency: u32) -> DynResult<()
         "AIPERF_DATASET_MMAP_CACHE_ENABLED".into(),
         crate::process::Value::Public("false".into()),
     );
+    spec.environment.insert(
+        "TMPDIR".into(),
+        crate::process::Value::Public(ipc.path().as_os_str().to_owned()),
+    );
     command::run(
         &spec,
         if input.profile == Profile::Smoke {
@@ -98,6 +106,11 @@ pub(super) fn run(input: &Prepared, port: u16, concurrency: u32) -> DynResult<()
         },
         &input.output.join("agentx"),
     )
+}
+fn ipc_directory() -> DynResult<tempfile::TempDir> {
+    Ok(tempfile::Builder::new()
+        .prefix("agentx-")
+        .tempdir_in("/tmp")?)
 }
 fn ready(root: &Path, port: u16, output: &Path) -> DynResult<()> {
     let spec = command::spec(
@@ -129,6 +142,20 @@ fn ready(root: &Path, port: u16, output: &Path) -> DynResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn private_ipc_directory_fits_agentx_unix_socket_paths() {
+        let directory = ipc_directory().unwrap();
+        let path = directory.path().to_owned();
+        let socket = path.join("tmp01234567/aiperf/event_bus_proxy_frontend.ipc");
+        assert!(socket.as_os_str().as_encoded_bytes().len() < 103);
+        std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        drop(listener);
+        drop(directory);
+        assert!(!path.exists());
+    }
+
     #[test]
     fn smoke_changes_workload_size_without_shortening_context_or_outputs() {
         let models: Vec<super::super::Model> = serde_json::from_str(include_str!(
