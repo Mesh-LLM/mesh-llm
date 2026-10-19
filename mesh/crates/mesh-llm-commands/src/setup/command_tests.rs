@@ -192,6 +192,7 @@ async fn service_summary_reports_real_service_installation() {
         platform: SetupPlatform::MacOs,
         home_dir: temp.path().join("home"),
         config_root: temp.path().join("config"),
+        local_data_root: temp.path().join("local"),
         binary_path,
         user_id: "501".to_string(),
         start_service: false,

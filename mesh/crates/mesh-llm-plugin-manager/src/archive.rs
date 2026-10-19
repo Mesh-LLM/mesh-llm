@@ -28,6 +28,7 @@ pub struct ExtractedPluginArchive {
 pub fn extract_plugin_archive(
     archive_path: &Path,
     archive_ext: ArchiveExt,
+    executable_suffix: &str,
     plugin_name: &str,
     install_dir: &Path,
 ) -> Result<ExtractedPluginArchive> {
@@ -42,7 +43,7 @@ pub fn extract_plugin_archive(
     }
 
     let extracted_root = find_plugin_root(staging.path(), plugin_name)?;
-    validate_plugin_root(&extracted_root, plugin_name)?;
+    validate_plugin_root(&extracted_root, plugin_name, executable_suffix)?;
     let manifest = load_packaged_manifest(&extracted_root, plugin_name)?;
     let final_dir = install_dir.join(plugin_name);
     fs::create_dir_all(install_dir)
@@ -407,11 +408,15 @@ fn find_plugin_root(staging: &Path, plugin_name: &str) -> Result<PathBuf> {
     }
 }
 
-fn validate_plugin_root(plugin_dir: &Path, plugin_name: &str) -> Result<()> {
+fn validate_plugin_root(
+    plugin_dir: &Path,
+    plugin_name: &str,
+    executable_suffix: &str,
+) -> Result<()> {
     if !plugin_dir.join("plugin.toml").exists() {
         bail!("installed plugin is missing plugin.toml");
     }
-    let executable = plugin_dir.join(format!("{plugin_name}{}", std::env::consts::EXE_SUFFIX));
+    let executable = plugin_dir.join(format!("{plugin_name}{executable_suffix}"));
     if !executable.exists() {
         bail!(
             "installed plugin is missing executable {}",
@@ -578,14 +583,57 @@ mod tests {
         )
         .unwrap();
 
-        let err = extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-            .expect_err("archive without executable should fail validation");
+        let err = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect_err("archive without executable should fail validation");
 
         assert!(err.to_string().contains("missing executable"));
         assert_eq!(
             fs::read_to_string(existing.join("old-version.txt")).unwrap(),
             "keep me"
         );
+    }
+
+    #[test]
+    fn extraction_checks_for_the_executable_suffix_it_is_given() {
+        use crate::target::PluginTarget;
+
+        let windows = PluginTarget::from_os_arch("windows", "x86_64").unwrap();
+        let linux = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
+        for (target, executable, accepted) in [
+            (&windows, "demo.exe", true),
+            (&windows, "demo", false),
+            (&linux, "demo", true),
+            (&linux, "demo.exe", false),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let archive_path = temp.path().join("demo.tar.gz");
+            write_tar_gz(
+                &archive_path,
+                "demo",
+                &[("plugin.toml", b"name = \"demo\""), (executable, b"")],
+            )
+            .unwrap();
+
+            let result = extract_plugin_archive(
+                &archive_path,
+                ArchiveExt::TarGz,
+                target.executable_suffix(),
+                "demo",
+                &temp.path().join("installed"),
+            );
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "{} with {executable}: {result:?}",
+                target.triple()
+            );
+        }
     }
 
     #[test]
@@ -636,8 +684,14 @@ mod tests {
         )
         .unwrap();
 
-        let error = extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-            .expect_err("unsupported schema version should fail install-time extraction");
+        let error = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect_err("unsupported schema version should fail install-time extraction");
 
         assert!(error.to_string().contains("unsupported"));
     }
@@ -689,9 +743,14 @@ mod tests {
         )
         .unwrap();
 
-        let extracted =
-            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-                .expect("old packaged manifest without web_ui should still install");
+        let extracted = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect("old packaged manifest without web_ui should still install");
         let metadata = extracted.manifest.expect("packaged manifest should load");
 
         assert!(metadata.config_schema.is_some());
@@ -720,9 +779,14 @@ mod tests {
         )
         .unwrap();
 
-        let extracted =
-            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-                .expect("archive should extract");
+        let extracted = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect("archive should extract");
         let web_ui = extracted
             .manifest
             .and_then(|manifest| manifest.web_ui)
@@ -771,11 +835,17 @@ mod tests {
         entries.extend_from_slice(files);
         write_tar_gz(&archive_path, "demo", &entries).unwrap();
 
-        extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-            .expect("archive should extract")
-            .manifest
-            .and_then(|manifest| manifest.web_ui)
-            .expect("web UI metadata should be stored")
+        extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect("archive should extract")
+        .manifest
+        .and_then(|manifest| manifest.web_ui)
+        .expect("web UI metadata should be stored")
     }
 
     #[test]
@@ -852,9 +922,14 @@ mod tests {
         )
         .unwrap();
 
-        let extracted =
-            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-                .expect("missing web UI assets should not fail plugin installation");
+        let extracted = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect("missing web UI assets should not fail plugin installation");
         let web_ui = extracted
             .manifest
             .and_then(|manifest| manifest.web_ui)
@@ -893,9 +968,14 @@ mod tests {
         )
         .unwrap();
 
-        let extracted =
-            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-                .expect("missing web UI assets should not fail plugin install");
+        let extracted = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect("missing web UI assets should not fail plugin install");
         let web_ui = extracted
             .manifest
             .and_then(|manifest| manifest.web_ui)
@@ -928,9 +1008,14 @@ mod tests {
         )
         .unwrap();
 
-        let extracted =
-            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-                .expect("traversal web UI asset root should not fail plugin install");
+        let extracted = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect("traversal web UI asset root should not fail plugin install");
         let web_ui = extracted
             .manifest
             .and_then(|manifest| manifest.web_ui)
@@ -962,9 +1047,14 @@ mod tests {
         )
         .unwrap();
 
-        let extracted =
-            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-                .expect("remote web UI asset root should not fail plugin install");
+        let extracted = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect("remote web UI asset root should not fail plugin install");
         let web_ui = extracted
             .manifest
             .and_then(|manifest| manifest.web_ui)
@@ -1001,9 +1091,14 @@ mod tests {
         })
         .unwrap();
 
-        let extracted =
-            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-                .expect("symlink escape should be recorded as web UI invalidity");
+        let extracted = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect("symlink escape should be recorded as web UI invalidity");
         let web_ui = extracted
             .manifest
             .and_then(|manifest| manifest.web_ui)
@@ -1041,9 +1136,14 @@ mod tests {
         })
         .unwrap();
 
-        let extracted =
-            extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
-                .expect("entry-script symlink escape should mark only the web UI invalid");
+        let extracted = extract_plugin_archive(
+            &archive_path,
+            ArchiveExt::TarGz,
+            std::env::consts::EXE_SUFFIX,
+            "demo",
+            &install_dir,
+        )
+        .expect("entry-script symlink escape should mark only the web UI invalid");
         let web_ui = extracted
             .manifest
             .and_then(|manifest| manifest.web_ui)

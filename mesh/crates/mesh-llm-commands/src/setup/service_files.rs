@@ -106,6 +106,22 @@ pub(crate) fn write_service_runner(
     Ok(())
 }
 
+/// Writes the scheduled task definition as UTF-16LE with a byte order mark,
+/// the encoding its XML declaration names.
+pub(crate) fn write_windows_task_definition(path: &Path, xml: &str) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        anyhow!(
+            "scheduled task definition path has no parent: {}",
+            path.display()
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(xml.encode_utf16().flat_map(u16::to_le_bytes));
+    fs::write(path, bytes)?;
+    Ok(())
+}
+
 pub(crate) fn shell_quote(path: &Path) -> String {
     let escaped = path
         .to_string_lossy()
