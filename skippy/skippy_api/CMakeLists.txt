@@ -247,6 +247,10 @@ if(SKIPPY_API_BUILD_PLANNER_PROBE)
   target_compile_options(skippy_api_stage_pipeline_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+# The .clang-format file in this directory is the authoritative style. The
+# binary is whatever `clang-format` the build finds first on PATH; the check
+# targets echo its version so a disagreement between machines is visible in
+# the log instead of a mystery wrap diff.
 find_program(SKIPPY_CLANG_FORMAT_EXE NAMES clang-format)
 
 if(PROJECT_IS_TOP_LEVEL AND SKIPPY_CLANG_FORMAT_EXE)
@@ -261,11 +265,13 @@ if(PROJECT_IS_TOP_LEVEL AND SKIPPY_CLANG_FORMAT_EXE)
   )
 
   add_custom_target(format
+    COMMAND "${SKIPPY_CLANG_FORMAT_EXE}" --version
     COMMAND "${SKIPPY_CLANG_FORMAT_EXE}" -i ${SKIPPY_FORMAT_SOURCES}
     COMMENT "clang-format: rewriting sources"
     VERBATIM)
 
   add_custom_target(format-check
+    COMMAND "${SKIPPY_CLANG_FORMAT_EXE}" --version
     COMMAND "${SKIPPY_CLANG_FORMAT_EXE}" --dry-run --Werror ${SKIPPY_FORMAT_SOURCES}
     COMMENT "clang-format: checking sources"
     VERBATIM)

@@ -29,11 +29,23 @@ _AGGREGATES = ("_mean", "_median", "_stddev", "_cv")
 
 
 def load(path: Path) -> list[dict]:
-    with path.open() as handle:
-        document = json.load(handle)
+    try:
+        with path.open() as handle:
+            document = json.load(handle)
+    except json.JSONDecodeError as failure:
+        raise SystemExit(
+            f"{path}: not valid JSON ({failure.msg}); the benchmark either "
+            "crashed or --benchmark_filter matched no registered benchmark "
+            "(google benchmark writes no report at all in that case)"
+        ) from failure
     benchmarks = document.get("benchmarks")
     if benchmarks is None:
         raise SystemExit(f"{path}: no 'benchmarks' key; pass the JSON format output")
+    if not benchmarks:
+        raise SystemExit(
+            f"{path}: report contains zero benchmark rows; the filter matched "
+            "nothing (names registered with UseRealTime end in /real_time)"
+        )
     return benchmarks
 
 

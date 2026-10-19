@@ -327,9 +327,20 @@ skippy-api-verify embed_model="" reranker_model="" *ARGS="":
     just skippy-llama-api-tidy '*'
     printf '%s\n' '== C++ tests' >&2
     just skippy-llama-api-test
+    printf '%s\n' '== Rust fmt + clippy' >&2
+    just skippy-api-rs-lint
     printf '%s\n' '== Rust tests' >&2
     just skippy-api-rs-e2e "$embed" "$reranker"
     printf '%s\n' 'ok: skippy_api is ready to commit' >&2
+
+# Format and lint the Rust facade with the gates CI applies elsewhere.
+[unix]
+skippy-api-rs-lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd skippy/skippy-api-rs
+    RUSTC_WRAPPER= cargo fmt --all --check
+    RUSTC_WRAPPER= cargo clippy --workspace --all-targets -- -D warnings
 
 # Verify, stage the API sources, and commit. Message must be a Conventional Commit.
 [unix]
@@ -417,14 +428,28 @@ skippy-ab case="" model="":
         exit 1
     fi
     out=$(mktemp -t skippy-ab).json
-    SKIPPY_BENCH_MODEL={{ model }} \
+    log="${out%.json}.log"
+    if ! SKIPPY_BENCH_MODEL={{ model }} \
         ./target/skippy-llama-api-ffi-bench/skippy_api_ffi_benchmarks \
         --benchmark_filter="$filter" \
         --benchmark_min_time=0.3s --benchmark_repetitions=5 \
         --benchmark_enable_random_interleaving=true \
-        --benchmark_format=json --benchmark_out="$out" >/dev/null 2>&1
+        --benchmark_format=json --benchmark_out="$out" >"$log" 2>&1; then
+        echo "{{ case }}: benchmark exited non-zero; last output:" >&2
+        tail -20 "$log" >&2
+        exit 1
+    fi
+    # A filter that matches no registered benchmark leaves the report empty
+    # with exit 0 (google benchmark writes nothing in that case), so check
+    # before the comparison script sees it.
+    if [ ! -s "$out" ]; then
+        echo "{{ case }}: filter '$filter' matched no benchmark; report is empty" >&2
+        echo "  registered names ending in /real_time come from ->UseRealTime();" >&2
+        echo "  manifest filters must prefix-match, never \$-anchor" >&2
+        exit 1
+    fi
     python3 skippy/skippy_api/benchmarks/compare_benchmarks.py "$out" | sed "s/^/  /"
-    echo "{{ case }}: acceptance=$expected"
+    echo "{{ case }}: acceptance=$expected (benchmark output: $log)"
 
 # Run the old C ABI against the skippy_api facade on one model (model=<gguf>).
 [unix]

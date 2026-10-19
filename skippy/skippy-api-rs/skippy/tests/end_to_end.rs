@@ -60,11 +60,12 @@ fn a_chain_runs_every_stage_and_hands_back_a_terminal_frame() {
     let ranges = [(0_i32, 12_i32), (12, 24)];
     let mut chain = match runtime.open_chain(&path, &ranges) {
         Ok(chain) => chain,
+        // StageError has one variant today; no catch-all arm or it is
+        // unreachable and rustc rejects it under -D warnings.
         Err(StageError::Rejected(reason)) => {
             assert!(!reason.is_empty(), "a rejection must explain itself");
             return; // encoder models cannot install a stage program yet
         }
-        Err(other) => panic!("open_chain: {other:?}"),
     };
     assert_eq!(chain.stages(), 2);
 

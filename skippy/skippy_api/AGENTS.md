@@ -324,6 +324,24 @@ just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare 
 - **A benchmark row is only a comparison if both sides do the same work.** The
   materialise row read "2.8x slower" for two rounds because the reference loop
   skipped fields we were reading. Gate on outputs first.
+- **A `$`-anchored benchmark filter matches nothing, silently.** Names
+  registered with `->UseRealTime()` end in `/real_time` when the filter is
+  applied, but the JSON report drops the suffix — so the manifest rows looked
+  right against the report and still matched zero benchmarks. Symptom: google
+  benchmark exits 0 having written a 0-byte `--benchmark_out` file (it writes
+  no report at all when nothing matched), and the comparison script died on a
+  Python traceback that hid the cause. Rule: manifest filters prefix-match and
+  never `$`-anchor; `just skippy-ab` checks the report is non-empty and keeps
+  the benchmark log before parsing; `--benchmark_list_tests` shows the
+  registered names a filter really sees.
+- **A lint gate that is not in the verify recipe does not exist.** The Rust
+  facade compiled, tested and shipped with an unreachable match arm because
+  `skippy-api-verify` ran format/tidy/ctest/cargo test but no clippy or
+  `cargo fmt --check`. Rule: a new gate goes into the owning verify recipe in
+  the same change, or it will not run. `clang-format`'s version is echoed by
+  the format targets because two machines with different Homebrew LLVM
+  disagreed on one wrap; the `.clang-format` beside the sources is the
+  authority, and the check tells you which binary interpreted it.
 - **A span into a growing vector is a dangling pointer waiting to happen.**
   The arena commit took per-profile spans into the flat value vectors while
   later profiles were still appending, so profile 0's spans dangled the moment
