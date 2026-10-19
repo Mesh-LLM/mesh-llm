@@ -62,6 +62,8 @@ mod split_readiness;
 mod state;
 pub(crate) mod status;
 
+#[cfg(test)]
+use self::server::record_latest_version;
 pub(crate) use self::server::start_with_listener;
 #[cfg(test)]
 pub(crate) use self::server::{handle_request, is_ui_only_route};
@@ -256,6 +258,7 @@ impl MeshApi {
                 mesh_region: None,
                 mesh_max_clients: None,
                 latest_version: None,
+                update_check: true,
                 nostr_relays: nostr::DEFAULT_RELAYS
                     .iter()
                     .map(|s| s.to_string())
@@ -555,6 +558,10 @@ impl MeshApi {
 
     pub(super) async fn is_headless(&self) -> bool {
         self.inner.lock().await.headless
+    }
+
+    pub async fn set_update_check(&self, update_check: bool) {
+        self.inner.lock().await.update_check = update_check;
     }
 
     async fn runtime_status(&self) -> RuntimeStatusPayload {

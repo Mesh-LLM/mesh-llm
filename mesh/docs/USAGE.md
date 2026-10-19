@@ -476,7 +476,6 @@ max_bytes            = 0         # 0 = no explicit byte cap
 min_tokens           = 64
 shared_stride_tokens = 32        # stride for shared-prefix record matching
 shared_record_limit  = 4         # max retained shared-prefix records
-payload_mode         = "auto"    # resident-kv kv-recurrent full-state auto
 
 # Schema-reserved fields (accepted but not yet wired to runtime):
 # keep_tokens          = 256     # session prompt retention
@@ -583,7 +582,7 @@ spec_default               = "auto"          # bool or "auto"
 # Native MTP strategy override
 # strategy = "mtp"  # force native model MTP when available
 # strategy = "disabled"       # disable package/model native MTP
-# draft_max_tokens = 1        # MTP/draft max draft-token window (native MTP defaults to 1)
+# draft_max_tokens = 1        # MTP/draft max draft-token window (native MTP defaults to the package's prediction_depth, else 1)
 # draft_min_tokens = 0        # MTP/draft min draft-token window
 
 # Draft hardware (leave unset to share host model's device)

@@ -14,7 +14,7 @@ const PINS: [&str; 2] = [
     "skippy/llama_cpp/upstream.txt",
 ];
 const GRAMMAR: Grammar = Grammar {
-    usage: "repository selected-ref --ref REF --expected-origin URL --event workflow_dispatch [--repository PATH] [--upstream SHA] [--github-output PATH --summary PATH] [--timeout-secs SECONDS]",
+    usage: "repository selected-ref --ref REF --expected-origin URL --event workflow_dispatch [--repository PATH] [--upstream SHA] [--action certify|certify-and-publish] [--github-output PATH --summary PATH] [--timeout-secs SECONDS]",
     values: &[
         "--ref",
         "--expected-origin",
@@ -24,6 +24,7 @@ const GRAMMAR: Grammar = Grammar {
         "--github-output",
         "--summary",
         "--timeout-secs",
+        "--action",
     ],
     flags: &[],
 };
@@ -35,6 +36,7 @@ struct Selection {
     changed: &'static str,
     mode: &'static str,
     certify: &'static str,
+    publish_selected: bool,
 }
 fn sha(value: &str) -> bool {
     value.len() == 40
@@ -55,6 +57,11 @@ pub(crate) fn run(
         return Err("selected-ref accepts named inputs only".into());
     }
     let reference = parsed.last("--ref").ok_or("selected ref missing")?;
+    let publish_selected = match parsed.last("--action").unwrap_or("certify") {
+        "certify" => false,
+        "certify-and-publish" => true,
+        _ => return Err("selected action must be certify or certify-and-publish".into()),
+    };
     let expected = parsed
         .last("--expected-origin")
         .ok_or("expected same-repository origin missing")?;
@@ -90,7 +97,8 @@ pub(crate) fn run(
     )?;
     let result = resolve(&transaction, reference, expected);
     interrupt.finish()?;
-    let selected = result?;
+    let mut selected = result?;
+    selected.publish_selected = publish_selected;
     publish(
         &selected,
         parsed.last("--github-output"),
@@ -152,6 +160,7 @@ fn resolve(git: &git::Transaction<'_>, reference: &str, expected: &str) -> DynRe
         changed: "false",
         mode: "pinned-build",
         certify: "true",
+        publish_selected: false,
     })
 }
 fn selected_pin(git: &git::Transaction<'_>, source: &str) -> DynResult<String> {
@@ -198,12 +207,18 @@ fn publish(selected: &Selection, output: Option<&str>, summary: Option<&str>) ->
     match (output, summary) {
         (Some(output), Some(summary)) => {
             let values = format!(
-                "source={}\nmesh_source={}\nupstream={}\nchanged=false\nmode=pinned-build\ncertify=true\n",
-                selected.source, selected.mesh_source, selected.upstream
+                "source={}\nmesh_source={}\nupstream={}\nchanged=false\nmode=pinned-build\ncertify=true\npublish_selected={}\n",
+                selected.source, selected.mesh_source, selected.upstream, selected.publish_selected
             );
             let receipt = format!(
-                "Certify-only MeshLLM revision: `{}`\n\nExisting llama.cpp pin: `{}`\n",
-                selected.mesh_source, selected.upstream
+                "{} MeshLLM revision: `{}`\n\nExisting llama.cpp pin: `{}`\n",
+                if selected.publish_selected {
+                    "Certify and publish"
+                } else {
+                    "Certify-only"
+                },
+                selected.mesh_source,
+                selected.upstream
             );
             append(output, values.as_bytes())?;
             append(summary, receipt.as_bytes())?;

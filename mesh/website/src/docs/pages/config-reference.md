@@ -31,6 +31,7 @@ built-in runtime default.
 |---|---|
 | `MESH_LLM_CONFIG` | Full path to the config file, instead of `~/.mesh-llm/config.toml` |
 | `MESH_LLM_LIFECYCLE_LOG_PARSER` | Overrides `runtime.lifecycle_log_parser`; accepts `auto`, `enabled`, or `disabled` |
+| `MESH_LLM_NO_UPDATE_CHECK` | Overrides `updates.check`; `1` turns the release checks off, `0` on |
 | `MESH_LLM_JOIN` | Invite token for a private mesh; equivalent to one `--join` |
 | `MESH_LLM_JOIN_FILE` | Path to a file holding the invite token; equivalent to `--join-file`, and re-read on every rejoin attempt |
 
@@ -88,6 +89,7 @@ produces a clear startup error rather than a partial start.
 | `telemetry.prompt_shape_metrics` | boolean | `false` | node-level | process restart | wired; exports token-count histograms only when explicitly enabled | none |
 | `telemetry.metrics.endpoint` | URL | unset (falls back to `telemetry.endpoint`) | node-level | process restart | wired | none |
 | `analytics.enabled` | boolean | unset (anonymous usage reporting is on when an analytics key is available, compiled in or set at run time); `false` opts out permanently | node-level | process restart | wired | `mesh-llm analytics disable` |
+| `updates.check` | boolean | unset (mesh-llm checks for a newer release at startup and shows it as a notice and in the web console); `false` turns the checks off, e.g. for installs that a package manager updates | node-level | process restart | wired | none |
 | `logging.audit.enabled` | boolean | unset | node-level | process restart | wired | none |
 | `logging.audit.log_path` | path | unset | node-level | process restart | wired | none |
 | `logging.audit.log_format` | enum | `json_lines` | node-level | process restart | wired | none |
@@ -190,7 +192,6 @@ normal warnings in every mode.
 | `model_fit.prefix_cache.min_tokens` | integer | runtime default | both | model reload | wired | none |
 | `model_fit.prefix_cache.shared_stride_tokens` | integer | runtime default | both | model reload | wired | none |
 | `model_fit.prefix_cache.shared_record_limit` | integer | runtime default | both | model reload | wired | none |
-| `model_fit.prefix_cache.payload_mode` | enum | `resident-kv`, `kv-recurrent`, `full-state`, `auto` (default) | both | model reload | wired | none |
 | `model_fit.keep_tokens` | integer | unset | both | model reload | unwired | none |
 | `model_fit.context_shift` | bool-or-`auto` | `auto` | both | model reload | unwired | none |
 | `model_fit.swa_full` | boolean | unset | both | model reload | wired | none |

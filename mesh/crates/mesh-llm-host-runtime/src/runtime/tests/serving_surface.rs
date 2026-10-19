@@ -189,6 +189,7 @@ async fn build_run_auto_console_state(
             affinity_router: &affinity_router,
             control_tx: &control_tx,
             owner_key_path: &None,
+            update_check: true,
         },
     )
     .await

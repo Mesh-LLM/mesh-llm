@@ -128,7 +128,6 @@ To keep it enabled but set explicit bounds:
 ```toml
 [defaults.model_fit.prefix_cache]
 enabled = true
-payload_mode = "auto"
 min_tokens = 512
 max_entries = 256
 max_bytes = 8589934592
@@ -136,9 +135,10 @@ shared_stride_tokens = 128
 shared_record_limit = 4
 ```
 
-`payload_mode = "auto"` stores resident KV for known dense models and KV plus
-recurrent state for known recurrent or hybrid models. Unknown architectures do
-not cache automatically. The size fields are byte counts; `max_bytes = 0`
+Skippy selects complete cache contents from the loaded graph and native memory
+capabilities. Attention, recurrent, and other persistent state are runtime facts,
+not configuration settings. Models requiring other state use complete snapshots.
+The size fields are byte counts; `max_bytes = 0`
 means no explicit byte cap. Setting `prompt_cache = false` disables prefix
 caching and conflicts with an explicitly enabled `prefix_cache` block.
 

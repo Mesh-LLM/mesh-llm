@@ -6,6 +6,7 @@
 //! pricing, budgets, payment intents and settlement orchestration.
 #![forbid(unsafe_code)]
 
+pub mod buying;
 pub mod control;
 pub mod intent;
 pub mod ledger;

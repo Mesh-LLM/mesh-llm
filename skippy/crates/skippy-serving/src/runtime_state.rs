@@ -322,7 +322,7 @@ pub fn loaded_model_state_kind(
     })
 }
 
-/// Complete cache representations supported by the loaded native memory.
+/// Complete cache representations admitted by the loaded graph and native memory.
 pub fn loaded_memory_cache_capabilities(
     runtime: Option<&Arc<Mutex<RuntimeState>>>,
 ) -> Option<skippy_runtime::MemoryCacheCapabilities> {

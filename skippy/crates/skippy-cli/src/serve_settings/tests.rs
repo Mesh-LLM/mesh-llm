@@ -1,4 +1,23 @@
 use super::*;
+
+#[test]
+fn cache_representation_is_not_an_operator_setting() {
+    let args = ["skippy", "serve", "--model-path", "model.gguf"];
+    let mut retired = args.to_vec();
+    retired.extend(["--prefix-cache-payload", "resident-kv"]);
+    assert!(parse_with_environment(retired.into_iter().map(Into::into), |_| None).is_err());
+    for retired in [
+        "SKIPPY_SERVE_PREFIX_CACHE_PAYLOAD",
+        "SKIPPY_KV_CACHE_PAYLOAD",
+    ] {
+        let error = parse_with_environment(args.into_iter().map(Into::into), |name| {
+            (name == retired).then(|| "resident-kv".into())
+        })
+        .err()
+        .expect("retired environment override must fail");
+        assert!(error.to_string().contains("was removed"));
+    }
+}
 use crate::cli::Command;
 use skippy_protocol::StageConfig;
 

@@ -120,8 +120,18 @@ both evidence sets, and fails after both have had a chance to run.
 for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
-`llama-upstream-canary.yml` runs daily or on trusted-main dispatch. It freezes
-one main source SHA and the upstream target before any hardware work. All
+**Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
+one main source SHA and the upstream target before any hardware work. Default
+selection uses `repository llama-upstream-release` to resolve GitHub's latest
+published stable `ggml-org/llama.cpp` release, validate its `vMAJOR.MINOR.PATCH`
+tag, and peel annotated tags to an exact commit. It records the release and
+commit in the Actions summary and rejects lookup failures or tag movement
+without falling back to `master`. The hosted selection step alone receives
+the workflow's read-only GitHub token; the lookup has a 120-second total budget.
+An explicit full `upstream_sha` bypasses release lookup; empty or `latest` selects
+the stable release. `mesh_ref` skips upstream selection entirely and retains
+its existing-pin contract; publication requires explicit `mesh_action=certify-and-publish`. This selection policy does not replace our full
+upgrade certification or independent verification. All
 candidate builds compile native tests with `--build-only`, then the generated
 patch checker owns one full native CTest pass after patch equality and
 idempotence checks. The generator's own unit suite remains separate.
@@ -147,9 +157,18 @@ stops without invoking Goose and denies publication.
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
 or full commit SHA. Resolution freezes the SHA once, requires it to be reachable
 from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
-cannot be combined with this input. Keep the Actions workflow ref on `main`;
-selecting `mesh_ref` always runs a complete certify-only pass, without Goose,
-source repair, an independent upgrade-verification pass, or PR publication.
+cannot be combined with this input. Keep the Actions workflow ref on `main`.
+The default `mesh_action=certify` runs one complete pass without repair or
+publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
+fresh independent build and complete family pass on the same frozen commit.
+Only two green passes permit the hosted publisher to create a PR to `main`
+with that exact commit. Both modes keep its existing pin and never invoke Goose.
+The independent selected build admits the digest-bound first-pass package; each
+pass has separate build directories and evidence. Failed certification publishes
+no branch or PR. Publication refuses a selected revision with no diff from main's
+merge base. Closing an earlier PR and merging the replacement remain operator actions.
+The publisher explicitly checks `!cancelled()`, successful `resolve` and `result`
+jobs, and `publish=true`, so skipped optional repair attempts do not suppress it.
 The approved Rust source-plan API uses the current controller planner for every
 selected SHA; source build scripts and the battery remain selected-source code.
 Rust `gguf_metadata` yields `metadata_admitted`; other modes stay `pending`, with downgrade rejection.
@@ -162,11 +181,18 @@ reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
 Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
 
-To certify a recovered branch after this workflow is on main:
+To certify a recovered branch without publication:
 
 ```sh
 gh workflow run llama-upstream-canary.yml --ref main \
   -f mesh_ref=scammed/recover-llama-pin-35582541955
+```
+
+To independently certify and publish a trusted revision:
+
+```sh
+gh workflow run llama-upstream-canary.yml --ref main \
+  -f mesh_ref=FULL_MESH_COMMIT_SHA -f mesh_action=certify-and-publish
 ```
 
 The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;
@@ -198,10 +224,19 @@ closure built by `just skippy-workload-oracles-build`. Static Metal resources
 are embedded; an unpackaged non-system dylib makes the handoff fail. SHA-256
 digests bind all handoff bytes to the candidate, main base, run/attempt, and
 pass identity.
+The native generator defaults to 600 seconds per whole-source rewriter pass,
+independently of its 60-second Git command budget. `--timeout` overrides both.
+Both generation and idempotence remain required; deadline diagnostics retain
+readable child output and process cleanup status.
+
 The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
 in the repair session and trusted build; the per-case timeout remains 900 seconds.
 The build job prepares the locked canary Python SDK before its early Metal
 battery, so Nomic embedding uses the same interpreter as family workers.
+Non-chat certification starts the candidate through `skippy serve --model-path`
+and verifies oracle evidence against that same `skippy` executable. Its native
+fixture distinguishes API workload classes from causal decoder execution;
+OCR and speech frontends may legitimately warm a decoder.
 Goose's build and test commands use `scripts/llama-canary-log-command.sh` to
 stream output and retain separate invocation logs, exit statuses, and available
 CTest result files under the build job's 14-day repair evidence artifact.
@@ -246,6 +281,16 @@ compilation. Reconciliation retains valid candidate failures from the initial
 pass and emits automatic-repair input only when the remaining failures are
 proved candidate-class; it binds that evidence to the producer identity and
 exact candidate package.
+The memory receipt records admission and continuous guard outcomes separately
+from the battery exit. An admitted, guarded battery that exits with a failing
+family result is candidate-class; a failed admission, guard, cancellation, or
+cleanup remains infrastructure-class.
+Projector smokes request up to 256 tokens with reasoning disabled and require a
+parsed, user-visible image answer. Reasoning-only output and raw chat protocol
+markers fail the smoke, including for Muse-Glimmer's split stage.
+Hybrid and recurrent decoders synchronize an async backend graph before
+advancing to another internal microbatch. This preserves recurrent state
+ordering without moving model layers off the selected GPU.
 
 `cargo xtool automation family-battery-policy` validates the versioned JSON family policy
 before native compilation: the three core parity lanes for certified causal
@@ -503,6 +548,11 @@ by one-second waits; persistent locks fail cleanup and retain remaining state.
 Native tests cover bounded deletion and actual Windows handle locks; the latter
 require a Windows test host and are separate from local macOS validation.
 
+The shared SDK fixture reports installation, daemon and consumer exit and
+cleanup facts on session failure, without including captured output or rejection
+text in that summary. Its executable contracts distinguish consumer failure,
+nonzero daemon shutdown and forced daemon cleanup; all remain failed smokes.
+
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
 workflows remain fixed to GitHub-hosted runners; the PR entrypoints pass no
 repository secrets. The trusted main entrypoint may pass the optional
@@ -730,9 +780,21 @@ Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
 compiler probes, including callers that already disable GHA caching. An explicit
 directory is preserved; otherwise the action uses the job's runner temporary
 directory. Missing GHA endpoints retain the existing disk-only fallback.
-The action starts sccache on a unique short Unix socket and exports that endpoint
-for subsequent steps. It never stops the default host server. Canary toolchain
+The action eagerly starts sccache on a unique short Unix socket in both disk-only
+and remote-cache modes, before any parallel compiler clients, and exports that
+endpoint for subsequent steps. Remote cache configuration is preserved. It never
+stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
+
+Persistent macOS canary preflight, build, family and infrastructure-retry jobs
+run `setup-canary-runner` before `prepare-automation` with
+`runner-profile: preinstalled-macos`. Missing tools fail with their names and a
+runner-provisioning instruction. This profile skips Rust and Just installers,
+disables Rustup automatic toolchain installation, and selects the accelerator
+action's `tool-source: preinstalled` path, which checks Homebrew lld and sccache
+without installing either. Hosted profiles retain their existing installers.
+The build prepares controller automation before the locked Python SDK
+environment, so SDK source admission uses the initialized automation binary.
 
 ### A pinned digest is a frozen artifact
 
@@ -1329,7 +1391,7 @@ Split-certification roster generation now targets `skippy/crates/skippy-api/src/
 The release-bound recipe build script and admission checks move with this neutral
 owner; canary generation/check commands and enforcement policy are unchanged.
 
-The standalone command now lives in `skippy-cli` (binary `skippy`); `skippy-serving` is the Clap-free embedded service library. CLI source is included in Docker prechecks, affected-crate selection, split-serving ownership and the publish roster after its server dependency. Certification, benchmark, smoke and WAN lab launches use the new binary. `just skippy-cli-build` and `just skippy-cli-release-build` select the dynamic-runtime CLI.
+The standalone command now lives in `skippy-cli` (binary `skippy`); `skippy-serving` is the Clap-free embedded service library. CLI source is included in Docker prechecks, affected-crate selection, split-serving ownership and the publish roster after its server dependency. Certification, smoke and interactive launches use the new binary. `just skippy-cli-build` and `just skippy-cli-release-build` select the dynamic-runtime CLI.
 
 Mesh raw byte-stream interfaces and TCP/QUIC relay are owned by
 `mesh-llm-transport`, consumed by the host and client. The runtime-product
@@ -1443,7 +1505,7 @@ unchanged, including historical `mesh_ref` certification. Missing artifact sizes
 and peaks beyond the larger tier fail planning. No family is silently skipped.
 An optional source-owned `minimum_runner_memory_gib` value of 128 or 256 may
 promote an estimate-selected row but cannot demote it; plans without the field
-remain estimate-only. GLM-4.5-Air, Qwen4exp and Llama4 currently require the
+remain estimate-only. GLM-4.5-Air, Qwen4exp, Llama4 and MiniMax-M2 currently require the
 256-plus tier through this policy.
 
 The Rust canary source-plan placement owner uses the greater of pinned file sizes and
@@ -1465,8 +1527,9 @@ than reported as a family failure; the evidence records whether and how long the
 worker waited. Available memory is macOS free + inactive + speculative pages;
 purgeable pages are not counted twice. A reserve violation or monitoring failure
 stops only this family's process group and fails certification.
-`memory-admission.json` retains the estimate and host observations even on
-failure. Sampling cannot guarantee that instantaneous allocations never cross
+`memory-admission.json` retains the estimate, host observations, admission
+status, continuous guard status, and output capture status even when the battery exits nonzero.
+Sampling cannot guarantee that instantaneous allocations never cross
 the reserve. Unrelated workloads must leave enough headroom at admission;
 labels alone are insufficient.
 
@@ -1714,3 +1777,19 @@ The unused local `audit-depot-pr-isolation` implementation is removed. All 27
 protected callers still use their immutable published `ed07043` action, and the
 five published package resolvers retain their separate rollout boundary. Neither
 SDK extraction nor native trajectory input changes those authority checks.
+
+Standalone OpenAI, cache-reuse, and System One smokes now use `skippy serve
+--model-path` directly. The handmade `openai-smoke-config` command and System One
+stage serializer are removed. The server derives cache capabilities from its
+loaded native graph and memory; tests supply only public resource/cache budgets.
+Split parity continues to use native planner evidence and binary stage servers.
+
+Skippy benchmark retirement removes `skippy-bench` from current workspace and
+native crate lists, and removes its research-source preparation step from Rust
+test batches. The WAN Docker lab and its deployment contracts are retired.
+Metrics-server and interactive/debug recipes remain maintained. Frozen legacy
+planner fixtures continue to describe their historical workspace inputs.
+The protected ownership catalog retains its historical `skippy-bench` domain
+entries: PR admission requires byte-for-byte equality with main. Removing a
+workspace member does not require changing these domain mappings; catalog
+cleanup must follow the separate protected-catalog rollout procedure.

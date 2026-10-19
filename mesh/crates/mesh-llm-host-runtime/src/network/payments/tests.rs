@@ -13,8 +13,8 @@ use mesh_llm_payments::{
     pricing::Pricing,
     service::PaymentService,
     wallet::{Balance, PayError, PaymentStatus, Transaction, WalletProvider},
-    wire::{self, Frame},
 };
+use mesh_llm_payments_types::metered_wire::{self as wire, Frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
@@ -22,13 +22,13 @@ use crate::{
     mesh::{Node, NodeRole},
 };
 
-mod admission;
-mod expiry;
+mod compatibility;
+mod dispatch_ownership;
 mod forwarding;
 mod handoff;
-mod lifecycle;
-mod pre_authorization;
-mod review_regressions;
+mod metered;
+mod recovery;
+mod strikes;
 
 #[derive(Default)]
 struct Network {
@@ -38,18 +38,14 @@ struct Network {
     invoice_expiry_seconds: AtomicUsize,
     updates: tokio::sync::Notify,
     hold_payments: AtomicBool,
+    fail_next_payment: AtomicBool,
+    payment_failed: tokio::sync::Notify,
     payment_release: tokio::sync::Notify,
-    decoded_before_payment: AtomicBool,
-    backend_output_before_payment: AtomicBool,
-    invoice_delay_ms: AtomicUsize,
     /// When set, each node also loads a plugin that records every
     /// `payment.lifecycle.v1` message it is sent.
     record_lifecycle: AtomicBool,
     provider_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
     payer_lifecycle: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// The `exchange_id` of each `openai.exchange.v1` event the provider
-    /// published, so a test can join them to its lifecycle events.
-    provider_exchange_ids: Mutex<Vec<String>>,
 }
 
 /// A trusted local plugin that declares `payment.lifecycle.v1` and keeps
@@ -120,10 +116,6 @@ impl WalletProvider for TestWallet {
         Ok(Vec::new())
     }
     async fn create_invoice(&self, amount: Option<u64>, expiry_secs: u32) -> Result<Invoice> {
-        let delay = self.network.invoice_delay_ms.load(Ordering::SeqCst);
-        if delay > 0 {
-            tokio::time::sleep(Duration::from_millis(delay as u64)).await;
-        }
         let number = self.network.next.fetch_add(1, Ordering::SeqCst) + 1;
         let key = SecretKey::from_slice(&[7; 32])?;
         // The simulated wallet honours the host's expiry unless a test forces
@@ -181,6 +173,12 @@ impl WalletProvider for TestWallet {
     async fn pay(&self, invoice: &Invoice, amount: u64, cap: u64) -> Result<Transaction, PayError> {
         invoice.validate_payment(amount, mesh_llm_payments::now_ms())?;
         assert!(amount + 10 <= cap);
+        if self.network.fail_next_payment.swap(false, Ordering::SeqCst) {
+            self.network.payment_failed.notify_one();
+            return Err(PayError::Uncertain(anyhow::anyhow!(
+                "simulated lost submission"
+            )));
+        }
         while self.network.hold_payments.load(Ordering::SeqCst) {
             let released = self.network.payment_release.notified();
             tokio::pin!(released);
@@ -217,472 +215,6 @@ impl WalletProvider for TestWallet {
     }
 }
 
-async fn simulated_backend(
-    listener: tokio::net::TcpListener,
-    payments: Arc<Network>,
-    cancel_after_output: bool,
-    output_allowance: u32,
-) -> Result<()> {
-    let (mut stream, _) = listener.accept().await?;
-    let mut raw = vec![0; 16 * 1024];
-    let count = stream.read(&mut raw).await?;
-    let mut headers = [httparse::EMPTY_HEADER; 64];
-    let mut request = httparse::Request::new(&mut headers);
-    request.parse(&raw[..count])?;
-    let id = request
-        .headers
-        .iter()
-        .find(|h| h.name.eq_ignore_ascii_case("x-request-id"))
-        .unwrap();
-    let id = uuid::Uuid::parse_str(std::str::from_utf8(id.value)?)?;
-    let gate = skippy_serving::frontend::generation_gate::registered_for_test(*id.as_bytes())
-        .unwrap()
-        .unwrap();
-    let output_tokens = if output_allowance > 4096 { 5000 } else { 3 };
-    let generation_payments = payments.clone();
-    let generate = tokio::task::spawn_blocking(move || -> Result<()> {
-        // Payment starts after prefill, while decode is allowed to continue.
-        assert_eq!(generation_payments.payments.load(Ordering::SeqCst), 0);
-        gate.after_prefill(40, output_allowance)
-            .map_err(|_| anyhow::anyhow!("gate failed"))?;
-        if generation_payments.payments.load(Ordering::SeqCst) == 0 {
-            generation_payments
-                .decoded_before_payment
-                .store(true, Ordering::SeqCst);
-        }
-        for _ in 0..output_tokens {
-            gate.before_token()
-                .map_err(|_| anyhow::anyhow!("cancelled"))?;
-            gate.committed_token()
-                .map_err(|_| anyhow::anyhow!("commit failed"))?;
-        }
-        Ok(())
-    });
-    generate.await??;
-    if cancel_after_output {
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"text\":\"test output\"}],\"usage\":{\"completion_tokens\":3}}\n\n").await?;
-        // The provider must close generation when it receives payer cancellation.
-        let mut closed = [0; 1];
-        assert_eq!(stream.read(&mut closed).await?, 0);
-        return Ok(());
-    }
-    let body = serde_json::to_vec(&serde_json::json!({
-        "choices": [{"text": "test output"}],
-        "usage": {"prompt_tokens": 40, "completion_tokens": output_tokens, "total_tokens": 40 + output_tokens}
-    }))?;
-    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).as_bytes()).await?;
-    stream.write_all(&body).await?;
-    stream.shutdown().await?;
-    if payments.payments.load(Ordering::SeqCst) == 0 {
-        payments
-            .backend_output_before_payment
-            .store(true, Ordering::SeqCst);
-    }
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_two_quic_nodes_gate_decode_and_settle_actual_output() -> Result<()> {
-    tokio::time::timeout(
-        Duration::from_secs(20),
-        paid_exchange(false, false, Some(8), 8),
-    )
-    .await??;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_decode_runs_while_input_payment_is_pending_but_delivery_waits() -> Result<()> {
-    tokio::time::timeout(
-        Duration::from_secs(20),
-        paid_exchange(false, true, Some(8), 8),
-    )
-    .await??;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_cancellation_settles_transmitted_output() -> Result<()> {
-    tokio::time::timeout(
-        Duration::from_secs(20),
-        paid_exchange(true, false, Some(8), 8),
-    )
-    .await??;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_omitted_limit_uses_backend_context_and_settles_long_output() -> Result<()> {
-    tokio::time::timeout(
-        Duration::from_secs(20),
-        paid_exchange(false, false, None, 6000),
-    )
-    .await??;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_explicit_large_limit_can_be_clamped_to_context() -> Result<()> {
-    tokio::time::timeout(
-        Duration::from_secs(20),
-        paid_exchange(false, false, Some(65_536), 6000),
-    )
-    .await??;
-    Ok(())
-}
-
-// Backend generation (and EOF) completes while the input invoice is still
-// being created: the transport must keep waiting for it, not fail the request.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_backend_eof_during_slow_invoice_creation_still_settles() -> Result<()> {
-    let network = Arc::new(Network::default());
-    network.invoice_delay_ms.store(1_500, Ordering::SeqCst);
-    tokio::time::timeout(
-        Duration::from_secs(20),
-        paid_exchange_on(network.clone(), false, false, Some(8), 8),
-    )
-    .await??;
-    // The backend closed its response before any payment: the race was real.
-    assert!(network.backend_output_before_payment.load(Ordering::SeqCst));
-    Ok(())
-}
-
-async fn paid_exchange(
-    cancel_after_output: bool,
-    hold_input_payment: bool,
-    requested: Option<u32>,
-    output_allowance: u32,
-) -> Result<()> {
-    paid_exchange_on(
-        Arc::new(Network::default()),
-        cancel_after_output,
-        hold_input_payment,
-        requested,
-        output_allowance,
-    )
-    .await
-}
-
-async fn paid_exchange_on(
-    network: Arc<Network>,
-    cancel_after_output: bool,
-    hold_input_payment: bool,
-    requested: Option<u32>,
-    output_allowance: u32,
-) -> Result<()> {
-    let provider_dir = tempfile::tempdir()?;
-    let payer_dir = tempfile::tempdir()?;
-    network
-        .hold_payments
-        .store(hold_input_payment, Ordering::SeqCst);
-    let provider_service = Arc::new(PaymentService::with_provider(
-        provider_dir.path(),
-        Arc::new(TestWallet {
-            owner: 1,
-            network: network.clone(),
-        }),
-    )?);
-    let payer_service = Arc::new(PaymentService::with_provider(
-        payer_dir.path(),
-        Arc::new(TestWallet {
-            owner: 2,
-            network: network.clone(),
-        }),
-    )?);
-    allow_paid(&payer_service)?;
-    payer_service.ledger.set_policy(&Policy {
-        mode: ApprovalMode::Automatic,
-        daily_budget_msat: Some(20_000),
-    })?;
-    let price = Pricing {
-        input_msat_per_million: 1_000_000,
-        output_msat_per_million: 1_000_000,
-    };
-    provider_service.ledger.set_pricing("test", Some(&price))?;
-    let provider = Node::new_for_tests(NodeRole::Host { http_port: 0 }).await?;
-    provider
-        .payments
-        .set(provider_service.clone())
-        .map_err(|_| anyhow::anyhow!("service already initialized"))?;
-    crate::network::payments::node_ext::attach_payments_plugin_with(
-        &provider,
-        network.recorder("provider-lifecycle-recorder", &network.provider_lifecycle),
-    )
-    .await?;
-    let payer = Node::new_for_tests(NodeRole::Client).await?;
-    let payer_payments = super::client::Payments::attach_for_tests_with(
-        &payer,
-        payer_service.clone(),
-        network.recorder("payer-lifecycle-recorder", &network.payer_lifecycle),
-    )
-    .await?;
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let port = listener.local_addr()?.port();
-    let backend = tokio::spawn(simulated_backend(
-        listener,
-        network.clone(),
-        cancel_after_output,
-        output_allowance,
-    ));
-    let mut targets = ModelTargets::default();
-    targets
-        .targets
-        .insert("test".into(), vec![InferenceTarget::Local(port)]);
-    let provider_addr = provider.endpoint.addr();
-    let provider_id = provider_addr.id;
-    let serving_node = provider.clone();
-    let serving = tokio::spawn(async move {
-        let connection = serving_node.endpoint.accept().await.unwrap().await?;
-        let peer = connection.remote_id();
-        let (send, recv) = connection.accept_bi().await?;
-        let result = super::serve(serving_node, peer, recv, send, targets).await;
-        Ok::<_, anyhow::Error>((connection, result))
-    });
-    let connection = payer
-        .endpoint
-        .connect(provider_addr, crate::protocol::ALPN_V1)
-        .await?;
-    let (mut send, recv) = connection.open_bi().await?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let request = paid_request(requested)?;
-    // Before the request is sent, so the seller's events are recorded.
-    let provider_events =
-        crate::network::openai::paid_exchange::record_paid_exchanges_for_test(&provider);
-    let expected_request_digest =
-        crate::plugin::openai_exchange::request_body_digest(&request.body, None);
-    wire::write(
-        &mut send,
-        &Frame::Request {
-            id: id.clone(),
-            model: "test".into(),
-            pricing: price.clone(),
-            http: request.backend_http(&id)?,
-        },
-    )
-    .await?;
-    let (mut output, mut receiver) = tokio::io::duplex(4096);
-    let (ready, _ready_receiver) = tokio::sync::oneshot::channel();
-    let (cancel, cancellation) = tokio::sync::watch::channel(false);
-    let evidence = Some((payer.clone(), "host-evidence-id".to_owned()));
-    let exchange = tokio::spawn(async move {
-        let mut recv = recv;
-        let initial = wire::read(&mut recv).await?;
-        crate::network::openai::test_payment_exchange(
-            payer_payments,
-            provider_id,
-            id,
-            request,
-            price,
-            send,
-            recv,
-            initial,
-            &mut output,
-            ready,
-            cancellation,
-            evidence,
-        )
-        .await
-    });
-    release_held_payment_after_backend_output(hold_input_payment, &network, &mut receiver).await?;
-    let response = receive_and_cancel(&mut receiver, cancel_after_output, cancel).await?;
-    exchange.await??;
-    assert_payer_correlation(&payer_service)?;
-    assert!(response.contains("test output"));
-    let (_server_connection, result) = serving.await??;
-    result?;
-    backend.await??;
-    network.provider_exchange_ids.lock().unwrap().extend(
-        provider_events
-            .events()
-            .iter()
-            .map(|event| event.exchange_id.clone()),
-    );
-    let output_tokens = if output_allowance > 4096 { 5000 } else { 3 };
-    if !cancel_after_output {
-        assert_seller_published_the_exchange(
-            &provider_events.events(),
-            expected_request_digest.as_deref(),
-            &provider.id().to_string(),
-            &hex::encode(payer.id().as_bytes()),
-            output_tokens,
-        );
-    } else {
-        assert_seller_did_not_claim_a_served_exchange(&provider_events.events());
-    }
-    assert_settlement(&network, &payer_service, &provider_service, output_tokens)?;
-    assert_eq!(
-        payer_service.ledger.requests()?[0].terms.max_output_tokens,
-        u64::from(output_allowance)
-    );
-    payer.endpoint.close().await;
-    provider.endpoint.close().await;
-    Ok(())
-}
-
-/// A payer-cancelled exchange still ends with a terminal event, but never
-/// one claiming a served response: no status, usage or output digests.
-fn assert_seller_did_not_claim_a_served_exchange(
-    events: &[crate::plugin::openai_exchange::OpenAiExchangeEnvelope],
-) {
-    assert_eq!(events.len(), 2, "effective + terminal: {events:?}");
-    let terminal = &events[1];
-    assert_eq!(events[0].exchange_id, terminal.exchange_id);
-    let json = serde_json::to_value(terminal).unwrap();
-    assert_eq!(json["phase"], "terminal");
-    assert_eq!(terminal.status, None, "cancelled, not served: {json}");
-    for field in [
-        "usage",
-        "serving_provenance",
-        "response_digest",
-        "tool_calls_digest",
-    ] {
-        assert!(
-            json.get(field).is_none(),
-            "cancelled exchange carries {field}: {json}"
-        );
-    }
-}
-
-/// The seller's paid serving path publishes the same exchange events as the
-/// free path -- an effective and a terminal event under one exchange id, with
-/// this node's serving provenance, the payer's request digest, and the digests
-/// of the response it delivered -- so a subscribed plugin sees the paid
-/// exchange just as it sees a free one.
-fn assert_seller_published_the_exchange(
-    events: &[crate::plugin::openai_exchange::OpenAiExchangeEnvelope],
-    expected_request_digest: Option<&str>,
-    provider_node_id: &str,
-    payer_node_id: &str,
-    output_tokens: u64,
-) {
-    use crate::plugin::openai_exchange::{
-        ExchangeOutputDigests, OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope,
-    };
-    assert_eq!(
-        events.len(),
-        2,
-        "one effective + one terminal event: {events:?}"
-    );
-    let (effective, terminal) = (&events[0], &events[1]);
-    assert_eq!(effective.exchange_id, terminal.exchange_id);
-    let terminal_json = serde_json::to_value(terminal).unwrap();
-    assert_eq!(terminal_json["phase"], "terminal");
-    assert_eq!(terminal.status, Some(200));
-    assert!(expected_request_digest.is_some());
-    assert_eq!(terminal.request_digest.as_deref(), expected_request_digest);
-    // The same construction the free relay uses on the body it delivered.
-    let body = serde_json::json!({
-        "choices": [{"text": "test output"}],
-        "usage": {"prompt_tokens": 40, "completion_tokens": output_tokens, "total_tokens": 40 + output_tokens}
-    });
-    let expected = OpenAiExchangeEnvelope::terminal(
-        String::new(),
-        OpenAiExchangeDispatchPath::RawProxy,
-        "test",
-        Some(200),
-        None,
-        None,
-    )
-    .with_output_digests(ExchangeOutputDigests::from_response_body(
-        &serde_json::to_vec(&body).unwrap(),
-    ));
-    assert!(expected.response_digest.is_some());
-    assert_eq!(terminal.response_digest, expected.response_digest);
-    let provenance = terminal
-        .serving_provenance
-        .as_ref()
-        .expect("served here, so this node's serving provenance is attached");
-    assert_eq!(provenance.served_by_node_id, provider_node_id);
-    // The node that asked, from the payments stream's authenticated remote
-    // id: without it the serving node has no one to give its record to.
-    assert_eq!(
-        provenance.requested_by_node_id.as_deref(),
-        Some(payer_node_id)
-    );
-}
-
-fn paid_request(max_tokens: Option<u32>) -> Result<super::request::PaidRequest> {
-    let mut body = serde_json::json!({"model": "test", "prompt": "Hi"});
-    if let Some(limit) = max_tokens {
-        body["max_tokens"] = limit.into();
-    }
-    super::request::PaidRequest::parse(
-        format!("POST /v1/completions HTTP/1.1\r\n\r\n{body}").as_bytes(),
-    )
-}
-
-async fn wait_for_backend_output_before_payment(network: &Network) -> Result<()> {
-    while !network.backend_output_before_payment.load(Ordering::SeqCst) {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(
-        network.decoded_before_payment.load(Ordering::SeqCst),
-        "decode did not start while payment was pending"
-    );
-    assert_eq!(network.payments.load(Ordering::SeqCst), 0);
-    Ok(())
-}
-
-async fn release_held_payment_after_backend_output(
-    held: bool,
-    network: &Network,
-    receiver: &mut tokio::io::DuplexStream,
-) -> Result<()> {
-    if !held {
-        return Ok(());
-    }
-    wait_for_backend_output_before_payment(network).await?;
-    let mut byte = [0; 1];
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), receiver.read(&mut byte))
-            .await
-            .is_err(),
-        "provider released output before receiving payment"
-    );
-    network.hold_payments.store(false, Ordering::SeqCst);
-    network.payment_release.notify_waiters();
-    Ok(())
-}
-
-async fn receive_and_cancel(
-    receiver: &mut tokio::io::DuplexStream,
-    cancel_after_output: bool,
-    cancel: tokio::sync::watch::Sender<bool>,
-) -> Result<String> {
-    let mut response = String::new();
-    if cancel_after_output {
-        let mut bytes = [0; 4096];
-        while !response.contains("completion_tokens\":3") {
-            let count = receiver.read(&mut bytes).await?;
-            anyhow::ensure!(count > 0, "output closed before cancellation point");
-            response.push_str(std::str::from_utf8(&bytes[..count])?);
-        }
-        cancel.send(true)?;
-    }
-    receiver.read_to_string(&mut response).await?;
-    Ok(response)
-}
-
-fn assert_settlement(
-    network: &Network,
-    payer_service: &PaymentService,
-    provider_service: &PaymentService,
-    output_tokens: u64,
-) -> Result<()> {
-    assert_eq!(network.payments.load(Ordering::SeqCst), 2);
-    let requests = payer_service.ledger.requests()?;
-    assert_eq!(requests[0].state, "completed");
-    assert_eq!(requests[0].spent_msat, 40 + output_tokens + 20);
-    assert!(
-        provider_service
-            .ledger
-            .receivables(None)?
-            .iter()
-            .all(|r| r.paid)
-    );
-    Ok(())
-}
-
 fn allow_paid(service: &PaymentService) -> Result<()> {
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
@@ -690,10 +222,228 @@ fn allow_paid(service: &PaymentService) -> Result<()> {
     })
 }
 
-fn assert_payer_correlation(service: &PaymentService) -> Result<()> {
-    assert_eq!(
-        service.ledger.requests()?[0].terms.exchange_id.as_deref(),
-        Some("host-evidence-id")
-    );
-    Ok(())
+fn price() -> Pricing {
+    Pricing {
+        input_msat_per_million: 100_000_000,
+        output_msat_per_million: 100_000_000,
+        cache_discount_percent: 0,
+    }
+}
+
+/// A seller and a buyer node on one simulated Lightning network, each with
+/// its own ledger and the in-process `payments.v1` plugin attached, with the
+/// buyer holding a cached connection to the seller.
+struct Pair {
+    _seller_dir: tempfile::TempDir,
+    _buyer_dir: tempfile::TempDir,
+    seller: Arc<PaymentService>,
+    buyer: Arc<PaymentService>,
+    seller_node: Node,
+    buyer_node: Node,
+}
+
+impl Pair {
+    async fn new(network: Arc<Network>) -> Result<Self> {
+        let seller_dir = tempfile::tempdir()?;
+        let buyer_dir = tempfile::tempdir()?;
+        let seller = Arc::new(PaymentService::with_provider(
+            seller_dir.path(),
+            Arc::new(TestWallet {
+                owner: 1,
+                network: network.clone(),
+            }),
+        )?);
+        let buyer = Arc::new(PaymentService::with_provider(
+            buyer_dir.path(),
+            Arc::new(TestWallet {
+                owner: 2,
+                network: network.clone(),
+            }),
+        )?);
+        allow_paid(&buyer)?;
+        seller.ledger.set_pricing("test", Some(&price()))?;
+        let seller_node = Node::new_for_tests(NodeRole::Host { http_port: 0 }).await?;
+        seller_node
+            .payments
+            .set(seller.clone())
+            .map_err(|_| anyhow::anyhow!("already set"))?;
+        crate::network::payments::node_ext::attach_payments_plugin_with(
+            &seller_node,
+            network.recorder("provider-lifecycle-recorder", &network.provider_lifecycle),
+        )
+        .await?;
+        let buyer_node = Node::new_for_tests(NodeRole::Client).await?;
+        // Keep node-local payment state (the payee blocklist) in the fixture.
+        *buyer_node.config_state.lock().await =
+            crate::runtime::config_state::ConfigState::load(&buyer_dir.path().join("config.toml"))?;
+        buyer_node
+            .payments
+            .set(buyer.clone())
+            .map_err(|_| anyhow::anyhow!("already set"))?;
+        crate::network::payments::node_ext::attach_payments_plugin_with(
+            &buyer_node,
+            network.recorder("payer-lifecycle-recorder", &network.payer_lifecycle),
+        )
+        .await?;
+        let mut announcement = seller_node
+            .build_local_announcement(seller_node.snapshot_local_announcement_data().await);
+        announcement.lightning_offers.insert("test".into(), price());
+        buyer_node
+            .add_peer_after_direct_requirements_validated(
+                seller_node.id(),
+                seller_node.endpoint.addr(),
+                &announcement,
+                Some(1),
+            )
+            .await;
+        Ok(Self {
+            _seller_dir: seller_dir,
+            _buyer_dir: buyer_dir,
+            seller,
+            buyer,
+            seller_node,
+            buyer_node,
+        })
+    }
+
+    /// Accept `count` metered exchanges on the seller, served from `targets`.
+    fn serve(&self, targets: ModelTargets, count: usize) -> ServingTask {
+        let node = self.seller_node.clone();
+        tokio::spawn(async move {
+            let connection = node.endpoint.accept().await.unwrap().await?;
+            for _ in 0..count {
+                let (send, mut recv) = accept_tunnel(&connection).await?;
+                let mut prefix = vec![0; wire::HTTP_UPGRADE.len()];
+                recv.read_exact(&mut prefix).await?;
+                anyhow::ensure!(prefix == wire::HTTP_UPGRADE, "not a metered upgrade");
+                let _ = super::serve(
+                    node.clone(),
+                    connection.remote_id(),
+                    recv,
+                    send,
+                    targets.clone(),
+                )
+                .await;
+            }
+            Ok(connection)
+        })
+    }
+
+    async fn connect(&self) -> Result<()> {
+        let connection = self
+            .buyer_node
+            .endpoint
+            .connect(self.seller_node.endpoint.addr(), crate::protocol::ALPN_V1)
+            .await?;
+        self.buyer_node
+            .state
+            .lock()
+            .await
+            .connections
+            .insert(self.seller_node.id(), connection);
+        Ok(())
+    }
+
+    /// Start one paid request as the buyer and return its response body
+    /// after the exchange's HTTP side ends.
+    async fn request(&self, raw: &[u8], exchange_id: Option<&str>) -> Result<String> {
+        let (mut pipe, ready, _cancel) = crate::network::openai::test_metered_start(
+            &self.buyer_node,
+            self.seller_node.id(),
+            raw,
+            price(),
+            exchange_id,
+        )
+        .await?;
+        ready.await?;
+        let mut response = String::new();
+        pipe.read_to_string(&mut response).await?;
+        Ok(response)
+    }
+
+    async fn wait_completed(&self, count: usize) -> Result<()> {
+        loop {
+            let completed = self
+                .buyer
+                .ledger
+                .requests()?
+                .iter()
+                .filter(|r| r.state == "completed")
+                .count();
+            if completed == count {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    async fn close(self) {
+        let buyer = Arc::downgrade(&self.buyer);
+        let seller = Arc::downgrade(&self.seller);
+        for node in [&self.buyer_node, &self.seller_node] {
+            node.shutdown_control_listener().await;
+            if let Some(manager) = node.take_plugin_manager().await {
+                manager.shutdown().await;
+            }
+            node.endpoint.close().await;
+        }
+        drop(self);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while buyer.upgrade().is_some() || seller.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("payment fixture leaked its service after close");
+    }
+}
+
+type ServingTask = tokio::task::JoinHandle<Result<iroh::endpoint::Connection>>;
+
+async fn accept_tunnel(
+    connection: &iroh::endpoint::Connection,
+) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+    loop {
+        let (send, mut recv) = connection.accept_bi().await?;
+        if recv.read_u8().await? == crate::protocol::STREAM_TUNNEL_HTTP {
+            return Ok((send, recv));
+        }
+        // Peer announcements may open a gossip stream before the HTTP tunnel.
+        drop(send);
+        drop(recv);
+    }
+}
+
+fn local_targets(port: u16) -> ModelTargets {
+    let mut targets = ModelTargets::default();
+    targets
+        .targets
+        .insert("test".into(), vec![InferenceTarget::Local(port)]);
+    targets
+}
+
+/// Read one HTTP request off `stream`, asserting it is a metered backend
+/// request, and return its JSON body.
+async fn read_backend_request(stream: &mut tokio::net::TcpStream) -> Result<serde_json::Value> {
+    let mut raw = Vec::new();
+    let mut byte = [0_u8; 1];
+    loop {
+        anyhow::ensure!(stream.read(&mut byte).await? == 1, "request truncated");
+        raw.extend(byte);
+        let mut headers = [httparse::EMPTY_HEADER; 64];
+        let mut request = httparse::Request::new(&mut headers);
+        if let httparse::Status::Complete(offset) = request.parse(&raw)? {
+            let length = match request
+                .headers
+                .iter()
+                .find(|header| header.name.eq_ignore_ascii_case("content-length"))
+            {
+                Some(header) => std::str::from_utf8(header.value)?.parse::<usize>()?,
+                None => 0,
+            };
+            if raw.len() == offset + length {
+                return Ok(serde_json::from_slice(&raw[offset..])?);
+            }
+        }
+    }
 }

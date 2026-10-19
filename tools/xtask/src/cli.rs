@@ -15,7 +15,6 @@ pub(crate) fn print_usage() {
     );
     println!("  cargo xtool automation endpoint-model-discovery --help");
     println!("  cargo xtool automation wan-observation --help");
-    println!("  cargo xtool automation wan-stage-deployment --help");
     println!("  cargo xtool automation system-one-cases --help");
     println!("  cargo xtool automation system-one-smoke --help");
     println!("  cargo xtool automation decisions-smoke --help");
@@ -23,7 +22,6 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool automation workload-monolithic-oracle --help");
     println!("  cargo xtool automation workload-media-oracle --help");
     println!("  cargo xtool automation workload-tts-oracle --help");
-    println!("  cargo xtool automation openai-smoke-config cache --help");
     println!(
         "  cargo xtool automation agent-fixture-inputs {{sha256 FILE | soak MODEL TARGET_CHARS OUTPUT | surface MODEL OUTPUT | coding-setup ROOT | coding-verify ROOT INITIAL_SHA256 ABSOLUTE_JUST ABSOLUTE_RUSTC}}"
     );
@@ -45,12 +43,6 @@ pub(crate) fn print_usage() {
         "  cargo xtool automation family-battery-policy --cache ROOT MANIFEST PLAN CACHE_ROOT"
     );
     println!("  cargo xtool automation family-battery-policy --inspect-gguf PATH");
-    println!(
-        "  cargo xtool automation openai-smoke-config --output PATH --model-id ID --model-path PATH --layer-end N --ctx-size N"
-    );
-    println!(
-        "  cargo xtool automation workload-smoke-config --output PATH --model-id ID --model-path PATH --model-sha256 SHA --layer-end N --n-gpu-layers N [--projector-path PATH]"
-    );
     println!("  cargo xtool prepared-input swift-api-checksum LIBRARY GENERATED_SWIFT");
     println!(
         "  cargo xtool automation smoke-inputs <product-root> <binary-name> <expected-backend>"
@@ -85,6 +77,9 @@ pub(crate) fn print_usage() {
     println!("  {}", crate::automation::split_evidence::USAGE);
     println!("  cargo xtool native package-source-version {{workspace|abi}} SOURCE (experimental)");
     println!("  cargo xtool repository cargo-target-directory < cargo-metadata.json");
+    println!(
+        "  cargo xtool repository llama-upstream-release [--upstream SHA] [--github-output PATH --summary PATH]"
+    );
     println!(
         "  cargo xtool repository publish-order [--dependency-pairs | --selected-script PATH [--source-root ROOT]] < cargo-metadata.json"
     );
@@ -134,13 +129,10 @@ pub(crate) enum CliCommand<'a> {
     LocalPorts(&'a [String]),
     ManualSmoke(&'a [String]),
     OpenaiCacheMatrix(&'a [String]),
-    OpenaiSmokeConfig(&'a [String]),
-    WorkloadSmokeConfig(&'a [String]),
     SmokeInputs(&'a [String]),
     WorkloadSmoke(&'a [String]),
     Stability(&'a [String]),
     WanObservation(&'a [String]),
-    WanStageDeployment(&'a [String]),
     SystemOneCases(&'a [String]),
     SystemOneSmoke(&'a [String]),
     DecisionsSmoke(&'a [String]),
@@ -207,6 +199,7 @@ pub(crate) enum RepositoryCheck {
     ConventionalCommits,
     EnvMutationCensus,
     LlamaUpstreamPin,
+    LlamaUpstreamRelease,
     SelectedRef,
     DockerPrecheck,
 }
@@ -356,16 +349,6 @@ impl<'a> Cli<'a> {
             [domain, scope, rest @ ..] if domain == "automation" && scope == "manual-smoke" => {
                 CliCommand::ManualSmoke(rest)
             }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "openai-smoke-config" =>
-            {
-                CliCommand::OpenaiSmokeConfig(rest)
-            }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "workload-smoke-config" =>
-            {
-                CliCommand::WorkloadSmokeConfig(rest)
-            }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "laya" => {
                 CliCommand::Laya(rest)
             }
@@ -388,11 +371,6 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "system-one-smoke" => {
                 CliCommand::SystemOneSmoke(rest)
-            }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "wan-stage-deployment" =>
-            {
-                CliCommand::WanStageDeployment(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "wan-observation" => {
                 CliCommand::WanObservation(rest)
@@ -596,6 +574,7 @@ impl<'a> Cli<'a> {
                     "conventional-commits" => RepositoryCheck::ConventionalCommits,
                     "env-mutation-census" => RepositoryCheck::EnvMutationCensus,
                     "llama-upstream-pin" => RepositoryCheck::LlamaUpstreamPin,
+                    "llama-upstream-release" => RepositoryCheck::LlamaUpstreamRelease,
                     "selected-ref" => RepositoryCheck::SelectedRef,
                     "docker-precheck" => RepositoryCheck::DockerPrecheck,
                     _ => return Err(USAGE.into()),

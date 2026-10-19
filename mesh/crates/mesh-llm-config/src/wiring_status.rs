@@ -190,6 +190,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "updates.check",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "telemetry.service_name",
         status: WiringStatus::Wired,
         owner: "n/a",
@@ -693,13 +700,6 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "model_fit.prefix_cache.shared_record_limit",
-        status: WiringStatus::Wired,
-        owner: "n/a",
-        reason: "",
-        behavior: WiringBehavior::None,
-    },
-    WiringEntry {
-        path: "model_fit.prefix_cache.payload_mode",
         status: WiringStatus::Wired,
         owner: "n/a",
         reason: "",

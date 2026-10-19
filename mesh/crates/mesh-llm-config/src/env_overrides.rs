@@ -6,6 +6,8 @@ use crate::{LifecycleLogParserMode, MeshConfig};
 
 pub const MESH_LLM_LIFECYCLE_LOG_PARSER_ENV: &str = "MESH_LLM_LIFECYCLE_LOG_PARSER";
 pub const MESH_LLM_CONFIG_ENV: &str = "MESH_LLM_CONFIG";
+/// Overrides `updates.check`: `1` turns the release checks off, `0` on.
+pub const MESH_LLM_NO_UPDATE_CHECK_ENV: &str = "MESH_LLM_NO_UPDATE_CHECK";
 /// Hidden, undocumented, TEST-ONLY gate -- see [`benchmark_tune_trial_enabled`].
 pub const MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV: &str = "MESH_LLM_BENCHMARK_TUNE_TRIAL";
 /// Hidden, undocumented, TEST-ONLY selector -- see [`event_system_trial_mode`].
@@ -23,6 +25,7 @@ pub const MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV: &str = "MESH_LLM_EVENT_SYSTEM_TR
 pub const CONFIG_OVERRIDE_ENV_NAMES: &[&str] = &[
     MESH_LLM_CONFIG_ENV,
     MESH_LLM_LIFECYCLE_LOG_PARSER_ENV,
+    MESH_LLM_NO_UPDATE_CHECK_ENV,
     MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV,
     MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV,
 ];
@@ -88,17 +91,34 @@ pub(crate) fn config_path_override() -> Option<std::path::PathBuf> {
 /// value.
 pub fn apply_env_overrides(config: &mut MeshConfig) -> Result<()> {
     let environment = std::env::var_os(MESH_LLM_LIFECYCLE_LOG_PARSER_ENV);
-    if environment.is_none() {
-        return Ok(());
+    if environment.is_some() {
+        let selection = resolve_lifecycle_log_parser_override(
+            config.runtime.lifecycle_log_parser,
+            config.runtime.lifecycle_log_parser_source,
+            environment.as_deref(),
+        )?;
+        config.runtime.lifecycle_log_parser = selection.mode;
+        config.runtime.lifecycle_log_parser_source = selection.source;
     }
-    let selection = resolve_lifecycle_log_parser_override(
-        config.runtime.lifecycle_log_parser,
-        config.runtime.lifecycle_log_parser_source,
-        environment.as_deref(),
-    )?;
-    config.runtime.lifecycle_log_parser = selection.mode;
-    config.runtime.lifecycle_log_parser_source = selection.source;
+    if let Some(check) =
+        resolve_no_update_check_override(std::env::var_os(MESH_LLM_NO_UPDATE_CHECK_ENV).as_deref())?
+    {
+        config.updates.check_override = Some(check);
+    }
     Ok(())
+}
+
+/// The `updates.check` value [`MESH_LLM_NO_UPDATE_CHECK_ENV`] sets, if any.
+/// Only `1` and `0` are accepted.
+pub fn resolve_no_update_check_override(environment: Option<&OsStr>) -> Result<Option<bool>> {
+    let Some(environment) = environment else {
+        return Ok(None);
+    };
+    match environment.to_str() {
+        Some("1") => Ok(Some(false)),
+        Some("0") => Ok(Some(true)),
+        _ => bail!("invalid {MESH_LLM_NO_UPDATE_CHECK_ENV}; expected 1 or 0"),
+    }
 }
 
 /// Hidden, undocumented, TEST-ONLY gate. This is NOT a user-facing config
@@ -334,10 +354,46 @@ mod tests {
             &[
                 "MESH_LLM_CONFIG",
                 "MESH_LLM_LIFECYCLE_LOG_PARSER",
+                "MESH_LLM_NO_UPDATE_CHECK",
                 "MESH_LLM_BENCHMARK_TUNE_TRIAL",
                 "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE"
             ]
         );
+    }
+
+    #[test]
+    fn no_update_check_accepts_only_one_or_zero() {
+        assert_eq!(resolve_no_update_check_override(None).unwrap(), None);
+        assert_eq!(
+            resolve_no_update_check_override(Some(OsStr::new("1"))).unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            resolve_no_update_check_override(Some(OsStr::new("0"))).unwrap(),
+            Some(true)
+        );
+        for value in ["", "true", "yes"] {
+            assert!(
+                resolve_no_update_check_override(Some(OsStr::new(value))).is_err(),
+                "{value:?} must be rejected, never silently defaulted"
+            );
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn no_update_check_overrides_the_config_both_ways() {
+        let mut config: MeshConfig = toml::from_str("[updates]\ncheck = false\n").unwrap();
+        with_env_override_for_test(MESH_LLM_NO_UPDATE_CHECK_ENV, "0", || {
+            apply_env_overrides(&mut config).unwrap();
+        });
+        assert!(config.updates.check_enabled());
+
+        let mut config = MeshConfig::default();
+        with_env_override_for_test(MESH_LLM_NO_UPDATE_CHECK_ENV, "1", || {
+            apply_env_overrides(&mut config).unwrap();
+        });
+        assert!(!config.updates.check_enabled());
     }
 
     #[test]

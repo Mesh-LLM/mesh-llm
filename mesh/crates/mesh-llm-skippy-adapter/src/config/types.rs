@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use skippy_protocol::{
-    FlashAttentionType, StageKvCacheCodec, StageKvCacheMode, StageKvCachePayload,
-};
+use skippy_protocol::{FlashAttentionType, StageKvCacheCodec, StageKvCacheMode};
 use skippy_runtime::package::PackageGenerationInfo;
 use skippy_serving::SpeculativeDecodeConfig;
 
@@ -159,7 +157,6 @@ pub enum ResolvedStageKvCache {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedStageKvCacheTemplate {
     pub mode: StageKvCacheMode,
-    pub payload: StageKvCachePayload,
     pub max_entries: Option<usize>,
     pub max_bytes: Option<u64>,
     pub min_tokens: Option<u64>,

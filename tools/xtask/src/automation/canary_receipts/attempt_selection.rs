@@ -16,12 +16,12 @@ use input::{Job, JobOutputs, JobResult};
 const INPUT_LIMIT: usize = 1024 * 1024;
 const LINE_LIMIT: usize = 4096;
 const ATTEMPT: Grammar = Grammar {
-    usage: "cargo xtool automation canary-receipts select-attempt --changed <true|false> --repair-json <job> --verification-json <job>",
+    usage: "cargo xtool automation canary-receipts select-attempt --changed <true|false> --repair-json <job> --verification-json <job> [--publish-selected]",
     values: &["--changed", "--repair-json", "--verification-json"],
-    flags: &["--help"],
+    flags: &["--help", "--publish-selected"],
 };
 const FINAL: Grammar = Grammar {
-    usage: "cargo xtool automation canary-receipts select-final --certify <true|false> --changed <true|false> --mesh-source <sha-or-empty> --preflight <result> --attempts-json <needs>",
+    usage: "cargo xtool automation canary-receipts select-final --certify <true|false> --changed <true|false> --mesh-source <sha-or-empty> --preflight <result> --attempts-json <needs> [--publish-selected]",
     values: &[
         "--certify",
         "--changed",
@@ -29,7 +29,7 @@ const FINAL: Grammar = Grammar {
         "--preflight",
         "--attempts-json",
     ],
-    flags: &["--help"],
+    flags: &["--help", "--publish-selected"],
 };
 
 pub(super) fn run_attempt(args: &[String]) -> DynResult<()> {
@@ -39,7 +39,12 @@ pub(super) fn run_attempt(args: &[String]) -> DynResult<()> {
         let verification: Job = decode(required(args, "--verification-json")?)?;
         repair.validate()?;
         verification.validate()?;
-        Ok(select_attempt(changed, &repair, &verification)?.outputs())
+        Ok(select_attempt(
+            changed || args.flag("--publish-selected"),
+            &repair,
+            &verification,
+        )?
+        .outputs())
     })
 }
 
@@ -53,7 +58,15 @@ pub(super) fn run_final(args: &[String]) -> DynResult<()> {
         }
         let preflight = JobResult::parse(required(args, "--preflight")?)?;
         let attempts = decode(required(args, "--attempts-json")?)?;
-        Ok(select_final(certify, changed, source, preflight, &attempts)?.outputs())
+        Ok(select_final(
+            certify,
+            changed,
+            source,
+            preflight,
+            &attempts,
+            args.flag("--publish-selected"),
+        )?
+        .outputs())
     })
 }
 
@@ -141,8 +154,14 @@ fn select_final(
     mesh_source: &str,
     preflight: JobResult,
     attempts: &input::Attempts,
+    publish_selected: bool,
 ) -> DynResult<FinalDecision> {
     attempts.validate_slots()?;
+    if publish_selected && (!certify || changed || mesh_source.is_empty()) {
+        return Err(
+            "selected publication requires unchanged explicit selected-source certification".into(),
+        );
+    }
     if !certify {
         return Ok(FinalDecision::Noop);
     }
@@ -165,11 +184,18 @@ fn select_final(
         return Err("green attempt has contradictory selection outputs".into());
     }
     let candidate = decision::Candidate::from_outputs(&selected.outputs)?;
+    if publish_selected && attempts.selected_verification()? != candidate {
+        return Err("selected publication does not match the independent verifier".into());
+    }
     if !mesh_source.is_empty() {
         if changed || candidate.head != mesh_source {
             return Err("selected MeshLLM revision certification failed".into());
         }
-        return Ok(FinalDecision::Certified);
+        return Ok(if publish_selected {
+            FinalDecision::Publish(candidate)
+        } else {
+            FinalDecision::Certified
+        });
     }
     Ok(if changed {
         FinalDecision::Publish(candidate)

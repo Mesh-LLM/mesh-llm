@@ -834,6 +834,8 @@ impl StageSession {
     /// Verifies a frame-backed speculative window.
     ///
     /// Retire the exact checkpoint after full acceptance, or trim after rejection.
+    /// A returned MTP draft follows the same anchoring rule as
+    /// [`Self::verify_tokens_sampled_mtp`].
     pub fn verify_tokens_frame_sampled(
         &mut self,
         token_ids: &[i32],
@@ -863,11 +865,12 @@ impl StageSession {
     }
 
     /// Verifies a speculative span in one batched forward and returns both the
-    /// target predictions and the MTP draft produced at the final row.
+    /// target predictions and an MTP draft.
     ///
-    /// The draft describes the branch that was just verified, so it is only
-    /// meaningful when the caller accepts the whole span. Callers that trim
-    /// after a mismatch must discard it.
+    /// The draft continues after the last row whose input held: the final row
+    /// when every proposal was accepted, otherwise the first row whose
+    /// prediction rejected the next proposal. It is valid for a caller that
+    /// commits exactly the accepted prefix plus that row's prediction.
     ///
     /// Call [`crate::StageSession::retire_verify_checkpoint`] after full
     /// acceptance, or [`crate::StageSession::trim_session`] after a rejection.

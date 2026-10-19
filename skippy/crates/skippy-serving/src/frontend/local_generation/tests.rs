@@ -25,9 +25,7 @@ use crate::runtime_state::{RuntimeState, load_runtime};
 use crate::telemetry::{Telemetry, TelemetryLevel};
 use anyhow::{Result, bail};
 use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
-use skippy_protocol::{
-    LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-};
+use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
 // The real-model tests below are deliberately ignored by default. The
@@ -229,7 +227,6 @@ fn recurrent_test_backend(
         kv_cache: Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::KvRecurrent,
             max_entries: 8,
             max_bytes: 0,
             l2_max_bytes: 0,
@@ -247,9 +244,10 @@ fn recurrent_test_backend(
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
-    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)?
-        .map(Arc::new)
-        .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
+    let kv =
+        KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Recurrent)?
+            .map(Arc::new)
+            .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
     let iteration_scheduler =

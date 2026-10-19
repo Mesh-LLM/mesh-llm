@@ -135,3 +135,43 @@ fn final_selection_cli_accepts_real_needs_projection_and_uses_latest_verified_sl
     assert_eq!(document["identity"], "c".repeat(64));
     assert!(bytes.ends_with("publish=true\n"));
 }
+
+#[test]
+fn selected_publication_cli_requires_explicit_action_and_both_complete_passes() {
+    let mut repair = green("success");
+    repair["outputs"]["identity"] = json!("d".repeat(64));
+    let valid =
+        json!({"attempt_1":green("success"), "repair_1":repair, "verify_1":green("success")});
+    for publish in [false, true] {
+        for failed in [false, true] {
+            let mut input = valid.clone();
+            if failed {
+                input["verify_1"] = json!({"result":"failure","outputs":{}});
+            }
+            let mut args = final_args(input);
+            args[4] = "false".into();
+            args[6] = "a".repeat(40);
+            if publish {
+                args.push("--publish-selected".into());
+            }
+            let (output, bytes) = invoke(&args);
+            if publish && failed {
+                assert!(!output.status.success(), "{output:?}");
+                assert_eq!(bytes, "prior=preserved\n");
+            } else {
+                assert!(output.status.success(), "{output:?}");
+                assert!(bytes.ends_with(if publish {
+                    "publish=true\n"
+                } else {
+                    "publish=false\n"
+                }));
+            }
+        }
+    }
+    let mut args = attempt_args(green("success"), json!({"result":"skipped","outputs":{}}));
+    args[2] = "false".into();
+    args.push("--publish-selected".into());
+    let (output, bytes) = invoke(&args);
+    assert!(output.status.success(), "{output:?}");
+    assert!(bytes.contains("state=failed"));
+}

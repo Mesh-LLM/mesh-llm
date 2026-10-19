@@ -6,7 +6,7 @@ on:
         type: string
         required: true
       mesh_source:
-        description: Frozen trusted MeshLLM commit for certify-only mode
+        description: Frozen trusted MeshLLM commit for unchanged certification passes
         type: string
         default: ''
       upstream:
@@ -98,15 +98,16 @@ jobs:
       - uses: ./.github/actions/setup-canary-runner
         with:
           require-agent: ${{ inputs.mode == 'repair-build' }}
-      - uses: ./.github/actions/setup-canary-python
       - name: Prepare protected controller automation
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
+          runner-profile: preinstalled-macos
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
+      - uses: ./.github/actions/setup-canary-python
       - uses: ./.github/actions/use-canary-cache
       - name: Download previous candidate
         if: inputs.previous_package != ''
@@ -290,12 +291,14 @@ jobs:
           path: canary-source
           fetch-depth: 0
           persist-credentials: false
+      - uses: ./.github/actions/setup-canary-runner
       - name: Prepare frozen controller automation for verify-only restore
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
+          runner-profile: preinstalled-macos
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache
@@ -464,12 +467,14 @@ jobs:
           path: canary-source
           fetch-depth: 0
           persist-credentials: false
+      - uses: ./.github/actions/setup-canary-runner
       - name: Prepare frozen controller automation for retry cache admission
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
+          runner-profile: preinstalled-macos
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache

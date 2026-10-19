@@ -124,7 +124,7 @@
     },
     {
       "domain": "native-abi",
-      "slices": ["static-abi", "runtime-product", "product-smoke", "rust-tests"]
+      "slices": ["static-abi", "runtime-product", "product-smoke", "rust-tests", "platform-checks"]
     },
     {
       "domain": "protocol",
@@ -196,7 +196,8 @@
   "platform-macos": ["macos-portable", "macos-unit"],
     "platform-windows": ["windows-portable", "windows-unit"],
     "platform-windows-storage": ["windows-log-store"],
-    "platform-windows-cfg": ["windows-unit"]
+    "platform-windows-cfg": ["windows-unit"],
+    "native-abi": ["windows-skippy-probes"]
   },
   "sdk_domain_rows": {
     "sdk-rust": ["rust"],
@@ -219,7 +220,8 @@
   {"id": "macos-unit", "platform": "macos", "architecture": "arm64", "runner_role": "macos-build", "kind": "unit"},
     {"id": "windows-portable", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "portable"},
     {"id": "windows-unit", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "unit"},
-    {"id": "windows-log-store", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "log-store"}
+    {"id": "windows-log-store", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "log-store"},
+    {"id": "windows-skippy-probes", "platform": "windows", "architecture": "amd64", "runner_role": "windows-build", "kind": "skippy-probes", "ctest_parallel": 1, "timeout_minutes": 150}
   ],
   "sdk_rows": [
     {"id": "rust", "language": "rust", "platform": "linux", "architecture": "amd64", "runner_role": "linux-build-4"},

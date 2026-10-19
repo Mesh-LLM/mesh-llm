@@ -63,6 +63,7 @@ mod startup_handles;
 mod startup_identity;
 mod startup_models;
 mod startup_retry;
+mod startup_update_check;
 mod status;
 pub(crate) mod survey;
 #[cfg(test)]
