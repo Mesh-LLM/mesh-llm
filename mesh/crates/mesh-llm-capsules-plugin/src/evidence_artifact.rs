@@ -787,7 +787,10 @@ fn check_record_set(
 
 /// Whether a record body is one the index files under a `correlation` or
 /// `exchange` subject: a JSON object, not padding, that carries the
-/// identifier or cites the half.
+/// identifier or cites the half. It mirrors this plugin's own index, so it
+/// holds only for answers from plugin peers (the one live caller is
+/// `mesh_evidence_bridge`); -00 §3 does not yet define what "carries" means
+/// for other responders.
 fn record_fits(subject: &Subject, body: &[u8]) -> bool {
     let Some(record) = serde_json::from_slice::<Value>(body)
         .ok()
