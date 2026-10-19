@@ -4,10 +4,15 @@ import {
   AUDIO_MAX_BYTES,
   FILE_MAX_BYTES,
   IMAGE_MAX_BYTES,
+  adjustPasteRange,
+  applyPasteEffects,
+  applyPasteRestore,
   getAttachmentSendIssue,
+  pasteRestoreBaseOffset,
   resolveImageFile,
   sniffImageType,
-  validateAttachmentFile
+  validateAttachmentFile,
+  type PasteRestoreEffect
 } from '@/lib/attachments'
 
 const PNG_HEADER = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
@@ -150,5 +155,53 @@ describe('resolveImageFile', () => {
     } as unknown as File
 
     await expect(resolveImageFile(unreadable)).resolves.toBe(unreadable)
+  })
+})
+
+describe('paste restoration ranges', () => {
+  it('places concurrent caret pastes in the middle of a prompt back to back', () => {
+    // Two suppressed pastes captured at the same caret before either
+    // resolves: the second must land after the first, not at the end.
+    const base = 'Hello world'
+    const first: PasteRestoreEffect = { start: 5, end: 5, text: 'FIRST' }
+    const secondRange = adjustPasteRange({ start: 5, end: 5 }, [first])
+
+    expect(secondRange).toEqual({ start: 10, end: 10 })
+    expect(applyPasteRestore(applyPasteRestore(base, { start: 5, end: 5 }, 'FIRST'), secondRange, 'SECOND')).toBe(
+      'HelloFIRSTSECOND world'
+    )
+  })
+
+  it('shifts a later range when an earlier paste replaced a selection before it', () => {
+    const earlier: PasteRestoreEffect = { start: 0, end: 5, text: 'Howdy' }
+
+    expect(adjustPasteRange({ start: 6, end: 11 }, [earlier])).toEqual({ start: 6, end: 11 })
+    expect(adjustPasteRange({ start: 0, end: 5 }, [earlier])).toEqual({ start: 5, end: 5 })
+    expect(applyPasteEffects('Hello world', [{ ...earlier, skipped: true }])).toBe('Hello world')
+  })
+
+  it('collapses a range that overlapped an earlier replacement onto the inserted text', () => {
+    const earlier: PasteRestoreEffect = { start: 6, end: 11, text: 'there' }
+
+    expect(adjustPasteRange({ start: 8, end: 11 }, [earlier])).toEqual({ start: 11, end: 11 })
+  })
+
+  it('reports how many queued effects a captured value already contains', () => {
+    const effects: PasteRestoreEffect[] = [
+      { start: 5, end: 5, text: 'FIRST' },
+      { start: 10, end: 10, text: 'SECOND' }
+    ]
+
+    expect(pasteRestoreBaseOffset('Hello world', 'Hello world', effects)).toBe(0)
+    expect(pasteRestoreBaseOffset('HelloFIRST world', 'Hello world', effects)).toBe(1)
+    expect(pasteRestoreBaseOffset('HelloFIRSTSECOND world', 'Hello world', effects)).toBe(2)
+    expect(pasteRestoreBaseOffset('edited', 'Hello world', effects)).toBe(-1)
+  })
+
+  it('treats a skipped effect as if it never existed', () => {
+    const skipped: PasteRestoreEffect = { start: 5, end: 5, text: 'FIRST', skipped: true }
+
+    expect(adjustPasteRange({ start: 5, end: 5 }, [skipped])).toEqual({ start: 5, end: 5 })
+    expect(pasteRestoreBaseOffset('Hello world', 'Hello world', [skipped])).toBe(0)
   })
 })

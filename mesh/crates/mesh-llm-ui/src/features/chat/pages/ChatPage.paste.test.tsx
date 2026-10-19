@@ -316,4 +316,132 @@ describe('ChatPage composer paste', () => {
     })
     expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
   })
+
+  it('places concurrent restorations at the caret in the middle of a nonempty prompt', async () => {
+    const user = userEvent.setup()
+    const { resolveImageFiles } = await import('@/lib/attachments')
+    let releaseFirst!: (files: File[]) => void
+    let releaseSecond!: (files: File[]) => void
+    vi.mocked(resolveImageFiles)
+      .mockImplementationOnce(
+        () =>
+          new Promise<File[]>((resolve) => {
+            releaseFirst = resolve
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<File[]>((resolve) => {
+            releaseSecond = resolve
+          })
+      )
+
+    renderChatPage({ mode: 'live' })
+    const prompt = screen.getByLabelText('Prompt')
+    await user.type(prompt, 'Hello world')
+    ;(prompt as HTMLTextAreaElement).setSelectionRange(5, 5)
+
+    const first = new File(['%PDF-1.7'], 'one.pdf', { type: '' })
+    fireEvent.paste(prompt, {
+      clipboardData: { files: [first], getData: (type: string) => (type === 'text/plain' ? 'FIRST' : '') }
+    })
+    const second = new File(['%PDF-2.7'], 'two.pdf', { type: '' })
+    fireEvent.paste(prompt, {
+      clipboardData: { files: [second], getData: (type: string) => (type === 'text/plain' ? 'SECOND' : '') }
+    })
+
+    // Both detections resolve after both captures; the restorations must
+    // land back to back at the caret, in paste order, regardless of the
+    // resolution order.
+    await act(async () => {
+      releaseSecond([second])
+      releaseFirst([first])
+    })
+
+    await waitFor(() => {
+      expect(prompt).toHaveValue('HelloFIRSTSECOND world')
+    })
+    expect(screen.queryByTestId('composer-attachments')).not.toBeInTheDocument()
+  })
+
+  it('blocks sending while an undetermined paste detection is still running', async () => {
+    const { resolveImageFiles } = await import('@/lib/attachments')
+    let releaseSniff!: (files: File[]) => void
+    vi.mocked(resolveImageFiles).mockImplementationOnce(
+      () =>
+        new Promise<File[]>((resolve) => {
+          releaseSniff = resolve
+        })
+    )
+
+    renderChatPage({ mode: 'live' })
+    const prompt = screen.getByLabelText('Prompt')
+    await userEvent.type(prompt, 'Describe this')
+
+    fireEvent.paste(prompt, {
+      clipboardData: {
+        files: [new File(['%PDF-1.7'], 'doc.pdf', { type: '' })],
+        getData: () => ''
+      }
+    })
+
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+
+    releaseSniff([new File(['%PDF-1.7'], 'doc.pdf', { type: '' })])
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+    })
+  })
+
+  it('keeps a queued restoration from shifting later pastes when it becomes an image', async () => {
+    const { resolveImageFiles } = await import('@/lib/attachments')
+    let releaseFirst!: (files: File[]) => void
+    let releaseSecond!: (files: File[]) => void
+    const firstFile = new File(['%PDF-1.7'], 'one.pdf', { type: '' })
+    const imageFile = new File([new Uint8Array(PNG_MAGIC_BYTES)], 'shot.png', { type: 'image/png' })
+    vi.mocked(resolveImageFiles)
+      .mockImplementationOnce(
+        () =>
+          new Promise<File[]>((resolve) => {
+            releaseFirst = resolve
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<File[]>((resolve) => {
+            releaseSecond = resolve
+          })
+      )
+
+    renderChatPage({ mode: 'live' })
+    const prompt = screen.getByLabelText('Prompt')
+    await userEvent.type(prompt, 'Hello world')
+    ;(prompt as HTMLTextAreaElement).setSelectionRange(5, 5)
+
+    // First paste turns out to be an image; the second paste's text must
+    // still land at the original caret, unshifted by the skipped restore.
+    fireEvent.paste(prompt, {
+      clipboardData: { files: [firstFile], getData: (type: string) => (type === 'text/plain' ? 'FIRST' : '') }
+    })
+    fireEvent.paste(prompt, {
+      clipboardData: {
+        files: [new File(['%PDF-2.7'], 'two.pdf', { type: '' })],
+        getData: (type: string) => (type === 'text/plain' ? 'SECOND' : '')
+      }
+    })
+
+    await act(async () => {
+      releaseFirst([imageFile])
+    })
+    await screen.findByTestId('composer-attachments')
+
+    const secondFile = new File(['%PDF-2.7'], 'two.pdf', { type: '' })
+    await act(async () => {
+      releaseSecond([secondFile])
+    })
+
+    await waitFor(() => {
+      expect(prompt).toHaveValue('HelloSECOND world')
+    })
+  })
 })

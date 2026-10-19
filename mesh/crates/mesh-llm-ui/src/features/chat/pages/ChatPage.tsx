@@ -101,6 +101,20 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   const [systemPromptDialogOpen, setSystemPromptDialogOpen] = useState(false)
   const [systemPromptDraft, setSystemPromptDraft] = useState('')
   const [composerDrafts, setComposerDrafts] = useState<Record<string, ConversationComposerDraft>>({})
+  // Undetermined-type paste detection, keyed like the drafts so a detection
+  // that outlives a conversation switch keeps gating (and crediting) the
+  // conversation it began in, instead of dying with the keyed composer.
+  const [pendingTypeDetections, setPendingTypeDetections] = useState<Record<string, number>>({})
+  const adjustPendingTypeDetections = useCallback((conversationId: string, delta: number) => {
+    setPendingTypeDetections((current) => {
+      const count = (current[conversationId] ?? 0) + delta
+      if (count > 0) return { ...current, [conversationId]: count }
+      if (!(conversationId in current)) return current
+      const next = { ...current }
+      delete next[conversationId]
+      return next
+    })
+  }, [])
   // The user's pick is intent, not availability: it is persisted and never silently swapped for
   // Auto. A pick that isn't currently selectable stays selected, is shown as unavailable, and
   // blocks sending until it returns or the user picks something else.
@@ -211,6 +225,13 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   })
   const displayedConversationId = activeConversationKey || chatConversationId
   const composerConversationId = displayedConversationId || draftConversationId
+  // Bound at the composer's mount: a detection started before a switch
+  // keeps adjusting the conversation it started in.
+  const composerPendingTypeDetectionChange = useCallback(
+    (delta: 1 | -1) => adjustPendingTypeDetections(composerConversationId, delta),
+    [adjustPendingTypeDetections, composerConversationId]
+  )
+  const composerPendingTypeDetection = (pendingTypeDetections[composerConversationId] ?? 0) > 0
   const composerDraft = useMemo<ConversationComposerDraft>(() => {
     return composerDrafts[composerConversationId] ?? { prompt: '', attachments: [] }
   }, [composerConversationId, composerDrafts])
@@ -896,6 +917,8 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       onRemoveComposerAttachment={removeComposerAttachment}
       composerDisabled={(composerIsPreparingAttachments || !canChat) && !composerIsStreaming}
       composerRequestDisabled={composerIsPreparingAttachments || !canChat || pickedModelUnavailable}
+      composerPendingTypeDetection={composerPendingTypeDetection}
+      onComposerPendingTypeDetectionChange={composerPendingTypeDetectionChange}
       composerIsPreparingAttachments={composerIsPreparingAttachments}
       attachmentProcessingStage={attachmentProcessingStatus?.stage}
       attachmentProcessingCount={attachmentProcessingStatus?.attachmentCount ?? 0}

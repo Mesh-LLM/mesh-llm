@@ -122,3 +122,58 @@ export async function resolveImageFile(file: File): Promise<File> {
 export async function resolveImageFiles(files: readonly File[]): Promise<File[]> {
   return Promise.all(files.map((file) => resolveImageFile(file)))
 }
+
+export type PasteRange = { start: number; end: number }
+
+/** One suppressed-paste text insertion: `text` replaced `[start, end)`.
+ *  `skipped` marks a queued insertion whose paste became an image
+ *  attachment; it maps indices and values as if it never existed. */
+export type PasteRestoreEffect = { start: number; end: number; text: string; skipped?: boolean }
+
+/** Maps a caret or range edge across one earlier insertion: indices before
+ *  it stay, indices at or after its end shift by the length delta, and an
+ *  index inside the replaced span collapses onto the end of the inserted
+ *  text (sequential pastes at the same point read back-to-back). */
+export function adjustPasteIndex(index: number, effect: PasteRestoreEffect): number {
+  if (index < effect.start) return index
+  if (index >= effect.end) return index + effect.text.length - (effect.end - effect.start)
+  return effect.start + effect.text.length
+}
+
+export function adjustPasteRange(range: PasteRange, effects: readonly PasteRestoreEffect[]): PasteRange {
+  return effects
+    .filter((effect) => !effect.skipped)
+    .reduce<PasteRange>(
+      (adjusted, effect) => ({
+        start: adjustPasteIndex(adjusted.start, effect),
+        end: adjustPasteIndex(adjusted.end, effect)
+      }),
+      range
+    )
+}
+
+/** Applies one insertion the way the suppressed default paste would have. */
+export function applyPasteRestore(value: string, range: PasteRange, text: string): string {
+  return `${value.slice(0, range.start)}${text}${value.slice(range.end)}`
+}
+
+export function applyPasteEffects(value: string, effects: readonly PasteRestoreEffect[]): string {
+  return effects
+    .filter((effect) => !effect.skipped)
+    .reduce((applied, effect) => applyPasteRestore(applied, effect, effect.text), value)
+}
+
+/** How many leading effects a captured prompt value already contains, so a
+ *  later capture only adjusts for the rest of the queue; -1 when the value
+ *  matches no prefix (the draft changed by other means and the queued
+ *  restorations should fall back to appending). */
+export function pasteRestoreBaseOffset(value: string, base: string, effects: readonly PasteRestoreEffect[]): number {
+  let applied = base
+  if (value === applied) return 0
+  for (let index = 0; index < effects.length; index += 1) {
+    if (effects[index].skipped) continue
+    applied = applyPasteRestore(applied, effects[index], effects[index].text)
+    if (value === applied) return index + 1
+  }
+  return -1
+}

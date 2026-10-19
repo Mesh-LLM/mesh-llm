@@ -2,7 +2,14 @@ import { useCallback, useRef, useState, type Ref } from 'react'
 import { Code2, ListEnd, MessageSquareX, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/cn'
-import { resolveImageFiles } from '@/lib/attachments'
+import {
+  adjustPasteRange,
+  applyPasteEffects,
+  applyPasteRestore,
+  pasteRestoreBaseOffset,
+  resolveImageFiles,
+  type PasteRestoreEffect
+} from '@/lib/attachments'
 
 type ComposerProcessingStage = 'downloading' | 'starting' | 'processing'
 
@@ -21,32 +28,43 @@ function hasUndeterminedType(files: File[]): boolean {
 
 type PasteSelection = { start: number; end: number; value: string }
 
+/** Bookkeeping for suppressed-paste text restorations queued on one
+ *  composer. `effects` records every queued insertion against `base` in
+ *  queue order; a queued restoration whose files turn out to be images is
+ *  marked skipped instead of removed, so value bookkeeping stays
+ *  consistent. `tail` serializes the restorations so each applies after
+ *  the previous one, with its captured range adjusted for the effects it
+ *  could not have seen yet. */
+type PasteRestoreQueue = {
+  base: string | null
+  effects: PasteRestoreEffect[]
+  pending: number
+  tail: Promise<void>
+}
+
+type PasteTextRestoration = {
+  /** Put the suppressed text back at the adjusted position (or append when
+   *  the prompt was edited meanwhile). */
+  apply: () => void
+  /** The paste became an image attachment; drop the queued effect. */
+  skip: () => void
+}
+
 async function attachDetectedPasteImages(
   files: File[],
-  pastedText: string,
-  selection: PasteSelection,
-  onAttach: (files: File[]) => void,
-  onChange: (value: ComposerPromptUpdate) => void
+  restoration: PasteTextRestoration,
+  onAttach: (files: File[]) => void
 ): Promise<void> {
   const resolved = await resolveImageFiles(files)
   const images = resolved.filter((file) => file.type.startsWith('image/'))
   if (images.length > 0) {
     onAttach(images)
+    restoration.skip()
     return
   }
   // No image materialized, so the suppressed default paste would have
-  // inserted this text at the selection. Evaluate against the latest
-  // draft so concurrent restorations compose: when the prompt is
-  // untouched since the paste, put the text back exactly there,
-  // replacing what the selection covered; if it was edited meanwhile,
-  // append instead of applying a stale range over the edit.
-  if (pastedText) {
-    onChange((current) =>
-      current === selection.value
-        ? `${current.slice(0, selection.start)}${pastedText}${current.slice(selection.end)}`
-        : `${current}${pastedText}`
-    )
-  }
+  // inserted its text payload.
+  restoration.apply()
 }
 
 type ComposerProps = {
@@ -66,6 +84,16 @@ type ComposerProps = {
   placeholder?: string
   disabled?: boolean
   requestDisabled?: boolean
+  /** Whether undetermined-type detection is still running for this
+   *  composer's conversation. Owners that key the composer by conversation
+   *  pass this from conversation-scoped state so a remount cannot drop the
+   *  gate while a detection is in flight; the count lives with the draft,
+   *  not the mounted component. */
+  pendingTypeDetection?: boolean
+  /** Reports one detection starting (1) or finishing (-1). The callback is
+   *  captured when the detection starts, so a detection that outlives a
+   *  conversation switch keeps adjusting the conversation it began in. */
+  onPendingTypeDetectionChange?: (delta: 1 | -1) => void
   isPreparingAttachments?: boolean
   preparingStage?: ComposerProcessingStage
   preparingAttachmentCount?: number
@@ -97,6 +125,8 @@ export function Composer({
   placeholder = 'Ask me anything...',
   disabled = false,
   requestDisabled = false,
+  pendingTypeDetection,
+  onPendingTypeDetectionChange,
   isPreparingAttachments = false,
   preparingStage,
   preparingAttachmentCount = 0,
@@ -105,21 +135,89 @@ export function Composer({
   showSystemPromptButton = false
 }: ComposerProps) {
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
-  const [pendingTypeSniffs, setPendingTypeSniffs] = useState(0)
-  const runTypeSniff = useCallback((run: () => Promise<void>) => {
-    setPendingTypeSniffs((count) => count + 1)
-    run()
-      .catch((error) => console.warn('attachment type detection failed', error))
-      .finally(() => setPendingTypeSniffs((count) => count - 1))
-  }, [])
+  const [localPendingTypeDetections, setLocalPendingTypeDetections] = useState(0)
+  const detectionPending = pendingTypeDetection ?? localPendingTypeDetections > 0
+  const runTypeSniff = useCallback(
+    (run: () => Promise<void>) => {
+      const report = (delta: 1 | -1) => {
+        if (onPendingTypeDetectionChange) onPendingTypeDetectionChange(delta)
+        else setLocalPendingTypeDetections((count) => count + delta)
+      }
+      report(1)
+      run()
+        .catch((error) => console.warn('attachment type detection failed', error))
+        .finally(() => report(-1))
+    },
+    [onPendingTypeDetectionChange]
+  )
+  // Restorations are queued per paste and run serialized once detection
+  // resolves; the ref survives the async gap, and dropping it on unmount
+  // only loses a still-pending text restore, never draft integrity.
+  const pasteRestoresRef = useRef<PasteRestoreQueue>({ base: null, effects: [], pending: 0, tail: Promise.resolve() })
+  const enqueuePasteTextRestore = useCallback(
+    (pastedText: string, selection: PasteSelection): PasteTextRestoration => {
+      const queue = pasteRestoresRef.current
+      if (queue.base === null) queue.base = selection.value
+      // The capture may predate queued effects (their updaters have not
+      // flushed); adjust only for the part of the queue it has not seen.
+      const seen = pasteRestoreBaseOffset(selection.value, queue.base, queue.effects)
+      const unseen = seen >= 0 ? queue.effects.slice(seen) : []
+      // The optimistic position feeds later captures' adjustments; this
+      // step recomputes against the final skip decisions when it runs.
+      const optimistic = adjustPasteRange(selection, unseen)
+      const effect: PasteRestoreEffect = { start: optimistic.start, end: optimistic.end, text: pastedText }
+      queue.effects.push(effect)
+      queue.pending += 1
+      const settleQueue = () => {
+        queue.pending -= 1
+        if (queue.pending === 0) {
+          queue.base = null
+          queue.effects = []
+        }
+      }
+      let settleSlot!: () => void
+      const settled = new Promise<void>((resolve) => {
+        settleSlot = resolve
+      })
+      let skipped = false
+      // Chained at enqueue, so restorations apply in paste order no matter
+      // the resolution order; each step blocks until its own detection
+      // resolved, by which point every earlier effect is final.
+      queue.tail = queue.tail
+        .then(async () => {
+          await settled
+          if (skipped) return
+          const live = unseen.filter((pending) => !pending.skipped)
+          const adjusted = adjustPasteRange(selection, live)
+          const expected = applyPasteEffects(selection.value, live)
+          // Untouched since the paste: put the text back exactly at the
+          // adjusted position. Edited meanwhile: append instead of
+          // applying a stale range over the edit.
+          onChange((current) =>
+            current === expected ? applyPasteRestore(current, adjusted, pastedText) : `${current}${pastedText}`
+          )
+        })
+        .then(settleQueue, settleQueue)
+      return {
+        apply: () => {
+          settleSlot()
+        },
+        skip: () => {
+          skipped = true
+          effect.skipped = true
+          settleSlot()
+        }
+      }
+    },
+    [onChange]
+  )
   const handleSend = useCallback(() => {
-    if (!disabled && !requestDisabled && pendingTypeSniffs === 0 && (value.trim() || attachments.length > 0)) {
+    if (!disabled && !requestDisabled && !detectionPending && (value.trim() || attachments.length > 0)) {
       onSend()
     }
-  }, [attachments.length, disabled, requestDisabled, pendingTypeSniffs, value, onSend])
+  }, [attachments.length, disabled, requestDisabled, detectionPending, value, onSend])
 
-  const sendDisabled =
-    disabled || requestDisabled || pendingTypeSniffs > 0 || (!value.trim() && attachments.length === 0)
+  const sendDisabled = disabled || requestDisabled || detectionPending || (!value.trim() && attachments.length === 0)
   const retryDisabled = disabled || requestDisabled || !canRetry
   const stopDisabled = disabled || !isStreaming || !onStop
   const submitQueuesPrompt = sendMode === 'queue' || isStreaming
@@ -200,7 +298,10 @@ export function Composer({
             end: textarea.selectionEnd ?? textarea.value.length,
             value: textarea.value
           }
-          runTypeSniff(() => attachDetectedPasteImages(candidates, pastedText, selection, onAttach, onChange))
+          const restoration = pastedText
+            ? enqueuePasteTextRestore(pastedText, selection)
+            : { apply: () => {}, skip: () => {} }
+          runTypeSniff(() => attachDetectedPasteImages(candidates, restoration, onAttach))
         }}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && isStreaming && onStop) {

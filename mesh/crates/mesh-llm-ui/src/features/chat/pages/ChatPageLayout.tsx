@@ -79,6 +79,8 @@ type ChatPageLayoutProps = {
   onRemoveComposerAttachment: (index: number) => void
   composerDisabled: boolean
   composerRequestDisabled?: boolean
+  composerPendingTypeDetection?: boolean
+  onComposerPendingTypeDetectionChange?: (delta: 1 | -1) => void
   composerIsPreparingAttachments: boolean
   attachmentProcessingStage: AttachmentProcessingStatus['stage'] | undefined
   attachmentProcessingCount: number
@@ -169,6 +171,8 @@ export function ChatPageLayout({
   onRemoveComposerAttachment,
   composerDisabled,
   composerRequestDisabled,
+  composerPendingTypeDetection,
+  onComposerPendingTypeDetectionChange,
   composerIsPreparingAttachments,
   attachmentProcessingStage,
   attachmentProcessingCount,
@@ -328,6 +332,8 @@ export function ChatPageLayout({
               onRemoveAttachment={onRemoveComposerAttachment}
               disabled={composerDisabled}
               requestDisabled={composerRequestDisabled}
+              pendingTypeDetection={composerPendingTypeDetection}
+              onPendingTypeDetectionChange={onComposerPendingTypeDetectionChange}
               isPreparingAttachments={composerIsPreparingAttachments}
               preparingStage={attachmentProcessingStage}
               preparingAttachmentCount={attachmentProcessingCount}
