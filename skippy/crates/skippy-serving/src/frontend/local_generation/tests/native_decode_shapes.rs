@@ -59,6 +59,116 @@ fn continuation_after_prefill_chunks(chunks: &[usize]) -> Result<Vec<i32>> {
     Ok(output)
 }
 
+#[derive(Clone, Copy, Debug)]
+enum FollowupLayout {
+    SingleLane,
+    ReservedLanes,
+    OccupiedLane,
+    RestoredPrefix,
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_followup_matches_across_lane_and_restore_shapes() -> Result<()> {
+    let mut prompt: Vec<i32> = (1..=64).collect();
+    prompt.extend(continuation_after_prefill_chunks(&[32, 32])?);
+    prompt.push(7);
+    let expected = native_followup(&prompt, &[32, 32], FollowupLayout::SingleLane)?;
+    for (chunks, layout) in [
+        (&[32, 32][..], FollowupLayout::ReservedLanes),
+        (&[32, 28, 4][..], FollowupLayout::ReservedLanes),
+        (&[32, 31, 1][..], FollowupLayout::ReservedLanes),
+        (&[32, 32][..], FollowupLayout::OccupiedLane),
+        (&[32, 32][..], FollowupLayout::RestoredPrefix),
+    ] {
+        assert_eq!(
+            native_followup(&prompt, chunks, layout)?,
+            expected,
+            "native follow-up: layout={layout:?}, prefix chunks={chunks:?}, prompt={prompt:?}"
+        );
+    }
+    Ok(())
+}
+
+fn native_followup(
+    prompt: &[i32],
+    prefix_chunks: &[usize],
+    layout: FollowupLayout,
+) -> Result<Vec<i32>> {
+    let lanes = if matches!(layout, FollowupLayout::SingleLane) {
+        1
+    } else {
+        2
+    };
+    let (backend, _) = recurrent_test_backend_with_lanes(
+        "followup-shapes",
+        "followup-shapes",
+        256,
+        (32, 32, lanes),
+        8,
+        lanes as usize * 256,
+        None,
+    )?;
+    let mut runtime = backend.runtime.lock().unwrap();
+    let mut offset = 0;
+    for &count in prefix_chunks {
+        iterate(
+            &mut runtime,
+            &["followup"],
+            &[&prompt[offset..offset + count]],
+            IterationBatchPhase::Prefill,
+        )?;
+        offset += count;
+    }
+    assert_eq!(offset, 64);
+    if matches!(
+        layout,
+        FollowupLayout::OccupiedLane | FollowupLayout::RestoredPrefix
+    ) {
+        for chunk in (1..=64).rev().collect::<Vec<_>>().chunks(32) {
+            iterate(
+                &mut runtime,
+                &["other"],
+                &[chunk],
+                IterationBatchPhase::Prefill,
+            )?;
+        }
+    }
+    if matches!(layout, FollowupLayout::RestoredPrefix) {
+        let checkpoint = runtime.export_full_state("followup")?;
+        for token in &prompt[64..67] {
+            iterate(
+                &mut runtime,
+                &["followup"],
+                &[&[*token]],
+                IterationBatchPhase::Decode,
+            )?;
+        }
+        restore(
+            &mut runtime,
+            &["followup"],
+            &[prompt[..64].to_vec()],
+            &[checkpoint],
+        )?;
+    }
+    let mut output = iterate(
+        &mut runtime,
+        &["followup"],
+        &[&prompt[64..]],
+        IterationBatchPhase::Prefill,
+    )?;
+    for _ in 1..8 {
+        let token = [*output.last().unwrap()];
+        output.extend(iterate(
+            &mut runtime,
+            &["followup"],
+            &[&token],
+            IterationBatchPhase::Decode,
+        )?);
+    }
+    Ok(output)
+}
+
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
 fn native_checkpoint_decode_matches_across_batch_shapes() -> Result<()> {
