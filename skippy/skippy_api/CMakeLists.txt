@@ -111,6 +111,7 @@ if(SKIPPY_BUILD_LLAMA)
 
   add_library(skippy_llama STATIC
     src/llama/backend.cpp
+    src/llama/model_inventory.cpp
     src/llama/batch.cpp
     src/llama/stage_planner.cpp
     src/llama/staged.cpp
@@ -164,6 +165,7 @@ if(SKIPPY_API_BUILD_TESTS)
       tests/stage_load_test.cpp
       tests/workload_profile_test.cpp
       tests/borrow_stress_test.cpp
+      tests/inventory_parser_test.cpp
   )
   target_compile_options(skippy_api_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   target_link_libraries(skippy_api_tests

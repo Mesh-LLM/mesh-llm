@@ -314,6 +314,12 @@ just skippy-llama-api-stage-pipeline <model.gguf> N   # chain N stages, compare 
   incremental path — `clone()` dangled any earlier profile the moment a
   later one grew the vectors. Stored positions make the whole class of
   bug unrepresentable, at any call site, forever.
+- **A refactor that moves a computation can leave the old one behind.**
+  Moving stored_length into row_size_bytes left the original multiply loop
+  in place, so every tensor's size was squared and the planner rejected the
+  real model — while all 213 tests stayed green, because no mocked test
+  compares stored_length against a real model. The probe is the only
+  witness for file-derived values; run it after touching the parser.
 - **A reverted harness silently un-fixes its own fairness.** The like-for-like
   loop above was lost when `benchmarks/` was reset to its committed state
   during a refactor; the row then read 0.7x for an evening while five wrong

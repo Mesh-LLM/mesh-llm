@@ -5,13 +5,15 @@
 ///
 /// The planner is configured from an exact tensor closure, so anything that
 /// plans a real model needs this map first. It lives beside the llama backend
-/// because the byte size of a tensor is a ggml type property.
-
-#include "ggml.h"
+/// because the byte size of a tensor is a ggml type property. This header
+/// stays free of native includes: row_size_bytes is declared here and
+/// defined once in src/llama/model_inventory.cpp against ggml, so the
+/// mocked tests can link a stub and stay native-free.
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -82,8 +84,25 @@ private:
     std::ifstream file_;
 };
 
-// Skips one metadata value of the given GGUF type.
-inline std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t type) {
+/// Counts come from the file: cap them so a malformed GGUF is a typed
+/// error, not a length_error through the expected boundary or a
+/// stack-overflow via recursive arrays. Real GGUFs carry at most tens of
+/// thousands of entries; these bounds are far past that.
+inline constexpr std::uint64_t kMaxInventoryEntries = 1ULL * 1024U * 1024U;
+inline constexpr std::uint32_t kMaxArrayDepth = 8;
+
+/// Bytes a tensor of `type` occupies given its extents. Declared here,
+/// defined against ggml in src/llama/model_inventory.cpp so this header
+/// stays includable from native-free test targets.
+[[nodiscard]] std::uint64_t row_size_bytes(std::uint32_t type,
+                                           const std::array<std::int64_t, 4>& dimensions,
+                                           std::uint32_t rank);
+
+// Skips one metadata value of the given GGUF type. Depth bounds nested
+// arrays: a metadata value may contain arrays of arrays, and unbounded
+// recursion is a stack overflow on hostile input.
+inline std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t type,
+                                                   std::uint32_t depth = 0) {
     switch (type) {
     case 0:                         // u8
     case 1:                         // i8
@@ -102,12 +121,15 @@ inline std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t
         return {};
     }
     case 9: { // array
+        if (depth >= kMaxArrayDepth) return std::unexpected("metadata array nesting too deep");
         std::uint32_t element_type = 0;
         std::uint64_t count = 0;
         if (auto ok = reader.read(element_type); !ok) return ok;
         if (auto ok = reader.read(count); !ok) return ok;
+        if (count > kMaxInventoryEntries) return std::unexpected("implausible array length");
         for (std::uint64_t index = 0; index < count; ++index) {
-            if (auto ok = skip_value(reader, element_type); !ok) return ok;
+            if (auto ok = skip_value(reader, element_type, depth + 1); !ok) return ok;
+            if (!reader.okay()) return std::unexpected("truncated metadata array");
         }
         return {};
     }
@@ -117,6 +139,7 @@ inline std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t
 
 inline std::expected<void, std::string> skip_metadata(Reader& reader, std::uint64_t count,
                                                       std::uint64_t& alignment) {
+    if (count > kMaxInventoryEntries) return std::unexpected("implausible metadata count");
     for (std::uint64_t index = 0; index < count; ++index) {
         auto key = reader.read_string();
         if (!key) return std::unexpected(key.error());
@@ -135,6 +158,7 @@ inline std::expected<void, std::string> skip_metadata(Reader& reader, std::uint6
 
 inline std::expected<std::vector<TensorInfo>, std::string> read_tensors(Reader& reader,
                                                                         std::uint64_t count) {
+    if (count > kMaxInventoryEntries) return std::unexpected("implausible tensor count");
     std::vector<TensorInfo> tensors;
     tensors.reserve(static_cast<std::size_t>(count));
     for (std::uint64_t index = 0; index < count; ++index) {
@@ -144,6 +168,7 @@ inline std::expected<std::vector<TensorInfo>, std::string> read_tensors(Reader& 
         info.name = std::move(*name);
         if (auto ok = reader.read(info.dimension_count); !ok) return std::unexpected(ok.error());
         if (info.dimension_count > 4) return std::unexpected("tensor rank above four");
+        if (info.dimension_count == 0) return std::unexpected("tensor rank below one");
         for (std::uint32_t dim = 0; dim < info.dimension_count; ++dim) {
             std::uint64_t extent = 0;
             if (auto ok = reader.read(extent); !ok) return std::unexpected(ok.error());
@@ -151,10 +176,7 @@ inline std::expected<std::vector<TensorInfo>, std::string> read_tensors(Reader& 
         }
         if (auto ok = reader.read(info.type); !ok) return std::unexpected(ok.error());
         if (auto ok = reader.read(info.offset); !ok) return std::unexpected(ok.error());
-        info.stored_length = ggml_row_size(static_cast<ggml_type>(info.type), info.dimensions[0]);
-        for (std::uint32_t dim = 1; dim < info.dimension_count; ++dim) {
-            info.stored_length *= static_cast<std::uint64_t>(info.dimensions[dim]);
-        }
+        info.stored_length = row_size_bytes(info.type, info.dimensions, info.dimension_count);
         tensors.push_back(std::move(info));
     }
     return tensors;
@@ -387,8 +409,8 @@ cached_inventory(const std::string& path) {
 /// Hashes the shard once per file version.
 inline std::string cached_sha256(const std::string& path) {
     // sha256_of cannot fail, so the optional is always engaged here.
-    auto digest = memoised_file_result<std::string>(file_stamp(path),
-                                                    [&] { return sha256_of(path); });
+    auto digest =
+        memoised_file_result<std::string>(file_stamp(path), [&] { return sha256_of(path); });
     return digest.value_or(std::string{});
 }
 
