@@ -464,6 +464,15 @@ pub struct Model<'rt> {
 }
 
 impl Model<'_> {
+    /// The vocab's declared suppress tokens (`tokenizer.ggml.suppress_tokens`),
+    /// gathered once at load. The library never links a sampler: a caller
+    /// holding logits applies this set before selecting a token. Empty when
+    /// the GGUF declares none (patch 0012).
+    #[must_use]
+    pub fn suppress_tokens(&self) -> Vec<Token> {
+        tokens_from_native(self.runtime.lock().suppress_tokens(&self.handle))
+    }
+
     pub fn create_session(&self, config: SessionConfig) -> Result<Session<'_>, RuntimeError> {
         let mut bridge = self.runtime.lock();
         let created = bridge.pin_mut().create_session(

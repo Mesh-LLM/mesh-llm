@@ -537,6 +537,18 @@ LlamaBackend::load_model(const ModelConfig& config) {
     const bool classifier_workload = profile.classifier_workload;
     const bool rerank_workload = classifier_workload || declared_pooling == LLAMA_POOLING_TYPE_RANK;
 
+    // Patch 0012: the vocab's declared suppress tokens, read once so callers
+    // never pay a vocab query on the sampling path.
+    std::int32_t suppress_count = 0;
+    const llama_token* suppress_ids = llama_vocab_get_suppress_tokens(&vocab, &suppress_count);
+    std::vector<Token> suppress_tokens;
+    if (suppress_ids != nullptr && suppress_count > 0) {
+        suppress_tokens.reserve(static_cast<std::size_t>(suppress_count));
+        for (std::int32_t index = 0; index < suppress_count; ++index) {
+            suppress_tokens.push_back(Token{suppress_ids[index]});
+        }
+    }
+
     try {
         LlamaModel::Traits traits{
             .declared_pooling = declared_pooling,
@@ -549,6 +561,7 @@ LlamaBackend::load_model(const ModelConfig& config) {
             .decoder_start = llama_model_has_encoder(model.get())
                                  ? decoder_start_token(*model, vocab)
                                  : std::nullopt,
+            .suppress_tokens = std::move(suppress_tokens),
         };
         auto loaded = std::make_unique<LlamaModel>(std::move(model), std::move(traits));
 
