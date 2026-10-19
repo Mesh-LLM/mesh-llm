@@ -30,7 +30,7 @@ templates:
         echo "holding this Mac awake for the build (caffeinate pid $!)"
       fi
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
-      cd "${repo_dir}"
+      cd ${repo_dir}
       if [[ ! -d skippy/skippy_api/.deps/llama.cpp/src/skippy ]]; then
         scripts/prepare-llama.sh pinned
       fi
@@ -83,7 +83,7 @@ templates:
   - key: split-frontier-certify
     name: Split frontier certify (dense + hybrid recurrent legs)
     group: Benchmarks
-    priority: 10
+    priority: 20
     # Self-contained build per template: a template-level build overrides the
     # file-level one at sync, so the example never inherits a file-level build that
     # targets the wrong product (the jianyang interim copy's file-level build runs
@@ -98,7 +98,7 @@ templates:
         echo "holding this Mac awake for the build (caffeinate pid $!)"
       fi
       export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
-      cd "${repo_dir}"
+      cd ${repo_dir}
       if [[ ! -d skippy/skippy_api/.deps/llama.cpp/src/skippy ]]; then
         scripts/prepare-llama.sh pinned
       fi
