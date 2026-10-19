@@ -68,7 +68,15 @@ fn native_cache_concurrency_matches_serial_and_reuses_prefixes() -> Result<()> {
                     Ok(())
                 })?;
             assert!(cached > 0, "prefix miss at c={lanes}, lane={index}");
-            assert_eq!(warm, expected, "warm parity at c={lanes}, lane={index}");
+            if warm != expected {
+                let warm_evidence =
+                    generate_with_token_margins(&backend, prompt, &format!("lane-{index}"))?;
+                let control_evidence =
+                    generate_with_token_margins(&control, prompt, &format!("control-{index}"))?;
+                panic!(
+                    "warm parity at c={lanes}, lane={index}: expected={expected:?}, actual={warm:?}; repeated warm={warm_evidence:?}; serial warm={control_evidence:?}"
+                );
+            }
         }
     }
     Ok(())
@@ -91,8 +99,8 @@ fn native_cache_replay_matches_cold_with_token_margin_evidence() -> Result<()> {
             lanes as usize * 1024,
             None,
         )?;
-        let cold = generate_with_token_margins(&backend, &prompt)?;
-        let warm = generate_with_token_margins(&backend, &prompt)?;
+        let cold = generate_with_token_margins(&backend, &prompt, "cache-replay")?;
+        let warm = generate_with_token_margins(&backend, &prompt, "cache-replay")?;
         assert!(warm.1 > 0, "prefix miss with {lanes} lanes");
         assert_eq!(
             cold.0, warm.0,
@@ -106,10 +114,11 @@ fn native_cache_replay_matches_cold_with_token_margin_evidence() -> Result<()> {
 fn generate_with_token_margins(
     backend: &StageOpenAiBackend,
     prompt: &[i32],
+    session: &str,
 ) -> Result<(Vec<i32>, u32, Vec<skippy_runtime::TokenSignal>)> {
     let ids = InferenceGenerationIds::new_with_trust(
         InferenceCacheHints::default(),
-        Some("cache-replay"),
+        Some(session),
         true,
         None,
     );
