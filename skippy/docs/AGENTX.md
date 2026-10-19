@@ -204,12 +204,12 @@ cleanup add time. A single cell has a bounded 80-minute lifecycle for smoke;
 the job has a 24-hour hard deadline shared with container build and preparation. These are
 failure ceilings, not runtime estimates.
 
-Smoke version 7 uses upstream `--burst-phase-starts` so each lane's first
+Smoke version 8 uses upstream `--burst-phase-starts` so each lane's first
 profiling request is eligible immediately. The previous c4 smoke's recorded
 first-request spacing was 81.4 seconds, exceeding its 60-second sending window
 and admitting only three profiling requests. The burst changes phase-start
 spacing only; subsequent inter-turn delays and trace contents remain intact.
-Full benchmark version 6 retains upstream phase-start spacing. Compare versions
+Full benchmark version 7 retains upstream phase-start spacing. Compare versions
 separately and verify observed HTTP overlap before claiming concurrency coverage.
 
 ## Corpus and validity
@@ -224,7 +224,7 @@ records the candidate IDs and context eligibility; each cell's `cohort.json`
 records the filtered selection and its digest. Parent/child relationships remain
 upstream-owned.
 
-AgentX 1.0.12's public loader does not expose a dataset revision option. We use
+AgentX 1.0.12.post1's public loader does not expose a dataset revision option. We use
 its stock local Weka loader and `--unsafe-override` with our independently
 verified corpus. **Both profiles retain `submission_valid=false`.** These are
 reproducible local comparisons, not InferenceX leaderboard submissions. Smoke
@@ -240,7 +240,7 @@ different template keys and harness fingerprints. Engine templates are separate
 because JY's existing chart series distinguish concurrency, not engine identity.
 Raw cell names remain `agentx/MODEL/ENGINE/PROFILE/cN`.
 
-AgentX smoke version 7 and full benchmark version 6 apply the same upstream
+AgentX smoke version 8 and full benchmark version 7 apply the same upstream
 `--max-context-length 131072` filter to both engines before selecting traces.
 AgentX excludes a whole trace if any parent or subagent turn's recorded input
 plus requested output exceeds the limit (zero recorded output reserves one token).
@@ -296,9 +296,12 @@ Request overlap is not proof of concurrent GPU decode. Full record and HTTP
 timing exports are retained for overlap analysis. GPU residency remains
 unavailable where the driver does not supply it; host RSS is separate.
 
-The pinned AgentX 1.0.12 includes upstream delayed-child cutoff cleanup
-([PR #50](https://github.com/SemiAnalysisAI/agentx-harness/pull/50)). The earlier
-1.0.7 harness could retain a branch after its scheduled continuation was
-cancelled at the sending cutoff, leaving an idle server waiting indefinitely
-for the harness to drain. Smoke 7 and full 6 use the corrected harness for both
-engines without shortening requests or clamping recorded inter-turn delays.
+Smoke 8 and full 7 pin the [MeshLLM AgentX 1.0.12.post1 fork](https://github.com/Mesh-LLM/agentx-harness/releases/tag/agentx-v1.0.12.post1)
+at source commit `8a37952a686d9fe49a2c7376b5b965e8f6480cc9`, with the wheel URL
+and SHA-256 locked in the environment. It contains upstream 1.0.12, including
+[PR #50](https://github.com/SemiAnalysisAI/agentx-harness/pull/50), plus cleanup
+for delayed children and joins declared by responses arriving after the sending
+cutoff. Existing HTTP requests drain normally; immediate children still use
+the existing issuer admission rules. Both engines consume the same artifact,
+without shortening outputs or clamping recorded inter-turn delays. Older
+harness versions remain separate.

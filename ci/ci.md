@@ -2070,14 +2070,14 @@ validity. This replaces the Jianyang `agentic-replay` entry; the separately
 owned GitHub trajectory qualification workflow is unchanged.
 
 AgentX sweeps offered concurrency 1, 2 and 4 with automatic context and Skippy parallelism (llama slots match offered sessions).
-Smoke version 7 starts each lane immediately with upstream
+Smoke version 8 starts each lane immediately with upstream
 `--burst-phase-starts`, then preserves subsequent recorded delays. Full benchmark
-version 6 retains upstream phase-start spacing.
+version 7 retains upstream phase-start spacing.
 Whole-sweep ABBAAB ordering uses six existing engine jobs per model; it does not
 add JY features or mix engines within a result series. Capacity failures retain
 cell evidence and do not erase earlier successful levels.
 
-AgentX smoke version 7 and full benchmark version 6 apply the same upstream
+AgentX smoke version 8 and full benchmark version 7 apply the same upstream
 `--max-context-length 131072` filter to both engines before selecting traces.
 AgentX excludes a whole trace if any parent or subagent turn's recorded input
 plus requested output exceeds the limit (zero recorded output reserves one token).
@@ -2089,9 +2089,12 @@ token guarantee. Unexpected wire overflows still invalidate a cell. Compare
 only matching cohort digests and completed raw trace/turn sets. Older workload
 versions remain separate. Skippy keeps its automatic planner and 128K cap.
 
-AgentX smoke 7 and full 6 pin upstream harness 1.0.12, including delayed-child
-and snapshot-continuation cleanup at the sending cutoff (upstream PR #50).
-A cancelled future timer must not keep an idle phase draining indefinitely.
-Both engines retain the same harness, whole-trace context filter, and recorded
-timing; this update does not introduce an inter-turn delay cap. Older 1.0.7
-results remain a separate harness version.
+AgentX smoke 8 and full 7 pin the MeshLLM AgentX 1.0.12.post1 fork, based on
+upstream 1.0.12 with late-return drain fixes at commit
+`8a37952a686d9fe49a2c7376b5b965e8f6480cc9`. The locked wheel is built with the
+upstream release builder and verified by SHA-256. Upstream PR #50 retires timers
+already pending at cutoff; the fork also retires delayed children and join timers
+created by later responses. In-flight requests drain normally and immediate DAG
+children retain the issuer's admission checks. Both engines use the same fork,
+whole-trace filter and recorded timing. No inter-turn delay cap is added.
+Earlier harness versions remain separate.

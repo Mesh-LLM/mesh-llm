@@ -63,18 +63,18 @@ comparison as unqualified, and investigate regressions per model and
 concurrency rather than hiding them in an aggregate. Compare completed work
 and inspect grace-period cancellations before declaring a winner.
 
-Smoke version 7 uses a 60-second dispatch window and drains outstanding requests.
+Smoke version 8 uses a 60-second dispatch window and drains outstanding requests.
 Upstream `--burst-phase-starts` makes every lane's first profiling request
 eligible immediately; subsequent recorded inter-turn delays remain intact.
 Without it, the pinned c4 cohort spreads initial requests over 81.4 seconds,
-leaving its fourth lane outside the smoke window. Full benchmark version 6
+leaving its fourth lane outside the smoke window. Full benchmark version 7
 keeps upstream phase-start spacing; do not combine these workload versions.
 A turn
 near that boundary can be included in one repetition and excluded from another,
 so the same trace seed does not guarantee identical completed work. Check trace
 IDs and turn indices before comparing short-run throughput. Offered sessions
 also need not equal observed HTTP overlap: replay delays can leave lanes idle.
-The runner reads AgentX 1.0.12's `metadata.benchmark_phase` and HTTP intervals to
+The runner reads AgentX 1.0.12.post1's `metadata.benchmark_phase` and HTTP intervals to
 report `observed_concurrency.peak_in_flight_requests`; this is not a count of
 simultaneous GPU decode streams.
 
@@ -104,7 +104,7 @@ race that can leave record processors waiting for dataset configuration after
 a fast cache hit. This rebuilds trace inputs before measurement and preserves
 the host HF model cache. It is a workaround pending an upstream lifecycle fix.
 
-AgentX smoke version 7 and full benchmark version 6 apply the same upstream
+AgentX smoke version 8 and full benchmark version 7 apply the same upstream
 `--max-context-length 131072` filter to both engines before selecting traces.
 AgentX excludes a whole trace if any parent or subagent turn's recorded input
 plus requested output exceeds the limit (zero recorded output reserves one token).
@@ -117,12 +117,17 @@ token guarantee. Unexpected wire overflows still invalidate a cell. Compare
 only matching cohort digests and completed raw trace/turn sets. Older workload
 versions remain separate. Skippy keeps its automatic planner and 128K cap.
 
-The harness is pinned to AgentX 1.0.12. Its upstream
-[cutoff cleanup fix](https://github.com/SemiAnalysisAI/agentx-harness/pull/50)
-releases delayed subagents and parked continuations that never dispatch before
-sending stops. Version 1.0.7 could leave their branch accounting pending after
-all HTTP requests finished, making an infinite drain hang. Smoke 7 and full 6
-use the corrected harness for both engines; they preserve recorded timing and
-requested outputs. This change does not cap individual trace delays or classify
-never-issued future requests as failed HTTP requests. Compare completed raw
-request/turn sets as well as the selected cohort digest.
+The harness is pinned to the [MeshLLM AgentX 1.0.12.post1 fork](https://github.com/Mesh-LLM/agentx-harness/releases/tag/agentx-v1.0.12.post1),
+based on upstream 1.0.12 plus drain fixes at commit
+`8a37952a686d9fe49a2c7376b5b965e8f6480cc9`. The wheel uses the upstream release
+builder, embeds its source commit and is SHA-256 verified by `uv.lock`.
+Upstream [PR #50](https://github.com/SemiAnalysisAI/agentx-harness/pull/50)
+retires timers already pending at cutoff. The fork also retires delayed children
+and join timers created by responses that arrive after cleanup. In-flight
+requests still finish normally; immediate DAG children retain existing issuer
+admission checks, including root-session quota semantics.
+
+Smoke 8 and full 7 use the same fork for both engines. Recorded timing and
+requested outputs remain intact. Never-issued future requests are reported as
+truncated children, not failed HTTP requests. Compare completed raw request/turn
+sets as well as the selected cohort digest. Earlier harness versions stay separate.

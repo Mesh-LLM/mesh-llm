@@ -2,4 +2,9 @@
 name = "skippy-agentx-environment"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
-dependencies = ["agentx-harness==1.0.12"]
+dependencies = ["agentx-harness==1.0.12.post1"]
+
+[tool.uv.sources]
+# AgentX 1.0.12 plus late-return drain fixes at 8a37952a686d9fe49a2c7376b5b965e8f6480cc9.
+# Built with upstream's release builder; uv.lock verifies the wheel SHA-256.
+agentx-harness = { url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post1/agentx_harness-1.0.12.post1-py3-none-any.whl" }

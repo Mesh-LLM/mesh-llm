@@ -26,8 +26,8 @@ pub(super) enum Profile {
 impl Profile {
     fn harness_version(self) -> &'static str {
         match self {
-            Self::Smoke => "agentx-1.0.12-local-smoke-7",
-            Self::Benchmark => "agentx-1.0.12-local-benchmark-6",
+            Self::Smoke => "agentx-1.0.12.post1-local-smoke-8",
+            Self::Benchmark => "agentx-1.0.12.post1-local-benchmark-7",
         }
     }
     fn label(self) -> &'static str {

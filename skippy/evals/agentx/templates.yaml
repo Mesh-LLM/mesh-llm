@@ -1048,7 +1048,7 @@ templates:
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.12-local-smoke-7
+      version: agentx-1.0.12.post1-local-smoke-8
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
@@ -1115,7 +1115,7 @@ templates:
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.12-local-benchmark-6
+      version: agentx-1.0.12.post1-local-benchmark-7
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
@@ -1182,7 +1182,7 @@ templates:
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.12-local-smoke-7
+      version: agentx-1.0.12.post1-local-smoke-8
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740
@@ -1249,7 +1249,7 @@ templates:
       submission_valid=false for the upstream leaderboard. Results appear in JY Benchmarks.
     harness:
       name: custom
-      version: agentx-1.0.12-local-benchmark-6
+      version: agentx-1.0.12.post1-local-benchmark-7
       trace:
         kind: file
         ref: hf://datasets/semianalysisai/cc-traces-weka-062126-256k@8fecd2fc56694469f758f0afbbb6335ad3043740

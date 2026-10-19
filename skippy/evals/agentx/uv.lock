@@ -4,8 +4,8 @@ requires-python = "==3.12.*"
 
 [[package]]
 name = "agentx-harness"
-version = "1.0.12"
-source = { registry = "https://pypi.org/simple" }
+version = "1.0.12.post1"
+source = { url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post1/agentx_harness-1.0.12.post1-py3-none-any.whl" }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiohttp" },
@@ -53,10 +53,106 @@ dependencies = [
     { name = "uvloop", marker = "sys_platform != 'win32'" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/54/2f/45004a01fa7c8d07c5637d1550a946fd51ff2dc5f7d4026a47ad76aff965/agentx_harness-1.0.12.tar.gz", hash = "sha256:3514b16905406d16f85432b0207df1cb5eea6147862dde97a8d1e6bdb80dedf4", size = 14319115, upload-time = "2026-10-19T14:25:36.162Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/e5/64e737e33784b481fabb0a1f49468982074bd332f34552ee572322267f63/agentx_harness-1.0.12-py3-none-any.whl", hash = "sha256:3d1f06f941bace12ab26c112bb6b5b1727dc160241c696851604e5269d874835", size = 5146997, upload-time = "2026-10-19T14:25:33.383Z" },
+    { url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post1/agentx_harness-1.0.12.post1-py3-none-any.whl", hash = "sha256:9f4d63bb3f25c37afda9b253851bd5ae654662b5018f4ade4e59103d526c4999" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiofiles", specifier = "~=24.1.0" },
+    { name = "aiohttp", specifier = "~=3.13.3" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=25.1.0" },
+    { name = "botorch", marker = "extra == 'botorch'", specifier = ">=0.10" },
+    { name = "botorch", marker = "extra == 'optuna'", specifier = ">=0.10" },
+    { name = "crick", specifier = "~=0.0.8" },
+    { name = "cyclopts", specifier = ">=4,<5" },
+    { name = "dash", specifier = "~=3.1.0" },
+    { name = "dash-bootstrap-components", specifier = "~=2.0.0" },
+    { name = "datasets", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'", specifier = ">=3.0,>=4.7.0" },
+    { name = "deepeval", marker = "extra == 'accuracy'", specifier = ">=2.9.0,<5.0.0" },
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "ffmpeg-python", specifier = "~=0.2.0" },
+    { name = "filelock", specifier = ">=3.13" },
+    { name = "gpytorch", marker = "extra == 'botorch'", specifier = ">=1.11" },
+    { name = "gpytorch", marker = "extra == 'optuna'", specifier = ">=1.11" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
+    { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27.0" },
+    { name = "huggingface-hub", specifier = ">=0.34.0,<2.0" },
+    { name = "hypothesis", marker = "platform_machine == 'ARM64' and sys_platform == 'win32' and extra == 'dev'", specifier = ">=6.0.0,<6.156" },
+    { name = "hypothesis", marker = "platform_machine == 'ARM64' and sys_platform == 'win32' and extra == 'test'", specifier = ">=6.0.0,<6.156" },
+    { name = "hypothesis", marker = "(platform_machine != 'ARM64' and extra == 'dev') or (sys_platform != 'win32' and extra == 'dev')", specifier = ">=6.0.0" },
+    { name = "hypothesis", marker = "(platform_machine != 'ARM64' and extra == 'test') or (sys_platform != 'win32' and extra == 'test')", specifier = ">=6.0.0" },
+    { name = "jinja2", specifier = "~=3.1.5" },
+    { name = "jmespath", specifier = "~=1.0.1" },
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "jsonschema", marker = "extra == 'test'", specifier = ">=4.0.0" },
+    { name = "kaleido", specifier = "~=1.2.0" },
+    { name = "latex2sympy2-extended", marker = "extra == 'accuracy'", specifier = ">=1.0.6" },
+    { name = "lighteval", marker = "extra == 'accuracy'", specifier = ">=0.13.0" },
+    { name = "looptime", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "looptime", marker = "extra == 'test'", specifier = ">=0.5" },
+    { name = "matplotlib", specifier = ">=3.10.0" },
+    { name = "mlflow", marker = "extra == 'dev'", specifier = ">=3.10.0,<4.0.0" },
+    { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=3.10.0,<4.0.0" },
+    { name = "msgspec", specifier = ">=0.19.0,<1.0.0" },
+    { name = "numpy", specifier = ">=1.26.4,<3" },
+    { name = "nvidia-ml-py" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'dev'", specifier = ">=1.24.0,<2.0.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.24.0,<2.0.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'dev'", specifier = ">=1.24.0,<2.0.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.24.0,<2.0.0" },
+    { name = "optuna", specifier = ">=3.6" },
+    { name = "optuna-integration", marker = "extra == 'botorch'", specifier = ">=3.6" },
+    { name = "optuna-integration", marker = "extra == 'optuna'", specifier = ">=3.6" },
+    { name = "orjson", specifier = "~=3.11.7" },
+    { name = "pandas", specifier = "~=2.3.3" },
+    { name = "pillow", specifier = "~=12.2.0" },
+    { name = "plotly", specifier = "~=6.4.0" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.2.0" },
+    { name = "prometheus-client", specifier = "~=0.23.1" },
+    { name = "protobuf", specifier = ">=4" },
+    { name = "psutil", specifier = "~=7.0.0" },
+    { name = "pyarrow", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'", specifier = ">=18.0.0" },
+    { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
+    { name = "pydantic-settings", specifier = ">=2.10.0,<3.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'" },
+    { name = "pytest-asyncio", marker = "extra == 'test'" },
+    { name = "pytest-cov", marker = "extra == 'dev'" },
+    { name = "pytest-cov", marker = "extra == 'test'" },
+    { name = "pytest-rerunfailures", marker = "extra == 'dev'", specifier = ">=15.0" },
+    { name = "pytest-rerunfailures", marker = "extra == 'test'", specifier = ">=15.0" },
+    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "pytest-timeout", marker = "extra == 'test'", specifier = ">=2.0.0" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8.0" },
+    { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.8.0" },
+    { name = "pyzmq", specifier = "~=26.4.0" },
+    { name = "rich", specifier = "~=14.1.0" },
+    { name = "ruamel-yaml", specifier = "~=0.18.12" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.0,<0.15.0" },
+    { name = "scipy", specifier = ">=1.13.0" },
+    { name = "seaborn", specifier = "~=0.13.2" },
+    { name = "sentencepiece", specifier = ">=0.2.0" },
+    { name = "setproctitle", specifier = "~=1.3.6" },
+    { name = "soundfile", specifier = "~=0.13.1" },
+    { name = "starlette-compress", specifier = ">=1.0.1" },
+    { name = "sympy", marker = "extra == 'accuracy'", specifier = ">=1.14.0" },
+    { name = "textual", specifier = "~=5.3.0" },
+    { name = "tiktoken", specifier = ">=0.7.0,<1" },
+    { name = "torch", marker = "extra == 'botorch'", specifier = ">=2.0" },
+    { name = "torch", marker = "extra == 'optuna'", specifier = ">=2.0" },
+    { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "transformers", specifier = ">=4.56.0" },
+    { name = "trustme", marker = "(platform_machine != 'ARM64' and extra == 'dev') or (sys_platform != 'win32' and extra == 'dev')", specifier = ">=1.0.0" },
+    { name = "trustme", marker = "(platform_machine != 'ARM64' and extra == 'test') or (sys_platform != 'win32' and extra == 'test')", specifier = ">=1.0.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
+    { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.22.1" },
+    { name = "wandb", marker = "extra == 'dev'", specifier = ">=0.19.0,<1.0.0" },
+    { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.19.0,<1.0.0" },
+    { name = "zstandard", specifier = ">=0.25.0" },
+]
+provides-extras = ["accuracy", "botorch", "dev", "mlflow", "optuna", "otel", "test", "wandb"]
 
 [[package]]
 name = "aiofiles"
@@ -1669,7 +1765,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "agentx-harness", specifier = "==1.0.12" }]
+requires-dist = [{ name = "agentx-harness", url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post1/agentx_harness-1.0.12.post1-py3-none-any.whl" }]
 
 [[package]]
 name = "soundfile"
