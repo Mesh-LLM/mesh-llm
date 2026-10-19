@@ -392,6 +392,16 @@ systemctl --user restart mesh-llm.service
 # macOS: launchctl kickstart -k gui/$(id -u)/com.mesh-llm.mesh-llm
 ```
 
+On Windows, `setup --service` registers a per-user scheduled task named
+`mesh-llm` that runs a bare `serve` through `mesh-llm service-host`. There is
+no `service.env`: write the token to `%USERPROFILE%\.mesh-llm\invite.token`,
+the default location. A node that started without any token starts its own
+mesh and does not look for one later, so after writing the first token restart
+the task: `schtasks /End /TN mesh-llm`, then `schtasks /Run /TN mesh-llm`. From
+then on the file is re-read on every rejoin. The task's output goes to
+`%LOCALAPPDATA%\mesh-llm\logs\service.log`; past 10 MiB, and at each start, it
+moves to `service.previous.log`, so the logs stay under 20 MiB.
+
 The token file is re-read on every rejoin attempt, so replacing its contents is
 all a rotation needs: no unit edit and no restart. The same holds for a token at
 the default location, which is re-resolved on each attempt rather than frozen at

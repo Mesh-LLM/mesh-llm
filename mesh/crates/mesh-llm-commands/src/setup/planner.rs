@@ -38,7 +38,7 @@ pub fn plan_setup<P: SetupPrompter>(
         return Err(SetupPlanError::ConflictingServiceFlags);
     }
 
-    if options.service && matches!(environment.platform, SetupPlatform::Windows) {
+    if options.service && !environment.platform.supports_service() {
         return Err(SetupPlanError::UnsupportedService {
             platform: environment.platform,
         });
