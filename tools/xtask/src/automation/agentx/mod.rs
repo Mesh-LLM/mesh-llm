@@ -119,12 +119,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
             PathBuf::from(parsed.last("--output").ok_or("missing output")?),
         ),
         [verb] if *verb == "run" => {
-            if !Path::new("/.dockerenv").exists()
-                || !std::env::var("AGENTX_CONTAINER_IMAGE")
-                    .is_ok_and(|image| image.starts_with("sha256:") && image.len() == 71)
-            {
-                return Err("AgentX benchmark cells require the JY GPU container".into());
-            }
+            hardware::admit_execution()?;
             let root = std::env::current_dir()?;
             let profile = Profile::parse(parsed.last("--profile").ok_or("missing profile")?)?;
             let output = PathBuf::from(parsed.last("--output").ok_or("missing output")?);

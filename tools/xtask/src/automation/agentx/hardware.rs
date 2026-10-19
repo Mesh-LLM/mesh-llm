@@ -3,6 +3,42 @@ use super::{Prepared, command, write};
 use crate::command::DynResult;
 use serde_json::{Value, json};
 
+pub(super) fn admit_execution() -> DynResult<()> {
+    validate_execution(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::path::Path::new("/.dockerenv").exists(),
+        std::env::var("AGENTX_CONTAINER_IMAGE").ok().as_deref(),
+        std::env::var("JIANYANG_RUN_ID").ok().as_deref(),
+        std::env::var("JIANYANG_COMMIT").ok().as_deref(),
+    )
+}
+
+fn validate_execution(
+    os: &str,
+    arch: &str,
+    in_container: bool,
+    image: Option<&str>,
+    run: Option<&str>,
+    commit: Option<&str>,
+) -> DynResult<()> {
+    match (os, arch) {
+        ("linux", "aarch64")
+            if in_container
+                && image.is_some_and(|value| {
+                    value.strip_prefix("sha256:").is_some_and(|digest| {
+                        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+                }) => Ok(()),
+        ("macos", "aarch64")
+            if run.is_some_and(|value| value.starts_with("run_") && value.len() > 4)
+                && commit.is_some_and(|value| {
+                    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }) => Ok(()),
+        _ => Err("AgentX requires the JY GPU container on Spark or a pinned native JY job on Apple Silicon".into()),
+    }
+}
+
 pub(super) fn capture(input: &Prepared) -> DynResult<()> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
@@ -69,6 +105,57 @@ fn apple_metal(gpu: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn execution_requires_platform_appropriate_provenance() {
+        let image = format!("sha256:{}", "a".repeat(64));
+        let commit = "b".repeat(40);
+        assert!(validate_execution("linux", "aarch64", true, Some(&image), None, None).is_ok());
+        assert!(
+            validate_execution(
+                "linux",
+                "aarch64",
+                false,
+                Some(&image),
+                Some("run_test"),
+                Some(&commit)
+            )
+            .is_err()
+        );
+        assert!(
+            validate_execution("linux", "aarch64", true, Some("sha256:invalid"), None, None)
+                .is_err()
+        );
+        assert!(
+            validate_execution(
+                "macos",
+                "aarch64",
+                false,
+                None,
+                Some("run_test"),
+                Some(&commit)
+            )
+            .is_ok()
+        );
+        for (run, revision) in [
+            (None, Some(commit.as_str())),
+            (Some("run_test"), None),
+            (Some("run_"), Some(commit.as_str())),
+            (Some("run_test"), Some("main")),
+        ] {
+            assert!(validate_execution("macos", "aarch64", false, None, run, revision).is_err());
+        }
+        assert!(
+            validate_execution(
+                "windows",
+                "aarch64",
+                true,
+                Some(&image),
+                Some("run_test"),
+                Some(&commit)
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn admits_recorded_apple_metal_and_spark_reports() {
