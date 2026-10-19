@@ -11,32 +11,39 @@
 
 version: 1
 
-# Backend-correct build, per the agentx template lessons: the build must
-# select the backend from the machine, or a GB10 silently serves CPU numbers
-# that look exactly like GPU ones. The facade example builds llama and ggml
-# as shared libraries inside Cargo's OUT_DIR and finds them by rpath.
-build: |
-  export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
-  cd "${repo_dir}"
-  if [[ ! -d skippy/skippy_api/.deps/llama.cpp/src/skippy ]]; then
-    scripts/prepare-llama.sh pinned
-  fi
-  case "$(uname -s)" in
-    Darwin) backend=metal ;;
-    Linux)  backend=cuda ;;
-    *)      backend=cpu ;;
-  esac
-  echo "building split-frontier example for backend: $backend"
-  (
-    cd skippy/skippy-api-rs
-    cargo build --locked -p skippy --example every_frontier --release
-  )
-
 templates:
   - key: split-frontier-smoke
     name: Split frontier smoke (every boundary, small dense model)
     group: Benchmarks
     priority: 20
+    # Self-contained build per template: a template-level build overrides the
+    # file-level one at sync, so the example never inherits a file-level build that
+    # targets the wrong product (the jianyang interim copy's file-level build runs
+    # `just release-host-build`, which dies on the fleet's older just — this example
+    # needs no just at all).
+    build: |
+      # KEEP THE MACHINE AWAKE FOR THE BUILD (Darwin only): a build this long dies on
+      # "no heartbeat for 300s" if the box sleeps mid-build. $$ is the top-level PID
+      # even in this subshell, so one caffeinate covers build and command.
+      if [ "$(uname -s)" = Darwin ] && command -v caffeinate >/dev/null 2>&1; then
+        caffeinate -dimsu -w $$ &
+        echo "holding this Mac awake for the build (caffeinate pid $!)"
+      fi
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd "${repo_dir}"
+      if [[ ! -d skippy/skippy_api/.deps/llama.cpp/src/skippy ]]; then
+        scripts/prepare-llama.sh pinned
+      fi
+      case "$(uname -s)" in
+        Darwin) backend=metal ;;
+        Linux)  backend=cuda ;;
+        *)      backend=cpu ;;
+      esac
+      echo "building split-frontier example for backend: $backend"
+      (
+        cd skippy/skippy-api-rs
+        cargo build --locked -p skippy --example every_frontier --release
+      )
     description: >
       Full every-frontier matrix on SmolLM2-135M Q8_0 through the typed skippy_api
       facade: every 2-stage frontier plus 3-stage handoff chains, terminal
@@ -77,6 +84,34 @@ templates:
     name: Split frontier certify (dense + hybrid recurrent legs)
     group: Benchmarks
     priority: 10
+    # Self-contained build per template: a template-level build overrides the
+    # file-level one at sync, so the example never inherits a file-level build that
+    # targets the wrong product (the jianyang interim copy's file-level build runs
+    # `just release-host-build`, which dies on the fleet's older just — this example
+    # needs no just at all).
+    build: |
+      # KEEP THE MACHINE AWAKE FOR THE BUILD (Darwin only): a build this long dies on
+      # "no heartbeat for 300s" if the box sleeps mid-build. $$ is the top-level PID
+      # even in this subshell, so one caffeinate covers build and command.
+      if [ "$(uname -s)" = Darwin ] && command -v caffeinate >/dev/null 2>&1; then
+        caffeinate -dimsu -w $$ &
+        echo "holding this Mac awake for the build (caffeinate pid $!)"
+      fi
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH"
+      cd "${repo_dir}"
+      if [[ ! -d skippy/skippy_api/.deps/llama.cpp/src/skippy ]]; then
+        scripts/prepare-llama.sh pinned
+      fi
+      case "$(uname -s)" in
+        Darwin) backend=metal ;;
+        Linux)  backend=cuda ;;
+        *)      backend=cpu ;;
+      esac
+      echo "building split-frontier example for backend: $backend"
+      (
+        cd skippy/skippy-api-rs
+        cargo build --locked -p skippy --example every_frontier --release
+      )
     description: >
       Every-frontier matrix on the dense smoke model plus the mandatory hybrid
       leg (granite-4.0-h-350m): recurrent-state frontiers are the historical
