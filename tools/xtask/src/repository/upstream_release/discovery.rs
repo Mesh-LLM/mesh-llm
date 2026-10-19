@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 pub(super) const QUERY: &str = r#"query($cursor:String) {
   repository(owner:"ggml-org",name:"llama.cpp") {
     releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}) {
-      nodes { id:databaseId tag_name:tagName draft:isDraft prerelease:isPrerelease created_at:createdAt published_at:publishedAt }
+      nodes { id:databaseId tag_name:tagName draft:isDraft prerelease:isPrerelease published_at:publishedAt }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -48,21 +48,9 @@ pub(super) fn newest(
         if page.nodes.len() > 100 || (page.nodes.is_empty() && page.page_info.has_next_page) {
             return Err("invalid upstream release page size".into());
         }
-        let mut oldest_created_at: Option<String> = None;
         for release in page.nodes {
             if release.id == 0 || !identities.insert(release.id) {
                 return Err("invalid or repeated upstream release identity".into());
-            }
-            let created = release
-                .created_at
-                .as_deref()
-                .ok_or("upstream release has no creation time")?;
-            validate_timestamp(created)?;
-            if oldest_created_at
-                .as_deref()
-                .is_none_or(|oldest| created < oldest)
-            {
-                oldest_created_at = Some(created.to_owned());
             }
             if release.draft {
                 continue;
@@ -82,16 +70,11 @@ pub(super) fn newest(
         if !page.page_info.has_next_page {
             return newest.ok_or_else(|| "no published upstream releases found".into());
         }
-        // The feed is ordered by creation time, so every release on a later page was
-        // created no later than this page's oldest creation time. Once the newest
-        // publication already found predates that point, no later page can hold a newer
-        // publication, and the scan stops instead of walking a feed that only grows. A
-        // draft created earlier but published later is the one release such a scan
-        // cannot see; the scheduled run re-checks the feed, so the selection stays a
-        // published release rather than a partial result.
-        if reaches_publication_horizon(newest.as_ref(), oldest_created_at.as_deref()) {
-            return newest.ok_or_else(|| "no published upstream releases found".into());
-        }
+        // Every page is read before selecting: the feed is ordered by creation time, so a
+        // draft created long ago and published recently sits on a late page, and stopping
+        // early on a publication horizon would hide it on every scheduled run rather than
+        // only until the next one. The 180-second lookup budget and the page ceiling are
+        // the bounds on a feed that only grows.
         let next = page
             .page_info
             .end_cursor
@@ -102,19 +85,6 @@ pub(super) fn newest(
         cursor = Some(next);
     }
     Err("upstream release pagination exceeds 1000-page limit; no partial selection admitted".into())
-}
-
-/// True when a later page cannot hold a newer publication. The feed is ordered by creation
-/// time, and a release becomes visible on its creation page, so anything on a later page was
-/// created at or before `oldest_created_at`. A directly published release is published at its
-/// creation time, which is already older than the newest publication found. The one release
-/// this cannot rule out is a draft created earlier and published later; the caller re-checks
-/// the feed on its next scheduled run instead of widening every scan.
-fn reaches_publication_horizon(newest: Option<&Release>, oldest_created_at: Option<&str>) -> bool {
-    newest
-        .and_then(|release| release.published_at.as_deref())
-        .zip(oldest_created_at)
-        .is_some_and(|(published, oldest)| published > oldest)
 }
 
 fn validate_timestamp(value: &str) -> DynResult<()> {

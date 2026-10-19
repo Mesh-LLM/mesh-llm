@@ -2,12 +2,8 @@ use super::*;
 use serde_json::{Value, json};
 
 fn release(id: u64, prerelease: bool, published: &str) -> Value {
-    release_created(id, prerelease, published, published)
-}
-
-fn release_created(id: u64, prerelease: bool, published: &str, created: &str) -> Value {
     json!({"id":id,"tag_name":format!("b{id}"),"draft":false,
-        "prerelease":prerelease,"created_at":created,"published_at":published})
+        "prerelease":prerelease,"published_at":published})
 }
 
 fn page(nodes: Vec<Value>, cursor: Option<&str>) -> Value {
@@ -34,7 +30,6 @@ fn publication_order_beats_pinned_stable_feed_position_and_release_kind() {
 fn later_pages_are_compared_and_drafts_are_excluded() {
     let mut draft = release(30, false, "2027-01-01T00:00:00Z");
     draft["draft"] = json!(true);
-    draft["created_at"] = json!("2027-01-01T00:00:00Z");
     draft["published_at"] = Value::Null;
     let mut calls = 0;
     let selected = newest(&mut |request| {
@@ -56,6 +51,27 @@ fn later_pages_are_compared_and_drafts_are_excluded() {
     })
     .unwrap();
     assert_eq!(selected.id, 10);
+    assert_eq!(calls, 2);
+}
+
+#[test]
+fn a_later_page_holding_the_newest_publication_is_always_read() {
+    // A draft created before the first page but published after it appears on a later page,
+    // because the feed is ordered by creation time. Any scan that stops before the last page
+    // hides that release on every run, so the whole feed is read.
+    let mut calls = 0;
+    let selected = newest(&mut |_| {
+        calls += 1;
+        Ok(match calls {
+            1 => page(
+                vec![release(80, true, "2026-10-16T00:00:00Z")],
+                Some("next"),
+            ),
+            _ => page(vec![release(70, false, "2026-10-18T00:00:00Z")], None),
+        })
+    })
+    .unwrap();
+    assert_eq!(selected.id, 70);
     assert_eq!(calls, 2);
 }
 
@@ -150,55 +166,4 @@ fn pagination_limit_never_returns_a_partial_selection() {
     .unwrap();
     assert_eq!(id, 1000);
     assert!(error.to_string().contains("pagination"));
-}
-
-#[test]
-fn a_page_older_than_the_newest_publication_ends_the_scan() {
-    let mut calls = 0;
-    let selected = newest(&mut |_| {
-        calls += 1;
-        Ok(page(
-            vec![
-                release_created(40, true, "2026-10-16T00:00:00Z", "2026-10-16T00:00:00Z"),
-                release_created(39, false, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z"),
-            ],
-            Some("next"),
-        ))
-    })
-    .unwrap();
-    assert_eq!(selected.id, 40);
-    // A later page can only hold releases created on or before 2026-10-01, and a directly
-    // published release publishes at its creation time, so the scan stops on one page.
-    assert_eq!(calls, 1);
-}
-
-#[test]
-fn a_creation_tie_with_the_newest_publication_keeps_scanning() {
-    let mut calls = 0;
-    let selected = newest(&mut |_| {
-        calls += 1;
-        Ok(match calls {
-            1 => page(
-                vec![release(50, false, "2026-10-16T00:00:00Z")],
-                Some("next"),
-            ),
-            _ => page(vec![release(51, true, "2026-10-16T00:00:00Z")], None),
-        })
-    })
-    .unwrap();
-    assert_eq!(selected.id, 51);
-    assert_eq!(calls, 2);
-}
-
-#[test]
-fn missing_or_invalid_creation_times_fail_closed() {
-    let mut missing = release(60, false, "2026-10-16T00:00:00Z");
-    missing.as_object_mut().unwrap().remove("created_at");
-    for row in [
-        missing,
-        release_created(61, false, "2026-10-16T00:00:00Z", "2026-02-30T00:00:00Z"),
-        release_created(62, true, "2026-10-16T00:00:00Z", ""),
-    ] {
-        assert!(newest(&mut |_| Ok(page(vec![row.clone()], None))).is_err());
-    }
 }

@@ -190,12 +190,11 @@ one main source SHA and the upstream target before any hardware work. The
 default target is the newest published llama.cpp release or prerelease, resolved
 by the Rust `repository llama-upstream-release` command. The hosted resolver
 compares publication times across the paginated metadata feed, excluding drafts.
-It walks pages newest-created first and stops once a page's oldest creation time
-predates the newest publication it has found, because no later page can then hold
-a newer directly published release; a draft published long after it was created
-is outside that bound and waits for the next scheduled run. It peels the selected
-tag to an exact commit and records its kind, publication time, tag and SHA in the
-summary. API errors, missing releases and moving tags fail before hardware work;
+It reads every page of the feed before selecting and records the selected
+release's kind, publication time, tag and SHA in the summary, because the feed
+is ordered by creation time and a draft created long ago but published recently
+sits on a late page. It peels the selected tag to an exact commit. API errors,
+missing releases and moving tags fail before hardware work;
 there is no `master` fallback. Public API reads use the workflow's read-only
 token only in that selection step. Fixed read-only GraphQL queries fetch metadata
 without assets; REST resolves the tag. A 180-second total budget, 1 MiB response

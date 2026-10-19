@@ -42,7 +42,8 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "UPSTREAM",
         "${{ inputs.upstream_sha }}",
     )?;
-    h::binding(selection, "timeout-minutes", "3")?;
+    // The selection step must outlast the resolver's own 180-second API budget.
+    h::binding(selection, "timeout-minutes", "5")?;
     h::command(
         selection,
         &[

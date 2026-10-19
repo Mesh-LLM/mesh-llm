@@ -18,7 +18,6 @@ struct Release {
     tag_name: String,
     draft: bool,
     prerelease: bool,
-    created_at: Option<String>,
     published_at: Option<String>,
 }
 

@@ -7,7 +7,7 @@ const TAG: &str = "2222222222222222222222222222222222222222";
 
 fn release() -> Value {
     json!({"id":123,"tag_name":"v0.7.0","draft":false,"prerelease":false,
-        "created_at":"2026-10-15T17:13:19Z","published_at":"2026-10-15T17:13:19Z",
+        "published_at":"2026-10-15T17:13:19Z",
         "target_commitish":"master"})
 }
 fn reference(kind: &str, sha: &str) -> Value {

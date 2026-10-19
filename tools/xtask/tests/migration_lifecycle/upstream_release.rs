@@ -40,7 +40,7 @@ impl Fixture {
             serde_json::to_vec(&serde_json::json!({
                 "data":{"repository":{"releases":{
                     "nodes":[{"id":123,"tag_name":"v0.7.0","draft":false,"prerelease":false,
-                        "created_at":"2026-10-15T17:13:19Z","published_at":"2026-10-15T17:13:19Z",
+                        "published_at":"2026-10-15T17:13:19Z",
                         "target_commitish":"master"}],
                     "pageInfo":{"hasNextPage":false,"endCursor":null}
                 }}}
@@ -166,7 +166,7 @@ fn release_cli_selects_newer_prerelease_across_pages_and_records_its_kind() {
     let mut second = first;
     second["data"]["repository"]["releases"]["nodes"] = serde_json::json!([
         {"id":124,"tag_name":"b11671","draft":false,"prerelease":true,
-         "created_at":"2026-10-16T00:18:22Z","published_at":"2026-10-16T00:18:22Z"}
+         "published_at":"2026-10-16T00:18:22Z"}
     ]);
     second["data"]["repository"]["releases"]["pageInfo"] =
         serde_json::json!({"hasNextPage":false,"endCursor":null});

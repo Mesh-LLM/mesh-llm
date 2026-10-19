@@ -124,12 +124,11 @@ source SHA, and uploads the reproducible failure log.
 one main source SHA and the upstream target before any hardware work. Default
 selection uses `repository llama-upstream-release` to compare publication times
 across pages of `ggml-org/llama.cpp` release metadata, including prereleases and
-excluding drafts, then peel the selected tag to an exact commit. Pages are walked
-newest-created first and the scan stops once a page's oldest creation time
-predates the newest publication found, so a growing feed stays inside its budget;
-a draft published long after it was created is outside that bound and waits for
-the next scheduled run. It records the release kind, publication time, tag and
-commit in the Actions summary and rejects lookup failures or tag movement
+excluding drafts, then peel the selected tag to an exact commit. Every page is
+read before selecting: the feed is ordered by creation time, so a draft created
+long ago but published recently is on a late page, and the 180-second budget and
+1000-page ceiling bound the walk. It records the release kind, publication time,
+tag and commit in the Actions summary and rejects lookup failures or tag movement
 without falling back to `master`. The hosted selection step alone receives
 the workflow's read-only GitHub token; fixed read-only GraphQL queries fetch
 metadata without release assets, and REST resolves the selected tag. The lookup
