@@ -297,14 +297,16 @@ impl RuntimeState {
     }
 
     pub(super) fn take_idle_session(&mut self) -> Option<RuntimeLaneSession> {
-        if let Some(index) = self
-            .idle_sessions
-            .iter()
-            .position(|idle| idle.resident_prefix.is_none() && idle.recurrent_prefixes.is_empty())
-        {
-            return Some(self.idle_sessions.swap_remove(index));
-        }
-        self.idle_sessions.pop()
+        let index = super::idle_retention::select_idle_victim(
+            self.idle_sessions.iter().enumerate().map(|(index, lane)| {
+                (
+                    index,
+                    lane.resident_prefix.is_none() && lane.recurrent_prefixes.is_empty(),
+                    lane.parked_at,
+                )
+            }),
+        )?;
+        Some(self.idle_sessions.swap_remove(index))
     }
 
     pub fn retain_resident_prefix_on_drop(
@@ -481,6 +483,7 @@ impl RuntimeState {
             || model.create_session_from_resident_prefix(cache_seq_id, token_ids),
         )?;
         let lane_session = RuntimeLaneSession {
+            parked_at: Instant::now(),
             index,
             session,
             resident_prefix: None,
@@ -550,6 +553,7 @@ impl RuntimeState {
             || model.create_session(),
         )?;
         Ok(RuntimeLaneSession {
+            parked_at: Instant::now(),
             index,
             session,
             resident_prefix: None,

@@ -19,6 +19,7 @@ use skippy_runtime::{
 
 mod context_capacity;
 mod frame_operations;
+mod idle_retention;
 mod lane_lifecycle;
 pub mod lifecycle;
 pub mod panic_recovery;
@@ -77,6 +78,7 @@ pub struct RuntimeState {
 }
 
 struct RuntimeLaneSession {
+    parked_at: Instant,
     index: usize,
     session: StageSession,
     resident_prefix: Option<ResidentLanePrefix>,

@@ -149,10 +149,11 @@ impl RuntimeState {
         {
             return false;
         }
-        let lane = self
+        let mut lane = self
             .sessions
             .remove(session_id)
             .expect("checked active lane");
+        lane.parked_at = Instant::now();
         self.idle_sessions.push(lane);
         self.session_token_counts.remove(session_id);
         self.session_resident_prefixes.remove(session_id);
@@ -237,19 +238,19 @@ impl RuntimeState {
     }
 
     pub(super) fn demote_recurrent_lane(lane: &mut RuntimeLaneSession, start: u32, end: u32) {
-        // Preserve the newest continuation, then a durable shared boundary.
+        // Save the shared boundary first: generated continuations may diverge\n        // from the next tool turn. Avoid exporting intermediate full prompts.
         let mut entries = std::mem::take(&mut lane.recurrent_prefixes);
         let newest = entries.last().map(|entry| entry.identity.token_ids.len());
         let oldest = entries.first().map(|entry| entry.identity.token_ids.len());
         entries.sort_by_key(|entry| {
             std::cmp::Reverse((
-                Some(entry.identity.token_ids.len()) == newest,
                 Some(entry.identity.token_ids.len()) == oldest,
+                Some(entry.identity.token_ids.len()) == newest,
                 entry.policy.write_through_l3,
                 entry.identity.token_ids.len(),
             ))
         });
-        for entry in entries {
+        for entry in entries.into_iter().take(2) {
             Self::demote_recurrent_checkpoint(lane, entry, start, end);
         }
     }
@@ -268,13 +269,17 @@ impl RuntimeState {
         {
             return;
         }
-        let _ = entry.cache.demote_resident_recurrent(
+        if let Err(error) = entry.cache.demote_resident_recurrent(
             &mut lane.session,
             start,
             end,
             &entry.identity,
             entry.recurrent,
             entry.policy,
-        );
+        ) {
+            entry.cache.notify_demotion_error();
+            // Errors affect optional cache retention, never generation output.
+            tracing::debug!(error = %error, "resident recurrent checkpoint demotion failed");
+        }
     }
 }

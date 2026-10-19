@@ -29,11 +29,31 @@ pub const EXACT_STATE_ADMISSION_RESERVED: usize = 1;
 #[derive(Debug)]
 pub struct ExactStateAdmissionCredit {
     class: CaptureAdmission,
+    bytes: Option<super::export_budget::ExportByteReservation>,
     total: Arc<std::sync::atomic::AtomicUsize>,
     best_effort: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl ExactStateAdmissionCredit {
+    pub(crate) fn reserve_bytes(
+        &mut self,
+        counter: &Arc<std::sync::atomic::AtomicU64>,
+        bytes: u64,
+        cap: u64,
+    ) -> bool {
+        self.bytes = super::export_budget::ExportByteReservation::acquire(counter, bytes, cap);
+        self.bytes.is_some()
+    }
+
+    pub(crate) fn transfer_reserved_bytes(
+        &mut self,
+        counter: &std::sync::atomic::AtomicU64,
+        bytes: u64,
+    ) -> bool {
+        self.bytes
+            .take()
+            .is_some_and(|reservation| reservation.transfer(counter, bytes))
+    }
     pub(crate) fn acquire(
         total: &Arc<std::sync::atomic::AtomicUsize>,
         best_effort: &Arc<std::sync::atomic::AtomicUsize>,
@@ -51,6 +71,7 @@ impl ExactStateAdmissionCredit {
                         Ok(_) => {
                             return Some(Self {
                                 class,
+                                bytes: None,
                                 total: Arc::clone(total),
                                 best_effort: Arc::clone(best_effort),
                             });
@@ -93,6 +114,7 @@ impl ExactStateAdmissionCredit {
                         Ok(_) => {
                             return Some(Self {
                                 class,
+                                bytes: None,
                                 total: Arc::clone(total),
                                 best_effort: Arc::clone(best_effort),
                             });

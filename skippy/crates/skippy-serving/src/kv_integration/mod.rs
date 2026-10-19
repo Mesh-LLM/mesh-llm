@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod export_admission_tests;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -572,7 +574,7 @@ fn enqueue_exact_state_record(
     queue_bytes: &AtomicU64,
     queue_bytes_cap: u64,
     worker_healthy: &AtomicBool,
-    pending: PendingExactStateRecord,
+    mut pending: PendingExactStateRecord,
 ) -> ExactStateRecordAdmission {
     if !worker_healthy.load(std::sync::atomic::Ordering::Acquire) {
         inflight_records
@@ -585,8 +587,18 @@ fn enqueue_exact_state_record(
     let bytes = pending.payload.byte_len();
     // Claim the bytes before the send so two producers cannot both see room.
     // Released on every non-queued path below, and by the worker on finish.
-    let held = queue_bytes.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
-    if !record_fits_queue(held, bytes, queue_bytes_cap) {
+    let reserved = pending
+        .admission_credit
+        .transfer_reserved_bytes(queue_bytes, bytes);
+    let held = if reserved {
+        queue_bytes
+            .load(std::sync::atomic::Ordering::Acquire)
+            .saturating_sub(bytes)
+    } else {
+        queue_bytes.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel)
+    };
+
+    if !reserved && !record_fits_queue(held, bytes, queue_bytes_cap) {
         queue_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Release);
         inflight_records
             .lock()

@@ -43,6 +43,10 @@ impl StageOpenAiBackend {
                 (false, 0, None)
             };
         ensure_cache_operation_active(runtime, session_id, cache_operation)?;
+        self.generation_service_estimator.advance(
+            session_id,
+            crate::frontend::generation::GenerationAdmissionWork::new(restored_prefill_tokens, 0),
+        );
         let capacity = if let Some(kv) = self.kv.as_ref() {
             let decode_batch_tokens = u64::from(self.config.n_batch.unwrap_or(2048));
             let target_free_tokens =

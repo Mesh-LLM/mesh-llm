@@ -1,5 +1,6 @@
 mod completion_exchange;
 mod exchange_hooks;
+mod generation_observation;
 mod prepared_exchange;
 #[cfg(test)]
 mod prepared_exchange_tests;
@@ -35,7 +36,6 @@ use crate::frontend::generation::completion_response_from_generated_text;
 use crate::frontend::generation::ensure_requested_model;
 use crate::frontend::generation::generation_event_to_chat_chunk;
 use crate::frontend::generation::generation_event_to_completion_chunk;
-use crate::frontend::generation::generation_predicted_wait_error;
 use crate::frontend::generation::generation_queue_timeout_error;
 use crate::frontend::generation::template_exposes_reasoning;
 use crate::frontend::request::{
@@ -503,7 +503,7 @@ impl GenerationAdmissionController {
                 deadline,
                 admission_timeout,
                 cancellation,
-                work,
+                (&ids.session_label, work),
                 scheduling,
             )
             .await?;
@@ -542,7 +542,7 @@ impl GenerationAdmissionController {
         deadline: Option<Instant>,
         admission_timeout: Duration,
         cancellation: &skippy_inference_api::CancellationToken,
-        work: GenerationAdmissionWork,
+        (session, work): (&str, GenerationAdmissionWork),
         scheduling: GenerationAdmissionScheduling,
     ) -> InferenceResult<GenerationAdmissionPermit> {
         if cancellation.is_cancelled() {
@@ -563,7 +563,9 @@ impl GenerationAdmissionController {
             GenerationAdmissionClaim::Acquired(resources) => Ok(GenerationAdmissionPermit {
                 _lane: self.generation_limit.wrap_permit(resources.lane),
                 token_budget: resources.token_budget,
-                _active_work: self.generation_service_estimator.start_active(work),
+                _active_work: self
+                    .generation_service_estimator
+                    .start_active(work, session),
                 predicted_wait_ms: Some(0.0),
                 demand_epoch: self.generation_limit.demand_epoch(),
                 queued_at_start: self.generation_queue_depth.load(Ordering::Acquire) > 0,
@@ -573,15 +575,8 @@ impl GenerationAdmissionController {
             }),
             GenerationAdmissionClaim::Queued(lease) => {
                 self.generation_limit.note_queued_demand();
-                self.generation_service_estimator
-                    .set_concurrency(self.generation_limit.current_limit());
                 let predicted_wait_ms = self.generation_service_estimator.predicted_wait_ms();
-                let queued_work = self
-                    .generation_service_estimator
-                    .reserve_queued(work, admission_timeout)
-                    .map_err(|predicted_wait_ms| {
-                        generation_predicted_wait_error(predicted_wait_ms, admission_timeout)
-                    })?;
+                let queued_work = self.generation_service_estimator.reserve_queued(work);
                 let resources = lease
                     .acquire(
                         self.generation_limit.semaphore(),
@@ -593,7 +588,7 @@ impl GenerationAdmissionController {
                 Ok(GenerationAdmissionPermit {
                     _lane: self.generation_limit.wrap_permit(resources.lane),
                     token_budget: resources.token_budget,
-                    _active_work: queued_work.promote(),
+                    _active_work: queued_work.promote(session),
                     predicted_wait_ms,
                     demand_epoch: self.generation_limit.demand_epoch(),
                     queued_at_start: self.generation_queue_depth.load(Ordering::Acquire) > 0,
@@ -646,128 +641,7 @@ struct GenerationDemandObservation {
     started_at: Instant,
 }
 
-impl StageOpenAiBackend {
-    fn observe_generation_completed(
-        &self,
-        output: &GeneratedText,
-        demand: GenerationDemandObservation,
-    ) {
-        let work = GenerationAdmissionWork::new(
-            usize::try_from(output.prompt_tokens).unwrap_or(usize::MAX),
-            output.completion_tokens,
-        );
-        self.generation_service_estimator.observe_completed(
-            work,
-            output.prompt_ms,
-            output.predicted_ms,
-        );
-        let completed_tokens = work.prompt_tokens.saturating_add(work.decode_tokens);
-        let executed_tokens =
-            u64::from(output.suffix_prefill_tokens).saturating_add(work.decode_tokens);
-        let saturated = demand.waited_for_lane
-            || self.generation_limit.was_saturated_since(
-                demand.demand_epoch,
-                demand.queued_at_start,
-                self.generation_queue_depth.load(Ordering::Acquire) > 0,
-            );
-        let Some(decision) =
-            self.generation_limit
-                .observe_completed(GenerationConcurrencyObservation {
-                    completed_tokens,
-                    executed_tokens,
-                    latency_ms: output.prompt_ms + output.predicted_ms,
-                    saturated,
-                    at_capacity: demand.at_capacity_at_start,
-                    started_at: demand.started_at,
-                })
-        else {
-            return;
-        };
-        self.emit_generation_concurrency_decision(decision);
-    }
-
-    fn observe_generation_failed(&self) {
-        if let Some(decision) = self.generation_limit.observe_failed() {
-            self.emit_generation_concurrency_decision(decision);
-        }
-    }
-
-    fn emit_generation_concurrency_decision(&self, decision: GenerationConcurrencyDecision) {
-        self.generation_service_estimator
-            .set_concurrency(decision.current_limit);
-        let mut attrs = lifecycle_attrs(&self.config);
-        attrs.insert(
-            "llama_stage.generation_concurrency_action".to_string(),
-            json!(decision.action),
-        );
-        attrs.insert(
-            "llama_stage.generation_concurrency_reason".to_string(),
-            json!(decision.reason),
-        );
-        attrs.insert(
-            "llama_stage.generation_concurrency_previous".to_string(),
-            json!(decision.previous_limit),
-        );
-        attrs.insert(
-            "llama_stage.generation_concurrency_current".to_string(),
-            json!(decision.current_limit),
-        );
-        attrs.insert(
-            "llama_stage.generation_concurrency_ceiling".to_string(),
-            json!(self.generation_limit.hard_limit()),
-        );
-        if let Some(throughput) = decision.throughput_tokens_per_second {
-            attrs.insert(
-                "llama_stage.generation_throughput_tokens_per_second".to_string(),
-                json!(throughput),
-            );
-        }
-        if let Some(p95_latency_ms) = decision.p95_latency_ms {
-            attrs.insert(
-                "llama_stage.generation_p95_latency_ms".to_string(),
-                json!(p95_latency_ms),
-            );
-        }
-        if let Some(p95_hardware_ms_per_token) = decision.p95_hardware_ms_per_token {
-            attrs.insert(
-                "llama_stage.generation_p95_hardware_ms_per_token".to_string(),
-                json!(p95_hardware_ms_per_token),
-            );
-        }
-        if let Some(improvement) = decision.throughput_improvement {
-            attrs.insert(
-                "llama_stage.generation_throughput_improvement".to_string(),
-                json!(improvement),
-            );
-        }
-        if let Some(ratio) = decision.p95_latency_ratio {
-            attrs.insert(
-                "llama_stage.generation_p95_latency_ratio".to_string(),
-                json!(ratio),
-            );
-        }
-        if let Some(ratio) = decision.hardware_pressure_ratio {
-            attrs.insert(
-                "llama_stage.generation_hardware_pressure_ratio".to_string(),
-                json!(ratio),
-            );
-        }
-        if let Some(observed_requests) = decision.observed_requests {
-            attrs.insert(
-                "llama_stage.generation_observed_requests".to_string(),
-                json!(observed_requests),
-            );
-        }
-        if let Some(saturated_requests) = decision.saturated_requests {
-            attrs.insert(
-                "llama_stage.generation_saturated_requests".to_string(),
-                json!(saturated_requests),
-            );
-        }
-        self.telemetry
-            .emit("stage.openai_generation_concurrency_adapt", attrs);
-    }
-}
+impl StageOpenAiBackend {}
 
 fn insert_generation_admission_attrs(
     attrs: &mut BTreeMap<String, Value>,

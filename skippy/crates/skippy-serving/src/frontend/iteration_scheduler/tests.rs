@@ -82,6 +82,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
@@ -91,6 +92,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            direct_batch_policy: DirectBatchPolicy::default(),
             direct_group_batch_size: 1,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
@@ -148,6 +150,7 @@ fn direct_iteration_rechecks_deadline_after_worker_reply() {
     let (commands, receiver) = std_mpsc::sync_channel(1);
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            service_estimator: Arc::default(),
             commands,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             owner_count: AtomicUsize::new(1),
@@ -254,6 +257,7 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(2)));
     let (_commands, receiver) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime,
         scheduler: Scheduler::new(build_scheduler_config(2, 64, 0, Some(8), Some(8), 8, false)),
@@ -263,6 +267,7 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 2,
+        direct_batch_policy: DirectBatchPolicy::default(),
         direct_group_batch_size: 2,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
@@ -473,6 +478,7 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
     let (_commands, receiver) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime,
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
@@ -482,6 +488,7 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        direct_batch_policy: DirectBatchPolicy::default(),
         direct_group_batch_size: 1,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
@@ -532,6 +539,7 @@ fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
         .track_session_tokens_for_test("resumed", 1);
     let (_commands, receiver) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime: Arc::clone(&runtime),
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
@@ -541,6 +549,7 @@ fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        direct_batch_policy: DirectBatchPolicy::default(),
         direct_group_batch_size: 1,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
@@ -589,6 +598,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8, false)),
@@ -598,6 +608,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 3,
+            direct_batch_policy: DirectBatchPolicy::default(),
             direct_group_batch_size: 3,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
@@ -613,6 +624,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
     });
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            service_estimator: Arc::default(),
             commands,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             owner_count: AtomicUsize::new(1),
@@ -635,6 +647,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8, false)),
@@ -644,6 +657,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 3,
+            direct_batch_policy: DirectBatchPolicy::default(),
             direct_group_batch_size: 3,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
@@ -659,6 +673,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
     });
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            service_estimator: Arc::default(),
             commands,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             owner_count: AtomicUsize::new(1),
@@ -778,6 +793,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
     let (_commands, receiver) = std_mpsc::channel();
     let (selected, selected_rx) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime,
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
@@ -787,6 +803,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        direct_batch_policy: DirectBatchPolicy::default(),
         direct_group_batch_size: 1,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
@@ -826,6 +843,7 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
     let (_commands, receiver) = std_mpsc::channel();
     let (selected, selected_rx) = std_mpsc::channel();
     let mut worker = SchedulerWorker {
+        service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime,
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
@@ -835,6 +853,7 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
         commands: receiver,
         kv_capacity_tokens: 64,
         max_direct_batch_size: 1,
+        direct_batch_policy: DirectBatchPolicy::default(),
         direct_group_batch_size: 1,
         max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
         max_commands_per_turn: 8,
@@ -895,6 +914,7 @@ fn bounded_command_queue_fails_closed_with_overload() {
         .unwrap();
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            service_estimator: Arc::default(),
             commands,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             owner_count: AtomicUsize::new(1),
@@ -921,6 +941,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
@@ -930,6 +951,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            direct_batch_policy: DirectBatchPolicy::default(),
             direct_group_batch_size: 1,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
@@ -1041,6 +1063,7 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            service_estimator: Arc::default(),
             runtime,
             compute_meter: std::sync::Arc::default(),
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
@@ -1050,6 +1073,7 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            direct_batch_policy: DirectBatchPolicy::default(),
             direct_group_batch_size: 1,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
@@ -1135,6 +1159,7 @@ fn scheduler_worker_keeps_serving_after_an_operation_panics() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
@@ -1144,6 +1169,7 @@ fn scheduler_worker_keeps_serving_after_an_operation_panics() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            direct_batch_policy: DirectBatchPolicy::default(),
             direct_group_batch_size: 1,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
@@ -1197,6 +1223,7 @@ fn direct_iterations_in_a_panicking_batch_get_an_error() {
     let (commands, receiver) = std_mpsc::sync_channel(8);
     let worker = thread::spawn(move || {
         SchedulerWorker {
+            service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
@@ -1206,6 +1233,7 @@ fn direct_iterations_in_a_panicking_batch_get_an_error() {
             commands: receiver,
             kv_capacity_tokens: 64,
             max_direct_batch_size: 1,
+            direct_batch_policy: DirectBatchPolicy::default(),
             direct_group_batch_size: 1,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
             max_commands_per_turn: 8,
@@ -1235,4 +1263,26 @@ fn direct_iterations_in_a_panicking_batch_get_an_error() {
 
     commands.send(SchedulerCommand::Shutdown).unwrap();
     worker.join().unwrap();
+}
+
+#[test]
+fn recurrent_direct_batches_preserve_phase_policy_and_fifo_progress() {
+    let config = build_scheduler_config(4, 524_288, 52_690_944, Some(2048), Some(512), 4, false);
+    let policy = DirectBatchPolicy {
+        max_prefill_sequences: config.max_prefill_sequences_per_iteration,
+        mixed_prefill_decode: config.mixed_prefill_decode,
+    };
+    let mut decode = direct_iteration("decode", 1);
+    decode.phase = IterationBatchPhase::Decode;
+    let mut queue = VecDeque::from([
+        direct_iteration("a", 512),
+        decode,
+        direct_iteration("b", 512),
+    ]);
+    for expected in ["a", "decode", "b"] {
+        let batch = take_direct_iteration_batch_with_policy(&mut queue, 4, 2048, policy);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].session_id, expected);
+    }
+    assert!(queue.is_empty());
 }

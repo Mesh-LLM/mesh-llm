@@ -88,12 +88,44 @@ pub(super) const fn effective_scheduler_lane_count(
     }
 }
 
+/// The direct driver obeys the same capability-derived phase policy as plans.
+#[derive(Clone, Copy)]
+pub(super) struct DirectBatchPolicy {
+    pub max_prefill_sequences: usize,
+    pub mixed_prefill_decode: bool,
+}
+
+impl Default for DirectBatchPolicy {
+    fn default() -> Self {
+        Self {
+            max_prefill_sequences: usize::MAX,
+            mixed_prefill_decode: true,
+        }
+    }
+}
+
+#[cfg(test)]
 pub(super) fn take_direct_iteration_batch(
     queue: &mut VecDeque<DirectIteration>,
     max_batch_size: usize,
-    mut token_budget: usize,
+    token_budget: usize,
 ) -> Vec<DirectIteration> {
-    let mut batch = Vec::new();
+    take_direct_iteration_batch_with_policy(
+        queue,
+        max_batch_size,
+        token_budget,
+        DirectBatchPolicy::default(),
+    )
+}
+
+pub(super) fn take_direct_iteration_batch_with_policy(
+    queue: &mut VecDeque<DirectIteration>,
+    max_batch_size: usize,
+    mut token_budget: usize,
+    policy: DirectBatchPolicy,
+) -> Vec<DirectIteration> {
+    let mut batch: Vec<DirectIteration> = Vec::new();
+    let mut prefill_sequences = 0;
     // Sessions that already have a request in this wave or deferred from it.
     // A later request from such a session must wait so it cannot overtake
     // the earlier one.
@@ -115,13 +147,22 @@ pub(super) fn take_direct_iteration_batch(
         // queued behind a large prefill chunk still join this wave. The
         // deferred chunk keeps its place ahead of later arrivals, and the
         // queue head always fits a fresh budget, so it cannot starve.
-        if request.token_ids.len() > token_budget {
+        let prefill = request.phase == skippy_runtime::IterationBatchPhase::Prefill;
+        let phase_blocked = !policy.mixed_prefill_decode
+            && batch
+                .first()
+                .is_some_and(|first| first.phase != request.phase);
+        if request.token_ids.len() > token_budget
+            || phase_blocked
+            || (prefill && prefill_sequences >= policy.max_prefill_sequences)
+        {
             claimed_sessions.insert(request.session_id.clone());
             deferred.push_back(request);
             continue;
         }
         token_budget = token_budget.saturating_sub(request.token_ids.len());
         claimed_sessions.insert(request.session_id.clone());
+        prefill_sequences += usize::from(prefill);
         batch.push(request);
         if token_budget == 0 {
             break;

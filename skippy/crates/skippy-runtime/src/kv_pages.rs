@@ -279,13 +279,13 @@ impl StageSession {
         Ok(())
     }
 
-    pub fn export_kv_page(
+    pub fn kv_page_export_size(
         &mut self,
         layer_start: i32,
         layer_end: i32,
         token_start: u64,
         token_count: u64,
-    ) -> Result<RuntimeKvPage> {
+    ) -> Result<usize> {
         let mut desc = RawKvPageDesc::default();
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();
@@ -309,6 +309,18 @@ impl StageSession {
             free_error(error);
         }
 
+        Ok(bytes)
+    }
+
+    pub fn export_kv_page(
+        &mut self,
+        layer_start: i32,
+        layer_end: i32,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<RuntimeKvPage> {
+        let bytes = self.kv_page_export_size(layer_start, layer_end, token_start, token_count)?;
+        let mut desc = RawKvPageDesc::default();
         let mut payload = vec![0_u8; bytes];
         let mut written = 0usize;
         let mut error = ptr::null_mut();

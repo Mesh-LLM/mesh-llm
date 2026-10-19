@@ -324,16 +324,18 @@ fn scheduler_generation_driver_eligible(
 
 fn deferred_suffix_prefill_enabled(
     payload: Option<StagePrefixCachePayload>,
-    max_tokens: u32,
+    _max_tokens: u32,
 ) -> bool {
-    // Resident KV suffixes must remain in the serialized cache operation. Releasing
-    // it between restore and suffix prefill lets another request interleave and
-    // destroys prefill phase locality on a shared accelerator.
-    max_tokens > 0
-        && matches!(
-            payload,
-            Some(StagePrefixCachePayload::KvRecurrent | StagePrefixCachePayload::FullState)
+    // Cache restoration remains serialized, but every suffix chunk returns to
+    // the worker so long prompts cannot block another lane's decode.
+    matches!(
+        payload,
+        Some(
+            StagePrefixCachePayload::ResidentKv
+                | StagePrefixCachePayload::KvRecurrent
+                | StagePrefixCachePayload::FullState
         )
+    )
 }
 
 fn deferred_suffix_split(
@@ -942,13 +944,17 @@ impl StageOpenAiBackend {
                 session_id,
                 &request.prompt_token_ids[suffix_start..],
                 request.sampling.enabled.then_some(request.sampling),
-                true,
+                max_tokens > 0,
                 cache_operation_deadline,
                 request.cancellation,
             )?;
-            prompt_prefill_sample = Some(suffix_outcome.predicted.ok_or_else(|| {
-                InferenceError::backend("deferred suffix prefill was not sampled")
-            })?);
+            prompt_prefill_sample = suffix_outcome.predicted;
+            if max_tokens > 0 && prompt_prefill_sample.is_none() {
+                return Err(InferenceError::backend(
+                    "deferred suffix prefill was not sampled",
+                ));
+            }
+
             prefill_chunk_count = if prefill_chunk_count == 1 {
                 suffix_outcome.chunk_count
             } else {
@@ -1007,7 +1013,7 @@ impl StageOpenAiBackend {
                 (record, runtime_sessions_after) = record_outcome.value;
             }
         }
-        if prompt_prefill_sample.is_some() {
+        if deferred_suffix_prefill && capacity.admitted {
             cache_stats.suffix_prefill_tokens = saturating_u32(
                 request
                     .prompt_token_ids
@@ -1015,7 +1021,7 @@ impl StageOpenAiBackend {
                     .saturating_sub(restored_prefill_tokens),
             );
         }
-        let prompt_tail_tokens = usize::from(prompt_prefill_sample.is_some());
+        let prompt_tail_tokens = usize::from(deferred_suffix_prefill && capacity.admitted);
         cache_stats.prompt_ms = prefill_timer.elapsed_ms();
         if self.telemetry.is_debug_enabled() {
             let mut attrs = self.openai_attrs(request.ids);
@@ -1379,8 +1385,8 @@ fn default_local_text_serving_selects_iteration_scheduler() {
 
 #[cfg(test)]
 #[test]
-fn resident_kv_suffix_prefill_stays_inside_the_cache_operation() {
-    assert!(!deferred_suffix_prefill_enabled(
+fn resident_kv_suffix_prefill_yields_to_the_scheduler() {
+    assert!(deferred_suffix_prefill_enabled(
         Some(StagePrefixCachePayload::ResidentKv),
         1,
     ));
@@ -1388,7 +1394,7 @@ fn resident_kv_suffix_prefill_stays_inside_the_cache_operation() {
 
 #[cfg(test)]
 #[test]
-fn recurrent_suffix_prefill_requires_a_nonzero_generation_budget() {
+fn cache_suffix_prefill_also_yields_for_prefill_only_requests() {
     assert!(deferred_suffix_prefill_enabled(
         Some(StagePrefixCachePayload::KvRecurrent),
         1,
@@ -1397,7 +1403,7 @@ fn recurrent_suffix_prefill_requires_a_nonzero_generation_budget() {
         Some(StagePrefixCachePayload::FullState),
         1,
     ));
-    assert!(!deferred_suffix_prefill_enabled(
+    assert!(deferred_suffix_prefill_enabled(
         Some(StagePrefixCachePayload::KvRecurrent),
         0,
     ));

@@ -29,6 +29,26 @@ library's ABI as well. This entry point uses local bundles/cache only; acquisiti
 is explicit. Static native test builds retain their existing linked-runtime path.
 This adds native startup, not model-reference resolution or clean-install proof.
 
+## Concurrent generation
+
+HTTP admission budgets the loaded runtime's total KV allocation across lanes;
+each request remains bounded by one lane's context limit. Cached prefill yields
+between native chunks, including prefill-only requests. Direct feature-driven
+iterations obey the same recurrent phase limits as planned generation, while
+decode requests can still batch together.
+
+The service estimator learns from native batch execution, counts shared work
+once, and reduces outstanding work as tokens execute or cached prefixes restore.
+Its predicted load is advisory: uncertain EOS, cache hits and batch shapes must
+not reject valid work. Actual queue deadlines, queue capacity, cancellation and
+native memory admission remain enforced.
+
+Idle hybrid lanes are reused by recency after empty lanes are exhausted. Demotion
+prioritizes the shared prefix over a generated continuation, reserves recorder
+bytes before exporting attention, and exports at most those two checkpoints.
+Cache retention is best effort under pressure; refused demotions contribute to
+the existing failed-record lifecycle and dropped-record counters.
+
 ## Architecture Role
 
 Each embedded server or server process owns one contiguous layer range. Mesh
