@@ -1,0 +1,66 @@
+From 2b6a22dc9e46fac4eb2f7c4656d3b17c86f45c15 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 20 Oct 2026 06:14:07 +1100
+Subject: [PATCH] fix(batch): respect microbatch capacity when selecting
+ sequences
+
+---
+ src/llama-batch.cpp        |  2 +-
+ tests/test-batch-alloc.cpp | 28 ++++++++++++++++++++++++++++
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-batch.cpp b/src/llama-batch.cpp
+index 321aa9d23..4267802c8 100644
+--- a/src/llama-batch.cpp
++++ b/src/llama-batch.cpp
+@@ -653,7 +653,7 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential,
+ 
+             last_seq_id = batch.seq_id[i][0];
+ 
+-            if (cur_seq_set.size() > n_ubatch) {
++            if (cur_seq_set.size() >= n_ubatch) {
+                 break;
+             }
+         }
+diff --git a/tests/test-batch-alloc.cpp b/tests/test-batch-alloc.cpp
+index c41e91d61..d190edc2b 100644
+--- a/tests/test-batch-alloc.cpp
++++ b/tests/test-batch-alloc.cpp
+@@ -562,6 +562,34 @@ static void test_mixed(testing & t) {
+ static void test_split(testing & t) {
+     llama_vocab vocab;
+ 
++    t.test("split_equal_respects_token_capacity", [&](testing & t) {
++        for (const uint32_t capacity : {1u, 2u, 4u}) {
++            for (const bool sequential : {false, true}) {
++                for (const llama_seq_id sequences : {1, 2, 3, 4, 5}) {
++                    batch_builder bb(2, nullptr, sequences);
++                    for (llama_seq_id sequence = 0; sequence < sequences; ++sequence) {
++                        bb.add(1, {sequence}, false);
++                        bb.add(2, {sequence}, true);
++                    }
++                    llama_batch_allocr ba(1);
++                    t.assert_true(ba.init(bb.b, vocab, false));
++                    uint32_t consumed = 0;
++                    for (int attempt = 0; attempt < 2 * sequences; ++attempt) {
++                        const auto ub = ba.split_equal(capacity, sequential, 0);
++                        if (ub.n_tokens == 0) {
++                            break;
++                        }
++                        t.assert_true("microbatch does not exceed token capacity", ub.n_tokens <= capacity);
++                        t.assert_true("equal sequence shape is preserved", ub.equal_seqs());
++                        consumed += ub.n_tokens;
++                    }
++                    t.assert_equal("all tokens are consumed", uint32_t(2 * sequences), consumed);
++                    t.assert_equal(0u, ba.split_equal(capacity, sequential, 0).n_tokens);
++                }
++            }
++        }
++    });
++
+     t.test("split_simple_chunks", [&](testing & t) {
+         batch_builder bb;
+         for (int i = 0; i < 5; ++i) {
+-- 
+2.56.0
+
