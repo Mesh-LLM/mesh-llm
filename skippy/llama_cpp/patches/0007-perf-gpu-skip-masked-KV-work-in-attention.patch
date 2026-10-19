@@ -1,21 +1,27 @@
-From 742528d999888a065a8ec57433f6766b7bb8048e Mon Sep 17 00:00:00 2001
+From c59908b728b689f3364bca60a7037045b1d0dce0 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sun, 18 Oct 2026 09:39:58 +1100
 Subject: [PATCH] perf(gpu): skip masked KV work in CUDA and Metal attention
 
 ---
- ggml/src/ggml-cpu/ops.cpp            |  10 +-
- ggml/src/ggml-cuda/fattn-common.cuh  |  71 ++-----------
- ggml/src/ggml-cuda/fattn-mask.cuh    |  62 +++++++++++
- ggml/src/ggml-cuda/fattn-mma-f16.cuh |  18 ++--
- ggml/src/ggml-cuda/fattn-tile.cuh    |   6 +-
- ggml/src/ggml-cuda/fattn-vec.cuh     |  10 +-
- ggml/src/ggml-metal/kernels/fa.metal |   6 +-
- tests/test-backend-ops.cpp           |   5 +
- tests/test-flash-attn-kv-bounds.h    | 150 +++++++++++++++++++++++++++
- 9 files changed, 259 insertions(+), 79 deletions(-)
+ ggml/src/ggml-cpu/ops.cpp                     |  10 +-
+ ggml/src/ggml-cuda/fattn-common.cuh           |  71 +------
+ ggml/src/ggml-cuda/fattn-mask.cuh             |  62 +++++++
+ ggml/src/ggml-cuda/fattn-mma-f16.cuh          |  18 +-
+ ggml/src/ggml-cuda/fattn-tile.cuh             |   6 +-
+ ggml/src/ggml-cuda/fattn-vec.cuh              |  10 +-
+ .../ggml-metal-attention-dispatch.h           |  22 +++
+ ggml/src/ggml-metal/ggml-metal-ops.cpp        |   6 +-
+ ggml/src/ggml-metal/kernels/fa.metal          |  11 +-
+ tests/CMakeLists.txt                          |   6 +
+ tests/test-backend-ops.cpp                    |   5 +
+ tests/test-flash-attn-kv-bounds.h             | 174 ++++++++++++++++++
+ tests/test-metal-attention-dispatch.cpp       |  49 +++++
+ 13 files changed, 367 insertions(+), 83 deletions(-)
  create mode 100644 ggml/src/ggml-cuda/fattn-mask.cuh
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-attention-dispatch.h
  create mode 100644 tests/test-flash-attn-kv-bounds.h
+ create mode 100644 tests/test-metal-attention-dispatch.cpp
 
 diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
 index ba00a0a73..9ecb7cdef 100644
@@ -338,8 +344,66 @@ index 57a285565..56c2f127b 100644
               // Increment pointers after each loop:
               K += gridDim.y*nthreads*nb11, V += gridDim.y*nthreads*nb21, maskh += gridDim.y*nthreads) {
  
+diff --git a/ggml/src/ggml-metal/ggml-metal-attention-dispatch.h b/ggml/src/ggml-metal/ggml-metal-attention-dispatch.h
+new file mode 100644
+index 000000000..49eab36da
+--- /dev/null
++++ b/ggml/src/ggml-metal/ggml-metal-attention-dispatch.h
+@@ -0,0 +1,22 @@
++#pragma once
++
++#include "ggml-metal-device.h"
++#include "ggml-impl.h"
++
++#include <algorithm>
++
++struct ggml_metal_attention_reduction {
++    int32_t nsg;
++    ggml_metal_pipeline_with_params pipeline;
++};
++
++// Keep the producer's partial-result count unchanged. Each reduction SIMD group
++// reads all 32 partials, but fewer groups can cover the output head in more steps
++// when the compiled pipeline has a lower thread limit (e.g. shader validation).
++static inline ggml_metal_attention_reduction ggml_metal_select_attention_reduction(
++        ggml_metal_library_t lib, const ggml_tensor * op, int32_t dv, int32_t nwg) {
++    auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(lib, op, dv, nwg);
++    const int32_t nsg = std::min(nwg, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)/32);
++    GGML_ASSERT(nsg > 0);
++    return { nsg, pipeline };
++}
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 708703e51..700aa8ed2 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -9,6 +9,7 @@
+ #include "ggml-metal-device.h"
+ #include "ggml-metal-fusion.h"
+ #include "ggml-metal-tuning.h"
++#include "ggml-metal-attention-dispatch.h"
+ 
+ #include <cassert>
+ #include <algorithm>
+@@ -3817,14 +3818,15 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+                     nrows,
+                 };
+ 
+-                auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(lib, op, ne20, nwg);
++                const auto reduction = ggml_metal_select_attention_reduction(lib, op, ne20, nwg);
++                auto pipeline0 = reduction.pipeline;
+ 
+                 ggml_metal_encoder_set_pipeline(enc, pipeline0);
+                 ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
+                 ggml_metal_encoder_set_buffer  (enc, bid_tmp, 1);
+                 ggml_metal_encoder_set_buffer  (enc, bid_dst, 2);
+ 
+-                ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, 32*nwg, 1, 1);
++                ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, 32*reduction.nsg, 1, 1);
+             }
+         }
+ #undef FATTN_SMEM
 diff --git a/ggml/src/ggml-metal/kernels/fa.metal b/ggml/src/ggml-metal/kernels/fa.metal
-index f26d493d5..d0ac74d16 100644
+index f26d493d5..3630d6f6d 100644
 --- a/ggml/src/ggml-metal/kernels/fa.metal
 +++ b/ggml/src/ggml-metal/kernels/fa.metal
 @@ -142,7 +142,7 @@ kernel void kernel_flash_attn_ext_blk(
@@ -362,6 +426,42 @@ index f26d493d5..d0ac74d16 100644
              FOR_UNROLL (short ii = 0; ii < C/NW; ++ii) {
                  mmin = min(mmin, mask_src[ii*NW]);
                  mmax = max(mmax, mask_src[ii*NW]);
+@@ -2290,7 +2294,8 @@ kernel void kernel_flash_attn_ext_vec_reduce(
+         device        char * dst,
+         uint   tgpig[[threadgroup_position_in_grid]],
+         ushort tiisg[[thread_index_in_simdgroup]],
+-        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
++        ushort sgitg[[simdgroup_index_in_threadgroup]],
++        ushort sgptg[[simdgroups_per_threadgroup]]) {
+ #define NWG (FC_flash_attn_ext_vec_reduce_NWG)
+ #define DV  (FC_flash_attn_ext_vec_reduce_DV)
+ 
+@@ -2314,7 +2319,7 @@ kernel void kernel_flash_attn_ext_vec_reduce(
+     device const float4 * htmp4 = (device const float4 *) htmp + rid*DV4*NWG;
+     device       float4 * dst4  = (device       float4 *) dst  + rid*DV4;
+ 
+-    for (short i = sgitg; i < DV4; i += NWG) {
++    for (short i = sgitg; i < DV4; i += sgptg) {
+         const float4 v = simd_sum(htmp4[i*NWG + iwg]*ms);
+ 
+         if (iwg == 0) {
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 5c170693b..1d3879fd8 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -343,6 +343,12 @@ endif()
+ # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
+ llama_build(test-backend-ops.cpp)
+ 
++# Host launch-policy coverage also runs without a Metal device.
++add_executable(test-metal-attention-dispatch test-metal-attention-dispatch.cpp)
++target_include_directories(test-metal-attention-dispatch PRIVATE ../ggml/src)
++target_link_libraries(test-metal-attention-dispatch PRIVATE ggml-base)
++llama_test(test-metal-attention-dispatch)
++
+ llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
+ llama_build_and_test(test-autorelease.cpp       LABEL "model")
+ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
 index 917faabfa..083b37a27 100644
 --- a/tests/test-backend-ops.cpp
@@ -394,10 +494,10 @@ index 917faabfa..083b37a27 100644
      // note: same bytes either way, so a backend that indexes them differently shows it here
 diff --git a/tests/test-flash-attn-kv-bounds.h b/tests/test-flash-attn-kv-bounds.h
 new file mode 100644
-index 000000000..ac16be2df
+index 000000000..2d1bceb85
 --- /dev/null
 +++ b/tests/test-flash-attn-kv-bounds.h
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,174 @@
 +#pragma once
 +
 +// Exercise physical KV layouts that arise from unified caches. Each query has
@@ -410,9 +510,9 @@ index 000000000..ac16be2df
 +                              int64_t   streams,
 +                              ggml_type kv_type,
 +                              bool      with_sinks,
-+                              int64_t   kv_size = 4096) :
-+        test_flash_attn_ext(128,
-+                            128,
++                              int64_t   kv_size = 4096, int64_t head_size = 128) :
++        test_flash_attn_ext(head_size,
++                            head_size,
 +                            2,
 +                            { 4, streams },
 +                            kv_size,
@@ -478,7 +578,14 @@ index 000000000..ac16be2df
 +                            case 9:
 +                                visible = (q + s) % 2 ? k >= kv / 2 : k < kv / 2;
 +                                break;  // each row sparse, but a two-row union is dense
++                            case 10:
++                                visible = (k / 512) % 4 == (q / 16 + s) % 4;
++                                break;  // chunk-interleaved physical lanes
++                            case 11:
++                                visible = k <= kv - nb + q;
++                                break;  // ordinary contiguous causal prefill
 +                            default:
++
 +                                GGML_ABORT("invalid KV bounds pattern");
 +                        }
 +                        if (visible) {
@@ -494,6 +601,16 @@ index 000000000..ac16be2df
 +};
 +
 +static void add_flash_attn_kv_bounds_tests(std::vector<std::unique_ptr<test_case>> & tests) {
++    for (int pattern : { 2, 6, 7, 8, 10, 11 }) {
++        for (int64_t queries : { 1, 2, 17, 512 }) {
++            tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, GGML_TYPE_F16, true, 4096, 256));
++        }
++    }
++    for (int pattern : { 7, 8, 10, 11 }) {
++        for (int64_t queries : { 17, 512 }) {
++            tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, GGML_TYPE_F16, true, 65536, 256));
++        }
++    }
 +    for (int pattern : { 7, 8, 9 }) {
 +        for (int64_t queries : { 1, 2, 3 }) {
 +            for (auto type : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
@@ -528,6 +645,13 @@ index 000000000..ac16be2df
 +}
 +
 +static void add_flash_attn_kv_bounds_perf_tests(std::vector<std::unique_ptr<test_case>> & tests) {
++    for (int pattern : { 2, 7, 8, 10, 11 }) {
++        for (int64_t queries : { 1, 2, 17, 512 }) {
++            for (int64_t kv_size : { 4096, 65536, 196608 }) {
++                tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, GGML_TYPE_F16, false, kv_size, 256));
++            }
++        }
++    }
 +    for (int pattern : { 0, 3, 4 }) {
 +        for (int64_t queries : { 65, 513 }) {
 +            tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, GGML_TYPE_F16, false, 16384));
@@ -547,6 +671,61 @@ index 000000000..ac16be2df
 +            }
 +        }
 +    }
++}
+diff --git a/tests/test-metal-attention-dispatch.cpp b/tests/test-metal-attention-dispatch.cpp
+new file mode 100644
+index 000000000..0a0673d0d
+--- /dev/null
++++ b/tests/test-metal-attention-dispatch.cpp
+@@ -0,0 +1,49 @@
++#include "ggml-metal/ggml-metal-attention-dispatch.h"
++
++#include <array>
++#include <cassert>
++#include <cstdint>
++
++static int compiled_limit;
++static int compiled_partials;
++static ggml_metal_pipeline_with_params selected_pipeline = {};
++
++ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(
++        ggml_metal_library_t, const ggml_tensor *, int32_t, int32_t nwg) {
++    compiled_partials = nwg;
++    return selected_pipeline;
++}
++
++int ggml_metal_pipeline_max_theads_per_threadgroup(ggml_metal_pipeline_with_params) {
++    return compiled_limit;
++}
++
++int main() {
++    // 832 reproduces the instrumented M1 Ultra pipeline limit. Nonmultiples
++    // ensure the host rounds down to complete SIMD groups, never up past it.
++    for (const int limit : { 1024, 832, 831, 512, 63, 32 }) {
++        compiled_limit = limit;
++        const auto dispatch = ggml_metal_select_attention_reduction(nullptr, nullptr, 256, 32);
++        GGML_ASSERT(compiled_partials == 32);
++        GGML_ASSERT(dispatch.nsg*32 <= limit);
++        GGML_ASSERT(dispatch.nsg > 0);
++        if (limit == 1024) {
++            GGML_ASSERT(dispatch.nsg == 32);
++        }
++        if (limit == 832) {
++            GGML_ASSERT(dispatch.nsg == 26);
++        }
++        for (const int head_values : { 16, 32, 64, 128 }) {
++            std::array<int, 128> writes = {};
++            for (int group = 0; group < dispatch.nsg; ++group) {
++                for (int value = group; value < head_values; value += dispatch.nsg) {
++                    ++writes[value];
++                }
++            }
++            for (int value = 0; value < head_values; ++value) {
++                GGML_ASSERT(writes[value] == 1);
++            }
++        }
++    }
++    return 0;
 +}
 -- 
 2.56.0
