@@ -188,6 +188,12 @@ it is a patch, not a façade feature.
 
 ## Testing rules
 
+- **The ASAN suite is one command** (`just skippy-api-asan`): the mocked suite
+  rebuilt in `target/skippy-api-asan` under AddressSanitizer + UBSan in a
+  separate tree, so sanitizer flags never leak into other targets. Any change
+  that stores a borrow — span, `string_view`, pointer into a container — runs
+  it. The borrow-stress tests exist to make reallocation-driven dangling
+  detectable, and were proven to fire on the pre-fix `StagePlan::append`.
 - **Mocked unit tests belong in C++** (`tests/`, no llama). They pin contracts:
   classification, buffer bounds, batch layout, rejection paths.
 - **Anything that needs a real model belongs in Rust** (`skippy/tests/end_to_end.rs`).
@@ -247,6 +253,7 @@ not a test failure.
 ### Workflow commands
 
 ```bash
+just skippy-api-asan                                 # mocked suite under ASan+UBSan
 just skippy-api-verify [embed.gguf] [reranker.gguf]   # format, tidy, ctest, Rust
 just skippy-api-checkpoint "<type(scope): subject>" [embed.gguf] [reranker.gguf]
 just skippy-ab                                        # list A/B cases

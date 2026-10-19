@@ -407,6 +407,25 @@ std::expected<StagePlan, PlanFailure> StagePlanHandle::materialize() const {
     if (!contract.has_value()) return std::unexpected(contract.error());
     plan.execution_contract = std::move(*contract);
 
+    // Descriptor counts are native-side data: cap them before reserving so a
+    // corrupt plan is a typed rejection, not a length_error through the
+    // expected boundary. The largest shipped models carry ~2k tensors and a
+    // handful of profiles; these bounds are orders of magnitude past that.
+    constexpr std::uint64_t kMaxResidentIdentities = 1ULL * 1024U * 1024U;
+    constexpr std::uint64_t kMaxProfiles = 256;
+    if (desc->resident_tensor_count > kMaxResidentIdentities) {
+        return std::unexpected(PlanFailure{
+            .code = PlanError::Rejected,
+            .message = "plan reports an implausible resident count",
+        });
+    }
+    if (desc->profile_count > kMaxProfiles) {
+        return std::unexpected(PlanFailure{
+            .code = PlanError::Rejected,
+            .message = "plan reports an implausible profile count",
+        });
+    }
+
     const auto resident_count = static_cast<std::size_t>(desc->resident_tensor_count);
     plan.resident_identities.reserve(resident_count);
     for (const std::size_t index : std::views::iota(std::size_t{0}, resident_count)) {
