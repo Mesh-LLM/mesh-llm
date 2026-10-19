@@ -252,7 +252,7 @@ pub fn handle_asked_adjudicate_request(
     asked: &Asked<'_>,
 ) -> std::io::Result<Value> {
     if let Ok(Value::Object(map)) = crate::strict_json::parse(body) {
-        let checked = capsule_emit_evidence_request::time::parse_utc(now)
+        let checked = evidence_request::time::parse_utc(now)
             .ok_or(crate::requester_auth::Refused::NotAuthorized)
             .and_then(|now| {
                 crate::requester_auth::principal(

@@ -16,7 +16,7 @@
 //! mesh-inbound evidence request. We bind a local listener, hand its
 //! endpoint back, and once the host bridges the remote bytes to it, read the
 //! whole request (bounded in bytes and in time) and answer it **in-process**
-//! (`evidence_answer`, over the `capsule-emit-evidence-request` crate): an
+//! (`evidence_answer`, over the `evidence-request` crate): an
 //! artifact or a signed refusal. At most [`MAX_IN_FLIGHT_ANSWERS`] requests
 //! are answered at once; one more is declined with a signed
 //! `policy_declined` before the ledger is read. Every answer is logged to

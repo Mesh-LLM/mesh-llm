@@ -293,7 +293,7 @@ fn answer(
     if history_segments == "off" {
         return not_authorized;
     }
-    let Some(now) = capsule_emit_evidence_request::time::parse_utc(door.now) else {
+    let Some(now) = evidence_request::time::parse_utc(door.now) else {
         return LedgerFetchResponse::Error {
             message: "this node's clock is not an RFC 3339 UTC time".into(),
         };

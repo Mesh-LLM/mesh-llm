@@ -572,7 +572,7 @@ pub fn principal(
     let deadline = map
         .get("deadline")
         .and_then(Value::as_str)
-        .and_then(capsule_emit_evidence_request::time::parse_utc)
+        .and_then(evidence_request::time::parse_utc)
         .ok_or(Refused::Malformed)?;
     if deadline < now {
         return Err(Refused::NotAuthorized);
@@ -711,7 +711,7 @@ mod tests {
     /// channel is refused, never read as unsigned.
     #[test]
     fn a_request_signed_for_one_channel_fails_on_every_other() {
-        let now = capsule_emit_evidence_request::time::parse_utc("2026-10-13T00:00:00Z").unwrap();
+        let now = evidence_request::time::parse_utc("2026-10-13T00:00:00Z").unwrap();
         let node = "node-a";
         let announced = BTreeMap::from([(
             node.to_string(),
@@ -741,8 +741,7 @@ mod tests {
                 panic!("not signed: {request}");
             };
             let deadline =
-                capsule_emit_evidence_request::time::parse_utc(map["deadline"].as_str().unwrap())
-                    .unwrap();
+                evidence_request::time::parse_utc(map["deadline"].as_str().unwrap()).unwrap();
             for received_on in Channel::ALL {
                 let replay = ReplayCache::default();
                 let checked = check(
