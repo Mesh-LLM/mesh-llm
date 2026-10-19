@@ -60,6 +60,15 @@ comparison as unqualified, and investigate regressions per model and
 concurrency rather than hiding them in an aggregate. Compare completed work
 and inspect grace-period cancellations before declaring a winner.
 
+Smoke uses a 60-second dispatch window and drains outstanding requests. A turn
+near that boundary can be included in one repetition and excluded from another,
+so the same trace seed does not guarantee identical completed work. Check trace
+IDs and turn indices before comparing short-run throughput. Offered sessions
+also need not equal observed HTTP overlap: replay delays can leave lanes idle.
+The runner reads AgentX 1.0.7's `metadata.benchmark_phase` and HTTP intervals to
+report `observed_concurrency.peak_in_flight_requests`; this is not a count of
+simultaneous GPU decode streams.
+
 Kernel timings establish the effect of a kernel change, not an end-to-end win
 against llama. Correctness and resident-prefix restore checks remain required.
 Label host RSS separately from GPU residency; missing GPU counters must remain

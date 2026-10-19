@@ -21,7 +21,10 @@ fn measure(path: &Path) -> DynResult<(usize, i64)> {
     let mut requests = 0;
     for line in BufReader::new(std::fs::File::open(path)?).lines() {
         let record: Value = serde_json::from_str(&line?)?;
-        if record["metadata"]["credit_phase"] != "profiling" {
+        let phase = record["metadata"]["benchmark_phase"]
+            .as_str()
+            .ok_or("missing AgentX benchmark phase")?;
+        if phase != "profiling" {
             continue;
         }
         let trace = &record["trace_data"];
@@ -62,7 +65,7 @@ mod tests {
             ("profiling", 5, 9),
         ]
         .map(|(phase, start, end)| {
-            json!({"metadata":{"credit_phase":phase},
+            json!({"metadata":{"benchmark_phase":phase},
                 "trace_data":{"request_send_start_ns":start,"response_receive_end_ns":end}})
             .to_string()
         });
@@ -70,5 +73,33 @@ mod tests {
         assert_eq!(measure(file.path()).unwrap(), (3, 2));
         std::fs::write(file.path(), "{}").unwrap();
         assert!(measure(file.path()).is_err());
+    }
+
+    #[test]
+    fn reads_pinned_agentx_export_with_fewer_active_requests_than_offered_sessions() {
+        // Reduced AgentX 1.0.7 export from an offered-c4 smoke. Preserve the
+        // real phase and interval fields; omit request identities and payloads.
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            include_str!("../../../tests/fixtures/agentx/http-overlap.jsonl"),
+        )
+        .unwrap();
+        assert_eq!(measure(file.path()).unwrap(), (3, 3));
+    }
+
+    #[test]
+    fn rejects_missing_phase_and_incomplete_http_intervals() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        for record in [
+            json!({"metadata":{"credit_phase":"profiling"}}),
+            json!({"metadata":{"benchmark_phase":"profiling"},
+                "trace_data":{"request_send_start_ns":1}}),
+            json!({"metadata":{"benchmark_phase":"profiling"},
+                "trace_data":{"request_send_start_ns":5,"response_receive_end_ns":5}}),
+        ] {
+            std::fs::write(file.path(), record.to_string()).unwrap();
+            assert!(measure(file.path()).is_err());
+        }
     }
 }
