@@ -73,3 +73,76 @@ fn native_cache_concurrency_matches_serial_and_reuses_prefixes() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_cache_replay_matches_cold_with_token_margin_evidence() -> Result<()> {
+    // Reproduce the prompt that diverged on CUDA without concurrent scheduling.
+    // Keep the exact-output assertion: margins are diagnostic evidence, not a
+    // tolerance that can turn a wrong continuation into a passing test.
+    let prompt: Vec<i32> = (515..=770).collect();
+    for lanes in [1, 4] {
+        let (backend, _) = recurrent_test_backend_with_lanes(
+            "cache-replay",
+            "cache-replay",
+            1024,
+            (128, 32, lanes),
+            8,
+            lanes as usize * 1024,
+            None,
+        )?;
+        let cold = generate_with_token_margins(&backend, &prompt)?;
+        let warm = generate_with_token_margins(&backend, &prompt)?;
+        assert!(warm.1 > 0, "prefix miss with {lanes} lanes");
+        assert_eq!(
+            cold.0, warm.0,
+            "cache replay with {lanes} lanes; cold signals={:?}; warm signals={:?}",
+            cold.2, warm.2,
+        );
+    }
+    Ok(())
+}
+
+fn generate_with_token_margins(
+    backend: &StageOpenAiBackend,
+    prompt: &[i32],
+) -> Result<(Vec<i32>, u32, Vec<skippy_runtime::TokenSignal>)> {
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("cache-replay"),
+        true,
+        None,
+    );
+    let mut output = Vec::new();
+    let mut signals = Vec::new();
+    let stats = backend.generate_local_tokens(
+        LocalGeneration {
+            prompt_token_ids: prompt,
+            recurrent_cache_prefix_token_ids: None,
+            max_tokens: 8,
+            sampling: &SamplingConfig::default(),
+            chat_sampling_metadata: None,
+            speculative: &SpeculativeDecodeConfig::default(),
+            native_mtp_enabled: false,
+            hook_request: None,
+            hook_runtime: None,
+            cancellation: None,
+            ids: &ids,
+        },
+        |token| {
+            output.push(token);
+            // This test runs one request at a time, so no other decode can
+            // replace the current logits before the lazy signal is observed.
+            signals.push(
+                backend
+                    .runtime
+                    .lock()
+                    .unwrap()
+                    .last_token_signal(&ids.session_label)
+                    .map_err(crate::frontend::util::openai_backend_error)?,
+            );
+            Ok(TokenControl::Continue)
+        },
+    )?;
+    Ok((output, stats.cached_prompt_tokens, signals))
+}
