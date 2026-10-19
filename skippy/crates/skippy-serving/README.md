@@ -37,6 +37,12 @@ between native chunks, including prefill-only requests. Direct feature-driven
 iterations obey the same recurrent phase limits as planned generation, while
 decode requests can still batch together.
 
+Deferred prefills acquire a FIFO turn for their prompt, including shared-prefix
+checkpoint boundaries. This avoids interleaving independent bulk prefills in
+the unified KV allocation. The turn does not hold the runtime or scheduler
+worker: decode continues between native chunks. Waiting respects the request's
+cancellation and cache-operation deadline; errors and unwinding release the turn.
+
 The service estimator learns from native batch execution, counts shared work
 once, and reduces outstanding work as tokens execute or cached prefixes restore.
 Its predicted load is advisory: uncertain EOS, cache hits and batch shapes must
@@ -48,6 +54,13 @@ prioritizes the shared prefix over a generated continuation, reserves recorder
 bytes before exporting attention, and exports at most those two checkpoints.
 Cache retention is best effort under pressure; refused demotions contribute to
 the existing failed-record lifecycle and dropped-record counters.
+
+Model-backed cache tests support static linkage and the `dynamic-native-runtime`
+feature. For the latter, `SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_LIBRARY` must point
+to the native library produced by `just skippy-release` from the tested source.
+Select pinned weights with `SKIPPY_RECURRENT_CACHE_TEST_MODEL` and
+`SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS`; set
+`SKIPPY_RECURRENT_CACHE_TEST_GPU_LAYERS=99` to exercise GPU offload.
 
 ## Architecture Role
 

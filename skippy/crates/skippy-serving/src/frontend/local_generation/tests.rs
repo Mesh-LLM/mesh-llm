@@ -195,6 +195,14 @@ fn recurrent_test_backend_with_lanes(
     token_budget: usize,
     cache_idle_slots: Option<u32>,
 ) -> Result<(StageOpenAiBackend, SpeculativeDecodeConfig)> {
+    #[cfg(feature = "dynamic-native-runtime")]
+    if !skippy_runtime::native_runtime_loaded() {
+        let library = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_LIBRARY")
+            .ok_or_else(|| anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_LIBRARY must name a native library built from this source revision"))?;
+        // SAFETY: this explicit native test input must be produced by the same
+        // source's `just skippy-release` build, never a downloaded release.
+        unsafe { skippy_runtime::load_native_runtime_library(library)? };
+    }
     let model_path = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL").ok_or_else(|| {
         anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_MODEL is required for this ignored test")
     })?;

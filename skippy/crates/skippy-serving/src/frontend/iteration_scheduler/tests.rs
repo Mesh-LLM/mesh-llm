@@ -150,6 +150,7 @@ fn direct_iteration_rechecks_deadline_after_worker_reply() {
     let (commands, receiver) = std_mpsc::sync_channel(1);
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            prefill_admission: Default::default(),
             service_estimator: Arc::default(),
             commands,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
@@ -624,6 +625,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
     });
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            prefill_admission: Default::default(),
             service_estimator: Arc::default(),
             commands,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
@@ -673,6 +675,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
     });
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            prefill_admission: Default::default(),
             service_estimator: Arc::default(),
             commands,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
@@ -914,6 +917,7 @@ fn bounded_command_queue_fails_closed_with_overload() {
         .unwrap();
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            prefill_admission: Default::default(),
             service_estimator: Arc::default(),
             commands,
             max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,

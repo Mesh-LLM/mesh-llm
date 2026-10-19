@@ -77,6 +77,7 @@ mod tests {
         let (commands, _commands_rx) = std_mpsc::sync_channel(8);
         let scheduler = IterationScheduler {
             shared: Arc::new(IterationSchedulerShared {
+                prefill_admission: Default::default(),
                 service_estimator: Arc::default(),
                 commands,
                 max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,

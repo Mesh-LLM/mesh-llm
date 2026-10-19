@@ -887,6 +887,9 @@ impl StageOpenAiBackend {
         let deferred_suffix_prefill =
             deferred_suffix_prefill_enabled(self.kv.as_ref().map(|kv| kv.payload), max_tokens);
         if deferred_suffix_prefill && capacity.admitted {
+            let _prefill_turn = self
+                .iteration_scheduler
+                .acquire_prefill_turn(cache_operation_deadline, request.cancellation)?;
             let exact_state = self
                 .kv
                 .as_ref()

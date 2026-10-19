@@ -4,6 +4,7 @@ mod direct_batch;
 mod direct_reply;
 mod generation_events;
 mod native_execution;
+mod prefill_admission;
 
 use self::cache_runtime::{
     CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
@@ -118,6 +119,7 @@ pub(crate) struct CacheAwareRuntimeRequest<'a> {
 }
 
 struct IterationSchedulerShared {
+    prefill_admission: prefill_admission::PrefillAdmission,
     service_estimator: Arc<GenerationServiceEstimator>,
     commands: std_mpsc::SyncSender<SchedulerCommand>,
     max_direct_iteration_tokens: usize,
@@ -405,6 +407,15 @@ struct SchedulerWorker {
 }
 
 impl IterationScheduler {
+    pub(in crate::frontend) fn acquire_prefill_turn(
+        &self,
+        deadline: Instant,
+        cancellation: Option<&skippy_inference_api::CancellationToken>,
+    ) -> InferenceResult<prefill_admission::PrefillTurn<'_>> {
+        self.shared
+            .prefill_admission
+            .acquire(deadline, cancellation)
+    }
     pub(in crate::frontend) fn service_estimator(&self) -> Arc<GenerationServiceEstimator> {
         self.shared.service_estimator.clone()
     }
@@ -536,6 +547,7 @@ impl IterationScheduler {
             })?;
         Ok(Self {
             shared: Arc::new(IterationSchedulerShared {
+                prefill_admission: Default::default(),
                 service_estimator,
                 commands,
                 max_direct_iteration_tokens,
