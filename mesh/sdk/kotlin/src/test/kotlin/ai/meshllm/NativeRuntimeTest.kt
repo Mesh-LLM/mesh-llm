@@ -17,6 +17,7 @@ class NativeRuntimeTest {
         assertEquals("/cache", options.cacheDir)
         assertEquals(false, options.allowDownload)
         assertEquals(NativeRuntimeVerificationPolicyNative.REQUIRE_CHECKSUM, options.verificationPolicy)
+        assertEquals(null, options.trustedPublicKey)
     }
 
     @Test

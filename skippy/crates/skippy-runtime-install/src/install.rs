@@ -54,6 +54,8 @@ async fn install_with_source_policy(
         // for the default catalog either; bundles and the cache are the
         // only sources then. Explicit manifest URLs are still honoured.
         allow_default_manifest_url: options.allow_download,
+        verification_policy: options.verification_policy,
+        trusted_public_key: options.trusted_public_key.clone(),
     };
     let (manifest, sources) = if explicit_only {
         load_release_manifest_from_explicit_sources(manifest_options).await?
@@ -78,6 +80,11 @@ async fn install_with_source_policy(
         }
     });
     let cache = native_runtime_cache(options.cache_dir.as_deref())?;
+    let authenticated_artifacts = authenticated_catalog_artifacts(
+        options.verification_policy,
+        &manifest.artifacts,
+        sources.manifest_artifacts,
+    )?;
     let resolver = NativeRuntimeResolver::new(
         &options.release_version,
         host_runtime_profile(),
@@ -110,9 +117,29 @@ async fn install_with_source_policy(
             return Err(err.context(explanation));
         }
     };
-    let mut outcome = install_resolved_runtime(&cache, resolution, &options).await?;
+    let authenticated_artifact = authenticated_artifacts
+        .as_deref()
+        .map(|artifacts| authenticated_catalog_artifact(&resolution.selected, artifacts))
+        .transpose()?;
+    let mut outcome =
+        install_resolved_runtime_with_catalog(&cache, resolution, &options, authenticated_artifact)
+            .await?;
     outcome.sources = sources;
     Ok(outcome)
+}
+
+fn authenticated_catalog_artifacts(
+    policy: NativeRuntimeVerificationPolicy,
+    merged_artifacts: &[NativeRuntimeArtifact],
+    catalog_artifact_count: usize,
+) -> Result<Option<Vec<NativeRuntimeArtifact>>> {
+    if policy != NativeRuntimeVerificationPolicy::RequireChecksumAndSignature {
+        return Ok(None);
+    }
+    merged_artifacts
+        .get(..catalog_artifact_count)
+        .context("authenticated catalog artifact count exceeds merged manifest")
+        .map(|artifacts| Some(artifacts.to_vec()))
 }
 
 /// Why native runtime resolution failed, kept structured so `--json`
@@ -290,16 +317,35 @@ fn candidate_is_plausible(candidate: &CandidateEvaluation) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(crate) async fn install_resolved_runtime(
     cache: &NativeRuntimeCache,
     resolution: skippy_native_runtime::NativeRuntimeResolution,
     options: &NativeRuntimeInstallOptions,
 ) -> Result<NativeRuntimeInstallOutcome> {
+    install_resolved_runtime_with_catalog(cache, resolution, options, None).await
+}
+
+async fn install_resolved_runtime_with_catalog(
+    cache: &NativeRuntimeCache,
+    resolution: skippy_native_runtime::NativeRuntimeResolution,
+    options: &NativeRuntimeInstallOptions,
+    authenticated_artifact: Option<&NativeRuntimeArtifact>,
+) -> Result<NativeRuntimeInstallOutcome> {
+    if options.verification_policy == NativeRuntimeVerificationPolicy::RequireChecksumAndSignature
+        && authenticated_artifact.is_none()
+    {
+        bail!(
+            "strict native runtime verification requires the selected runtime to be listed by the authenticated catalog"
+        );
+    }
     match resolution.source.clone() {
-        NativeRuntimeSource::Installed { path: _ } => {
+        NativeRuntimeSource::Installed { path } => {
+            verify_local_runtime_if_strict(&path, authenticated_artifact)?;
             installed_outcome(cache, resolution, &options.release_version)
         }
         NativeRuntimeSource::Bundle { path } => {
+            verify_local_runtime_if_strict(&path, authenticated_artifact)?;
             if should_install_explicit_bundle_into_cache(&path, options)? {
                 let runtime = cache.install_from_dir(&path)?;
                 return Ok(NativeRuntimeInstallOutcome {
@@ -312,8 +358,14 @@ pub(crate) async fn install_resolved_runtime(
             in_place_bundle_outcome(&path, resolution)
         }
         NativeRuntimeSource::Download { url } if options.allow_download => {
-            let runtime =
-                download_and_install_runtime(cache, &resolution.selected, &url, options).await?;
+            let runtime = download_and_install_runtime(
+                cache,
+                &resolution.selected,
+                &url,
+                options,
+                authenticated_artifact,
+            )
+            .await?;
             Ok(NativeRuntimeInstallOutcome {
                 status: NativeRuntimeInstallStatus::Installed,
                 runtime,
@@ -331,6 +383,66 @@ pub(crate) async fn install_resolved_runtime(
             )
         }
     }
+}
+
+fn authenticated_catalog_artifact<'a>(
+    selected: &NativeRuntimeArtifact,
+    authenticated_artifacts: &'a [NativeRuntimeArtifact],
+) -> Result<&'a NativeRuntimeArtifact> {
+    let authenticated = authenticated_artifacts
+        .iter()
+        .find(|artifact| {
+            artifact.id == selected.id
+                && artifact.release_version == selected.release_version
+                && artifact.skippy_abi == selected.skippy_abi
+        })
+        .with_context(|| {
+            format!(
+                "selected native runtime {} is not listed by the authenticated catalog",
+                selected.native_runtime_id()
+            )
+        })?;
+    if authenticated != selected {
+        bail!(
+            "selected native runtime {} metadata differs from its authenticated catalog entry",
+            selected.native_runtime_id()
+        );
+    }
+    Ok(authenticated)
+}
+
+fn verify_local_runtime_if_strict(
+    path: &Path,
+    authenticated_artifact: Option<&NativeRuntimeArtifact>,
+) -> Result<()> {
+    let Some(authenticated_artifact) = authenticated_artifact else {
+        return Ok(());
+    };
+    let local = NativeRuntimeManifest::read_from_dir(path)?;
+    if local_artifact_metadata(&local.runtime) != local_artifact_metadata(authenticated_artifact) {
+        bail!(
+            "local native runtime {} metadata does not match its authenticated catalog entry",
+            authenticated_artifact.native_runtime_id()
+        );
+    }
+    NativeRuntimeManifest {
+        runtime: local_artifact_metadata(authenticated_artifact),
+    }
+    .verify_payload(path)
+    .with_context(|| {
+        format!(
+            "verify local native runtime {} against authenticated catalog file hashes",
+            authenticated_artifact.native_runtime_id()
+        )
+    })
+}
+
+fn local_artifact_metadata(artifact: &NativeRuntimeArtifact) -> NativeRuntimeArtifact {
+    let mut artifact = artifact.clone();
+    artifact.url = None;
+    artifact.sha256 = None;
+    artifact.signature = None;
+    artifact
 }
 
 pub(crate) fn should_install_explicit_bundle_into_cache(
@@ -417,6 +529,7 @@ async fn download_and_install_runtime(
     artifact: &NativeRuntimeArtifact,
     url: &str,
     options: &NativeRuntimeInstallOptions,
+    authenticated_artifact: Option<&NativeRuntimeArtifact>,
 ) -> Result<InstalledNativeRuntime> {
     let temp = tempfile::Builder::new()
         .prefix("mesh-native-runtime-")
@@ -435,6 +548,7 @@ async fn download_and_install_runtime(
     })?;
     extract_runtime_archive(&archive, &extracted)?;
     let bundle_dir = find_extracted_runtime_dir(&extracted)?;
+    verify_local_runtime_if_strict(&bundle_dir, authenticated_artifact)?;
     cache.install_from_dir(&bundle_dir)
 }
 
@@ -487,7 +601,7 @@ async fn download_runtime_archive(
 
 pub(crate) fn verify_download_policy_before_fetch(
     artifact: &NativeRuntimeArtifact,
-    policy: NativeRuntimeVerificationPolicy,
+    _policy: NativeRuntimeVerificationPolicy,
 ) -> Result<()> {
     if artifact.sha256.is_none() {
         bail!(
@@ -495,16 +609,9 @@ pub(crate) fn verify_download_policy_before_fetch(
             artifact.native_runtime_id()
         );
     }
-    if policy == NativeRuntimeVerificationPolicy::RequireChecksumAndSignature {
-        let signature = artifact.signature.as_deref().unwrap_or_default();
-        if signature.trim().is_empty() {
-            bail!(
-                "native runtime {} is missing required signature metadata",
-                artifact.native_runtime_id()
-            );
-        }
-        bail!("native runtime signature verification is not implemented yet");
-    }
+    // Strict-mode authenticity belongs to the detached signature over the
+    // catalog that supplied this archive checksum, not to attacker-controlled
+    // per-artifact metadata. The caller verifies that catalog before resolving.
     Ok(())
 }
 

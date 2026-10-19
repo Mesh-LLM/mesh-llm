@@ -91,6 +91,7 @@ fn runtime_install_options(
         bundle_dirs: options.bundle_dirs.into_iter().map(PathBuf::from).collect(),
         cache_dir: options.cache_dir.map(PathBuf::from),
         verification_policy: options.verification_policy.into(),
+        trusted_public_key: options.trusted_public_key,
         bundle_install_policy: Default::default(),
         progress,
         allow_download: options.allow_download,

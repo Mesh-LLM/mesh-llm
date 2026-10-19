@@ -99,6 +99,80 @@ The reported status must be `valid`. A `missing` status means the bundle was
 published without an embedded release-attestation footer. An `invalid` status
 means a footer was present, but signature verification failed.
 
+## Native Runtime Catalog Signing Key
+
+Native runtime catalog signing is independent of executable release
+attestation and Apple code signing. The protected release publisher recognizes
+these dedicated Actions environment secrets:
+
+- `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` — the full encrypted
+  Minisign secret-key file
+- `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD` — that key's password
+
+Generate a dedicated production key interactively with the maintained Minisign
+CLI. Do not reuse another MeshLLM signing key and do not use `-W`, which would
+leave the secret key unencrypted:
+
+```bash
+umask 077
+mkdir -p /tmp/mesh-native-runtime-catalog-key
+minisign -G \
+  -p /tmp/mesh-native-runtime-catalog-key/native-runtime-catalog.pub \
+  -s /tmp/mesh-native-runtime-catalog-key/native-runtime-catalog.key
+```
+
+Enter a new strong password when prompted and store the encrypted secret key
+and password in the production password vault. Review the public key and its
+key ID out of band, then commit that exact public file at
+`skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub`. There
+is intentionally no placeholder key at that path. The public pin must land
+before the Actions secrets are enabled; never fetch the trusted public key from
+the release or catalog download location.
+
+After the public-key change is reviewed, create the `native-runtime-release`
+Actions environment with required release reviewers and a deployment branch
+policy restricted to the default branch used by release dispatch. The publish
+job targets this environment; configure these as **environment secrets**, not
+repository secrets. This approval also gates publication before key rollout.
+Provision the full encrypted key file and enter its password through the `gh`
+prompt:
+
+```bash
+gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY \
+  --app actions --env native-runtime-release \
+  < /tmp/mesh-native-runtime-catalog-key/native-runtime-catalog.key
+
+gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD --app actions --env native-runtime-release
+```
+
+Do not dispatch a release while only one secret is configured. The Rust signer
+requires both values and refuses to emit a signature unless the secret key
+derives the committed public key. Once provisioned, the publisher signs the
+exact final `native-runtimes.json` bytes after matrix validation and publishes
+`native-runtimes.json.minisig` beside the existing `.sha256` sidecar. Until
+then, signature output is skipped and the existing checksum-default behavior
+remains compatible. Partial secret configuration fails the release. This
+rollout does not rewrite any older release.
+
+To verify a newly signed catalog, use the reviewed public-key checkout rather
+than a key downloaded with the release:
+
+```bash
+minisign -Vm /tmp/native-runtimes.json \
+  -x /tmp/native-runtimes.json.minisig \
+  -p skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub
+```
+
+Downstream prebuilt bundlers must authenticate the original catalog bytes
+before parsing them, select an entry whose release matches the requested
+release, verify the archive against that signed entry's `sha256`, and verify
+every extracted `files` and `tools` digest before copying the runtime into the
+bundle. Ship the original catalog, `.sha256`, and `.minisig` together when the
+application will install offline. Pin the public key independently in the
+application or caller configuration. A locally rewritten catalog or runtime
+manifest, an unsigned bundle, or an existing cache entry is not a substitute
+for this chain.
+
 ## Build
 
 ```bash

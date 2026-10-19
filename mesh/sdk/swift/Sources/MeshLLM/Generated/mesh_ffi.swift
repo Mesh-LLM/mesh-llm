@@ -983,11 +983,12 @@ public struct NativeRuntimeInstallOptionsNative: Equatable, Hashable {
     public var bundleDirs: [String]
     public var cacheDir: String?
     public var verificationPolicy: NativeRuntimeVerificationPolicyNative
+    public var trustedPublicKey: String?
     public var allowDownload: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(meshVersion: String?, skippyAbiVersion: String?, selection: String, manifestPath: String?, manifestUrl: String?, bundleDirs: [String], cacheDir: String?, verificationPolicy: NativeRuntimeVerificationPolicyNative, allowDownload: Bool) {
+    public init(meshVersion: String?, skippyAbiVersion: String?, selection: String, manifestPath: String?, manifestUrl: String?, bundleDirs: [String], cacheDir: String?, verificationPolicy: NativeRuntimeVerificationPolicyNative, trustedPublicKey: String?, allowDownload: Bool) {
         self.meshVersion = meshVersion
         self.skippyAbiVersion = skippyAbiVersion
         self.selection = selection
@@ -996,6 +997,7 @@ public struct NativeRuntimeInstallOptionsNative: Equatable, Hashable {
         self.bundleDirs = bundleDirs
         self.cacheDir = cacheDir
         self.verificationPolicy = verificationPolicy
+        self.trustedPublicKey = trustedPublicKey
         self.allowDownload = allowDownload
     }
 
@@ -1023,6 +1025,7 @@ public struct FfiConverterTypeNativeRuntimeInstallOptionsNative: FfiConverterRus
                 bundleDirs: FfiConverterSequenceString.read(from: &buf),
                 cacheDir: FfiConverterOptionString.read(from: &buf),
                 verificationPolicy: FfiConverterTypeNativeRuntimeVerificationPolicyNative.read(from: &buf),
+                trustedPublicKey: FfiConverterOptionString.read(from: &buf),
                 allowDownload: FfiConverterBool.read(from: &buf)
         )
     }
@@ -1036,6 +1039,7 @@ public struct FfiConverterTypeNativeRuntimeInstallOptionsNative: FfiConverterRus
         FfiConverterSequenceString.write(value.bundleDirs, into: &buf)
         FfiConverterOptionString.write(value.cacheDir, into: &buf)
         FfiConverterTypeNativeRuntimeVerificationPolicyNative.write(value.verificationPolicy, into: &buf)
+        FfiConverterOptionString.write(value.trustedPublicKey, into: &buf)
         FfiConverterBool.write(value.allowDownload, into: &buf)
     }
 }

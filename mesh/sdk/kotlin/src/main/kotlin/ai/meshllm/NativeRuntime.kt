@@ -99,6 +99,7 @@ object NativeRuntime {
         bundleDirs: List<String> = emptyList(),
         cacheDir: String? = null,
         verificationPolicy: NativeRuntimeVerificationPolicy = NativeRuntimeVerificationPolicy.REQUIRE_CHECKSUM,
+        trustedPublicKey: String? = null,
         allowDownload: Boolean = true,
     ): NativeRuntimeInstallOptions =
         NativeRuntimeInstallOptions(
@@ -110,6 +111,7 @@ object NativeRuntime {
             bundleDirs = bundleDirs,
             cacheDir = cacheDir,
             verificationPolicy = verificationPolicy,
+            trustedPublicKey = trustedPublicKey,
             allowDownload = allowDownload,
         )
 }

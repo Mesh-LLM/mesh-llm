@@ -114,6 +114,7 @@ dictionary NativeRuntimeInstallOptionsNative {
     sequence<string> bundle_dirs;
     string? cache_dir;
     NativeRuntimeVerificationPolicyNative verification_policy;
+    string? trusted_public_key;
     boolean allow_download;
 };
 

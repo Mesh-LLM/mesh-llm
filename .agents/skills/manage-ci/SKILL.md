@@ -494,6 +494,25 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Host artifacts include the executable checksum and import-policy report.
   Runtime artifacts include manifest, checksums, ABI/version, platform, and
   backend identity. Product manifests record exact host and runtime digests.
+- Treat the final `native-runtimes.json` bytes as the native-runtime trust
+  root. The protected release publisher may add a detached Minisign signature
+  only after final catalog generation and matrix validation. Scope the
+  encrypted key and password to that one signing step from the protected
+  `native-runtime-release` Actions environment under the secret names
+  `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` and
+  `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD`; no PR, build, composition,
+  or smoke job receives them. The signer must prove that the secret key
+  matches a separately reviewed, repository-pinned public key before emitting
+  `native-runtimes.json.minisig`. Compile the publisher's signing tool in-run
+  with hosted executable cache reuse disabled and verify the new signature
+  before writing it. Environment protection rules are operator-provisioned.
+- Do not manufacture a placeholder production trust key. Until a real public
+  key is reviewed and committed and both protected secrets are provisioned,
+  the release remains checksum-only and consumers retain their existing
+  checksum policy. Strict consumers authenticate the exact original catalog
+  bytes before parsing, require the requested release and selected artifact to
+  be present in that catalog, and verify catalog-bound archive and file hashes
+  even when satisfying the install from a bundle or cache.
 - Use the owning preparation and composition actions. A composer verifies and
   copies exact producer bytes; it never compiles, links, re-stamps, or silently
   substitutes an input.

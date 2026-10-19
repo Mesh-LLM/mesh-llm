@@ -40,9 +40,10 @@ Loading additionally requires the exact Skippy ABI.
 Release CI owns the normal native runtime build. It builds, verifies, and
 publishes the runtime artifacts for supported target/flavor combinations
 alongside the MeshLLM release. Downloaded artifacts require checksum metadata
-today. The API already has a policy knob for requiring signatures, but
-signature verification intentionally fails closed until signing keys and
-attestation format are implemented.
+by default. The strict policy additionally verifies a detached Minisign catalog
+signature against an independently supplied public key, including for caches
+and bundles. Production signing requires provisioning the reviewed release key;
+strict mode rejects unsigned historical catalogs. Build provenance is separate.
 
 Both development and release use the same product boundary: a dynamic,
 backend-neutral host plus exactly one selected runtime directory. `just build`
@@ -295,13 +296,22 @@ Downloaded native runtime artifacts are fail-closed:
 
 - `sha256` metadata is required for downloads.
 - the downloaded archive digest must match the manifest digest.
-- `RequireChecksumAndSignature` requires signature metadata and then returns an
-  explicit unsupported-signature-verification error until signature verification
-  is implemented.
+- `RequireChecksumAndSignature` requires an independently supplied Minisign
+  public key plus adjacent `native-runtimes.json.sha256` and
+  `native-runtimes.json.minisig` sidecars. It authenticates the exact original
+  catalog bytes before UTF-8 or JSON parsing, rejects a catalog or artifact for
+  another release, and requires signed archive and per-file hashes.
+- strict resolution may use a local bundle or existing cache entry only when
+  its identity and metadata match the selected signed catalog entry and its
+  payload passes the signed `files` and `tools` hashes. It never falls back to
+  an unsigned bundle-only catalog after authentication fails.
 
-This avoids silently presenting unsigned downloads as stronger than they are.
-Checksum-only verification is the default policy for the first release artifact
-lane.
+The public key is trust configuration, not catalog data. Callers set
+`trusted_public_key` to reviewed Minisign public-key file contents; they must
+not fetch it from the same URL as the catalog. Local strict installs use the
+original catalog path and sidecars, so downstream prebuilt bundlers must retain
+those files and verify the selected archive before packaging. Checksum-only
+verification remains the default until a production key is provisioned.
 
 The public installers use release-archive `.sha256` sidecars as
 backward-compatible rollout metadata. New release/package jobs should keep

@@ -403,7 +403,20 @@ does not start a second release pipeline or silently serve rebuilt bytes (for
 example a different glibc floor) under the same version. The publish job
 checks all four supported Node addon archives and checksum sidecars before
 creating the GitHub release, matching the downstream npm assembly matrix. It
-creates only the release-specific tag commit
+generates the final `native-runtimes.json` and checksum before a step-scoped
+Minisign operation. The publisher targets the `native-runtime-release` Actions
+environment and compiles its signer without hosted executable cache reuse.
+Only that step maps the protected environment secrets
+`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` and
+`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD`. The Rust xtask signer skips
+signature output when both are absent, rejects partial configuration, and
+proves a configured secret key matches the separately
+committed public-key pin before writing `native-runtimes.json.minisig`. No
+production public key is currently committed, and repository inspection
+cannot establish whether either external Actions secret is provisioned, so the
+checked-in default remains checksum-only until key provisioning is completed.
+The secrets are not passed to native builders, composers, smoke jobs, or PR
+workflows. It then creates only the release-specific tag commit
 for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is selected by `cargo xtool release notes-base` from the
 highest stable `vMAJOR.MINOR.PATCH` tag below the target; prerelease tags are

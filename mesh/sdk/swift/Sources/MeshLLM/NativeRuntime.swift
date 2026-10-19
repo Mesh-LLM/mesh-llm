@@ -70,6 +70,7 @@ public enum NativeRuntime {
                 bundleDirs: bundleDirs,
                 cacheDir: options.cacheDirectory?.path,
                 verificationPolicy: .requireChecksum,
+                trustedPublicKey: nil,
                 allowDownload: options.allowDownload
             ),
             onProgress: onProgress

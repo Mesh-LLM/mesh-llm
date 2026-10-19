@@ -1,4 +1,5 @@
 mod cache;
+mod catalog_authentication;
 mod discovery;
 mod import;
 mod install;
@@ -92,7 +93,7 @@ mod tests {
 
     static MANIFEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    fn artifact_with_sha(signature: Option<&str>) -> NativeRuntimeArtifact {
+    fn artifact_with_sha() -> NativeRuntimeArtifact {
         NativeRuntimeArtifact {
             id: "meshllm-runtime-linux-x86_64-cpu".to_string(),
             release_version: Some(TEST_RELEASE.to_string()),
@@ -110,7 +111,7 @@ mod tests {
             tools: Default::default(),
             url: Some("https://example.invalid/runtime.tar.gz".to_string()),
             sha256: Some("a".repeat(64)),
-            signature: signature.map(str::to_string),
+            signature: None,
         }
     }
 
@@ -147,7 +148,7 @@ mod tests {
         }
         let root = tempfile::tempdir().unwrap();
         let bundle = root.path().join("bundle");
-        write_bundle(&bundle, &artifact_with_sha(None));
+        write_bundle(&bundle, &artifact_with_sha());
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "tests::explicit_sources_ignore_product_environment",
@@ -176,7 +177,7 @@ mod tests {
 
     #[test]
     fn checksum_policy_requires_sha256() {
-        let mut artifact = artifact_with_sha(None);
+        let mut artifact = artifact_with_sha();
         artifact.sha256 = None;
 
         let err = verify_download_policy_before_fetch(
@@ -203,7 +204,7 @@ mod tests {
         };
 
         emit_download_progress(
-            &artifact_with_sha(None),
+            &artifact_with_sha(),
             "https://example.invalid/runtime.tar.gz?token=secret",
             10,
             Some(20),
@@ -220,7 +221,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let bundle = temp.path().join("bundle");
         let profile = host_runtime_profile();
-        let mut artifact = artifact_with_sha(None);
+        let mut artifact = artifact_with_sha();
         artifact.id = "valid-bundle-runtime".to_string();
         artifact.platform.os = profile.os;
         artifact.platform.arch = profile.arch;
@@ -283,7 +284,7 @@ mod tests {
         let cache = NativeRuntimeCache::new(root.path());
         let release = "0.68.0";
         assert_ne!(release, TEST_RELEASE);
-        let mut artifact = artifact_with_sha(None);
+        let mut artifact = artifact_with_sha();
         artifact.release_version = Some(release.to_string());
         let path = cache.runtime_dir(release, artifact.native_runtime_id());
         std::fs::create_dir_all(path.join("lib")).unwrap();
@@ -333,7 +334,7 @@ mod tests {
     fn bundled_runtime_is_used_in_place_without_cache_copy() {
         let bundle = tempfile::tempdir().unwrap();
         let cache_root = tempfile::tempdir().unwrap();
-        let mut artifact = artifact_with_sha(None);
+        let mut artifact = artifact_with_sha();
         artifact.url = None;
         artifact.sha256 = None;
         std::fs::create_dir_all(bundle.path().join("lib")).unwrap();
@@ -382,7 +383,7 @@ mod tests {
     fn bundled_runtime_is_used_in_place_when_policy_has_no_explicit_root_match() {
         let bundle = tempfile::tempdir().unwrap();
         let cache_root = tempfile::tempdir().unwrap();
-        let mut artifact = artifact_with_sha(None);
+        let mut artifact = artifact_with_sha();
         artifact.url = None;
         artifact.sha256 = None;
         std::fs::create_dir_all(bundle.path().join("lib")).unwrap();
@@ -435,7 +436,7 @@ mod tests {
         let cache_root = tempfile::tempdir().unwrap();
         let product_bundle = temp.path().join("mesh-bundle");
         let runtime_bundle = product_bundle.join("native-runtimes/runtime-a");
-        let mut artifact = artifact_with_sha(None);
+        let mut artifact = artifact_with_sha();
         artifact.url = None;
         artifact.sha256 = None;
         std::fs::create_dir_all(runtime_bundle.join("lib")).unwrap();
@@ -485,7 +486,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let bundle = temp.path().join("bundle");
         let cache = NativeRuntimeCache::new(temp.path().join("cache"));
-        let mut artifact = artifact_with_sha(None);
+        let mut artifact = artifact_with_sha();
         artifact.url = None;
         artifact.sha256 = None;
         write_bundle(&bundle, &artifact);
@@ -676,23 +677,6 @@ mod tests {
         let expected = hex::encode(sha2::Sha256::digest(manifest));
         verify_release_manifest_checksum(manifest, &format!("{expected}  native-runtimes.json"))
             .unwrap();
-    }
-
-    #[test]
-    fn signature_policy_fails_closed_until_implemented() {
-        let artifact = artifact_with_sha(Some("signature"));
-
-        let err = verify_download_policy_before_fetch(
-            &artifact,
-            NativeRuntimeVerificationPolicy::RequireChecksumAndSignature,
-        )
-        .unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("signature verification is not implemented"),
-            "{err:?}"
-        );
     }
 
     #[test]
@@ -918,6 +902,7 @@ mod tests {
                 manifest_url: Some("https://example.invalid/from-arg.json".to_string()),
                 bundle_dirs: Vec::new(),
                 allow_default_manifest_url: true,
+                ..test_manifest_options()
             }))
             .unwrap();
 
@@ -971,7 +956,7 @@ mod tests {
     /// The Windows CPU runtime as shipped next to the executable: bundled,
     /// with no download URL.
     fn windows_cpu_bundle_artifact() -> NativeRuntimeArtifact {
-        let mut artifact = artifact_with_sha(None);
+        let mut artifact = artifact_with_sha();
         artifact.id = "meshllm-native-runtime-windows-x86_64-cpu".to_string();
         artifact.platform = NativeRuntimePlatform {
             os: "windows".to_string(),
@@ -988,7 +973,7 @@ mod tests {
     /// The Windows CUDA 12 runtime as published in the release catalog:
     /// download only.
     fn windows_cuda_release_artifact() -> NativeRuntimeArtifact {
-        let mut artifact = artifact_with_sha(None);
+        let mut artifact = artifact_with_sha();
         artifact.id = "meshllm-native-runtime-windows-x86_64-cuda12".to_string();
         artifact.platform = NativeRuntimePlatform {
             os: "windows".to_string(),

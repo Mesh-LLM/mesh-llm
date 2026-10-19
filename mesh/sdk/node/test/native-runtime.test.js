@@ -35,12 +35,14 @@ test('installNativeRuntime delegates to native SDK installer', async () => {
   const outcome = await runtime.installNativeRuntime({
     selection: 'cpu',
     cacheDir: '/cache',
+    trustedPublicKey: 'trusted fixture key',
     allowDownload: false,
     onProgress: (event) => progress.push(event)
   })
 
   assert.equal(calls[0].selection, 'cpu')
   assert.equal(calls[0].cacheDir, '/cache')
+  assert.equal(calls[0].trustedPublicKey, 'trusted fixture key')
   assert.equal(calls[0].allowDownload, false)
   assert.equal(outcome.runtime.nativeRuntimeId, 'meshllm-native-runtime-linux-x86_64-cpu')
   assert.equal(progress[0].downloadedBytes, 128)

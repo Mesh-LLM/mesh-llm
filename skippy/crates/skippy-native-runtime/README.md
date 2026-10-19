@@ -129,6 +129,14 @@ Release jobs publish `native-runtimes.json`:
 }
 ```
 
+The release publisher always emits `native-runtimes.json.sha256`. Once the
+dedicated production key and independently reviewed public-key pin are
+provisioned, it also emits a detached `native-runtimes.json.minisig` over the
+exact final JSON bytes. Catalog signing happens after the release matrix is
+complete; it does not replace the signed entry's archive `sha256` or per-file
+hashes. Authentication and cache/bundle admission policy are owned by
+`skippy-runtime-install`, not by this manifest/resolver crate.
+
 ## Host Profile
 
 Selection evaluates artifacts against `HostRuntimeProfile`:

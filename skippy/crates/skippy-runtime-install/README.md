@@ -11,6 +11,9 @@ It provides:
 - compatible runtime resolution for the requested release
 - cache path selection and installed runtime discovery
 - checksum enforcement before installing downloaded archives
+- optional strict detached Minisign authentication of the exact release
+  catalog bytes, with catalog-bound archive and payload hashes for downloads,
+  bundles, and cache hits
 - download progress callbacks for SDK and CLI callers
 - stale runtime pruning through `NativeRuntimeCache`
 
@@ -53,6 +56,16 @@ Installer options, runtime manifests, and cache inventory name runtime identity
 Mesh-era format with `mesh_version` and no `schema_version`. The legacy version
 is required and mapped to internal `release_version`; missing versions never
 inherit a fallback. Runtime payload checksums and ABI eligibility still apply.
+
+For strict catalog authentication, set `verification_policy` to
+`RequireChecksumAndSignature` and set `trusted_public_key` to the contents of a
+reviewed Minisign public-key file. The key is caller trust configuration and is
+never discovered from the catalog URL. A local catalog requires adjacent
+`.sha256` and `.minisig` sidecars; a remote catalog fetches those sidecars from
+the same asset basename. The exact bytes are authenticated before parsing.
+Strict mode rejects unsigned bundle-only fallback and verifies the selected
+signed entry's file hashes even when resolution finds the runtime in a bundle
+or cache.
 
 ## Migrating callers
 

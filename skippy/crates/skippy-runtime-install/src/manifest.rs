@@ -1,8 +1,14 @@
 //! Release manifest discovery, download, and verification.
 
 use crate::cache::current_skippy_abi_version;
+use crate::catalog_authentication::{
+    CATALOG_SIGNATURE_SUFFIX, sidecar_path, sidecar_url, validate_authenticated_catalog,
+    verify_catalog_bytes,
+};
 use crate::discovery::{discover_explicit_bundle_dirs, discover_native_runtime_bundle_dirs};
-use crate::types::{NATIVE_RUNTIME_MANIFEST_URL_ENV, NativeRuntimeManifestOptions};
+use crate::types::{
+    NATIVE_RUNTIME_MANIFEST_URL_ENV, NativeRuntimeManifestOptions, NativeRuntimeVerificationPolicy,
+};
 use anyhow::{Context, Result, bail};
 use sha2::Digest;
 use skippy_native_runtime::{
@@ -130,9 +136,11 @@ pub(crate) async fn load_release_manifest_with_bundle_dirs(
 /// 1. An explicit manifest file is required: a read failure is an error.
 /// 2. A remote manifest is consulted even when bundle directories exist, so
 ///    an adjacent bundle cannot hide downloadable runtimes. If the fetch
-///    fails and bundles were discovered, the bundles carry the load and the
-///    failure is recorded in `NativeRuntimeCatalogSources::remote_error`.
-///    Without bundles the fetch failure is an error, as before.
+///    fails and bundles were discovered, checksum mode lets the bundles carry
+///    the load and records the failure in
+///    `NativeRuntimeCatalogSources::remote_error`. Strict authentication never
+///    falls back after a catalog fetch or verification failure. Without
+///    bundles the fetch failure is an error, as before.
 /// 3. Bundle artifacts are appended after the manifest artifacts. The
 ///    manifest's `release_version` and `skippy_abi` win when a manifest was
 ///    loaded; bundle values only describe the release when no manifest was
@@ -177,8 +185,10 @@ async fn merge_release_manifest_sources(
     let mut release_version = options.release_version.clone();
     let mut skippy_abi = current_skippy_abi_version();
     let mut manifest_loaded = false;
+    let strict =
+        options.verification_policy == NativeRuntimeVerificationPolicy::RequireChecksumAndSignature;
     if let Some(path) = options.manifest_path.take() {
-        let manifest = NativeRuntimeReleaseManifest::read_from_path(&path)?;
+        let manifest = load_release_manifest_path(&path, &options)?;
         sources.manifest_path = Some(path);
         release_version = manifest.release_version.clone();
         skippy_abi = manifest.skippy_abi.clone();
@@ -186,18 +196,23 @@ async fn merge_release_manifest_sources(
         manifest_loaded = true;
     } else if let Some(url) = url {
         sources.manifest_url = Some(url_without_query(&url));
-        match download_release_manifest(&url).await {
+        match download_release_manifest(&url, &options).await {
             Ok(manifest) => {
                 release_version = manifest.release_version.clone();
                 skippy_abi = manifest.skippy_abi.clone();
                 artifacts.extend(manifest.artifacts);
                 manifest_loaded = true;
             }
-            Err(err) if !options.bundle_dirs.is_empty() => {
+            Err(err) if !strict && !options.bundle_dirs.is_empty() => {
                 sources.remote_error = Some(format!("{err:#}"));
             }
             Err(err) => return Err(err),
         }
+    }
+    if strict && !manifest_loaded {
+        bail!(
+            "strict native runtime verification requires an authenticated release catalog; unsigned bundle-only installation is not allowed"
+        );
     }
     sources.manifest_artifacts = artifacts.len();
     let merged = append_bundle_artifacts(
@@ -220,7 +235,41 @@ async fn merge_release_manifest_sources(
     ))
 }
 
-pub(crate) async fn download_release_manifest(url: &str) -> Result<NativeRuntimeReleaseManifest> {
+fn load_release_manifest_path(
+    path: &std::path::Path,
+    options: &NativeRuntimeManifestOptions,
+) -> Result<NativeRuntimeReleaseManifest> {
+    if options.verification_policy == NativeRuntimeVerificationPolicy::RequireChecksum {
+        return NativeRuntimeReleaseManifest::read_from_path(path);
+    }
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("read native runtime release manifest {}", path.display()))?;
+    let checksum_path = sidecar_path(path, ".sha256");
+    let checksum = std::fs::read_to_string(&checksum_path).with_context(|| {
+        format!(
+            "read native runtime manifest checksum {}",
+            checksum_path.display()
+        )
+    })?;
+    let signature_path = sidecar_path(path, CATALOG_SIGNATURE_SUFFIX);
+    let signature = std::fs::read_to_string(&signature_path).with_context(|| {
+        format!(
+            "read detached native runtime catalog signature {}",
+            signature_path.display()
+        )
+    })?;
+    parse_authenticated_manifest(&bytes, &checksum, &signature, options).with_context(|| {
+        format!(
+            "authenticate native runtime release manifest {}",
+            path.display()
+        )
+    })
+}
+
+pub(crate) async fn download_release_manifest(
+    url: &str,
+    options: &NativeRuntimeManifestOptions,
+) -> Result<NativeRuntimeReleaseManifest> {
     let diagnostic_url = url_without_query(url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
@@ -264,12 +313,60 @@ pub(crate) async fn download_release_manifest(url: &str) -> Result<NativeRuntime
         .with_context(|| {
             format!("read native runtime manifest checksum {diagnostic_checksum_url}")
         })?;
-    verify_release_manifest_checksum(&bytes, &checksum)
-        .with_context(|| format!("verify native runtime release manifest {diagnostic_url}"))?;
-    let text = std::str::from_utf8(&bytes)
-        .with_context(|| format!("decode native runtime release manifest {diagnostic_url}"))?;
+    if options.verification_policy == NativeRuntimeVerificationPolicy::RequireChecksum {
+        verify_release_manifest_checksum(&bytes, &checksum)
+            .with_context(|| format!("verify native runtime release manifest {diagnostic_url}"))?;
+        return parse_manifest_bytes(&bytes)
+            .with_context(|| format!("parse native runtime release manifest {diagnostic_url}"));
+    }
+    let signature_url = sidecar_url(url, CATALOG_SIGNATURE_SUFFIX);
+    let diagnostic_signature_url = url_without_query(&signature_url);
+    let signature = client
+        .get(&signature_url)
+        .header("User-Agent", "mesh-llm")
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| {
+            format!("download detached native runtime catalog signature {diagnostic_signature_url}")
+        })?
+        .error_for_status()
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| {
+            format!(
+                "native runtime catalog signature request failed for {diagnostic_signature_url}"
+            )
+        })?
+        .text()
+        .await
+        .map_err(reqwest::Error::without_url)
+        .with_context(|| {
+            format!("read detached native runtime catalog signature {diagnostic_signature_url}")
+        })?;
+    parse_authenticated_manifest(&bytes, &checksum, &signature, options)
+        .with_context(|| format!("authenticate native runtime release manifest {diagnostic_url}"))
+}
+
+fn parse_authenticated_manifest(
+    bytes: &[u8],
+    checksum: &str,
+    signature: &str,
+    options: &NativeRuntimeManifestOptions,
+) -> Result<NativeRuntimeReleaseManifest> {
+    verify_catalog_bytes(
+        bytes,
+        checksum,
+        signature,
+        options.trusted_public_key.as_deref(),
+    )?;
+    let manifest = parse_manifest_bytes(bytes)?;
+    validate_authenticated_catalog(&manifest, &options.release_version)?;
+    Ok(manifest)
+}
+
+fn parse_manifest_bytes(bytes: &[u8]) -> Result<NativeRuntimeReleaseManifest> {
+    let text = std::str::from_utf8(bytes).context("decode native runtime release manifest")?;
     NativeRuntimeReleaseManifest::from_json_str(text)
-        .with_context(|| format!("parse native runtime release manifest {diagnostic_url}"))
 }
 
 pub(crate) fn verify_release_manifest_checksum(

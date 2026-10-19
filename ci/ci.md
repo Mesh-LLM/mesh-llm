@@ -650,6 +650,19 @@ claiming a wall-time improvement.
 The later publish job checks out the canonical source commit, adds only the
 generated SwiftPM/binding and SDK console resources needed by the immutable
 release tag, publishes the assets, and enables GitHub-generated release notes.
+After it generates and validates the final `native-runtimes.json` bytes and
+writes the checksum sidecar, it invokes the Rust xtask catalog signer. Only
+that step receives secrets from the `native-runtime-release` Actions environment;
+the publisher disables hosted executable cache reuse for the signer:
+`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` and
+`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD`; the signer requires both and
+refuses a secret key that does not match the independently committed public
+key file. If neither external secret is provisioned, it emits no signature and
+the established checksum-only release remains unchanged; partial configuration
+fails closed. There is deliberately
+no placeholder production public key in the repository; the public pin and
+matching protected secrets must be provisioned together before signed catalog
+publication is enabled.
 The metadata job runs `cargo xtool release notes-base` to select the highest
 stable `vMAJOR.MINOR.PATCH` tag below the target as the explicit comparison base.
 It excludes every prerelease tag, so release candidates and their final stable

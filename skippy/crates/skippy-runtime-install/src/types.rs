@@ -99,6 +99,10 @@ pub struct NativeRuntimeManifestOptions {
     pub manifest_url: Option<String>,
     pub bundle_dirs: Vec<PathBuf>,
     pub allow_default_manifest_url: bool,
+    /// Catalog authentication required before parsing or merging catalog data.
+    pub verification_policy: NativeRuntimeVerificationPolicy,
+    /// Minisign public-key file contents pinned independently of the catalog source.
+    pub trusted_public_key: Option<String>,
 }
 
 #[derive(Clone)]
@@ -114,6 +118,8 @@ pub struct NativeRuntimeInstallOptions {
     pub bundle_dirs: Vec<PathBuf>,
     pub cache_dir: Option<PathBuf>,
     pub verification_policy: NativeRuntimeVerificationPolicy,
+    /// Minisign public-key file contents pinned independently of the catalog source.
+    pub trusted_public_key: Option<String>,
     pub bundle_install_policy: NativeRuntimeBundleInstallPolicy,
     pub progress: Option<NativeRuntimeDownloadProgressCallback>,
     pub allow_download: bool,
@@ -146,6 +152,8 @@ impl NativeRuntimeManifestOptions {
             manifest_url: None,
             bundle_dirs: Vec::new(),
             allow_default_manifest_url: true,
+            verification_policy: NativeRuntimeVerificationPolicy::RequireChecksum,
+            trusted_public_key: None,
         }
     }
 }
@@ -163,6 +171,7 @@ impl NativeRuntimeInstallOptions {
             bundle_dirs: Vec::new(),
             cache_dir: None,
             verification_policy: NativeRuntimeVerificationPolicy::RequireChecksum,
+            trusted_public_key: None,
             bundle_install_policy: NativeRuntimeBundleInstallPolicy::UseInPlace,
             progress: None,
             allow_download: true,
