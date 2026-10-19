@@ -73,23 +73,31 @@ std::expected<std::string, PlanFailure> read_string(const skippy_stage_plan& pla
     return std::string{view->data(), view->size()};
 }
 
-StateKind state_kind_of(std::int32_t value) noexcept {
+// Finite domains from the native planner: every value this facade does not
+// recognise is rejected, not defaulted. A default is not cosmetic here —
+// summarize() derives `recurrent` and write counts from these fields, so an
+// unknown kind pretending to be KvKey would silently change plan semantics.
+// parse_pooling rejecting out-of-range values is the same pattern.
+std::optional<StateKind> state_kind_of(std::int32_t value) noexcept {
     switch (value) {
     case SKIPPY_STAGE_PLAN_STATE_KV_KEY: return StateKind::KvKey;
     case SKIPPY_STAGE_PLAN_STATE_KV_VALUE: return StateKind::KvValue;
     case SKIPPY_STAGE_PLAN_STATE_RECURRENT_CONV: return StateKind::RecurrentConvolution;
     case SKIPPY_STAGE_PLAN_STATE_RECURRENT_SSM: return StateKind::RecurrentSsm;
-    default: return StateKind::KvKey;
+    default: return std::nullopt;
     }
 }
 
-StateAccess access_of(std::int32_t value) noexcept {
-    return value == SKIPPY_STAGE_PLAN_STATE_WRITE ? StateAccess::Write : StateAccess::Read;
+std::optional<StateAccess> access_of(std::int32_t value) noexcept {
+    if (value == SKIPPY_STAGE_PLAN_STATE_WRITE) return StateAccess::Write;
+    if (value == SKIPPY_STAGE_PLAN_STATE_READ) return StateAccess::Read;
+    return std::nullopt;
 }
 
-StateResidency residency_of(std::int32_t value) noexcept {
-    return value == SKIPPY_STAGE_PLAN_STATE_PER_STAGE ? StateResidency::PerStage
-                                                      : StateResidency::LayerLocal;
+std::optional<StateResidency> residency_of(std::int32_t value) noexcept {
+    if (value == SKIPPY_STAGE_PLAN_STATE_PER_STAGE) return StateResidency::PerStage;
+    if (value == SKIPPY_STAGE_PLAN_STATE_LAYER_LOCAL) return StateResidency::LayerLocal;
+    return std::nullopt;
 }
 
 namespace {
@@ -146,11 +154,27 @@ std::optional<PlanFailure> append_states(const skippy_stage_plan& plan, std::siz
             skippy_stage_plan_state_at_v1(&plan, profile_index, index, &desc, &error.raw);
         if (auto ok = check(status, error); !ok.has_value()) return ok.error();
 
+        const auto kind = state_kind_of(desc.kind);
+        const auto access = access_of(desc.access);
+        const auto residency = residency_of(desc.residency);
+        // An unrecognised domain value means this facade predates the native
+        // planner that produced it; guessing a default would silently change
+        // the plan's semantics (summarize derives `recurrent` from the kind),
+        // so the plan is rejected and the raw value named.
+        if (!kind || !access || !residency) {
+            return PlanFailure{
+                .code = PlanError::Rejected,
+                .message = "unknown state descriptor: kind=" + std::to_string(desc.kind) +
+                           " access=" + std::to_string(desc.access) +
+                           " residency=" + std::to_string(desc.residency),
+            };
+        }
+
         storage.push_back(StateEffect{
-            .kind = state_kind_of(desc.kind),
-            .access = access_of(desc.access),
+            .kind = *kind,
+            .access = *access,
             .layer = desc.layer,
-            .residency = residency_of(desc.residency),
+            .residency = *residency,
             .write_ordinal = desc.write_ordinal,
         });
     }

@@ -85,8 +85,11 @@ thing that survives it.
   validated type accepts only the ones that mean something. Where a value has a
   finite domain (pooling kinds, workload kinds, families), parse into the
   bounded type and reject the rest at the boundary — `parse_pooling` rejecting
-  out-of-range integers is the pattern. Do not smuggle an unconstrained `int`
-  through the middle of the library.
+  out-of-range integers is the pattern. The native-planner converters
+  (`state_kind_of` and siblings) reject unknown domain values the same way,
+  because a defaulted kind would silently flip `summarize()`'s recurrent
+  classification rather than merely mislabel. Do not smuggle an unconstrained
+  `int` through the middle of the library.
 - **No silent widening or narrowing.** Every `static_cast` between integer
   widths needs a reason: a bound was checked, an ABI demands exactly this width,
   or the value is provably in range. Cast *at the boundary* (where the check
