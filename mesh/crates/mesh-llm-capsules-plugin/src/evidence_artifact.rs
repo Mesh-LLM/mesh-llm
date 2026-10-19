@@ -773,20 +773,9 @@ fn check_record_set(
     let fits = match subject {
         Subject::Range(a, b) => leaves.iter().copied().eq(*a..=*b),
         Subject::FullHistory => leaves.iter().copied().eq(0..covered),
-        Subject::Correlation(id) => bodies.iter().all(|b| {
-            served_record(b).is_some_and(|r| {
-                crate::evidence_log::record_correlation_ids(&r)
-                    .iter()
-                    .any(|c| c == id)
-            })
-        }),
-        Subject::Exchange(half) => bodies.iter().all(|b| {
-            served_record(b).is_some_and(|r| {
-                crate::evidence_log::counterparty_half_citations(&r)
-                    .iter()
-                    .any(|h| h == half)
-            })
-        }),
+        Subject::Correlation(_) | Subject::Exchange(_) => {
+            bodies.iter().all(|b| record_fits(subject, b))
+        }
         // Answered before a record set is read.
         Subject::Record(_) | Subject::Checkpoints => false,
     };
@@ -796,11 +785,25 @@ fn check_record_set(
     Ok((served, leaves))
 }
 
-/// A record body the index would match: a JSON object that is not padding.
-fn served_record(body: &[u8]) -> Option<Value> {
-    serde_json::from_slice::<Value>(body)
+/// Whether a record body is one the index files under a `correlation` or
+/// `exchange` subject: a JSON object, not padding, that carries the
+/// identifier or cites the half.
+fn record_fits(subject: &Subject, body: &[u8]) -> bool {
+    let Some(record) = serde_json::from_slice::<Value>(body)
         .ok()
         .filter(|r| r.is_object() && !crate::producer::padding::is_padding(r))
+    else {
+        return false;
+    };
+    match subject {
+        Subject::Correlation(id) => crate::evidence_log::record_correlation_ids(&record)
+            .iter()
+            .any(|c| c == id),
+        Subject::Exchange(half) => crate::evidence_log::counterparty_half_citations(&record)
+            .iter()
+            .any(|h| h == half),
+        _ => false,
+    }
 }
 
 /// The coverage the request asked for: the pinned anchor, or one at least
@@ -1484,6 +1487,35 @@ mod tests {
         }
     }
 
+    /// The index never files padding under a subject, so a padding record
+    /// that carries the identifier or cites the half still does not fit.
+    #[test]
+    fn padding_never_fits_a_correlation_or_exchange() {
+        let half = "c".repeat(64);
+        let record = |record_type: &str| {
+            serde_json::to_vec(&json!({
+                "record_type": record_type,
+                "nonce": "n-1",
+                "references": [{
+                    "type": "capsule", "digest_alg": "SHA-256", "digest": half,
+                    "citation_purpose": "counterparty_half",
+                }],
+            }))
+            .unwrap()
+        };
+        for subject in [
+            Subject::Correlation("n-1".into()),
+            Subject::Exchange(half.clone()),
+        ] {
+            assert!(record_fits(&subject, &record("served")), "{subject:?}");
+            assert!(!record_fits(&subject, &record("padding")), "{subject:?}");
+        }
+        assert!(!record_fits(
+            &Subject::Correlation("n-1".into()),
+            b"not json"
+        ));
+    }
+
     /// A checkpoint list and a history card must start the stream and chain
     /// to the anchor, and a history card's consistency proofs must hold.
     #[test]
@@ -1564,9 +1596,11 @@ mod tests {
             )
             .unwrap();
             let req = request::parse_json(&asked).unwrap();
+            // Signed for this request, so only the subject it names differs.
+            let answer = resigned(&asked, &reply, |_| {});
             assert!(
                 matches!(
-                    check(&asked, &req, &reply, &key().verifying_key(), &|_| None),
+                    check(&asked, &req, &answer, &key().verifying_key(), &|_| None),
                     Err(CheckError::Answer(_))
                 ),
                 "{subject}"
