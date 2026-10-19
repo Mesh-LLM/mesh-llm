@@ -28,6 +28,7 @@ use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
+mod native_cache_concurrency;
 mod recurrent_concurrency;
 mod recurrent_early_stop;
 mod recurrent_verification;
@@ -230,7 +231,9 @@ fn recurrent_test_backend_with_lanes(
         lane_count: lanes,
         n_batch: Some(batch_size),
         n_ubatch: Some(microbatch_size),
-        n_gpu_layers: 0,
+        n_gpu_layers: std::env::var("SKIPPY_RECURRENT_CACHE_TEST_GPU_LAYERS")
+            .unwrap_or_else(|_| "0".into())
+            .parse()?,
         mmap: Some(true),
         mlock: false,
         repack: false,
@@ -269,10 +272,14 @@ fn recurrent_test_backend_with_lanes(
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
-    let kv =
-        KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Recurrent)?
-            .map(Arc::new)
-            .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
+    let kv = KvStageIntegration::from_loaded_model(
+        &config,
+        crate::runtime_state::loaded_model_state_kind(Some(&runtime)),
+        crate::runtime_state::loaded_memory_cache_capabilities(Some(&runtime)),
+        None,
+    )?
+    .map(Arc::new)
+    .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
     let iteration_scheduler = IterationScheduler::new(
@@ -306,7 +313,7 @@ fn recurrent_test_backend_with_lanes(
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
         generation_admission_timeout: std::time::Duration::from_secs(10),
-        generation_service_estimator: Arc::new(crate::frontend::GenerationServiceEstimator::new(1)),
+        generation_service_estimator: iteration_scheduler.service_estimator(),
         generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         generation_token_budget: Arc::new(GenerationTokenBudget::new(token_budget)),
         hook_policy: None,
