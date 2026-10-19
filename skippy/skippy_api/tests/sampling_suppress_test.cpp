@@ -81,4 +81,39 @@ TEST(SamplingSuppress, MembershipCheckMatchesTheSets) {
     EXPECT_FALSE(skippy::is_suppressed(Token{2}, {}));
 }
 
+// Patch 0013: the selection's boundary rule. Exhaustion is a typed
+// rejection, an engaged selection (id 0 included) is a token, and the
+// conversion never invents a third outcome.
+
+TEST(SamplingSuppress, ExhaustedSelectionIsARejection) {
+    const std::vector<float> logits{1.0F, 2.0F, 100.0F, 50.0F, 4.0F};
+    const std::vector<Token> all{Token{0}, Token{1}, Token{2}, Token{3}, Token{4}};
+    const auto rejected = skippy::eligible_token(skippy::greedy_among_allowed(logits, all));
+    ASSERT_FALSE(rejected.has_value());
+    EXPECT_EQ(rejected.error(), skippy::SamplingFailure::ExhaustedVocabulary);
+}
+
+TEST(SamplingSuppress, AnEligibleSelectionPassesThroughUnchanged) {
+    const std::vector<float> logits{1.0F, 2.0F, 100.0F, 50.0F, 4.0F};
+    const auto eligible =
+        skippy::eligible_token(skippy::greedy_among_allowed(logits, suppress_2_3));
+    ASSERT_TRUE(eligible.has_value());
+    EXPECT_EQ(*eligible, Token{4});
+}
+
+TEST(SamplingSuppress, TokenZeroIsEligibleNotASentinel) {
+    // The polarity rule the native store path pins: zero is a token. An
+    // engaged selection of id 0 passes the boundary check untouched.
+    const std::optional<Token> zero{Token{0}};
+    const auto eligible = skippy::eligible_token(zero);
+    ASSERT_TRUE(eligible.has_value());
+    EXPECT_EQ(*eligible, Token{0});
+}
+
+TEST(SamplingSuppress, NoLogitsIsExhaustionAtTheBoundary) {
+    const auto rejected = skippy::eligible_token(skippy::greedy_among_allowed({}, {}));
+    ASSERT_FALSE(rejected.has_value());
+    EXPECT_EQ(rejected.error(), skippy::SamplingFailure::ExhaustedVocabulary);
+}
+
 } // namespace
