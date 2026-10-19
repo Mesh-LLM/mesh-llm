@@ -1,4 +1,4 @@
-From 6795594a4f373f89230822f502ddad6a4694b556 Mon Sep 17 00:00:00 2001
+From 977f5394fe5cef81ba3b3d2cd009d4f9bb750ea3 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -18,7 +18,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  624 +++++++
- src/skippy/tests/sampling_history.cpp         |  349 ++++
+ src/skippy/tests/sampling_history.cpp         |  375 ++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9448 insertions(+), 33 deletions(-)
+ 34 files changed, 9474 insertions(+), 33 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5772,10 +5772,10 @@ index 000000000..8c9e3288b
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..16684e942
+index 000000000..d7faaf302
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,375 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "llama-model.h"
@@ -6000,6 +6000,31 @@ index 000000000..16684e942
 +    release(queued); // Destruction also owns a pending-work fence.
 +}
 +
++void full_state_rewinds_active_session(skippy_model * model) {
++    const std::vector<llama_token> prefix(64, 1);
++    auto sampling = sampling_config();
++    sampling.logit_bias_count = 0;
++    auto * session = create(model);
++    prefill(session, prefix);
++    snapshot checkpoint(session, true);
++    const auto expected = decode(session, sampling, 2);
++    CHECK(session->n_past == 65);
++    CHECK(session->token_history.size() == 65);
++    for (int repeat = 0; repeat < 2; ++repeat) {
++        skippy_error * error = nullptr;
++        const auto status = skippy_import_full_state(session, 0, checkpoint.layers,
++                checkpoint.payload.data(), checkpoint.payload.size(), &error);
++        ok(status, error);
++        // Do not call set_position: the import itself owns the restored cursor.
++        CHECK(session->n_past == 64);
++        CHECK(session->token_history == prefix);
++        snapshot restored(session, true);
++        CHECK(restored.payload == checkpoint.payload);
++        CHECK(decode(session, sampling, 2) == expected);
++    }
++    release(session);
++}
++
 +void grammar_restore(skippy_model * model, bool full, bool lazy) {
 +    const auto sampling = sampling_config();
 +    const std::vector<llama_token> prefix(256, 1);
@@ -6108,6 +6133,7 @@ index 000000000..16684e942
 +    const auto status = skippy_model_open(argv[1], &config, &model, &error);
 +    ok(status, error);
 +    queued_prefill_state_parity(model);
++    full_state_rewinds_active_session(model);
 +    for (const bool full : {false, true}) {
 +        if (grammar) {
 +            for (const bool lazy : {false, true}) {

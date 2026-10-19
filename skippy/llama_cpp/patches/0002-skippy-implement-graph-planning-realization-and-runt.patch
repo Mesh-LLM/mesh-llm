@@ -1,4 +1,4 @@
-From abab3931af995477298d6505d575631d76c6244b Mon Sep 17 00:00:00 2001
+From a4d9a77b61f7646dacb32795db3928163030b193 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -52,7 +52,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  871 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  119 +++
- src/skippy/state.cpp                    | 1167 ++++++++++++++++++++++
+ src/skippy/state.cpp                    | 1168 ++++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
  src/skippy/state_memory.cpp             |  139 +++
@@ -61,7 +61,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  371 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16079 insertions(+)
+ 57 files changed, 16080 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -13815,10 +13815,10 @@ index 000000000..2272a3fec
 +        std::string & error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..aa197340b
+index 000000000..b41f289f6
 --- /dev/null
 +++ b/src/skippy/state.cpp
-@@ -0,0 +1,1167 @@
+@@ -0,0 +1,1168 @@
 +#include "skippy/state.h"
 +#include "skippy/state_memory.h"
 +#include "skippy/errors.h"
@@ -13865,12 +13865,13 @@ index 000000000..aa197340b
 +
 +static void skippy_update_session_state_after_import(
 +        skippy_session * session,
-+        uint32_t imported_position) {
-+    session->n_past = std::max<int32_t>(
-+            session->n_past,
-+            static_cast<int32_t>(std::min<uint32_t>(
-+                    imported_position,
-+                    static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))));
++        uint32_t imported_position,
++        bool full_state) {
++    const int32_t restored_position = static_cast<int32_t>(std::min<uint32_t>(
++            imported_position, static_cast<uint32_t>(std::numeric_limits<int32_t>::max())));
++    // A complete snapshot replaces the sequence, including when rewinding a
++    // live lane. Partial imports can still be assembling state with KV pages.
++    session->n_past = full_state ? restored_position : std::max(session->n_past, restored_position);
 +    if (session->token_history.size() > static_cast<size_t>(session->n_past)) {
 +        session->token_history.resize(static_cast<size_t>(session->n_past));
 +    }
@@ -13997,7 +13998,7 @@ index 000000000..aa197340b
 +    if (status != SKIPPY_STATUS_OK) {
 +        return status;
 +    }
-+    skippy_update_session_state_after_import(session, imported_position);
++    skippy_update_session_state_after_import(session, imported_position, false);
 +
 +    return skippy_success(out_error);
 +}
@@ -14079,7 +14080,7 @@ index 000000000..aa197340b
 +    if (status != SKIPPY_STATUS_OK) {
 +        return status;
 +    }
-+    skippy_update_session_state_after_import(session, imported_position);
++    skippy_update_session_state_after_import(session, imported_position, true);
 +
 +    return skippy_success(out_error);
 +}
