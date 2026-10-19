@@ -4,7 +4,7 @@ use crate::command::DynResult;
 use serde_json::{Value, json};
 
 pub(super) fn run(input: &Prepared, engine: Engine) -> DynResult<()> {
-    lifecycle::hardware(input)?;
+    super::hardware::capture(input)?;
     let mut cells = Vec::new();
     let mut points = Vec::new();
     let mut notes = Vec::new();

@@ -13,12 +13,16 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 #[derive(Default, Serialize)]
 struct Sample {
     elapsed_ms: u128,
     process_rss_bytes: Option<u64>,
     process_rss_high_water_bytes: Option<u64>,
     process_anonymous_rss_bytes: Option<u64>,
+    process_physical_footprint_bytes: Option<u64>,
     container_memory_bytes: Option<u64>,
     host_available_bytes: Option<u64>,
 }
@@ -27,6 +31,7 @@ struct Sample {
 pub(super) struct Summary {
     samples: usize,
     sampled_peak_process_rss_bytes: Option<u64>,
+    sampled_peak_process_physical_footprint_bytes: Option<u64>,
     process_rss_high_water_bytes: Option<u64>,
     sampled_peak_container_memory_bytes: Option<u64>,
     minimum_host_available_bytes: Option<u64>,
@@ -76,6 +81,7 @@ impl Drop for Monitor {
     }
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn kib_field(text: &str, name: &str) -> Option<u64> {
     let line = text.lines().find_map(|line| line.strip_prefix(name))?;
     let mut fields = line.split_whitespace();
@@ -99,6 +105,17 @@ fn cgroup_memory_path() -> Option<PathBuf> {
 }
 
 fn read_sample(pid: u32, elapsed_ms: u128, cgroup: Option<&Path>) -> Sample {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = cgroup;
+        macos::sample(pid, elapsed_ms)
+    }
+    #[cfg(not(target_os = "macos"))]
+    read_proc_sample(pid, elapsed_ms, cgroup)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_proc_sample(pid: u32, elapsed_ms: u128, cgroup: Option<&Path>) -> Sample {
     let status = if pid == 0 {
         String::new()
     } else {
@@ -110,6 +127,7 @@ fn read_sample(pid: u32, elapsed_ms: u128, cgroup: Option<&Path>) -> Sample {
         process_rss_bytes: kib_field(&status, "VmRSS:"),
         process_rss_high_water_bytes: kib_field(&status, "VmHWM:"),
         process_anonymous_rss_bytes: kib_field(&status, "RssAnon:"),
+        process_physical_footprint_bytes: None,
         container_memory_bytes: cgroup
             .and_then(|path| std::fs::read_to_string(path).ok())
             .and_then(|value| value.trim().parse().ok()),
@@ -132,6 +150,9 @@ fn sample_loop(file: File, pid: &AtomicU32, stop: &mpsc::Receiver<()>) -> DynRes
         summary.sampled_peak_process_rss_bytes = summary
             .sampled_peak_process_rss_bytes
             .max(sample.process_rss_bytes);
+        summary.sampled_peak_process_physical_footprint_bytes = summary
+            .sampled_peak_process_physical_footprint_bytes
+            .max(sample.process_physical_footprint_bytes);
         summary.process_rss_high_water_bytes = summary
             .process_rss_high_water_bytes
             .max(sample.process_rss_high_water_bytes);

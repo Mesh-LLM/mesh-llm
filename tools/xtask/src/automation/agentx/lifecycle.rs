@@ -11,26 +11,6 @@ use std::time::Duration;
 
 pub(super) const STARTUP_TIMEOUT_SECS: u64 = 900;
 
-pub(super) fn hardware(input: &Prepared) -> DynResult<()> {
-    if std::env::consts::OS != "linux" || std::env::consts::ARCH != "aarch64" {
-        return Err("AgentX job requires a Linux aarch64 DGX Spark".into());
-    }
-    let spec = command::spec(
-        &input.root,
-        "nvidia-smi",
-        &command::strings(&[
-            "--query-gpu=name,memory.total,memory.used,memory.free",
-            "--format=csv,noheader",
-        ]),
-    )?;
-    let log = input.output.join("hardware");
-    command::run(&spec, 30, &log)?;
-    let name = std::fs::read_to_string(log.with_extension("stdout.log"))?;
-    if !name.contains("GB10") {
-        return Err("AgentX job requires an NVIDIA GB10".into());
-    }
-    Ok(())
-}
 fn server(
     input: &Prepared,
     engine: &str,

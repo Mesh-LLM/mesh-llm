@@ -83,6 +83,33 @@ verifies every weight shard against [models.json](../evals/agentx/models.json).
 No projector is needed for these text-only traces. Tokenizers have independent
 immutable Hugging Face revisions.
 
+## Metal qualification
+
+On an Apple Silicon Mac, submit a native JY job at the immutable PR revision and
+set `HF_HOME` to that Mac's existing cache. Inside its materialized checkout:
+
+```sh
+just agentx-build metal
+just automation-bootstrap
+target/debug/xtask automation agentx run --engine skippy --model qwen3.5-4b-q4-k-m --profile smoke --output "$JIANYANG_ARTIFACT_DIR/campaign"
+```
+
+Use `--engine llama` in the corresponding baseline job. The same runner owns
+trace selection, c1/2/4 sweeps, child cleanup, exports, and offline model admission
+on both platforms. The Metal build uses the pinned upstream llama.cpp baseline
+and the source-built Skippy Metal runtime. Run comparisons in ABBAAB order on
+the same leased Mac. The existing Spark templates retain their GPU Docker path;
+native Metal qualification uses standalone jobs and artifact results.
+
+`hardware.json` identifies the admitted backend, and the raw hardware report is
+retained alongside it. macOS samples process RSS and physical footprint through
+`proc_pid_rusage`; summaries expose `sampled_peak_process_rss_bytes` and
+`sampled_peak_process_physical_footprint_bytes`. The latter is the process's
+memory-accounting footprint, not GPU residency. macOS does not provide an RSS
+high-water mark through this API, so that field remains unavailable. Linux keeps
+its `/proc` RSS/high-water and cgroup observations. Sampling can miss short peaks
+on either platform; none of these process fields substitutes for GPU residency.
+
 ## Q4 model matrix
 
 All PR comparisons use Q4_K_M weights. Model keys and result names include the

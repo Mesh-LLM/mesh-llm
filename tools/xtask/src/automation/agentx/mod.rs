@@ -3,6 +3,7 @@ mod campaign;
 mod capacity;
 mod command;
 mod container;
+mod hardware;
 mod inputs;
 mod lifecycle;
 mod memory;
