@@ -26,14 +26,19 @@
     `checkpoint_cose` the checkpointer already writes beside each checkpoint), not by the digest of
     its JSON form. A checkpoint line without its own statement ends the evidence chain there, as
     any checkpoint the index cannot take does: nothing after it is served.
-  - **A record answer** is the record's ledger line, as before, with the profile's Checkpointed
+  - **Earlier digests and pins no longer reproduce.** The artifact octets and the anchor both
+    changed, so every `artifact_digest` and every anchor pin taken from an earlier version stops
+    reproducing. An old anchor names none of this node's checkpoints, so a request pinned to one,
+    which would otherwise have been answered, is refused `coverage_unsatisfiable`.
+  - **A record answer** is now the record's ledger line itself, with the profile's Checkpointed
     Local Log material for its `capsule_id` (the anchor's statement, the inclusion proof, and the
     consistency proof when the checkpoint extends another). The line is not the `capsule_id`
     preimage, so a profile verifier reports that check `NOT_CHECKED`, never `FAIL`; this node's
     requester recomputes the `capsule_id` and checks the proofs, and also accepts a record served as
     its own octets, which the profile's check passes. The line keeps the producer's signature, which
     the page's "Ask them for their record" checks. The page reads the artifact as the profile
-    carries it, unpadded base64url.
+    carries it, unpadded base64url. Before, a record answer was the canonical JSON (RFC 8785) of
+    `{anchor, evidence_stream, records, subject}`.
   - **The other answers** take evidencebook's artifact forms (record sets, the checkpoint list,
     `history_card/1`) and `served_summary/1` the same shape. The profile has no material for them
     and no carrier for witness receipts, so this node also sends, where a profile verifier reads

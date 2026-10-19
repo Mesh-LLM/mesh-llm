@@ -112,8 +112,8 @@ pub struct Build<'a> {
     pub issued_at: &'a str,
 }
 
-/// Build and sign the answer: the reply in the JSON binding, with this
-/// node's witness receipts beside the envelope. A reason when no answer can
+/// Build and sign the answer: the profile's flat reply, carried in a JSON
+/// frame, with this node's witness receipts beside the envelope. A reason when no answer can
 /// be built.
 pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
     let index = view.index;

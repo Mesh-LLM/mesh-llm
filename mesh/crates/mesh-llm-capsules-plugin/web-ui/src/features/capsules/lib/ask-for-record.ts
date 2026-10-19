@@ -180,7 +180,7 @@ export type AskJudges = {
 
 const REAL_JUDGES: AskJudges = { recomputeIdMatch, producerSignatureVerifies }
 
-/** Unpadded base64url, as the interop profile's JSON binding carries bytes. */
+/** Unpadded base64url, as the interop profile's reply carries bytes in a JSON frame. */
 function base64urlBytes(text: string): Uint8Array | null {
   if (!/^[A-Za-z0-9_-]*$/.test(text)) return null
   try {

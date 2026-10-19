@@ -274,12 +274,13 @@ settlement legs, verdict bodies and any TEE quote sidecar.
   discovery (only under R-7): an A2A Agent Card extension naming the draft,
   the supported subjects and derivations and their versions; no history and no
   per-exchange ids in discovery.
-- **R-23 Wire alignment.** The Mesh carrier today is the interop profile's
-  reply in its JSON binding (agent-action-capsule `spec/interop-profile-v0.md`
-  §6.2, `evidence-interop/0`; `evidence_answer.rs` module doc), whereas draft
-  -00's peer-to-peer binding uses the same `evidence-request/1` identifier with
-  deterministic CBOR frames. One normative encoding is chosen, and Mesh either
-  conforms or uses a distinct identifier (§9).
+- **R-23 Wire alignment.** An answer is the interop profile's flat reply
+  (agent-action-capsule `spec/interop-profile-v0.md` §6.2, `evidence-interop/0`;
+  `evidence_answer.rs` module doc), but the `evidence-request/1` frames that
+  carry it are still JSON, whereas draft -00's peer-to-peer binding uses the
+  same identifier with deterministic CBOR frames. Decided: Mesh keeps the
+  identifier and conforms by moving its frames to deterministic CBOR in a later
+  change; until then its JSON frames do not match draft -00's binding.
 - **R-24** A2A binding: **planned** (no A2A code in this repository).
 
 ### 5.7 Cross-node corroboration

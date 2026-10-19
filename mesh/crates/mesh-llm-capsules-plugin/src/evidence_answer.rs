@@ -83,12 +83,14 @@
 //! read this log's size or cadence from which refusal it gets. A real
 //! counterparty asking for more than its own records still can.
 //!
-//! **The wire.** An artifact answer is the interop profile's reply in the
-//! JSON binding (agent-action-capsule `spec/interop-profile-v0.md` §6.2,
+//! **The wire.** An artifact answer is the interop profile's flat reply
+//! (agent-action-capsule `spec/interop-profile-v0.md` §6.2,
 //! `evidence-interop/0`): the signed envelope with its artifact and
 //! verification material beside it as unpadded base64url, plus this node's
 //! witness receipts (`evidence_artifact::WITNESS_RECEIPTS`). A refusal is
-//! the crate's refusal object.
+//! the crate's refusal object. The `evidence-request/1` frames that carry
+//! them are still JSON, pending the deterministic CBOR frames of the
+//! draft's peer binding.
 
 use cll::mmr::leaf_count;
 use ed25519_dalek::SigningKey;
