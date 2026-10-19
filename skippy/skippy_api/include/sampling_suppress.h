@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <expected>
 #include <limits>
 #include <optional>
@@ -97,6 +98,9 @@ struct LogitBias {
 enum class SamplingFailure {
     /// Every candidate was suppressed, or there were no logits to pick from.
     ExhaustedVocabulary,
+    /// A raw id below zero arrived where a token was required — the native
+    /// sampler's "nothing" spelling, whatever sentinel produced it.
+    SentinelToken,
 };
 
 /// Patch 0013's boundary rule for callers of `greedy_among_allowed`: the
@@ -109,6 +113,35 @@ enum class SamplingFailure {
 eligible_token(std::optional<Token> selection) noexcept {
     if (!selection.has_value()) return std::unexpected(SamplingFailure::ExhaustedVocabulary);
     return *selection;
+}
+
+/// Patch 0014's store rule for ids that arrive as raw native tokens: any
+/// negative id — `LLAMA_TOKEN_NULL` today, whatever sentinel a future
+/// sampler returns — is a rejection, and id 0 is a token. The native helper
+/// this mirrors also guarantees a rejected store never touches the caller's
+/// destination; here that property is structural, because the only way to
+/// write the result is through a successful `expected`.
+[[nodiscard]] constexpr std::expected<Token, SamplingFailure>
+eligible_token(std::int32_t native_id) noexcept {
+    if (native_id < 0) return std::unexpected(SamplingFailure::SentinelToken);
+    return Token{native_id};
+}
+
+/// Patch 0014's batch boundary: a sampled batch is published only when every
+/// selection is a token. One exhausted selection rejects the whole batch —
+/// the native iteration paths zero their output count and publish nothing
+/// partial, and so does this rule.
+[[nodiscard]] inline std::expected<std::vector<Token>, SamplingFailure>
+eligible_tokens(std::span<const std::optional<Token>> sampled) {
+    std::vector<Token> tokens;
+    tokens.reserve(sampled.size());
+    for (const std::optional<Token>& selection : sampled) {
+        if (!selection.has_value()) {
+            return std::unexpected(SamplingFailure::ExhaustedVocabulary);
+        }
+        tokens.push_back(*selection);
+    }
+    return tokens;
 }
 
 } // namespace skippy

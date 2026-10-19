@@ -116,4 +116,53 @@ TEST(SamplingSuppress, NoLogitsIsExhaustionAtTheBoundary) {
     EXPECT_EQ(rejected.error(), skippy::SamplingFailure::ExhaustedVocabulary);
 }
 
+// Patch 0014: one store rule at every boundary. Any negative raw id is the
+// sampler's "nothing", a rejected store never touches the caller's
+// destination, and a batch publishes all of its tokens or none of them.
+
+TEST(SamplingSuppress, AnyNegativeRawIdIsARejection) {
+    // LLAMA_TOKEN_NULL today; the rule is total over negatives so a future
+    // sentinel spelling cannot slip through.
+    for (const std::int32_t sentinel : {-1, -2, -30592}) {
+        const auto rejected = skippy::eligible_token(sentinel);
+        ASSERT_FALSE(rejected.has_value());
+        EXPECT_EQ(rejected.error(), skippy::SamplingFailure::SentinelToken);
+    }
+}
+
+TEST(SamplingSuppress, RawZeroAndPositiveIdsAreTokens) {
+    const auto zero = skippy::eligible_token(0);
+    ASSERT_TRUE(zero.has_value());
+    EXPECT_EQ(*zero, Token{0});
+    const auto real = skippy::eligible_token(30592);
+    ASSERT_TRUE(real.has_value());
+    EXPECT_EQ(*real, Token{30592});
+}
+
+TEST(SamplingSuppress, ARejectedStoreNeverTouchesTheDestination) {
+    // The native test pins that an exhausted store leaves the caller's
+    // buffer at its prior value; the facade makes the property structural —
+    // the destination is only written through a successful expected.
+    Token stored{Token{7}};
+    const auto rejected = skippy::eligible_token(-1);
+    ASSERT_FALSE(rejected.has_value());
+    if (rejected.has_value()) stored = *rejected;
+    EXPECT_EQ(stored, Token{7});
+}
+
+TEST(SamplingSuppress, ABatchPublishesEveryTokenWhenAllAreEligible) {
+    const std::vector<std::optional<Token>> sampled{Token{0}, Token{5}, Token{30591}};
+    const auto published = skippy::eligible_tokens(sampled);
+    ASSERT_TRUE(published.has_value());
+    EXPECT_EQ(*published, (std::vector<Token>{Token{0}, Token{5}, Token{30591}}));
+}
+
+TEST(SamplingSuppress, OneExhaustedSelectionRejectsTheWholeBatch) {
+    const std::vector<std::optional<Token>> middle{Token{1}, std::nullopt, Token{3}};
+    const auto rejected = skippy::eligible_tokens(middle);
+    ASSERT_FALSE(rejected.has_value());
+    EXPECT_EQ(rejected.error(), skippy::SamplingFailure::ExhaustedVocabulary);
+    EXPECT_TRUE(skippy::eligible_tokens({}).has_value());
+    EXPECT_TRUE(skippy::eligible_tokens({})->empty());
+}
 } // namespace
