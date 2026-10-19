@@ -127,11 +127,7 @@ pub(super) fn verify(path: &Path, expected: &str) -> DynResult<()> {
 }
 pub(super) fn recheck(prepared: &Prepared) -> DynResult<()> {
     let parent = prepared.weights.parent().ok_or("weights parent")?;
-    let directory = if prepared.model.files[0].name.starts_with("BF16/") {
-        parent.parent().ok_or("shard parent")?
-    } else {
-        parent
-    };
+    let directory = parent;
     for FilePin { name, sha256 } in &prepared.model.files {
         verify(&directory.join(name), sha256)?;
     }
