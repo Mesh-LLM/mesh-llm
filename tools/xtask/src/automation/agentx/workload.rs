@@ -112,7 +112,8 @@ fn ready(root: &Path, port: u16, output: &Path) -> DynResult<()> {
             &format!("http://127.0.0.1:{port}/health"),
         ]),
     )?;
-    let deadline = Instant::now() + Duration::from_secs(900);
+    let seconds = super::lifecycle::STARTUP_TIMEOUT_SECS;
+    let deadline = Instant::now() + Duration::from_secs(seconds);
     let mut attempt = 0;
     while Instant::now() < deadline {
         let log = output.join(format!("health-{attempt}"));
@@ -122,7 +123,7 @@ fn ready(root: &Path, port: u16, output: &Path) -> DynResult<()> {
         attempt += 1;
         std::thread::sleep(Duration::from_secs(2));
     }
-    Err("server never became healthy within 900s".into())
+    Err(format!("server never became healthy within {seconds}s").into())
 }
 
 #[cfg(test)]

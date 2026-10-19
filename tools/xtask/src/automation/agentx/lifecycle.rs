@@ -9,6 +9,8 @@ use crate::{
 use serde_json::json;
 use std::time::Duration;
 
+pub(super) const STARTUP_TIMEOUT_SECS: u64 = 900;
+
 pub(super) fn hardware(input: &Prepared) -> DynResult<()> {
     if std::env::consts::OS != "linux" || std::env::consts::ARCH != "aarch64" {
         return Err("AgentX job requires a Linux aarch64 DGX Spark".into());
@@ -80,6 +82,8 @@ fn server(
                 &input.model.key,
                 "--bind-addr",
                 &format!("127.0.0.1:{port}"),
+                "--startup-timeout-secs",
+                &STARTUP_TIMEOUT_SECS.to_string(),
                 "--batch-size",
                 "2048",
                 "--microbatch-size",
@@ -348,6 +352,9 @@ mod tests {
                 assert!(arguments.windows(2).any(|args| args == ["--parallel", "2"]));
             } else {
                 assert!(!arguments.iter().any(|arg| arg == "--parallel"));
+                assert!(arguments.windows(2).any(|args| {
+                    args == ["--startup-timeout-secs", &STARTUP_TIMEOUT_SECS.to_string()]
+                }));
             }
         }
     }

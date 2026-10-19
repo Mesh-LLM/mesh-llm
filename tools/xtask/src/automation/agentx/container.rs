@@ -41,12 +41,25 @@ pub(super) fn run(engine: Engine, model: &str, profile: Profile, output: PathBuf
         &json!({"container":launch.name,"image":image,"source_commit":launch.commit,
             "benchmark_success":result.is_ok(),"removed":cleanup.is_ok()}),
     )?;
+    let result_path = std::env::var_os("JIANYANG_RESULT_PATH").ok_or("JY result path missing")?;
+    let published = retain_result(
+        &launch.artifacts.join("container-result.json"),
+        Path::new(&result_path),
+        result,
+    );
     cleanup?;
     finished?;
-    result?;
-    let result_path = std::env::var_os("JIANYANG_RESULT_PATH").ok_or("JY result path missing")?;
-    std::fs::copy(launch.artifacts.join("container-result.json"), result_path)?;
-    Ok(())
+    published
+}
+
+fn retain_result(source: &Path, destination: &Path, outcome: DynResult<()>) -> DynResult<()> {
+    // Failed sweeps still publish valid earlier cells and explicit failure counts.
+    // A failure before the first cell may have no result at all; retain that error.
+    match std::fs::copy(source, destination) {
+        Ok(_) => outcome,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && outcome.is_err() => outcome,
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn prepare(output: PathBuf) -> DynResult<Launch> {
@@ -251,6 +264,30 @@ fn docker_limits(seconds: u64) -> process::Limits {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_container_retains_partial_results_without_becoming_successful() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("container-result.json");
+        let destination = dir.path().join("result.json");
+        let partial = r#"{"points":[{"concurrency":1}],"quality":{"sweep":{"cells_incomplete_or_failed":1}}}"#;
+        std::fs::write(&source, partial).unwrap();
+        let result = retain_result(&source, &destination, Err("cell failed".into()));
+        assert_eq!(result.unwrap_err().to_string(), "cell failed");
+        assert_eq!(std::fs::read_to_string(&destination).unwrap(), partial);
+        assert!(retain_result(&source, &destination, Ok(())).is_ok());
+    }
+
+    #[test]
+    fn missing_results_are_only_allowed_after_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("missing.json");
+        let destination = dir.path().join("result.json");
+        assert!(retain_result(&source, &destination, Ok(())).is_err());
+        let result = retain_result(&source, &destination, Err("startup failed".into()));
+        assert_eq!(result.unwrap_err().to_string(), "startup failed");
+        assert!(!destination.exists());
+    }
+
     #[test]
     fn selected_engine_reaches_container_with_same_host_cache_mount() {
         let launch = Launch {

@@ -136,7 +136,10 @@ server logs preserved; missing observations remain unavailable. Do not infer
 execution slots from offered concurrency or native sequence reservations.
 Context overflow and failed requests invalidate a cell; traces are not silently
 truncated to fit a plan. Failed cells retain evidence, and subsequent levels
-continue only after confirmed cleanup. Harness version 4 separates these
+continue only after confirmed cleanup. Any failed or incomplete cell fails the
+job after the sweep; valid earlier points and explicit failure counts are still
+copied from the container into the JY result. A green job therefore requires
+every requested cell to complete. Harness version 4 separates these
 measurements from the previous fixed-context sweep.
 Skippy's in-memory prefix retention target is explicitly 8 GiB, with disk
 caching off; exact snapshots can exceed that target. llama-server retains its
@@ -157,7 +160,11 @@ workers, bounded by available parallelism and block count. Contiguous snapshots
 remain borrowed directly. Reconstruction preserves deduplication and cache
 accounting, and falls back to a serial copy if worker creation fails.
 
-Sixty seconds is only the smoke measurement window. Building, downloading,
+Both engines have a 900-second readiness deadline. Skippy receives that same
+startup timeout explicitly, so its CLI's 60-second default cannot terminate a
+large NAS-backed model load while the harness is still waiting for readiness.
+
+Sixty seconds is only the smoke measurement window. Building, cache verification,
 tokenizer synthesis, server readiness, warmup, outstanding-request drain, and
 cleanup add time. A single cell has a bounded 80-minute lifecycle for smoke;
 the job has a 24-hour hard deadline shared with container build and preparation. These are

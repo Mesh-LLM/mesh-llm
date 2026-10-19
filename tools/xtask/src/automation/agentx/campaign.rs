@@ -48,6 +48,16 @@ pub(super) fn run(input: &Prepared, engine: Engine) -> DynResult<()> {
             );
         }
     }
+    finish_sweep(input.profile.concurrencies().len(), points.len())
+}
+
+fn finish_sweep(expected: usize, completed: usize) -> DynResult<()> {
+    if completed != expected {
+        return Err(format!(
+            "AgentX sweep completed {completed}/{expected} cells; partial results retained"
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -123,6 +133,16 @@ fn publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_and_incomplete_sweeps_fail_the_job() {
+        assert!(finish_sweep(3, 3).is_ok());
+        for completed in 0..3 {
+            let error = finish_sweep(3, completed).unwrap_err().to_string();
+            assert!(error.contains(&format!("{completed}/3")));
+            assert!(error.contains("partial results retained"));
+        }
+    }
+
     #[test]
     fn cancelled_requests_are_never_serving_points() {
         assert!(complete(
