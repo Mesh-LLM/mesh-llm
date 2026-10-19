@@ -1158,7 +1158,8 @@ fn answer_openly(dir: &Path, bytes: &[u8]) -> Outcome {
 }
 
 /// `request.json`: a request the vectors call malformed is refused with
-/// their reason; a well-formed one is never refused as malformed. Every
+/// their reason; a well-formed one parses here and is never refused as
+/// malformed (the vectors expect nothing more of it). Every
 /// refusal binds the vector's digest of the bytes as received. The JSON
 /// binding only: this node takes no CBOR requests.
 #[test]
@@ -1185,7 +1186,8 @@ fn the_responder_refuses_each_aac_request_as_the_vectors_say() {
         };
         let expect = &case["expect"];
         let ok = if expect["well_formed"] == json!(true) {
-            refused != Some("request_malformed")
+            evidence_request::request::parse_json(bytes).is_ok()
+                && refused != Some("request_malformed")
         } else {
             refused == expect["reason"].as_str()
         };

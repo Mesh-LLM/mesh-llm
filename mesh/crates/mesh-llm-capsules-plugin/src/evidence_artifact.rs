@@ -702,9 +702,14 @@ fn raw_digest(digest: &str) -> Result<Hash, CheckError> {
         .ok_or_else(|| CheckError::Answer("a record's digest is malformed".into()))
 }
 
-/// A record set: each record's body is the record its digest names, the leaves are
-/// what the subject asks for, and the anchor checkpoint and one inclusion
-/// proof per record prove each under it. Returns the anchor and the leaves.
+/// A record set: each record's body is the record its digest names, the
+/// anchor checkpoint and one inclusion proof per record prove each under it,
+/// and the records are the ones the subject names. A range or the full
+/// history must be exactly those positions. A `correlation` or `exchange`
+/// answer's records must each carry the identifier or cite the half, by the
+/// rules the responder's index uses; that the set is complete is not
+/// checkable here, and is what the requester's own half proves (-00 §6).
+/// Returns the anchor and the leaves.
 fn check_record_set(
     env: &Envelope,
     art: &Map<String, Value>,
@@ -730,6 +735,7 @@ fn check_record_set(
         .map_err(|_| CheckError::Answer("the anchor's size is not an MMR size".into()))?;
 
     let mut leaves = Vec::with_capacity(records.len());
+    let mut bodies = Vec::with_capacity(records.len());
     for (record, proof) in records.iter().zip(&env.verification_content[1..]) {
         let body = hex_member(record, "body")?;
         // A record of this format, or one that is its own octets.
@@ -762,16 +768,39 @@ fn check_record_set(
             return fail("a record's inclusion proof does not hold");
         }
         leaves.push(leaf);
+        bodies.push(body);
     }
     let fits = match subject {
         Subject::Range(a, b) => leaves.iter().copied().eq(*a..=*b),
         Subject::FullHistory => leaves.iter().copied().eq(0..covered),
-        _ => true,
+        Subject::Correlation(id) => bodies.iter().all(|b| {
+            served_record(b).is_some_and(|r| {
+                crate::evidence_log::record_correlation_ids(&r)
+                    .iter()
+                    .any(|c| c == id)
+            })
+        }),
+        Subject::Exchange(half) => bodies.iter().all(|b| {
+            served_record(b).is_some_and(|r| {
+                crate::evidence_log::counterparty_half_citations(&r)
+                    .iter()
+                    .any(|h| h == half)
+            })
+        }),
+        // Answered before a record set is read.
+        Subject::Record(_) | Subject::Checkpoints => false,
     };
     if !fits {
         return fail("the records are not the ones the subject names");
     }
     Ok((served, leaves))
+}
+
+/// A record body the index would match: a JSON object that is not padding.
+fn served_record(body: &[u8]) -> Option<Value> {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .filter(|r| r.is_object() && !crate::producer::padding::is_padding(r))
 }
 
 /// The coverage the request asked for: the pinned anchor, or one at least
@@ -1260,7 +1289,10 @@ mod tests {
         ];
         for (what, change) in tampered {
             let bad = resigned(&sent, &reply, |p| change(p));
-            assert!(check_reply(&sent, &bad).is_err(), "{what}");
+            assert!(
+                matches!(check_reply(&sent, &bad), Err(CheckError::Answer(_))),
+                "{what}"
+            );
         }
     }
 
@@ -1281,25 +1313,52 @@ mod tests {
         );
     }
 
-    /// The artifact is the same for every requester (-00 §5): two requests
-    /// for the same subject under the same anchor, differing in their nonce
-    /// and coverage form, get byte-identical artifacts.
+    /// The artifact is the same for every requester (-00 §5): an unsigned
+    /// request and requests signed by two different nodes, differing too in
+    /// their nonce and coverage form, get byte-identical artifacts.
     #[test]
     fn the_artifact_is_the_same_whoever_asks() {
         let node = node();
+        let now = chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
+        let signed_by = |asker: &str, mut request: Value| {
+            request["requester_id"] = json!(asker);
+            crate::requester_auth::sign(
+                crate::requester_auth::Channel::EvidenceRequest,
+                &mut request,
+                &crate::evidence_request_parity::asker_key(asker),
+                now,
+                RESPONDER_NODE,
+            );
+            request
+        };
         for subject in [
             json!({"range": [16, 20]}),
             json!({"checkpoints": null}),
             json!({"correlation": "n-1"}),
         ] {
-            let a = node
+            let anonymous = node
                 .ask(&json!({"subject": subject, "coverage": node.pin(1), "nonce": "a"}))
                 .1;
-            let b = node
-                .ask(&json!({"subject": subject, "coverage": {"min_freshness": 300}, "nonce": "b"}))
+            let by_a = node
+                .ask(&signed_by(
+                    "node-a",
+                    json!({"subject": subject, "coverage": {"min_freshness": 300}, "nonce": "b"}),
+                ))
                 .1;
-            assert_eq!(a["artifact"], b["artifact"], "{subject}");
-            assert_ne!(a["request_digest"], b["request_digest"]);
+            let by_b = node
+                .ask(&signed_by(
+                    "node-b",
+                    json!({"subject": subject, "coverage": node.pin(1), "nonce": "c"}),
+                ))
+                .1;
+            for (who, other) in [("node-a", &by_a), ("node-b", &by_b)] {
+                assert!(
+                    other.get("artifact").is_some(),
+                    "{subject}: {who} was answered"
+                );
+                assert_eq!(anonymous["artifact"], other["artifact"], "{subject}: {who}");
+                assert_ne!(anonymous["request_digest"], other["request_digest"]);
+            }
         }
     }
 
@@ -1370,6 +1429,57 @@ mod tests {
             assert!(
                 matches!(check_reply(&sent, &bad), Err(CheckError::Answer(_))),
                 "{what}"
+            );
+        }
+    }
+
+    /// A `correlation` or `exchange` answer may carry only records that
+    /// carry the identifier or cite the half. A record that does not, slipped
+    /// in with its own valid proof under the same anchor and signed by the
+    /// responder, is refused; so is a padding record.
+    #[test]
+    fn a_record_set_with_a_record_the_subject_does_not_name_is_refused() {
+        let node = node();
+        let half = hex::encode(Sha256::digest(b"the counterparty's own half"));
+        // The exchange is answered under the earliest checkpoint covering
+        // the citing record, checkpoint 0; the others under checkpoint 1.
+        for (subject, coverage, anchor, outsider) in [
+            (json!({"correlation": "n-1"}), node.pin(1), 1, 1u64),
+            (
+                json!({"exchange": half}),
+                json!({"expected_pin": half}),
+                0,
+                5u64,
+            ),
+            (json!({"correlation": "n-1"}), node.pin(1), 1, 8u64),
+        ] {
+            let (sent, reply) = node.ask(&json!({"subject": subject, "coverage": coverage}));
+            let checked = check_reply(&sent, &reply).unwrap();
+            assert!(!checked.records.contains(&outsider), "{subject}");
+            // The outsider and its proof, from a range answer under the same anchor.
+            let (_, other) = node.ask(&json!({
+                "subject": {"range": [outsider, outsider]},
+                "coverage": node.pin(anchor),
+            }));
+            let other = envelope_of(&other);
+            let other_record =
+                serde_json::from_slice::<Value>(&other.artifact).unwrap()["records"][0].clone();
+            let other_proof = other.verification_content[1].clone();
+            let bad = resigned(&sent, &reply, |p| {
+                let mut art = artifact_json(p);
+                let records = art["records"].as_array_mut().unwrap();
+                let at = records
+                    .iter()
+                    .position(|r| r["leaf_index"].as_u64().unwrap() > outsider)
+                    .unwrap_or(records.len());
+                records.insert(at, other_record.clone());
+                p.artifact = jcs_bytes(&art);
+                p.verification
+                    .insert(at + 1, (KIND_INCLUSION.to_string(), other_proof.clone()));
+            });
+            assert!(
+                matches!(check_reply(&sent, &bad), Err(CheckError::Answer(_))),
+                "{subject} with record {outsider}"
             );
         }
     }
@@ -1445,6 +1555,23 @@ mod tests {
                 .unwrap();
         let req = request::parse_json(&other).unwrap();
         assert!(check(&other, &req, &reply, &key().verifying_key(), &|_| None).is_err());
+        // Asked about another record, or another subject form: the answer
+        // names a subject the request did not.
+        let another = ledger[1]["capsule_id"].as_str().unwrap();
+        for subject in [json!({"record": another}), json!({"range": [0, 0]})] {
+            let asked = serde_json::to_vec(
+                &json!({"subject": subject, "coverage": {"min_freshness": 300}}),
+            )
+            .unwrap();
+            let req = request::parse_json(&asked).unwrap();
+            assert!(
+                matches!(
+                    check(&asked, &req, &reply, &key().verifying_key(), &|_| None),
+                    Err(CheckError::Answer(_))
+                ),
+                "{subject}"
+            );
+        }
     }
 
     /// A served summary is under the newest anchor, named in its material.

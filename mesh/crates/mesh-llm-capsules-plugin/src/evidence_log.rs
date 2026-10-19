@@ -290,12 +290,7 @@ impl LedgerIndex {
         let padding = crate::producer::padding::is_padding(&record);
         if !padding {
             self.by_id.entry(capsule_id.clone()).or_insert(index);
-            let mut ids = Vec::new();
-            collect_correlations(&record, &mut ids);
-            ids.extend(record_exchange_binding(&record));
-            ids.sort();
-            ids.dedup();
-            for id in ids {
+            for id in record_correlation_ids(&record) {
                 self.correlations.entry(id).or_default().push(index);
             }
             for half in counterparty_half_citations(&record) {
@@ -596,6 +591,19 @@ fn is_digest(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// The correlation identifiers a record carries: every `nonce`,
+/// `client_nonce` and `exchange_id` in it, and its exchange binding. The
+/// index keys `correlation` answers on these, and the requester checks a
+/// `correlation` answer's records against them.
+pub(crate) fn record_correlation_ids(record: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    collect_correlations(record, &mut ids);
+    ids.extend(record_exchange_binding(record));
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
 fn collect_correlations(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
@@ -620,7 +628,7 @@ fn collect_correlations(value: &Value, out: &mut Vec<String>) {
 /// The exchange halves a record cites as its counterparty's half
 /// (`references[].citation_purpose == "counterparty_half"`), the citation the
 /// ledger itself keys on.
-fn counterparty_half_citations(record: &Value) -> Vec<String> {
+pub(crate) fn counterparty_half_citations(record: &Value) -> Vec<String> {
     record
         .get("references")
         .and_then(Value::as_array)
