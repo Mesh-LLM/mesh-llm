@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <expected>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -87,6 +88,27 @@ struct LogitBias {
         }
     }
     return best;
+}
+
+/// Why a selection cannot become a sampled token. Ported from llama.cpp
+/// patch 0013 (skippy: reject exhausted vocab sampling): exhausting the
+/// vocabulary under suppression is a caller-visible failure, never a
+/// sentinel id that leaks into caller outputs or subsequent decode inputs.
+enum class SamplingFailure {
+    /// Every candidate was suppressed, or there were no logits to pick from.
+    ExhaustedVocabulary,
+};
+
+/// Patch 0013's boundary rule for callers of `greedy_among_allowed`: the
+/// selection is either a usable token or the typed reason it is not. An
+/// engaged selection always passes — id 0 is a real token, not a sentinel —
+/// and an exhausted one is a rejection the caller stops on, exactly as the
+/// native patch turns `LLAMA_TOKEN_NULL` into a runtime error at every
+/// sampling boundary instead of storing it.
+[[nodiscard]] constexpr std::expected<Token, SamplingFailure>
+eligible_token(std::optional<Token> selection) noexcept {
+    if (!selection.has_value()) return std::unexpected(SamplingFailure::ExhaustedVocabulary);
+    return *selection;
 }
 
 } // namespace skippy

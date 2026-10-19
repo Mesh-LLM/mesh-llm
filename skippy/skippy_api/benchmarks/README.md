@@ -19,6 +19,8 @@ google-benchmark report.
 | `SamplingSuppress/N` | native-equivalent merge and per-call bitmap greedy scan | `apply_vocab_suppress` and `greedy_among_allowed` |
 | `stage_chain` | *row pending: the gate compares identical inputs; must compare the C-ABI chain's terminal frame against `StageChain::prefill`'s before timing* | `StageChain` prefill |
 
+| `SamplingSuppress` | hand-written find-per-candidate merge + greedy (pre-0012 spelling) | `apply_vocab_suppress` + `greedy_among_allowed` (bitmap) |
+| `SamplingEligible` | the post-0012 native sampler entry plus the call-site `LLAMA_TOKEN_NULL` check | `greedy_among_allowed` through `eligible_token` |
 Both sides link the *same* patched llama.cpp build, load the same GGUF, and run
 with the same geometry (`n_ctx = n_batch = n_ubatch = 512`, one sequence, all
 layers offloaded, flash-attention AUTO). The harness embeds one 64-token input

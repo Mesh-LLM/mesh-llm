@@ -790,6 +790,108 @@ template <bool UseFfi> void SamplingSuppress(benchmark::State& state) {
 }
 
 // ---------------------------------------------------------------------------
+// Sampling eligibility (patch 0013): an exhausted selection is a rejection at
+// the boundary, never a sentinel token stored into caller state. This row
+// measures the boundary rule's spelling, not the selection algorithm (the
+// SamplingSuppress row owns that comparison), so both sides run the same
+// bitmap selection and differ only in how exhaustion reaches the caller:
+//   FFI: a transcription of the native sampler entry the 0013 call sites wrap
+//        (LLAMA_TOKEN_NULL sentinel) plus the call-site compare the patch adds.
+//   API: the facade's optional selection through eligible_token.
+// ---------------------------------------------------------------------------
+
+// skippy_greedy_sample_allowed_logits as the patched runtime spells it: the
+// bitmap selection patch 0012 added, -1 sentinel on exhaustion.
+SKIPPY_NOINLINE llama_token eligible_sample_legacy(const float* logits, std::int32_t n_vocab,
+                                                   const llama_token* suppress,
+                                                   std::int32_t count) {
+    if (logits == nullptr || n_vocab <= 0) return LLAMA_TOKEN_NULL;
+    std::vector<std::uint8_t> suppressed(static_cast<std::size_t>(n_vocab), 0);
+    if (suppress != nullptr && count > 0) {
+        for (std::int32_t index = 0; index < count; ++index) {
+            const llama_token token = suppress[index];
+            if (token >= 0 && token < n_vocab) {
+                suppressed[static_cast<std::size_t>(token)] = 1;
+            }
+        }
+    }
+    llama_token best = LLAMA_TOKEN_NULL;
+    float best_logit = -std::numeric_limits<float>::infinity();
+    for (llama_token token = 0; token < n_vocab; ++token) {
+        if (suppressed[static_cast<std::size_t>(token)] != 0) continue;
+        if (best == LLAMA_TOKEN_NULL || logits[token] > best_logit) {
+            best_logit = logits[token];
+            best = token;
+        }
+    }
+    return best;
+}
+
+template <bool UseFfi> void SamplingEligible(benchmark::State& state) {
+    const auto vocab_size = static_cast<std::int32_t>(state.range(0));
+    std::vector<float> logits(static_cast<std::size_t>(vocab_size));
+    for (std::int32_t token = 0; token < vocab_size; ++token) {
+        logits[static_cast<std::size_t>(token)] =
+            static_cast<float>((token * 7919) % 9973) / 9973.0F;
+    }
+    std::vector<llama_token> ffi_suppress;
+    std::vector<skippy::Token> api_suppress;
+    for (std::int32_t index = 0; index < 128; ++index) {
+        const auto token = static_cast<std::int32_t>((index * 5077 + 3) % vocab_size);
+        ffi_suppress.push_back(token);
+        api_suppress.push_back(skippy::Token{token});
+    }
+
+    // Gate on outputs first: an eligible vocab and an exhausted one must agree
+    // on both the token and the rejection, or this row does not count.
+    const auto eligible =
+        skippy::eligible_token(skippy::greedy_among_allowed(logits, api_suppress));
+    const llama_token legacy_sampled =
+        eligible_sample_legacy(logits.data(), vocab_size, ffi_suppress.data(),
+                               static_cast<std::int32_t>(ffi_suppress.size()));
+    if (!eligible.has_value() || legacy_sampled == LLAMA_TOKEN_NULL ||
+        legacy_sampled != static_cast<std::int32_t>(*eligible)) {
+        state.SkipWithError("eligible selection disagrees between FFI and API");
+        return;
+    }
+    std::vector<llama_token> ffi_exhausted(vocab_size);
+    std::vector<skippy::Token> api_exhausted;
+    api_exhausted.reserve(static_cast<std::size_t>(vocab_size));
+    for (std::int32_t token = 0; token < vocab_size; ++token) {
+        ffi_exhausted[static_cast<std::size_t>(token)] = token;
+        api_exhausted.push_back(skippy::Token{token});
+    }
+    const auto exhausted =
+        skippy::eligible_token(skippy::greedy_among_allowed(logits, api_exhausted));
+    const llama_token legacy_exhausted =
+        eligible_sample_legacy(logits.data(), vocab_size, ffi_exhausted.data(),
+                               static_cast<std::int32_t>(ffi_exhausted.size()));
+    if (exhausted.has_value() || legacy_exhausted != LLAMA_TOKEN_NULL) {
+        state.SkipWithError("exhausted selection disagrees between FFI and API");
+        return;
+    }
+
+    for (auto _ : state) {
+        if constexpr (UseFfi) {
+            llama_token sampled =
+                eligible_sample_legacy(logits.data(), vocab_size, ffi_suppress.data(),
+                                       static_cast<std::int32_t>(ffi_suppress.size()));
+            // The call-site check patch 0013 adds at every sampling boundary.
+            bool usable = sampled != LLAMA_TOKEN_NULL;
+            benchmark::DoNotOptimize(sampled);
+            benchmark::DoNotOptimize(usable);
+        } else {
+            const auto sampled =
+                skippy::eligible_token(skippy::greedy_among_allowed(logits, api_suppress));
+            benchmark::DoNotOptimize(&sampled);
+        }
+        benchmark::ClobberMemory();
+    }
+
+    state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(vocab_size));
+}
+
+// ---------------------------------------------------------------------------
 // Session create/release: the model stays loaded.
 //   FFI: claims a lane on the model's shared context (cheap).
 //   API: builds a dedicated llama_context per session (n_ctx = 512).
@@ -1461,6 +1563,11 @@ BENCHMARK_TEMPLATE(SamplingSuppress, false)
     ->Arg(32000)
     ->UseRealTime();
 
+BENCHMARK_TEMPLATE(SamplingEligible, true)->Name("SamplingEligible/FFI")->Arg(32000)->UseRealTime();
+BENCHMARK_TEMPLATE(SamplingEligible, false)
+    ->Name("SamplingEligible/API")
+    ->Arg(32000)
+    ->UseRealTime();
 BENCHMARK_TEMPLATE(ModelLoad, true)
     ->Name("ModelLoad/FFI")
     ->Iterations(1)
