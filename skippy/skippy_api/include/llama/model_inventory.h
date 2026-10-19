@@ -316,7 +316,7 @@ inline std::int64_t layer_count_from(const std::vector<TensorInfo>& tensors) {
         const auto dot = tensor.name.find('.', position);
         if (dot == std::string::npos) continue;
         layers =
-            std::max(layers, std::stoll(tensor.name.substr(position + 4, dot - position - 4)) + 1);
+            std::max<std::int64_t>(layers, std::stoll(tensor.name.substr(position + 4, dot - position - 4)) + 1);
     }
     return layers;
 }
