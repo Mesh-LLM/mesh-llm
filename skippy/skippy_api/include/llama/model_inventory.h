@@ -13,18 +13,23 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <cstdio>
+#include <cstring>
 #include <expected>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace skippy::probe {
 
@@ -53,37 +58,100 @@ struct TensorInfo {
     std::uint64_t stored_length = 0;
 };
 
+/// Owns a read-only mapping of the whole file. Only the pages the parser
+/// touches fault in, so mapping a multi-gigabyte shard costs the header.
+class Mapping {
+public:
+    Mapping() = default;
+    explicit Mapping(const std::string& path) {
+        const int fd = ::open(path.c_str(), O_RDONLY);
+        if (fd < 0) return;
+        struct stat status{};
+        if (::fstat(fd, &status) == 0 && status.st_size > 0) {
+            size_ = static_cast<std::size_t>(status.st_size);
+            data_ = ::mmap(nullptr, size_, PROT_READ, MAP_PRIVATE, fd, 0);
+            if (data_ == MAP_FAILED) data_ = nullptr;
+        }
+        ::close(fd);
+    }
+    ~Mapping() {
+        if (data_ != nullptr) ::munmap(data_, size_);
+    }
+    Mapping(const Mapping&) = delete;
+    Mapping& operator=(const Mapping&) = delete;
+    Mapping(Mapping&& other) noexcept { adopt(other); }
+    Mapping& operator=(Mapping&& other) noexcept {
+        if (this != &other) {
+            if (data_ != nullptr) ::munmap(data_, size_);
+            adopt(other);
+        }
+        return *this;
+    }
+    [[nodiscard]] bool valid() const { return data_ != nullptr; }
+    [[nodiscard]] const void* data() const { return data_; }
+    [[nodiscard]] std::size_t size() const { return size_; }
+
+private:
+    void adopt(Mapping& other) {
+        data_ = std::exchange(other.data_, nullptr);
+        size_ = std::exchange(other.size_, std::size_t{0});
+    }
+    void* data_ = nullptr;
+    std::size_t size_ = 0;
+};
+
+/// A bounds-checked cursor over the mapped bytes. Every operation is one
+/// comparison and a pointer bump: no stream machinery, no per-field
+/// syscalls, no allocation. Instruments blamed the per-element seekg (one
+/// flockfile/fseeko/ftello each) for 62% of parse time; this is the fix.
 class Reader {
 public:
-    explicit Reader(const std::string& path) : file_(path, std::ios::binary) {}
+    explicit Reader(const Mapping& mapping)
+        : base_(static_cast<const std::uint8_t*>(mapping.data())), pos_(base_),
+          end_(base_ + mapping.size()) {}
 
-    [[nodiscard]] bool okay() const { return file_.good(); }
-    [[nodiscard]] std::uint64_t tell() { return static_cast<std::uint64_t>(file_.tellg()); }
+    [[nodiscard]] std::uint64_t tell() const { return static_cast<std::uint64_t>(pos_ - base_); }
+    [[nodiscard]] std::uint64_t remaining() const {
+        return static_cast<std::uint64_t>(end_ - pos_);
+    }
 
     template <typename T> std::expected<void, std::string> read(T& value) {
-        file_.read(reinterpret_cast<char*>(&value), sizeof(T));
-        if (!file_) return std::unexpected("truncated header");
+        if (remaining() < sizeof(T)) return std::unexpected("truncated header");
+        std::memcpy(&value, pos_, sizeof(T));
+        pos_ += sizeof(T);
         return {};
     }
 
     std::expected<void, std::string> skip(std::uint64_t count) {
-        file_.seekg(static_cast<std::streamoff>(count), std::ios::cur);
-        if (!file_) return std::unexpected("truncated header");
+        if (remaining() < count) return std::unexpected("truncated header");
+        pos_ += count;
         return {};
     }
 
-    std::expected<std::string, std::string> read_string() {
+    /// Views the next length-prefixed string without copying it. The view
+    /// borrows the mapping and must not outlive it.
+    std::expected<std::string_view, std::string> read_string_view() {
         std::uint64_t length = 0;
         if (auto ok = read(length); !ok) return std::unexpected(ok.error());
         if (length > kMaxMetadataString) return std::unexpected("implausible string length");
-        std::string value(length, '\0');
-        file_.read(value.data(), static_cast<std::streamsize>(length));
-        if (!file_) return std::unexpected("truncated string");
-        return value;
+        if (remaining() < length) return std::unexpected("truncated string");
+        const auto* begin = reinterpret_cast<const char*>(pos_);
+        pos_ += length;
+        return std::string_view{begin, static_cast<std::size_t>(length)};
+    }
+
+    /// Advances past one length-prefixed string without viewing its bytes.
+    std::expected<void, std::string> skip_string() {
+        std::uint64_t length = 0;
+        if (auto ok = read(length); !ok) return std::unexpected(ok.error());
+        if (length > kMaxMetadataString) return std::unexpected("implausible string length");
+        return skip(length);
     }
 
 private:
-    std::ifstream file_;
+    const std::uint8_t* base_;
+    const std::uint8_t* pos_;
+    const std::uint8_t* end_;
 };
 
 /// Counts come from the file: cap them so a malformed GGUF is a typed
@@ -100,41 +168,72 @@ inline constexpr std::uint32_t kMaxArrayDepth = 8;
                                            const std::array<std::int64_t, 4>& dimensions,
                                            std::uint32_t rank);
 
-// Skips one metadata value of the given GGUF type. Depth bounds nested
-// arrays: a metadata value may contain arrays of arrays, and unbounded
-// recursion is a stack overflow on hostile input.
-inline std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t type,
-                                                   std::uint32_t depth = 0) {
+/// Fixed widths of the scalar GGUF value types; anything else is a string,
+/// an array, or unknown.
+inline std::optional<std::uint64_t> scalar_width(std::uint32_t type) {
     switch (type) {
-    case 0:                         // u8
-    case 1:                         // i8
-    case 7: return reader.skip(1);  // bool
-    case 2:                         // u16
-    case 3: return reader.skip(2);  // i16
-    case 4:                         // u32
-    case 5:                         // i32
-    case 6: return reader.skip(4);  // f32
-    case 10:                        // u64
-    case 11:                        // i64
-    case 12: return reader.skip(8); // f64
-    case 8: {                       // string
-        auto value = reader.read_string();
-        if (!value) return std::unexpected(value.error());
-        return {};
+    case 0:                           // u8
+    case 1:                           // i8
+    case 7: return std::uint64_t{1};  // bool
+    case 2:                           // u16
+    case 3: return std::uint64_t{2};  // i16
+    case 4:                           // u32
+    case 5:                           // i32
+    case 6: return std::uint64_t{4};  // f32
+    case 10:                          // u64
+    case 11:                          // i64
+    case 12: return std::uint64_t{8}; // f64
+    default: return std::nullopt;
     }
-    case 9: { // array
-        if (depth >= kMaxArrayDepth) return std::unexpected("metadata array nesting too deep");
-        std::uint32_t element_type = 0;
-        std::uint64_t count = 0;
-        if (auto ok = reader.read(element_type); !ok) return ok;
-        if (auto ok = reader.read(count); !ok) return ok;
-        if (count > kMaxInventoryEntries) return std::unexpected("implausible array length");
+}
+
+inline std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t type,
+                                                   std::uint32_t depth);
+
+/// Skips one array: scalar arrays collapse to a single bulk skip, string
+/// arrays walk lengths without reading bytes, nested arrays recurse inside
+/// the depth cap.
+inline std::expected<void, std::string> skip_array(Reader& reader, std::uint32_t depth) {
+    if (depth >= kMaxArrayDepth) return std::unexpected("metadata array nesting too deep");
+    std::uint32_t element_type = 0;
+    std::uint64_t count = 0;
+    if (auto ok = reader.read(element_type); !ok) return ok;
+    if (auto ok = reader.read(count); !ok) return ok;
+    if (count > kMaxInventoryEntries) return std::unexpected("implausible array length");
+    if (const auto width = scalar_width(element_type)) {
+        // One bounds check replaces count per-element reads.
+        if (count > 0 && *width > reader.remaining() / count) {
+            return std::unexpected("truncated metadata array");
+        }
+        return reader.skip(count * *width);
+    }
+    if (element_type == 8) { // string array: walk lengths, not bytes
         for (std::uint64_t index = 0; index < count; ++index) {
-            if (auto ok = skip_value(reader, element_type, depth + 1); !ok) return ok;
-            if (!reader.okay()) return std::unexpected("truncated metadata array");
+            if (auto ok = reader.skip_string(); !ok) return ok;
         }
         return {};
     }
+    if (element_type != 9) {
+        return std::unexpected("unknown metadata type " + std::to_string(element_type));
+    }
+    for (std::uint64_t index = 0; index < count; ++index) {
+        if (auto ok = skip_value(reader, element_type, depth + 1); !ok) return ok;
+    }
+    return {};
+}
+
+// Skips one metadata value of the given GGUF type. Depth bounds nested
+// arrays: a metadata value may contain arrays of arrays, and unbounded
+// recursion is a stack overflow on hostile input. Scalar arrays skip in
+// bulk and string arrays walk lengths only; neither ever materialises the
+// bytes, because the tokenizer arrays carry hundreds of thousands of
+// entries and their contents are not the parser's business.
+inline std::expected<void, std::string> skip_value(Reader& reader, std::uint32_t type,
+                                                   std::uint32_t depth = 0) {
+    if (const auto width = scalar_width(type)) return reader.skip(*width);
+    switch (type) {
+    case 8: return reader.skip_string(); // string
+    case 9: return skip_array(reader, depth);
     default: return std::unexpected("unknown metadata type " + std::to_string(type));
     }
 }
@@ -143,7 +242,7 @@ inline std::expected<void, std::string> skip_metadata(Reader& reader, std::uint6
                                                       std::uint64_t& alignment) {
     if (count > kMaxInventoryEntries) return std::unexpected("implausible metadata count");
     for (std::uint64_t index = 0; index < count; ++index) {
-        auto key = reader.read_string();
+        auto key = reader.read_string_view();
         if (!key) return std::unexpected(key.error());
         std::uint32_t type = 0;
         if (auto ok = reader.read(type); !ok) return std::unexpected(ok.error());
@@ -158,56 +257,86 @@ inline std::expected<void, std::string> skip_metadata(Reader& reader, std::uint6
     return {};
 }
 
-/// Reads one tensor extent and keeps it representable: a value past INT64_MAX
-/// would alias to a negative dimension once stored, and a running element
-/// product that wraps silently disables every downstream size check — the
-/// exact shape of the upstream ggml_nelements overflow (CVE-2026-33298, see
-/// UPSTREAM.md). `elements` carries the product across calls.
-inline std::optional<std::string> read_extent(Reader& reader, std::int64_t& out,
-                                              std::uint64_t& elements) {
+/// Reads one tensor extent. A value past INT64_MAX would alias to a
+/// negative dimension once stored (the upstream ggml_nelements overflow
+/// shape, CVE-2026-33298 — see UPSTREAM.md), so it is rejected here.
+inline std::expected<std::int64_t, std::string> read_extent(Reader& reader) {
     std::uint64_t extent = 0;
-    if (auto ok = reader.read(extent); !ok) return ok.error();
+    if (auto ok = reader.read(extent); !ok) return std::unexpected(ok.error());
     if (extent > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-        return "tensor dimension not representable";
+        return std::unexpected("tensor dimension not representable");
     }
-    if (extent != 0 && elements > std::numeric_limits<std::uint64_t>::max() / extent) {
-        return "tensor extent product overflows";
+    return static_cast<std::int64_t>(extent);
+}
+
+/// A parse record borrows the mapping: sorting happens over trivially
+/// movable views and the owning TensorInfo vector is materialised once,
+/// already in order, with no string moves in flight.
+struct TensorRecord {
+    std::string_view name;
+    std::uint32_t type = 0;
+    std::uint32_t dimension_count = 0;
+    std::array<std::int64_t, 4> dimensions{};
+    std::uint64_t offset = 0;
+};
+
+/// Reads a record's extents and keeps their product representable: a
+/// product that wraps silently disables every downstream size check.
+inline std::expected<void, std::string> read_extents(Reader& reader, TensorRecord& record) {
+    std::uint64_t elements = 1;
+    for (std::uint32_t dim = 0; dim < record.dimension_count; ++dim) {
+        auto extent = read_extent(reader);
+        if (!extent) return std::unexpected(extent.error());
+        if (*extent != 0 && elements > std::numeric_limits<std::uint64_t>::max() /
+                                           static_cast<std::uint64_t>(*extent)) {
+            return std::unexpected("tensor extent product overflows");
+        }
+        elements *= static_cast<std::uint64_t>(*extent);
+        record.dimensions[dim] = *extent;
     }
-    elements *= extent;
-    out = static_cast<std::int64_t>(extent);
-    return std::nullopt;
+    return {};
 }
 
 inline std::expected<std::vector<TensorInfo>, std::string> read_tensors(Reader& reader,
                                                                         std::uint64_t count) {
     if (count > kMaxInventoryEntries) return std::unexpected("implausible tensor count");
-    std::vector<TensorInfo> tensors;
-    tensors.reserve(static_cast<std::size_t>(count));
+    std::vector<TensorRecord> records;
+    records.reserve(static_cast<std::size_t>(count));
     for (std::uint64_t index = 0; index < count; ++index) {
-        auto name = reader.read_string();
+        TensorRecord record;
+        auto name = reader.read_string_view();
         if (!name) return std::unexpected(name.error());
-        TensorInfo info;
-        info.name = std::move(*name);
-        if (auto ok = reader.read(info.dimension_count); !ok) return std::unexpected(ok.error());
-        if (info.dimension_count > 4) return std::unexpected("tensor rank above four");
-        if (info.dimension_count == 0) return std::unexpected("tensor rank below one");
-        std::uint64_t elements = 1;
-        for (std::uint32_t dim = 0; dim < info.dimension_count; ++dim) {
-            if (auto failure = read_extent(reader, info.dimensions[dim], elements)) {
-                return std::unexpected(*failure);
-            }
+        record.name = *name;
+        if (auto ok = reader.read(record.dimension_count); !ok) {
+            return std::unexpected(ok.error());
         }
-        if (auto ok = reader.read(info.type); !ok) return std::unexpected(ok.error());
-        if (auto ok = reader.read(info.offset); !ok) return std::unexpected(ok.error());
-        info.stored_length = row_size_bytes(info.type, info.dimensions, info.dimension_count);
+        if (record.dimension_count > 4) return std::unexpected("tensor rank above four");
+        if (record.dimension_count == 0) return std::unexpected("tensor rank below one");
+        if (auto ok = read_extents(reader, record); !ok) return std::unexpected(ok.error());
+        if (auto ok = reader.read(record.type); !ok) return std::unexpected(ok.error());
+        if (auto ok = reader.read(record.offset); !ok) return std::unexpected(ok.error());
+        records.push_back(record);
+    }
+    std::ranges::sort(records, {}, &TensorRecord::name);
+    std::vector<TensorInfo> tensors;
+    tensors.reserve(records.size());
+    for (const TensorRecord& record : records) {
+        TensorInfo info;
+        info.name.assign(record.name);
+        info.type = record.type;
+        info.dimension_count = record.dimension_count;
+        info.dimensions = record.dimensions;
+        info.offset = record.offset;
+        info.stored_length = row_size_bytes(record.type, record.dimensions, record.dimension_count);
         tensors.push_back(std::move(info));
     }
     return tensors;
 }
 
 inline std::expected<std::vector<TensorInfo>, std::string> read_inventory(const std::string& path) {
-    Reader reader(path);
-    if (!reader.okay()) return std::unexpected("cannot open " + path);
+    const Mapping mapping(path);
+    if (!mapping.valid()) return std::unexpected("cannot open " + path);
+    Reader reader(mapping);
 
     std::uint32_t magic = 0;
     std::uint32_t version = 0;
@@ -324,8 +453,9 @@ inline std::string sha256_of(const std::string& path) {
 
 /// Reads `general.architecture`, the one metadata value the facade types.
 inline std::expected<std::string, std::string> model_architecture(const std::string& path) {
-    Reader reader(path);
-    if (!reader.okay()) return std::unexpected("cannot open " + path);
+    const Mapping mapping(path);
+    if (!mapping.valid()) return std::unexpected("cannot open " + path);
+    Reader reader(mapping);
 
     std::uint32_t magic = 0;
     std::uint32_t version = 0;
@@ -335,17 +465,20 @@ inline std::expected<std::string, std::string> model_architecture(const std::str
     if (auto ok = reader.read(version); !ok) return std::unexpected(ok.error());
     if (auto ok = reader.read(tensor_count); !ok) return std::unexpected(ok.error());
     if (auto ok = reader.read(metadata_count); !ok) return std::unexpected(ok.error());
+    if (metadata_count > kMaxInventoryEntries) {
+        return std::unexpected("implausible metadata count");
+    }
 
     std::string architecture;
     for (std::uint64_t index = 0; index < metadata_count; ++index) {
-        auto key = reader.read_string();
+        auto key = reader.read_string_view();
         if (!key) return std::unexpected(key.error());
         std::uint32_t type = 0;
         if (auto ok = reader.read(type); !ok) return std::unexpected(ok.error());
         if (*key == "general.architecture" && type == 8) {
-            auto value = reader.read_string();
+            auto value = reader.read_string_view();
             if (!value) return std::unexpected(value.error());
-            architecture = *value;
+            architecture.assign(*value);
             continue;
         }
         if (auto ok = skip_value(reader, type); !ok) return std::unexpected(ok.error());
