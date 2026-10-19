@@ -69,17 +69,13 @@ enum FollowupLayout {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
-fn native_followup_matches_across_lane_and_restore_shapes() -> Result<()> {
-    let mut prompt: Vec<i32> = (1..=64).collect();
-    prompt.extend(continuation_after_prefill_chunks(&[32, 32])?);
-    prompt.push(7);
+fn native_followup_prefill_boundaries_preserve_tokens() -> Result<()> {
+    let prompt = followup_prompt()?;
     let expected = native_followup(&prompt, &[32, 32], FollowupLayout::SingleLane)?;
     for (chunks, layout) in [
         (&[32, 32][..], FollowupLayout::ReservedLanes),
         (&[32, 28, 4][..], FollowupLayout::ReservedLanes),
         (&[32, 31, 1][..], FollowupLayout::ReservedLanes),
-        (&[32, 32][..], FollowupLayout::OccupiedLane),
-        (&[32, 32][..], FollowupLayout::RestoredPrefix),
     ] {
         assert_eq!(
             native_followup(&prompt, chunks, layout)?,
@@ -88,6 +84,34 @@ fn native_followup_matches_across_lane_and_restore_shapes() -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_followup_cache_and_lane_layouts_preserve_tokens() -> Result<()> {
+    // Keep chunk boundaries fixed so a numerical shape mismatch cannot prevent
+    // the occupied-lane and snapshot-restore controls from running.
+    let prompt = followup_prompt()?;
+    let expected = native_followup(&prompt, &[32, 32], FollowupLayout::SingleLane)?;
+    for layout in [
+        FollowupLayout::ReservedLanes,
+        FollowupLayout::OccupiedLane,
+        FollowupLayout::RestoredPrefix,
+    ] {
+        assert_eq!(
+            native_followup(&prompt, &[32, 32], layout)?,
+            expected,
+            "native follow-up with fixed prefill chunks: layout={layout:?}"
+        );
+    }
+    Ok(())
+}
+
+fn followup_prompt() -> Result<Vec<i32>> {
+    let mut prompt: Vec<i32> = (1..=64).collect();
+    prompt.extend(continuation_after_prefill_chunks(&[32, 32])?);
+    prompt.push(7);
+    Ok(prompt)
 }
 
 fn native_followup(
