@@ -2,7 +2,7 @@
 FROM nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04@sha256:7d2f6a8c2071d911524f95061a0db363e24d27aa51ec831fcccf9e76eb72bc92
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential ca-certificates curl git cmake ninja-build pkg-config \
+    build-essential ca-certificates curl git jq cmake ninja-build pkg-config \
     libssl-dev libdbus-1-dev clang libclang-dev lld mold python3-dev sccache \
     && rm -rf /var/lib/apt/lists/*
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
