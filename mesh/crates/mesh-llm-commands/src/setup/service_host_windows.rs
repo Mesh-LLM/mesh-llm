@@ -85,11 +85,38 @@ struct RotatingLog {
     dir: PathBuf,
     file: File,
     len: u64,
+    /// The log is set aside once a write would take it past this.
     rotate_at: u64,
+    /// How much the log may grow between attempts to set it aside.
+    interval: u64,
+}
+
+impl RotatingLog {
+    /// Starts a new log, keeping the one before beside it.
+    ///
+    /// Returns why the log could not be set aside, if it could not: something
+    /// else then holds the file open (an editor, a scanner). The caller keeps
+    /// the file it already has and reports the failure in the log.
+    fn rotate(&mut self) -> io::Result<Option<io::Error>> {
+        let current = self.dir.join(WINDOWS_SERVICE_LOG_FILE);
+        match fs::rename(&current, self.dir.join(PREVIOUS_LOG_FILE)) {
+            // A log that is already gone needs no setting aside.
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Ok(Some(error)),
+        }
+        self.file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&current)?;
+        self.len = self.file.metadata()?.len();
+        self.rotate_at = self.interval;
+        Ok(None)
+    }
 }
 
 impl ServiceLog {
-    fn open(dir: &Path, rotate_at: u64) -> Result<Self> {
+    fn open(dir: &Path, interval: u64) -> Result<Self> {
         fs::create_dir_all(dir)
             .with_context(|| format!("create the service log directory {}", dir.display()))?;
         let (file, len) = start_log_file(dir).with_context(|| {
@@ -102,7 +129,8 @@ impl ServiceLog {
             dir: dir.to_path_buf(),
             file,
             len,
-            rotate_at,
+            rotate_at: interval,
+            interval,
         }))))
     }
 }
@@ -123,11 +151,25 @@ fn start_log_file(dir: &Path) -> io::Result<(File, u64)> {
 impl Write for ServiceLog {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let mut log = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if log.len > 0 && log.len + bytes.len() as u64 > log.rotate_at {
-            (log.file, log.len) = start_log_file(&log.dir)?;
-        }
+        let after = log.len + bytes.len() as u64;
+        let kept = if log.len > 0 && after > log.rotate_at {
+            log.rotate()?
+        } else {
+            None
+        };
         log.file.write_all(bytes)?;
         log.len += bytes.len() as u64;
+        if let Some(error) = kept {
+            // Reported into the file directly: going through this writer would
+            // rotate again and recurse.
+            let line = format!("warning: could not set the previous service log aside: {error}\n");
+            if log.file.write_all(line.as_bytes()).is_ok() {
+                log.len += line.len() as u64;
+            }
+            // Give the holder another interval to let go of the file instead
+            // of reopening it at every write.
+            log.rotate_at = log.len + log.interval;
+        }
         Ok(bytes.len())
     }
 
@@ -141,9 +183,20 @@ impl Write for ServiceLog {
 }
 
 /// Copies one output stream of the node into the log until it closes.
-fn forward(mut output: impl Read + Send + 'static, mut log: ServiceLog) -> JoinHandle<()> {
+///
+/// A log that can no longer be written (a full disk, a rotation that cannot
+/// reopen the file) must not stop the pipe being drained: once the pipe buffer
+/// fills, `mesh-llm serve` blocks on its next stdout/stderr write and the node
+/// stalls with nothing to say why. The rest of the output is read away instead,
+/// so the node keeps running without those logs.
+fn forward(
+    mut output: impl Read + Send + 'static,
+    mut log: impl Write + Send + 'static,
+) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        let _ = io::copy(&mut output, &mut log);
+        if io::copy(&mut output, &mut log).is_err() {
+            let _ = io::copy(&mut output, &mut io::sink());
+        }
     })
 }
 
@@ -285,6 +338,98 @@ mod tests {
         assert_eq!(
             read_log(temp.path(), WINDOWS_SERVICE_LOG_FILE),
             "third 0123456\n"
+        );
+    }
+
+    #[test]
+    fn a_log_that_cannot_be_set_aside_is_retried_after_another_interval() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        // A rename cannot replace a directory, so the log cannot be set aside.
+        fs::create_dir(temp.path().join(PREVIOUS_LOG_FILE)).expect("blocker");
+        let mut log = ServiceLog::open(temp.path(), 16).expect("open log");
+
+        log.write_all(b"first 0123456\n").expect("write");
+        log.write_all(b"second 012345\n").expect("write");
+        let kept = read_log(temp.path(), WINDOWS_SERVICE_LOG_FILE);
+        assert!(kept.starts_with("first 0123456\n"), "{kept}");
+        assert!(kept.contains("second 012345\n"), "{kept}");
+        assert!(
+            kept.contains("could not set the previous service log aside"),
+            "{kept}"
+        );
+
+        fs::remove_dir(temp.path().join(PREVIOUS_LOG_FILE)).expect("unblock");
+        // Rotation waits for another interval of growth rather than reopening
+        // the file at every write, so this one still lands in the same log.
+        log.write_all(b"third 0123456\n").expect("write");
+        assert!(!temp.path().join(PREVIOUS_LOG_FILE).exists());
+        log.write_all(b"fourth 0123456\n").expect("write");
+
+        let previous = read_log(temp.path(), PREVIOUS_LOG_FILE);
+        assert!(previous.ends_with("third 0123456\n"), "{previous}");
+        assert_eq!(
+            read_log(temp.path(), WINDOWS_SERVICE_LOG_FILE),
+            "fourth 0123456\n"
+        );
+    }
+
+    /// A log that has stopped accepting bytes, as a full disk would.
+    struct FailingLog {
+        written: usize,
+        fails_after: usize,
+    }
+
+    impl Write for FailingLog {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let room = self.fails_after.saturating_sub(self.written);
+            if room == 0 {
+                return Err(io::Error::other("no space left on device"));
+            }
+            let accepted = room.min(bytes.len());
+            self.written += accepted;
+            Ok(accepted)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The node's output stream, counting what has been read from it.
+    struct NodeOutput {
+        bytes: io::Cursor<Vec<u8>>,
+        read: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Read for NodeOutput {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let count = self.bytes.read(buf)?;
+            self.read
+                .fetch_add(count, std::sync::atomic::Ordering::SeqCst);
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn a_log_that_cannot_be_written_still_drains_the_node_output() {
+        const OUTPUT: usize = 64 * 1024;
+        let read = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let output = NodeOutput {
+            bytes: io::Cursor::new(vec![b'.'; OUTPUT]),
+            read: Arc::clone(&read),
+        };
+        let log = FailingLog {
+            written: 0,
+            fails_after: 4096,
+        };
+
+        forward(output, log).join().expect("copy thread");
+
+        // The node's pipe is never left full, so its next write returns.
+        assert_eq!(
+            read.load(std::sync::atomic::Ordering::SeqCst),
+            OUTPUT,
+            "the whole output should be read away"
         );
     }
 
