@@ -487,7 +487,7 @@ impl RuntimeState {
             index,
             session,
             resident_prefix: None,
-            recurrent_prefixes: Vec::new(),
+            recurrent_prefixes: Default::default(),
         };
         self.sessions.insert(session_id.to_string(), lane_session);
         self.session_token_counts
@@ -557,7 +557,7 @@ impl RuntimeState {
             index,
             session,
             resident_prefix: None,
-            recurrent_prefixes: Vec::new(),
+            recurrent_prefixes: Default::default(),
         })
     }
 }

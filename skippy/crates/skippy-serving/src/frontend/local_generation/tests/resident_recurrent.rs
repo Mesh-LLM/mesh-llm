@@ -30,7 +30,7 @@ fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
-fn resident_hybrid_demotes_to_l3_and_reopens_after_restart() -> Result<()> {
+fn resident_hybrid_unload_demotes_to_l3_and_reopens_after_restart() -> Result<()> {
     let root = tempfile::tempdir()?;
     let manager = skippy_cache::L3CacheManager::acquire(
         root.path(),
@@ -53,7 +53,7 @@ fn resident_hybrid_demotes_to_l3_and_reopens_after_restart() -> Result<()> {
     let prompt = (1..=64).collect::<Vec<_>>();
     let (expected, _) = generate(&backend, &prompt, 8)?;
     drain(&backend)?;
-    let kv = backend.kv.as_ref().unwrap();
+    let kv = backend.kv.as_ref().unwrap().clone();
     let ids = InferenceGenerationIds::new_with_trust(
         InferenceCacheHints::default(),
         Some("recurrent-resume"),
@@ -67,8 +67,9 @@ fn resident_hybrid_demotes_to_l3_and_reopens_after_restart() -> Result<()> {
         l3.locate_longest(&identity.namespace, &identity.token_ids, 64)?
             .is_none()
     );
-    assert_eq!(backend.runtime.lock().unwrap().evict_idle_recurrent()?, 1);
-    drain(&backend)?;
+    drop(backend);
+    kv.wait_for_exact_state_recording(Duration::from_secs(30))
+        .map_err(anyhow::Error::msg)?;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while l3
         .locate_longest(&identity.namespace, &identity.token_ids, 64)?

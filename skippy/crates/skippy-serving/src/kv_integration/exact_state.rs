@@ -440,7 +440,6 @@ impl KvStageIntegration {
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             return Ok(None);
         }
-        // Admission: one credit per payload across its whole lifetime —
         if self.payload == StagePrefixCachePayload::KvRecurrent
             && let Some((bytes, retained_bytes, retained_checkpoints)) = runtime
                 .record_resident_recurrent(
@@ -466,6 +465,7 @@ impl KvStageIntegration {
                 dedupe: Default::default(),
             }));
         }
+        // Admission: one credit per payload across its whole lifetime —
         // exporting, queued in the recorder channel, or held by the recorder
         // worker. Acquisition happens HERE, inside record_exact_state, on the
         // thread that already holds the runtime lock, immediately before the

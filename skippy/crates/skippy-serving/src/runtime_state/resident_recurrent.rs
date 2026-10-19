@@ -8,12 +8,7 @@ use crate::kv_integration::{
     ExactStateRestore, KvStageIntegration, PrefillKvIdentity, ResidentRecurrentPolicy,
 };
 
-pub(super) struct ResidentRecurrentCheckpoint {
-    identity: PrefillKvIdentity,
-    recurrent: Vec<u8>,
-    cache: KvStageIntegration,
-    policy: ResidentRecurrentPolicy,
-}
+use super::recurrent_checkpoints::ResidentRecurrentCheckpoint;
 
 impl RuntimeState {
     /// Opt in only callers that own the successful park/error-reset lifecycle.
@@ -46,7 +41,7 @@ impl RuntimeState {
         session_id: &str,
         identity: &PrefillKvIdentity,
         cache: &KvStageIntegration,
-        mut policy: ResidentRecurrentPolicy,
+        policy: ResidentRecurrentPolicy,
     ) -> Result<Option<(u64, u64, usize)>> {
         // Checkpoints retain only their owning lane's cells. Admission reuses
         // or resets an idle lane before allocating its replacement request.
@@ -81,56 +76,43 @@ impl RuntimeState {
         if limit == 0 || (byte_limit > 0 && bytes > byte_limit) {
             return Ok(None);
         }
-        policy.write_through_l3 |= lane.recurrent_prefixes.iter().any(|entry| {
-            entry.identity.namespace == identity.namespace
-                && entry.identity.token_ids == identity.token_ids
-                && entry.policy.write_through_l3
-        });
-        lane.recurrent_prefixes.retain(|entry| {
-            entry.identity.namespace == identity.namespace
-                && identity.token_ids.starts_with(&entry.identity.token_ids)
-                && entry.identity.token_ids != identity.token_ids
-        });
-        while lane.recurrent_prefixes.len() >= limit
-            || (byte_limit > 0
-                && lane
-                    .recurrent_prefixes
-                    .iter()
-                    .map(|entry| entry.recurrent.len() as u64)
-                    .sum::<u64>()
-                    .saturating_add(bytes)
-                    > byte_limit)
-        {
-            // Preserve the shared branch boundary ahead of superseded
-            // request-specific continuations when the bounded set fills.
-            let index = lane
-                .recurrent_prefixes
-                .iter()
-                .enumerate()
-                .skip(1)
-                .find(|(_, entry)| !entry.policy.write_through_l3)
-                .map(|(index, _)| index)
-                .unwrap_or(usize::from(lane.recurrent_prefixes.len() > 1));
-            let entry = lane.recurrent_prefixes.remove(index);
-            // Superseded hot checkpoints are cheap to discard. Do not turn
-            // every growing turn back into a full attention export merely to
-            // populate another L1 representation. Durable boundaries may spill.
+        let displaced = lane.recurrent_prefixes.insert(
+            ResidentRecurrentCheckpoint {
+                identity: identity.clone(),
+                recurrent,
+                cache: cache.clone(),
+                policy,
+            },
+            limit,
+            byte_limit,
+        );
+        for entry in displaced {
+            // Hot continuation replacement must not serialize attention KV.
             if entry.policy.write_through_l3 && entry.cache.has_durable_recurrent_tier() {
                 Self::demote_recurrent_checkpoint(lane, entry, self.layer_start, self.layer_end);
             }
         }
-        lane.recurrent_prefixes.push(ResidentRecurrentCheckpoint {
-            identity: identity.clone(),
-            recurrent,
-            cache: cache.clone(),
-            policy,
-        });
-        let retained_bytes = lane
-            .recurrent_prefixes
-            .iter()
-            .map(|entry| entry.recurrent.len() as u64)
-            .sum();
+        let retained_bytes = lane.recurrent_prefixes.retained_bytes();
         Ok(Some((bytes, retained_bytes, lane.recurrent_prefixes.len())))
+    }
+
+    /// A successful request may lose its idle slot to another completed lane.
+    /// Export eligible checkpoints before ordinary cleanup releases native KV.
+    pub(crate) fn demote_completed_recurrent(&mut self, session_id: &str) {
+        if let Some(lane) = self.sessions.get_mut(session_id) {
+            Self::demote_recurrent_lane(lane, self.layer_start, self.layer_end);
+        }
+    }
+
+    /// Graceful unload preserves successful parked lanes. Active requests and
+    /// panic cleanup remain discard-only; cache storage is always best effort.
+    pub(super) fn demote_idle_recurrent_on_unload(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        for lane in &mut self.idle_sessions {
+            Self::demote_recurrent_lane(lane, self.layer_start, self.layer_end);
+        }
     }
 
     /// Only successful, non-cancelled local generation may park a lane.
@@ -194,9 +176,7 @@ impl RuntimeState {
             return Ok(None);
         };
         let mut lane = self.idle_sessions.swap_remove(lane_index);
-        // Later checkpoints refer to attention suffixes about to be removed.
-        lane.recurrent_prefixes.truncate(checkpoint_index + 1);
-        let checkpoint = &lane.recurrent_prefixes[checkpoint_index];
+        let checkpoint = lane.recurrent_prefixes.restore(checkpoint_index);
         let page_id = checkpoint.identity.page_id.clone();
         let bytes = checkpoint.recurrent.len() as u64;
         let lookup_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -238,19 +218,7 @@ impl RuntimeState {
     }
 
     pub(super) fn demote_recurrent_lane(lane: &mut RuntimeLaneSession, start: u32, end: u32) {
-        // Save the shared boundary first: generated continuations may diverge\n        // from the next tool turn. Avoid exporting intermediate full prompts.
-        let mut entries = std::mem::take(&mut lane.recurrent_prefixes);
-        let newest = entries.last().map(|entry| entry.identity.token_ids.len());
-        let oldest = entries.first().map(|entry| entry.identity.token_ids.len());
-        entries.sort_by_key(|entry| {
-            std::cmp::Reverse((
-                Some(entry.identity.token_ids.len()) == oldest,
-                Some(entry.identity.token_ids.len()) == newest,
-                entry.policy.write_through_l3,
-                entry.identity.token_ids.len(),
-            ))
-        });
-        for entry in entries.into_iter().take(2) {
+        for entry in lane.recurrent_prefixes.take_for_demotion() {
             Self::demote_recurrent_checkpoint(lane, entry, start, end);
         }
     }

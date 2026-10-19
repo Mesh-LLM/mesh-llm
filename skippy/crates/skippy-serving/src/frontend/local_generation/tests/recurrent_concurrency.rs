@@ -60,16 +60,35 @@ fn recurrent_concurrent_retention_respects_idle_pool_limit() -> Result<()> {
     let (backend, _) =
         recurrent_test_backend_with_lanes("bounded", "bounded", 256, (32, 32, 2), 8, 512, Some(1))?;
     let prompts = [(1..=64).collect::<Vec<_>>(), (1..=64).rev().collect()];
-    concurrent_outputs(&backend, &prompts)?;
-    let mut runtime = backend.runtime.lock().unwrap();
+    let outputs = concurrent_outputs(&backend, &prompts)?;
+    let runtime = backend.runtime.lock().unwrap();
     let stats = runtime.session_stats();
     assert_eq!(stats.active_sessions, 0);
     assert_eq!(stats.idle_sessions, 1);
     assert_eq!(stats.idle_resident_prefixes, 1);
-    assert_eq!(runtime.evict_idle_recurrent()?, 1);
-    assert_eq!(runtime.session_stats().idle_resident_prefixes, 0);
     drop(runtime);
-    concurrent_outputs(&backend, &prompts)?;
+    let kv = backend.kv.as_ref().unwrap();
+    kv.wait_for_exact_state_recording(Duration::from_secs(30))
+        .map_err(anyhow::Error::msg)?;
+    // Both the parked lane and the successful overflow lane must survive.
+    for (index, prompt) in prompts.iter().enumerate() {
+        let (repeated, cached) = generate_after_first_token(
+            &backend,
+            prompt,
+            8,
+            &format!("concurrent-{index}"),
+            || Ok(()),
+        )?;
+        assert!(
+            cached > 0,
+            "overflow completion lost prompt {index}: {}; {:?}",
+            capture_trace::render(),
+            kv.attrs()
+        );
+        assert_eq!(repeated[..outputs[index].len()], outputs[index]);
+        kv.wait_for_exact_state_recording(Duration::from_secs(30))
+            .map_err(anyhow::Error::msg)?;
+    }
     Ok(())
 }
 

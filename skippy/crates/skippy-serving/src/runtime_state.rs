@@ -25,6 +25,7 @@ mod iteration_execution;
 mod lane_lifecycle;
 pub mod lifecycle;
 pub mod panic_recovery;
+mod recurrent_checkpoints;
 mod resident_recurrent;
 mod restore_transaction;
 mod state_transfer;
@@ -86,7 +87,7 @@ struct RuntimeLaneSession {
     index: usize,
     session: StageSession,
     resident_prefix: Option<ResidentLanePrefix>,
-    recurrent_prefixes: Vec<resident_recurrent::ResidentRecurrentCheckpoint>,
+    recurrent_prefixes: recurrent_checkpoints::RecurrentCheckpoints,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -300,6 +301,7 @@ impl RuntimeState {
 
 impl Drop for RuntimeState {
     fn drop(&mut self) {
+        self.demote_idle_recurrent_on_unload();
         self.sessions.clear();
         self.idle_sessions.clear();
     }

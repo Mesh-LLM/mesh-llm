@@ -121,6 +121,9 @@ impl StageOpenAiBackend {
                             ..Default::default()
                         });
                     }
+                    if retain_recurrent {
+                        runtime.demote_completed_recurrent(&scheduler_session_id);
+                    }
                     runtime
                         .drop_session_timed(&scheduler_session_id)
                         .map_err(openai_backend_error)
