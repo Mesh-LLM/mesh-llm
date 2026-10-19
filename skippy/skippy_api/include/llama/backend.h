@@ -10,6 +10,7 @@
 // Only include/llama/* and src/llama/* include llama.h. No C++ tests by rule;
 // the static_asserts in backend.cpp are the C++ test surface.
 
+#include "atomic_shared.h"
 #include "embed.h"
 #include "encode.h"
 #include "llama/batch.h"
@@ -222,10 +223,12 @@ struct PlanLease {
 };
 
 /// Lock-free plan storage: readers snapshot an atomic index pointer, writers
-/// publish copy-on-write via CAS. `std::atomic<std::shared_ptr<T>>` uses a
-/// short internal spin on libc++ rather than being truly lock-free, but reads
-/// dominate (one per plan call) and publishes are once per model version, so
-/// the snapshot stays a few uncontended instructions.
+/// publish copy-on-write via CAS. The handoff is
+/// `skippy::detail::atomic_shared_ptr` — `std::atomic<std::shared_ptr<T>>`
+/// where the library provides it — and both spellings use a short internal
+/// spin on libc++ rather than being truly lock-free. Reads dominate (one per
+/// plan call) and publishes are once per model version, so the snapshot stays
+/// a few uncontended instructions.
 class PlanStore {
 public:
     PlanStore() : index_(std::make_shared<const PlanIndex>()) {}
@@ -233,7 +236,7 @@ public:
     /// A consistent snapshot. Holding the returned pointer keeps every plan in
     /// it alive; dropping it may free plans nobody else references.
     [[nodiscard]] std::shared_ptr<const PlanIndex> snapshot() const noexcept {
-        return std::atomic_load_explicit(&index_, std::memory_order_acquire);
+        return index_.load(std::memory_order_acquire);
     }
 
     /// Publishes `plans` under `key` unless a racing publisher got there
@@ -243,11 +246,7 @@ public:
     publish(const std::string& key, std::vector<std::shared_ptr<const StagePlan>> plans);
 
 private:
-    friend std::shared_ptr<const PlanIndex> PlanStore_test_snapshot(const PlanStore&);
-
-    // std::atomic<shared_ptr> is not in every libc++; the free functions are
-    // the portable form of the same RCU publication.
-    mutable std::shared_ptr<const PlanIndex> index_;
+    skippy::detail::atomic_shared_ptr<const PlanIndex> index_;
 };
 
 class LlamaBackend {

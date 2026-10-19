@@ -143,7 +143,12 @@ thing that survives it.
   a snapshot with an atomic load and never block, and publishers build a
   copy-on-write index and install it with `compare_exchange`. Publish returns
   the winning index so racing publishers observe each other instead of planning
-  twice. Two things to say plainly: libc++ implements the shared_ptr atomics
+  twice. The handoff goes through `skippy::detail::atomic_shared_ptr`:
+  `std::atomic<std::shared_ptr<T>>` where `__cpp_lib_atomic_shared_ptr` is
+  defined, otherwise the free-function spelling that C++20 deprecated — the
+  fallback lives only inside the shim with its suppression scoped to two
+  bodies, because GCC 14 warns and this tree builds `-Werror`. Two things to
+  say plainly: libc++ implements the shared_ptr atomics
   with a short internal spin rather than being truly lock-free (fine when reads
   dominate and publishes are once per model version — measure if a cache turns
   write-heavy), and anything borrowed out of the snapshot must be returned

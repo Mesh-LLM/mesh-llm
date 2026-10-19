@@ -10,6 +10,8 @@
 /// defined once in src/llama/model_inventory.cpp against ggml, so the
 /// mocked tests can link a stub and stay native-free.
 
+#include "atomic_shared.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -515,10 +517,9 @@ inline std::optional<Value> memoised_file_result(const std::string& stamp, Compu
     // static in a template: one index per Value type, shared across TUs. These
     // are properties of the file version, not of any runtime or backend, so
     // two backends sharing them is correct.
-    static std::shared_ptr<const std::unordered_map<std::string, Value>> index =
-        std::make_shared<const std::unordered_map<std::string, Value>>();
-    std::shared_ptr<const std::unordered_map<std::string, Value>> current =
-        std::atomic_load_explicit(&index, std::memory_order_acquire);
+    using index_type = const std::unordered_map<std::string, Value>;
+    static skippy::detail::atomic_shared_ptr<index_type> index{std::make_shared<index_type>()};
+    std::shared_ptr<index_type> current = index.load(std::memory_order_acquire);
     if (const auto found = current->find(stamp); found != current->end()) {
         return std::optional<Value>{found->second};
     }
@@ -528,10 +529,8 @@ inline std::optional<Value> memoised_file_result(const std::string& stamp, Compu
     for (;;) {
         auto next = std::make_shared<std::unordered_map<std::string, Value>>(*current);
         next->emplace(stamp, *computed);
-        if (std::atomic_compare_exchange_weak_explicit(
-                &index, &current,
-                std::static_pointer_cast<const std::unordered_map<std::string, Value>>(next),
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (index.compare_exchange_weak(current, next, std::memory_order_acq_rel,
+                                        std::memory_order_acquire)) {
             return computed;
         }
         // Lost the race to a newer generation: if it already carries our

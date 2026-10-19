@@ -487,18 +487,17 @@ configs_from(const std::vector<std::shared_ptr<const StagePlan>>& plans) {
 
 std::shared_ptr<const PlanIndex>
 PlanStore::publish(const std::string& key, std::vector<std::shared_ptr<const StagePlan>> plans) {
-    std::shared_ptr<const PlanIndex> current =
-        std::atomic_load_explicit(&index_, std::memory_order_acquire);
+    std::shared_ptr<const PlanIndex> current = index_.load(std::memory_order_acquire);
     for (;;) {
         if (current->by_key.contains(key)) return current; // a racing publisher won
         auto next = std::make_shared<PlanIndex>(*current); // copy-on-write
         next->by_key.emplace(key, plans);
-        // CAS on the shared_ptr itself: the winner installs its index, the
-        // loser's `current` is reloaded and the loop observes the winner.
-        if (std::atomic_compare_exchange_weak_explicit(
-                &index_, &current, std::static_pointer_cast<const PlanIndex>(next),
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
-            return std::static_pointer_cast<const PlanIndex>(next);
+        // CAS on the index handle: the winner installs its index, the loser's
+        // `current` is refreshed by the failed exchange and the loop observes
+        // the winner.
+        if (index_.compare_exchange_weak(current, next, std::memory_order_acq_rel,
+                                         std::memory_order_acquire)) {
+            return next;
         }
     }
 }
@@ -576,8 +575,9 @@ std::expected<PlanLease, PlanFailure> plan_model_stages(LlamaBackend& backend,
 
     // Fast path: snapshot the index without blocking, build the configs, and
     // pin the snapshot in the lease we return.
-    if (auto snapshot = store.snapshot(); snapshot->by_key.contains(key)) {
-        auto configs = configs_from(snapshot->by_key.at(key));
+    auto snapshot = store.snapshot();
+    if (const auto found = snapshot->by_key.find(key); found != snapshot->by_key.end()) {
+        auto configs = configs_from(found->second);
         if (!configs) return std::unexpected(configs.error());
         return PlanLease{.configs = std::move(*configs), .pinned = std::move(snapshot)};
     }
