@@ -69,10 +69,24 @@ fn native_cache_concurrency_matches_serial_and_reuses_prefixes() -> Result<()> {
                 })?;
             assert!(cached > 0, "prefix miss at c={lanes}, lane={index}");
             if warm != expected {
-                let warm_evidence =
-                    generate_with_token_margins(&backend, prompt, &format!("lane-{index}"))?;
-                let control_evidence =
-                    generate_with_token_margins(&control, prompt, &format!("control-{index}"))?;
+                let divergence = warm
+                    .iter()
+                    .zip(&expected)
+                    .position(|(actual, expected)| actual != expected)
+                    .unwrap_or(warm.len().min(expected.len()));
+                let tokens = u32::try_from(divergence + 1)?;
+                let warm_evidence = generate_with_token_margins(
+                    &backend,
+                    prompt,
+                    &format!("lane-{index}"),
+                    tokens,
+                )?;
+                let control_evidence = generate_with_token_margins(
+                    &control,
+                    prompt,
+                    &format!("control-{index}"),
+                    tokens,
+                )?;
                 panic!(
                     "warm parity at c={lanes}, lane={index}: expected={expected:?}, actual={warm:?}; repeated warm={warm_evidence:?}; serial warm={control_evidence:?}"
                 );
@@ -99,8 +113,8 @@ fn native_cache_replay_matches_cold_with_token_margin_evidence() -> Result<()> {
             lanes as usize * 1024,
             None,
         )?;
-        let cold = generate_with_token_margins(&backend, &prompt, "cache-replay")?;
-        let warm = generate_with_token_margins(&backend, &prompt, "cache-replay")?;
+        let cold = generate_with_token_margins(&backend, &prompt, "cache-replay", 8)?;
+        let warm = generate_with_token_margins(&backend, &prompt, "cache-replay", 8)?;
         assert!(warm.1 > 0, "prefix miss with {lanes} lanes");
         assert_eq!(
             cold.0, warm.0,
@@ -115,6 +129,7 @@ fn generate_with_token_margins(
     backend: &StageOpenAiBackend,
     prompt: &[i32],
     session: &str,
+    max_tokens: u32,
 ) -> Result<(Vec<i32>, u32, Vec<skippy_runtime::TokenSignal>)> {
     let ids = InferenceGenerationIds::new_with_trust(
         InferenceCacheHints::default(),
@@ -128,7 +143,7 @@ fn generate_with_token_margins(
         LocalGeneration {
             prompt_token_ids: prompt,
             recurrent_cache_prefix_token_ids: None,
-            max_tokens: 8,
+            max_tokens,
             sampling: &SamplingConfig::default(),
             chat_sampling_metadata: None,
             speculative: &SpeculativeDecodeConfig::default(),
@@ -140,16 +155,22 @@ fn generate_with_token_margins(
         },
         |token| {
             output.push(token);
-            // This test runs one request at a time, so no other decode can
-            // replace the current logits before the lazy signal is observed.
-            signals.push(
-                backend
+            // Planned decode can buffer events before callbacks consume them.
+            // Inspect only the terminal token, with no other request active;
+            // earlier callbacks may already observe the final logits.
+            if output.len() == max_tokens as usize {
+                let signal = backend
                     .runtime
                     .lock()
                     .unwrap()
                     .last_token_signal(&ids.session_label)
-                    .map_err(crate::frontend::util::openai_backend_error)?,
-            );
+                    .map_err(crate::frontend::util::openai_backend_error)?;
+                assert_eq!(
+                    signal.top_token, token,
+                    "terminal signal must match its token"
+                );
+                signals.push(signal);
+            }
             Ok(TokenControl::Continue)
         },
     )?;
