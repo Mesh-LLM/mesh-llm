@@ -148,7 +148,13 @@ case "$1 ${2:-}" in
     if [[ "$*" == *url,isDraft,headRefOid* && "$FIXTURE_RECONCILE" == 1 ]]; then printf '%s\n' "$FIXTURE_URL"; fi
     ;;
   'api --method') [[ "$3" == DELETE ]] ;;
-  'api '*) printf '%s\n' "$FIXTURE_HEAD" ;;
+  'api '*)
+    if [[ "$2" == repos/*/commits/*/pulls ]]; then
+      if [[ "$FIXTURE_MERGED_PR" == 1 ]]; then printf '%s\n' "$FIXTURE_URL"; fi
+    else
+      printf '%s\n' "$FIXTURE_HEAD"
+    fi
+    ;;
   'pr create')
     printf 'gh credential=%s\n' "$CANARY_REPAIR_TOKEN" >&2
     if [[ "$FIXTURE_CREATE_STATUS" == 0 ]]; then printf '%s\n' "$FIXTURE_URL"; fi
@@ -180,6 +186,7 @@ esac
         create: u8,
         reconcile: bool,
         filter_failure: bool,
+        merged: bool,
     ) -> Output {
         Command::new("/bin/bash")
             .arg(self.root.join("scripts/llama-canary-publish.sh"))
@@ -194,7 +201,8 @@ esac
             .env("CANARY_PR_BODY", self.root.join("body.md"))
             .env("CANARY_BUNDLE", self.root.join("candidate.bundle"))
             .env("GITHUB_REPOSITORY", "fixture/repository")
-            .env("CANARY_REPAIR_TOKEN", TOKEN)
+            .env("CANARY_REPAIR_TOKEN", if merged { "" } else { TOKEN })
+            .env("CANARY_READ_TOKEN", TOKEN)
             .env("MESH_LLM_AUTOMATION_BIN", owner)
             .env("FIXTURE_XTASK", env!("CARGO_BIN_EXE_xtask"))
             .env("FIXTURE_HEAD", HEAD)
@@ -204,6 +212,7 @@ esac
             .env("FIXTURE_PUSH_STATUS", push.to_string())
             .env("FIXTURE_CREATE_STATUS", create.to_string())
             .env("FIXTURE_RECONCILE", if reconcile { "1" } else { "0" })
+            .env("FIXTURE_MERGED_PR", if merged { "1" } else { "0" })
             .env(
                 "FIXTURE_REDACTOR_FAILURE",
                 if filter_failure { "1" } else { "0" },
@@ -229,6 +238,7 @@ fn actual_publisher_uses_frozen_redactor_and_preserves_success_failure_and_recon
             create,
             reconcile,
             filter_failure,
+            false,
         );
         assert_eq!(output.status.success(), success, "{output:?}");
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -259,11 +269,26 @@ fn actual_publisher_uses_frozen_redactor_and_preserves_success_failure_and_recon
 fn actual_publisher_refuses_unprepared_controllers_before_git_or_publication() {
     for owner in ["", "relative-controller", "/fixture/missing-controller"] {
         let fixture = Publisher::new();
-        let output = fixture.invoke(owner, 0, 0, false, false);
+        let output = fixture.invoke(owner, 0, 0, false, false, false);
         assert!(!output.status.success());
         assert!(!fixture.root.join("trace").exists());
         assert!(!fixture.root.join("forbidden").exists());
         assert_eq!(fs::read_dir(&fixture.runner).unwrap().count(), 0);
         assert!(!String::from_utf8_lossy(&output.stderr).contains(TOKEN));
     }
+}
+
+#[test]
+fn actual_publisher_reconciles_exact_merged_head_without_pushing() {
+    let fixture = Publisher::new();
+    let output = fixture.invoke(fixture.owner.to_str().unwrap(), 0, 0, false, false, true);
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("already merged"));
+    let trace = fs::read_to_string(fixture.root.join("trace")).unwrap();
+    assert!(trace.contains("commits/"), "{trace}");
+    assert!(
+        !trace.contains("push ") && !trace.contains("pr create"),
+        "{trace}"
+    );
+    assert_eq!(fs::read_dir(&fixture.runner).unwrap().count(), 0);
 }

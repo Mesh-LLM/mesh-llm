@@ -14,7 +14,8 @@ UPSTREAM_SHA="${CANARY_UPSTREAM_SHA:?CANARY_UPSTREAM_SHA is required}"
 PR_BODY="${CANARY_PR_BODY:?CANARY_PR_BODY is required}"
 BUNDLE="${CANARY_BUNDLE:?CANARY_BUNDLE is required}"
 REPOSITORY="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-TOKEN="${CANARY_REPAIR_TOKEN:?CANARY_REPAIR_TOKEN is required}"
+TOKEN="${CANARY_REPAIR_TOKEN:-}"
+READ_TOKEN="${CANARY_READ_TOKEN:?CANARY_READ_TOKEN is required}"
 
 if [[ ! "$BRANCH" =~ ^llama-canary/repair-[0-9A-Za-z._-]+-[0-9]+-[0-9a-f]{10}$ ]]; then
   echo "refusing to publish unexpected canary branch: $BRANCH" >&2
@@ -100,6 +101,10 @@ gh_repair() {
   GH_TOKEN="$TOKEN" "$@"
 }
 
+gh_read() {
+  GH_TOKEN="$READ_TOKEN" "$@"
+}
+
 redact_token() {
   exec "$PUBLICATION_AUTOMATION" automation canary-receipts redact-publication-log
 }
@@ -162,6 +167,28 @@ cleanup_before_pr() {
 trap 'cleanup_before_pr $?' EXIT
 trap 'cleanup_before_pr 130' INT
 trap 'cleanup_before_pr 143' TERM
+
+# A selected source may have merged while its long certification was running.
+# Reconcile that exact head instead of opening a duplicate repair PR.
+merged_pr="$(gh_read gh api "repos/${REPOSITORY}/commits/${CERTIFIED_SHA}/pulls" \
+  --jq ".[] | select(.merged_at != null and .head.sha == \"$CERTIFIED_SHA\" and .base.ref == \"main\" and .head.repo.full_name == \"$REPOSITORY\") | .html_url" \
+  2>/dev/null | head -n 1 || true)"
+if [[ -n "$merged_pr" ]]; then
+  published=1
+  trap - EXIT INT TERM
+  cleanup_publication_files
+  set +e
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf 'pr_url=%s\n' "$merged_pr" >> "$GITHUB_OUTPUT"
+  fi
+  echo "certified canary head already merged: ${merged_pr}; head=${CERTIFIED_SHA}"
+  exit 0
+fi
+
+if [[ -z "$TOKEN" ]] || ! gh_repair gh api "repos/${REPOSITORY}" --jq .full_name >/dev/null 2>&1; then
+  echo "CANARY_REPAIR_TOKEN is missing or cannot authenticate for $REPOSITORY" >&2
+  exit 1
+fi
 
 if existing="$(gh_repair gh pr list --repo "$REPOSITORY" --head "$BRANCH" \
     --state all --json number --jq '.[0].number' 2>/dev/null)" && [[ -n "$existing" ]]; then

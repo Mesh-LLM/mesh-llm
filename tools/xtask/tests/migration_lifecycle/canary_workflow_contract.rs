@@ -389,6 +389,10 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
     let (_, action) = named(publish, "id", "publish");
     assert_eq!(field(action, "run"), "scripts/llama-canary-publish.sh");
     assert_eq!(
+        field(action.get("env").unwrap(), "CANARY_READ_TOKEN"),
+        "${{ github.token }}"
+    );
+    assert_eq!(
         field(action.get("env").unwrap(), "CANARY_REPAIR_TOKEN"),
         "${{ secrets.CANARY_REPAIR_TOKEN }}"
     );
