@@ -12,7 +12,7 @@ use crate::runtime_events::abi_features_bitmask;
 /// specific family, and is reported once rather than disabling anything.
 /// It tracks the highest `FEATURE_*` bit `skippy_ffi` defines, family or
 /// not: a bit this build names is not reserved to a future one.
-const MAX_KNOWN_FEATURE_BIT: u32 = 40;
+const MAX_KNOWN_FEATURE_BIT: u32 = 41;
 
 struct FamilySpec {
     bit: u64,

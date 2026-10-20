@@ -34,8 +34,9 @@ pub use capability_probe::{CapabilityReport, probe_capabilities};
 pub use checkpoint::{CheckpointQuantization, is_safetensors_checkpoint};
 pub use config::{
     FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_I32, GGML_TYPE_Q4_0,
-    GGML_TYPE_Q8_0, GlmDsaPolicy, LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH,
-    MtpSource, RuntimeConfig, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SplitMode, parse_cache_type,
+    GGML_TYPE_Q8_0, GGML_TYPE_TURBO4_0, GlmDsaPolicy, LLAMA_SERVER_DEFAULT_N_BATCH,
+    LLAMA_SERVER_DEFAULT_N_UBATCH, MtpSource, RuntimeConfig, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH,
+    SplitMode, parse_cache_type,
 };
 pub use decision::{
     DecisionError, DecisionModel, DecisionOutput, DecisionQuestion, DecisionQuestionKind,

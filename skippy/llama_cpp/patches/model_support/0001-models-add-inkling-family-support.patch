@@ -1,7 +1,7 @@
-From deffabcb3b09a6fa9eb136aafb7af2399d34ae7f Mon Sep 17 00:00:00 2001
+From 0f6908954d2a3d91cc0acfad8f02df18bc8e59d4 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 18:30:01 +1000
-Subject: [PATCH 1/6] models: add inkling family support
+Subject: [PATCH] models: add inkling family support
 
 ---
  common/chat.cpp                     |   8 +
@@ -836,7 +836,7 @@ index d822d6d76..fe46aa888 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index b966f8ccd..56390f221 100644
+index 4d198295f..f9592c7ed 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -272,6 +272,12 @@ llama_context::llama_context(
@@ -853,10 +853,10 @@ index b966f8ccd..56390f221 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index ec6e4d075..569b27022 100644
+index f2aee7f26..73853ed19 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3401,9 +3401,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3401,12 +3401,29 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -866,6 +866,9 @@ index ec6e4d075..569b27022 100644
 +    const bool fold_kq_b_into_mask = cparams.flash_attn && kq_b != nullptr && kq_mask != nullptr &&
 +            arch == LLM_ARCH_INKLING;
 +    const bool use_flash_attn = cparams.flash_attn && (kq_b == nullptr || fold_kq_b_into_mask);
+     if (v->type == GGML_TYPE_TURBO4_0 && !use_flash_attn) {
+         throw std::runtime_error("Turbo4 V cache requires a flash-attention graph");
+     }
      if (use_flash_attn) {
 -        GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 +        ggml_tensor * fa_mask = kq_mask;
@@ -1809,7 +1812,7 @@ index a80d7970e..7b454ba00 100644
      ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens
                            : (model.tok_embd          ? model.tok_embd
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 3d15111fb..258c86143 100644
+index 7f55c0d88..5ab739c9d 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
 @@ -7,6 +7,7 @@
@@ -1863,7 +1866,7 @@ index 3d15111fb..258c86143 100644
      llama_context * ctx;
      uint32_t depth_count;
  };
-@@ -101,8 +124,12 @@ void skippy_mtp_clear_session_state(skippy_session * session) {
+@@ -175,8 +198,12 @@ void skippy_mtp_trim_session_state(skippy_session * session, llama_pos token_cou
  static bool skippy_mtp_shares_target_memory(
          const llama_context * mtp_ctx,
          const llama_context * target_ctx) {
@@ -1878,7 +1881,7 @@ index 3d15111fb..258c86143 100644
  }
  
  enum skippy_status skippy_mtp_sync_target_inputs(
-@@ -126,7 +153,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -200,7 +227,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
      skippy_mtp_depth_scope mtp_depth_scope(mtp_ctx);
      const bool mtp_shares_target_memory = skippy_mtp_shares_target_memory(mtp_ctx, session->ctx);
      const bool chain_heads = mtp_depth_scope.chains_heads();
@@ -1887,7 +1890,7 @@ index 3d15111fb..258c86143 100644
      // MTP consumes complete pre-norm output rows, which can be wider than
      // token embeddings (for example DeepSeek4 hyperconnections).
      const int32_t n_hidden = llama_model_n_embd_out(session->stage_model->model);
-@@ -340,9 +367,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -416,9 +443,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
  }
  
  int skippy_external_decode_observe(llama_context * ctx, const llama_batch & batch) {
@@ -1946,7 +1949,7 @@ index 3d15111fb..258c86143 100644
  }
  
  skippy_graph_build_inputs skippy_external_decode_build_inputs(llama_context * ctx) {
-@@ -393,7 +466,7 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -469,7 +542,7 @@ enum skippy_status skippy_mtp_propose_next(
              max_draft_tokens,
              SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS);
      const bool chain_heads = mtp_depth_scope.chains_heads();
@@ -2096,10 +2099,10 @@ index bff571609..c6be5a10a 100644
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index ef56c4c61..e791fcaf9 100644
+index 56fbaa548..18257fb2e 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -936,6 +936,10 @@ static bool arch_supported(const llm_arch arch) {
+@@ -937,6 +937,10 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -2736,6 +2739,3 @@ index 2fa02f83e..ef113a3a0 100644
                  } else {
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
--- 
-2.55.0
-

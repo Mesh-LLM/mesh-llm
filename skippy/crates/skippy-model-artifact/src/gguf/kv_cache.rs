@@ -39,6 +39,7 @@ pub enum GgufKvCacheType {
     F16,
     Q8_0,
     Q4_0,
+    Turbo4,
 }
 
 impl GgufKvCacheType {
@@ -47,6 +48,7 @@ impl GgufKvCacheType {
             "f16" => Some(Self::F16),
             "q8_0" => Some(Self::Q8_0),
             "q4_0" => Some(Self::Q4_0),
+            "turbo4" => Some(Self::Turbo4),
             _ => None,
         }
     }
@@ -56,6 +58,7 @@ impl GgufKvCacheType {
             Self::F16 => "f16",
             Self::Q8_0 => "q8_0",
             Self::Q4_0 => "q4_0",
+            Self::Turbo4 => "turbo4",
         }
     }
 
@@ -64,6 +67,7 @@ impl GgufKvCacheType {
             Self::F16 => (1, 2),
             Self::Q8_0 => (32, 34),
             Self::Q4_0 => (32, 18),
+            Self::Turbo4 => (128, 66),
         }
     }
 
@@ -75,6 +79,7 @@ impl GgufKvCacheType {
         match self {
             Self::F16 => 1,
             Self::Q8_0 | Self::Q4_0 => 32,
+            Self::Turbo4 => 128,
         }
     }
 
@@ -140,6 +145,7 @@ impl GgufKvCacheQuant {
             GgufKvCacheType::F16 => 0,
             GgufKvCacheType::Q8_0 => 1,
             GgufKvCacheType::Q4_0 => 2,
+            GgufKvCacheType::Turbo4 => 3,
         }
     }
 
@@ -201,6 +207,8 @@ fn cache_bytes_per_token(
 /// unsupported quant would crash the model load outright.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KvQuantUnsupported {
+    /// The admitted Turbo4 layout uses Q8 keys and Turbo4 values.
+    UnsupportedTurbo4Layout,
     /// Quantised V cache requires Flash Attention (`llama-context.cpp:3617`),
     /// but this architecture forces FA off (`:3579`, currently Grok), so a
     /// quantised V can never load.
@@ -254,6 +262,11 @@ impl GgufCompactMeta {
         &self,
         desired: GgufKvCacheQuant,
     ) -> Result<(), KvQuantUnsupported> {
+        if desired.k == GgufKvCacheType::Turbo4
+            || (desired.v == GgufKvCacheType::Turbo4 && desired.k != GgufKvCacheType::Q8_0)
+        {
+            return Err(KvQuantUnsupported::UnsupportedTurbo4Layout);
+        }
         if desired.v.is_quantized() && self.flash_attention_forced_off() {
             return Err(KvQuantUnsupported::FlashAttentionUnavailable);
         }
@@ -297,6 +310,47 @@ impl GgufCompactMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prices_turbo4_packed_blocks_and_rejects_unadmitted_layouts() {
+        let meta = GgufCompactMeta {
+            head_count: 32,
+            kv_head_count: 8,
+            layer_count: 36,
+            key_length: 128,
+            value_length: 128,
+            ..Default::default()
+        };
+        let quant = GgufKvCacheQuant::from_llama_args("q8_0", "turbo4").unwrap();
+        assert_eq!(quant.k_cache_bytes_per_token(&meta), Some(39_168));
+        assert_eq!(quant.v_cache_bytes_per_token(&meta), Some(19_008));
+        assert_eq!(quant.kv_cache_bytes_per_token(&meta), Some(58_176));
+        assert_eq!(
+            quant.kv_cache_bytes_per_token(&meta).unwrap() * 8192,
+            476_577_792
+        );
+        assert_eq!(meta.kv_cache_quant_support(quant), Ok(()));
+        for rejected in [
+            GgufKvCacheQuant::new(GgufKvCacheType::Turbo4, GgufKvCacheType::Turbo4),
+            GgufKvCacheQuant::new(GgufKvCacheType::F16, GgufKvCacheType::Turbo4),
+        ] {
+            assert_eq!(
+                meta.kv_cache_quant_support(rejected),
+                Err(KvQuantUnsupported::UnsupportedTurbo4Layout)
+            );
+        }
+        let unaligned = GgufCompactMeta {
+            value_length: 64,
+            ..meta
+        };
+        assert_eq!(
+            unaligned.kv_cache_quant_support(quant),
+            Err(KvQuantUnsupported::ValueWidthNotBlockAligned {
+                head_width: 64,
+                block: 128
+            })
+        );
+    }
 
     #[test]
     fn prices_key_and_value_types_independently() {

@@ -1,10 +1,10 @@
-From ecb5bedcd83493493b94889d7652aabce960c778 Mon Sep 17 00:00:00 2001
+From 7b9440cf934a4ff21f7ed9419d2fe655f7c2e803 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
 
 ---
- src/skippy/abi.cpp                      |   59 ++
+ src/skippy/abi.cpp                      |   60 ++
  src/skippy/activation.cpp               | 1014 +++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
  src/skippy/activation_layout.cpp        |  156 +++
@@ -61,7 +61,7 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  372 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16079 insertions(+)
+ 57 files changed, 16080 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -122,10 +122,10 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
 
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
 new file mode 100644
-index 000000000..ceed6e5d3
+index 000000000..6733e5bc1
 --- /dev/null
 +++ b/src/skippy/abi.cpp
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,60 @@
 +#include "skippy/common.h"
 +
 +#include <cstdlib>
@@ -174,7 +174,8 @@ index 000000000..ceed6e5d3
 +           SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
 +           SKIPPY_FEATURE_UNLOAD_EVENTS |
 +           SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
-+           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
++           SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
++           SKIPPY_FEATURE_TURBO4_KV;
 +}
 +
 +void skippy_error_free(struct skippy_error * error) {
@@ -16541,6 +16542,3 @@ index 000000000..cc9279e7e
 +// batches request output for every input row, so no backend sampler may remain
 +// attached from an earlier chat request.
 +void skippy_prepare_non_chat_workload(skippy_session * session);
--- 
-2.54.0 (Apple Git-157)
-

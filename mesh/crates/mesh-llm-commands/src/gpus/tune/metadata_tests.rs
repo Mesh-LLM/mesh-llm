@@ -228,6 +228,22 @@ fn gpu_tune_accepts_supported_kv_types() {
 }
 
 #[test]
+fn gpu_tune_does_not_admit_experimental_standalone_turbo4() {
+    let error = validate_kv_cache_quant("sample-model", "q8_0", "turbo4")
+        .expect_err("standalone cache support must not expand Mesh tuning");
+    assert_eq!(
+        error,
+        TuneGgufMetadataError::UnsupportedKvTypes {
+            model: "sample-model".to_string(),
+            invalid_fields: vec![InvalidKvType {
+                field_name: "cache_type_v",
+                value: "turbo4".to_string(),
+            }],
+        }
+    );
+}
+
+#[test]
 fn gpu_tune_rejects_unsupported_kv_types_with_model_name() {
     let error = validate_kv_cache_quant("bad-model", "q6_k", "q4_0")
         .expect_err("unsupported kv strings should fail");

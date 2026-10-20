@@ -18,8 +18,7 @@ pub(crate) fn build_tune_plan(input: TuneRecommendationInput<'_>) -> TunePlan {
     let model_entry = matched_model_entry(input.config, input.target);
     let defaults = input.config.defaults.as_ref();
     let fit = plan_fit(input.metadata, input.hardware, input.survey);
-    let recommended_quant = recommended_kv_cache_quant(input.metadata.model_bytes);
-    let recommended_cache_type = tune_kv_cache_type_from_quant(recommended_quant);
+    let recommended_cache_type = recommended_kv_cache_type(input.metadata.model_bytes);
 
     let mut plan = TunePlan {
         target: plan_target(input.target, model_entry),

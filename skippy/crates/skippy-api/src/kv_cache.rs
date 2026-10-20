@@ -5,6 +5,7 @@ pub enum KvCacheType {
     F16,
     Q8_0,
     Q4_0,
+    Turbo4,
 }
 
 impl KvCacheType {
@@ -13,6 +14,7 @@ impl KvCacheType {
             Self::F16 => "f16",
             Self::Q8_0 => "q8_0",
             Self::Q4_0 => "q4_0",
+            Self::Turbo4 => "turbo4",
         }
     }
 
@@ -22,6 +24,7 @@ impl KvCacheType {
             Self::F16 => GgufKvCacheType::F16,
             Self::Q8_0 => GgufKvCacheType::Q8_0,
             Self::Q4_0 => GgufKvCacheType::Q4_0,
+            Self::Turbo4 => GgufKvCacheType::Turbo4,
         }
     }
 
@@ -31,6 +34,7 @@ impl KvCacheType {
             GgufKvCacheType::F16 => Self::F16,
             GgufKvCacheType::Q8_0 => Self::Q8_0,
             GgufKvCacheType::Q4_0 => Self::Q4_0,
+            GgufKvCacheType::Turbo4 => Self::Turbo4,
         }
     }
 }

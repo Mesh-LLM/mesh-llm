@@ -1,7 +1,7 @@
-From 43d7915d757c943ce529adae7f406fea0b24689b Mon Sep 17 00:00:00 2001
+From 78a398d7d67e7e66799f607b774191c2f1aabab6 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
-Subject: [PATCH 6/6] models: add Laya decision model support
+Subject: [PATCH] models: add Laya decision model support
 
 Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
 the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
@@ -36,21 +36,21 @@ Changes from the upstream draft:
 Co-authored-by: ZhangYu <zhangyub@uniontech.com>
 ---
  include/skippy.h          |    1 +
- include/skippy/common.h   |    4 +-
+ include/skippy/common.h   |    2 +
  include/skippy/laya.h     |  167 ++++++
  src/CMakeLists.txt        |    4 +-
  src/llama-arch.cpp        |   32 ++
  src/llama-arch.h          |   20 +
  src/llama-model-saver.cpp |    1 +
  src/llama-model.cpp       |    7 +
- src/skippy/abi.cpp        |    3 +-
+ src/skippy/abi.cpp        |    1 +
  src/skippy/laya.cpp       |  372 ++++++++++++
  tools/CMakeLists.txt      |    1 +
  tools/laya/CMakeLists.txt |   23 +
  tools/laya/laya-cli.cpp   |  670 ++++++++++++++++++++++
  tools/laya/laya.cpp       | 1132 +++++++++++++++++++++++++++++++++++++
  tools/laya/laya.h         |  119 ++++
- 15 files changed, 2553 insertions(+), 3 deletions(-)
+ 15 files changed, 2551 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/laya.h
  create mode 100644 src/skippy/laya.cpp
  create mode 100644 tools/laya/CMakeLists.txt
@@ -70,27 +70,18 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 772028cfc..2fc90a14e 100644
+index 1b11c57e6..d03517321 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 68
-+#define SKIPPY_ABI_VERSION_PATCH 70
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 @@ -108,6 +108,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
  
  #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
 +/** @brief Full-model Laya decision reads (`skippy/laya.h`). */
 +#define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
+ /** @brief Runtime Q8_0 K / Turbo4 V cache (ggml type 43); requires supported graph geometry and CPU or Metal placement. */
+ #define SKIPPY_FEATURE_TURBO4_KV              (UINT64_C(1) << 41)
  
- enum skippy_status {
-     SKIPPY_STATUS_OK                      = 0,
 diff --git a/include/skippy/laya.h b/include/skippy/laya.h
 new file mode 100644
 index 000000000..002fac598
@@ -265,7 +256,7 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 3edf17e64..fa6857599 100644
+index 0b6fb0cff..37794a08e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -81,6 +81,8 @@ add_library(llama
@@ -440,19 +431,17 @@ index dd701fcee..5992b1989 100644
          case LLM_ARCH_NOMIC_BERT_MOE:
          case LLM_ARCH_EUROBERT:
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index 1e1d2d7c8..f806cdbdc 100644
+index 5f819e7be..57b968e14 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -47,7 +47,8 @@ uint64_t skippy_abi_features(void) {
-            SKIPPY_FEATURE_UNLOAD_EVENTS |
+@@ -48,6 +48,7 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
             SKIPPY_FEATURE_SYSTEM_ONE |
--           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
-+           SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
-+           SKIPPY_FEATURE_LAYA_DECISIONS;
+            SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
++           SKIPPY_FEATURE_LAYA_DECISIONS |
+            SKIPPY_FEATURE_TURBO4_KV;
  }
  
- void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/laya.cpp b/src/skippy/laya.cpp
 new file mode 100644
 index 000000000..9d9f26ecd
@@ -2811,6 +2800,3 @@ index 000000000..8a713d563
 +
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
--- 
-2.55.0
-

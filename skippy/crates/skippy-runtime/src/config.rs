@@ -9,10 +9,12 @@ use skippy_ffi::{
 
 use crate::checkpoint::CheckpointQuantization;
 
+mod cache_types;
+pub use cache_types::{
+    GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_TURBO4_0, parse_cache_type,
+};
+
 pub const GGML_TYPE_F32: u32 = 0;
-pub const GGML_TYPE_F16: u32 = 1;
-pub const GGML_TYPE_Q4_0: u32 = 2;
-pub const GGML_TYPE_Q8_0: u32 = 8;
 pub const GGML_TYPE_I32: u32 = 26;
 pub const LLAMA_SERVER_DEFAULT_N_BATCH: u32 = 2048;
 pub const LLAMA_SERVER_DEFAULT_N_UBATCH: u32 = 512;
@@ -197,6 +199,7 @@ impl RuntimeConfig {
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
+        cache_types::validate_layout(self)?;
         if self.layer_start >= self.layer_end {
             return Err("layer_start must be less than layer_end");
         }
@@ -227,6 +230,9 @@ impl RuntimeConfig {
 
     pub(crate) fn as_raw(&self) -> Result<RawRuntimeConfigParts> {
         self.validate().map_err(anyhow::Error::msg)?;
+        if self.cache_type_v == GGML_TYPE_TURBO4_0 {
+            cache_types::require_native_support(skippy_ffi::try_abi_features())?;
+        }
         let mmap = self.mmap.or_else(|| {
             (self.has_stage_plan() && self.load_mode == LoadMode::RuntimeSlice).then_some(false)
         });
@@ -510,16 +516,6 @@ impl Default for RuntimeConfig {
             main_gpu: None,
             split_mode: SplitMode::Auto,
         }
-    }
-}
-
-pub fn parse_cache_type(value: &str) -> Result<u32> {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    match normalized.as_str() {
-        "" | "f16" => Ok(GGML_TYPE_F16),
-        "q4" | "q4_0" => Ok(GGML_TYPE_Q4_0),
-        "q8" | "q8_0" => Ok(GGML_TYPE_Q8_0),
-        _ => Err(anyhow!("unsupported KV cache type {value:?}")),
     }
 }
 
@@ -877,14 +873,6 @@ mod tests {
         assert_ne!(none.split_mode, layer.split_mode);
         assert_ne!(layer.split_mode, row.split_mode);
         assert_ne!(row.split_mode, tensor.split_mode);
-        Ok(())
-    }
-
-    #[test]
-    fn parse_cache_type_accepts_legacy_mesh_kv_defaults() -> anyhow::Result<()> {
-        assert_eq!(parse_cache_type("f16")?, GGML_TYPE_F16);
-        assert_eq!(parse_cache_type("q8_0")?, GGML_TYPE_Q8_0);
-        assert_eq!(parse_cache_type("q4_0")?, GGML_TYPE_Q4_0);
         Ok(())
     }
 

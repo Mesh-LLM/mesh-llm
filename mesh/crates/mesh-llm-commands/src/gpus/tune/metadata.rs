@@ -264,8 +264,11 @@ pub fn validate_kv_cache_quant(
     cache_type_k: &str,
     cache_type_v: &str,
 ) -> Result<GgufKvCacheQuant, TuneGgufMetadataError> {
-    let parsed_k = GgufKvCacheType::from_llama_arg(cache_type_k);
-    let parsed_v = GgufKvCacheType::from_llama_arg(cache_type_v);
+    // Standalone experimental types do not expand the qualified Mesh tuner.
+    let parsed_k = GgufKvCacheType::from_llama_arg(cache_type_k)
+        .filter(|value| *value != GgufKvCacheType::Turbo4);
+    let parsed_v = GgufKvCacheType::from_llama_arg(cache_type_v)
+        .filter(|value| *value != GgufKvCacheType::Turbo4);
     let mut invalid_fields = Vec::new();
     if parsed_k.is_none() {
         invalid_fields.push(InvalidKvType {

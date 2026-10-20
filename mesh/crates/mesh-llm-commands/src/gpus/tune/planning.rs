@@ -21,10 +21,19 @@ pub(crate) fn derive_fit_target_mib(allocatable_memory_bytes: u64) -> u64 {
 pub(crate) fn recommended_kv_cache_quant(
     model_bytes: u64,
 ) -> skippy_model_artifact::gguf::GgufKvCacheQuant {
+    use skippy_model_artifact::gguf::GgufKvCacheQuant;
+    match recommended_kv_cache_type(model_bytes) {
+        TuneKvCacheType::F16 => GgufKvCacheQuant::F16,
+        TuneKvCacheType::Q8_0 => GgufKvCacheQuant::Q8_0,
+        TuneKvCacheType::Q4_0 => GgufKvCacheQuant::Q4_0,
+    }
+}
+
+pub(crate) fn recommended_kv_cache_type(model_bytes: u64) -> TuneKvCacheType {
     if model_bytes >= LARGE_MODEL_MIN_BYTES {
-        skippy_model_artifact::gguf::GgufKvCacheQuant::Q4_0
+        TuneKvCacheType::Q4_0
     } else {
-        skippy_model_artifact::gguf::GgufKvCacheQuant::Q8_0
+        TuneKvCacheType::Q8_0
     }
 }
 
@@ -34,16 +43,6 @@ pub(crate) fn tune_kv_cache_type(value: &str) -> Option<TuneKvCacheType> {
         value if value.eq_ignore_ascii_case("q8_0") => Some(TuneKvCacheType::Q8_0),
         value if value.eq_ignore_ascii_case("q4_0") => Some(TuneKvCacheType::Q4_0),
         _ => None,
-    }
-}
-
-pub(crate) fn tune_kv_cache_type_from_quant(
-    quant: skippy_model_artifact::gguf::GgufKvCacheQuant,
-) -> TuneKvCacheType {
-    match quant.v {
-        skippy_model_artifact::gguf::GgufKvCacheType::F16 => TuneKvCacheType::F16,
-        skippy_model_artifact::gguf::GgufKvCacheType::Q8_0 => TuneKvCacheType::Q8_0,
-        skippy_model_artifact::gguf::GgufKvCacheType::Q4_0 => TuneKvCacheType::Q4_0,
     }
 }
 
