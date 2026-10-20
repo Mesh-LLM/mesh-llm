@@ -3,6 +3,8 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/automation.sh
+# REPO_ROOT is resolved from this script at runtime.
+# shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/lib/automation.sh"
 
 # Rust repository and CI consistency checks read this shared fallback roster.
@@ -42,6 +44,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-tui"
   "mesh-llm-ui"
   "mesh-llm-plugin"
+  "mesh-llm-peer-probe"
   "mesh-llm-skills"
   "mesh-llm-plugin-manager"
   "mesh-llm-client"

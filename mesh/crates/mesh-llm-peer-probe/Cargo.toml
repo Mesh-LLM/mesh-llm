@@ -1,0 +1,28 @@
+[package]
+name = "mesh-llm-peer-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Experimental bounded WASM peer-observation probe for Mesh"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+clap = { workspace = true }
+hex = "0.4"
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.78.0" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0" }
+reqwest = { version = "0.13", features = ["blocking", "json", "rustls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sysinfo = "0.38"
+tokio = { version = "1", features = ["full"] }
+wasmi = "2.0"
+
+[build-dependencies]
+wat = "1"

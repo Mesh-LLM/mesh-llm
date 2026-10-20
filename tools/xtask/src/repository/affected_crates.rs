@@ -50,6 +50,7 @@ const WORKSPACE_MEMBERS: &[&str] = &[
     "mesh-llm-tui",
     "mesh-llm-ui",
     "mesh-llm-plugin",
+    "mesh-llm-peer-probe",
     "mesh-llm-skills",
     "mesh-llm-plugin-manager",
     "mesh-llm-client",
