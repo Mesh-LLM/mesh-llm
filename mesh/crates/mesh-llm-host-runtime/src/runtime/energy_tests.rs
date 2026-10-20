@@ -1,7 +1,7 @@
 use super::*;
 use skippy_events::usage::TokenUsage;
 use skippy_inference_api::{
-    InferenceBackendOperation, InferenceFrontendRoute, InferenceLifecycleContext,
+    InferenceBackendOperation, InferenceFailure, InferenceFrontendRoute, InferenceLifecycleContext,
     InferenceRequestMethod, InferenceUsage,
 };
 
@@ -126,8 +126,8 @@ fn lifecycle_events_drive_the_meter_and_count_tokens_once() {
         },
         1.0,
     );
-    // The backend may finish before the stream's own terminal event, which
-    // reports the same usage again.
+    // The backend call of a stream ends before generation does; the stream's
+    // own terminal event, which reports the same usage again, closes it.
     apply_event(
         &mut meter,
         &InferenceLifecycleEvent::BackendTerminal {
@@ -137,7 +137,7 @@ fn lifecycle_events_drive_the_meter_and_count_tokens_once() {
         },
         1.5,
     );
-    assert!(!meter.in_flight.contains_key(&streamed));
+    assert!(meter.in_flight.contains_key(&streamed));
     apply_event(
         &mut meter,
         &InferenceLifecycleEvent::StreamTerminal {
@@ -181,4 +181,77 @@ fn lifecycle_events_drive_the_meter_and_count_tokens_once() {
     );
     assert_eq!(meter.output_tokens, 47);
     assert!(meter.in_flight.is_empty() && meter.counted.is_empty());
+}
+
+fn dispatched(request: RequestId, operation: InferenceBackendOperation) -> InferenceLifecycleEvent {
+    InferenceLifecycleEvent::BackendDispatched {
+        context: context(request),
+        operation,
+    }
+}
+
+fn backend_done(
+    request: RequestId,
+    operation: InferenceBackendOperation,
+    result: InferenceTerminalResult,
+) -> InferenceLifecycleEvent {
+    InferenceLifecycleEvent::BackendTerminal {
+        context: context(request),
+        operation,
+        result,
+    }
+}
+
+#[test]
+fn a_stream_keeps_the_node_busy_until_the_stream_ends() {
+    // Measured on an RTX 4070 Ti: with BackendTerminal taken as the end of a
+    // stream, four concurrent streams at 200 W were counted mostly as idle.
+    let mut meter = EnergyMeter::default();
+    let stream = RequestId::new();
+    let operation = InferenceBackendOperation::ChatCompletionStream;
+    meter.record_power(0.0, 30.0);
+    apply_event(&mut meter, &dispatched(stream, operation), 0.1);
+    let opened = InferenceTerminalResult::Completed { status_code: 200 };
+    apply_event(&mut meter, &backend_done(stream, operation, opened), 0.2);
+    samples(&mut meter, 1, 5, 200.0);
+    apply_event(
+        &mut meter,
+        &InferenceLifecycleEvent::StreamTerminal {
+            context: context(stream),
+            result: InferenceTerminalResult::Completed { status_code: 200 },
+        },
+        5.5,
+    );
+    samples(&mut meter, 6, 7, 30.0);
+    let status = meter.status(SOURCE);
+    assert_eq!(status.busy_seconds, 6.0);
+    assert_eq!(status.idle_seconds, 1.0);
+}
+
+#[test]
+fn listing_models_or_counting_tokens_does_not_make_the_node_busy() {
+    let mut meter = EnergyMeter::default();
+    for operation in [
+        InferenceBackendOperation::Models,
+        InferenceBackendOperation::MessagesCountTokens,
+    ] {
+        apply_event(&mut meter, &dispatched(RequestId::new(), operation), 0.5);
+    }
+    samples(&mut meter, 0, 2, 25.0);
+    assert!(meter.in_flight.is_empty());
+    assert_eq!(meter.status(SOURCE).busy_seconds, 0.0);
+}
+
+#[test]
+fn a_stream_that_fails_to_open_frees_the_node() {
+    let mut meter = EnergyMeter::default();
+    let stream = RequestId::new();
+    let operation = InferenceBackendOperation::ChatCompletionStream;
+    apply_event(&mut meter, &dispatched(stream, operation), 0.0);
+    let failed = InferenceTerminalResult::Failed {
+        status_code: 503,
+        failure: InferenceFailure::Backend,
+    };
+    apply_event(&mut meter, &backend_done(stream, operation, failed), 0.1);
+    assert!(meter.in_flight.is_empty());
 }

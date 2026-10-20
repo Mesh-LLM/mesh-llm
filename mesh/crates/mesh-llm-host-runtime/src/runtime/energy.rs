@@ -17,7 +17,8 @@ use std::time::Instant;
 
 use serde::Serialize;
 use skippy_inference_api::{
-    InferenceLifecycleEvent, InferenceLifecycleObserver, InferenceTerminalResult, RequestId,
+    InferenceBackendOperation, InferenceLifecycleEvent, InferenceLifecycleObserver,
+    InferenceTerminalResult, RequestId,
 };
 
 /// Samples further apart than this leave a gap rather than an interval: the
@@ -193,10 +194,34 @@ pub(crate) fn energy_lifecycle_observer() -> Arc<dyn InferenceLifecycleObserver>
     Arc::new(EnergyLifecycleObserver)
 }
 
+/// Listing models or counting tokens doesn't run the model, so it never makes
+/// an interval busy; a client polling `/v1/models` would otherwise do so.
+fn runs_model(operation: InferenceBackendOperation) -> bool {
+    !matches!(
+        operation,
+        InferenceBackendOperation::Models | InferenceBackendOperation::MessagesCountTokens
+    )
+}
+
+/// For a streamed operation the backend call only opens the stream: its
+/// terminal event comes before the first token, and generation goes on until
+/// the stream's own terminal event.
+fn opens_stream(operation: InferenceBackendOperation) -> bool {
+    matches!(
+        operation,
+        InferenceBackendOperation::ChatCompletionStream
+            | InferenceBackendOperation::CompletionStream
+            | InferenceBackendOperation::ResponsesStream
+            | InferenceBackendOperation::MessagesStream
+    )
+}
+
 fn apply_event(meter: &mut EnergyMeter, event: &InferenceLifecycleEvent, seconds: f64) {
     match event {
-        InferenceLifecycleEvent::BackendDispatched { context, .. } => {
-            meter.request_started(context.request_id, seconds);
+        InferenceLifecycleEvent::BackendDispatched { context, operation } => {
+            if runs_model(*operation) {
+                meter.request_started(context.request_id, seconds);
+            }
         }
         InferenceLifecycleEvent::ResponseCompleted { context, usage, .. } => {
             meter.tokens_completed(context.request_id, u64::from(usage.completion_tokens));
@@ -209,8 +234,15 @@ fn apply_event(meter: &mut EnergyMeter, event: &InferenceLifecycleEvent, seconds
             }
             meter.request_closed(&context.request_id);
         }
-        InferenceLifecycleEvent::BackendTerminal { context, .. } => {
-            meter.compute_finished(&context.request_id);
+        InferenceLifecycleEvent::BackendTerminal {
+            context,
+            operation,
+            result,
+        } => {
+            let failed = matches!(result, InferenceTerminalResult::Failed { .. });
+            if failed || !opens_stream(*operation) {
+                meter.compute_finished(&context.request_id);
+            }
         }
         // Every way a request can end; closing one twice is harmless.
         InferenceLifecycleEvent::NonStreamTerminal { context, .. }
