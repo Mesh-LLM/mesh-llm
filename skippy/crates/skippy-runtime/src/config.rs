@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::ptr;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use skippy_ffi::{
     LoadMode, MtpSource as RawMtpSource, RuntimeConfig as RawRuntimeConfig, TRISTATE_AUTO,
     TRISTATE_FALSE, TRISTATE_TRUE,
