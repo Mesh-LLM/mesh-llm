@@ -395,11 +395,27 @@ pub(in crate::output) fn event_severity_badge(event: &MeshEventState) -> (&'stat
 }
 
 /// Whole words only: `inferred`, `preferred` or a counter such as
-/// `terminal_delivery_failed=0` in an info line is not a failure (#2341).
+/// `terminal_delivery_failed=0` in an info line is not a failure (#2341),
+/// but the same counter above zero is.
 fn mentions_failure(summary_lower: &str) -> bool {
     summary_lower
-        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .any(|word| word.starts_with("err") || word == "failed")
+        .split_whitespace()
+        .any(failure_counter_above_zero)
+        || summary_lower
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .any(|word| word.starts_with("err") || word == "failed")
+}
+
+/// `<name>failed=<count>` with a count above zero, as in
+/// `terminal_delivery_failed=1`.
+fn failure_counter_above_zero(chunk: &str) -> bool {
+    chunk.split_once('=').is_some_and(|(name, count)| {
+        name.ends_with("failed")
+            && count
+                .trim_end_matches([',', ';', '.'])
+                .parse::<u64>()
+                .is_ok_and(|count| count > 0)
+    })
 }
 
 pub(in crate::output) fn event_severity_badge_span(event: &MeshEventState) -> Span<'static> {

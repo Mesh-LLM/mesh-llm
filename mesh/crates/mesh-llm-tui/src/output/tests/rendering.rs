@@ -15,6 +15,12 @@ pub(super) fn tui_event_badge_marks_failures_by_word_not_by_substring() {
         badge("system health: terminal_delivery_failed=0 persistence_failed=0"),
         "INFO"
     );
+    // The same counters above zero are failures, though the line stays INFO.
+    assert_eq!(
+        badge("event_system_health: version=7 terminal_delivery_failed=1 dropped_progress=0"),
+        "ERR"
+    );
+    assert_eq!(badge("system health: persistence_failed=12."), "ERR");
     assert_eq!(badge("inferred context from the preferred model"), "INFO");
     assert_eq!(badge("launch failed: port in use"), "ERR");
     assert_eq!(badge("rpc error: connection refused"), "ERR");
