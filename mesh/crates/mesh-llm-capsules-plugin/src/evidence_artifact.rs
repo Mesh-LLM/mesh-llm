@@ -53,7 +53,7 @@
 //! the receipts may differ, as the profile allows.
 
 use cll::checkpoint::{verify_checkpoint_cose_offline, DecodedCheckpointCose, WitnessRecord};
-use cll::mmr::{height_at, interior_hash, leaf_count, leaf_hash, pos_to_leaf_index, Hash};
+use cll::mmr::{leaf_count, Hash};
 use ed25519_dalek::VerifyingKey;
 use evidence_request::cll_material::{
     self, encode_consistency_proof, encode_inclusion_proof, KeyDecision, LogKeyPolicy,
@@ -70,7 +70,11 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::evidence_log::{ChainCheckpoint, LogView, Record};
+
+mod cll_proofs;
+
 use crate::served_summary::SERVED_SUMMARY_DERIVATION_TOKEN;
+use cll_proofs::{consistent, inclusion_leaf, proves};
 
 /// The reply member that carries witness receipts beside the envelope.
 pub const WITNESS_RECEIPTS: &str = "witness_receipts";
@@ -78,13 +82,6 @@ pub const WITNESS_RECEIPTS: &str = "witness_receipts";
 /// The most records, checkpoints or receipts a received answer may carry
 /// before anything in it is checked (the responder's limits are lower).
 const MAX_ITEMS: usize = 10_000;
-
-/// The longest inclusion or consistency path an MMR of profile size can
-/// have.
-const MAX_PATH: usize = 64;
-
-/// The largest MMR node index read from a peer: the profile's integers.
-const MAX_NODE_INDEX: u64 = (1 << 53) - 1;
 
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
@@ -389,6 +386,18 @@ struct Stated {
     cp: DecodedCheckpointCose,
 }
 
+/// The profile identifier a request names: its `profile` member, or
+/// `evidence-interop/0` when it has none (profile §3.3 step 2). `None` when
+/// the member is not text. This node answers and checks `evidence-interop/0`
+/// only.
+pub fn requested_profile(request: &Map<String, Value>) -> Option<&str> {
+    match request.get("profile") {
+        None => Some(envelope::PROFILE),
+        Some(Value::String(profile)) => Some(profile),
+        Some(_) => None,
+    }
+}
+
 /// Check a reply `response` to the request whose octets as sent are `sent`
 /// (parsed as `request`), from the responder whose key is `key`. Every check
 /// the old pre-profile verifier made is made here: the envelope (the
@@ -410,6 +419,14 @@ pub fn check(
         Ok(Reply::Refusal(_)) => return fail("a refusal, not an answer"),
         Err(e) => return fail(e.to_string()),
     };
+    // Profile §3.3 step 5: the envelope's profile is the one asked for.
+    let asked = match serde_json::from_slice::<Value>(sent) {
+        Ok(Value::Object(map)) => requested_profile(&map).map(str::to_string),
+        _ => None,
+    };
+    if asked.as_deref() != Some(env.profile.as_str()) {
+        return fail("the answer is not under the profile the request named");
+    }
     env.verify_for(key, sent)
         .map_err(|e| CheckError::Answer(e.to_string()))?;
     if env.subject != request.subject || env.derivation != request.derivation {
@@ -443,10 +460,24 @@ pub fn check(
                             .map(|i| env.verification_content[i].as_slice())
                             .unwrap_or_default()
                     };
-                    let leaf = inclusion_leaf(item(KIND_INCLUSION)).ok_or_else(|| {
+                    let proof = item(KIND_INCLUSION);
+                    let leaf = inclusion_leaf(proof).ok_or_else(|| {
                         CheckError::Answer("the inclusion proof is malformed".into())
                     })?;
-                    (stated(item(KIND_CHECKPOINT), key)?, leaf)
+                    // The profile's check finds the path's root among the
+                    // peaks; whether the leaf sits at its stated position
+                    // under the anchor's size is checked here.
+                    let served = stated(item(KIND_CHECKPOINT), key)?;
+                    if !proves(
+                        proof,
+                        leaf,
+                        &raw_digest(digest)?,
+                        served.cp.mmr_size,
+                        &served.cp.new_peak_hashes,
+                    ) {
+                        return fail("the record's inclusion proof does not hold");
+                    }
+                    (served, leaf)
                 }
                 // A record of this format, named by its `capsule_id`.
                 cll_material::Status::NotChecked if env.artifact_digest != *digest => {
@@ -866,135 +897,6 @@ fn hex_member(value: &Value, member: &str) -> Result<Vec<u8>, CheckError> {
         .ok_or_else(|| CheckError::Answer(format!("{member} is not hex")))
 }
 
-/// A `cll-inclusion-proof` item: `[MMR node index, inclusion path]`.
-fn inclusion_parts(octets: &[u8]) -> Option<(u64, Vec<Hash>)> {
-    let value: ciborium::Value = ciborium::from_reader(octets).ok()?;
-    let ciborium::Value::Array(items) = value else {
-        return None;
-    };
-    let [index, path] = items.as_slice() else {
-        return None;
-    };
-    let index = u64::try_from(index.as_integer()?).ok()?;
-    if index > MAX_NODE_INDEX {
-        return None;
-    }
-    Some((index, hash_list(path)?))
-}
-
-/// The leaf an inclusion proof is for.
-fn inclusion_leaf(octets: &[u8]) -> Option<u64> {
-    let (index, _) = inclusion_parts(octets)?;
-    pos_to_leaf_index(index).ok()
-}
-
-/// Whether `proof` proves the leaf `leaf` with entry `entry` in the MMR of
-/// `size` nodes whose peaks are `peaks` (profile §6.2.1 step 12). The path
-/// must climb from the leaf's own node to the one peak that holds it, so a
-/// leaf cannot be passed off at another position: a peak that is itself a
-/// leaf would otherwise match any position given an empty path.
-fn proves(proof: &[u8], leaf: u64, entry: &Hash, size: u64, peaks: &[Hash]) -> bool {
-    let Some((index, path)) = inclusion_parts(proof) else {
-        return false;
-    };
-    if cll::mmr::leaf_index_to_pos(leaf).ok() != Some(index) || path.len() > MAX_PATH {
-        return false;
-    }
-    let Ok(positions) = cll::mmr::peaks(size) else {
-        return false;
-    };
-    let Some(k) = positions.iter().position(|&p| p >= index) else {
-        return false;
-    };
-    positions.len() == peaks.len()
-        && included_root(index, leaf_hash(entry), &path) == Some((positions[k], peaks[k]))
-}
-
-/// MMR's `included_root`: the node at `index` with hash `node`, carried up
-/// its path, as the position it reaches and its hash. `None` when the path
-/// climbs past any MMR of profile size.
-fn included_root(mut index: u64, mut node: Hash, path: &[Hash]) -> Option<(u64, Hash)> {
-    for (height, sibling) in (height_at(index)..).zip(path) {
-        if index.checked_add(1)? > MAX_NODE_INDEX {
-            return None;
-        }
-        if height_at(index + 1) > height {
-            index += 1;
-            node = interior_hash(sibling, &node, index);
-        } else {
-            index = index.checked_add(2u64.checked_shl(height)?)?;
-            if index > MAX_NODE_INDEX {
-                return None;
-            }
-            node = interior_hash(&node, sibling, index);
-        }
-    }
-    Some((index, node))
-}
-
-/// Whether `proof` (a `cll-consistency-proof` item) proves that the MMR of
-/// `to` nodes with peaks `to_peaks` extends the one of `from` nodes with
-/// peaks `from_peaks` (profile §6.2.1 step 13).
-fn consistent(
-    from_size: u64,
-    from_peaks: &[Hash],
-    to_size: u64,
-    to_peaks: &[Hash],
-    proof: &[u8],
-) -> bool {
-    (|| -> Option<bool> {
-        let value: ciborium::Value = ciborium::from_reader(proof).ok()?;
-        let ciborium::Value::Array(items) = value else {
-            return None;
-        };
-        let [from, to, paths, right] = items.as_slice() else {
-            return None;
-        };
-        let from = u64::try_from(from.as_integer()?).ok()?;
-        let to = u64::try_from(to.as_integer()?).ok()?;
-        if from != from_size || to != to_size || from == 0 || from > to {
-            return Some(false);
-        }
-        let ciborium::Value::Array(paths) = paths else {
-            return None;
-        };
-        let peak_indices = cll::mmr::peaks(from).ok()?;
-        if paths.len() != peak_indices.len() || paths.len() != from_peaks.len() {
-            return Some(false);
-        }
-        let mut roots: Vec<Hash> = Vec::new();
-        for ((index, path), peak) in peak_indices.iter().zip(paths).zip(from_peaks) {
-            let path = hash_list(path)?;
-            if path.len() > MAX_PATH {
-                return Some(false);
-            }
-            let (_, root) = included_root(*index, *peak, &path)?;
-            if roots.last() != Some(&root) {
-                roots.push(root);
-            }
-        }
-        roots.extend(hash_list(right)?);
-        Some(roots == to_peaks)
-    })()
-    .unwrap_or(false)
-}
-
-fn hash_list(value: &ciborium::Value) -> Option<Vec<Hash>> {
-    let ciborium::Value::Array(items) = value else {
-        return None;
-    };
-    if items.len() > MAX_PATH {
-        return None;
-    }
-    items
-        .iter()
-        .map(|item| match item {
-            ciborium::Value::Bytes(b) => b.as_slice().try_into().ok(),
-            _ => None,
-        })
-        .collect()
-}
-
 /// Check every receipt the reply carries. Each must name one of the
 /// checkpoints the answer carries and be bound to it: its entry hash is
 /// `SHA-256(checkpoint digest)`, the digest of the checkpoint's signed JSON
@@ -1151,6 +1053,16 @@ mod tests {
     /// The same answer with `change` made to its parts, signed again by the
     /// responder: what a responder that lies, with its own key, can send.
     fn resigned(sent: &[u8], reply: &Value, change: impl FnOnce(&mut EnvelopeParts)) -> Value {
+        resigned_by(&key(), sent, reply, change)
+    }
+
+    /// [`resigned`], by the responder whose key is `key`.
+    fn resigned_by(
+        key: &SigningKey,
+        sent: &[u8],
+        reply: &Value,
+        change: impl FnOnce(&mut EnvelopeParts),
+    ) -> Value {
         let env = envelope_of(reply);
         let mut parts = EnvelopeParts {
             subject: env.subject.clone(),
@@ -1166,7 +1078,7 @@ mod tests {
             issued_at: env.issued_at.clone(),
         };
         change(&mut parts);
-        let signed = envelope::sign(sent, parts, &key()).unwrap();
+        let signed = envelope::sign(sent, parts, key).unwrap();
         let mut out: Value = serde_json::from_slice(&signed.encode(Binding::Json)).unwrap();
         if let Some(r) = reply.get(WITNESS_RECEIPTS) {
             out[WITNESS_RECEIPTS] = r.clone();
@@ -1253,6 +1165,109 @@ mod tests {
             report.detail
         );
         assert_eq!(check_reply(&sent, &own).unwrap().records, [17]);
+    }
+
+    /// A record that is its own octets passes the profile's check whenever
+    /// its path reaches some peak, so a leaf that is itself a peak, sent
+    /// with an empty path, passes it at any position. This node's requester
+    /// accepts it only at its own position under the anchor's size (review
+    /// on Mesh-LLM/mesh-llm#2502: a real leaf 2 accepted as records `[0]`
+    /// and `[100]`).
+    #[test]
+    fn a_record_that_is_its_own_octets_holds_only_at_its_own_position() {
+        let (_dir, ledger, key, _) = producer_ledger(3, &[2]);
+        let (stated_anchors, _) = anchors_of(&ledger, &key);
+        let pin = json!({"expected_pin": stated_anchors[0]});
+        let ask = |request: Value| {
+            let (checked, wire) = ask_ledger(&ledger, &key, &request);
+            checked.unwrap();
+            (serde_json::to_vec(&request).unwrap(), wire)
+        };
+        let check_by = |sent: &[u8], reply: &Value| {
+            let req = request::parse_json(sent).unwrap();
+            check(sent, &req, reply, &key.verifying_key(), &|_| None)
+        };
+        // A leaf that is a peak on its own, and its digest.
+        let (_, full) = ask(json!({"subject": {"full_history": null}, "coverage": pin}));
+        let full = envelope_of(&full);
+        let size = stated(&full.verification_content[0], &key.verifying_key())
+            .unwrap()
+            .cp
+            .mmr_size;
+        let peak = cll::mmr::peaks(size)
+            .unwrap()
+            .into_iter()
+            .find(|&p| cll::mmr::height_at(p) == 0)
+            .expect("the anchor has a one-leaf peak");
+        let leaf = cll::mmr::pos_to_leaf_index(peak).unwrap();
+        let records: Value = serde_json::from_slice(&full.artifact).unwrap();
+        let digest = records["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["leaf_index"] == json!(leaf))
+            .unwrap()["digest"]
+            .clone();
+        let (sent, reply) = ask(json!({"subject": {"record": digest}, "coverage": pin}));
+        let mut preimage: Value = serde_json::from_slice(&envelope_of(&reply).artifact).unwrap();
+        let members = preimage.as_object_mut().unwrap();
+        for local in ["capsule_id", "signature", "key_id"] {
+            members.remove(local);
+        }
+        assert_eq!(json!(sha256_hex(&jcs_bytes(&preimage))), digest);
+        let own = resigned_by(&key, &sent, &reply, |p| p.artifact = jcs_bytes(&preimage));
+        assert_eq!(check_by(&sent, &own).unwrap().records, [leaf]);
+        for forged in [0, leaf - 1, 100, leaf_count(size).unwrap()] {
+            let bad = resigned_by(&key, &sent, &reply, |p| {
+                p.artifact = jcs_bytes(&preimage);
+                p.verification[1].1 = encode_inclusion_proof(forged, &[]).unwrap();
+            });
+            let report = cll_material::check_anchor_inclusion(
+                &envelope_of(&bad),
+                &ResponderLogKey(key.verifying_key()),
+            );
+            assert_eq!(report.status, cll_material::Status::Pass, "{forged}");
+            assert_eq!(
+                check_by(&sent, &bad).unwrap_err(),
+                CheckError::Answer("the record's inclusion proof does not hold".into()),
+                "{forged}"
+            );
+        }
+    }
+
+    /// An answer is under the profile the request named. A responder that
+    /// answers a request for another profile as `evidence-interop/0` is not
+    /// believed, even signing over that request.
+    #[test]
+    fn an_answer_under_another_profile_than_asked_is_refused() {
+        let node = node();
+        let id = corpus_ledger()[17]["capsule_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (sent, reply) = node.ask(&json!({"subject": {"record": id}, "coverage": node.pin(1)}));
+        for profile in [
+            json!("evidence-interop/0"),
+            json!("evidence-interop/1"),
+            json!(7),
+        ] {
+            let mut asked: Value = serde_json::from_slice(&sent).unwrap();
+            asked["profile"] = profile.clone();
+            let asked = serde_json::to_vec(&asked).unwrap();
+            let answer = resigned(&asked, &reply, |_| {});
+            let checked = check_reply(&asked, &answer);
+            if profile == json!("evidence-interop/0") {
+                assert!(checked.is_ok(), "{profile}");
+            } else {
+                assert_eq!(
+                    checked.unwrap_err(),
+                    CheckError::Answer(
+                        "the answer is not under the profile the request named".into()
+                    ),
+                    "{profile}"
+                );
+            }
+        }
     }
 
     /// A record answer whose line, proof or consistency proof is not the one
@@ -1837,77 +1852,5 @@ mod tests {
             ),
             "{outcome:?}"
         );
-    }
-
-    /// A leaf that is itself a peak cannot be passed off at another
-    /// position: in a three-leaf MMR, leaf 2 is the right peak, and an empty
-    /// path from leaf 0's position must not reach it.
-    #[test]
-    fn an_inclusion_proof_proves_its_leafs_position() {
-        use cll::mmr::{add_leaf, peaks, MemoryNodeStore, NodeReader};
-        let entries = [[1u8; 32], [2u8; 32], [3u8; 32]];
-        let mut nodes = MemoryNodeStore::new();
-        for e in &entries {
-            add_leaf(&mut nodes, leaf_hash(e)).unwrap();
-        }
-        let size = nodes.size();
-        let peak_hashes: Vec<Hash> = peaks(size)
-            .unwrap()
-            .iter()
-            .map(|&p| nodes.node(p))
-            .collect();
-        let proof = |leaf: u64| {
-            let path = cll::mmr::inclusion_proof(&nodes, leaf, size)
-                .unwrap()
-                .witness;
-            let path: Vec<Hash> = path
-                .iter()
-                .map(|h| hex::decode(h).unwrap().try_into().unwrap())
-                .collect();
-            encode_inclusion_proof(leaf, &path).unwrap()
-        };
-        for (leaf, entry) in entries.iter().enumerate() {
-            assert!(
-                proves(&proof(leaf as u64), leaf as u64, entry, size, &peak_hashes),
-                "{leaf}"
-            );
-        }
-        let forged = encode_inclusion_proof(0, &[]).unwrap();
-        assert!(!proves(&forged, 0, &entries[2], size, &peak_hashes));
-        assert!(!proves(&proof(2), 2, &entries[2], size, &peak_hashes[..1]));
-    }
-
-    /// `included_root` stays inside the profile's integers on a hostile
-    /// path, and an index that is not a leaf proves nothing.
-    #[test]
-    fn a_hostile_proof_is_refused_without_panicking() {
-        assert!(included_root(MAX_NODE_INDEX, [0; 32], &[[1; 32]; 64]).is_none());
-        let entry = [3u8; 32];
-        let mut proof = Vec::new();
-        ciborium::into_writer(
-            &ciborium::Value::Array(vec![
-                ciborium::Value::Integer(2.into()),
-                ciborium::Value::Array(vec![]),
-            ]),
-            &mut proof,
-        )
-        .unwrap();
-        assert!(!proves(&proof, 1, &entry, 3, &[leaf_hash(&entry)]));
-        assert!(inclusion_parts(b"not cbor").is_none());
-        let ledger = corpus_ledger();
-        let cps = crate::evidence_request_parity::corpus_checkpoints(&ledger, &key());
-        let decoded = |i: usize| {
-            verify_checkpoint_cose_offline(&cps[i].statement)
-                .decoded
-                .unwrap()
-        };
-        let (a, b) = (decoded(0), decoded(1));
-        assert!(!consistent(
-            a.mmr_size,
-            &a.new_peak_hashes,
-            b.mmr_size,
-            &b.new_peak_hashes,
-            b"\x84\x00"
-        ));
     }
 }

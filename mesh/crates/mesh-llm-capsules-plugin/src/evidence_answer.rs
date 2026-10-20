@@ -269,6 +269,10 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
         }
         _ => return refuse(Reason::RequestMalformed, kind),
     };
+    // A profile this node does not implement (profile §3.3 step 4).
+    if evidence_artifact::requested_profile(&map) != Some(evidence_request::envelope::PROFILE) {
+        return refuse(Reason::RequestMalformed, kind);
+    }
     if form == Form::Malformed {
         return refuse(Reason::RequestMalformed, kind);
     }
@@ -1821,6 +1825,37 @@ mod tests {
                 Some(Reason::RequestMalformed),
                 "{segments}"
             );
+        }
+    }
+
+    /// A request naming a profile this node does not implement, or a
+    /// `profile` that is not text, is refused `request_malformed` (profile
+    /// §3.3 step 4), never answered as `evidence-interop/0`. One naming
+    /// `evidence-interop/0`, or none, is answered under it.
+    #[test]
+    fn a_request_for_another_profile_is_malformed() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let with_profile = |profile: Value| {
+            let mut req: Value = serde_json::from_slice(CHECKPOINTS).unwrap();
+            req["profile"] = profile;
+            serde_json::to_vec(&req).unwrap()
+        };
+        for profile in [json!("evidence-interop/1"), json!(""), json!(0)] {
+            assert_eq!(
+                refused(&ask(dir.path(), &with_profile(profile.clone()), "peers")),
+                Some(Reason::RequestMalformed),
+                "{profile}"
+            );
+        }
+        for bytes in [
+            with_profile(json!("evidence-interop/0")),
+            CHECKPOINTS.to_vec(),
+        ] {
+            let Outcome::Answered { wire, .. } = ask(dir.path(), &bytes, "peers") else {
+                panic!("answered");
+            };
+            assert_eq!(wire["profile"], json!("evidence-interop/0"));
         }
     }
 
