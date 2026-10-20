@@ -36,14 +36,44 @@ struct JudgeOutput {
     unsupported_claims: Vec<String>,
 }
 
+fn relevant_question(challenge: &Challenge, question: &str) -> bool {
+    let lower = question.to_ascii_lowercase();
+    let has = |terms: &[&str]| terms.iter().any(|term| lower.contains(term));
+    (!challenge.intents.contains(&Intent::Process)
+        || (has(&["process", "pid"])
+            && has(&[
+                "identify",
+                "show",
+                "report",
+                "observe",
+                "find",
+                "provide",
+                "tell",
+                "what process",
+                "which process",
+            ])))
+        && (!challenge.intents.contains(&Intent::Executable) || has(&["hash", "digest", "sample"]))
+        && (!challenge.intents.contains(&Intent::Model)
+            || (has(&["model"]) && has(&["metadata", "architecture", "tensor", "active"])))
+}
+
 pub fn compose_question(challenge: &Challenge, model: &dyn ModelClient) -> Result<(String, bool)> {
-    let input = serde_json::to_string(challenge)?;
-    let output = model.complete(Stage::Writer, &input);
+    let mut tasks = Vec::new();
+    if challenge.intents.contains(&Intent::Process) {
+        tasks.push("Identify the probe component process, its PID and start time, executable handle, and observation source; say unavailable if it cannot be observed.");
+    }
+    if challenge.intents.contains(&Intent::Executable) {
+        tasks.push("Sample the executable specified in the structured challenge and report the nonce-bound hash of its byte range; say if it is no longer the same process or is unavailable.");
+    }
+    if challenge.intents.contains(&Intent::Model) {
+        tasks.push("Report active model metadata: architecture, tensor count, file size, and observation source; say unavailable if this cannot be observed.");
+    }
+    let output = model.complete(Stage::Writer, &tasks.join(" "));
     if let Ok(text) = &output {
         let question = text.trim();
-        if !question.is_empty() && question.len() <= 800 {
-            // Prose is intentionally not checked against machine obligations:
-            // the challenge envelope, not A's model, defines what B must do.
+        if !question.is_empty() && question.len() <= 800 && relevant_question(challenge, question) {
+            // This lexical guard is only for useful prose. The structured
+            // challenge, not A's model text, defines B's obligations.
             return Ok((question.to_owned(), false));
         }
     }

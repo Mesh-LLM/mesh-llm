@@ -24,8 +24,8 @@ transport.
 
 The structured obligations are authoritative even if A's model rewrites the
 question. Prose need not repeat the nonce, handle, or range: B receives those
-in the structured challenge. Empty, failed, or overlong writer output falls
-back to a short template. A records its reference bytes separately; no
+in the structured challenge. Empty, off-task, failed, or overlong writer output
+falls back to a short template. A records its reference bytes separately; no
 expected digest is sent to B.
 
 | Intent | Question obligation | B tool | A check |
@@ -42,8 +42,12 @@ freshness source:
 
 > Round 1: Identify this probe component's process and executable handle.
 >
-> Round 2: For executable `fixture-exe-1`, sample offset `...` for 64 bytes
-> using the fresh nonce `...`. Say if it is no longer the same process.
+> Round 2: Sample the specified executable byte range and report its
+> nonce-bound hash. Say if it is no longer the same process.
+
+The machine envelope, not the prose, carries the exact handle, offset, length,
+nonce, and budgets. A lightweight relevance check rejects A-model
+meta-questions about protocol fields; it does not decide the evidence verdict.
 
 The native planner accepts only strict JSON actions naming one tool from that
 round's menu, `finish`, or explicit `unavailable`. One malformed or disallowed
@@ -97,6 +101,10 @@ the selected ID. This explicit mode labels every transcript
 `operator_supplied_loopback_unverified`; the operator must establish that the
 server uses local weights and does not proxy paid or remote inference. The
 `plugin` command keeps the Mesh-local marker requirement.
+Live-model HTTP disables redirects and environment proxies, and bounds the
+inventory and completion response bodies while reading them. These client
+checks limit accidental remote routing and oversized responses; they do not
+authenticate the server or prove locality.
 
 ## Evaluation
 
