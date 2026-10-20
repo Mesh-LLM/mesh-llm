@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+pub(super) fn tui_event_badge_marks_failures_by_word_not_by_substring() {
+    let badge = |summary: &str| {
+        event_severity_badge(&MeshEventState {
+            timestamp: "12:34:56".to_string(),
+            level: OutputLevel::Info,
+            summary: summary.to_string(),
+        })
+        .0
+    };
+    // #2341: the idle health line was badged ERR.
+    assert_eq!(
+        badge("system health: terminal_delivery_failed=0 persistence_failed=0"),
+        "INFO"
+    );
+    assert_eq!(badge("inferred context from the preferred model"), "INFO");
+    assert_eq!(badge("launch failed: port in use"), "ERR");
+    assert_eq!(badge("rpc error: connection refused"), "ERR");
+    assert_eq!(badge("err: stage server exited"), "ERR");
+}
+
+#[test]
 pub(super) fn tui_event_line_uses_compact_timestamp_level_message_layout() {
     let line = event_line(
         &MeshEventState {

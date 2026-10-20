@@ -354,10 +354,7 @@ pub(in crate::output) fn event_severity_badge(event: &MeshEventState) -> (&'stat
                 .fg(theme.error)
                 .add_modifier(Modifier::BOLD),
         )
-    } else if matches!(event.level, OutputLevel::Error)
-        || summary_lower.contains("err")
-        || summary_lower.contains("failed")
-    {
+    } else if matches!(event.level, OutputLevel::Error) || mentions_failure(&summary_lower) {
         (
             "ERR",
             Style::default()
@@ -395,6 +392,14 @@ pub(in crate::output) fn event_severity_badge(event: &MeshEventState) -> (&'stat
                 .add_modifier(Modifier::BOLD),
         )
     }
+}
+
+/// Whole words only: `inferred`, `preferred` or a counter such as
+/// `terminal_delivery_failed=0` in an info line is not a failure (#2341).
+fn mentions_failure(summary_lower: &str) -> bool {
+    summary_lower
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(|word| word.starts_with("err") || word == "failed")
 }
 
 pub(in crate::output) fn event_severity_badge_span(event: &MeshEventState) -> Span<'static> {

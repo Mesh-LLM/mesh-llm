@@ -52,27 +52,6 @@ fn parse_command(line: &str) -> Option<InteractiveCommand> {
 }
 
 #[cfg(test)]
-fn console_session_mode_for_term(
-    stdin_is_tty: bool,
-    stderr_is_tty: bool,
-    term: Option<&str>,
-) -> ConsoleSessionMode {
-    if stdin_is_tty && stderr_is_tty && terminal_supports_dashboard(term) {
-        ConsoleSessionMode::InteractiveDashboard
-    } else {
-        ConsoleSessionMode::Fallback
-    }
-}
-
-#[cfg(test)]
-fn terminal_supports_dashboard(term: Option<&str>) -> bool {
-    match term.map(str::trim).filter(|term| !term.is_empty()) {
-        Some(term) => term != "dumb",
-        None => false,
-    }
-}
-
-#[cfg(test)]
 fn write_ready_prompt<W: Write>(writer: &mut W) -> std::io::Result<()> {
     writer.write_all(READY_PROMPT.as_bytes())?;
     writer.flush()
@@ -537,12 +516,13 @@ fn map_key_event(code: KeyCode, modifiers: KeyModifiers) -> Option<TuiEvent> {
 mod tests {
     use super::{
         HELP_TEXT, InitialPromptMode, InteractiveCommand, InteractiveEntryKind, READY_PROMPT,
-        TuiLoopError, console_session_mode_for_term, interactive_entry_kind, map_key_event,
-        maybe_write_initial_prompt, parse_command, read_tui_event, restore_tui_terminal_after_loop,
-        write_ready_prompt,
+        TuiLoopError, interactive_entry_kind, map_key_event, maybe_write_initial_prompt,
+        parse_command, read_tui_event, restore_tui_terminal_after_loop, write_ready_prompt,
     };
     use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use mesh_llm_events::{ConsoleSessionMode, TuiEvent, TuiKeyEvent};
+    use mesh_llm_events::{
+        ConsoleSessionMode, TuiEvent, TuiKeyEvent, console_session_mode_for_term,
+    };
 
     #[test]
     fn parse_command_accepts_supported_shortcuts() {
@@ -601,17 +581,20 @@ mod tests {
             ConsoleSessionMode::InteractiveDashboard
         );
         assert_eq!(
-            console_session_mode_for_term(true, false, Some("xterm-256color")),
-            ConsoleSessionMode::Fallback
-        );
-        assert_eq!(
             console_session_mode_for_term(false, true, Some("xterm-256color")),
             ConsoleSessionMode::Fallback
         );
-        assert_eq!(
-            console_session_mode_for_term(false, false, Some("xterm-256color")),
-            ConsoleSessionMode::Fallback
-        );
+    }
+
+    #[test]
+    fn output_without_a_terminal_prints_lines_not_the_dashboard() {
+        // A service, a container without a TTY or a redirected file (#2341).
+        for (stdin_is_tty, term) in [(true, Some("xterm-256color")), (false, None)] {
+            assert_eq!(
+                console_session_mode_for_term(stdin_is_tty, false, term),
+                ConsoleSessionMode::None
+            );
+        }
     }
 
     #[test]

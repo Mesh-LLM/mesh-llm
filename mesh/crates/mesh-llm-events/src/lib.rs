@@ -312,7 +312,12 @@ pub fn console_session_mode_for_term(
     stderr_is_tty: bool,
     term: Option<&str>,
 ) -> ConsoleSessionMode {
-    if stdin_is_tty && stderr_is_tty && terminal_supports_dashboard(term) {
+    if !stderr_is_tty {
+        // Pretty output goes to stderr. When nothing redraws it (a service, a
+        // container, a file), print each event once as a line: the dashboard
+        // text repeats every panel on every event, about 90 MB an hour idle.
+        ConsoleSessionMode::None
+    } else if stdin_is_tty && terminal_supports_dashboard(term) {
         ConsoleSessionMode::InteractiveDashboard
     } else {
         ConsoleSessionMode::Fallback
