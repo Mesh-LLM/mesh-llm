@@ -76,6 +76,26 @@ fn one_entry_limit_can_evict_the_shared_boundary_without_looping() {
 }
 
 #[test]
+fn shortened_tail_boundary_survives_prefill_and_decode_captures_within_existing_limits() {
+    let mut set = RecurrentCheckpoints::default();
+    let prompt = (1..=192).collect::<Vec<_>>();
+    // Include an older anchor to exercise eviction rather than just insertion.
+    for (count, shared) in [(100, true), (128, true), (188, true), (192, false)] {
+        set.insert(checkpoint("a", &prompt[..count], shared), 4, 32);
+    }
+    let mut generated = prompt;
+    generated.extend(193..=199);
+    set.insert(checkpoint("a", &generated, false), 4, 32);
+    assert_eq!(lengths(&set), [100, 128, 188, 199]);
+    assert_eq!(set.retained_bytes(), 32);
+
+    // A shortened prompt can restore the nearby boundary; all later states
+    // become invalid and must be removed from the lane.
+    assert_eq!(set.restore(1).identity.token_ids.len(), 128);
+    assert_eq!(lengths(&set), [100, 128]);
+}
+
+#[test]
 fn replacement_preserves_durability_but_branch_and_namespace_changes_do_not() {
     let mut set = RecurrentCheckpoints::default();
     set.insert(checkpoint("a", &[1], true), 4, 0);

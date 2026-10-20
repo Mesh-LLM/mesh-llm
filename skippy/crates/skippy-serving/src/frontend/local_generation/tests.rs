@@ -34,7 +34,9 @@ mod native_execution_accounting;
 mod recurrent_concurrency;
 mod recurrent_early_stop;
 mod recurrent_verification;
+mod resident_checkpoint_shapes;
 mod resident_recurrent;
+mod shortened_tail;
 
 // The real-model tests below are deliberately ignored by default. The
 // fixture contract is explicit: run them with both model-path variables set;

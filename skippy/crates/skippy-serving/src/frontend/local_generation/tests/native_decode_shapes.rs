@@ -272,6 +272,17 @@ fn native_single_token_microbatches_preserve_both_continuations() -> Result<()> 
 }
 
 #[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_shortened_tail_decode_batches_preserve_continuations() -> Result<()> {
+    let prompts = [0, 1].map(|lane| {
+        let mut prompt: Vec<_> = (1..=176).map(|token| token + 257 * lane).collect();
+        prompt.extend_from_slice(&[501, 502, 503, 504]);
+        prompt
+    });
+    compare_long_decode_prompts(32, prompts)
+}
+
+#[test]
 #[ignore = "requires a full-attention hybrid SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_recurrent_cache_payload_excludes_attention_growth() -> Result<()> {
     let (backend, _) = recurrent_test_backend_with_lanes(
@@ -313,6 +324,13 @@ fn native_recurrent_cache_payload_excludes_attention_growth() -> Result<()> {
 }
 
 fn compare_long_decode_batches(microbatch: u32) -> Result<()> {
+    compare_long_decode_prompts(
+        microbatch,
+        [(1..=64).collect::<Vec<_>>(), (1..=64).rev().collect()],
+    )
+}
+
+fn compare_long_decode_prompts(microbatch: u32, prompts: [Vec<i32>; 2]) -> Result<()> {
     let (backend, _) = recurrent_test_backend_with_lanes(
         "long-decode-shapes",
         "long-decode-shapes",
@@ -324,7 +342,6 @@ fn compare_long_decode_batches(microbatch: u32) -> Result<()> {
     )?;
     let mut runtime = backend.runtime.lock().unwrap();
     let sessions = ["long-shape-0", "long-shape-1"];
-    let prompts = [(1..=64).collect::<Vec<_>>(), (1..=64).rev().collect()];
     let mut starts = Vec::new();
     let mut checkpoints = Vec::new();
     for (session, prompt) in sessions.iter().zip(&prompts) {
@@ -357,7 +374,9 @@ fn compare_long_decode_batches(microbatch: u32) -> Result<()> {
     assert_eq!(
         together.tokens,
         separate.tokens,
-        "concurrent versus serial decode, ubatch={microbatch}; terminal signals: together={:?}, separate={:?}; recurrent byte differences={}",
+        "concurrent versus serial decode, ubatch={microbatch}; first decode signals: together={:?}, separate={:?}; terminal signals: together={:?}, separate={:?}; recurrent byte differences={}",
+        together.first_signal,
+        separate.first_signal,
         together.terminal_signal,
         separate.terminal_signal,
         together
@@ -372,6 +391,7 @@ fn compare_long_decode_batches(microbatch: u32) -> Result<()> {
 
 struct LongDecode {
     tokens: Vec<Vec<i32>>,
+    first_signal: skippy_runtime::TokenSignal,
     terminal_signal: skippy_runtime::TokenSignal,
     recurrent: Vec<u8>,
 }
@@ -383,6 +403,7 @@ fn long_decode(
     together: bool,
 ) -> Result<LongDecode> {
     let mut outputs: Vec<_> = starts.iter().map(|&token| vec![token]).collect();
+    let mut first_signal = None;
     for step in 1..8 {
         let active: &[usize] = if step < 3 { &[0, 1] } else { &[1] };
         let names: Vec<_> = active.iter().map(|&index| sessions[index]).collect();
@@ -408,6 +429,11 @@ fn long_decode(
         for (&index, token) in active.iter().zip(next) {
             outputs[index].push(token);
         }
+        if step == 1 {
+            let signal = runtime.last_token_signal(sessions[1])?;
+            assert_eq!(signal.top_token, *outputs[1].last().unwrap());
+            first_signal = Some(signal);
+        }
     }
     // At the terminal step only lane 1 has run; its signal refers to the last
     // native logit row. Do not read earlier lanes through the last-row API.
@@ -415,6 +441,7 @@ fn long_decode(
     assert_eq!(terminal_signal.top_token, *outputs[1].last().unwrap());
     Ok(LongDecode {
         tokens: outputs,
+        first_signal: first_signal.expect("decode includes a first step"),
         terminal_signal,
         recurrent: runtime.export_recurrent_cache_state(sessions[1])?,
     })
@@ -433,7 +460,7 @@ fn restore(
     Ok(())
 }
 
-fn iterate(
+pub(super) fn iterate(
     runtime: &mut RuntimeState,
     sessions: &[&str],
     tokens: &[&[i32]],
