@@ -96,6 +96,15 @@ mod nvidia {
             .kill_on_drop(true)
             .spawn()
             .context("start nvidia-smi power sampling")?;
+        // Windows doesn't end a child with its parent, and nvidia-smi keeps
+        // looping once its stdout is broken: a killed node would leave it
+        // polling the GPU for good.
+        #[cfg(windows)]
+        if let Some(handle) = child.raw_handle()
+            && let Err(error) = mesh_llm_system::process_lifetime::end_with_current_process(handle)
+        {
+            tracing::debug!("nvidia-smi is not tied to the node's lifetime: {error}");
+        }
         let stdout = child
             .stdout
             .take()

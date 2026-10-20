@@ -2,9 +2,10 @@
 //!
 //! Windows does not end a process's children when the process ends, and a
 //! scheduled task that is ended only loses its own process. The Windows
-//! background service host uses these two pieces to stop the node with the
-//! task: a kill-on-close job that takes its children down when it exits, and
-//! a watch on the console host that started it.
+//! background service host uses two pieces to stop the node with the task: a
+//! kill-on-close job that takes its children down when it exits, and a watch
+//! on the console host that started it. The GPU energy sampler uses a third,
+//! a job for one child, so its `nvidia-smi` ends with the node.
 
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
@@ -32,6 +33,36 @@ use windows_sys::Win32::System::Threading::{
 /// would end this process as well, since it is in the job. The handle is not
 /// inheritable, so no child keeps the job open after this process.
 pub fn end_children_with_current_process() -> io::Result<()> {
+    let job = kill_on_close_job()?;
+    // SAFETY: the job handle is owned and valid; the current-process
+    // pseudo-handle needs no closing.
+    if unsafe { AssignProcessToJobObject(job.as_raw_handle() as HANDLE, GetCurrentProcess()) } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // Left to the process exit to close, as documented above.
+    let _ = job.into_raw_handle();
+    Ok(())
+}
+
+/// Ends one child process when the current process ends, however it ends,
+/// for a helper that would otherwise outlive a killed node: `nvidia-smi
+/// --loop-ms` keeps running after its parent is gone and its stdout is
+/// broken. The child goes alone into a kill-on-close job whose only handle
+/// this process keeps until it exits.
+pub fn end_with_current_process(child: RawHandle) -> io::Result<()> {
+    let job = kill_on_close_job()?;
+    // SAFETY: the job handle is owned and valid, and `child` is a live process
+    // handle the caller owns.
+    if unsafe { AssignProcessToJobObject(job.as_raw_handle() as HANDLE, child as HANDLE) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Closing it earlier would end the child.
+    let _ = job.into_raw_handle();
+    Ok(())
+}
+
+fn kill_on_close_job() -> io::Result<OwnedHandle> {
     // SAFETY: null attributes and name create an unnamed, non-inheritable job;
     // the null return is checked before use.
     let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
@@ -56,15 +87,7 @@ pub fn end_children_with_current_process() -> io::Result<()> {
     if set == 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: the job handle is owned and valid; the current-process
-    // pseudo-handle needs no closing.
-    if unsafe { AssignProcessToJobObject(job.as_raw_handle() as HANDLE, GetCurrentProcess()) } == 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    // Left to the process exit to close, as documented above.
-    let _ = job.into_raw_handle();
-    Ok(())
+    Ok(job)
 }
 
 /// The process that started the current one.
@@ -159,7 +182,10 @@ fn creation_time(process: HANDLE) -> io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::{Command, Stdio};
+    use std::process::{Child, Command, Stdio};
+
+    const HOLDER_PID_FILE: &str = "MESH_LLM_PROCESS_LIFETIME_PID_FILE";
+    const TIED_CHILD_PID_FILE: &str = "MESH_LLM_PROCESS_LIFETIME_TIED_PID_FILE";
 
     #[test]
     fn the_parent_process_is_watched_and_still_running() {
@@ -172,36 +198,65 @@ mod tests {
 
     // A child process puts itself in the job and starts a long grandchild;
     // once the child exits, the grandchild must be gone too. Done in a child
-    // so that the test runner itself never joins a kill-on-close job. The pid
-    // travels through a file, not a pipe: the grandchild inherits every
-    // inheritable handle, so a pipe would stay open as long as it lives.
+    // so that the test runner itself never joins a kill-on-close job.
     #[test]
     fn ending_the_job_holder_ends_its_children() {
-        if let Some(pid_file) = std::env::var_os("MESH_LLM_PROCESS_LIFETIME_PID_FILE") {
+        if let Some(pid_file) = std::env::var_os(HOLDER_PID_FILE) {
             end_children_with_current_process().expect("join the job");
-            let grandchild = Command::new("ping")
-                .args(["-n", "60", "127.0.0.1"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("spawn the grandchild");
-            let pid = grandchild.id();
-            // Dropped, never waited on: it has to outlive this process for
-            // the job to be what ends it.
-            drop(grandchild);
-            std::fs::write(pid_file, pid.to_string()).expect("write the pid");
+            leave_running(spawn_grandchild(), pid_file);
             return;
         }
+        assert_grandchild_ends_with_holder(
+            "process_lifetime::tests::ending_the_job_holder_ends_its_children",
+            HOLDER_PID_FILE,
+        );
+    }
+
+    // The same, with only the grandchild in a job: what the energy sampler
+    // does for `nvidia-smi`, while the node itself stays out of any job.
+    #[test]
+    fn a_child_tied_to_the_current_process_ends_with_it() {
+        if let Some(pid_file) = std::env::var_os(TIED_CHILD_PID_FILE) {
+            let grandchild = spawn_grandchild();
+            end_with_current_process(std::os::windows::io::AsRawHandle::as_raw_handle(
+                &grandchild,
+            ))
+            .expect("tie the grandchild");
+            leave_running(grandchild, pid_file);
+            return;
+        }
+        assert_grandchild_ends_with_holder(
+            "process_lifetime::tests::a_child_tied_to_the_current_process_ends_with_it",
+            TIED_CHILD_PID_FILE,
+        );
+    }
+
+    fn spawn_grandchild() -> Child {
+        Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the grandchild")
+    }
+
+    // The pid travels through a file, not a pipe: the grandchild inherits
+    // every inheritable handle, so a pipe would stay open as long as it lives.
+    fn leave_running(grandchild: Child, pid_file: std::ffi::OsString) {
+        let pid = grandchild.id();
+        // Dropped, never waited on: it has to outlive this process for the
+        // job to be what ends it.
+        drop(grandchild);
+        std::fs::write(pid_file, pid.to_string()).expect("write the pid");
+    }
+
+    fn assert_grandchild_ends_with_holder(test: &str, pid_env: &str) {
         let temp = tempfile::tempdir().expect("tempdir");
         let pid_file = temp.path().join("grandchild.pid");
         let status = Command::new(std::env::current_exe().expect("test binary"))
-            .args([
-                "--exact",
-                "process_lifetime::tests::ending_the_job_holder_ends_its_children",
-                "--test-threads=1",
-            ])
-            .env("MESH_LLM_PROCESS_LIFETIME_PID_FILE", &pid_file)
+            .args(["--exact", test, "--test-threads=1"])
+            .env(pid_env, &pid_file)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
