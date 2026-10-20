@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::ptr;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use skippy_ffi::{
     LoadMode, MtpSource as RawMtpSource, RuntimeConfig as RawRuntimeConfig, TRISTATE_AUTO,
     TRISTATE_FALSE, TRISTATE_TRUE,
@@ -231,7 +231,7 @@ impl RuntimeConfig {
     pub(crate) fn as_raw(&self) -> Result<RawRuntimeConfigParts> {
         self.validate().map_err(anyhow::Error::msg)?;
         if self.cache_type_v == GGML_TYPE_TURBO4_0 {
-            cache_types::require_native_support(skippy_ffi::try_abi_features())?;
+            cache_types::require_native_support(skippy_ffi::try_abi_features(), self.cache_type_k)?;
         }
         let mmap = self.mmap.or_else(|| {
             (self.has_stage_plan() && self.load_mode == LoadMode::RuntimeSlice).then_some(false)

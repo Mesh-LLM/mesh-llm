@@ -195,7 +195,7 @@ with their runtime purpose; existing controls follow in the same sections.
 | CLI flag | TOML key | Purpose |
 |---|---|---|
 | `--kv-cache-type-k` | `kv_cache_type_k` | Live key-cache precision: f16, q8_0, q4_0 |
-| `--kv-cache-type-v` | `kv_cache_type_v` | Live value-cache precision: f16, q8_0, q4_0 |
+| `--kv-cache-type-v` | `kv_cache_type_v` | Live value-cache precision: f16, q8_0, q4_0, turbo4 (experimental; f16 or q8_0 keys and compatible native runtime required) |
 | `--flash-attention` | `flash_attention` | Flash Attention: auto, enabled, disabled |
 | `--kv-cache-offload` | `kv_cache_offload` | Offload live KV memory to the backend |
 | `--swa-full` | `swa_full` | Use a full cache window for sliding-window attention |
@@ -297,7 +297,7 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--speculative-strategy` | `speculative_strategy` | Speculation: auto, disabled, draft-model, native-mtp, ngram, mtp-ngram |
 | `--draft-device` | `draft_device` | Backend device for the draft model |
 | `--draft-cache-type-k` | `draft_cache_type_k` | Draft key-cache precision: f16, q8_0, q4_0 |
-| `--draft-cache-type-v` | `draft_cache_type_v` | Draft value-cache precision: f16, q8_0, q4_0 |
+| `--draft-cache-type-v` | `draft_cache_type_v` | Draft value-cache precision: f16, q8_0, q4_0, turbo4 (experimental; f16 or q8_0 keys and compatible native runtime required) |
 | `--ngram-kind` | `ngram_kind` | N-gram proposer: cache or suffix |
 | `--native-mtp` | `native_mtp` | Enable native multi-token prediction |
 | `--mtp-suppress-cooldown-drafts` | `mtp_suppress_cooldown_drafts` | Suppress drafts during MTP rejection cooldown |

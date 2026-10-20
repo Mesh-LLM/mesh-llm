@@ -159,7 +159,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         "kv",
         "cache_type_v",
         Kind::Text,
-        "Live value-cache precision: f16, q8_0, q4_0, turbo4 (experimental; q8_0 keys and compatible native runtime required)",
+        "Live value-cache precision: f16, q8_0, q4_0, turbo4 (experimental; f16 or q8_0 keys and compatible native runtime required)",
     ),
     option(
         "flash-attention",
@@ -614,7 +614,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         "speculative",
         "spec.draft_cache_type_v",
         Kind::Text,
-        "Draft value-cache precision: f16, q8_0, q4_0, turbo4 (experimental; q8_0 keys and compatible native runtime required)",
+        "Draft value-cache precision: f16, q8_0, q4_0, turbo4 (experimental; f16 or q8_0 keys and compatible native runtime required)",
     ),
     option(
         "ngram-kind",

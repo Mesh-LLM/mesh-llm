@@ -5,7 +5,7 @@ use super::{FlashAttentionType, RuntimeConfig, SplitMode};
 pub const GGML_TYPE_F16: u32 = 1;
 pub const GGML_TYPE_Q4_0: u32 = 2;
 pub const GGML_TYPE_Q8_0: u32 = 8;
-// This ID belongs to the packaged Skippy ABI 0.1.72 runtime, not the public fork.
+// This ID belongs to the packaged Skippy runtime, not the public fork.
 pub const GGML_TYPE_TURBO4_0: u32 = 43;
 
 pub fn parse_cache_type(value: &str) -> Result<u32> {
@@ -26,8 +26,8 @@ pub(super) fn validate_layout(config: &RuntimeConfig) -> Result<(), &'static str
     if config.cache_type_v != GGML_TYPE_TURBO4_0 {
         return Ok(());
     }
-    if config.cache_type_k != GGML_TYPE_Q8_0 {
-        return Err("Turbo4 value cache requires q8_0 keys");
+    if !matches!(config.cache_type_k, GGML_TYPE_F16 | GGML_TYPE_Q8_0) {
+        return Err("Turbo4 value cache requires f16 or q8_0 keys");
     }
     if config.flash_attn_type == FlashAttentionType::Disabled {
         return Err("Turbo4 value cache requires Flash Attention");
@@ -38,10 +38,15 @@ pub(super) fn validate_layout(config: &RuntimeConfig) -> Result<(), &'static str
     Ok(())
 }
 
-pub(super) fn require_native_support(features: Option<u64>) -> Result<()> {
+pub(super) fn require_native_support(features: Option<u64>, key_type: u32) -> Result<()> {
+    let (required, name) = match key_type {
+        GGML_TYPE_F16 => (skippy_ffi::FEATURE_TURBO4_F16_KV, "F16-key/Turbo4-value"),
+        GGML_TYPE_Q8_0 => (skippy_ffi::FEATURE_TURBO4_KV, "Q8-key/Turbo4-value"),
+        _ => return Err(anyhow!("unsupported Turbo4 key cache type {key_type}")),
+    };
     ensure!(
-        features.is_some_and(|bits| bits & skippy_ffi::FEATURE_TURBO4_KV != 0),
-        "the loaded native runtime does not advertise Turbo4 KV support"
+        features.is_some_and(|bits| bits & required != 0),
+        "the loaded native runtime does not advertise {name} support"
     );
     Ok(())
 }
@@ -76,13 +81,20 @@ mod tests {
             ..RuntimeConfig::default()
         };
         assert!(validate_layout(&config).is_ok());
+        assert!(
+            validate_layout(&RuntimeConfig {
+                cache_type_k: GGML_TYPE_F16,
+                ..config.clone()
+            })
+            .is_ok()
+        );
         for changed in [
             RuntimeConfig {
                 cache_type_k: GGML_TYPE_TURBO4_0,
                 ..config.clone()
             },
             RuntimeConfig {
-                cache_type_k: GGML_TYPE_F16,
+                cache_type_k: GGML_TYPE_Q4_0,
                 ..config.clone()
             },
             RuntimeConfig {
@@ -100,15 +112,24 @@ mod tests {
 
     #[test]
     fn missing_native_capability_is_rejected_without_calling_native_code() {
-        assert!(require_native_support(None).is_err());
-        assert!(require_native_support(Some(0)).is_err());
-        assert!(require_native_support(Some(skippy_ffi::FEATURE_LAYA_DECISIONS)).is_err());
-        assert!(require_native_support(Some(skippy_ffi::FEATURE_TURBO4_KV)).is_ok());
-        assert!(
-            require_native_support(Some(
-                skippy_ffi::FEATURE_TURBO4_KV | skippy_ffi::FEATURE_LAYA_DECISIONS
-            ))
-            .is_ok()
-        );
+        let q8 = skippy_ffi::FEATURE_TURBO4_KV;
+        let f16 = skippy_ffi::FEATURE_TURBO4_F16_KV;
+        assert_eq!(q8 & f16, 0);
+        for (key, required, unrelated) in [(GGML_TYPE_F16, f16, q8), (GGML_TYPE_Q8_0, q8, f16)] {
+            for absent in [
+                None,
+                Some(0),
+                Some(skippy_ffi::FEATURE_LAYA_DECISIONS),
+                Some(unrelated),
+            ] {
+                assert!(require_native_support(absent, key).is_err());
+            }
+            assert!(require_native_support(Some(required), key).is_ok());
+            assert!(
+                require_native_support(Some(q8 | f16 | skippy_ffi::FEATURE_LAYA_DECISIONS), key)
+                    .is_ok()
+            );
+        }
+        assert!(require_native_support(Some(q8 | f16), GGML_TYPE_Q4_0).is_err());
     }
 }

@@ -12,7 +12,7 @@ use crate::runtime_events::abi_features_bitmask;
 /// specific family, and is reported once rather than disabling anything.
 /// It tracks the highest `FEATURE_*` bit `skippy_ffi` defines, family or
 /// not: a bit this build names is not reserved to a future one.
-const MAX_KNOWN_FEATURE_BIT: u32 = 41;
+const MAX_KNOWN_FEATURE_BIT: u32 = 42;
 
 struct FamilySpec {
     bit: u64,
@@ -246,7 +246,9 @@ mod tests {
         let report = build_report(
             FEATURE_KV_EVENTS
                 | skippy_ffi::FEATURE_SYSTEM_ONE
-                | skippy_ffi::FEATURE_CACHEGEN_KV_PAGE,
+                | skippy_ffi::FEATURE_CACHEGEN_KV_PAGE
+                | skippy_ffi::FEATURE_TURBO4_KV
+                | skippy_ffi::FEATURE_TURBO4_F16_KV,
             |_| true,
         );
         assert_eq!(report.confirmed, FEATURE_KV_EVENTS);

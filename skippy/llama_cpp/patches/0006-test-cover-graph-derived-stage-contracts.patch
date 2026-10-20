@@ -1,4 +1,4 @@
-From 5447f45aa0202eafa92dc075ce1b0504cd585e2a Mon Sep 17 00:00:00 2001
+From 3e889e53dc3f5d6bed4881a5068758f06905ff92 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -37,9 +37,9 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
- tests/test-skippy-turbo4-cache.h              |  189 ++
+ tests/test-skippy-turbo4-cache.h              |  197 ++
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 35 files changed, 9974 insertions(+), 32 deletions(-)
+ 35 files changed, 9982 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -9350,7 +9350,7 @@ index 000000000..0e95c35b2
 +}
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 new file mode 100644
-index 000000000..11addd559
+index 000000000..3c360bce5
 --- /dev/null
 +++ b/tests/test-skippy-kv-page-export.cpp
 @@ -0,0 +1,374 @@
@@ -9436,11 +9436,11 @@ index 000000000..11addd559
 +}
 +
 +int main() {
-+    if (!turbo4_cache_lifecycle()) {
++    if (!turbo4_cache_lifecycle(GGML_TYPE_Q8_0) || !turbo4_cache_lifecycle(GGML_TYPE_F16)) {
 +        fprintf(stderr, "Turbo4 cache lifecycle or graph capability contract failed\n");
 +        return 1;
 +    }
-+    fprintf(stderr, "Turbo4 cache lifecycle and graph capabilities: OK (ABI 0.1.72, feature bit 41)\n");
++    fprintf(stderr, "Turbo4 cache lifecycle and graph capabilities: OK (ABI 0.1.73, feature bits 41/42, Q8_0/F16 K)\n");
 +    if (!graph_cache_capabilities_cover_complete_state()) {
 +        fprintf(stderr, "graph cache capabilities do not cover complete state\n");
 +        return 1;
@@ -10357,15 +10357,18 @@ index 000000000..3f797cbe8
 +}
 diff --git a/tests/test-skippy-turbo4-cache.h b/tests/test-skippy-turbo4-cache.h
 new file mode 100644
-index 000000000..c0e6a9225
+index 000000000..16d5f6d1f
 --- /dev/null
 +++ b/tests/test-skippy-turbo4-cache.h
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,197 @@
 +#pragma once
 +
 +#include "../src/llama-io.h"
 +#include <cstring>
 +#include <stdexcept>
++
++static_assert(SKIPPY_FEATURE_TURBO4_KV == (UINT64_C(1) << 41), "Q8_0/Turbo4 capability bit changed");
++static_assert(SKIPPY_FEATURE_TURBO4_F16_KV == (UINT64_C(1) << 42), "F16/Turbo4 capability bit changed");
 +
 +class turbo4_state_writer final : public llama_io_write_i {
 +public:
@@ -10439,8 +10442,9 @@ index 000000000..c0e6a9225
 +    return skippy_graph_cache_capabilities(result) == 0;
 +}
 +
-+static bool turbo4_cache_lifecycle() {
-+    if (SKIPPY_ABI_VERSION_PATCH != 72 || !(skippy_abi_features() & SKIPPY_FEATURE_TURBO4_KV) ||
++static bool turbo4_cache_lifecycle(ggml_type key_type) {
++    if (SKIPPY_ABI_VERSION_PATCH != 73 || !(skippy_abi_features() & SKIPPY_FEATURE_TURBO4_KV) ||
++            !(skippy_abi_features() & SKIPPY_FEATURE_TURBO4_F16_KV) ||
 +            !turbo4_graph_capabilities()) {
 +        return false;
 +    }
@@ -10457,8 +10461,8 @@ index 000000000..c0e6a9225
 +                0, LLAMA_SWA_TYPE_NONE, nullptr, llama_kv_cache::layer_filter_cb{},
 +                llama_kv_cache::layer_reuse_cb{}, llama_kv_cache::layer_share_cb{});
 +    };
-+    auto cache = make_cache(hp, GGML_TYPE_Q8_0, GGML_TYPE_TURBO4_0, false);
-+    auto restore = make_cache(hp, GGML_TYPE_Q8_0, GGML_TYPE_TURBO4_0, false);
++    auto cache = make_cache(hp, key_type, GGML_TYPE_TURBO4_0, false);
++    auto restore = make_cache(hp, key_type, GGML_TYPE_TURBO4_0, false);
 +    const uint32_t expected = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
 +        SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    if (skippy_memory_cache_capabilities(cache.get()) != expected) { return false; }
@@ -10485,9 +10489,11 @@ index 000000000..c0e6a9225
 +    skippy_kv_page_desc desc = {};
 +    size_t bytes = 0;
 +    std::string error;
++    const size_t key_row_bytes = key_type == GGML_TYPE_F16 ? 512 : 272;
 +    if (!cache->stage_export_kv_page(0, 0, 1, 0, 2, &desc, nullptr, 0, &bytes, error) ||
-+            desc.k_type != GGML_TYPE_Q8_0 || desc.v_type != GGML_TYPE_TURBO4_0 ||
-+            desc.k_row_bytes != 272 || desc.v_row_bytes != 132 || desc.flags != 0 || bytes != 808) {
++            desc.k_type != key_type || desc.v_type != GGML_TYPE_TURBO4_0 ||
++            desc.k_row_bytes != key_row_bytes || desc.v_row_bytes != 132 || desc.flags != 0 ||
++            bytes != 2*(key_row_bytes + 132)) {
 +        return false;
 +    }
 +    std::vector<uint8_t> page(bytes), roundtrip(bytes);
@@ -10500,14 +10506,16 @@ index 000000000..c0e6a9225
 +        size_t size = 0;
 +        return restore->stage_export_kv_page(0, 0, 1, 0, 2, &actual, roundtrip.data(), roundtrip.size(), &size, error) &&
 +            size == page.size() && roundtrip == page && actual.k_type == desc.k_type &&
++            actual.k_row_bytes == desc.k_row_bytes &&
 +            actual.v_type == desc.v_type && actual.v_row_bytes == desc.v_row_bytes;
 +    };
 +    if (!same_page()) { return false; }
-+    for (int mutation = 0; mutation < 3; ++mutation) {
++    for (int mutation = 0; mutation < 4; ++mutation) {
 +        auto invalid = desc;
 +        if (mutation == 0) { invalid.v_type = GGML_TYPE_Q8_0; }
 +        if (mutation == 1) { ++invalid.v_row_bytes; }
 +        if (mutation == 2) { ++invalid.layer_count; }
++        if (mutation == 3) { invalid.k_type = key_type == GGML_TYPE_F16 ? GGML_TYPE_Q8_0 : GGML_TYPE_F16; }
 +        if (restore->stage_import_kv_page(0, invalid, page.data(), bytes, error) || !same_page()) { return false; }
 +    }
 +    restore->seq_cp(0, 1, 0, 2);
@@ -10528,10 +10536,10 @@ index 000000000..c0e6a9225
 +    }
 +    for (int invalid = 0; invalid < 5; ++invalid) {
 +        auto bad_hp = hp;
-+        auto k = GGML_TYPE_Q8_0;
++        auto k = key_type;
 +        bool trans = false;
 +        if (invalid == 0) { k = GGML_TYPE_TURBO4_0; }
-+        if (invalid == 1) { k = GGML_TYPE_F16; }
++        if (invalid == 1) { k = GGML_TYPE_F32; }
 +        if (invalid == 2) { trans = true; }
 +        if (invalid == 3) { bad_hp.n_embd_head_v_full = 64; }
 +        if (invalid == 4) { bad_hp.n_embd_head_k_mla_impl = bad_hp.n_embd_head_v_mla_impl = 128; }
@@ -10544,7 +10552,7 @@ index 000000000..c0e6a9225
 +    split_params.split_mode = LLAMA_SPLIT_MODE_TENSOR;
 +    std::unique_ptr<llama_model> split_model(llama_model_create(LLM_ARCH_LLAMA, split_params));
 +    try {
-+        llama_kv_cache invalid(*split_model, hp, GGML_TYPE_Q8_0, GGML_TYPE_TURBO4_0,
++        llama_kv_cache invalid(*split_model, hp, key_type, GGML_TYPE_TURBO4_0,
 +                false, false, true, 4, 2, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, {}, {}, {});
 +        return false;
 +    } catch (const std::runtime_error &) {}
@@ -10582,3 +10590,6 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
+-- 
+2.56.0
+

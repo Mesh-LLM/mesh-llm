@@ -207,7 +207,7 @@ fn cache_bytes_per_token(
 /// unsupported quant would crash the model load outright.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KvQuantUnsupported {
-    /// The admitted Turbo4 layout uses Q8 keys and Turbo4 values.
+    /// Admitted Turbo4 layouts use F16 or Q8 keys and Turbo4 values.
     UnsupportedTurbo4Layout,
     /// Quantised V cache requires Flash Attention (`llama-context.cpp:3617`),
     /// but this architecture forces FA off (`:3579`, currently Grok), so a
@@ -263,7 +263,8 @@ impl GgufCompactMeta {
         desired: GgufKvCacheQuant,
     ) -> Result<(), KvQuantUnsupported> {
         if desired.k == GgufKvCacheType::Turbo4
-            || (desired.v == GgufKvCacheType::Turbo4 && desired.k != GgufKvCacheType::Q8_0)
+            || (desired.v == GgufKvCacheType::Turbo4
+                && !matches!(desired.k, GgufKvCacheType::F16 | GgufKvCacheType::Q8_0))
         {
             return Err(KvQuantUnsupported::UnsupportedTurbo4Layout);
         }
@@ -332,7 +333,7 @@ mod tests {
         assert_eq!(meta.kv_cache_quant_support(quant), Ok(()));
         for rejected in [
             GgufKvCacheQuant::new(GgufKvCacheType::Turbo4, GgufKvCacheType::Turbo4),
-            GgufKvCacheQuant::new(GgufKvCacheType::F16, GgufKvCacheType::Turbo4),
+            GgufKvCacheQuant::new(GgufKvCacheType::Q4_0, GgufKvCacheType::Turbo4),
         ] {
             assert_eq!(
                 meta.kv_cache_quant_support(rejected),
@@ -350,6 +351,29 @@ mod tests {
                 block: 128
             })
         );
+    }
+
+    #[test]
+    fn prices_f16_key_turbo4_value_cache_without_quantizing_keys() {
+        let meta = GgufCompactMeta {
+            head_count: 32,
+            kv_head_count: 8,
+            layer_count: 36,
+            key_length: 128,
+            value_length: 128,
+            ..Default::default()
+        };
+        let quant = GgufKvCacheQuant::from_llama_args("f16", "turbo4").unwrap();
+        assert_eq!(meta.kv_cache_quant_support(quant), Ok(()));
+        assert_eq!(quant.k_cache_bytes_per_token(&meta), Some(73_728));
+        assert_eq!(quant.v_cache_bytes_per_token(&meta), Some(19_008));
+        assert_eq!(quant.kv_cache_bytes_per_token(&meta), Some(92_736));
+        for (context, bytes) in [(8192, 759_693_312), (32768, 3_038_773_248)] {
+            assert_eq!(
+                quant.kv_cache_bytes_per_token(&meta).unwrap() * context,
+                bytes
+            );
+        }
     }
 
     #[test]

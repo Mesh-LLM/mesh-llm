@@ -1,4 +1,4 @@
-From ce5d604fc79de59481f5ea1e54ebbc0f51767615 Mon Sep 17 00:00:00 2001
+From 804a047ef88e16e053eeba46d77f64a8c30b55ab Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): define graph-derived native ABI
@@ -6,7 +6,7 @@ Subject: [PATCH] feat(skippy): define graph-derived native ABI
 ---
  include/skippy.h                      |  29 +++
  include/skippy/activation.h           |  66 ++++++
- include/skippy/common.h               | 149 ++++++++++++++
+ include/skippy/common.h               | 151 ++++++++++++++
  include/skippy/devices.h              |  56 ++++++
  include/skippy/events.h               | 229 +++++++++++++++++++++
  include/skippy/execution.h            | 264 ++++++++++++++++++++++++
@@ -20,7 +20,7 @@ Subject: [PATCH] feat(skippy): define graph-derived native ABI
  include/skippy/state.h                | 236 ++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2113 insertions(+)
+ 16 files changed, 2115 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -147,10 +147,10 @@ index 000000000..673c1d81c
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..3575a555d
+index 000000000..01adcf2bf
 --- /dev/null
 +++ b/include/skippy/common.h
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,151 @@
 +#ifndef SKIPPY_COMMON_H
 +#define SKIPPY_COMMON_H
 +
@@ -199,7 +199,7 @@ index 000000000..3575a555d
 +
 +#define SKIPPY_ABI_VERSION_MAJOR 0
 +#define SKIPPY_ABI_VERSION_MINOR 1
-+#define SKIPPY_ABI_VERSION_PATCH 72
++#define SKIPPY_ABI_VERSION_PATCH 73
 +
 +#if defined(_MSC_VER)
 +#define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -263,6 +263,8 @@ index 000000000..3575a555d
 +
 +/** @brief Runtime Q8_0 K / Turbo4 V cache (ggml type 43); requires supported graph geometry and CPU or Metal placement. */
 +#define SKIPPY_FEATURE_TURBO4_KV              (UINT64_C(1) << 41)
++/** @brief Runtime F16 K / Turbo4 V cache; requires supported graph geometry and CPU or Metal placement. */
++#define SKIPPY_FEATURE_TURBO4_F16_KV          (UINT64_C(1) << 42)
 +
 +enum skippy_status {
 +    SKIPPY_STATUS_OK                      = 0,
@@ -2247,3 +2249,6 @@ index 000000000..6aff32414
 +#endif
 +
 +#endif  // SKIPPY_WORKLOADS_H
+-- 
+2.56.0
+

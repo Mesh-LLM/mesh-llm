@@ -1,4 +1,4 @@
-From 78a398d7d67e7e66799f607b774191c2f1aabab6 Mon Sep 17 00:00:00 2001
+From 08ba4a60b6015a713aa8a997a20356c97bbf61e2 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
 Subject: [PATCH] models: add Laya decision model support
@@ -70,7 +70,7 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 1b11c57e6..d03517321 100644
+index e308c1a7c..a1ef96786 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -108,6 +108,8 @@ enum skippy_feature {
@@ -81,7 +81,7 @@ index 1b11c57e6..d03517321 100644
 +#define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
  /** @brief Runtime Q8_0 K / Turbo4 V cache (ggml type 43); requires supported graph geometry and CPU or Metal placement. */
  #define SKIPPY_FEATURE_TURBO4_KV              (UINT64_C(1) << 41)
- 
+ /** @brief Runtime F16 K / Turbo4 V cache; requires supported graph geometry and CPU or Metal placement. */
 diff --git a/include/skippy/laya.h b/include/skippy/laya.h
 new file mode 100644
 index 000000000..002fac598
@@ -431,7 +431,7 @@ index dd701fcee..5992b1989 100644
          case LLM_ARCH_NOMIC_BERT_MOE:
          case LLM_ARCH_EUROBERT:
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index 5f819e7be..57b968e14 100644
+index 8d7cce5c7..f778cdb3d 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
 @@ -48,6 +48,7 @@ uint64_t skippy_abi_features(void) {
@@ -439,9 +439,9 @@ index 5f819e7be..57b968e14 100644
             SKIPPY_FEATURE_SYSTEM_ONE |
             SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
 +           SKIPPY_FEATURE_LAYA_DECISIONS |
-            SKIPPY_FEATURE_TURBO4_KV;
+            SKIPPY_FEATURE_TURBO4_KV |
+            SKIPPY_FEATURE_TURBO4_F16_KV;
  }
- 
 diff --git a/src/skippy/laya.cpp b/src/skippy/laya.cpp
 new file mode 100644
 index 000000000..9d9f26ecd
@@ -2800,3 +2800,6 @@ index 000000000..8a713d563
 +
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
+-- 
+2.56.0
+

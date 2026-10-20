@@ -1,4 +1,4 @@
-From 8534f5bf0df09da0f008299517f378426f5e1580 Mon Sep 17 00:00:00 2001
+From 29d72bfbb9a58dabd3721b2ea35bac3fc7145d2f Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 16:37:38 +0100
 Subject: [PATCH] models: add Qwen3-MoE native MTP
@@ -494,3 +494,6 @@ index 69313f903..4f7ea31ac 100644
                      glm_dsa_indexshare_fixture::DEFAULT,
                      256, 8, false, 2 + dense_mtp_depth, 256);
              llama_model_saver metadata(arch, gguf.get());
+-- 
+2.56.0
+

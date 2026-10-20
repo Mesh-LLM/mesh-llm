@@ -1,4 +1,4 @@
-From cb4fa778900afdaf5144b1e264b9ca08106452e8 Mon Sep 17 00:00:00 2001
+From 80f53416307af4f874cc42651437f8c52e8f6222 Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
 Subject: [PATCH] skippy: add DiffusionGemma system-one reads
@@ -31,7 +31,7 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 3575a555d..1b11c57e6 100644
+index 01adcf2bf..e308c1a7c 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -105,9 +105,9 @@ enum skippy_feature {
@@ -44,7 +44,7 @@ index 3575a555d..1b11c57e6 100644
 -
  /** @brief Runtime Q8_0 K / Turbo4 V cache (ggml type 43); requires supported graph geometry and CPU or Metal placement. */
  #define SKIPPY_FEATURE_TURBO4_KV              (UINT64_C(1) << 41)
- 
+ /** @brief Runtime F16 K / Turbo4 V cache; requires supported graph geometry and CPU or Metal placement. */
 diff --git a/include/skippy/system_one.h b/include/skippy/system_one.h
 new file mode 100644
 index 000000000..4faf057ba
@@ -124,7 +124,7 @@ index 528edfa99..0b6fb0cff 100644
              ${LLAMA_MODELS_SOURCES}
              )
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index 6733e5bc1..5f819e7be 100644
+index b608f94bf..8d7cce5c7 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
 @@ -46,6 +46,7 @@ uint64_t skippy_abi_features(void) {
@@ -133,8 +133,8 @@ index 6733e5bc1..5f819e7be 100644
             SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
 +           SKIPPY_FEATURE_SYSTEM_ONE |
             SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
-            SKIPPY_FEATURE_TURBO4_KV;
- }
+            SKIPPY_FEATURE_TURBO4_KV |
+            SKIPPY_FEATURE_TURBO4_F16_KV;
 diff --git a/src/skippy/system_one.cpp b/src/skippy/system_one.cpp
 new file mode 100644
 index 000000000..d0c51d87a
@@ -384,3 +384,6 @@ index 000000000..d0c51d87a
 +                "unexpected native exception during system-one read");
 +    }
 +}
+-- 
+2.56.0
+

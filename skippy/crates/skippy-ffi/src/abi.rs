@@ -27,6 +27,8 @@ pub const FEATURE_CACHEGEN_KV_PAGE: u64 = 1 << 39;
 pub const FEATURE_LAYA_DECISIONS: u64 = 1 << 40;
 /// Runtime-only Turbo4 value cache with Q8 keys; backend/graph constraints still apply.
 pub const FEATURE_TURBO4_KV: u64 = 1 << 41;
+/// Runtime-only Turbo4 value cache with F16 keys; backend/graph constraints still apply.
+pub const FEATURE_TURBO4_F16_KV: u64 = 1 << 42;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
 pub const LAYA_INFO_V1_ABI_VERSION: u32 = 1;
