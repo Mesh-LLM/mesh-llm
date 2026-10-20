@@ -13,7 +13,6 @@ pub struct RequestTerms {
     pub payee: Option<String>,
     pub model: String,
     pub pricing: Pricing,
-    pub input_tokens: u64,
     pub max_output_tokens: u64,
     pub max_total_msat: u64,
     pub expires_at_ms: u64,

@@ -1,4 +1,4 @@
-use std::mem::{offset_of, size_of};
+use std::mem::{align_of, offset_of, size_of};
 
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
@@ -6,10 +6,10 @@ use crate::{
     CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED, CACHEGEN_RECORD_Q4_0,
     CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
     LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1, LayaMemoryV1, LayaSequence,
-    StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStateKind,
-    StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1, StagePlannerProfileV1,
-    StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind,
-    WorkloadPooling, runtime_abi_supported,
+    LlamaPerfContextData, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1,
+    StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1,
+    StagePlannerProfileV1, StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1,
+    WorkloadKind, WorkloadPooling, runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -165,6 +165,25 @@ fn activation_boundary_descriptor_matches_native_layout() {
     assert_eq!(offset_of!(ActivationBoundaryDesc, part_count), 4);
     assert_eq!(offset_of!(ActivationBoundaryDesc, frontier_identity), 8);
     assert_eq!(offset_of!(ActivationBoundaryDesc, parts), 40);
+}
+
+#[test]
+fn perf_context_data_matches_native_layout() {
+    // `llama_perf_context` returns this struct by value, so the caller supplies
+    // the destination slot: a mirror shorter than the pinned llama.h writes past
+    // it instead of returning a visibly wrong value. Independent C probe against
+    // the prepared llama.h at llama.cpp 620d2225 (v0.7.0).
+    assert_eq!(size_of::<LlamaPerfContextData>(), 56);
+    assert_eq!(align_of::<LlamaPerfContextData>(), 8);
+    assert_eq!(offset_of!(LlamaPerfContextData, t_start_ms), 0);
+    assert_eq!(offset_of!(LlamaPerfContextData, t_load_ms), 8);
+    assert_eq!(offset_of!(LlamaPerfContextData, t_p_eval_ms), 16);
+    assert_eq!(offset_of!(LlamaPerfContextData, t_eval_ms), 24);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_p_eval), 32);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_eval), 36);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_reused), 40);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_reallocs_same), 44);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_reallocs_diff), 48);
 }
 
 #[test]

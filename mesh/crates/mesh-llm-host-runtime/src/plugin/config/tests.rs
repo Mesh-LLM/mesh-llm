@@ -32,6 +32,7 @@ fn config_override_env_names_owner_totality_is_unchanged() {
         &[
             "MESH_LLM_CONFIG",
             "MESH_LLM_LIFECYCLE_LOG_PARSER",
+            "MESH_LLM_NO_UPDATE_CHECK",
             "MESH_LLM_BENCHMARK_TUNE_TRIAL",
             "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE"
         ]
@@ -119,6 +120,43 @@ fn validate_config_file_through_production_wrapper_rejects_invalid_lifecycle_log
     assert!(format!("{err:#}").contains("MESH_LLM_LIFECYCLE_LOG_PARSER"));
 }
 
+#[test]
+#[serial_test::serial]
+fn load_config_through_production_wrapper_applies_no_update_check_env_override() {
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "version = 1\n\n[updates]\ncheck = false\n").unwrap();
+
+    let config = with_env_override_for_test("MESH_LLM_NO_UPDATE_CHECK", "0", || {
+        load_config(Some(&config_path))
+    })
+    .expect("config should load through the production wrapper");
+    assert!(
+        config.updates.check_enabled(),
+        "MESH_LLM_NO_UPDATE_CHECK=0 must override updates.check = false"
+    );
+
+    let config = with_env_override_for_test("MESH_LLM_NO_UPDATE_CHECK", "1", || {
+        load_config(Some(&temp.path().join("does-not-exist.toml")))
+    })
+    .expect("a default config must still honor the env override");
+    assert!(!config.updates.check_enabled());
+}
+
+#[test]
+#[serial_test::serial]
+fn load_config_through_production_wrapper_rejects_invalid_no_update_check_env_override() {
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "version = 1\n").unwrap();
+
+    let err = with_env_override_for_test("MESH_LLM_NO_UPDATE_CHECK", "yes", || {
+        load_config(Some(&config_path))
+    })
+    .expect_err("an invalid MESH_LLM_NO_UPDATE_CHECK value must fail, never be defaulted");
+    assert!(format!("{err:#}").contains("MESH_LLM_NO_UPDATE_CHECK"));
+}
+
 fn documented_matrix_key_paths() -> BTreeSet<String> {
     let matrix = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -183,6 +221,7 @@ fn installed_plugin_metadata(
         downloaded_asset_name: format!("{name}.tar.gz"),
         install_path: std::env::temp_dir().join(format!("mesh-llm-plugin-{name}")),
         enabled: true,
+        default_managed: false,
         manifest: Some(InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: schema,

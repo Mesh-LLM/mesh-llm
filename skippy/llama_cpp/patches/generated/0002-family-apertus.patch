@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/apertus.cpp b/src/models/apertus.cpp
-index 6dfb8905fbe574ac973f39d446941504c56b8c64..1d744f81d54f07e6e9618b441d1d3af83ce1684c 100644
+index 130980e32a70aa5e764bab7c289d493dd1efde29..5d6790a0aa7c4c989510df7721315d11918444e4 100644
 --- a/src/models/apertus.cpp
 +++ b/src/models/apertus.cpp
 @@ -77,6 +77,8 @@ llama_model_apertus::graph::graph(const llama_model & model, const llm_graph_par

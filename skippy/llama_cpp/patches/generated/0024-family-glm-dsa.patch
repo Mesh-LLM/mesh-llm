@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
-index bbb08c1321a426406f7d7f2770d09d17756a155f..e46c106cc7426a9db3b5cad05f88b64295be9401 100644
+index 0f59c03f270a068a1e0478b1ee13ee16e39abff0..f7191893eb8a0f51243fa907279f7cd3e994b16c 100644
 --- a/src/models/glm-dsa.cpp
 +++ b/src/models/glm-dsa.cpp
-@@ -310,6 +310,8 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+@@ -300,6 +300,8 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
      // See https://huggingface.co/zai-org/GLM-5.2/blob/main/config.json#L30
      ggml_tensor * prev_top_k = nullptr;
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index bbb08c1321a426406f7d7f2770d09d17756a155f..e46c106cc7426a9db3b5cad05f88b642
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -570,6 +572,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+@@ -560,6 +562,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
  
          // input for next layer
          inpL = cur;

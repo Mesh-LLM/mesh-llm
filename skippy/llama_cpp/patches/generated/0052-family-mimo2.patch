@@ -9,19 +9,19 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/mimo2.cpp b/src/models/mimo2.cpp
-index 0d4576fb57d94b4942c3ff5829b9e6d21f082576..b37d3fb2eb21350b0913b5909ac50ccee16600a0 100644
+index bf754823bb3a95830f37e7251a1be25932b9f701..4d9102412bf0df9dda71e91b562f57d149ebe7bf 100644
 --- a/src/models/mimo2.cpp
 +++ b/src/models/mimo2.cpp
-@@ -106,6 +106,8 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
-     const bool crop_last_layer = inp_out_ids && (!emit_h_nextn || cparams.embeddings_nextn_masked);
+@@ -101,6 +101,8 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
+     const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer];
  
      for (int il = 0; il < n_layer; ++il) {
 +        begin_block(inpL, il);
 +
-         ggml_tensor * inpSA = inpL;
+         res->t_layer_inp[il] = inpL;
  
-         uint32_t n_head_l    = hparams.n_head(il);
-@@ -230,6 +232,7 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
+         ggml_tensor * inpSA = inpL;
+@@ -227,6 +229,7 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
  
          // input for next layer
          inpL = cur;

@@ -85,7 +85,7 @@ fn security(controller: &Node, worker: &Node) -> Result<(), String> {
     let jobs = controller.get("jobs").ok_or("controller jobs absent")?;
     for (name, job) in jobs.entries() {
         if name != "publish-certified-canary" {
-            reject_secrets(job)?;
+            reject_nonpublisher_secrets(name, job)?;
         }
         if let Some(permissions) = job.get("permissions")
             && permissions
@@ -107,6 +107,31 @@ fn security(controller: &Node, worker: &Node) -> Result<(), String> {
         }
     }
     Ok(())
+}
+fn reject_nonpublisher_secrets(name: &str, job: &Node) -> Result<(), String> {
+    if name != "resolve" {
+        return reject_secrets(job);
+    }
+    let mut admitted = job.clone();
+    let Node::Seq(items) = change(&mut admitted, &["steps"]) else {
+        return Err("resolver steps missing".into());
+    };
+    for step in items {
+        if step.get("id").and_then(Node::text) == Some("upstream") {
+            let Node::Map(env) = change(step, &["env"]) else {
+                return Err("upstream selection environment missing".into());
+            };
+            let token = env
+                .iter()
+                .position(|(key, _)| key == "GH_TOKEN")
+                .ok_or("upstream selection read-only token missing")?;
+            if env[token].1.text() != Some("${{ github.token }}") {
+                return Err("upstream selection must use the workflow read-only token".into());
+            }
+            env.remove(token);
+        }
+    }
+    reject_secrets(&admitted)
 }
 fn change<'a>(node: &'a mut Node, keys: &[&str]) -> &'a mut Node {
     if let Some((key, tail)) = keys.split_first() {
@@ -241,7 +266,14 @@ fn current_attempt_inputs(jobs: &Node, index: u8) {
         BTreeSet::from(["resolve", repair_name.as_str()])
     );
     let with = verify.get("with").unwrap();
-    assert_eq!(field(with, "mode"), "verify-build");
+    assert_eq!(
+        field(with, "mode"),
+        if index == 1 {
+            "${{ needs.resolve.outputs.publish_selected == 'true' && 'pinned-build' || 'verify-build' }}"
+        } else {
+            "verify-build"
+        }
+    );
     for key in ["package", "identity", "head"] {
         assert_eq!(
             field(with, &format!("previous_{key}")),
@@ -256,7 +288,7 @@ fn current_attempt_inputs(jobs: &Node, index: u8) {
         );
         assert_eq!(
             field(verify, "if"),
-            "${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair_1.outputs.green == 'true' }}"
+            "${{ !cancelled() && (needs.resolve.outputs.changed == 'true' || needs.resolve.outputs.publish_selected == 'true') && needs.repair_1.outputs.green == 'true' }}"
         );
     } else {
         let previous = format!("attempt_{}", index - 1);
@@ -333,6 +365,8 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
         BTreeSet::from([
             "resolve",
             "preflight",
+            "repair_1",
+            "verify_1",
             "attempt_1",
             "attempt_2",
             "attempt_3"
@@ -349,7 +383,7 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
     assert_eq!(needs(publish), BTreeSet::from(["resolve", "result"]));
     assert_eq!(
         field(publish, "if"),
-        "${{ needs.result.outputs.publish == 'true' }}"
+        "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}"
     );
     assert_eq!(field(publish, "runs-on"), "ubuntu-24.04");
     let (_, action) = named(publish, "id", "publish");
@@ -393,12 +427,19 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
             "Build exact candidate for distributed certification",
         ),
         (worker_jobs.get("family").unwrap(), "Certify one family"),
+        (
+            worker_jobs.get("retry_family").unwrap(),
+            "Recheck one infrastructure-failed family",
+        ),
     ] {
         let (prepare, step) = named(job, "uses", "./.github/actions/prepare-automation");
+        let (prerequisites, _) = named(job, "uses", "./.github/actions/setup-canary-runner");
+        assert!(prerequisites < prepare);
         let (cache, _) = named(job, "uses", "./.github/actions/use-canary-cache");
         let (consume, _) = named(job, "name", consumer);
         assert!(prepare < cache && cache < consume);
         let config = step.get("with").unwrap();
+        assert_eq!(field(config, "runner-profile"), "preinstalled-macos");
         assert_eq!(field(config, "allow_depot_remote_cache"), "false");
         assert_eq!(field(config, "allow_native_github_cache"), "false");
         assert!(
@@ -559,11 +600,32 @@ fn setup_observers() -> &'static str {
     r#"
 export GITHUB_ENV="$PWD/action.env"
 export MACOSX_DEPLOYMENT_TARGET=13.3
-for tool in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo xcrun; do eval "$tool() { :; }"; done
+for tool in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs lipo xcrun; do eval "$tool() { :; }"; done
 uname() { printf 'Darwin\n'; }
 git() { printf '%s\n' "$*" >> "$PWD/git.observed"; case "$*" in 'config --local user.name mesh-llama-canary-bot'|'config --local user.email llama-canary-bot@meshllm.invalid'|'lfs install --force') return 0;; *) return 91;; esac; }
 brew() { case "$*" in '--prefix llvm@22') printf '%s\n' "$PWD/pinned";; '--prefix llvm') printf '%s\n' "$PWD/fallback";; *) return 92;; esac; }
 "#
+}
+fn assert_missing_runner_tools(directory: &std::path::Path, production: &str) {
+    for tool in [
+        "cargo", "rustc", "just", "sccache", "jq", "python3", "uv", "cmake", "ninja", "hf",
+        "git-lfs", "lipo", "brew", "xcrun",
+    ] {
+        let observers = format!(
+            "{}\nMISSING_TOOL={tool}\n{}",
+            setup_observers(),
+            r#"command() {
+  if [[ "$1" == -v && "$2" == "$MISSING_TOOL" ]]; then return 1; fi
+  builtin command "$@"
+}"#
+        );
+        let (status, _, stderr) = action_shell(directory, &observers, production);
+        assert_eq!(status, 1, "missing {tool}");
+        assert!(
+            String::from_utf8_lossy(&stderr)
+                .contains(&format!("missing on family-certify image: {tool}"))
+        );
+    }
 }
 #[test]
 fn actual_setup_action_preserves_local_git_identity_and_llvm_fallback_refusal_without_installing() {
@@ -608,6 +670,7 @@ fn actual_setup_action_preserves_local_git_identity_and_llvm_fallback_refusal_wi
                 directory.display()
             ))
     );
+    assert_missing_runner_tools(&directory, &production);
     fs::remove_file(directory.join("pinned/lib/cmake/clang/ClangConfig.cmake")).unwrap();
     fs::write(directory.join("action.env"), "").unwrap();
     let (status, _, _) = action_shell(&directory, setup_observers(), &production);

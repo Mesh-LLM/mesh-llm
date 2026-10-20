@@ -22,6 +22,7 @@ serving = [
     "dep:serde",
     "dep:serde_json",
     "dep:tokio",
+    "dep:mesh-llm-host-runtime",
 ]
 # Opt-in paid inference on top of the serving path: ledger, gates and the
 # `wallet.v1` plugin adapter. Off by default: an embedding consumer (e.g. Buzz)
@@ -29,7 +30,11 @@ serving = [
 # rusqlite/lightning-invoice/bitcoin stack. Enabling it still links no wallet
 # SDK. A host with
 # `payments` needs an external `wallet.v1` plugin configured to actually pay.
-payments = ["serving", "mesh-llm-embedded-runtime/payments"]
+payments = ["serving", "mesh-llm-embedded-runtime/payments", "dep:mesh-llm-payments"]
+# Node identity keys on disk (default key path, keystore read/write).
+identity = ["dep:mesh-llm-identity"]
+# Install plugin archives (e.g. a wallet) into the local plugin store.
+plugin-install = ["dep:mesh-llm-plugin-manager"]
 
 [lints]
 workspace = true
@@ -37,6 +42,10 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true, optional = true }
 mesh-llm-console-server = { path = "../mesh-llm-console-server", version = "0.78.0", optional = true }
+mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.78.0", default-features = false, optional = true }
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.78.0", features = ["host-io"], optional = true }
+mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.78.0", optional = true }
+mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.78.0", optional = true }
 mesh-llm-embedded-runtime = { path = "../mesh-llm-embedded-runtime", version = "0.78.0", optional = true }
 skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install", version = "0.78.0", optional = true }
 reqwest = { version = "0.13", features = ["json"], optional = true }

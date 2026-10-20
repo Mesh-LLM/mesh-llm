@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/granite-switch.cpp b/src/models/granite-switch.cpp
-index ed3a6c6747bec6bebcf7ca1f11485fddd1d46fe2..3bcb5f2ffb965540f6a313ae28b574f327bc8780 100644
+index a98c3ca42cf6c09b9d72b213d2170723105a0d10..6b40b701520bfa7afb976db8d73934899e9d48ac 100644
 --- a/src/models/granite-switch.cpp
 +++ b/src/models/granite-switch.cpp
-@@ -314,6 +314,8 @@ llama_model_granite_switch::graph::graph(
+@@ -316,6 +316,8 @@ llama_model_granite_switch::graph::graph(
      ggml_tensor * cur;
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index ed3a6c6747bec6bebcf7ca1f11485fddd1d46fe2..3bcb5f2ffb965540f6a313ae28b574f3
          ggml_tensor * inpSA = inpL;
  
          cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-@@ -334,6 +336,7 @@ llama_model_granite_switch::graph::graph(
+@@ -336,6 +338,7 @@ llama_model_granite_switch::graph::graph(
          cur = build_layer_ffn(cur, inpSA, adapter_ids, model, il);
  
          inpL = cur;

@@ -43,6 +43,12 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
+Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
+They check runner prerequisites before compiling automation or preparing SDK
+dependencies and fail if any are absent. Tool installation and upgrades belong
+to runner provisioning: never invoke Rust, Just, or Homebrew installers from
+this profile. Keep job-owned compiler-cache startup and linker verification.
+
 Automation is compiled at most once per run and platform for product-source
 work, never once per job. Each platform lane has one `product_automation_*`
 producer (`product-automation-artifact.yml` through `upload-automation` with
@@ -343,7 +349,9 @@ Python-free or remove legacy validation before its Rust replacement passes.
   Both variables are matched case-sensitively in a shell validation step,
   because a GitHub Actions `==` expression ignores case: `TRUE`/`True` would
   otherwise enable a row whose runner is not certified for that backend. The
-  GPU rows gate on the normalized result, never on the variable directly.
+  GPU rows gate on the normalized result, never on the variable directly, and
+  the gate job reports each planned row from that result in its step summary,
+  so a skipped GPU row is visible as skipped rather than read as covered.
 - Never route untrusted code to a persistent self-hosted runner. Public-repo
   self-hosted execution requires ephemeral runners, restricted credentials and
   network access, and a runner group limited to the repository and exact
@@ -578,6 +586,25 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+The final publisher must use an explicit `!cancelled()` status condition,
+require successful source resolution and final selection, and require
+`publish=true`. Optional repair and retry jobs may be skipped after a green
+pass; their skipped status must not suppress publication through GitHub's
+implicit `success()` condition.
+
+Default upstream selection uses GitHub's latest published stable release of
+`ggml-org/llama.cpp`, never an unqualified `master` tip or a `b*` prerelease.
+The hosted resolver validates the release and peels its tag to an exact commit
+before any hardware work. Missing releases, malformed metadata, moved tags or
+API failures stop resolution without a fallback. Record the release tag and
+commit in the run summary. An explicit full `upstream_sha` remains an operator
+override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and-publish`
+adds independent verification and publication of the unchanged selected commit. Upstream release
+qualification never replaces the complete candidate and independent family
+passes required before publishing an upgrade PR. Only the hosted upstream
+selection step may receive the read-only GitHub token for public upstream API
+reads; workers and repair agents remain credential-free.
+
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
 generation, patch equality and idempotence must pass before rebuilding and
@@ -609,7 +636,11 @@ Manual `mesh_ref` is an explicitly authorized trusted-code path, not a PR
 runner exception. Keep the workflow/controller on protected main, resolve only
 same-repository branch-reachable commits once, and bind the controller and
 selected source independently in every handoff. Certify the selected revision's
-existing pin and patches without repair or publication. Selected build scripts
+existing pin and patches without repair. Default `mesh_action=certify` does not
+publish. Explicit `mesh_action=certify-and-publish` requires a complete candidate
+pass and a fresh independent build and complete family pass on the same frozen
+selected commit before publishing that exact commit as a PR to main. It never
+changes the selected pin or invokes coding repair. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 

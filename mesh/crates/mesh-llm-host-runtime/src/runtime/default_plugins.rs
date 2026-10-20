@@ -1,94 +1,80 @@
-//! Offer the default plugin list once on a fresh node, before plugins are
-//! resolved, so a new install starts with them. See
-//! `mesh_llm_plugin_manager::defaults`. Best effort and bounded: a node always
-//! starts, with or without its defaults. `--no-default-plugins` or
-//! `MESH_LLM_NO_DEFAULT_PLUGINS=1` skips it.
+//! Install the default plugins from this release's bundled copy when the node
+//! starts, before plugins are resolved, so a node installed by a package, a
+//! formula or `install.sh` starts with them, and an updated node with the new
+//! release's copy. See `mesh_llm_plugin_manager::defaults`.
+//!
+//! Local only: the archive comes from the release (`plugins/`), is checked
+//! against the reviewed pin, and is never downloaded; a missing copy is
+//! reported, not fetched. A node always starts, with or without its defaults.
+//! `MESH_LLM_NO_DEFAULT_PLUGINS=1` (or `--no-default-plugins` on `serve` or
+//! `client`) skips it; `mesh-llm plugins install-defaults
+//! --off` (and `mesh-llm update --no-default-plugins`) turns the defaults off
+//! for good.
 
 use std::collections::BTreeSet;
-use std::time::Duration;
 
-use anyhow::Result;
 use mesh_llm_plugin_manager::defaults::{
-    DEFAULT_PLUGINS, DefaultPlugin, DefaultPluginOutcome, DefaultPluginsRun,
-    default_plugins_opted_out, install_default_plugins,
+    DEFAULT_PLUGINS, DefaultPluginOutcome, default_plugins_opted_out, provision_bundled_defaults,
 };
 use mesh_llm_plugin_manager::{PluginInstallOptions, PluginProgressEvent};
 
 use super::RuntimeOptions;
 use crate::plugin;
 
-/// Bounds how long a node's start can wait on a first-run install (an
-/// offline node waits this long on each start until the defaults are offered).
-const FIRST_RUN_INSTALL_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Offer the defaults, then resolve plugins from `config` as before.
-pub(super) async fn resolve_after_defaults(
+/// Install the defaults from the bundled copy, then let plugins be resolved
+/// from `config` as before.
+pub(super) fn provision_bundled_defaults_at_start(
     config: &plugin::MeshConfig,
     options: &RuntimeOptions,
-) -> Result<plugin::ResolvedPlugins> {
-    if offers_defaults(
-        DEFAULT_PLUGINS,
-        options.no_default_plugins,
-        default_plugins_opted_out(),
-    ) {
-        offer_default_plugins(config).await;
-    }
-    super::run_auto::resolve_plugins_from_config(config, options)
-}
-
-/// Whether this start offers the default list: not when the list is empty,
-/// and not when the operator opted out by flag or environment.
-fn offers_defaults(defaults: &[DefaultPlugin], flag_opt_out: bool, env_opt_out: bool) -> bool {
-    !defaults.is_empty() && !flag_opt_out && !env_opt_out
-}
-
-async fn offer_default_plugins(config: &plugin::MeshConfig) {
-    let Some(options) = install_options() else {
+) {
+    if DEFAULT_PLUGINS.is_empty() || options.no_default_plugins || default_plugins_opted_out() {
         return;
+    }
+    let options = match PluginInstallOptions::from_env() {
+        Ok(options) => options,
+        Err(error) => {
+            return warn(format!(
+                "Default plugins skipped: no plugin store ({error:#})"
+            ));
+        }
     };
-    let configured: BTreeSet<String> = config
+    let mut progress = |_event: PluginProgressEvent| {};
+    let outcomes = provision_bundled_defaults(
+        DEFAULT_PLUGINS,
+        &operator_run_plugins(config),
+        &options,
+        &mut progress,
+    );
+    let has_bundle_dir = options
+        .bundled_plugins_dir
+        .as_ref()
+        .is_some_and(|dir| dir.is_dir());
+    for (name, outcome) in outcomes {
+        log_outcome(name, outcome, has_bundle_dir);
+    }
+}
+
+/// The plugins the operator runs from config: an entry that says how to start
+/// the plugin (`command` or `url`). A bare `[[plugin]]` entry holding only
+/// settings, as the console writes, leaves a default default-managed.
+fn operator_run_plugins(config: &plugin::MeshConfig) -> BTreeSet<String> {
+    config
         .plugins
         .iter()
+        .filter(|entry| entry.command.is_some() || entry.url.is_some())
         .map(|entry| entry.name.clone())
-        .collect();
-    let mut progress = |_event: PluginProgressEvent| {};
-    let install = install_default_plugins(DEFAULT_PLUGINS, &configured, &options, &mut progress);
-    match tokio::time::timeout(FIRST_RUN_INSTALL_TIMEOUT, install).await {
-        Ok(run) => log_run(run),
-        Err(_) => {
-            warn("Default plugins: first-run install timed out; tried again next start".into())
-        }
-    }
+        .collect()
 }
 
-fn install_options() -> Option<PluginInstallOptions> {
-    PluginInstallOptions::from_env()
-        .inspect_err(|error| {
-            warn(format!(
-                "Default plugins skipped: no plugin store ({error:#})"
-            ))
-        })
-        .ok()
-}
-
-fn log_run(run: DefaultPluginsRun) {
-    for (name, outcome) in run.outcomes {
-        log_outcome(name, outcome);
-    }
-    if let Some(error) = run.record_error {
-        warn(format!("Default plugins: {error}"));
-    }
-}
-
-fn log_outcome(name: &str, outcome: DefaultPluginOutcome) {
+fn log_outcome(name: &str, outcome: DefaultPluginOutcome, has_bundle_dir: bool) {
     // Output events, not `tracing`: the runtime's default log filter drops
     // host-runtime info and warnings, and an operator should see what a
-    // first run installed and how to undo it.
+    // start installed and how to undo it.
     let event = match outcome {
         DefaultPluginOutcome::Installed(installed) => mesh_llm_events::OutputEvent::Info {
             message: format!(
-                "Installed default plugin {name} {}; remove it with `mesh-llm plugins delete \
-                 {name}`, or start with --no-default-plugins to skip defaults",
+                "Installed default plugin {name} {} from this release; turn it off with \
+                 `mesh-llm plugins disable {name}`",
                 installed.metadata.installed_version
             ),
             context: Some("default_plugins".to_string()),
@@ -96,11 +82,40 @@ fn log_outcome(name: &str, outcome: DefaultPluginOutcome) {
         DefaultPluginOutcome::NotInstalled(reason) => {
             return warn(format!("Default plugin {name} not installed: {reason}"));
         }
-        // Nothing happened, so nothing is logged: a node that has offered its
-        // defaults is silent about them on every later start.
-        DefaultPluginOutcome::AlreadyOffered | DefaultPluginOutcome::OperatorChose => return,
+        DefaultPluginOutcome::NotBundled => not_bundled_event(name, has_bundle_dir),
+        // Nothing to do, or the operator's choice: a node is silent about it
+        // on every start.
+        DefaultPluginOutcome::AlreadyCurrent
+        | DefaultPluginOutcome::OperatorManaged
+        | DefaultPluginOutcome::Disabled
+        | DefaultPluginOutcome::TurnedOff
+        | DefaultPluginOutcome::UnsupportedPlatform => return,
     };
     let _ = mesh_llm_events::emit_event(event);
+}
+
+/// An install with no `plugins/` directory at all (a source build, or a
+/// release that bundles nothing yet) is told so as `Info`; a `Warning` only
+/// when the directory exists but lacks this default's archive.
+fn not_bundled_event(name: &str, has_bundle_dir: bool) -> mesh_llm_events::OutputEvent {
+    let context = Some("default_plugins".to_string());
+    if has_bundle_dir {
+        mesh_llm_events::OutputEvent::Warning {
+            message: format!(
+                "Default plugin {name} not installed: this install's bundled plugins carry \
+                 no copy of it, and a default plugin is never downloaded"
+            ),
+            context,
+        }
+    } else {
+        mesh_llm_events::OutputEvent::Info {
+            message: format!(
+                "Default plugin {name} not installed: this install bundles no plugins, \
+                 and a default plugin is never downloaded"
+            ),
+            context,
+        }
+    }
 }
 
 fn warn(message: String) {
@@ -115,21 +130,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_offered_unless_the_operator_opts_out() {
-        let one = [DefaultPlugin {
-            name: "notes",
-            version: "1.0.0",
-            sha256: &[],
-        }];
-        assert!(offers_defaults(&one, false, false), "on by default");
-        assert!(!offers_defaults(&one, true, false), "--no-default-plugins");
-        assert!(
-            !offers_defaults(&one, false, true),
-            "MESH_LLM_NO_DEFAULT_PLUGINS=1"
-        );
-        assert!(
-            !offers_defaults(&[], false, false),
-            "an empty list does nothing, not even a catalog lookup"
-        );
+    fn only_entries_that_start_a_plugin_take_it_out_of_default_management() {
+        let config: plugin::MeshConfig = toml::from_str(
+            r#"
+[[plugin]]
+name = "capsules"
+[plugin.settings]
+share_history_segments = "off"
+
+[[plugin]]
+name = "operator-run"
+command = "/opt/plugins/operator-run"
+
+[[plugin]]
+name = "remote"
+url = "unix:///run/remote.sock"
+"#,
+        )
+        .unwrap();
+        let configured = operator_run_plugins(&config);
+        assert!(!configured.contains("capsules"));
+        assert!(configured.contains("operator-run"));
+        assert!(configured.contains("remote"));
+    }
+
+    #[test]
+    fn no_bundle_dir_is_info_and_a_bundle_dir_missing_the_archive_is_a_warning() {
+        assert!(matches!(
+            not_bundled_event("capsules", false),
+            mesh_llm_events::OutputEvent::Info { .. }
+        ));
+        assert!(matches!(
+            not_bundled_event("capsules", true),
+            mesh_llm_events::OutputEvent::Warning { .. }
+        ));
     }
 }

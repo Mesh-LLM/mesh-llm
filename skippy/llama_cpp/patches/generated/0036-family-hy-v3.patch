@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/hy-v3.cpp b/src/models/hy-v3.cpp
-index f6b72d843c86611e741e49cd5d181c83b7ef7ab9..b114e7b4d56418d4e5a15f9262ce46f1348643d8 100644
+index 080b30c1a5d11528a3558812c00282bc8583cb05..c85e536d33658d83a88603cc92f372acfbd83465 100644
 --- a/src/models/hy-v3.cpp
 +++ b/src/models/hy-v3.cpp
-@@ -121,6 +121,8 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
+@@ -112,6 +112,8 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
  
      // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index f6b72d843c86611e741e49cd5d181c83b7ef7ab9..b114e7b4d56418d4e5a15f9262ce46f1
          ggml_tensor * inpSA = inpL;
  
          cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
-@@ -206,6 +208,7 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
+@@ -197,6 +199,7 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
          cb(cur, "l_out", il);
  
          inpL = cur;

@@ -111,7 +111,7 @@ pub struct RuntimeOptions {
     pub trust_policy: Option<TrustPolicy>,
     pub trust_owner: Vec<String>,
     pub nostr_discovery: bool,
-    /// Skip installing the default plugin list on first run.
+    /// Skip installing the default plugins when this node starts.
     pub no_default_plugins: bool,
     pub audit_log_path: Option<PathBuf>,
     pub audit_log_format: AuditLogFormat,

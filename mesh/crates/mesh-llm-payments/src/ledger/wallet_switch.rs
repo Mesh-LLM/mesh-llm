@@ -36,7 +36,7 @@ impl Ledger {
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         let unpaid_invoices = connection
-            .prepare("SELECT hash FROM receivables WHERE state='unpaid' ORDER BY rowid")?
+            .prepare("SELECT hash FROM metered_invoices WHERE state='unpaid' ORDER BY rowid")?
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         Ok(WalletSwitchBlockers {

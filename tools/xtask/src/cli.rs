@@ -15,7 +15,6 @@ pub(crate) fn print_usage() {
     );
     println!("  cargo xtool automation endpoint-model-discovery --help");
     println!("  cargo xtool automation wan-observation --help");
-    println!("  cargo xtool automation wan-stage-deployment --help");
     println!("  cargo xtool automation system-one-cases --help");
     println!("  cargo xtool automation system-one-smoke --help");
     println!("  cargo xtool automation decisions-smoke --help");
@@ -79,6 +78,9 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool native package-source-version {{workspace|abi}} SOURCE (experimental)");
     println!("  cargo xtool repository cargo-target-directory < cargo-metadata.json");
     println!(
+        "  cargo xtool repository llama-upstream-release [--upstream SHA] [--github-output PATH --summary PATH]"
+    );
+    println!(
         "  cargo xtool repository publish-order [--dependency-pairs | --selected-script PATH [--source-root ROOT]] < cargo-metadata.json"
     );
     println!("  cargo xtool product attestation-status < inspection.json");
@@ -131,7 +133,6 @@ pub(crate) enum CliCommand<'a> {
     WorkloadSmoke(&'a [String]),
     Stability(&'a [String]),
     WanObservation(&'a [String]),
-    WanStageDeployment(&'a [String]),
     SystemOneCases(&'a [String]),
     SystemOneSmoke(&'a [String]),
     DecisionsSmoke(&'a [String]),
@@ -198,6 +199,7 @@ pub(crate) enum RepositoryCheck {
     ConventionalCommits,
     EnvMutationCensus,
     LlamaUpstreamPin,
+    LlamaUpstreamRelease,
     SelectedRef,
     DockerPrecheck,
     CapsulesPluginGate,
@@ -370,11 +372,6 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "system-one-smoke" => {
                 CliCommand::SystemOneSmoke(rest)
-            }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "wan-stage-deployment" =>
-            {
-                CliCommand::WanStageDeployment(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "wan-observation" => {
                 CliCommand::WanObservation(rest)
@@ -578,6 +575,7 @@ impl<'a> Cli<'a> {
                     "conventional-commits" => RepositoryCheck::ConventionalCommits,
                     "env-mutation-census" => RepositoryCheck::EnvMutationCensus,
                     "llama-upstream-pin" => RepositoryCheck::LlamaUpstreamPin,
+                    "llama-upstream-release" => RepositoryCheck::LlamaUpstreamRelease,
                     "selected-ref" => RepositoryCheck::SelectedRef,
                     "docker-precheck" => RepositoryCheck::DockerPrecheck,
                     "capsules-plugin-gate" => RepositoryCheck::CapsulesPluginGate,

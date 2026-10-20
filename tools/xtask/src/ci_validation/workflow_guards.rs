@@ -34,6 +34,7 @@ mod runtime_events;
 mod selected_ref;
 mod shell;
 mod windows_build_paths;
+mod windows_skippy_probes;
 
 use super::lane_results::workflow_yaml::{self, Node};
 use crate::command::DynResult;
@@ -43,6 +44,7 @@ use std::path::Path;
 pub(super) fn check(root: &Path) -> DynResult<()> {
     build_acceleration::check(root)?;
     windows_build_paths::check(root)?;
+    windows_skippy_probes::check(root)?;
     compute_changes_budget::check(root)?;
     action_pins::check(root)?;
     let mut workflows = BTreeMap::new();

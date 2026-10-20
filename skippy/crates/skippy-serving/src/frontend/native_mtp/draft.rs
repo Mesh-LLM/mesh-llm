@@ -48,6 +48,7 @@ mod tests {
             NativeMtpDraft::from_stage_draft(StageNativeMtpDraft {
                 token_ids: vec![12],
                 proposal_compute_us: 34,
+                follows_correction: false,
             }),
             NativeMtpDraft {
                 tokens: vec![12],
@@ -61,6 +62,7 @@ mod tests {
         let draft = NativeMtpDraft::from_stage_draft(StageNativeMtpDraft {
             token_ids: vec![12],
             proposal_compute_us: -3,
+            follows_correction: false,
         });
 
         assert_eq!(draft.proposal_compute_us, 0);

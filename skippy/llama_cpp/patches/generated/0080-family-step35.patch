@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/step35.cpp b/src/models/step35.cpp
-index ca68855d8dabef22baeb0fb66cab7ab30c5ed465..98348882147967519630b6c3fd8c11038febfdf4 100644
+index 3e225a11efa3fba7229dc127ea5818c931a2d4ba..9e6674755d90cf4edbd1973d85fc70033b50c631 100644
 --- a/src/models/step35.cpp
 +++ b/src/models/step35.cpp
-@@ -199,6 +199,8 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
+@@ -190,6 +190,8 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
  
      // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index ca68855d8dabef22baeb0fb66cab7ab30c5ed465..98348882147967519630b6c3fd8c1103
          ggml_tensor * inpSA = inpL;
  
          const uint32_t n_head_l    = hparams.n_head(il);
-@@ -342,6 +344,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
+@@ -333,6 +335,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
  
          // input for next layer
          inpL = cur;

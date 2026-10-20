@@ -58,7 +58,9 @@ impl PaymentIntent {
         }
     }
 
-    pub fn permits(&self, price: &Pricing, total_including_fees: u64) -> bool {
+    /// Rate caps only. `max_total_msat` is a legacy terms field, not a
+    /// per-request spending cap: the daily budget alone gates new admissions.
+    pub fn permits(&self, price: &Pricing) -> bool {
         if self.validate().is_err() || price.validate().is_err() {
             return false;
         }
@@ -67,11 +69,10 @@ impl PaymentIntent {
             Self::AllowPaid {
                 max_input_msat_per_million,
                 max_output_msat_per_million,
-                max_total_msat,
+                ..
             } => {
                 price.input_msat_per_million <= *max_input_msat_per_million
                     && price.output_msat_per_million <= *max_output_msat_per_million
-                    && total_including_fees <= *max_total_msat
             }
         }
     }

@@ -268,6 +268,7 @@ fn config_sync_state_revision_monotonic() {
         owner_control: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
+        updates: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![crate::plugin::ModelConfigEntry {
@@ -318,6 +319,7 @@ fn config_sync_state_hash_changes_on_different_config() {
         owner_control: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
+        updates: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![crate::plugin::ModelConfigEntry {

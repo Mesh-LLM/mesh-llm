@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/smollm3.cpp b/src/models/smollm3.cpp
-index c67d967b2040ff6eb34d98eb33241810e881c40d..0c7a18bc5f19fb66e073d148d8283133a31906b1 100644
+index 474093b68b9a65d11fea9200e6653c1a76098485..93014716983f4c233fdeb30733caf33f529a1bc7 100644
 --- a/src/models/smollm3.cpp
 +++ b/src/models/smollm3.cpp
 @@ -64,6 +64,8 @@ llama_model_smollm3::graph::graph(const llama_model & model, const llm_graph_par

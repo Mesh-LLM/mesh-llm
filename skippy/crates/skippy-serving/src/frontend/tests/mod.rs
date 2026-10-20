@@ -64,5 +64,3 @@ mod request;
 mod support;
 mod tts_oracle;
 mod wire_messages;
-
-mod payment_gate;

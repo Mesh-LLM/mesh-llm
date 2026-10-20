@@ -16,10 +16,12 @@ runs:
   - name: Verify runner toolchain
     run: |
       set -euo pipefail
+      export RUSTUP_AUTO_INSTALL=0
+      echo "RUSTUP_AUTO_INSTALL=0" >> "$GITHUB_ENV"
       source scripts/lib/macos-deployment-target.sh
       echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
       missing=0
-      for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do
+      for cmd in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
           echo "missing on family-certify image: $cmd" >&2
           missing=1

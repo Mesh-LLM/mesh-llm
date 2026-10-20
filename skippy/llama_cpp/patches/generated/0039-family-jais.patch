@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/jais.cpp b/src/models/jais.cpp
-index 415103ce23a86c475c32e2b60db39575dec669be..33314fe5672b88239270251e53d250d988858154 100644
+index 446b56617555bb41fcc3cd4c79f32c86da4efcf7..521dc1acf884dfd0fb827e2bfd7856b157474041 100644
 --- a/src/models/jais.cpp
 +++ b/src/models/jais.cpp
 @@ -67,6 +67,8 @@ llama_model_jais::graph::graph(const llama_model & model, const llm_graph_params

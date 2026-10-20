@@ -9,11 +9,11 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
-index 69e2cdbca175e6fb7a394bb6babbc833c1e3744d..3c7e2cd8b5b5165d14da0b78cdd789a99cfd29df 100644
+index efc7d52ab294c68530707c025918a7928ebe3a6f..b1141c8cae8af6afdb56a5c269a208ebddfa2801 100644
 --- a/src/models/qwen4exp.cpp
 +++ b/src/models/qwen4exp.cpp
-@@ -392,6 +392,8 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
-     cb(res_hc, "hc_init", -1);
+@@ -447,6 +447,8 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
+     ggml_build_forward_expand(gf, res_hc);
  
      for (int il = 0; il < n_layer; ++il) {
 +        begin_block(res_hc, il);
@@ -21,14 +21,14 @@ index 69e2cdbca175e6fb7a394bb6babbc833c1e3744d..3c7e2cd8b5b5165d14da0b78cdd789a9
          res->t_layer_inp[il] = res_hc;
  
          if (hparams.is_ple(il)) {
-@@ -440,6 +442,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
+@@ -495,6 +497,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
  
          // "l_last" is the layer output name that build_cvec and imatrix look for
          cb(res_hc, "l_last", il);
 +        end_block(res_hc, il);
      }
  
-     // the final mixer is the output norm: there is no separate one
+     // the MTP head reads the hc-wide residual, before the final mixer
 -- 
 2.54.0
 

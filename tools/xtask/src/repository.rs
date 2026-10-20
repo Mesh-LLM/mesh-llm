@@ -12,6 +12,7 @@ pub(crate) mod publish_roster;
 mod selected_ref;
 pub(crate) mod text;
 mod upstream_pin;
+mod upstream_release;
 
 use crate::cli::RepositoryCheck;
 use crate::command::DynResult;
@@ -45,6 +46,7 @@ pub(crate) fn run_check(
         RepositoryCheck::ConventionalCommits => conventional_commit::run(&cwd, args),
         RepositoryCheck::EnvMutationCensus => env_census::run(args, default_root),
         RepositoryCheck::LlamaUpstreamPin => upstream_pin::run(args, default_root),
+        RepositoryCheck::LlamaUpstreamRelease => upstream_release::run(args),
         RepositoryCheck::SelectedRef => selected_ref::run(args, default_root),
         RepositoryCheck::DockerPrecheck => docker_precheck::run(args, default_root),
         RepositoryCheck::CapsulesPluginGate => capsules_gate::run(args, default_root),

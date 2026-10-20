@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/muse-glimmer.cpp b/src/models/muse-glimmer.cpp
-index 0e5f75ebed9e66a02873e82d08b189cf89c77a75..13437b41c34da6558454cd7847691cd6537073d9 100644
+index 2f84d6f98013a0482f53927c1e00f9580efe64bb..55463bdf3bddf944ceabf1914704c312802c69b2 100644
 --- a/src/models/muse-glimmer.cpp
 +++ b/src/models/muse-glimmer.cpp
 @@ -76,6 +76,8 @@ llama_model_muse_glimmer::graph::graph(const llama_model & model, const llm_grap
