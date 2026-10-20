@@ -168,7 +168,7 @@ pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
                     checkpoint: &served.record,
                     covered,
                 },
-                &|id| index.leaf_index_of(id).is_some(),
+                &|id| index.leaf_index_of(id),
             );
             head.insert("derivation".into(), json!(SERVED_SUMMARY_DERIVATION_TOKEN));
             head.insert("served_summary".into(), summary);

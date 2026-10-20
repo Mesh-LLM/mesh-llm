@@ -212,13 +212,13 @@ pub struct Coverage<'a> {
 }
 
 /// The published summary (`ServedSummary.to_value()`), over `leaves` (every
-/// ledger line's facts, in log order) bounded by `coverage`. `own_ids` says
-/// whether a capsule id is one of this node's own records (for the
-/// adjudications-received count, which reads the whole log).
+/// ledger line's facts, in log order) bounded by `coverage`. `leaf_index_of`
+/// gives the leaf index of one of this node's own records by capsule id (for
+/// the adjudications-received count).
 pub fn summary_value(
     leaves: &[&LeafFacts],
     coverage: &Coverage<'_>,
-    is_own_record: &dyn Fn(&str) -> bool,
+    leaf_index_of: &dyn Fn(&str) -> Option<u64>,
 ) -> Value {
     let cp = coverage.checkpoint;
     let covered = coverage.covered.min(leaves.len() as u64);
@@ -245,13 +245,7 @@ pub fn summary_value(
         .iter()
         .map(|(model, bucket)| (model.to_string(), bucket.to_value()))
         .collect();
-    let adjudications_received = leaves
-        .iter()
-        .filter_map(|f| f.adjudicated_halves.as_ref())
-        .filter(|(a, b)| {
-            a.as_deref().is_some_and(is_own_record) || b.as_deref().is_some_and(is_own_record)
-        })
-        .count();
+    let adjudications_received = adjudications_received(leaves, covered, leaf_index_of);
     let witnesses: std::collections::BTreeSet<&str> =
         cp.witnesses.iter().map(|w| w.ts_url.as_str()).collect();
     json!({
@@ -287,8 +281,8 @@ pub fn summary_value(
             "source": "self_held",
             "note": "verdicts this node has received() into its own log about its served \
                      exchanges -- not this node's own judgment of itself. The counterparty-held \
-                     references path (its counterparties asked about it) is what carries weight in an \
-                     adversarial reading; this count is never presented as a substitute for it.",
+                     references path is what carries weight in an adversarial reading; this \
+                     count is never presented as a substitute for it.",
         },
         "no_requester_identifiers": "this summary reads and reports no requester-identity field \
              (cross_party.initiator_ref, serving_provenance.requesting_party/counterparty_ref) \
@@ -296,6 +290,25 @@ pub fn summary_value(
         "not_a_score": "An account of facts + a witness handle to verify them, not a score or routing \
              recommendation.",
     })
+}
+
+/// Verdicts within the covered range that name one of this node's own
+/// records within it. A line appended after the checkpoint, a verdict or the
+/// record it names, never changes the answer for that checkpoint (R-15).
+fn adjudications_received(
+    leaves: &[&LeafFacts],
+    covered: u64,
+    leaf_index_of: &dyn Fn(&str) -> Option<u64>,
+) -> usize {
+    let is_covered_own = |id: &str| leaf_index_of(id).is_some_and(|at| at < covered);
+    leaves
+        .iter()
+        .take(covered as usize)
+        .filter_map(|f| f.adjudicated_halves.as_ref())
+        .filter(|(a, b)| {
+            a.as_deref().is_some_and(is_covered_own) || b.as_deref().is_some_and(is_covered_own)
+        })
+        .count()
 }
 
 #[cfg(test)]
@@ -347,6 +360,60 @@ mod tests {
         }
     }
 
+    /// A verdict judging `half` against another node's half.
+    fn verdict(half: &str) -> LeafFacts {
+        LeafFacts::of(&json!({
+            "model_attestation": {"compute_attestation": {"epistemic_type": "adjudication",
+                "adjudication": {"half_a_capsule_id": half, "half_b_capsule_id": "theirs"}}}
+        }))
+    }
+
+    /// The adjudications-received count over `leaves`, the first `covered`
+    /// of them checkpointed, where `own` maps each own record to its leaf.
+    fn received(leaves: &[LeafFacts], covered: u64, own: &[(&str, u64)]) -> Value {
+        let cp = checkpoint();
+        let refs: Vec<&LeafFacts> = leaves.iter().collect();
+        let index_of = |id: &str| own.iter().find(|(o, _)| *o == id).map(|(_, at)| *at);
+        summary_value(
+            &refs,
+            &Coverage {
+                checkpoint: &cp,
+                covered,
+            },
+            &index_of,
+        )
+    }
+
+    #[test]
+    fn a_covered_verdict_on_a_covered_own_record_is_counted() {
+        let leaves = [
+            LeafFacts::of(&served("m", "confirmed", json!("1"))),
+            verdict("mine"),
+        ];
+        let v = received(&leaves, 2, &[("mine", 0)]);
+        assert_eq!(v["adjudications_received"]["value"], json!(1));
+    }
+
+    #[test]
+    fn a_verdict_appended_after_the_checkpoint_leaves_the_summary_unchanged() {
+        let record = LeafFacts::of(&served("m", "confirmed", json!("1")));
+        let at_checkpoint = received(std::slice::from_ref(&record), 1, &[("mine", 0)]);
+        let grown = received(&[record, verdict("mine")], 1, &[("mine", 0)]);
+        assert_eq!(grown["adjudications_received"]["value"], json!(0));
+        assert_eq!(grown, at_checkpoint);
+    }
+
+    #[test]
+    fn a_covered_verdict_naming_a_record_appended_later_is_not_counted() {
+        let leaves = [
+            LeafFacts::of(&served("m", "confirmed", json!("1"))),
+            verdict("later"),
+            LeafFacts::of(&served("m", "confirmed", json!("2"))),
+        ];
+        let v = received(&leaves, 2, &[("mine", 0), ("later", 2)]);
+        assert_eq!(v["adjudications_received"]["value"], json!(0));
+    }
+
     #[test]
     fn percentiles_interpolate_like_the_python() {
         let v = [1.0, 2.0, 3.0, 4.0];
@@ -368,7 +435,7 @@ mod tests {
                 checkpoint: &cp,
                 covered: 3,
             },
-            &|_| false,
+            &|_| None,
         );
         let m = &v["derivation"]["by_model"]["m"];
         assert_eq!(m["served"], json!(FLOOR_LABEL));
@@ -396,7 +463,7 @@ mod tests {
                 checkpoint: &cp,
                 covered: 6,
             },
-            &|_| false,
+            &|_| None,
         );
         let m = &v["derivation"]["by_model"]["m"];
         assert_eq!(m["served"], json!(6));

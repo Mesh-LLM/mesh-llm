@@ -189,6 +189,12 @@
   read as a second, different weights claim. Weights fields are now held to weights fields and
   model ids to model ids. A half whose two weights fields disagree, or that names another model id
   than the one asked for, is still refused, and the Evidence page applies the same rule.
+- **A `served_summary/1` answer no longer changes as the log grows past its checkpoint.**
+  `adjudications_received` counted every verdict in the log, and took a record as this node's own
+  wherever it sat, so a verdict appended after the newest checkpoint changed the summary answered
+  for that checkpoint. It now counts only verdicts the checkpoint covers that name a record it
+  covers, as the Python reference does. Its note also now reads as the reference's does, so the
+  two answer the same bytes.
 
 ## 0.1.4
 
