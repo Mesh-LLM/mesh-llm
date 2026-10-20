@@ -1,4 +1,4 @@
-From 093ccd3c2aa9d9d5401b0b9d29089f6258f11055 Mon Sep 17 00:00:00 2001
+From a6a92444db34c84b871b4a7be4bf1561e89cb870 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 20 Oct 2026 22:32:01 +1100
 Subject: [PATCH] feat: add bounded Turbo4 KV support to Skippy CPU and Metal
@@ -16,8 +16,9 @@ Assisted-by: Codex
  ggml/src/ggml-cpu/CMakeLists.txt              |   1 +
  ggml/src/ggml-cpu/ggml-cpu.c                  |  32 +++
  ggml/src/ggml-cpu/ggml-cpu.cpp                |  12 +
+ ggml/src/ggml-cpu/ops.cpp                     |   1 +
  ggml/src/ggml-cpu/ops.h                       |   2 +
- ggml/src/ggml-cpu/turbo4.cpp                  |  66 +++++
+ ggml/src/ggml-cpu/turbo4.cpp                  |  67 +++++
  ggml/src/ggml-metal/CMakeLists.txt            |  13 +-
  ggml/src/ggml-metal/ggml-metal-device.cpp     |  34 ++-
  ggml/src/ggml-metal/ggml-metal-device.h       |   5 +-
@@ -43,7 +44,7 @@ Assisted-by: Codex
  tests/test-backend-ops.cpp                    |  21 ++
  tests/test-quantize-fns.cpp                   |   8 +
  tests/test-turbo4-codec.h                     |  81 ++++++
- 34 files changed, 1846 insertions(+), 27 deletions(-)
+ 35 files changed, 1848 insertions(+), 27 deletions(-)
  create mode 100644 ggml/src/ggml-cpu/turbo4.cpp
  create mode 100644 ggml/src/ggml-metal/kernels/fa_turbo4.metal
  create mode 100644 ggml/src/ggml-metal/kernels/fa_vec_turbo4.metal
@@ -249,6 +250,18 @@ index 81ff5d79f..30c0d457b 100644
      // check extra buffer types
      // note: only the first sources are checked for extra buffer types to reduce overhead, increase if necessary
      for (int i = 0; i < 4; i++) {
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index 7a73e138e..aff957f2c 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -6223,6 +6223,7 @@ void ggml_compute_forward_clamp(
+         case GGML_TYPE_Q6_K:
+         case GGML_TYPE_TQ1_0:
+         case GGML_TYPE_TQ2_0:
++        case GGML_TYPE_TURBO4_0:
+         case GGML_TYPE_IQ2_XXS:
+         case GGML_TYPE_IQ2_XS:
+         case GGML_TYPE_IQ3_XXS:
 diff --git a/ggml/src/ggml-cpu/ops.h b/ggml/src/ggml-cpu/ops.h
 index 2728b08b6..32a094211 100644
 --- a/ggml/src/ggml-cpu/ops.h
@@ -264,12 +277,13 @@ index 2728b08b6..32a094211 100644
  void ggml_compute_forward_gla(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 diff --git a/ggml/src/ggml-cpu/turbo4.cpp b/ggml/src/ggml-cpu/turbo4.cpp
 new file mode 100644
-index 000000000..af1a1a08d
+index 000000000..ebf5e0122
 --- /dev/null
 +++ b/ggml/src/ggml-cpu/turbo4.cpp
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,67 @@
 +#include "ops.h"
 +#include "ggml-cpu.h"
++#include "ggml-cpu-impl.h"
 +#include "ggml-impl.h"
 +#include <cmath>
 +
