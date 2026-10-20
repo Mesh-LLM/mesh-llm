@@ -327,7 +327,9 @@ pub fn console_session_mode_for_term(
 fn terminal_supports_dashboard(term: Option<&str>) -> bool {
     match term.map(str::trim).filter(|term| !term.is_empty()) {
         Some(term) => term != "dumb",
-        None => false,
+        // Windows consoles (conhost, Windows Terminal) don't set TERM; the
+        // dashboard reaches them through crossterm and `CONOUT$`.
+        None => cfg!(windows),
     }
 }
 
