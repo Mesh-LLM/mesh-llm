@@ -68,6 +68,14 @@ fn windows_skippy_probes_lib_tests_follow_the_build_on_its_static_abi() {
             "LLAMA_STAGE_BUILD_DIR: .deps/other\n    run",
         ),
         ("skippy-probes", "unit"),
+        (
+            "      cargo test --locked -p skippy-runtime",
+            "      # cargo test --locked -p skippy-runtime",
+        ),
+        (
+            "      cargo test --locked -p skippy-serving",
+            "      # cargo test --locked -p skippy-serving",
+        ),
     ] {
         let lib = LIB_STEP.replace(from, to);
         assert_ne!(lib, LIB_STEP, "{from}");

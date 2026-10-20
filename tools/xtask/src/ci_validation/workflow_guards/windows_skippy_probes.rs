@@ -56,7 +56,14 @@ fn probe_job(job: &Node) -> DynResult<()> {
     if check > build || headroom > build {
         return Err("the ctest check and headroom log must precede the Skippy probes".into());
     }
-    let lib_tests = find(&LIB_TESTS)
+    // Whole active lines: a commented-out command must not count as run.
+    let lib_tests = probes
+        .iter()
+        .position(|step| {
+            LIB_TESTS
+                .iter()
+                .all(|command| run(step).lines().any(|line| line.trim() == *command))
+        })
         .ok_or("the Skippy probe row must run the skippy-runtime and skippy-serving lib tests")?;
     if lib_tests < build {
         return Err("the Skippy lib tests must follow the probe build".into());
