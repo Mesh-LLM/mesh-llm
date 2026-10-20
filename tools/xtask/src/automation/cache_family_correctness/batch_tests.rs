@@ -1,7 +1,8 @@
 use super::*;
 fn request() -> Request {
-    // Absolute on every platform: "/prepared.json" has no drive on Windows.
-    let prepared = std::env::temp_dir().join("prepared.json");
+    // Absolute on every platform: "/prepared.json" has no drive on Windows, and
+    // temp_dir() is relative when TMPDIR is.
+    let prepared = std::path::absolute(std::env::temp_dir().join("prepared.json")).unwrap();
     serde_json::from_value(json!({"schema_version":1,"prepared_input":prepared,"prefix_tokens":null,"n_gpu_layers":null})).unwrap()
 }
 #[test]
