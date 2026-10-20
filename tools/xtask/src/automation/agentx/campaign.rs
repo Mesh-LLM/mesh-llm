@@ -168,10 +168,11 @@ mod tests {
         }
     }
     #[test]
-    fn both_profiles_cover_every_requested_capacity() {
+    fn all_profiles_cover_every_requested_capacity() {
         for profile in [
             super::super::Profile::Smoke,
             super::super::Profile::Benchmark,
+            super::super::Profile::Comparison,
         ] {
             assert_eq!(profile.concurrencies(), &[1, 2, 4]);
         }

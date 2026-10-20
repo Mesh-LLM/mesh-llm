@@ -806,3 +806,14 @@ created by later responses. In-flight requests drain normally and immediate DAG
 children retain the issuer's admission checks. Both engines use the same fork,
 whole-trace filter and recorded timing. No inter-turn delay cap is added.
 Earlier harness versions remain separate.
+
+The standalone `comparison` profile (`agentx-1.0.12.post1-local-comparison-1`)
+replays four pinned complete traces once per cell, with no dispatch duration,
+request cutoff or accelerated warmup. It uses an explicit local AgentX config
+and four root sessions, preserving child work and recorded think times. Its
+69 source requests must produce exactly 18,713 output tokens. Before publishing
+throughput, Rust checks each source trace/outer/inner turn against the expected
+output count, rejecting missing, duplicated, failed, cancelled or shortened
+work. A safety deadline fails an incomplete cell; it never supplies a comparable
+partial result. Run ABBAAB on one host at c=1/2/4, separately from smoke/full
+workload versions. Standalone artifact jobs need no template registration change.

@@ -68,7 +68,13 @@ fn metric_point(export: &Value, concurrency: u32) -> DynResult<Value> {
     }))
 }
 pub(super) fn validate(export: &Value, profile: Profile) -> DynResult<()> {
-    if export["was_cancelled"] == true || export["metadata"]["submission_valid"] != false {
+    let submission = &export["metadata"]["submission_valid"];
+    let local = if profile == Profile::Comparison {
+        submission.is_null()
+    } else {
+        submission == false
+    };
+    if export["was_cancelled"] == true || !local {
         return Err("expected uncancelled, explicitly non-submission local-corpus export".into());
     }
     if metric(export, "request_count")? < 1.0
@@ -104,6 +110,11 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
     )?;
     let memory: Value =
         serde_json::from_slice(&std::fs::read(input.output.join("memory-summary.json"))?)?;
+    let completed_work = if input.profile == Profile::Comparison {
+        Some(super::completed_work::validate(input)?)
+    } else {
+        None
+    };
     let summary = json!({
         "name":format!("agentx/{}/{}/{}/c{}",input.model.key,engine,input.profile.label(),concurrency),
         "engine":engine,"offered_sessions":concurrency,
@@ -112,6 +123,7 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
         "native_capacity":super::capacity::read(&input.output),
         "submission_valid":false,"request_count":metric(&export,"request_count")?,
         "phase_outcome":phase_outcome,
+        "completed_work":completed_work,
         "output_tok_s":metric(&export,"output_token_throughput")?,
         "ttft":export["time_to_first_token"],"itl":export["inter_token_latency"],"e2e":export["request_latency"],
         "errors":export["error_request_count"],"context_overflows":export["context_overflow_count"],
@@ -166,6 +178,16 @@ mod tests {
     }
     fn export() -> Value {
         json!({"metadata":{"submission_valid":false},"request_count":{"avg":2},"output_token_count":{"avg":8},"usage_prompt_tokens":{"avg":32},"usage_completion_tokens":{"avg":4},"time_to_first_token":{"avg":2},"inter_token_latency":{"avg":1},"warmup_metrics":{}})
+    }
+    #[test]
+    fn explicit_comparison_is_local_and_requires_its_own_work_audit() {
+        let mut local = export();
+        assert!(validate(&local, Profile::Comparison).is_err());
+        local["metadata"] = Value::Null;
+        assert!(validate(&local, Profile::Comparison).is_ok());
+        assert!(validate(&local, Profile::Smoke).is_err());
+        local["metadata"] = json!({"submission_valid":true});
+        assert!(validate(&local, Profile::Comparison).is_err());
     }
     #[test]
     fn rejects_empty_failed_and_cancelled_runs() {

@@ -2,6 +2,8 @@
 mod campaign;
 mod capacity;
 mod command;
+mod comparison_cohort;
+mod completed_work;
 mod container;
 mod context_support;
 mod hardware;
@@ -22,25 +24,29 @@ use std::path::{Path, PathBuf};
 pub(super) enum Profile {
     Smoke,
     Benchmark,
+    Comparison,
 }
 impl Profile {
     fn harness_version(self) -> &'static str {
         match self {
             Self::Smoke => "agentx-1.0.12.post1-local-smoke-8",
             Self::Benchmark => "agentx-1.0.12.post1-local-benchmark-7",
+            Self::Comparison => "agentx-1.0.12.post1-local-comparison-1",
         }
     }
     fn label(self) -> &'static str {
         match self {
             Self::Smoke => "smoke",
             Self::Benchmark => "benchmark",
+            Self::Comparison => "comparison",
         }
     }
     fn parse(value: &str) -> DynResult<Self> {
         match value {
             "smoke" => Ok(Self::Smoke),
             "benchmark" => Ok(Self::Benchmark),
-            _ => Err("profile must be smoke or benchmark".into()),
+            "comparison" => Ok(Self::Comparison),
+            _ => Err("profile must be smoke, benchmark or comparison".into()),
         }
     }
     fn concurrencies(self) -> &'static [u32] {
@@ -101,7 +107,7 @@ struct Prepared {
 }
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     const GRAMMAR: Grammar = Grammar {
-        usage: "cargo xtool automation agentx {container|run} --engine {llama|skippy} --model KEY --profile {smoke|benchmark} --output PATH | worker --input PATH --port PORT --concurrency N",
+        usage: "cargo xtool automation agentx {container|run} --engine {llama|skippy} --model KEY --profile {smoke|benchmark|comparison} --output PATH | worker --input PATH --port PORT --concurrency N",
         values: &[
             "--model",
             "--engine",

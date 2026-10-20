@@ -63,6 +63,59 @@ comparison as unqualified, and investigate regressions per model and
 concurrency rather than hiding them in an aggregate. Compare completed work
 and inspect grace-period cancellations before declaring a winner.
 
+## Fixed-work comparison
+
+Use `--profile comparison` for the small repeated comparison report. Its workload
+version is `agentx-1.0.12.post1-local-comparison-1`, separate from smoke 8 and full 7.
+For each model, run whole c=1/2/4 sweeps in **llama, Skippy, Skippy, llama, llama,
+Skippy** order on the same host. The four Q4_K_M model categories are dense
+(Qwen3-4B-Instruct-2507), hybrid dense (Qwen3.5-4B), attention MoE
+(Qwen3-Coder-30B-A3B-Instruct), and hybrid MoE (Qwen3.5-35B-A3B).
+
+The fixed cohort uses the pinned corpus in `inputs.rs`. Selection is independent
+of engine results: among whole traces within the common 128K budget and with
+the last recorded request start at most 600 seconds, take the two smallest
+output totals in the <=64K peak-input band, and one each in the 64–96K and
+96–128K bands. Ties use trace ID. Original rows, output lengths, child topology
+and recorded think times remain intact.
+
+| Trace ID | Source requests | Requested output tokens | Peak input tokens |
+|---|---:|---:|---:|
+| `12cfecf98c158ab54fb65980602421f00d69` | 20 | 6,409 | 110,464 |
+| `1493faffdc8942e99daa22277f44871a40b8` | 7 | 4,097 | 46,528 |
+| `9ec047754f4ddd94a59fcd0d85213d5f3b1b` | 21 | 4,258 | 89,792 |
+| `bbdcb12440a7ab3496b9fac8b5f9824b1672` | 21 | 3,949 | 54,784 |
+| **Total** | **69** | **18,713** | |
+
+Each cell starts a fresh server and sends each root trace once, starting at turn
+zero. An explicit local config selects agentic replay with four root sessions
+and no duration, request cutoff or accelerated warmup. This avoids the named
+AgentX scenario restoring its duration and warmup defaults. Initial lanes start
+together; later think times remain intact. Children finish even after the last
+root is admitted. This is a cold-start, small-cohort comparison, not a leaderboard
+submission or a general steady-state capacity claim.
+
+One explicit record processor participates in the harness startup barrier.
+Auto-scaling can otherwise register it after the one-shot dataset notification,
+leaving completed requests without processed metrics even with mmap caching
+disabled. This setting changes metric-service startup, not serving concurrency.
+
+`expected-work.json` records every source trace/outer/inner turn and its requested
+output. A cell only publishes throughput after matching every actual source turn
+and server-reported output count exactly. Missing, repeated, cancelled, failed,
+overflowed or shortened turns fail the cell. `completed-work.json` records the
+matched map and SHA-256; compare this hash and the selected cohort hash across
+all arms. Safety deadlines fail unfinished work without accepting partial
+throughput. Keep raw exports and failed cells in the comparison report.
+
+Report throughput, decode, TTFT, completed work and sampled process RSS/physical
+footprint separately for each category/model/backend/concurrency, with all three
+arms per engine and their variation. GPU residency remains unavailable where
+the platform exposes no separate counter. Standalone JY artifact jobs can run
+this profile without merging or syncing template configuration.
+
+## Duration-bounded smoke and full profiles
+
 Smoke version 8 uses a 60-second dispatch window and drains outstanding requests.
 Upstream `--burst-phase-starts` makes every lane's first profiling request
 eligible immediately; subsequent recorded inter-turn delays remain intact.

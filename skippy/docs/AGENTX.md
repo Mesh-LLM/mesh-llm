@@ -6,6 +6,14 @@ no legacy alias or old command-line compatibility. Its source is
 in `tools/xtask/src/automation/agentx`, with the upstream Python harness in a
 [locked external environment](../evals/agentx/pyproject.toml).
 
+For the small repeated comparison report, use the standalone `comparison`
+profile: four complete deterministic traces, 69 requests and 18,713 output
+tokens per c=1/2/4 cell, with ABBAAB engine order on one host. It has no
+dispatch cutoff or accelerated warmup and checks every source turn/output
+before accepting throughput. See the [fixed-work cohort and result contract](../evals/agentx/README.md#fixed-work-comparison).
+This profile can use standalone JY artifact jobs without changing installed
+repository templates; keep its workload version separate from smoke/full.
+
 One job owns one model and one engine. Separate llama.cpp and Skippy templates
 record standard JY serving points without mixing engines into one concurrency
 series. Run each comparison sequentially on the same DGX Spark; separate model

@@ -1796,6 +1796,13 @@ cleanup must follow the separate protected-catalog rollout procedure.
 
 ## Jianyang AgentX templates
 
+The additional standalone `comparison` profile is version
+`agentx-1.0.12.post1-local-comparison-1`: four complete pinned traces,
+69 source requests and 18,713 output tokens per c=1/2/4 cell. It has no
+dispatch cutoff or accelerated warmup; source-turn and output-count equality
+is required before throughput is published. It does not add registered templates
+or change smoke 8 / full 7. See the [cohort contract](../../../../skippy/evals/agentx/README.md#fixed-work-comparison).
+
 `skippy/evals/agentx/templates.yaml` carries the repository-owned Jianyang inventory, replacing
 its `agentic-replay` entry with four `agentx-{engine}-{profile}` templates. Other entries are migrated unchanged.
 Its model choices are four pinned Q4_K_M cases: dense attention, hybrid dense,

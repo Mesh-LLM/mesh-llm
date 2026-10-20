@@ -6,6 +6,17 @@ use std::{
 };
 
 pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<String> {
+    if input.profile == Profile::Comparison {
+        return vec![
+            "profile".into(),
+            "--config".into(),
+            input
+                .output
+                .join("comparison-config.json")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+    }
     let mut args = command::strings(&[
         "profile",
         "--url",
@@ -84,6 +95,12 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
 }
 pub(super) fn run(input: &Prepared, port: u16, concurrency: u32) -> DynResult<()> {
     ready(&input.root, port, &input.output)?;
+    if input.profile == Profile::Comparison {
+        super::write(
+            &input.output.join("comparison-config.json"),
+            &super::comparison_cohort::configuration(input, port, concurrency)?,
+        )?;
+    }
     // JY's macOS work directory exceeds sockaddr_un's 103-byte path limit
     // after AgentX appends its temporary directory and ZMQ socket names.
     // Own a short private directory until the supervised harness has stopped.

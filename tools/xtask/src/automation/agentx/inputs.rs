@@ -135,6 +135,9 @@ pub(super) fn recheck(prepared: &Prepared) -> DynResult<()> {
 }
 fn materialize(source: &Path, destination: &Path, profile: Profile) -> DynResult<()> {
     std::fs::create_dir(destination)?;
+    if profile == Profile::Comparison {
+        return super::comparison_cohort::materialize(source, destination);
+    }
     let limit = if profile == Profile::Smoke { 128 } else { 393 };
     let mut ids = Vec::new();
     let mut trace_context = Vec::new();

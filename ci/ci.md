@@ -2052,6 +2052,14 @@ on immediate repeated requests without publication sleeps or retries.
 
 ## Jianyang AgentX
 
+The standalone `comparison` profile uses workload version
+`agentx-1.0.12.post1-local-comparison-1`, with four complete pinned traces,
+69 source requests and 18,713 output tokens per cell. It runs c=1/2/4 without
+a dispatch cutoff or accelerated warmup and validates the exact source-turn
+and output-count map before accepting throughput. ABBAAB runs stay on one host.
+This profile leaves registered templates and smoke 8 / full 7 unchanged; see
+the [cohort contract](../skippy/evals/agentx/README.md#fixed-work-comparison).
+
 The external Jianyang job inventory is now source-owned in
 [`skippy/evals/agentx/templates.yaml`](../skippy/evals/agentx/templates.yaml). Its four `agentx-{engine}-{profile}` templates run
 llama.cpp or Skippy with a smoke or full profile and pinned upstream harness.
