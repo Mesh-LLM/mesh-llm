@@ -1,4 +1,4 @@
-From d8c5dc735187c7ca2f59dc79fb452b01adbbedec Mon Sep 17 00:00:00 2001
+From 15c71f77549c29cfca2458d1ad932c832e8115b0 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] build(skippy): wire native runtime and backend support
@@ -10,9 +10,9 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  common/chat-diff-analyzer.cpp              |  10 +-
  common/chat-peg-parser.cpp                 |  15 +-
  common/chat-peg-parser.h                   |   2 +-
- common/chat.cpp                            | 126 ++++-
+ common/chat.cpp                            | 126 +++-
  common/chat.h                              |   5 +-
- common/ngram-cache.cpp                     | 158 +++++-
+ common/ngram-cache.cpp                     | 158 ++++-
  common/peg-parser.cpp                      | 337 +++++++++++
  common/peg-parser.h                        |   8 +
  common/reasoning-budget.cpp                | 119 ++--
@@ -32,12 +32,12 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 +++++++
- src/CMakeLists.txt                         | 630 ++++++++++++++++++++-
+ src/CMakeLists.txt                         | 633 ++++++++++++++++++++-
  tests/CMakeLists.txt                       |   9 +
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 33 files changed, 3252 insertions(+), 127 deletions(-)
+ 33 files changed, 3255 insertions(+), 127 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -3527,10 +3527,20 @@ index 000000000..728899e4b
 +    }
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2e8..2fdba9f75 100644
+index 97250c2e8..ff0a97e34 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -47,6 +47,40 @@ set(LLAMA_CORE_SOURCES
+@@ -22,6 +22,9 @@ set(LLAMA_CORE_SOURCES
+     llama-impl.cpp
+     llama-io.cpp
+     llama-kv-cache.cpp
++    llama-kv-cache-extent.cpp
++    llama-kv-cache-views.cpp
++    llama-kv-cache-mask.cpp
+     llama-kv-cache-iswa.cpp
+     llama-kv-cache-dsa.cpp
+     llama-kv-cache-dsa-iswa.cpp
+@@ -47,6 +50,40 @@ set(LLAMA_CORE_SOURCES
  add_library(llama
              ../include/llama.h
              ${LLAMA_CORE_SOURCES}
@@ -3571,7 +3581,7 @@ index 97250c2e8..2fdba9f75 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -60,19 +94,611 @@ set_target_properties(llama PROPERTIES
+@@ -60,19 +97,611 @@ set_target_properties(llama PROPERTIES
  )
  
  # exclude non-model sources from unity build

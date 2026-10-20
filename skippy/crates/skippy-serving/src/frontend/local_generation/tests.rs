@@ -28,6 +28,7 @@ use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
+mod active_kv_window;
 mod native_cache_concurrency;
 mod native_decode_shapes;
 mod native_execution_accounting;

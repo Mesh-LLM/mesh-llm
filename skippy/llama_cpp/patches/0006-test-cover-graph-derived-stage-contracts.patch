@@ -1,4 +1,4 @@
-From f52b1c912c851ba80f56edcf204d4eac15f14c77 Mon Sep 17 00:00:00 2001
+From 3901c7ad31ba29f4e5dd8dd6c5c3433b2bd3ea53 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -32,14 +32,16 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-reasoning-budget.cpp               |    1 +
  tests/test-skippy-cachegen-import.cpp         |  347 ++++
  tests/test-skippy-cachegen-metal.cpp          |  399 ++++
- tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
+ tests/test-skippy-kv-cache-extent.h           |  171 ++
+ tests/test-skippy-kv-cells-contiguous.cpp     |   27 +
+ tests/test-skippy-kv-cells-extent.h           |  128 ++
  tests/test-skippy-kv-page-export.cpp          |  367 ++++
  tests/test-skippy-model-loader-accounting.cpp |  320 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 35 files changed, 10045 insertions(+), 32 deletions(-)
+ 37 files changed, 10351 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -63,7 +65,9 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  create mode 100644 tests/test-graph-contract-fixture.h
  create mode 100644 tests/test-skippy-cachegen-import.cpp
  create mode 100644 tests/test-skippy-cachegen-metal.cpp
+ create mode 100644 tests/test-skippy-kv-cache-extent.h
  create mode 100644 tests/test-skippy-kv-cells-contiguous.cpp
+ create mode 100644 tests/test-skippy-kv-cells-extent.h
  create mode 100644 tests/test-skippy-kv-page-export.cpp
  create mode 100644 tests/test-skippy-model-loader-accounting.cpp
  create mode 100644 tests/test-skippy-recurrent-state-roundtrip.cpp
@@ -9596,15 +9600,199 @@ index 000000000..b15b5e53a
 +    }
 +    return finish(0);
 +}
+diff --git a/tests/test-skippy-kv-cache-extent.h b/tests/test-skippy-kv-cache-extent.h
+new file mode 100644
+index 000000000..990ae9911
+--- /dev/null
++++ b/tests/test-skippy-kv-cache-extent.h
+@@ -0,0 +1,171 @@
++#pragma once
++
++#include "../src/llama-kv-cache.h"
++#include "../src/llama-model.h"
++#include "ggml-alloc.h"
++#include "ggml-cpu.h"
++#include "test-skippy-kv-cells-extent.h"
++
++#include <cmath>
++#include <memory>
++
++static void check_mask_extent(const llama_kv_cache & kv,
++                              const llama_ubatch &   ubatch,
++                              uint32_t               end,
++                              uint32_t               begin = 0) {
++    ggml_init_params        params = { ggml_tensor_overhead() * 2, nullptr, true };
++    ggml_context_ptr        ctx(ggml_init(params));
++    auto *                  full   = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 2048, ubatch.n_tokens);
++    auto *                  active = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, end, ubatch.n_tokens);
++    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), ggml_backend_cpu_buffer_type()));
++    require_extent(buffer != nullptr, "mask allocation failed");
++    for (bool causal : { false, true }) {
++        kv.set_input_kq_mask(full, &ubatch, causal);
++        kv.set_input_kq_mask(active, &ubatch, causal, begin);
++        const auto * full_data   = static_cast<const float *>(full->data);
++        const auto * active_data = static_cast<const float *>(active->data);
++        for (uint32_t row = 0; row < ubatch.n_tokens; ++row) {
++            for (uint32_t cell = 0; cell < 2048; ++cell) {
++                const auto value = full_data[row * 2048 + cell];
++                if (cell >= begin && cell < begin + end) {
++                    require_extent(value == active_data[row * end + cell - begin],
++                                   "active mask changed a retained cell");
++                } else {
++                    require_extent(std::isinf(value) && value < 0, "active extent excluded an unmasked cell");
++                }
++            }
++        }
++    }
++}
++
++static void check_extent_graph_reuse(llama_kv_cache &                  kv,
++                                     const llama_hparams &             hparams,
++                                     const llama_ubatch &              ubatch,
++                                     const llama_kv_cache::slot_info & slot) {
++    auto         next_slot  = slot;
++    auto         next_batch = ubatch;
++    const auto   seq        = ubatch.seq_id_unq[0];
++    const auto & cells      = kv.get_cells(seq);
++    llama_pos    next_pos   = cells.seq_pos_max(seq) + 1;
++    next_slot.idxs          = { { cells.seq_used_max_p1(seq) } };
++    next_batch.pos          = &next_pos;
++    llama_kv_cache_context context(&kv, { next_slot }, { next_batch });
++    require_extent(context.apply(), "cache context apply failed");
++    llama_cparams cparams = {};
++    cparams.kv_unified    = kv.get_n_stream() == 1;
++    llm_graph_input_attn_kv input(hparams, cparams, &context);
++    ggml_init_params        params = { ggml_tensor_overhead(), nullptr, true };
++    ggml_context_ptr        ctx(ggml_init(params));
++    input.self_kq_mask = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, context.get_n_kv(), 1);
++    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), ggml_backend_cpu_buffer_type()));
++    require_extent(buffer != nullptr, "reuse test mask allocation failed");
++    input.self_kq_mask_begin      = context.get_kv_begin();
++    llm_graph_params graph_params = {};
++    graph_params.mctx             = &context;
++    graph_params.ubatch           = ubatch;
++    graph_params.cparams          = cparams;
++    require_extent(input.can_reuse(graph_params), "unchanged physical view should reuse the graph");
++    input.self_kq_mask_begin += 256;
++    require_extent(!input.can_reuse(graph_params), "same shape at a different physical origin must rebuild the graph");
++}
++
++static void test_cache_extents(bool unified, bool v_trans = false) {
++    std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
++    require_extent(model != nullptr, "test model creation failed");
++    llama_hparams hparams      = {};
++    hparams.n_layer_all        = 1;
++    hparams.n_embd_head_k_full = 4;
++    hparams.n_embd_head_v_full = 4;
++    hparams.n_head_arr[0]      = 1;
++    hparams.n_head_kv_arr[0]   = 1;
++    llama_kv_cache kv(*model, hparams, GGML_TYPE_F32, GGML_TYPE_F32, v_trans, false, unified, 2048, 4, 256, 0,
++                      LLAMA_SWA_TYPE_NONE, nullptr, [](int32_t) { return true; }, {}, {});
++
++    llama_pos      pos             = 0;
++    llama_seq_id   seq             = 0;
++    llama_seq_id * ids             = &seq;
++    int32_t        count           = 1;
++    llama_ubatch   ubatch          = {};
++    ubatch.n_tokens                = 1;
++    ubatch.n_pos                   = 1;
++    ubatch.pos                     = &pos;
++    ubatch.n_seq_id                = &count;
++    ubatch.seq_id                  = &ids;
++    ubatch.n_seqs_unq              = 1;
++    ubatch.seq_id_unq              = &seq;
++    llama_kv_cache::slot_info slot = {};
++    auto                      put  = [&](llama_seq_id s, uint32_t cell, llama_pos logical) {
++        seq                   = s;
++        pos                   = logical;
++        const uint32_t stream = unified ? 0 : static_cast<uint32_t>(s);
++        slot.s0 = slot.s1 = stream;
++        slot.strm         = { static_cast<llama_seq_id>(stream) };
++        slot.idxs         = { { cell } };
++        kv.apply_ubatch(slot, ubatch);
++    };
++
++    put(0, 3, 900);
++    put(1, 1900, 0);
++    put(2, 700, 0);
++    put(3, 1300, 0);
++    seq     = 0;
++    slot.s0 = slot.s1 = 0;
++    slot.strm         = { 0 };
++    require_extent(kv.get_n_kv(slot, ubatch) == 256, "parked sessions must not extend an active view");
++    require_extent(kv.get_cells(1).seq_used_max_p1(1) == 1901, "parked session must stay resident");
++    check_mask_extent(kv, ubatch, 256);
++
++    // Resuming each parked sequence grows the view to include all of its
++    // physical cells, even when its logical positions are small.
++    for (const auto & resume : std::vector<std::pair<llama_seq_id, uint32_t>>{
++             { 1, 2048 },
++             { 2, 768  },
++             { 3, 1536 }
++    }) {
++        seq       = resume.first;
++        slot.strm = { unified ? 0 : seq };
++        require_extent(kv.get_n_kv(slot, ubatch) == resume.second, "resumed sequence history was excluded");
++        check_mask_extent(kv, ubatch, resume.second);
++        slot.s0 = slot.s1            = unified ? 0 : static_cast<uint32_t>(seq);
++        ggml_init_params view_params = { ggml_tensor_overhead() * 4, nullptr, true };
++        ggml_context_ptr view_ctx(ggml_init(view_params));
++        auto *           full_k = kv.get_k(view_ctx.get(), 0, resume.second, slot);
++        auto *           full_v = kv.get_v(view_ctx.get(), 0, resume.second, slot);
++        slot.kv_begin           = kv.get_kv_begin(ubatch);
++        const auto length       = kv.get_n_kv(slot, ubatch);
++        require_extent(slot.kv_begin > 0 && length == 256, "parked prefix was not excluded");
++        check_mask_extent(kv, ubatch, length, slot.kv_begin);
++        auto * cropped_k = kv.get_k(view_ctx.get(), 0, length, slot);
++        auto * cropped_v = kv.get_v(view_ctx.get(), 0, length, slot);
++        require_extent(cropped_k->view_offs == full_k->view_offs + slot.kv_begin * full_k->nb[2],
++                       "K view uses the wrong physical origin");
++        const auto token_stride = v_trans ? full_v->nb[0] : full_v->nb[2];
++        require_extent(cropped_v->view_offs == full_v->view_offs + slot.kv_begin * token_stride,
++                       "V view uses the wrong physical origin");
++        check_extent_graph_reuse(kv, hparams, ubatch, slot);
++        slot.kv_begin = 0;
++    }
++
++    llama_seq_id active[] = { 0, 2, 3, 1 };
++    ubatch.seq_id_unq     = active;
++    slot.strm             = unified ? std::vector<llama_seq_id>{ 0 } : std::vector<llama_seq_id>{ 0, 2, 3, 1 };
++    for (const auto & group : std::vector<std::pair<uint32_t, uint32_t>>{
++             { 1, 256  },
++             { 2, 768  },
++             { 4, 2048 }
++    }) {
++        ubatch.n_seqs_unq = group.first;
++        require_extent(kv.get_n_kv(slot, ubatch) == group.second, "active sequence union is incomplete");
++    }
++    // Missing or invalid metadata must preserve the conservative old extent.
++    ubatch.seq_id_unq = nullptr;
++    require_extent(kv.get_n_kv(slot, ubatch) == 2048, "missing metadata must fall back");
++    active[0]         = -1;
++    ubatch.seq_id_unq = active;
++    require_extent(kv.get_n_kv(slot, ubatch) == 2048, "invalid metadata must fall back");
++    active[0]             = 0;
++    ubatch.n_seqs_unq     = 1;
++    // The cache holds hparams by reference, matching the owning model lifetime.
++    hparams.indexer_kpool = 4;
++    require_extent(kv.get_n_kv(slot, ubatch) == 2048, "pooled indexer gathers need the complete extent");
++}
 diff --git a/tests/test-skippy-kv-cells-contiguous.cpp b/tests/test-skippy-kv-cells-contiguous.cpp
 new file mode 100644
-index 000000000..0e95c35b2
+index 000000000..1a97dec48
 --- /dev/null
 +++ b/tests/test-skippy-kv-cells-contiguous.cpp
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,27 @@
 +#include "../src/llama-kv-cells.h"
++#include "test-skippy-kv-cells-extent.h"
++#include "test-skippy-kv-cache-extent.h"
 +
 +int main() {
++    test_cell_extents();
++    test_cache_extents(true);
++    test_cache_extents(false);
++    test_cache_extents(true, true);
++    test_cache_extents(false, true);
 +    llama_kv_cells cells;
 +    cells.resize(8);
 +    for (uint32_t i = 0; i < 4; ++i) {
@@ -9621,6 +9809,140 @@ index 000000000..0e95c35b2
 +    if (!cells.seq_rm(2, 0)) return 4;
 +    if (cells.seq_pos_is_cell_contiguous(0)) return 5;
 +    return 0;
++}
+diff --git a/tests/test-skippy-kv-cells-extent.h b/tests/test-skippy-kv-cells-extent.h
+new file mode 100644
+index 000000000..cdc19d17d
+--- /dev/null
++++ b/tests/test-skippy-kv-cells-extent.h
+@@ -0,0 +1,128 @@
++#pragma once
++
++#include "../src/llama-kv-cells.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <random>
++
++static void require_extent(bool condition, const char * description) {
++    if (!condition) {
++        std::fprintf(stderr, "KV extent: %s\n", description);
++        std::abort();
++    }
++}
++
++static void check_cell_extents(const llama_kv_cells & cells) {
++    for (llama_seq_id seq = 0; seq < 4; ++seq) {
++        uint32_t expected = 0;
++        uint32_t first    = std::numeric_limits<uint32_t>::max();
++        for (uint32_t i = 0; i < cells.size(); ++i) {
++            if (!cells.is_empty(i) && cells.seq_has(i, seq)) {
++                expected = i + 1;
++                first    = std::min(first, i);
++            }
++        }
++        require_extent(cells.seq_used_max_p1(seq) == expected, "physical scan disagrees with index");
++        require_extent(cells.seq_used_min(seq) == first, "physical minimum disagrees with index");
++        require_extent(cells.seq_used_max_p1(seq) == expected, "repeated query changes the index");
++    }
++}
++
++static void test_cell_extents() {
++    llama_kv_cells cells;
++    cells.resize(64);
++    // Logical order deliberately differs from physical order, with duplicates
++    // and shared cells. A logical-position maximum is not a physical extent.
++    cells.pos_set(3, 100);
++    cells.seq_add(3, 0);
++    cells.pos_set(60, 1);
++    cells.seq_add(60, 0);
++    cells.seq_add(60, 1);
++    cells.pos_set(61, 1);
++    cells.seq_add(61, 1);
++    check_cell_extents(cells);
++    cells.seq_rm(60, 0);
++    require_extent(cells.seq_used_max_p1(0) == 4, "removing an alias must shrink only its own extent");
++    cells.mv(61, 8);
++    cells.rm(60);
++    check_cell_extents(cells);
++    cells.pos_add(8, 1000);
++    cells.pos_div(8, 2);
++    cells.reset_shift();
++    check_cell_extents(cells);
++
++    auto snapshot = cells.cp(0, cells.size());
++    cells.reset();
++    check_cell_extents(cells);
++    cells.set(0, snapshot);
++    check_cell_extents(cells);
++    const std::vector<uint32_t> indices = { 3, 8 };
++    snapshot                            = cells.cp(indices);
++    cells.set(std::vector<uint32_t>{ 62, 63 }, snapshot);
++    check_cell_extents(cells);
++    cells.seq_keep(63, 0);
++    check_cell_extents(cells);
++
++    std::mt19937 rng(0x4b564558);
++    for (uint32_t step = 0; step < 20000; ++step) {
++        const uint32_t     i   = rng() % cells.size();
++        const uint32_t     j   = rng() % cells.size();
++        const llama_seq_id seq = rng() % 4;
++        switch (rng() % 9) {
++            case 0:
++                if (cells.is_empty(i)) {
++                    cells.pos_set(i, rng() % 32);
++                    cells.seq_add(i, seq);
++                }
++                break;
++            case 1:
++                if (!cells.is_empty(i) && !cells.seq_has(i, seq)) {
++                    cells.seq_add(i, seq);
++                }
++                break;
++            case 2:
++                if (cells.seq_has(i, seq)) {
++                    cells.seq_rm(i, seq);
++                }
++                break;
++            case 3:
++                if (!cells.is_empty(i)) {
++                    cells.rm(i);
++                }
++                break;
++            case 4:
++                if (!cells.is_empty(i) && cells.is_empty(j)) {
++                    cells.mv(i, j);
++                }
++                break;
++            case 5:
++                if (!cells.is_empty(i)) {
++                    cells.pos_add(i, static_cast<int>(rng() % 7) - 3);
++                }
++                cells.reset_shift();
++                break;
++            case 6:
++                if (!cells.is_empty(i)) {
++                    cells.pos_div(i, 2);
++                }
++                cells.reset_shift();
++                break;
++            case 7:
++                cells.seq_keep(i, seq);
++                break;
++            case 8:
++                snapshot = cells.cp(std::vector<uint32_t>{ i });
++                cells.set(std::vector<uint32_t>{ j }, snapshot);
++                break;
++        }
++        // Occasionally defer queries to exercise multiple invalidations and
++        // insertions before the lazy high-water mark is rebuilt.
++        if (step % 11 == 0) {
++            check_cell_extents(cells);
++        }
++    }
++    check_cell_extents(cells);
++    cells.resize(16);
++    check_cell_extents(cells);
 +}
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 new file mode 100644
