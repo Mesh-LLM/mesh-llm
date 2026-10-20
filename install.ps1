@@ -235,6 +235,12 @@ function Remove-StaleBinaries {
             continue
         }
         $path = Join-Path $InstallDir $name
+        # A directory under a stale binary name would make Remove-Item ask
+        # whether to recurse, a prompt in an interactive install and a
+        # localized error otherwise. Stop with the same message everywhere.
+        if (Test-Path -LiteralPath $path -PathType Container) {
+            throw "stale binary path is a directory, remove it and run the installer again: $path"
+        }
         if (Test-Path $path) {
             Remove-Item $path -Force
         }

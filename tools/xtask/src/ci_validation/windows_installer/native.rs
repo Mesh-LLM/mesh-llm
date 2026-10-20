@@ -36,6 +36,9 @@ impl Installed {
             .close()
             .expect("owned installer fixture directory deletion failed");
     }
+    pub(super) fn stderr(&self) -> String {
+        String::from_utf8_lossy(&self.report.stderr.bytes_retained).into_owned()
+    }
     pub(super) fn path(&self, relative: &str) -> PathBuf {
         self.root.path().join(relative)
     }
@@ -381,6 +384,11 @@ fn native_windows_installer_stale_cleanup_failure_keeps_committed_new_product() 
         .unwrap();
     });
     result.rejected();
+    assert!(
+        result.stderr().contains("stale binary path is a directory"),
+        "{}",
+        result.stderr()
+    );
     assert!(result.path("bin/mesh-llm.exe").is_file());
     assert!(
         result
