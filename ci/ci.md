@@ -940,7 +940,9 @@ model cadence, device gates and protected action references remain unchanged.
   by `native-abi` changes (the patch queue and the llama build scripts) and on
   every main run. It replays the pinned patch queue, builds the static CPU ABI
   with `LLAMA_STAGE_BUILD_TESTS=ON`, and lets `build-llama.sh` run every
-  `^skippy_` test; nothing is skipped. It runs them with the image's 64-bit
+  `^skippy_` test; nothing is skipped. The same row then runs the
+  `skippy-runtime` and `skippy-serving` lib tests linked against that static
+  ABI (#2137), so Windows covers both crates without a runtime bundle. It runs them with the image's 64-bit
   CMake (`C:\Program Files\CMake`) rather than the 32-bit ctest that
   `msvc-dev-cmd` puts first on `PATH`, which dies on the graph-contract
   probes' output. The row's `ctest_parallel` is sized by memory, not cores:

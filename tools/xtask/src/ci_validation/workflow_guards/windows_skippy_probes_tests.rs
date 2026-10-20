@@ -1,7 +1,8 @@
 use super::*;
 const CHECK: &str = "  - if: ${{ matrix.check.kind == 'skippy-probes' }}\n    run: |\n      $ctest = 'C:\\Program Files\\CMake\\bin\\ctest.exe'\n      if ($machine -ne 0x8664) { throw 'not x64' }\n";
 const HEADROOM: &str = "  - if: ${{ matrix.check.kind == 'skippy-probes' }}\n    run: |\n      $os.TotalVirtualMemorySize - $os.FreeVirtualMemory\n";
-const BUILD_STEP: &str = "  - if: ${{ matrix.check.kind == 'skippy-probes' }}\n    env:\n      LLAMA_STAGE_BUILD_TESTS: \"ON\"\n      CTEST_PARALLEL_LEVEL: ${{ matrix.check.ctest_parallel }}\n    run: |\n      PATH=\"/c/Program Files/CMake/bin:$PATH\" scripts/build-llama.sh\n";
+const BUILD_STEP: &str = "  - if: ${{ matrix.check.kind == 'skippy-probes' }}\n    env:\n      LLAMA_STAGE_BUILD_TESTS: \"ON\"\n      LLAMA_STAGE_BUILD_DIR: .deps/probes\n      CTEST_PARALLEL_LEVEL: ${{ matrix.check.ctest_parallel }}\n    run: |\n      PATH=\"/c/Program Files/CMake/bin:$PATH\" scripts/build-llama.sh\n";
+const LIB_STEP: &str = "  - if: ${{ matrix.check.kind == 'skippy-probes' }}\n    env:\n      LLAMA_STAGE_LINK_MODE: static\n      LLAMA_STAGE_BUILD_DIR: .deps/probes\n    run: |\n      cargo test --locked -p skippy-runtime --lib\n      cargo test --locked -p skippy-serving --lib\n";
 fn job(timeout: &str, steps: &[&str]) -> Node {
     workflow_yaml::parse(&format!(
         "timeout-minutes: {timeout}\nsteps:\n{}",
@@ -20,9 +21,9 @@ fn windows_skippy_probes_actual_workflow_and_catalog_hold() {
 }
 #[test]
 fn windows_skippy_probes_job_checks_ctest_and_headroom_before_the_build() {
-    probe_job(&job(JOB_TIMEOUT, &[CHECK, HEADROOM, BUILD_STEP])).unwrap();
+    probe_job(&job(JOB_TIMEOUT, &[CHECK, HEADROOM, BUILD_STEP, LIB_STEP])).unwrap();
     for steps in [
-        &[BUILD_STEP, CHECK, HEADROOM][..],
+        &[BUILD_STEP, CHECK, HEADROOM, LIB_STEP][..],
         &[CHECK, BUILD_STEP, HEADROOM][..],
         &[HEADROOM, BUILD_STEP][..],
         &[CHECK, BUILD_STEP][..],
@@ -45,11 +46,36 @@ fn windows_skippy_probes_build_uses_x64_cmake_tests_and_row_parallelism() {
         let build = BUILD_STEP.replace(from, to);
         assert!(check != CHECK || build != BUILD_STEP, "{from}");
         assert!(
-            probe_job(&job(JOB_TIMEOUT, &[&check, HEADROOM, &build])).is_err(),
+            probe_job(&job(JOB_TIMEOUT, &[&check, HEADROOM, &build, LIB_STEP])).is_err(),
             "{from}"
         );
     }
-    assert!(probe_job(&job("75", &[CHECK, HEADROOM, BUILD_STEP])).is_err());
+    assert!(probe_job(&job("75", &[CHECK, HEADROOM, BUILD_STEP, LIB_STEP])).is_err());
+}
+#[test]
+fn windows_skippy_probes_lib_tests_follow_the_build_on_its_static_abi() {
+    for steps in [
+        &[CHECK, HEADROOM, BUILD_STEP][..],
+        &[CHECK, HEADROOM, LIB_STEP, BUILD_STEP][..],
+    ] {
+        assert!(probe_job(&job(JOB_TIMEOUT, steps)).is_err(), "{steps:?}");
+    }
+    for (from, to) in [
+        ("-p skippy-serving", "-p skippy-server"),
+        ("static", "dynamic"),
+        (
+            "LLAMA_STAGE_BUILD_DIR: .deps/probes\n    run",
+            "LLAMA_STAGE_BUILD_DIR: .deps/other\n    run",
+        ),
+        ("skippy-probes", "unit"),
+    ] {
+        let lib = LIB_STEP.replace(from, to);
+        assert_ne!(lib, LIB_STEP, "{from}");
+        assert!(
+            probe_job(&job(JOB_TIMEOUT, &[CHECK, HEADROOM, BUILD_STEP, &lib])).is_err(),
+            "{from}"
+        );
+    }
 }
 #[test]
 fn windows_skippy_probes_row_is_windows_and_extends_the_timeout() {
