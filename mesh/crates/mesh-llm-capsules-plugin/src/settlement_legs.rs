@@ -2,9 +2,13 @@
 //! exchanges, beside the `payment.lifecycle.v1` trail
 //! ([`crate::settlement_channel`]), which seals what it did before.
 //!
-//! One terms leg per invoice. Mesh pays per invoice (an input and an output
-//! invoice per exchange, each with its own payment hash), and -00 joins one
-//! payer-observed and one payee-observed leg per terms leg.
+//! One terms leg per invoice. Mesh pays per invoice, each with its own payment
+//! hash: a deposit invoice (segment 0, the `input_*` phases) when the seller
+//! asks for one, and a final invoice (segment 1, the `output_*` phases) only
+//! when the bill exceeds the deposit (hosts before token metering issued an
+//! input and an output invoice on these segments). An exchange can have
+//! either, both or neither. -00 joins one payer-observed and one
+//! payee-observed leg per terms leg.
 //!
 //! **Who seals what.**
 //! - The payer seals the terms leg when it sees an invoice issued (the
@@ -26,9 +30,12 @@
 //!   for one of its own invoices whose amount is that invoice's amount; any
 //!   other pushed terms leg is ignored.
 //! - The payer seals `delivered` (`received`) with the exchange's response
-//!   digest, citing the output invoice's terms leg. The provider's own
-//!   delivered leg needs its exchange event joined to its lifecycle events,
-//!   which the host does not do yet, so it is not sealed.
+//!   digest once its host reports the bill accounted (`final_accounted`), so
+//!   no final invoice is still to come. It cites the final invoice's terms
+//!   leg, or the deposit's when the deposit covered the bill; an exchange
+//!   with no invoice has no terms leg to cite and gets no delivered leg. The
+//!   provider's own delivered leg needs its exchange event joined to its
+//!   lifecycle events, which the host does not do yet, so it is not sealed.
 //!
 //! `observed_at` is when this node received the host's event, coarsened to
 //! the minute like every committed time here; the host's events carry no
@@ -136,8 +143,11 @@ struct OwnTerms {
 struct Inner {
     /// Payer: its terms legs, by payment hash.
     own_terms: Bounded<OwnTerms>,
-    /// Payer: the output invoice's payment hash, by exchange id.
-    output_hash: Bounded<String>,
+    /// Payer: the payment hash whose terms leg the delivered leg cites, by
+    /// exchange id: the final invoice's, else the deposit's.
+    cited_hash: Bounded<String>,
+    /// Payer: the exchanges whose bill the host accounted (`final_accounted`).
+    accounted: Bounded<()>,
     /// Payer: the serving peer, by exchange id.
     peer: Bounded<String>,
     /// Payer: payment hashes whose terms leg is not pushed yet, by exchange id.
@@ -216,7 +226,8 @@ impl Legs {
         let mut inner = self.inner();
         let dropped = [
             ("terms legs", inner.own_terms.expire(cutoff)),
-            ("output invoices", inner.output_hash.expire(cutoff)),
+            ("cited invoices", inner.cited_hash.expire(cutoff)),
+            ("accounted exchanges", inner.accounted.expire(cutoff)),
             ("serving peers", inner.peer.expire(cutoff)),
             ("unpushed terms legs", inner.unpushed.expire(cutoff)),
             ("response digests", inner.response.expire(cutoff)),
@@ -246,6 +257,10 @@ impl Legs {
     ) -> Vec<Push> {
         self.expire(Instant::now());
         let role = event.role.unwrap_or(Role::Payer);
+        if role == Role::Payer && event.phase == Phase::FinalAccounted {
+            self.payer_accounted(capsules, &event.exchange_id);
+            return Vec::new();
+        }
         let Some(hash) = event.payment_hash.as_deref() else {
             return Vec::new();
         };
@@ -315,9 +330,11 @@ impl Legs {
                     capsule_id: sealed.capsule_id.clone(),
                 },
             );
-            if event.phase == Phase::OutputInvoiceIssued {
+            // The final invoice's terms leg is cited over the deposit's.
+            if event.phase == Phase::OutputInvoiceIssued || !inner.cited_hash.contains(&exchange_id)
+            {
                 inner
-                    .output_hash
+                    .cited_hash
                     .insert(exchange_id.clone(), hash.to_string());
             }
             let push = match inner.peer.get(&exchange_id).cloned() {
@@ -469,19 +486,44 @@ impl Legs {
             .insert(push.exchange_id.clone(), push.peer.clone());
     }
 
-    /// The payer's delivered leg is due once both the output invoice's terms
-    /// leg and the response digest are known; the exchange's entries are then
-    /// cleared, so a later event for the same id starts afresh.
+    /// Payer: the host accounted the exchange's bill (`final_accounted`), so
+    /// every invoice it will issue for the exchange has been seen.
+    fn payer_accounted(&self, capsules: &CapsuleState, exchange_id: &str) {
+        let delivered = {
+            let mut inner = self.inner();
+            inner.accounted.insert(exchange_id.to_string(), ());
+            Self::delivered_due(&mut inner, exchange_id)
+        };
+        if let Some((terms_ref, digest)) = delivered {
+            self.seal_payer_delivered(capsules, &terms_ref, &digest);
+        }
+    }
+
+    /// The payer's delivered leg is due once the bill is accounted and the
+    /// response digest is known. It cites the final invoice's terms leg, or
+    /// the deposit's when the deposit covered the bill; with neither there is
+    /// nothing to cite and no leg. The exchange's entries are then cleared, so
+    /// a later event for the same id starts afresh.
     fn delivered_due(inner: &mut Inner, exchange_id: &str) -> Option<(String, String)> {
-        let hash = inner.output_hash.get(exchange_id)?.clone();
+        if !inner.accounted.contains(exchange_id) {
+            return None;
+        }
         let digest = inner.response.get(exchange_id)?.clone();
-        let terms = inner.own_terms.get(&hash)?.capsule_id.clone();
-        inner.output_hash.remove(exchange_id);
+        let terms = inner
+            .cited_hash
+            .get(exchange_id)
+            .and_then(|hash| inner.own_terms.get(hash))
+            .map(|terms| terms.capsule_id.clone());
+        inner.accounted.remove(exchange_id);
+        inner.cited_hash.remove(exchange_id);
         inner.response.remove(exchange_id);
         if !inner.unpushed.contains(exchange_id) {
             inner.peer.remove(exchange_id);
         }
-        Some((terms, digest))
+        if terms.is_none() {
+            tracing::debug!(%exchange_id, "no terms leg for this exchange; no delivered leg");
+        }
+        Some((terms?, digest))
     }
 
     fn seal_payer_delivered(&self, capsules: &CapsuleState, terms_ref: &str, digest: &str) {
@@ -546,11 +588,12 @@ impl Legs {
 
     /// How many entries each kind holds, in field order.
     #[cfg(test)]
-    fn held(&self) -> [usize; 8] {
+    fn held(&self) -> [usize; 9] {
         let inner = self.inner();
         [
             inner.own_terms.len(),
-            inner.output_hash.len(),
+            inner.cited_hash.len(),
+            inner.accounted.len(),
             inner.peer.len(),
             inner.unpushed.len(),
             inner.response.len(),
@@ -603,6 +646,15 @@ mod tests {
         parse_and_check(&serde_json::to_vec(&body).unwrap()).expect("a host-shaped event")
     }
 
+    /// The payer host's `final_accounted` for `exchange_id`.
+    fn accounted(exchange_id: &str) -> PaymentLifecycleEvent {
+        let mut body = host_shaped_event(exchange_id, Phase::FinalAccounted, None, None, 1000);
+        body["role"] = json!("payer");
+        body["event_ref"] = json!("");
+        body["event_ref"] = json!(crate::producer::jcs::json_digest(&body).unwrap());
+        parse_and_check(&serde_json::to_vec(&body).unwrap()).expect("a host-shaped event")
+    }
+
     fn legs_of(dir: &Path) -> Vec<Value> {
         std::fs::read_to_string(dir.join("ledger").join("capsules.jsonl"))
             .unwrap_or_default()
@@ -648,6 +700,11 @@ mod tests {
                 &event("provider", "p-ex", phase, seg, hash, 1000, wallet),
             );
         }
+        fn payer_accounted(&self) {
+            self.payer
+                .settlement_legs()
+                .on_lifecycle(&self.payer, &accounted("ex"));
+        }
         fn deliver(&self, pushes: &[Push]) {
             for push in pushes {
                 assert_eq!(push.peer, PROVIDER_PEER);
@@ -659,8 +716,9 @@ mod tests {
     }
 
     /// Both nodes of one paid exchange, in the order a live run sees it:
-    /// invoices, then each wallet's settlement, then the payer's exchange
-    /// event naming the provider (when the terms legs are pushed).
+    /// invoices, then each wallet's settlement and the payer's accounted
+    /// bill, then the payer's exchange event naming the provider (when the
+    /// terms legs are pushed).
     fn two_nodes(a: &Path, b: &Path, provider_wallet: &[(&str, u64)]) -> (Vec<Value>, Vec<Value>) {
         let pair = Pair::open(a, b);
         for (phase, seg, hash) in [
@@ -680,6 +738,7 @@ mod tests {
             pair.provider_event(phase, seg, hash, provider_wallet);
             pair.payer_event(phase, seg, hash, &[("fee_msat", 0)]);
         }
+        pair.payer_accounted();
         let pushes = pair.payer.settlement_legs().on_exchange(
             &pair.payer,
             "ex",
@@ -843,10 +902,53 @@ mod tests {
         let pair = Pair::open(a.path(), b.path());
         let legs = pair.payer.settlement_legs();
         pair.payer_event(Phase::OutputInvoiceIssued, 1, OUTPUT, &[]);
+        pair.payer_accounted();
         legs.on_exchange(&pair.payer, "ex", Some(PROVIDER_PEER), Some(RESPONSE));
         assert_eq!(kinds(&legs_of(a.path())), ["terms", "delivered"]);
-        let [_, output_hash, peer, unpushed, response, ..] = legs.held();
-        assert_eq!((output_hash, peer, unpushed, response), (0, 0, 0, 0));
+        let [_, cited_hash, accounted, peer, unpushed, response, ..] = legs.held();
+        assert_eq!(
+            (cited_hash, accounted, peer, unpushed, response),
+            (0, 0, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn a_deposit_that_covers_the_bill_gets_a_delivered_leg_once_accounted() {
+        let (a, b) = dirs();
+        let pair = Pair::open(a.path(), b.path());
+        let legs = pair.payer.settlement_legs();
+        pair.payer_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+        pair.payer_event(Phase::InputSettlementObserved, 0, INPUT, &[("fee_msat", 0)]);
+        legs.on_exchange(&pair.payer, "ex", Some(PROVIDER_PEER), Some(RESPONSE));
+        assert_eq!(
+            kinds(&legs_of(a.path())),
+            ["terms", "payer_observed"],
+            "a final invoice may still come"
+        );
+        pair.payer_accounted();
+        let payer = legs_of(a.path());
+        assert_eq!(kinds(&payer), ["terms", "payer_observed", "delivered"]);
+        assert_eq!(
+            payer[2]["settlement"]["terms_ref"], payer[0]["capsule_id"],
+            "delivery cites the deposit"
+        );
+        assert_eq!(
+            payer[2]["settlement"]["delivery"]["content_digest"],
+            json!(RESPONSE)
+        );
+        let [_, cited_hash, accounted, _, _, response, ..] = legs.held();
+        assert_eq!((cited_hash, accounted, response), (0, 0, 0));
+    }
+
+    #[test]
+    fn an_exchange_with_no_invoice_gets_no_delivered_leg() {
+        let (a, b) = dirs();
+        let pair = Pair::open(a.path(), b.path());
+        let legs = pair.payer.settlement_legs();
+        pair.payer_accounted();
+        legs.on_exchange(&pair.payer, "ex", Some(PROVIDER_PEER), Some(RESPONSE));
+        assert!(legs_of(a.path()).is_empty());
+        assert_eq!(legs.held(), [0; 9], "the exchange's entries are cleared");
     }
 
     #[test]
@@ -861,12 +963,12 @@ mod tests {
             pair.provider.settlement_legs(),
         );
         payer.expire(Instant::now());
-        assert_ne!(payer.held(), [0; 8], "fresh entries stay");
+        assert_ne!(payer.held(), [0; 9], "fresh entries stay");
         let later = Instant::now() + MAX_AGE + Duration::from_secs(1);
         payer.expire(later);
         provider.expire(later);
-        assert_eq!(payer.held(), [0; 8]);
-        assert_eq!(provider.held(), [0; 8]);
+        assert_eq!(payer.held(), [0; 9]);
+        assert_eq!(provider.held(), [0; 9]);
         assert!(payer.retry().is_empty());
     }
 
