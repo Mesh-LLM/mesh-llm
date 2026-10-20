@@ -3,8 +3,9 @@
   "background": "#ffffff",
   "padding": 24,
   "title": {
-    "text": "DGX Spark 2 / CUDA · Qwen3.5-4B Q4_K_M",
+    "text": "Hybrid dense · Qwen3.5-4B · Q4_K_M",
     "subtitle": [
+      "Platform: DGX Spark 2 / CUDA · Model category: hybrid dense",
       "AgentX smoke v8 · ABBAAB · c = offered root sessions · 3 repetitions per plotted cell",
       "c2 omitted: unequal completed work + one startup failure. c1/c4 workloads match.",
       "Error bars show observed range, not confidence intervals. RSS is process memory, not GPU residency."

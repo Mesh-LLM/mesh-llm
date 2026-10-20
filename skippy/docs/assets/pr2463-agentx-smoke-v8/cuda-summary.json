@@ -227,5 +227,6 @@
       "peak_completed_rss_gib": 6.107200622558594,
       "peak_completed_footprint_gib": null
     }
-  ]
+  ],
+  "category": "hybrid dense"
 }

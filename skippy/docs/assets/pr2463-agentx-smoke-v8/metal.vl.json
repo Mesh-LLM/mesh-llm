@@ -3,8 +3,9 @@
   "background": "#ffffff",
   "padding": 24,
   "title": {
-    "text": "M3 Ultra / Metal · Qwen3.5-4B Q4_K_M",
+    "text": "Hybrid dense · Qwen3.5-4B · Q4_K_M",
     "subtitle": [
+      "Platform: M3 Ultra / Metal · Model category: hybrid dense",
       "AgentX smoke v8 · ABBAAB · c = offered root sessions · 3 repetitions per plotted cell",
       "Matched completed work at c1/c2/c4. c1 output TPS is dispatch-window limited.",
       "Error bars show observed range, not confidence intervals. RSS is process memory, not GPU residency."

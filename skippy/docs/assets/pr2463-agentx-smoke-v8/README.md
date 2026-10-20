@@ -1,6 +1,12 @@
-# AgentX smoke v8 comparison charts
+# AgentX smoke v8 — Hybrid dense: Qwen3.5-4B
 
-Qwen3.5-4B Q4_K_M, three same-host repetitions per engine at offered root-session
+**Category: hybrid dense. Model: Qwen3.5-4B. Quantization: Q4_K_M.**
+
+These charts cover only the hybrid dense model in the four-model benchmark
+matrix. Dense (Qwen3-4B-Instruct-2507), MoE (Qwen3-Coder-30B-A3B) and hybrid MoE
+(Qwen3.5-35B-A3B) have historical results and await a comparable rerun.
+
+Three same-host repetitions per engine at offered root-session
 concurrency 1/2/4, in llama/Skippy/Skippy/llama/llama/Skippy order.
 These charts document the campaign in [PR #2463](https://github.com/Mesh-LLM/mesh-llm/pull/2463).
 They are local comparative smokes, not an official AgentX leaderboard submission.
