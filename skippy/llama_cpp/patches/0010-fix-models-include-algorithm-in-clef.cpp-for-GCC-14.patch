@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Brody <0c30d6330cb88c7b0519e2630b057ef0c584ad3f0be0157d9d2fdf0c913780bd@meshllm.communities.buzz.xyz>
+Date: Tue, 20 Oct 2026 18:49:49 +1100
+Subject: [PATCH] fix(models): include <algorithm> in clef.cpp for GCC 14+
+
+clef.cpp uses std::find without including <algorithm>. Upstream compiles
+it in a unity batch where another file provides the header; the staged
+build compiles model sources individually, so GCC 14+ fails.
+---
+ src/models/clef.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/models/clef.cpp b/src/models/clef.cpp
+index cd2889b22..6f8720913 100644
+--- a/src/models/clef.cpp
++++ b/src/models/clef.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "llama-ext.h"
+ 
++#include <algorithm>
+ #include <cmath>
+ 
+ void llama_model_clef::load_arch_hparams(llama_model_loader & ml) {
+-- 
+2.54.0 (Apple Git-157)
+
