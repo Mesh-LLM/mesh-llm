@@ -1,4 +1,6 @@
-//! Native runtime library discovery for the gated test.
+//! Native runtime library discovery for tests that load a runtime bundle: the
+//! gated `runtime_events_native` integration test and `test_support`'s
+//! `require_native_runtime`.
 
 use std::path::{Path, PathBuf};
 

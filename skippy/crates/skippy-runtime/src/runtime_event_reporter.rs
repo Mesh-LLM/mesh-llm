@@ -39,7 +39,7 @@ use skippy_ffi::{
     SkippyRuntimeEventV1 as RawRuntimeEvent,
 };
 
-use crate::capability_probe::probe_capabilities;
+use crate::capability_probe::{CapabilityReport, probe_capabilities};
 use crate::runtime_events::{NativeEventRecord, RUNTIME_EVENT_V1_ABI_VERSION};
 
 /// Records the ring holds before it starts dropping.
@@ -207,7 +207,11 @@ fn clear_reporter_fn() -> Option<ClearReporterFn> {
 /// native state when the family is unavailable or a symbol failed to
 /// resolve, so a caller can fall back cleanly on an older runtime.
 pub fn install_runtime_event_reporter() -> bool {
-    if !probe_capabilities().family_confirmed(FEATURE_RUNTIME_EVENT_REPORTER) {
+    install_runtime_event_reporter_for(&probe_capabilities())
+}
+
+fn install_runtime_event_reporter_for(capabilities: &CapabilityReport) -> bool {
+    if !capabilities.family_confirmed(FEATURE_RUNTIME_EVENT_REPORTER) {
         return false;
     }
     let Some(set_fn) = set_reporter_fn() else {
@@ -350,10 +354,13 @@ mod tests {
     #[test]
     fn install_returns_false_without_a_confirmed_family() {
         let _test_guard = test_guard();
-        // No native runtime is loaded in unit tests, so the family probe
-        // always reports unconfirmed; install must refuse cleanly rather
-        // than dereference an absent native symbol.
-        assert!(!install_runtime_event_reporter());
+        // Install must refuse cleanly on an unconfirmed family rather than
+        // dereference an absent native symbol. The report is the probe's
+        // no-runtime answer, built here because a lib test that loads a
+        // runtime through `test_support` confirms the family process-wide.
+        assert!(!install_runtime_event_reporter_for(
+            &CapabilityReport::default()
+        ));
     }
 
     #[test]

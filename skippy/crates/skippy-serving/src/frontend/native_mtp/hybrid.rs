@@ -451,6 +451,7 @@ mod tests {
 
     #[test]
     fn cache_extends_native_mtp_without_requiring_a_matching_prefix() {
+        skippy_runtime::test_support::require_native_runtime();
         let provider = CompositeProposalProvider::from_options(options());
         let mut cache = HistoryNgramProposer::new_cache(2, 2).unwrap();
         let context = [1, 9, 7, 1, 9, 7, 1];
@@ -467,6 +468,7 @@ mod tests {
 
     #[test]
     fn one_token_horizon_keeps_one_exact_ngram_token() {
+        skippy_runtime::test_support::require_native_runtime();
         let provider = CompositeProposalProvider::from_options(options());
         let mut cache = HistoryNgramProposer::new_cache(1, 1).unwrap();
         let block = (1..=12).collect::<Vec<_>>();

@@ -1378,6 +1378,7 @@ mod tests {
 
     #[test]
     fn native_invalid_argument_is_returned_without_serial_fallback() {
+        crate::test_support::require_native_runtime();
         let mut first = batch_session(false, true);
         let mut second = batch_session(false, true);
         let error = StageSession::iteration_batch_sampled(&mut [
