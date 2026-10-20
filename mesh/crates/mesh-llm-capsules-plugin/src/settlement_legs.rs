@@ -317,10 +317,18 @@ impl Legs {
                 ("payment_ref", ln(hash)),
             ],
         );
+        let exchange_id = event.exchange_id.clone();
+        // The final invoice is cited over the deposit, and recorded before
+        // sealing: if its terms leg is not sealed there is nothing to cite,
+        // rather than the deposit's.
+        if event.phase == Phase::OutputInvoiceIssued {
+            self.inner()
+                .cited_hash
+                .insert(exchange_id.clone(), hash.to_string());
+        }
         let Some(sealed) = seal(capsules, "terms", leg) else {
             return Vec::new();
         };
-        let exchange_id = event.exchange_id.clone();
         let (push, delivered) = {
             let mut inner = self.inner();
             inner.own_terms.insert(
@@ -330,9 +338,7 @@ impl Legs {
                     capsule_id: sealed.capsule_id.clone(),
                 },
             );
-            // The final invoice's terms leg is cited over the deposit's.
-            if event.phase == Phase::OutputInvoiceIssued || !inner.cited_hash.contains(&exchange_id)
-            {
+            if !inner.cited_hash.contains(&exchange_id) {
                 inner
                     .cited_hash
                     .insert(exchange_id.clone(), hash.to_string());
@@ -938,6 +944,24 @@ mod tests {
         );
         let [_, cited_hash, accounted, _, _, response, ..] = legs.held();
         assert_eq!((cited_hash, accounted, response), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_final_invoice_whose_terms_leg_is_not_sealed_is_never_replaced_by_the_deposit() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = CapsuleState::open(dir.path(), "payer-node").unwrap();
+        let payer = |legs: &Legs, phase, seg, hash| {
+            legs.on_lifecycle(&state, &event("payer", "ex", phase, seg, hash, 1000, &[]));
+        };
+        // The final invoice's terms leg is already in the ledger (sealed
+        // before a restart), so sealing it again seals nothing.
+        payer(&Legs::default(), Phase::OutputInvoiceIssued, 1, OUTPUT);
+        let legs = Legs::default();
+        payer(&legs, Phase::InputInvoiceIssued, 0, INPUT);
+        payer(&legs, Phase::OutputInvoiceIssued, 1, OUTPUT);
+        legs.on_lifecycle(&state, &accounted("ex"));
+        legs.on_exchange(&state, "ex", Some(PROVIDER_PEER), Some(RESPONSE));
+        assert_eq!(kinds(&legs_of(dir.path())), ["terms", "terms"]);
     }
 
     #[test]
