@@ -103,7 +103,7 @@ means a footer was present, but signature verification failed.
 
 Native runtime catalog signing is independent of executable release
 attestation and Apple code signing. The protected release publisher recognizes
-these dedicated Actions environment secrets:
+these dedicated repository Actions secrets (no environment or extra approval):
 
 - `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` — the full encrypted
   Minisign secret-key file
@@ -115,44 +115,35 @@ leave the secret key unencrypted:
 
 ```bash
 umask 077
-mkdir -p /tmp/mesh-native-runtime-catalog-key
-minisign -G \
-  -p /tmp/mesh-native-runtime-catalog-key/native-runtime-catalog.pub \
-  -s /tmp/mesh-native-runtime-catalog-key/native-runtime-catalog.key
+KEYDIR=$(mktemp -d "$HOME/native-runtime-key.XXXXXX")
+minisign -G -p "$KEYDIR/native-runtime-catalog.pub" -s "$KEYDIR/native-runtime-catalog.key"
 ```
 
-Enter a new strong password when prompted and store the encrypted secret key
-and password in the production password vault. Review the public key and its
-key ID out of band, then commit that exact public file at
-`skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub`. There
-is intentionally no placeholder key at that path. The public pin must land
-before the Actions secrets are enabled; never fetch the trusted public key from
-the release or catalog download location.
+Enter a strong password at the prompt. Back up the encrypted `.key`, password,
+and `.pub` in the production password vault and confirm they can be retrieved.
+Do not regenerate an already provisioned key. The reviewed public key is committed
+at `skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub` and
+compiled into installer options; never obtain a trust pin from the download server.
 
-After the public-key change is reviewed, create the `native-runtime-release`
-Actions environment with required release reviewers and a deployment branch
-policy restricted to the default branch used by release dispatch. The publish
-job targets this environment; configure these as **environment secrets**, not
-repository secrets. This approval also gates publication before key rollout.
-Provision the full encrypted key file and enter its password through the `gh`
-prompt:
+Upload the encrypted key and enter its password through the interactive prompt:
 
 ```bash
-gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY \
-  --app actions --env native-runtime-release \
-  < /tmp/mesh-native-runtime-catalog-key/native-runtime-catalog.key
-
-gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD --app actions --env native-runtime-release
+gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY --repo Mesh-LLM/mesh-llm < "$KEYDIR/native-runtime-catalog.key"
+gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD --repo Mesh-LLM/mesh-llm
 ```
 
-Do not dispatch a release while only one secret is configured. The Rust signer
-requires both values and refuses to emit a signature unless the secret key
-derives the committed public key. Once provisioned, the publisher signs the
-exact final `native-runtimes.json` bytes after matrix validation and publishes
-`native-runtimes.json.minisig` beside the existing `.sha256` sidecar. Until
-then, signature output is skipped and the existing checksum-default behavior
-remains compatible. Partial secret configuration fails the release. This
-rollout does not rewrite any older release.
+These are repository secrets, not environment secrets. Workflow authors with
+repository write access are trusted with their use. Only the signing step receives
+them; builds and download/load consumers do not. A maintainer-authorized isolated
+diagnostic can exercise signing without publishing a release.
+
+Missing or partial configuration, wrong passwords, and mismatched keys fail
+publication. The signer verifies its output against the reviewed key before
+writing it. The publisher signs the exact final catalog after matrix validation
+and publishes `native-runtimes.json.minisig` beside `.sha256` and the runtime
+archives. There is no unsigned fallback. Older releases are not rewritten, and
+consumers must explicitly select strict verification; embedding the public key
+alone does not change the checksum-only default.
 
 To verify a newly signed catalog, use the reviewed public-key checkout rather
 than a key downloaded with the release:
@@ -395,3 +386,21 @@ self-hosting path.
 Forks build without the secret and therefore never report. See
 `website/src/docs/pages/analytics.md` for the collected surface and the
 opt-out, and `crates/mesh-llm-analytics/README.md` for the design.
+
+### Isolated pre-merge signing qualification
+
+A maintainer can dispatch the existing manual controller at the candidate branch
+without publishing anything:
+
+```bash
+gh workflow run ci-control.yml --repo Mesh-LLM/mesh-llm --ref feat/runtime-catalog-signing -f runtime_signing_diagnostic=true
+```
+
+This mode skips normal CI dispatch. The dedicated reusable builds the signer
+without cached executables, signs a catalog for a retained real Linux CPU runtime
+artifact, and sends only public files to a separate hosted consumer. That consumer
+uses the compiled key (no key override) and exercises HTTP download, strict
+installation, missing/wrong signatures, catalog/archive/cache tampering, and actual
+native loading. The retained input is tied to PR source `8b34702e8`; artifact expiry
+is an explicit failure, not permission to substitute another build. This is
+signing-chain evidence, not a new native build or a full release-matrix pass.

@@ -410,3 +410,21 @@ fn signed_catalog_cannot_override_requested_abi_or_host_platform() {
     options.bundle_dirs.clear();
     assert!(install(options).is_err());
 }
+
+#[test]
+fn constructors_embed_the_reviewed_production_pin_without_enabling_strict_policy() {
+    let install = NativeRuntimeInstallOptions::new(RELEASE, test_catalog());
+    let manifest =
+        skippy_runtime_install::NativeRuntimeManifestOptions::new(RELEASE, test_catalog());
+    let pin = include_str!("../trust/native-runtime-catalog.pub");
+    assert_eq!(install.trusted_public_key.as_deref(), Some(pin));
+    assert_eq!(manifest.trusted_public_key.as_deref(), Some(pin));
+    assert_eq!(
+        install.verification_policy,
+        NativeRuntimeVerificationPolicy::RequireChecksum
+    );
+    PublicKeyBox::from_string(pin)
+        .unwrap()
+        .into_public_key()
+        .unwrap();
+}

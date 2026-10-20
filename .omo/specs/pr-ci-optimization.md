@@ -100,6 +100,12 @@ Routine main validation has the same acceptance invariant and exposes
 `Main / Quality`, `Main / Website`, `Main / Linux`, `Main / macOS`, and
 `Main / Windows` from five focused native runs.
 
+The manual controller also has a maintainer-authorized signing-only diagnostic
+input. It bypasses the full-plan path and calls an isolated hosted signer and
+separate public-artifact consumer. It does not change the five required lane
+contracts, claim full-CI coverage, or publish releases. See the manage-ci skill
+for its repository-secret boundary.
+
 ## Graph
 
   PR Quality entry --> plan --> protected Quality lane --> PR / Quality

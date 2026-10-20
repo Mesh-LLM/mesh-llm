@@ -1844,7 +1844,6 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    environment: native-runtime-release
     needs:
       - metadata
       - release_ui

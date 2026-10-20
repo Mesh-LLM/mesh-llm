@@ -132,7 +132,7 @@ publish chain orders `mesh-llm-plugin` before `mesh-llm-wallet` and
 | `main_macos.yml` (`Main · macOS`) | push to `main` | Plans and calls the same-commit macOS lane |
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Plans and calls the same-commit Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert compatibility for the former main ingress filename, pending the protected-main runner-contract update |
-| `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` on `main` | Explicit operator-only full plan, detached lane dispatch, and correlated diagnostic checks |
+| `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` | Default-branch full plan, or opt-in candidate signing-only diagnostic |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
 | `nightly-stability.yml` / `nightly-stability-run.yml` | daily schedule, dispatch / reusable | GitHub-hosted live-endpoint evidence. The general stability and KV tool-loop/prefix-reuse harnesses run independently, upload both evidence sets, and preserve either failure. The reusable workflow accepts no runner label. |
 | `nightly-kv-coverage.yml` | daily schedule, dispatch | Trusted-`main`, read-only, GitHub-hosted expansion of deterministic radix lease/eviction and blob-ownership state machines. Seed/step budgets and the exact source SHA are uploaded; no secrets or privileged runner are used. |
@@ -530,6 +530,13 @@ revision must retain its five terminal results. `ci-control.yml` is reserved
 for a maintainer's explicit default-branch manual-full diagnostic run. That
 operator-selected path may use detached dispatch and the synthetic
 `CI Required` aggregate; routine main never does.
+The explicit `runtime_signing_diagnostic` input instead skips all planning and
+lane dispatch and runs `runtime-signing-diagnostic.yml` from the candidate ref.
+It has two ephemeral hosted Linux jobs: sign a loopback-only catalog for the
+retained PR CPU runtime archive, then consume public artifacts by ID on a runner
+with no signing credentials. The consumer proves HTTP download, compiled-pin
+verification, installation, tamper rejection and native loading. This diagnostic
+publishes no release and is not a replacement for the five required CI lanes.
 
 The temporary `ci.yml` reusable-only shim has no push trigger, dispatcher, or
 lane calls. Remove it after the updated runner contract is active on protected
@@ -652,17 +659,16 @@ generated SwiftPM/binding and SDK console resources needed by the immutable
 release tag, publishes the assets, and enables GitHub-generated release notes.
 After it generates and validates the final `native-runtimes.json` bytes and
 writes the checksum sidecar, it invokes the Rust xtask catalog signer. Only
-that step receives secrets from the `native-runtime-release` Actions environment;
-the publisher disables hosted executable cache reuse for the signer:
+that step receives the ordinary repository Actions secrets
 `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` and
-`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD`; the signer requires both and
-refuses a secret key that does not match the independently committed public
-key file. If neither external secret is provisioned, it emits no signature and
-the established checksum-only release remains unchanged; partial configuration
-fails closed. There is deliberately
-no placeholder production public key in the repository; the public pin and
-matching protected secrets must be provisioned together before signed catalog
-publication is enabled.
+`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD`. No environment or extra approval
+is required. The publisher disables hosted executable cache reuse for its signer.
+Missing, partial, invalid, or mismatched credentials fail publication, never
+silently omit the signature. The reviewed production public key is committed
+and compiled into installer options; strict verification remains an explicit
+consumer choice for compatibility with older unsigned releases. An explicitly
+maintainer-authorized isolated diagnostic may use the signing secrets without
+publishing a release; its separate hosted consumer receives public artifacts only.
 The metadata job runs `cargo xtool release notes-base` to select the highest
 stable `vMAJOR.MINOR.PATCH` tag below the target as the explicit comparison base.
 It excludes every prerelease tag, so release candidates and their final stable

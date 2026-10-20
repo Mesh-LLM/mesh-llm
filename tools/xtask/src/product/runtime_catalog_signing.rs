@@ -25,9 +25,7 @@ fn sign_from_environment(args: &[String]) -> Result<(), String> {
     };
     let secret_key = std::env::var(SECRET_KEY_ENV).unwrap_or_default();
     let password = std::env::var(PASSWORD_ENV).unwrap_or_default();
-    if !signing_credentials_configured(&secret_key, &password)? {
-        return Ok(());
-    }
+    signing_credentials_configured(&secret_key, &password)?;
     sign_catalog(
         Path::new(catalog),
         Path::new(signature_out),
@@ -37,17 +35,16 @@ fn sign_from_environment(args: &[String]) -> Result<(), String> {
     )
 }
 
-fn signing_credentials_configured(secret_key: &str, password: &str) -> Result<bool, String> {
-    match (secret_key.trim().is_empty(), password.is_empty()) {
-        (true, true) => Ok(false),
-        (false, false) => Ok(true),
-        _ => Err(format!(
-            "{SECRET_KEY_ENV} and {PASSWORD_ENV} must either both be configured or both be absent"
-        )),
+fn signing_credentials_configured(secret_key: &str, password: &str) -> Result<(), String> {
+    if secret_key.trim().is_empty() || password.is_empty() {
+        return Err(format!(
+            "{SECRET_KEY_ENV} and {PASSWORD_ENV} must both be configured; unsigned publication is forbidden"
+        ));
     }
+    Ok(())
 }
 
-fn sign_catalog(
+pub(super) fn sign_catalog(
     catalog: &Path,
     signature_out: &Path,
     trusted_public_key_path: &Path,
@@ -196,9 +193,30 @@ mod tests {
     }
 
     #[test]
-    fn absent_credentials_preserve_checksum_only_releases_but_partial_configuration_fails() {
-        assert!(!signing_credentials_configured("", "").unwrap());
-        assert!(signing_credentials_configured("secret", "password").unwrap());
+    fn wrong_password_never_writes_a_signature() {
+        let temp = tempfile::tempdir().unwrap();
+        let catalog = temp.path().join("native-runtimes.json");
+        let signature = temp.path().join("native-runtimes.json.minisig");
+        let public_key = temp.path().join("native-runtime-catalog.pub");
+        std::fs::write(&catalog, b"catalog").unwrap();
+        let (secret_key, public_key_text) = fixture_key("correct disposable password");
+        std::fs::write(&public_key, public_key_text).unwrap();
+        let error = sign_catalog(
+            &catalog,
+            &signature,
+            &public_key,
+            &secret_key,
+            "wrong password",
+        )
+        .unwrap_err();
+        assert!(error.contains("decrypt"), "{error}");
+        assert!(!signature.exists());
+    }
+
+    #[test]
+    fn missing_or_partial_credentials_fail_closed() {
+        assert!(signing_credentials_configured("", "").is_err());
+        assert!(signing_credentials_configured("secret", "password").is_ok());
         assert!(signing_credentials_configured("secret", "").is_err());
         assert!(signing_credentials_configured("", "password").is_err());
     }

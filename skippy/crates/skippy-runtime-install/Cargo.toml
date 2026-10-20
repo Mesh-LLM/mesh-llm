@@ -30,3 +30,6 @@ tar = "0.4"
 tempfile = "3"
 tokio = { version = "1", features = ["fs", "io-util", "rt"] }
 tracing = "0.1"
+
+[dev-dependencies]
+skippy-ffi = { path = "../skippy-ffi", version = "0.78.0", features = ["dynamic-runtime"] }

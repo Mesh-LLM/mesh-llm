@@ -58,9 +58,13 @@ is required and mapped to internal `release_version`; missing versions never
 inherit a fallback. Runtime payload checksums and ABI eligibility still apply.
 
 For strict catalog authentication, set `verification_policy` to
-`RequireChecksumAndSignature` and set `trusted_public_key` to the contents of a
-reviewed Minisign public-key file. The key is caller trust configuration and is
-never discovered from the catalog URL. A local catalog requires adjacent
+`RequireChecksumAndSignature`. Constructors embed the reviewed MeshLLM release
+key from `trust/native-runtime-catalog.pub` at compile time; consumers do not
+need that file at runtime. Custom publishers must override `trusted_public_key`
+with their independently reviewed Minisign key. Setting it to `None` fails closed
+in strict mode. The key is never discovered from the catalog URL.
+Embedding the key does **not** enable strict mode: checksum-only remains the
+default for compatibility with existing unsigned releases. A local catalog requires adjacent
 `.sha256` and `.minisig` sidecars; a remote catalog fetches those sidecars from
 the same asset basename. The exact bytes are authenticated before parsing.
 Strict mode rejects unsigned bundle-only fallback and verifies the selected

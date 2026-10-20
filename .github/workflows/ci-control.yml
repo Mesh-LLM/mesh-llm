@@ -4,6 +4,11 @@ run-name: CI · Manual Full · ${{ github.ref_name }}
 on:
   workflow_dispatch:
     inputs:
+      runtime_signing_diagnostic:
+        description: Isolated signing qualification only; no release or CI lane dispatch.
+        required: false
+        default: false
+        type: boolean
       use_depot:
         description: Opt into the guarded main-only Depot canary.
         required: false
@@ -18,9 +23,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  runtime_signing_diagnostic:
+    if: ${{ inputs.runtime_signing_diagnostic && github.repository == 'Mesh-LLM/mesh-llm' }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/runtime-signing-diagnostic.yml
+    secrets:
+      MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY: ${{ secrets.MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY }}
+      MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD: ${{ secrets.MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD }}
+
   plan:
     name: Compute canonical CI shape
-    if: ${{ github.ref_name == github.event.repository.default_branch }}
+    if: ${{ !inputs.runtime_signing_diagnostic && github.ref_name == github.event.repository.default_branch }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
