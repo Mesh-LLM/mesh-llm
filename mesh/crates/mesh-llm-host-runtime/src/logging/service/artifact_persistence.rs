@@ -75,7 +75,7 @@ impl ArtifactMemoryPermit {
             return None;
         }
         in_flight
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current.checked_add(bytes).filter(|next| *next <= limit)
             })
             .ok()?;
