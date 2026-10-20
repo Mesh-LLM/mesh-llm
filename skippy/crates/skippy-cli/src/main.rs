@@ -7,6 +7,7 @@ mod native_logging;
 mod runtime;
 mod serve;
 mod serve_settings;
+mod startup_receipt;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -24,7 +25,13 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let native_logs = Arc::new(native_logging::NativeDiagnostics::new(cli.debug));
+    let startup_receipt =
+        matches!(&cli.command, Command::Serve(args) if args.native_startup_receipt)
+            .then(|| Arc::new(startup_receipt::StartupCapture::new()));
+    let native_logs = Arc::new(native_logging::NativeDiagnostics::new(
+        cli.debug,
+        startup_receipt.clone(),
+    ));
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -35,7 +42,12 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let result = runtime.block_on(run_main(cli, startup_warnings, native_logs.clone()));
+    let result = runtime.block_on(run_main(
+        cli,
+        startup_warnings,
+        native_logs.clone(),
+        startup_receipt,
+    ));
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -70,6 +82,7 @@ async fn run_main(
     cli: Cli,
     startup_warnings: Vec<String>,
     native_logs: Arc<native_logging::NativeDiagnostics>,
+    startup_receipt: Option<Arc<startup_receipt::StartupCapture>>,
 ) -> Result<()> {
     let output = match (&cli.command, cli.output) {
         (Command::Serve(args), OutputFormat::Auto) if args.print_effective_config => {
@@ -121,7 +134,7 @@ async fn run_main(
             })
             .await?
         }
-        Command::Serve(args) => serve::run(*args).await,
+        Command::Serve(args) => serve::run(*args, startup_receipt).await,
         Command::Models { command } => skippy_commands::models::run_standalone(&command).await,
         Command::PlanSplit(args) => skippy_commands::split::run(args.into()),
         Command::Runtime { command } => {

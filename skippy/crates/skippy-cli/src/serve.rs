@@ -26,7 +26,10 @@ pub(crate) fn default_public_bind_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 9337))
 }
 
-pub async fn run(mut args: ServeCommandArgs) -> Result<()> {
+pub async fn run(
+    mut args: ServeCommandArgs,
+    startup_receipt: Option<Arc<crate::startup_receipt::StartupCapture>>,
+) -> Result<()> {
     validate(&args)?;
     if let Some(model) = args.model.take() {
         console::status(&format!("🔎 Checking local model cache for {model}"))?;
@@ -82,7 +85,7 @@ pub async fn run(mut args: ServeCommandArgs) -> Result<()> {
     }
     match args.stage_transport {
         Some(StageTransport::Binary) => serve_binary_stage(args).await,
-        None => serve_public(args).await,
+        None => serve_public(args, startup_receipt).await,
     }
 }
 
@@ -103,6 +106,13 @@ fn installed_model_path(model: &str) -> Option<std::path::PathBuf> {
 }
 
 pub(crate) fn validate(args: &ServeCommandArgs) -> Result<()> {
+    if args.native_startup_receipt
+        && (args.stage_transport.is_some()
+            || args.print_effective_config
+            || console::mode() != OutputMode::Jsonl)
+    {
+        bail!("--native-startup-receipt requires local OpenAI serving with --output jsonl");
+    }
     args.public.settings.validate_mode(args)?;
     args.public.settings.tuning(args.public.openai_guardrails)?;
     let mut stage = skippy_protocol::StageConfig::default();
@@ -128,7 +138,10 @@ pub(crate) fn validate(args: &ServeCommandArgs) -> Result<()> {
     Ok(())
 }
 
-async fn serve_public(args: ServeCommandArgs) -> Result<()> {
+async fn serve_public(
+    args: ServeCommandArgs,
+    startup_receipt: Option<Arc<crate::startup_receipt::StartupCapture>>,
+) -> Result<()> {
     let bind_addr = args
         .public
         .bind_addr
@@ -161,6 +174,7 @@ async fn serve_public(args: ServeCommandArgs) -> Result<()> {
         ReadinessServer {
             future: server,
             shutdown_requested,
+            startup_receipt,
         },
         bind_addr,
         model_id,
@@ -257,6 +271,7 @@ async fn serve_binary_stage(mut args: ServeCommandArgs) -> Result<()> {
             ReadinessServer {
                 future: server,
                 shutdown_requested,
+                startup_receipt: None,
             },
             bind_addr,
             model_id,
@@ -281,6 +296,7 @@ async fn serve_binary_stage(mut args: ServeCommandArgs) -> Result<()> {
         ReadinessServer {
             future: server,
             shutdown_requested,
+            startup_receipt: None,
         },
         bind_addr,
         model_id,
@@ -315,6 +331,7 @@ pub(crate) fn apply_public_frontend_tuning(public: &ServeOpenAiArgs, stage: &mut
 struct ReadinessServer<F> {
     future: F,
     shutdown_requested: Arc<AtomicBool>,
+    startup_receipt: Option<Arc<crate::startup_receipt::StartupCapture>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -396,6 +413,7 @@ async fn serve_with_readiness(
         bail!("--bind-addr must use a fixed port so readiness can be reported");
     }
     let api_base = format!("http://{}/v1", readiness_addr(bind_addr));
+    let startup_receipt = server.startup_receipt;
     let shutdown_requested = server.shutdown_requested;
     let mut server = tokio::spawn(server.future);
     console::status("🧠 Loading model and starting the API")?;
@@ -410,6 +428,9 @@ async fn serve_with_readiness(
     .await?;
     if readiness == ReadinessOutcome::ShutdownRequested {
         return Ok(());
+    }
+    if let Some(capture) = startup_receipt {
+        console::event("native_startup_receipt", &capture.finish()?)?;
     }
     console::event(
         "ready",

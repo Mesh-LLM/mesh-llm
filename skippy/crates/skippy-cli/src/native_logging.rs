@@ -1,5 +1,8 @@
 //! Keep native diagnostics quiet unless debugging or a failure needs context.
-use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use skippy_runtime::logging::NativeLogSink;
 
@@ -11,13 +14,18 @@ const CONT: i32 = 5;
 pub(crate) struct NativeDiagnostics {
     debug: bool,
     buffer: Mutex<DiagnosticBuffer>,
+    startup_receipt: Option<Arc<crate::startup_receipt::StartupCapture>>,
 }
 
 impl NativeDiagnostics {
-    pub(crate) fn new(debug: bool) -> Self {
+    pub(crate) fn new(
+        debug: bool,
+        startup_receipt: Option<Arc<crate::startup_receipt::StartupCapture>>,
+    ) -> Self {
         Self {
             debug,
             buffer: Mutex::new(DiagnosticBuffer::default()),
+            startup_receipt,
         }
     }
 
@@ -40,6 +48,9 @@ impl NativeLogSink for NativeDiagnostics {
             .buffer
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if let Some(receipt) = &self.startup_receipt {
+            receipt.record(text);
+        }
         let text = buffer.record(self.debug, level, text);
         if !text.is_empty() {
             let _ = skippy_commands::console::native_log(&text);

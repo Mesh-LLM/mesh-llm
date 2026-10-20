@@ -78,6 +78,9 @@ pub enum StageTransport {
 
 #[derive(Parser)]
 pub struct ServeCommandArgs {
+    /// Emit a bounded native allocation and layer-placement receipt before readiness.
+    #[arg(long)]
+    pub native_startup_receipt: bool,
     /// Complete serving settings file (TOML); CLI overrides environment and file values.
     #[arg(long)]
     pub settings: Option<PathBuf>,
