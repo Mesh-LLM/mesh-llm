@@ -8,6 +8,8 @@ mod daemon_startup;
 mod dashboard;
 mod default_plugins;
 mod discovery;
+pub(crate) mod energy;
+pub(crate) mod energy_sampler;
 mod failed_node_start;
 pub mod instance;
 mod instance_lifecycle;

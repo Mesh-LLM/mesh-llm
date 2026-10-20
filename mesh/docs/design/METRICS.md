@@ -144,6 +144,29 @@ The counter and its throttle state live outside the mesh-wide state lock.
 | --- | --- |
 | `source_mismatch_total` | Received plugin-mesh channel/bulk frames whose non-empty claimed source was not the sending peer. Advanced on every occurrence, including those folded into a throttled warning. |
 
+### `/api/status` `energy`
+
+Layer: **Information** | Scope: **local-only**
+
+GPU energy this node has spent since it first served a local model, read from
+its own board power sensor (`nvidia-smi`, once a second) and attributed with the
+inference lifecycle
+(#2320). An interval between two readings counts as busy when a local request
+ran during any part of it, and as idle otherwise; concurrent requests share the
+busy energy. Board power covers the GPU only, not the CPU, memory or power
+supply, so the figures are estimates. The field is absent until a power reading
+exists, so nodes without an NVIDIA GPU never report it. Stages of a split model
+that have no front end of their own count their work as idle, and models served
+through a plugin endpoint are not counted.
+
+| Field(s) | Meaning |
+| --- | --- |
+| `source` | Where the readings come from (`nvidia-smi`) |
+| `idle_watts` | Mean board power while no request ran; null until 5 s of idle time is measured |
+| `wh_per_1k_output_tokens` | Energy per 1,000 output tokens on top of the idle draw: what serving adds |
+| `wh_per_1k_output_tokens_total` | Energy per 1,000 output tokens including the idle draw while requests ran |
+| `output_tokens`, `busy_seconds`, `idle_seconds` | What the figures are computed from |
+
 ### `/api/models[]` `routing_metrics`
 
 Layer: **Information** | Scope: **local-only**

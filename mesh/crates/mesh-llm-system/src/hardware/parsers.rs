@@ -37,6 +37,20 @@ pub fn parse_nvidia_gpu_memory_and_reserved(output: &str) -> Vec<(u64, Option<u6
         .collect()
 }
 
+/// Parse one line of `nvidia-smi --query-gpu=index,power.draw
+/// --format=csv,noheader,nounits` into the GPU index and its board power in
+/// watts, `None` when the GPU does not report power (`[N/A]`).
+pub fn parse_nvidia_power_draw_line(line: &str) -> Option<(u32, Option<f64>)> {
+    let (index, watts) = line.split_once(',')?;
+    let index = index.trim().parse().ok()?;
+    let watts = watts
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|watts| watts.is_finite() && *watts >= 0.0);
+    Some((index, watts))
+}
+
 /// Sanitizes a macOS Metal `MTLDevice.name` query result into `gpu_name`.
 /// This is what the OS reported, not a verified measurement, so the only
 /// correction applied is rejecting anything shaped like a CPU brand string
