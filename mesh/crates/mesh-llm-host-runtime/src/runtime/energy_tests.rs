@@ -255,3 +255,14 @@ fn a_stream_that_fails_to_open_frees_the_node() {
     apply_event(&mut meter, &backend_done(stream, operation, failed), 0.1);
     assert!(meter.in_flight.is_empty());
 }
+
+#[test]
+fn a_request_running_at_the_first_reading_makes_the_first_interval_busy() {
+    let mut meter = EnergyMeter::default();
+    let request = RequestId::new();
+    let operation = InferenceBackendOperation::ChatCompletion;
+    apply_event(&mut meter, &dispatched(request, operation), 0.0);
+    meter.record_power(0.5, 180.0);
+    meter.record_power(1.5, 180.0);
+    assert_eq!(meter.status(SOURCE).busy_seconds, 1.0);
+}

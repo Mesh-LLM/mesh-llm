@@ -180,11 +180,10 @@ pub(crate) struct EnergyLifecycleObserver;
 
 impl InferenceLifecycleObserver for EnergyLifecycleObserver {
     fn observe(&self, event: &InferenceLifecycleEvent) {
+        // Tracked before the first power reading too: a request already
+        // running then makes the first interval busy. Every request ends with
+        // a terminal event, so nothing piles up on a node with no sampler.
         let energy = energy();
-        // Without power readings there is nothing to attribute requests to.
-        if energy.source.get().is_none() {
-            return;
-        }
         let seconds = energy.started.elapsed().as_secs_f64();
         with_meter(|meter| apply_event(meter, event, seconds));
     }
