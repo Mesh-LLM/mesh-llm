@@ -39,23 +39,13 @@ struct JudgeOutput {
 pub fn compose_question(challenge: &Challenge, model: &dyn ModelClient) -> Result<(String, bool)> {
     let input = serde_json::to_string(challenge)?;
     let output = model.complete(Stage::Writer, &input);
-    let required = format!("offset {} for {} bytes", challenge.offset, challenge.length);
-    let valid = output.as_ref().is_ok_and(|text| {
-        text.len() <= 800
-            && text.contains(&challenge.id)
-            && text.contains(&challenge.nonce)
-            && (!challenge.intents.contains(&Intent::Executable) || text.contains(&required))
-            && challenge
-                .process_binding
-                .as_ref()
-                .is_none_or(|binding| text.contains(&binding.executable_handle))
-            && challenge
-                .intents
-                .iter()
-                .all(|intent| text.contains(intent.as_str()))
-    });
-    if valid {
-        return Ok((output?, false));
+    if let Ok(text) = &output {
+        let question = text.trim();
+        if !question.is_empty() && question.len() <= 800 {
+            // Prose is intentionally not checked against machine obligations:
+            // the challenge envelope, not A's model, defines what B must do.
+            return Ok((question.to_owned(), false));
+        }
     }
     let mut question = format!(
         "Challenge {} for peer {} with nonce {}.",

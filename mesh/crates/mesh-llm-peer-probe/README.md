@@ -23,8 +23,10 @@ small-model trade-off. These are research comparisons, not production peer
 transport.
 
 The structured obligations are authoritative even if A's model rewrites the
-question or falls back to a template. A records its reference bytes separately;
-no expected digest is sent to B.
+question. Prose need not repeat the nonce, handle, or range: B receives those
+in the structured challenge. Empty, failed, or overlong writer output falls
+back to a short template. A records its reference bytes separately; no
+expected digest is sent to B.
 
 | Intent | Question obligation | B tool | A check |
 | --- | --- | --- | --- |
