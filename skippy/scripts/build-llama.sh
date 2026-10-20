@@ -278,7 +278,10 @@ fi
 # embedded source/build paths so the archived link closure does not retain a
 # producer-local workspace path.
 if [[ "$LLAMA_LINK_MODE" == "static" ]]; then
-  PREFIX_MAP_FLAGS="-ffile-prefix-map=$ROOT=/mesh-llm -fdebug-prefix-map=$ROOT=/mesh-llm -fmacro-prefix-map=$ROOT=/mesh-llm"
+  # CMake stores these as a command-line string, not an argv array. Keep each
+  # mapping quoted through that second parse for workspaces such as macOS's
+  # Application Support directory.
+  PREFIX_MAP_FLAGS="\"-ffile-prefix-map=$ROOT=/mesh-llm\" \"-fdebug-prefix-map=$ROOT=/mesh-llm\" \"-fmacro-prefix-map=$ROOT=/mesh-llm\""
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
       # Setting CMAKE_<LANG>_FLAGS replaces CMake's platform defaults, which

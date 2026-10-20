@@ -168,7 +168,10 @@ impl Fixture {
             .collect()
     }
     fn configure_args(&self) -> Vec<String> {
-        fs::read(self.root.join("configure.argv"))
+        self.recorded_args("configure.argv")
+    }
+    fn recorded_args(&self, name: &str) -> Vec<String> {
+        fs::read(self.root.join(name))
             .unwrap()
             .split(|b| *b == 0)
             .filter(|bytes| !bytes.is_empty())
@@ -206,6 +209,17 @@ if [[ "$1" == --build ]]; then
 else
   printf 'cmake:configure\n' >> "$STATIC_FIXTURE_ROOT/events"
   printf '%s\0' "$@" > "$STATIC_FIXTURE_ROOT/configure.argv"
+  # Exercise the second command-line parse used by generated build rules.
+  # Only printf runs: the fixture forbids every native compiler and builder.
+  for arg in "$@"; do
+    case "$arg" in
+      -DCMAKE_C_FLAGS=*|-DCMAKE_CXX_FLAGS=*)
+        name="${arg%%=*}"
+        flags="${arg#*=}"
+        /bin/bash -c "printf '%s\0' $flags" > "$STATIC_FIXTURE_ROOT/$name.argv"
+        ;;
+    esac
+  done
   printf 'CMAKE_GENERATOR:INTERNAL=Ninja\n' > "$target/CMakeCache.txt"
 fi
 "#;
@@ -236,20 +250,17 @@ fn static_abi_build_policy_emits_static_compiler_flags_and_portable_stamp() {
         let args = fixture.configure_args();
         assert!(args.iter().any(|arg| arg == "-DBUILD_SHARED_LIBS=OFF"));
         for language in ["C", "CXX"] {
-            let flags = args
-                .iter()
-                .find(|arg| arg.starts_with(&format!("-DCMAKE_{language}_FLAGS=")))
-                .unwrap();
-            for flag in [
+            let expected = [
                 "-ffile-prefix-map",
                 "-fdebug-prefix-map",
                 "-fmacro-prefix-map",
-            ] {
-                assert!(
-                    flags.contains(&format!("{flag}={}=/mesh-llm", fixture.root.display())),
-                    "{flags}"
-                );
-            }
+            ]
+            .map(|flag| format!("{flag}={}=/mesh-llm", fixture.root.display()));
+            assert_eq!(
+                fixture.recorded_args(&format!("-DCMAKE_{language}_FLAGS.argv")),
+                expected,
+                "each mapping must reach the compiler as one argument"
+            );
             assert!(args.iter().any(|arg| arg
                 == &format!(
                     "-DCMAKE_{language}_COMPILER_LAUNCHER={}",
