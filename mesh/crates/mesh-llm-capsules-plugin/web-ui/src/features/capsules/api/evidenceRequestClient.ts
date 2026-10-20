@@ -15,6 +15,11 @@ import { getPluginJson, pluginHost } from '@/plugin-host/host'
 export const EVIDENCE_REQUEST_ROUTE = 'tools/mesh_evidence_request'
 export const peerKeyRoute = (peerId: string) => `http/peer-key?peer=${encodeURIComponent(peerId)}`
 
+/** The interop profile every request follows: a requester following it
+ *  MUST name it (agent-action-capsule interop-profile-v0 §3.3 step 2, P-2),
+ *  and the tool's verification holds the reply's envelope to it. */
+export const INTEROP_PROFILE = 'evidence-interop/0'
+
 /** What the tool's verification found (`evidence_answer::verify_response`):
  *  a refusal signed with the announced key for our request; an artifact that
  *  verifies (the served records, by leaf index); a reply that proves nothing;
@@ -44,7 +49,7 @@ export type EvidenceAskReply =
 /** The -00 request for the records carrying one client nonce: a correlation
  *  subject, under the freshest checkpoint the peer holds. */
 export function askByNonceRequest(nonce: string): Record<string, unknown> {
-  return { coverage: { min_freshness: 1 }, subject: { correlation: nonce } }
+  return { profile: INTEROP_PROFILE, coverage: { min_freshness: 1 }, subject: { correlation: nonce } }
 }
 
 /** The correlation identifier that names an exchange by both of its digests
@@ -56,7 +61,11 @@ export function exchangeBinding(requestDigest: string, responseDigest: string): 
 
 /** The -00 request for the records of the exchange with these two digests. */
 export function askByDigestsRequest(digests: ExchangeDigests): Record<string, unknown> {
-  return { coverage: { min_freshness: 1 }, subject: { correlation: exchangeBinding(digests.request, digests.response) } }
+  return {
+    profile: INTEROP_PROFILE,
+    coverage: { min_freshness: 1 },
+    subject: { correlation: exchangeBinding(digests.request, digests.response) }
+  }
 }
 
 export type ExchangeDigests = { request: string; response: string }

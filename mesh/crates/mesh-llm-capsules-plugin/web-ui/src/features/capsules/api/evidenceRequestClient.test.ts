@@ -49,7 +49,7 @@ describe('askForRecord', () => {
     const sent = JSON.parse(String(init.body)) as Record<string, unknown>
     expect(sent).toEqual({
       peer_id: PEER,
-      request: { coverage: { min_freshness: 1 }, subject: { correlation: 'nonce-1' } }
+      request: { profile: 'evidence-interop/0', coverage: { min_freshness: 1 }, subject: { correlation: 'nonce-1' } }
     })
     expect('verify' in sent).toBe(false)
     expect(String(fetchMock.mock.calls[1][0])).toBe(`/api/plugins/capsules/http/peer-key?peer=${PEER}`)
@@ -121,8 +121,9 @@ describe('askForRecord', () => {
     const reply = await askForRecord(PEER, { nonce: 'nonce-1', digests: DIGESTS })
 
     expect(sentRequests(fetchMock)).toEqual([
-      { coverage: { min_freshness: 1 }, subject: { correlation: 'nonce-1' } },
+      { profile: 'evidence-interop/0', coverage: { min_freshness: 1 }, subject: { correlation: 'nonce-1' } },
       {
+        profile: 'evidence-interop/0',
         coverage: { min_freshness: 1 },
         subject: { correlation: `exchange-digests:${DIGESTS.request}:${DIGESTS.response}` }
       }
@@ -152,6 +153,7 @@ describe('askForRecord', () => {
     await askForRecord(PEER, { nonce: null, digests: DIGESTS })
     expect(sentRequests(fetchMock)).toEqual([
       {
+        profile: 'evidence-interop/0',
         coverage: { min_freshness: 1 },
         subject: { correlation: `exchange-digests:${DIGESTS.request}:${DIGESTS.response}` }
       }
