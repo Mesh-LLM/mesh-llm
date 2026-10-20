@@ -944,11 +944,7 @@ impl SchedulerWorker {
                 self.active_runtime_sessions,
                 self.max_direct_batch_size,
             );
-            let coalesce_direct = should_coalesce_direct_iterations(
-                !self.cache_runtime_queue.is_empty(),
-                self.cache_runtime_queue.has_wave_aware_operations(),
-            );
-            if !cache_fill_wave_pending && coalesce_direct && !self.coalesce_direct_iterations() {
+            if !cache_fill_wave_pending && !self.coalesce_direct_iterations() {
                 return;
             }
             self.run_work_turn();
@@ -1142,6 +1138,14 @@ impl SchedulerWorker {
     }
 
     fn coalesce_direct_iterations(&mut self) -> bool {
+        if !should_coalesce_direct_iterations(
+            !self.cache_runtime_queue.is_empty(),
+            self.cache_runtime_queue.has_wave_aware_operations(),
+            self.scheduler.metrics().active_sequences > 0,
+            !self.direct_iterations.is_empty(),
+        ) {
+            return true;
+        }
         let target = direct_coalesce_target(
             self.active_runtime_sessions,
             self.direct_iterations.len(),

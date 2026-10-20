@@ -301,8 +301,11 @@ pub(super) fn should_suppress_cache_runtime(
 pub(super) fn should_coalesce_direct_iterations(
     has_cache_runtime: bool,
     has_wave_aware_cache_runtime: bool,
+    has_ready_planned: bool,
+    has_direct: bool,
 ) -> bool {
-    !has_cache_runtime || has_wave_aware_cache_runtime
+    // An admitted planned sequence can run now; it need not await a direct caller.
+    (!has_ready_planned || has_direct) && (!has_cache_runtime || has_wave_aware_cache_runtime)
 }
 
 pub(super) fn cache_runtime_wave_enabled(payload: StagePrefixCachePayload) -> bool {
@@ -379,8 +382,10 @@ mod tests {
 
         assert!(!should_fill_cache_runtime_wave(true, false, 1, 4));
         assert!(!should_suppress_cache_runtime(false, true, 4, 4));
-        assert!(!should_coalesce_direct_iterations(true, false));
-        assert!(should_coalesce_direct_iterations(true, true));
+        assert!(!should_coalesce_direct_iterations(
+            true, false, false, false
+        ));
+        assert!(should_coalesce_direct_iterations(true, true, false, false));
     }
 
     #[test]
@@ -398,6 +403,8 @@ mod tests {
         assert!(!should_coalesce_direct_iterations(
             !resident_queue.is_empty(),
             resident_queue.has_wave_aware_operations(),
+            false,
+            false,
         ));
         assert!(!should_fill_cache_runtime_wave(
             true,
@@ -415,6 +422,8 @@ mod tests {
         assert!(should_coalesce_direct_iterations(
             !resident_queue.is_empty(),
             resident_queue.has_wave_aware_operations(),
+            false,
+            false,
         ));
 
         for payload in [
@@ -446,6 +455,8 @@ mod tests {
             assert!(should_coalesce_direct_iterations(
                 !queue.is_empty(),
                 queue.has_wave_aware_operations(),
+                false,
+                false,
             ));
         }
     }
@@ -598,5 +609,131 @@ mod tests {
         std::sync::Arc::new(std::sync::Mutex::new(
             crate::runtime_state::RuntimeState::new_modelless_for_test(1),
         ))
+    }
+}
+
+#[cfg(test)]
+mod coalescing_tests {
+    use super::super::{
+        DirectIteration, RuntimeState, ScheduledRequest, SchedulerCommand, SchedulerWorker,
+        build_scheduler_config,
+    };
+    use super::CacheRuntimeQueue;
+    use skippy_runtime::IterationBatchPhase;
+    use skippy_scheduler::{IterationPrediction, Scheduler};
+    use std::collections::{BTreeMap, VecDeque};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::{Duration, Instant};
+
+    fn worker_with_planned_request(
+        admit: bool,
+    ) -> (SchedulerWorker, mpsc::Sender<SchedulerCommand>) {
+        let (commands, receiver) = mpsc::channel();
+        let mut worker = SchedulerWorker {
+            runtime: Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1))),
+            scheduler: Scheduler::new(build_scheduler_config(2, 64, 0, Some(8), Some(8), 8, false)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_queue: CacheRuntimeQueue::new(4_096, true),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 2,
+            direct_group_batch_size: 2,
+            max_direct_iteration_tokens: 8,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 2,
+            direct_wave_full: false,
+            telemetry: None,
+            compute_meter: Arc::default(),
+            last_served_direct: false,
+            last_served_cache_runtime: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        };
+        let (reply, _events) = mpsc::channel();
+        worker.submit(ScheduledRequest {
+            id: "planned".into(),
+            prompt_tokens: vec![1],
+            max_tokens: 2,
+            sampling: None,
+            chat_sampling_metadata: None,
+            generated_tokens: Vec::new(),
+            runtime_configured: false,
+            retain_runtime: false,
+            reply,
+        });
+        if admit {
+            let plan = worker.scheduler.plan_iteration();
+            assert_eq!(plan.work.len(), 1);
+            worker.scheduler.complete_iteration(
+                &plan,
+                &[IterationPrediction {
+                    work_index: 0,
+                    token: 7,
+                }],
+            );
+        }
+        (worker, commands)
+    }
+
+    #[test]
+    fn ready_planned_decode_does_not_enter_the_direct_command_wait() {
+        let (mut worker, commands) = worker_with_planned_request(true);
+        assert_eq!(worker.scheduler.metrics().active_sequences, 1);
+        commands.send(SchedulerCommand::Shutdown).unwrap();
+
+        assert!(worker.coalesce_direct_iterations());
+        assert!(matches!(
+            worker.commands.try_recv(),
+            Ok(SchedulerCommand::Shutdown)
+        ));
+        let plan = worker.scheduler.plan_iteration();
+        assert_eq!(plan.work.len(), 1);
+        assert_eq!(plan.work[0].tokens, [7]);
+    }
+
+    #[test]
+    fn direct_only_work_keeps_the_command_wait() {
+        let (mut worker, commands) = worker_with_planned_request(false);
+        worker.scheduler.cancel("planned");
+        worker.requests.clear();
+        commands.send(SchedulerCommand::Shutdown).unwrap();
+
+        assert!(!worker.coalesce_direct_iterations());
+        assert!(matches!(
+            worker.commands.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn waiting_only_and_queued_direct_work_keep_the_command_wait() {
+        for (admit, has_direct) in [(false, false), (false, true), (true, true)] {
+            let (mut worker, commands) = worker_with_planned_request(admit);
+            if has_direct {
+                let (reply, _result) = mpsc::sync_channel(1);
+                worker.direct_iterations.push_back(DirectIteration {
+                    session_id: "direct".into(),
+                    target_token_count: None,
+                    token_ids: vec![1],
+                    positions: Vec::new(),
+                    sampling: None,
+                    input: None,
+                    sample_last: true,
+                    phase: IterationBatchPhase::Decode,
+                    deadline: None,
+                    cancellation: None,
+                    enqueued_at: Instant::now(),
+                    reply: reply.into(),
+                });
+            }
+            commands.send(SchedulerCommand::Shutdown).unwrap();
+
+            assert!(!worker.coalesce_direct_iterations());
+            assert!(matches!(
+                worker.commands.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+        }
     }
 }
