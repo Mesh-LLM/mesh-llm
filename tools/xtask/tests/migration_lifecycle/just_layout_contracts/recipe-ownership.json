@@ -110,6 +110,7 @@
       "ci-snapshot-promotion-contracts",
       "ci-validate",
       "no-console-print",
+      "plugin-capsules-gate",
       "publish-crates",
       "research-source-restore",
       "test-all"
