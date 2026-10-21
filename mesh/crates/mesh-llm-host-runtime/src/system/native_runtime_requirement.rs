@@ -10,6 +10,8 @@ static EXTERNAL_STARTUP_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 
 #[cfg(test)]
 mod tests;
+#[cfg(feature = "dynamic-native-runtime")]
+mod unused_gpu;
 
 pub(crate) fn ensure_native_runtime_available() -> Result<()> {
     if !skippy_runtime::native_runtime_loaded() {
@@ -63,12 +65,22 @@ pub(crate) async fn initialize(options: &RuntimeOptions) -> Result<()> {
             config.runtime.native_runtime.clone(),
             options.llama_flavor,
         )?;
+        let runtime_selection = selection.runtime_selection.clone();
+        let mesh_version = selection.mesh_version.clone();
         match super::native_runtime::try_load_installed_native_runtime(selection).await {
-            Ok(Some(runtime)) => tracing::info!(
-                native_runtime_id = %runtime.native_runtime_id,
-                libraries = ?runtime.libraries,
-                "Loaded MeshLLM native runtime"
-            ),
+            Ok(Some(runtime)) => {
+                tracing::info!(
+                    native_runtime_id = %runtime.native_runtime_id,
+                    libraries = ?runtime.libraries,
+                    "Loaded MeshLLM native runtime"
+                );
+                unused_gpu::record(
+                    &runtime_selection,
+                    &mesh_version,
+                    &runtime.release_version,
+                    &runtime.native_runtime_id,
+                );
+            }
             Ok(None) => {}
             Err(error) if allow_external && is_unavailable_runtime_error(&error)? => {
                 // Resolve executables now. Missing/disabled optional packages must
@@ -132,6 +144,13 @@ fn require_external_inference_provider(failure: &str, endpoint_count: usize) -> 
         bail!("{failure}; no enabled plugin completed a compatible inference endpoint handshake");
     }
     Ok(())
+}
+
+/// Shows the warnings about detected GPUs the loaded runtime leaves unused;
+/// called once the output surface exists.
+pub(crate) fn emit_unused_gpu_warnings() {
+    #[cfg(feature = "dynamic-native-runtime")]
+    unused_gpu::emit_recorded();
 }
 
 pub(crate) async fn confirm_external_provider(manager: &plugin::PluginManager) -> Result<()> {
