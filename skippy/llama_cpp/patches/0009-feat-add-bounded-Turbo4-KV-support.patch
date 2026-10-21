@@ -1,4 +1,4 @@
-From 484f0003bff55d2775843be5c23c60ceebc46777 Mon Sep 17 00:00:00 2001
+From 27aa598ab5c4dbbb39926c2567faf1088dba8c72 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 20 Oct 2026 22:32:01 +1100
 Subject: [PATCH] feat: add bounded Turbo4 KV support to Skippy CPU and Metal
@@ -29,24 +29,25 @@ Assisted-by: Codex
  ggml/src/ggml-metal/kernels/fa_turbo4.metal   |  16 +
  .../ggml-metal/kernels/fa_vec_common.metal    |   8 +-
  .../ggml-metal/kernels/fa_vec_turbo4.metal    | 218 ++++++++++++
- ggml/src/ggml-metal/kernels/turbo4.h          | 113 +++++++
- ggml/src/ggml-metal/kernels/turbo4.metal      | 315 ++++++++++++++++++
+ ggml/src/ggml-metal/kernels/turbo4.h          | 113 ++++++
+ ggml/src/ggml-metal/kernels/turbo4.metal      | 325 ++++++++++++++++++
  ggml/src/ggml-quants.c                        |  10 +
  ggml/src/ggml-quants.h                        |   4 +
  ggml/src/ggml-rpc/ggml-rpc.cpp                |  10 +-
- ggml/src/ggml-turbo4.c                        | 164 +++++++++
+ ggml/src/ggml-turbo4.c                        | 169 +++++++++
  ggml/src/ggml.c                               |  45 ++-
  src/llama-graph.cpp                           |  11 +
  src/llama-kv-cache.cpp                        |  39 ++-
  tests/test-backend-ops-skippy-turbo4.h        | 165 +++++++++
- tests/test-backend-ops-turbo4-centroids.h     | 209 ++++++++++++
+ tests/test-backend-ops-turbo4-centroids.h     | 209 +++++++++++
  tests/test-backend-ops-turbo4-gqa.h           | 174 ++++++++++
- tests/test-backend-ops-turbo4-write-bytes.h   | 197 +++++++++++
+ tests/test-backend-ops-turbo4-write-bytes.h   | 222 ++++++++++++
  tests/test-backend-ops-wht-decode.h           | 103 ++++++
  tests/test-backend-ops.cpp                    |  24 ++
  tests/test-quantize-fns.cpp                   |   8 +
  tests/test-turbo4-codec.h                     |  81 +++++
- 37 files changed, 2224 insertions(+), 31 deletions(-)
+ tests/test-turbo4-scale.h                     | 101 ++++++
+ 38 files changed, 2365 insertions(+), 31 deletions(-)
  create mode 100644 ggml/src/ggml-cpu/turbo4.cpp
  create mode 100644 ggml/src/ggml-metal/kernels/fa_turbo4.metal
  create mode 100644 ggml/src/ggml-metal/kernels/fa_vec_turbo4.metal
@@ -59,6 +60,7 @@ Assisted-by: Codex
  create mode 100644 tests/test-backend-ops-turbo4-write-bytes.h
  create mode 100644 tests/test-backend-ops-wht-decode.h
  create mode 100644 tests/test-turbo4-codec.h
+ create mode 100644 tests/test-turbo4-scale.h
 
 diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
 index 482bd3666..ecf0a3a6d 100644
@@ -1199,10 +1201,10 @@ index 000000000..2c6a62921
 +}
 diff --git a/ggml/src/ggml-metal/kernels/turbo4.metal b/ggml/src/ggml-metal/kernels/turbo4.metal
 new file mode 100644
-index 000000000..77d82e229
+index 000000000..01a9f026f
 --- /dev/null
 +++ b/ggml/src/ggml-metal/kernels/turbo4.metal
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,325 @@
 +#include "common.h"
 +#include "dequantize.h"
 +#include "turbo4.h"
@@ -1407,6 +1409,7 @@ index 000000000..77d82e229
 +        for (int j = 0; j < QK_TURBO4 / 2; j++) blk.qs[j] = 0;
 +
 +        float recon_norm_sq = 0.0f;
++        float projection = 0.0f;
 +        for (int j = 0; j < 128; j++) {
 +            float val = x[j];
 +            uint8_t idx;
@@ -1431,10 +1434,13 @@ index 000000000..77d82e229
 +
 +            float c = turbo_centroids_4bit[idx];
 +            recon_norm_sq += c * c;
++            projection += val * c;
 +        }
 +
-+        float recon_norm = sqrt(recon_norm_sq);
-+        blk.norm = half((recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm);
++        blk.norm = half((recon_norm_sq > 1e-20f) ? grp_norm * (projection / recon_norm_sq) : 0.0f);
++        if (blk.norm == half(0)) {
++            for (int j = 0; j < QK_TURBO4 / 2; ++j) blk.qs[j] = 0;
++        }
 +    }
 +}
 +
@@ -1450,6 +1456,7 @@ index 000000000..77d82e229
 +    device block_turbo4_0 & blk = ((device block_turbo4_0 *) ((device char *) dst + row*args.nb1))[tgpig.x];
 +    device const float * src = (device const float *) src0 + 128*tgpig.x;
 +    threadgroup uint8_t indices[128];
++    threadgroup float rotated[128];
 +
 +    float grp_norm = 0.0f;
 +    float inv_norm = 0.0f;
@@ -1477,6 +1484,7 @@ index 000000000..77d82e229
 +    uint8_t code[4];
 +    for (int j = 0; j < 4; ++j) {
 +        const float val = x[j]*turbo_wht_signs2[4*lane + j];
++        rotated[4*lane + j] = val;
 +        uint8_t idx;
 +        if      (val < turbo_mid_4bit[ 0]) idx = 0;
 +        else if (val < turbo_mid_4bit[ 1]) idx = 1;
@@ -1502,12 +1510,16 @@ index 000000000..77d82e229
 +    simdgroup_barrier(mem_flags::mem_threadgroup);
 +    if (lane == 0) {
 +        float recon_norm_sq = 0.0f;
++        float projection = 0.0f;
 +        for (int j = 0; j < 128; ++j) {
 +            float c = turbo_centroids_4bit[indices[j]];
 +            recon_norm_sq += c * c;
++            projection += rotated[j] * c;
 +        }
-+        float recon_norm = sqrt(recon_norm_sq);
-+        blk.norm = half((recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm);
++        blk.norm = half((recon_norm_sq > 1e-20f) ? grp_norm * (projection / recon_norm_sq) : 0.0f);
++        if (blk.norm == half(0)) {
++            for (int j = 0; j < QK_TURBO4 / 2; ++j) blk.qs[j] = 0;
++        }
 +    }
 +}
 +
@@ -1577,10 +1589,10 @@ index 49f11073e..95eaeaff1 100644
  }
 diff --git a/ggml/src/ggml-turbo4.c b/ggml/src/ggml-turbo4.c
 new file mode 100644
-index 000000000..cb33d5198
+index 000000000..1f653e05c
 --- /dev/null
 +++ b/ggml/src/ggml-turbo4.c
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,169 @@
 +#include "ggml-quants.h"
 +#include "ggml-impl.h"
 +
@@ -1688,13 +1700,15 @@ index 000000000..cb33d5198
 +            indices[i] = (uint8_t)nearest_centroid_4bit(rotated[i]);
 +        }
 +
-+        /* Norm correction */
++        /* Minimize reconstruction error for the selected codeword. */
 +        float recon_norm_sq = 0.0f;
++        float projection = 0.0f;
 +        for (int i = 0; i < d; i++) {
-+            recon_norm_sq += CENTROIDS_4BIT[indices[i]] * CENTROIDS_4BIT[indices[i]];
++            const float c = CENTROIDS_4BIT[indices[i]];
++            recon_norm_sq += c * c;
++            projection += rotated[i] * c;
 +        }
-+        float recon_norm = sqrtf(recon_norm_sq);
-+        float corrected_norm = (recon_norm > 1e-10f) ? norm / recon_norm : norm;
++        float corrected_norm = (recon_norm_sq > 1e-20f) ? norm * (projection / recon_norm_sq) : 0.0f;
 +        y[block].norm = GGML_FP32_TO_FP16(corrected_norm);
 +
 +        /* Pack */
@@ -1703,6 +1717,9 @@ index 000000000..cb33d5198
 +        memset(y[block].qs, 0, d / 2);
 +        for (int i = 0; i < d; i++) {
 +            y[block].qs[i / 2] |= (uint8_t)((indices[i] & 0xF) << ((i % 2) * 4));
++        }
++        if (GGML_FP16_TO_FP32(y[block].norm) == 0.0f) {
++            memset(y[block].qs, 0, sizeof(y[block].qs));
 +        }
 +    }
 +}
@@ -2501,10 +2518,10 @@ index 000000000..1155e38af
 +};
 diff --git a/tests/test-backend-ops-turbo4-write-bytes.h b/tests/test-backend-ops-turbo4-write-bytes.h
 new file mode 100644
-index 000000000..70a6d997a
+index 000000000..99f1db1b6
 --- /dev/null
 +++ b/tests/test-backend-ops-turbo4-write-bytes.h
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,222 @@
 +#pragma once
 +
 +struct test_set_rows_turbo4_bytes : public test_case {
@@ -2616,6 +2633,31 @@ index 000000000..70a6d997a
 +        std::vector<uint8_t> a(ggml_nbytes(fast)), b(ggml_nbytes(fallback));
 +        ggml_backend_tensor_get(fast, a.data(), 0, a.size());
 +        ggml_backend_tensor_get(fallback, b.data(), 0, b.size());
++        if (pattern < 4) {
++            const auto input = input_values();
++            std::vector<uint8_t> cpu(row_bytes);
++            ggml_quantize_chunk(GGML_TYPE_TURBO4_0, input.data(), cpu.data(), 0, 1, width, nullptr);
++            if (memcmp(a.data() + row*row_bytes, cpu.data(), row_bytes) != 0) {
++                for (size_t block = 0; block < row_bytes/66; ++block) {
++                    const uint8_t * actual = a.data() + row*row_bytes + block*66;
++                    const uint8_t * expected = cpu.data() + block*66;
++                    if (memcmp(actual, expected, 66) == 0) {
++                        continue;
++                    }
++                    size_t first = 0;
++                    while (actual[first] == expected[first]) {
++                        ++first;
++                    }
++                    ggml_fp16_t actual_norm, expected_norm;
++                    memcpy(&actual_norm, actual, 2);
++                    memcpy(&expected_norm, expected, 2);
++                    fprintf(stderr, "TQ_T4_WRITE_BYTES CPU mismatch row=%lld pattern=%d block=%zu byte=%zu actual=%u expected=%u actual_norm=%.9g expected_norm=%.9g\n",
++                            (long long) row, pattern, block, first, unsigned(actual[first]),
++                            unsigned(expected[first]), ggml_fp16_to_fp32(actual_norm), ggml_fp16_to_fp32(expected_norm));
++                }
++                return false;
++            }
++        }
 +        for (int64_t r = 0; r < rows; ++r) {
 +            for (size_t j = 0; j < row_bytes; ++j) {
 +                const uint8_t av = a[r*row_bytes + j], bv = b[r*row_bytes + j];
@@ -2888,7 +2930,7 @@ index 1930a09b2..448e15e7f 100644
          printf("%d tests failed\n", num_failed);
 diff --git a/tests/test-turbo4-codec.h b/tests/test-turbo4-codec.h
 new file mode 100644
-index 000000000..b4df0b0a0
+index 000000000..03ba7e4cc
 --- /dev/null
 +++ b/tests/test-turbo4-codec.h
 @@ -0,0 +1,81 @@
@@ -2911,13 +2953,13 @@ index 000000000..b4df0b0a0
 +    1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1
 +};
 +
-+
++#include "test-turbo4-scale.h"
 +
 +static int test_turbo4_codec() {
 +    const auto type = GGML_TYPE_TURBO4_0;
 +    const auto * traits = ggml_get_type_traits(type);
 +    const auto * cpu = ggml_get_type_traits_cpu(type);
-+    int failures = 0;
++    int failures = test_turbo4_scale();
 +    for (int blocks : {1, 3, 17}) {
 +        std::vector<float> input(blocks*128), decoded(input.size()), rhs(input.size());
 +        for (size_t i = 0; i < input.size(); ++i) {
@@ -2971,6 +3013,113 @@ index 000000000..b4df0b0a0
 +        failures += ggml_validate_row_data(type, packed.data(), packed.size());
 +    }
 +    printf("Turbo4 rotated codec: %s (%d failures)\n", failures ? "FAIL" : "OK", failures);
++    return failures;
++}
+diff --git a/tests/test-turbo4-scale.h b/tests/test-turbo4-scale.h
+new file mode 100644
+index 000000000..529a6d2f1
+--- /dev/null
++++ b/tests/test-turbo4-scale.h
+@@ -0,0 +1,101 @@
++#pragma once
++
++static std::array<double, 128> turbo4_scale_direction(const std::array<uint8_t, 66> & packed) {
++    static constexpr float centroids[16] = {
++        -0.241529f, -0.182877f, -0.143016f, -0.111036f,
++        -0.083292f, -0.058050f, -0.034299f, -0.011349f,
++         0.011349f,  0.034299f,  0.058050f,  0.083292f,
++         0.111036f,  0.143016f,  0.182877f,  0.241529f,
++    };
++    std::array<double, 128> direction = {};
++    for (int i = 0; i < 128; ++i) {
++        for (int j = 0; j < 128; ++j) {
++            unsigned bits = unsigned(i & j), parity = 0;
++            while (bits) { parity ^= bits & 1; bits >>= 1; }
++            const int code = (packed[2 + j/2] >> (4*(j%2))) & 15;
++            direction[i] += (parity ? -1.0 : 1.0)*turbo_cpu_s2[j]*centroids[code];
++        }
++        direction[i] *= turbo_cpu_s1[i]/std::sqrt(128.0);
++    }
++    return direction;
++}
++
++static double turbo4_scale_error(const std::array<float, 128> & input,
++                                const std::array<double, 128> & direction, double scale) {
++    double error = 0;
++    for (int i = 0; i < 128; ++i) {
++        const double delta = input[i] - scale*direction[i];
++        error += delta*delta;
++    }
++    return error;
++}
++
++static int test_turbo4_scale() {
++    int failures = 0, cases = 0, improved = 0;
++    for (float amplitude : {0.0f, 1e-12f, 1e-6f, 0.125f, 1.0f, 256.0f}) {
++        for (int pattern = 0; pattern < 4; ++pattern) {
++            for (int seed = 0; seed < 4; ++seed) {
++                std::array<float, 128> input = {};
++                for (int i = 0; i < 128; ++i) {
++                    const uint32_t bits = uint32_t(i + 128*seed)*2654435761u;
++                    if (pattern == 0) {
++                        input[i] = amplitude*float(int((bits ^ (bits >> 16))%1025) - 512)/512.0f;
++                    } else if (pattern == 1) {
++                        input[i] = i == 17*seed ? amplitude : 0.0f;
++                    } else if (pattern == 2) {
++                        input[i] = amplitude;
++                    } else {
++                        input[i] = amplitude*((i + seed)%2 ? -1.0f : 1.0f);
++                    }
++                }
++                std::array<uint8_t, 66> packed = {};
++                ggml_quantize_chunk(GGML_TYPE_TURBO4_0, input.data(), packed.data(), 0, 1, 128, nullptr);
++                const auto direction = turbo4_scale_direction(packed);
++                double energy = 0, length = 0, projection = 0;
++                for (int i = 0; i < 128; ++i) {
++                    energy += double(input[i])*input[i];
++                    length += direction[i]*direction[i];
++                    projection += double(input[i])*direction[i];
++                }
++                ggml_fp16_t stored;
++                memcpy(&stored, packed.data(), sizeof(stored));
++                const double scale = ggml_fp16_to_fp32(stored);
++                const double old_scale = ggml_fp16_to_fp32(ggml_fp32_to_fp16(float(std::sqrt(energy/length))));
++                const double error = turbo4_scale_error(input, direction, scale);
++                const double old_error = turbo4_scale_error(input, direction, old_scale);
++                const double tolerance = energy*1e-10;
++                bool ok = std::isfinite(scale) && scale >= 0 && std::isfinite(error) && error <= old_error + tolerance;
++                if (scale == 0) {
++                    for (size_t i = 2; i < packed.size(); ++i) {
++                        ok &= packed[i] == 0;
++                    }
++                }
++                if (energy > 1e-20) {
++                    // The direct double matrix is independent of the production float butterfly.
++                    const double ideal = projection/length;
++                    const double half_ulp = scale >= 0x1p-14 ? std::ldexp(1.0, std::ilogb(scale) - 10) : 0x1p-24;
++                    ok &= std::abs(scale - ideal) <= half_ulp;
++                    if (stored > 0) {
++                        ok &= error <= turbo4_scale_error(input, direction, ggml_fp16_to_fp32(stored - 1)) + tolerance;
++                    }
++                    if (stored < 0x7bff) {
++                        ok &= error <= turbo4_scale_error(input, direction, ggml_fp16_to_fp32(stored + 1)) + tolerance;
++                    }
++                } else {
++                    ok &= scale == 0;
++                }
++                improved += error + energy*1e-6 < old_error;
++                failures += !ok;
++                ++cases;
++                if (!ok) {
++                    fprintf(stderr, "TQ_T4_SCALE_FAIL amplitude=%.9g pattern=%d seed=%d scale=%.9g mse=%.17g old_mse=%.17g\n",
++                            amplitude, pattern, seed, scale, error, old_error);
++                }
++            }
++        }
++    }
++    failures += cases != 96 || improved < 16;
++    printf("Turbo4 least-squares scale: %s (cases=%d improved=%d failures=%d)\n",
++           failures ? "FAIL" : "OK", cases, improved, failures);
 +    return failures;
 +}
 -- 
