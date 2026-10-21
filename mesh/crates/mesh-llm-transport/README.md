@@ -10,6 +10,9 @@ Skippy does not depend on this crate.
 
 The `protocol` module also defines the application-handler contract shared by the
 host runtime and embedded SDK: descriptors, authenticated incoming streams,
-scoped outbound opens, peer snapshots and lifecycle cancellation. The host owns
+scoped outbound opens (with a named `OPEN_STREAM_TIMEOUT` dial deadline), peer
+snapshots and lifecycle cancellation. `BUILT_IN_PROTOCOL_NAMES` reserves the
+names owned by built-in mesh subprotocols; applications may not register them,
+and gossip filtering applies the same list. The host owns
 admission and dispatch; applications own framing and payload limits. See the
 [SDK example](../mesh-llm-sdk/README.md#application-protocols).

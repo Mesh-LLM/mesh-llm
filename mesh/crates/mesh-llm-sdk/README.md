@@ -56,7 +56,11 @@ the cache has no matching runtime.
 Register handlers before startup with `MeshNode::builder().protocol(Arc::new(handler))`.
 The SDK advertises the descriptor through the existing mesh subprotocol envelope, and routes
 streams by name and major version. Old nodes ignore unknown descriptors and reject unsupported
-streams. There are no new ALPNs or changes to the built-in stage protocol.
+streams. There are no new ALPNs or changes to the built-in stage protocol. A relay that predates
+this change strips application descriptors when rebroadcasting; an admitted peer's capability set
+is learned from its direct announcements and survives such rebroadcasts. If a gossip frame nears
+the control-frame size ceiling, the node prunes application descriptors from relayed entries —
+never its own — instead of failing the whole gossip exchange.
 
 ```rust,no_run
 use std::sync::Arc;
@@ -101,7 +105,8 @@ Registration accepts at most 16 protocols, rejects duplicate name/major pairs an
 versions are positive, and features are at most 32 strings of 1–64 ASCII letters, digits, dots,
 hyphens or underscores. Keep `descriptor()` stable for the lifetime of the handler.
 
-The runtime allows at most 32 concurrent incoming application streams. It cancels incoming
+The runtime allows at most 32 concurrent incoming application streams; once the cap is reached,
+additional incoming opens are rejected rather than queued. It cancels incoming
 handlers when the node stops and signals `context.cancelled()` to background work, allowing one
 second for cleanup before aborting remaining tasks. Await work inside `run`/`accept`; detached
 tasks created by a handler are the application's responsibility. Registrations cannot change

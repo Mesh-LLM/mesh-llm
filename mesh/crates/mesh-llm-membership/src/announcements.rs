@@ -151,6 +151,7 @@ pub fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.served_model_descriptors != new.served_model_descriptors
         || old.served_model_runtime != new.served_model_runtime
         || old.artifact_transfer_supported != new.artifact_transfer_supported
+        || old.application_protocols != new.application_protocols
         || old.stage_protocol_generation_supported != new.stage_protocol_generation_supported
         || old.stage_status_list_supported != new.stage_status_list_supported
         || old.local_gguf_content_id_supported != new.local_gguf_content_id_supported
@@ -246,7 +247,14 @@ pub fn apply_transitive_ann(
     existing.served_model_descriptors = ann.served_model_descriptors.clone();
     existing.served_model_runtime = ann.served_model_runtime.clone();
     existing.artifact_transfer_supported = ann.artifact_transfer_supported;
-    existing.application_protocols = ann.application_protocols.clone();
+    // Application protocol capabilities are authoritative only from the peer
+    // itself: a relay that predates this change strips application descriptors
+    // when re-encoding, so a transitive update must not clear (or inject) them
+    // for a peer that has been admitted by direct gossip. Mirrors the
+    // provenance rule for the stage capability flags below.
+    if !existing.is_admitted() {
+        existing.application_protocols = ann.application_protocols.clone();
+    }
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     // `stage_protocol_generation_supported` and
     // `local_gguf_content_id_supported` require capability provenance from the

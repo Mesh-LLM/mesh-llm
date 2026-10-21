@@ -52,7 +52,7 @@ fn application_subprotocols(
     protocols
         .iter()
         .filter(|protocol| {
-            protocol.name != skippy_protocol::STAGE_SUBPROTOCOL_NAME
+            !mesh_llm_transport::protocol::BUILT_IN_PROTOCOL_NAMES.contains(&protocol.name.as_str())
                 && mesh_llm_transport::protocol::ProtocolDescriptor {
                     name: protocol.name.clone(),
                     major: protocol.major,

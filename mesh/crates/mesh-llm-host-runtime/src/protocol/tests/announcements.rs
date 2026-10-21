@@ -149,6 +149,111 @@ pub(crate) fn assert_mixed_version_peer_ignores_missing_release_attestation() {
     assert!(!peer.release_attestation_summary.verified);
 }
 
+fn proto_ann_with_subprotocols(
+    subprotocols: Vec<crate::proto::node::MeshSubprotocol>,
+) -> crate::proto::node::PeerAnnouncement {
+    crate::proto::node::PeerAnnouncement {
+        endpoint_id: vec![1; 32],
+        role: crate::proto::node::NodeRole::Worker as i32,
+        version: Some("0.78.0".into()),
+        subprotocols,
+        ..Default::default()
+    }
+}
+
+fn full_stage_subprotocol() -> crate::proto::node::MeshSubprotocol {
+    crate::proto::node::MeshSubprotocol {
+        name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.into(),
+        major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
+        features: vec![
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER.into(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST.into(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.into(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11.into(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.into(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1.into(),
+        ],
+    }
+}
+
+/// A peer predating application protocols sends only the built-in
+/// `skippy-stage` subprotocol. Decoding must leave every stage capability
+/// flag authoritative while reporting no application protocols.
+#[test]
+fn legacy_skippy_stage_only_announcement_decodes_without_application_protocols() {
+    let proto = proto_ann_with_subprotocols(vec![full_stage_subprotocol()]);
+    let (_addr, ann) = proto_ann_to_local(&proto).expect("announcement should decode");
+    assert!(ann.application_protocols.is_empty());
+    assert!(ann.artifact_transfer_supported);
+    assert!(ann.stage_status_list_supported);
+    assert!(ann.stage_protocol_generation_supported);
+    assert!(ann.local_gguf_content_id_supported);
+    assert!(ann.decode_batch_policy_supported);
+}
+
+/// Decoding filters invalid, reserved-name, and duplicate application
+/// descriptors, retains valid ones in order, and caps the retained set at
+/// 16 — all without disturbing the stage capability flags.
+#[test]
+fn application_descriptors_are_filtered_deduplicated_and_capped_on_decode() {
+    let mut subprotocols = vec![full_stage_subprotocol()];
+    subprotocols.push(crate::proto::node::MeshSubprotocol {
+        name: "echo".into(),
+        major: 1,
+        features: vec![],
+    });
+    // Invalid: uppercase names are not valid descriptor syntax.
+    subprotocols.push(crate::proto::node::MeshSubprotocol {
+        name: "Echo".into(),
+        major: 1,
+        features: vec![],
+    });
+    // Reserved: built-in names never surface as application protocols.
+    subprotocols.push(crate::proto::node::MeshSubprotocol {
+        name: "skippy-stage".into(),
+        major: 9,
+        features: vec![],
+    });
+    // Duplicate of the earlier valid entry.
+    subprotocols.push(crate::proto::node::MeshSubprotocol {
+        name: "echo".into(),
+        major: 1,
+        features: vec![],
+    });
+    subprotocols.push(crate::proto::node::MeshSubprotocol {
+        name: "echo".into(),
+        major: 2,
+        features: vec![],
+    });
+    // Enough extra valid descriptors to exceed the 16-entry cap.
+    for index in 0..20 {
+        subprotocols.push(crate::proto::node::MeshSubprotocol {
+            name: format!("p{index}"),
+            major: 1,
+            features: vec![],
+        });
+    }
+
+    let proto = proto_ann_with_subprotocols(subprotocols);
+    let (_addr, ann) = proto_ann_to_local(&proto).expect("announcement should decode");
+
+    let retained = ann
+        .application_protocols
+        .iter()
+        .map(|descriptor| (descriptor.name.clone(), descriptor.major))
+        .collect::<Vec<_>>();
+    let mut expected: Vec<(String, u32)> = vec![("echo".to_string(), 1), ("echo".to_string(), 2)];
+    expected.extend((0..14).map(|index| (format!("p{index}"), 1)));
+    assert_eq!(retained.len(), 16);
+    assert_eq!(retained, expected);
+
+    assert!(ann.artifact_transfer_supported);
+    assert!(ann.stage_status_list_supported);
+    assert!(ann.stage_protocol_generation_supported);
+    assert!(ann.local_gguf_content_id_supported);
+    assert!(ann.decode_batch_policy_supported);
+}
+
 /// Proves advertised model-throughput hints survive a local-to-proto-to-local
 /// announcement round trip unchanged.
 #[test]

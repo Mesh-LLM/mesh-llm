@@ -16,6 +16,13 @@ use tokio::{
 
 pub use iroh::EndpointId as PeerId;
 
+/// Deadline for opening an outbound application protocol stream before the open fails.
+pub const OPEN_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Names owned by built-in mesh subprotocols. Application protocols may not
+/// register these names; the host and gossip filtering apply the same list.
+pub const BUILT_IN_PROTOCOL_NAMES: &[&str] = &["skippy-stage"];
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtocolDescriptor {
     pub name: String,
@@ -200,7 +207,7 @@ impl ProtocolContext {
             "application protocol is stopped"
         );
         tokio::select! {
-            result = tokio::time::timeout(std::time::Duration::from_secs(10), self.network.open(peer, &self.descriptor)) => result?,
+            result = tokio::time::timeout(OPEN_STREAM_TIMEOUT, self.network.open(peer, &self.descriptor)) => result?,
             () = self.cancelled() => anyhow::bail!("application protocol stopped while opening stream"),
         }
     }
@@ -252,7 +259,7 @@ pub fn validate_protocols(protocols: &[Arc<dyn MeshProtocol>]) -> Result<()> {
         let descriptor = protocol.descriptor();
         descriptor.validate()?;
         ensure!(
-            descriptor.name != "skippy-stage",
+            !BUILT_IN_PROTOCOL_NAMES.contains(&descriptor.name.as_str()),
             "built-in protocol name is reserved"
         );
         ensure!(

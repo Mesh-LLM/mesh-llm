@@ -200,6 +200,7 @@ mod announcements;
 mod config;
 mod control_frames;
 mod frame_reading;
+mod gossip_frames;
 mod mesh_timestamps;
 mod owner_control;
 
