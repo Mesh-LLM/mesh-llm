@@ -16,3 +16,10 @@ names owned by built-in mesh subprotocols; applications may not register them,
 and gossip filtering applies the same list. The host owns
 admission and dispatch; applications own framing and payload limits. See the
 [SDK example](../mesh-llm-sdk/README.md#application-protocols).
+
+Application protocols may supply a `protocol::StageTransportProvider` through
+`MeshProtocol::stage_transport`. The SDK owns registration and cancellation;
+`ProtocolContext::accept_stage` delegates stage admission and routing to the host.
+Providers return owned `ProtocolStream` values and must preserve ordered reliable
+bytes, confidentiality, integrity and half-close. See the
+[contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).

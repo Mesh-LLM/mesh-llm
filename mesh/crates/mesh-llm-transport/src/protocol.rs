@@ -161,6 +161,10 @@ impl AsyncWrite for IrohStream {
 #[async_trait]
 pub trait ProtocolNetwork: Debug + Send + Sync {
     async fn open(&self, peer: PeerId, protocol: &ProtocolDescriptor) -> Result<ProtocolStream>;
+
+    async fn accept_stage(&self, _peer: PeerId, _stream: ProtocolStream) -> Result<()> {
+        anyhow::bail!("stage transport is unavailable")
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -212,6 +216,19 @@ impl ProtocolContext {
         }
     }
 
+    /// Route a provider's authenticated stream to an authorized local stage.
+    /// `peer` must come from the authenticated setup channel, not payload metadata.
+    pub async fn accept_stage(&self, peer: PeerId, stream: ProtocolStream) -> Result<()> {
+        ensure!(
+            !*self.cancellation.borrow(),
+            "application protocol is stopped"
+        );
+        tokio::select! {
+            result = self.network.accept_stage(peer, stream) => result,
+            () = self.cancelled() => anyhow::bail!("application protocol stopped during stage transport"),
+        }
+    }
+
     pub async fn cancelled(&self) {
         let mut cancellation = self.cancellation.clone();
         if *cancellation.borrow() {
@@ -232,9 +249,25 @@ pub struct IncomingProtocolStream {
     pub stream: ProtocolStream,
 }
 
+/// Supplies reliable, ordered, confidential duplex stage streams with half-close.
+#[async_trait]
+pub trait StageTransportProvider: Debug + Send + Sync {
+    /// Decline with `None` before sending stage bytes. Errors fail the connection;
+    /// they never trigger replay through the default transport.
+    async fn open_stage(
+        &self,
+        context: ProtocolContext,
+        peer: PeerId,
+    ) -> Result<Option<ProtocolStream>>;
+}
+
 #[async_trait]
 pub trait MeshProtocol: Debug + Send + Sync + 'static {
     fn descriptor(&self) -> ProtocolDescriptor;
+
+    fn stage_transport(&self) -> Option<&dyn StageTransportProvider> {
+        None
+    }
 
     /// Runs on the embedded node's runtime and is cancelled when that node stops.
     async fn run(&self, context: ProtocolContext) -> Result<()> {
@@ -253,6 +286,14 @@ pub fn validate_protocols(protocols: &[Arc<dyn MeshProtocol>]) -> Result<()> {
     ensure!(
         protocols.len() <= 16,
         "at most 16 application protocols may be registered"
+    );
+    ensure!(
+        protocols
+            .iter()
+            .filter(|p| p.stage_transport().is_some())
+            .count()
+            <= 1,
+        "at most one stage transport provider may be registered"
     );
     let mut keys = std::collections::HashSet::new();
     for protocol in protocols {

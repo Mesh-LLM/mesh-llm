@@ -1129,6 +1129,17 @@ impl Node {
                 tokio::spawn(async move {
                     if let Err(err) = async {
                         tcp_stream.set_nodelay(true)?;
+                        if let Some(stream) = node.open_application_stage_stream(peer_id).await? {
+                            return crate::network::tunnel::application_stage::outbound(
+                                &node,
+                                peer_id,
+                                (&topology_id, &run_id, &stage_id),
+                                tcp_stream,
+                                stream,
+                                link_delay,
+                            )
+                            .await;
+                        }
                         let (send, recv) = node
                             .open_stage_transport_stream(peer_id, topology_id, run_id, stage_id)
                             .await?;

@@ -37,3 +37,9 @@ nonempty generated output through the OpenAI endpoint. Child deadlines turn
 leaked runtime threads into failures rather than hanging the test runner.
 These tests cover SDK lifecycle and native inference, not the Buzz UI or a
 multi-machine community mesh.
+
+SDK application stage providers are integrated at the stage bridge. The host
+checks authenticated peer identity, admission, topology/run ownership and local
+stage readiness before routing an inbound provider stream. Unhandled stage
+connections retain the dedicated Iroh path. The provider never selects a local
+TCP destination. See the [contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).

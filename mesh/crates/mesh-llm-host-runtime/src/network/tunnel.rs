@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 
+pub(crate) mod application_stage;
 mod inbound_http;
 
 fn quic_response_first_byte_timeout() -> Duration {
@@ -141,7 +142,7 @@ async fn handle_inbound_stage_transport(
     relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv, None).await
 }
 
-async fn resolve_stage_transport_bind_addr(
+pub(super) async fn resolve_stage_transport_bind_addr(
     node: &Node,
     open: &skippy_protocol::proto::stage::StageTransportOpen,
 ) -> Result<String> {

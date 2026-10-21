@@ -101,7 +101,8 @@ authenticated connection in `incoming.peer`. Capabilities are hints, not proof o
 readiness. Handlers own framing, payload bounds and transaction timeouts.
 
 Registration accepts at most 16 protocols, rejects duplicate name/major pairs and reserves
-`skippy-stage`. Names use lowercase ASCII letters, digits, dots and hyphens (1–64 bytes), major
+the built-in protocol names (`BUILT_IN_PROTOCOL_NAMES`, currently `skippy-stage`). Names use
+lowercase ASCII letters, digits, dots and hyphens (1–64 bytes), major
 versions are positive, and features are at most 32 strings of 1–64 ASCII letters, digits, dots,
 hyphens or underscores. Keep `descriptor()` stable for the lifetime of the handler.
 
@@ -120,4 +121,44 @@ flowchart LR
     Iroh[Admitted iroh connection] --> Dispatch[Name / major dispatch]
     Dispatch --> Handler
     Handler --> Context[Scoped context and peer watch]
+```
+
+### Application stage transport
+
+A registered `MeshProtocol` can return a `StageTransportProvider` from its
+`stage_transport()` method. Its `open_stage(context, peer)` returns an owned
+`ProtocolStream`, or `None` to use the existing dedicated Iroh stage connection.
+The protocol's inbound handler calls `context.accept_stage(incoming.peer, stream)`
+using the identity established by its authenticated setup. Mesh then checks the
+stage header, topology, run, destination readiness and admission before bridging
+the channel to the local stage. Admission loss and shutdown cancel the channel.
+
+```rust,ignore
+#[async_trait]
+impl StageTransportProvider for MyProtocol {
+    async fn open_stage(&self, context: ProtocolContext, peer: PeerId)
+        -> anyhow::Result<Option<ProtocolStream>> {
+        self.connect_stage_channel(context, peer).await
+    }
+}
+// In MeshProtocol's implementation:
+// fn stage_transport(&self) -> Option<&dyn StageTransportProvider> { Some(self) }
+// In its authenticated inbound channel handler:
+// context.accept_stage(incoming.peer, connected_stream).await?;
+```
+
+At most one stage provider may be registered. It must supply reliable, ordered,
+confidential and integrity-protected bytes, support half-close, and release its
+owned work when the stream is dropped. Errors fail the connection; Mesh never
+replays stage bytes over another transport. Stage control, artifacts and activation
+encoding retain their existing contracts. See the
+[application stage transport contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).
+
+```mermaid
+flowchart LR
+    SDK[SDK protocol registration] --> Provider[Application stage provider]
+    Bridge[Mesh stage bridge] --> Provider
+    Provider --> Channel[Provider-owned authenticated channel]
+    Channel --> Gate[Peer and topology authorization]
+    Gate --> Stage[Destination stage]
 ```

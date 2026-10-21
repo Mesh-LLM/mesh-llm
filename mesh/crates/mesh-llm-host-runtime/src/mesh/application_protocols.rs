@@ -107,10 +107,16 @@ impl ProtocolNetwork for NodeProtocolNetwork {
             .await?;
         Ok(ProtocolStream::from_iroh(send, recv))
     }
+    async fn accept_stage(&self, peer: PeerId, stream: ProtocolStream) -> Result<()> {
+        self.0.accept_application_stage_stream(peer, stream).await
+    }
 }
 
 impl Node {
-    fn application_protocol_context(&self, descriptor: ProtocolDescriptor) -> ProtocolContext {
+    pub(crate) fn application_protocol_context(
+        &self,
+        descriptor: ProtocolDescriptor,
+    ) -> ProtocolContext {
         ProtocolContext::new(
             self.endpoint.id(),
             descriptor,
@@ -257,5 +263,75 @@ impl Node {
             }
         }).await;
         Ok(())
+    }
+}
+
+impl Node {
+    pub(crate) fn application_stage_cancellation(&self) -> watch::Receiver<bool> {
+        self.application_protocols.cancelled.subscribe()
+    }
+
+    pub(crate) fn application_stage_peers(&self) -> watch::Receiver<Vec<ProtocolPeer>> {
+        self.application_protocols.peers.subscribe()
+    }
+
+    pub(crate) async fn open_application_stage_stream(
+        &self,
+        peer: PeerId,
+    ) -> Result<Option<ProtocolStream>> {
+        let Some(registry) = self.application_protocols.registrations.get() else {
+            return Ok(None);
+        };
+        for entry in registry.values() {
+            let Some(provider) = entry.handler.stage_transport() else {
+                continue;
+            };
+            let supported = self
+                .application_protocols
+                .peers
+                .borrow()
+                .iter()
+                .any(|p| p.id == peer && p.supports(&entry.descriptor));
+            if !supported {
+                continue;
+            }
+            ensure!(
+                self.stage_stream_admitted(peer).await,
+                "stage peer is not admitted"
+            );
+            let context = self.application_protocol_context(entry.descriptor.clone());
+            return tokio::select! {
+                result = tokio::time::timeout(
+                    mesh_llm_transport::protocol::OPEN_STREAM_TIMEOUT,
+                    provider.open_stage(context.clone(), peer),
+                ) => result?,
+                () = context.cancelled() => anyhow::bail!("stage transport stopped during open"),
+            };
+        }
+        Ok(None)
+    }
+
+    pub(crate) async fn accept_application_stage_stream(
+        &self,
+        peer: PeerId,
+        stream: ProtocolStream,
+    ) -> Result<()> {
+        let mut peers = self.application_protocols.peers.subscribe();
+        let mut cancellation = self.application_protocols.cancelled.subscribe();
+        let transfer =
+            crate::network::tunnel::application_stage::accept(self.clone(), peer, stream);
+        tokio::pin!(transfer);
+        loop {
+            ensure!(!*cancellation.borrow(), "stage transport stopped");
+            ensure!(
+                peers.borrow().iter().any(|p| p.id == peer),
+                "stage peer is no longer admitted"
+            );
+            tokio::select! {
+                result = &mut transfer => return result,
+                _ = cancellation.changed() => {},
+                changed = peers.changed() => { changed?; },
+            }
+        }
     }
 }
