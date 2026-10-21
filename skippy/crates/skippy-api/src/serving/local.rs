@@ -171,6 +171,7 @@ impl LocalOpenAiOptions {
             self.bind_addr,
             ModelLoadRequest {
                 runtime: EmbeddedRuntimeOptions {
+                    stage_transport: None,
                     config,
                     topology: self.topology,
                     n_threads: self.tuning.n_threads,

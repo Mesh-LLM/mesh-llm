@@ -130,8 +130,9 @@ A registered `MeshProtocol` can return a `StageTransportProvider` from its
 `ProtocolStream`, or `None` to use the existing dedicated Iroh stage connection.
 The protocol's inbound handler calls `context.accept_stage(incoming.peer, stream)`
 using the identity established by its authenticated setup. Mesh then checks the
-stage header, topology, run, destination readiness and admission before bridging
-the channel to the local stage. Admission loss and shutdown cancel the channel.
+stage header, topology, run, destination readiness and admission before handing
+the channel directly to stage execution. Admission loss, policy loss and shutdown
+cancel the channel after handoff. No local TCP stage bridge is used.
 
 ```rust,ignore
 #[async_trait]
@@ -183,8 +184,8 @@ each stage, Mesh verifies its remote provider setup by opening and dropping a st
 without stage bytes. Actual activation connections repeat setup; declines or failures
 never fall back. Incoming default activation streams are rejected too. Connections
 are not reserved by verification, so later capacity or link failures still return
-errors. Local stage sockets, discovery, control and artifact transfers retain their
-existing behavior. Every participant must opt in; a coordinator cannot impose local
+errors. Execution consumes supplied connections directly. Discovery, control and
+artifact transfers retain their existing behavior. Every participant must opt in; a coordinator cannot impose local
 configuration on another machine. The host advertises the policy through the
 existing feature list; wire formats and protocol versions do not change.
 
@@ -199,7 +200,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     SDK[SDK protocol registration] --> Provider[Application stage provider]
-    Bridge[Mesh stage bridge] --> Provider
+    StageIO[Stage execution connection] --> Provider
     Provider --> Channel[Provider-owned authenticated channel]
     Channel --> Gate[Peer and topology authorization]
     Gate --> Stage[Destination stage]

@@ -38,9 +38,11 @@ leaked runtime threads into failures rather than hanging the test runner.
 These tests cover SDK lifecycle and native inference, not the Buzz UI or a
 multi-machine community mesh.
 
-SDK application stage providers are integrated at the stage bridge. The host
+SDK application stage providers supply connections directly to stage execution. The host
 checks authenticated peer identity, admission, topology/run ownership and local
-stage readiness before routing an inbound provider stream. Unhandled stage
+stage readiness before handing an inbound provider stream to a bounded execution
+ingress. Forward lanes and prediction returns use supplied connections without
+local TCP listeners or byte-copy relay tasks. Unhandled stage
 connections retain the dedicated Iroh path. The provider never selects a local
 TCP destination. See the [contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).
 
@@ -55,6 +57,6 @@ Embedded nodes may require their registered provider through
 the policy through an existing capability feature, filters split participants,
 verifies outgoing setup before stage loading and refuses default activation streams
 in both directions. Each participant must enforce the policy. Required mode also
-rejects identity-free remote stage endpoints and non-loopback local endpoints;
+requires stage peer identities and rejects raw socket endpoints on the injected path;
 control, artifacts and ordinary mesh membership remain available. See the
 [SDK example](../mesh-llm-sdk/README.md#application-stage-transport).

@@ -63,7 +63,7 @@ fn application_protocol_registration_rejects_invalid_or_reserved_descriptors() {
 }
 
 pub(super) async fn start_node() -> Node {
-    let (node, _channels) = Node::start(
+    let (node, channels) = Node::start(
         super::super::NodeRole::Client,
         RelayConfig {
             urls: &Vec::new(),
@@ -82,6 +82,14 @@ pub(super) async fn start_node() -> Node {
     )
     .await
     .expect("start application protocol node");
+    crate::network::tunnel::Manager::start(
+        node.clone(),
+        channels.rpc,
+        channels.http,
+        channels.stage,
+    )
+    .await
+    .expect("start direct stage ingress dispatcher");
     node
 }
 
@@ -207,13 +215,19 @@ async fn application_stage_provider_routes_only_authorized_runs_and_preserves_ha
         mesh_llm_transport::protocol::StageTransportPolicy::PreferProvider,
         mesh_llm_transport::protocol::StageTransportPolicy::RequireProvider,
     ] {
-        authorized_stage_exchange(policy).await?;
+        authorized_stage_exchange(policy, true).await?;
     }
+    authorized_stage_exchange(
+        mesh_llm_transport::protocol::StageTransportPolicy::PreferProvider,
+        false,
+    )
+    .await?;
     Ok(())
 }
 
 async fn authorized_stage_exchange(
     policy: mesh_llm_transport::protocol::StageTransportPolicy,
+    with_provider: bool,
 ) -> anyhow::Result<()> {
     use crate::mesh::stage_transport::StageTopologyInstance;
     assert!(
@@ -231,18 +245,20 @@ async fn authorized_stage_exchange(
             .await?
             .is_none()
     );
-    sender
-        .install_application_protocols_with_policy(
-            vec![Arc::new(StageBridge::new("stage-bridge"))],
-            policy,
-        )
-        .await?;
-    receiver
-        .install_application_protocols_with_policy(
-            vec![Arc::new(StageBridge::new("stage-bridge"))],
-            policy,
-        )
-        .await?;
+    if with_provider {
+        sender
+            .install_application_protocols_with_policy(
+                vec![Arc::new(StageBridge::new("stage-bridge"))],
+                policy,
+            )
+            .await?;
+        receiver
+            .install_application_protocols_with_policy(
+                vec![Arc::new(StageBridge::new("stage-bridge"))],
+                policy,
+            )
+            .await?;
+    }
     sender.start_accepting();
     receiver.start_accepting();
     sender
@@ -275,40 +291,80 @@ async fn authorized_stage_exchange(
         })
         .await;
     reject_invalid_stage_headers(&sender, &receiver).await?;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    receiver
-        .register_stage_transport_alias(
-            "topology",
-            "run",
-            "destination",
-            listener.local_addr()?.to_string(),
-        )
-        .await;
-    let address = sender
-        .ensure_stage_transport_bridge(receiver.id(), "topology", "run", "destination")
-        .await?;
-    let exchange = async {
-        let mut client = tokio::net::TcpStream::connect(address).await?;
-        client.write_all(b"activation bytes").await?;
-        client.shutdown().await?;
+    let mut load = super::stage_load_request();
+    load.topology_id = "topology".into();
+    load.run_id = "run".into();
+    load.stage_id = "destination".into();
+    load.upstream = None;
+    load.downstream = None;
+    load.topology_stages = vec![
+        crate::inference::skippy::StageTopologyStageDescriptor {
+            stage_id: "source".into(),
+            stage_index: 0,
+            node_id: sender.id(),
+            layer_start: 0,
+            layer_end: 1,
+            bind_addr: "deliberately-not-a-socket".into(),
+        },
+        crate::inference::skippy::StageTopologyStageDescriptor {
+            stage_id: "destination".into(),
+            stage_index: 1,
+            node_id: receiver.id(),
+            layer_start: 1,
+            layer_end: 2,
+            bind_addr: "deliberately-not-a-socket".into(),
+        },
+    ];
+    let destination = receiver.direct_stage_transport(&load).await?;
+    destination.ready();
+    load.stage_id = "source".into();
+    let source = sender.direct_stage_transport(&load).await?;
+    source.ready();
+    let source_node = sender.id();
+    let destination_node = receiver.id();
+    let exchange = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        use std::io::{Read, Write};
+        let mut stream = source.connect(
+            "mesh-stage://destination",
+            std::time::Instant::now() + std::time::Duration::from_secs(3),
+            None,
+        )?;
+        stream.write_all(b"activation bytes")?;
+        stream.shutdown(std::net::Shutdown::Write)?;
         let mut reply = Vec::new();
-        client.read_to_end(&mut reply).await?;
+        stream.read_to_end(&mut reply)?;
         assert_eq!(reply, b"stage result");
-        Ok::<_, anyhow::Error>(())
-    };
-    let stage = async {
-        let (mut socket, _) = listener.accept().await?;
+        Ok(())
+    });
+    let stage = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        use std::io::{Read, Write};
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut stream = loop {
+            match destination.try_accept() {
+                Ok(stream) => break stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1))
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
         let mut data = Vec::new();
-        socket.read_to_end(&mut data).await?;
+        stream.read_to_end(&mut data)?;
         assert_eq!(data, b"activation bytes");
-        socket.write_all(b"stage result").await?;
-        socket.shutdown().await?;
-        Ok::<_, anyhow::Error>(())
-    };
+        stream.write_all(b"stage result")?;
+        stream.shutdown(std::net::Shutdown::Write)?;
+        Ok(())
+    });
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        tokio::try_join!(exchange, stage)
+        exchange.await??;
+        stage.await??;
+        Ok::<_, anyhow::Error>(())
     })
     .await??;
+    assert_ne!(source_node, destination_node);
     sender.close_endpoint().await;
     receiver.close_endpoint().await;
     Ok(())

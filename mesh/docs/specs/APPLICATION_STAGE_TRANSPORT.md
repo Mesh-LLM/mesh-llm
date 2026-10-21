@@ -16,7 +16,7 @@ exclude known unavailable paths without requiring performance samples. Before
 planning excludes a peer for exhausted capacity, the provider must account for
 usable existing channels so a healthy split is not withdrawn just for using its
 connection budget. Before
-creating a remote stage bridge, required mode opens and drops a provider stream
+loading remote stage connections, required mode opens and drops a provider stream
 to verify setup. This sends no stage bytes and reserves no long-lived capacity.
 Each node performs this check for its own stage neighbors during load, including
 the last stage's return connection. Setup errors prevent that load from becoming
@@ -44,23 +44,54 @@ peer. Mesh writes the existing `StageTransportOpen` followed by unchanged stage 
 
 Inbound providers call `context.accept_stage(peer, stream)` with the peer identity
 from authenticated setup. Mesh checks admission, requester identity, topology, run,
-destination stage and local readiness before opening the local stage socket. The
+destination stage and local readiness before handing the stream to the destination execution ingress. The
 header has a ten-second deadline. Admission loss or node shutdown terminates the
 channel; providers must also cancel outstanding setup and native work on stream drop.
 Providers must not interpret remote stage addresses as local TCP destinations.
+Accepted streams enter a bounded queue for the exact local stage generation; a
+full, stopped or unready ingress rejects the channel. The accept call returns
+after handoff. Mesh retains admission and policy monitoring for the stream's
+lifetime, including while execution is blocked on reads or writes.
 
 ```mermaid
 flowchart LR
-    S[Local stage] -->|Local TCP| B[Mesh stage bridge]
-    B --> P[Application transport provider]
+    S[Stage execution] --> C[Injected stage connection]
+    C --> P[Application transport provider]
     P --> R[Remote provider]
     R --> G[Mesh admission and topology checks]
-    G --> T[Destination stage]
+    G --> I[Bounded execution ingress]
+    I --> T[Destination stage]
 ```
 
 The application protocol is the setup/control channel. It does not replace built-in
 stage control or artifact transfer. No stage encoding or dedicated Iroh wire changes
 are required, and nodes without a provider continue using the existing path.
+
+## Direct execution connections
+
+The host supplies `skippy_serving::stage_transport::StageTransport` to embedded
+binary stages and stage-zero serving. It resolves outbound opaque stage identities
+within the admitted topology and accepts inbound streams after authorization.
+The forward lanes, warm preconnections and prediction-return paths all use
+`StageConnection`. No loopback listener, local TCP connection or byte-copy relay
+sits between the provider stream and execution. Default Iroh stage streams use
+this same execution ingress when the provider policy permits them.
+
+Skippy's blocking execution threads consume async streams through a runtime
+handle, with independent reader and writer locks, bounded read buffering,
+non-consuming readiness checks, I/O deadlines and shared shutdown. The adapter
+polls the supplied stream directly; it does not spawn a copying task. Half-close
+preserves the opposite direction. Cancellation interrupts blocked reads and writes.
+The host monitors peer admission, required-provider capability, node shutdown and
+local stage teardown after handoff. Stage readiness comes from the running
+execution handle rather than a TCP probe.
+
+The legacy `MESH_LLM_STAGE_LINK_DELAY_MS` relay emulator is rejected on this path
+until a direct-stream emulator exists, so a benchmark cannot silently run unshaped.
+
+Standalone TCP serving remains available when no transport is supplied. Skippy
+has no Mesh or application-provider dependency. These are Rust execution-interface
+changes; the stage header, activation codec and wire protocol versions are unchanged.
 
 ## Local link observations
 

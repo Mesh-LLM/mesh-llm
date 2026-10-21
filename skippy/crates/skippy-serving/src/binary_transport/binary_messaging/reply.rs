@@ -1,5 +1,6 @@
 use crate::binary_transport::direct_return;
 use crate::binary_transport::direct_return::PredictionReturnSinks;
+use crate::stage_transport::StageConnection;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
@@ -13,11 +14,10 @@ use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
 use skippy_protocol::binary::send_reply_message;
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::time::Duration;
 
 pub(super) fn drain_deferred_prefill_replies(
-    downstream: Option<&mut TcpStream>,
+    downstream: Option<&mut StageConnection>,
     pending_prefill_replies: &mut usize,
     pending_reply_stats: &mut StageReplyStats,
 ) -> Result<()> {
@@ -44,7 +44,7 @@ pub(in crate::binary_transport) fn configure_prediction_return_stream(
     session_id: u64,
     downstream_connect_timeout_secs: u64,
     prediction_return_sinks: &PredictionReturnSinks,
-    prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
+    prediction_return_streams: &mut BTreeMap<(u64, u64), StageConnection>,
 ) {
     if prediction_return_streams.contains_key(&(request_id, session_id)) {
         return;
@@ -63,6 +63,7 @@ pub(in crate::binary_transport) fn configure_prediction_return_stream(
 
     match direct_return::open_prediction_return_stream(
         config,
+        prediction_return_sinks.transport.as_ref(),
         topology,
         request_id,
         session_id,
@@ -78,7 +79,7 @@ pub(in crate::binary_transport) fn configure_prediction_return_stream(
         }
     }
 }
-pub(super) fn send_stage_reply(stream: &mut TcpStream, reply: StageReply) -> Result<()> {
+pub(super) fn send_stage_reply(stream: &mut StageConnection, reply: StageReply) -> Result<()> {
     send_reply_message(stream, &reply).context("send stage reply")
 }
 

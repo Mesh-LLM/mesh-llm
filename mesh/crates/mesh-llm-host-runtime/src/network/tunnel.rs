@@ -1,23 +1,15 @@
 //! QUIC tunnel management for delivering remote OpenAI HTTP traffic and
 //! forwarding stage transport streams.
 
-pub(crate) use mesh_llm_transport::stage_link_delay;
-
 use crate::mesh::Node;
 use crate::protocol::read_len_prefixed;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use iroh::EndpointId;
 use prost::Message;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::net::TcpStream;
 
 pub(crate) mod application_stage;
 mod inbound_http;
-
-fn quic_response_first_byte_timeout() -> Duration {
-    Duration::from_secs(5 * 60)
-}
 
 #[derive(Clone)]
 pub(super) struct HttpIngress {
@@ -131,92 +123,10 @@ async fn handle_inbound_stage_transport(
         );
     }
 
-    let bind_addr = resolve_stage_transport_bind_addr(&node, &open).await?;
-    let tcp_stream = TcpStream::connect(&bind_addr).await?;
-    tcp_stream.set_nodelay(true)?;
-    tracing::info!(
-        "Inbound stage transport stream {} → {}",
-        remote.fmt_short(),
-        bind_addr
-    );
-    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv, None).await
-}
-
-pub(super) async fn resolve_stage_transport_bind_addr(
-    node: &Node,
-    open: &skippy_protocol::proto::stage::StageTransportOpen,
-) -> Result<String> {
-    let status_result = node
-        .query_local_stage_status(crate::inference::skippy::StageStatusFilter {
-            topology_id: Some(open.topology_id.clone()),
-            run_id: Some(open.run_id.clone()),
-            stage_id: Some(open.stage_id.clone()),
-        })
-        .await;
-    match status_result {
-        Ok(statuses) => {
-            if let Some(status) = statuses.into_iter().find(|status| {
-                status.topology_id == open.topology_id
-                    && status.run_id == open.run_id
-                    && status.stage_id == open.stage_id
-            }) {
-                if status.state != crate::inference::skippy::StageRuntimeState::Ready {
-                    anyhow::bail!(
-                        "stage {} / {} / {} is not ready: {:?}",
-                        status.topology_id,
-                        status.run_id,
-                        status.stage_id,
-                        status.state
-                    );
-                }
-                return Ok(status.bind_addr);
-            }
-        }
-        Err(error) => {
-            if let Some(bind_addr) = node
-                .stage_transport_alias(&open.topology_id, &open.run_id, &open.stage_id)
-                .await
-            {
-                return Ok(bind_addr);
-            }
-            return Err(error).with_context(|| {
-                format!(
-                    "query local stage status for {} / {} / {}",
-                    open.topology_id, open.run_id, open.stage_id
-                )
-            });
-        }
-    }
-    if let Some(bind_addr) = node
-        .stage_transport_alias(&open.topology_id, &open.run_id, &open.stage_id)
-        .await
-    {
-        return Ok(bind_addr);
-    }
-    anyhow::bail!(
-        "stage {} / {} / {} is not loaded locally",
-        open.topology_id,
-        open.run_id,
-        open.stage_id
-    )
-}
-
-/// Relay admitted streams using Mesh's existing first-response timeout policy.
-pub async fn relay_bidirectional(
-    tcp_read: tokio::io::ReadHalf<TcpStream>,
-    tcp_write: tokio::io::WriteHalf<TcpStream>,
-    quic_send: iroh::endpoint::SendStream,
-    quic_recv: iroh::endpoint::RecvStream,
-    link_delay: Option<Duration>,
-) -> Result<()> {
-    mesh_llm_transport::relay_bidirectional(
-        tcp_read,
-        tcp_write,
-        quic_send,
-        quic_recv,
-        quic_response_first_byte_timeout(),
-        link_delay,
+    node.deliver_direct_stage(
+        remote,
+        &open,
+        mesh_llm_transport::protocol::ProtocolStream::from_iroh(quic_send, quic_recv),
     )
     .await
 }

@@ -5,6 +5,7 @@ use crate::frontend::generation::PhaseTimer;
 use crate::frontend::prefill::PrefillChunkObservation;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::us_to_ms;
+use crate::stage_transport::StageConnection;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -18,7 +19,6 @@ use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::recv_ready;
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
@@ -26,6 +26,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 pub(in crate::frontend) struct PersistentStageLanePool {
+    pub(in crate::frontend) stage_transport:
+        Option<Arc<dyn crate::stage_transport::StageTransport>>,
     pub(in crate::frontend) config: StageConfig,
     pub(in crate::frontend) timeout_secs: u64,
     pub(in crate::frontend) telemetry: Telemetry,
@@ -37,7 +39,7 @@ pub(in crate::frontend) struct PersistentStageLanePool {
 
 pub(in crate::frontend) struct PersistentStageLane {
     pub(in crate::frontend) id: u64,
-    pub(in crate::frontend) stream: TcpStream,
+    pub(in crate::frontend) stream: StageConnection,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -65,6 +67,7 @@ impl PersistentStageLanePool {
 
     pub(in crate::frontend) fn new(
         config: &StageConfig,
+        stage_transport: Option<Arc<dyn crate::stage_transport::StageTransport>>,
         capacity: usize,
         timeout_secs: u64,
         telemetry: Telemetry,
@@ -73,6 +76,7 @@ impl PersistentStageLanePool {
             return Ok(None);
         }
         let pool = Arc::new(Self {
+            stage_transport,
             config: config.clone(),
             timeout_secs,
             telemetry,
@@ -377,9 +381,13 @@ impl PersistentStageLanePool {
         lane_id: u64,
         connect_timeout: Duration,
         ready_timeout: Duration,
-    ) -> Result<TcpStream> {
-        let mut stream = connect_binary_downstream(&self.config, connect_timeout)?
-            .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
+    ) -> Result<StageConnection> {
+        let mut stream = connect_binary_downstream(
+            &self.config,
+            self.stage_transport.as_ref(),
+            connect_timeout,
+        )?
+        .ok_or_else(|| anyhow!("embedded stage0 has no downstream"))?;
         let local_addr = stream.local_addr().ok();
         let peer_addr = stream.peer_addr().ok();
         tracing::debug!(
@@ -399,7 +407,7 @@ impl PersistentStageLanePool {
 }
 
 pub(in crate::frontend) fn configure_persistent_lane_io_deadlines(
-    stream: &TcpStream,
+    stream: &StageConnection,
 ) -> Result<()> {
     let timeout = super::stage_reply_timeout();
     stream
@@ -411,7 +419,7 @@ pub(in crate::frontend) fn configure_persistent_lane_io_deadlines(
 }
 
 pub(in crate::frontend) fn receive_persistent_lane_ready(
-    stream: &mut TcpStream,
+    stream: &mut StageConnection,
     timeout: Duration,
 ) -> Result<()> {
     stream
@@ -424,7 +432,7 @@ pub(in crate::frontend) fn receive_persistent_lane_ready(
     ready
 }
 
-fn lane_stream_is_live(stream: &TcpStream) -> bool {
+fn lane_stream_is_live(stream: &StageConnection) -> bool {
     use std::io::ErrorKind;
     if stream.set_nonblocking(true).is_err() {
         return false;

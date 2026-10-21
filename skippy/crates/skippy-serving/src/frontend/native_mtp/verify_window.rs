@@ -1,4 +1,4 @@
-use std::net::TcpStream;
+use crate::stage_transport::StageConnection;
 
 use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_protocol::binary::{StageNativeMtpDraft, WireReplyKind};
@@ -30,7 +30,7 @@ impl StageOpenAiBackend {
     pub(in crate::frontend) fn execute_native_mtp_verify_window(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         session_key: &str,
         request_id: u64,
         session_id: u64,

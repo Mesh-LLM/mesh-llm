@@ -20,6 +20,12 @@ struct Registration {
 }
 
 pub(crate) struct ApplicationProtocols {
+    pub(super) stage_ingresses: std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            std::sync::Weak<super::direct_stage_connections::DirectStageConnections>,
+        >,
+    >,
     policy: OnceLock<StageTransportPolicy>,
     registrations: OnceLock<BTreeMap<(String, u32), Registration>>,
     peers: watch::Sender<Vec<ProtocolPeer>>,
@@ -31,6 +37,7 @@ pub(crate) struct ApplicationProtocols {
 impl Default for ApplicationProtocols {
     fn default() -> Self {
         Self {
+            stage_ingresses: Default::default(),
             policy: OnceLock::new(),
             registrations: OnceLock::new(),
             peers: watch::channel(Vec::new()).0,

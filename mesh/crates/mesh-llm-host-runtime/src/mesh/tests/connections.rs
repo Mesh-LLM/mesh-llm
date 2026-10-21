@@ -278,6 +278,7 @@ fn endpoint_addr_filter_for_lan_only_bind_ip_strips_public_candidates() {
 
 fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
     crate::inference::skippy::StageLoadRequest {
+        stage_transport: None,
         topology_id: "topology-a".to_string(),
         run_id: "run-a".to_string(),
         model_id: "model-a".to_string(),
@@ -431,8 +432,6 @@ async fn make_test_node_with_requirements(
         stage_transport_tx,
         stage_control_tx: Arc::new(Mutex::new(None)),
         stage_control_lifecycle: Arc::new(Mutex::new(None)),
-        stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
-        stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
         stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
         plugin_manager: Arc::new(Mutex::new(None)),
         display_name: Arc::new(Mutex::new(None)),

@@ -1,4 +1,4 @@
-use super::{Node, PeerInfo, StageTransportBridgeLabel};
+use super::{Node, PeerInfo};
 use crate::mesh::node::LocalRequestMetricsSampler;
 use crate::mesh::stage_proto::{
     stage_control_request_to_proto, stage_control_response_from_proto,
@@ -1045,145 +1045,6 @@ impl Node {
         Ok((send, recv))
     }
 
-    pub async fn ensure_stage_transport_bridge(
-        &self,
-        peer_id: EndpointId,
-        topology_id: impl Into<String>,
-        run_id: impl Into<String>,
-        stage_id: impl Into<String>,
-    ) -> Result<String> {
-        self.verify_required_stage_provider(peer_id).await?;
-        let topology_id = topology_id.into();
-        let run_id = run_id.into();
-        let stage_id = stage_id.into();
-        let key = stage_runtime_status_key(&topology_id, &run_id, &stage_id);
-        let label = StageTransportBridgeLabel::new(&topology_id, &run_id, &stage_id);
-        let owner = self
-            .reserve_stage_transport_bridge(key.clone(), &label)
-            .await?;
-
-        // The emulated link delay applies on this (initiating) side only, so
-        // a stage exchange gains exactly one delay no matter how many nodes
-        // export the variable. A misconfigured value fails the bridge here
-        // rather than silently running an unshaped sweep.
-        let link_delay = match crate::network::tunnel::stage_link_delay() {
-            Ok(delay) => delay,
-            Err(error) => {
-                self.remove_stage_transport_bridge_if_owner(&key, &owner)
-                    .await;
-                return Err(error);
-            }
-        };
-
-        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
-            Ok(listener) => listener,
-            Err(error) => {
-                self.remove_stage_transport_bridge_if_owner(&key, &owner)
-                    .await;
-                return Err(error.into());
-            }
-        };
-        let bind_addr = match listener.local_addr() {
-            Ok(addr) => addr.to_string(),
-            Err(error) => {
-                self.remove_stage_transport_bridge_if_owner(&key, &owner)
-                    .await;
-                return Err(error.into());
-            }
-        };
-        let node = self.clone();
-        let cleanup_key = key.clone();
-        let topology_for_task = topology_id.clone();
-        let run_for_task = run_id.clone();
-        let stage_for_task = stage_id.clone();
-        let handle = tokio::spawn(async move {
-            // Back off exponentially on accept errors (capped at 1s) so a
-            // permanently failing accept cannot warn every 100ms forever;
-            // each successful accept restores the fast retry.
-            let mut accept_backoff = std::time::Duration::from_millis(100);
-            loop {
-                // An accept error (EMFILE under load, an aborted handshake)
-                // must not end the bridge: once this loop exits the local
-                // listener closes and every stage-0 lane to this peer is
-                // refused for the rest of the generation.
-                let tcp_stream = match listener.accept().await {
-                    Ok((tcp_stream, _)) => {
-                        accept_backoff = std::time::Duration::from_millis(100);
-                        tcp_stream
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            key = %cleanup_key.replace('\n', "/"),
-                            peer = %peer_id.fmt_short(),
-                            error = %err,
-                            "stage transport bridge accept failed; retrying"
-                        );
-                        tokio::time::sleep(accept_backoff).await;
-                        accept_backoff =
-                            (accept_backoff * 2).min(std::time::Duration::from_secs(1));
-                        continue;
-                    }
-                };
-                let node = node.clone();
-                let topology_id = topology_for_task.clone();
-                let run_id = run_for_task.clone();
-                let stage_id = stage_for_task.clone();
-                tokio::spawn(async move {
-                    if let Err(err) = async {
-                        tcp_stream.set_nodelay(true)?;
-                        if let Some(stream) = node.open_application_stage_stream(peer_id).await? {
-                            return crate::network::tunnel::application_stage::outbound(
-                                &node,
-                                peer_id,
-                                (&topology_id, &run_id, &stage_id),
-                                tcp_stream,
-                                stream,
-                                link_delay,
-                            )
-                            .await;
-                        }
-                        let (send, recv) = node
-                            .open_stage_transport_stream(peer_id, topology_id, run_id, stage_id)
-                            .await?;
-                        let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-                        crate::network::tunnel::relay_bidirectional(
-                            tcp_read, tcp_write, send, recv, link_delay,
-                        )
-                        .await
-                    }
-                    .await
-                    {
-                        tracing::warn!(
-                            "stage transport bridge to {} ended: {err}",
-                            peer_id.fmt_short()
-                        );
-                    }
-                });
-            }
-        });
-        if self
-            .publish_stage_transport_bridge(key, owner, handle)
-            .await
-        {
-            return Ok(bind_addr);
-        }
-        Err(label.cancelled_error())
-    }
-
-    pub(crate) async fn register_stage_transport_alias(
-        &self,
-        topology_id: &str,
-        run_id: &str,
-        stage_id: &str,
-        bind_addr: impl Into<String>,
-    ) {
-        let key = stage_runtime_status_key(topology_id, run_id, stage_id);
-        self.stage_transport_aliases
-            .lock()
-            .await
-            .insert(key, bind_addr.into());
-    }
-
     /// Whether `remote` belongs to the topology run of the stage `open` targets.
     pub(crate) async fn stage_transport_allowed(
         &self,
@@ -1192,26 +1053,6 @@ impl Node {
     ) -> bool {
         let state = self.stage_topologies.lock().await;
         stage_transport_allowed_by_topology(state.topologies.values(), remote, open)
-    }
-
-    pub(crate) async fn stage_transport_alias(
-        &self,
-        topology_id: &str,
-        run_id: &str,
-        stage_id: &str,
-    ) -> Option<String> {
-        let key = stage_runtime_status_key(topology_id, run_id, stage_id);
-        self.stage_transport_aliases.lock().await.get(&key).cloned()
-    }
-
-    pub(crate) async fn unregister_stage_transport_alias(
-        &self,
-        topology_id: &str,
-        run_id: &str,
-        stage_id: &str,
-    ) {
-        let key = stage_runtime_status_key(topology_id, run_id, stage_id);
-        self.stage_transport_aliases.lock().await.remove(&key);
     }
 }
 impl Node {

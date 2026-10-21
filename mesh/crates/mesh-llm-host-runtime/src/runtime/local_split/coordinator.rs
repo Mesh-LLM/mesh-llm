@@ -1280,7 +1280,7 @@ pub(super) async fn stop_split_generation(
     if let Some(stage0) = generation.stages.first()
         && stage0.node_id == node.id()
     {
-        node.unregister_stage_transport_alias(
+        node.stop_direct_stage_connections(
             &generation.topology_id,
             &generation.run_id,
             &stage0.stage_id,
@@ -1316,14 +1316,6 @@ pub(super) async fn stop_split_generation(
                 error = %err,
                 "failed to stop split stage generation"
             );
-        }
-        if stage.node_id != node.id() {
-            node.stop_stage_transport_bridge(
-                &generation.topology_id,
-                &generation.run_id,
-                &stage.stage_id,
-            )
-            .await;
         }
     }
 }

@@ -13,6 +13,7 @@ pub mod kv_proto;
 mod listener;
 pub mod readiness;
 pub mod runtime_state;
+pub mod stage_transport;
 
 #[cfg(test)]
 pub(crate) mod test_activation;

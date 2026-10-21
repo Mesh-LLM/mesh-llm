@@ -17,6 +17,7 @@ use crate::frontend::util::ms_to_us;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::openai_io_error;
 use crate::frontend::wire_messages::{discard_stale_windows_message, retire_verify_window_message};
+use crate::stage_transport::StageConnection;
 use crate::telemetry::now_unix_nanos;
 use serde_json::json;
 use skippy_inference_api::InferenceError;
@@ -27,7 +28,6 @@ use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
-use std::net::TcpStream;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -67,7 +67,7 @@ impl StageOpenAiBackend {
     pub(super) fn retire_verify_window(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         async_forwarder: Option<&mut AsyncForwarder>,
         session_key: &str,
         retirement: VerifyRetirement,
@@ -117,7 +117,7 @@ impl StageOpenAiBackend {
     pub(super) fn discard_stale_windows(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         async_forwarder: Option<&mut AsyncForwarder>,
         discard: StaleWindowDiscard,
     ) -> InferenceResult<()> {
@@ -149,7 +149,7 @@ impl StageOpenAiBackend {
     pub(super) fn execute_embedded_stage_message(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         session_key: &str,
         message: &StageWireMessage,
         token_ids: &[i32],
@@ -169,7 +169,7 @@ impl StageOpenAiBackend {
     pub(super) fn dispatch_embedded_stage_message(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         session_key: &str,
         message: &StageWireMessage,
         token_ids: &[i32],
@@ -318,7 +318,7 @@ impl StageOpenAiBackend {
     pub(super) fn complete_dispatched_stage_message(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         dispatched: DispatchedEmbeddedStage,
         expected_reply: WireReplyKind,
     ) -> InferenceResult<EmbeddedStageExecution> {
@@ -334,7 +334,7 @@ impl StageOpenAiBackend {
     pub(super) fn complete_dispatched_stage_message_direct(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         dispatched: DispatchedEmbeddedStage,
         expected_reply: WireReplyKind,
     ) -> InferenceResult<EmbeddedStageExecution> {
@@ -350,7 +350,7 @@ impl StageOpenAiBackend {
     fn complete_dispatched_stage_message_with_return(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         mut dispatched: DispatchedEmbeddedStage,
         expected_reply: WireReplyKind,
         require_direct_return: bool,
@@ -417,7 +417,7 @@ fn receive_direct_prediction_return(
 }
 
 pub(crate) fn receive_embedded_stage_reply(
-    downstream: &mut TcpStream,
+    downstream: &mut StageConnection,
     prediction_return: Option<&PredictionReturnReceiver>,
     expected_reply: WireReplyKind,
 ) -> InferenceResult<StageReply> {
@@ -429,7 +429,7 @@ pub(crate) fn receive_embedded_stage_reply(
 }
 
 pub(crate) fn receive_embedded_stage_reply_one_of(
-    downstream: &mut TcpStream,
+    downstream: &mut StageConnection,
     prediction_return: Option<&PredictionReturnReceiver>,
     expected_replies: &[WireReplyKind],
 ) -> InferenceResult<StageReply> {
@@ -445,7 +445,7 @@ pub(crate) fn receive_embedded_stage_reply_one_of(
 }
 
 fn poll_direct_or_downstream_reply(
-    downstream: &mut TcpStream,
+    downstream: &mut StageConnection,
     prediction_return: &PredictionReturnReceiver,
     expected_replies: &[WireReplyKind],
 ) -> InferenceResult<StageReply> {
@@ -465,7 +465,7 @@ fn poll_direct_or_downstream_reply(
 // wide peek interval proves the peek is bounded by the remaining reply deadline
 // rather than overrunning it by a fixed interval.
 fn poll_direct_or_downstream_reply_with_timeouts(
-    downstream: &mut TcpStream,
+    downstream: &mut StageConnection,
     prediction_return: &PredictionReturnReceiver,
     expected_replies: &[WireReplyKind],
     fallback_poll: Duration,
@@ -525,7 +525,7 @@ fn poll_direct_or_downstream_reply_with_timeouts(
     result
 }
 
-fn downstream_reply_available(downstream: &TcpStream) -> InferenceResult<bool> {
+fn downstream_reply_available(downstream: &StageConnection) -> InferenceResult<bool> {
     let mut byte = [0u8; 1];
     match downstream.peek(&mut byte) {
         Ok(0) => Err(InferenceError::backend(
@@ -558,7 +558,7 @@ const DIRECT_RETURN_PEEK_TIMEOUT: Duration = Duration::from_millis(1);
 /// but on Windows it is a separate socket handle with its own `SO_RCVTIMEO`,
 /// so restoring through a clone left the short peek timeout on this one.
 struct DirectReturnFallbackTimeout<'a> {
-    downstream: &'a TcpStream,
+    downstream: &'a StageConnection,
     previous_timeout: Option<Duration>,
     restored: bool,
 }
@@ -567,7 +567,7 @@ impl<'a> DirectReturnFallbackTimeout<'a> {
     /// Give the downstream socket a short read timeout so availability peeks
     /// return promptly while the reply wait blocks on the direct-return channel,
     /// without toggling nonblocking mode on the shared file description.
-    fn install(downstream: &'a TcpStream, peek_timeout: Duration) -> InferenceResult<Self> {
+    fn install(downstream: &'a StageConnection, peek_timeout: Duration) -> InferenceResult<Self> {
         let previous_timeout = downstream.read_timeout().map_err(openai_io_error)?;
         downstream
             .set_read_timeout(Some(peek_timeout))
@@ -597,7 +597,7 @@ impl Drop for DirectReturnFallbackTimeout<'_> {
 }
 
 fn receive_downstream_stage_reply_one_of(
-    downstream: &TcpStream,
+    downstream: &StageConnection,
     expected_replies: &[WireReplyKind],
 ) -> InferenceResult<StageReply> {
     let reply = recv_reply(downstream).map_err(openai_io_error)?;
@@ -614,8 +614,8 @@ fn receive_downstream_stage_reply_one_of(
 mod tests {
     use super::*;
     use crate::binary_transport::PredictionReturnHub;
+    use crate::stage_transport::StageListener;
     use skippy_protocol::binary::StageStateHeader;
-    use std::net::TcpListener;
     use std::sync::Arc;
 
     #[test]
@@ -688,13 +688,13 @@ mod tests {
         reply.kind
     }
 
-    fn tcp_pair() -> (TcpStream, TcpStream) {
+    fn tcp_pair() -> (StageConnection, StageConnection) {
         connected_stream_pair()
     }
 
-    fn connected_stream_pair() -> (TcpStream, TcpStream) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    fn connected_stream_pair() -> (StageConnection, StageConnection) {
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         (client, server)
     }

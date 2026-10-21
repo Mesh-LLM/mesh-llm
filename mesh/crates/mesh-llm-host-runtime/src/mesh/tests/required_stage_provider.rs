@@ -125,7 +125,7 @@ async fn required_stage_provider_rejects_fallback_peers_and_unavailable_or_decli
             );
             assert!(
                 sender
-                    .ensure_stage_transport_bridge(receiver.id(), "topology", "run", "stage")
+                    .verify_required_stage_provider(receiver.id())
                     .await
                     .is_err()
             );
@@ -150,7 +150,7 @@ async fn required_stage_provider_rejects_fallback_peers_and_unavailable_or_decli
                 );
                 assert!(
                     sender
-                        .ensure_stage_transport_bridge(receiver.id(), "topology", "run", "stage")
+                        .verify_required_stage_provider(receiver.id())
                         .await
                         .is_err()
                 );
@@ -237,83 +237,191 @@ async fn required_stage_provider_blocks_direct_activation_and_other_protocol_con
 }
 
 #[tokio::test]
-async fn required_stage_provider_rejects_identity_free_or_nonlocal_stage_endpoints() {
+async fn direct_stage_connections_require_identity_and_never_dial_raw_endpoints() {
     let node = start_node().await;
-    node.install_application_protocols_with_policy(
-        vec![Arc::new(Provider(Mutex::new(Behavior::Available)))],
-        StageTransportPolicy::RequireProvider,
-    )
+    let mut load = super::stage_load_request();
+    load.downstream = None;
+    load.upstream = Some(crate::inference::skippy::StagePeerDescriptor {
+        stage_id: "stage-0".into(),
+        stage_index: 0,
+        endpoint: "192.0.2.1:9002".into(),
+        node_id: None,
+    });
+    assert!(node.direct_stage_transport(&load).await.is_err());
+    load.upstream.as_mut().unwrap().node_id = Some(node.id());
+    let transport = node.direct_stage_transport(&load).await.unwrap();
+    tokio::task::spawn_blocking(move || {
+        assert!(
+            transport
+                .connect(
+                    "192.0.2.1:9002",
+                    std::time::Instant::now() + std::time::Duration::from_secs(1),
+                    None
+                )
+                .is_err()
+        );
+    })
     .await
     .unwrap();
-    let mut peer = crate::inference::skippy::StagePeerDescriptor {
-        stage_id: "stage".into(),
-        stage_index: 1,
-        endpoint: "127.0.0.1:9002".into(),
-        node_id: None,
-    };
-    assert!(
-        node.resolve_stage_peer_endpoint("topology", "run", &mut peer)
-            .await
-            .is_err()
-    );
-    peer.node_id = Some(node.id());
-    peer.endpoint = "192.0.2.1:9002".into();
-    assert!(
-        node.resolve_stage_peer_endpoint("topology", "run", &mut peer)
-            .await
-            .is_err()
-    );
-    peer.endpoint = "127.0.0.1:9002".into();
-    node.resolve_stage_peer_endpoint("topology", "run", &mut peer)
-        .await
-        .unwrap();
     node.close_endpoint().await;
 }
 
 #[tokio::test]
-async fn required_stage_provider_capability_loss_terminates_an_accepted_channel() {
-    let sender = start_node().await;
-    let receiver = start_node().await;
-    for node in [&sender, &receiver] {
-        node.install_application_protocols_with_policy(
-            vec![Arc::new(Provider(Mutex::new(Behavior::Available)))],
-            StageTransportPolicy::RequireProvider,
-        )
-        .await
-        .unwrap();
-    }
-    connect(&sender, &receiver).await;
-    let (_held_open, stream) = tokio::io::duplex(64);
-    let task = {
-        let receiver = receiver.clone();
-        let peer = sender.id();
-        tokio::spawn(async move {
-            receiver
-                .accept_application_stage_stream(peer, ProtocolStream::new(stream))
+async fn handed_off_stage_streams_are_cancelled_on_policy_or_admission_loss() {
+    for require_provider in [true, false] {
+        let sender = start_node().await;
+        let receiver = start_node().await;
+        for node in [&sender, &receiver] {
+            node.install_application_protocols_with_policy(
+                if require_provider {
+                    vec![Arc::new(Provider(Mutex::new(Behavior::Available)))]
+                } else {
+                    vec![]
+                },
+                if require_provider {
+                    StageTransportPolicy::RequireProvider
+                } else {
+                    StageTransportPolicy::PreferProvider
+                },
+            )
+            .await
+            .unwrap();
+        }
+        connect(&sender, &receiver).await;
+        let mut load = super::stage_load_request();
+        load.topology_id = "topology".into();
+        load.run_id = "run".into();
+        load.stage_id = "destination".into();
+        load.upstream = None;
+        load.downstream = None;
+        load.topology_stages = [("source", sender.id()), ("destination", receiver.id())]
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, (stage, node))| crate::inference::skippy::StageTopologyStageDescriptor {
+                    stage_id: stage.into(),
+                    stage_index: index as u32,
+                    node_id: node,
+                    layer_start: index as u32,
+                    layer_end: index as u32 + 1,
+                    bind_addr: String::new(),
+                },
+            )
+            .collect();
+        receiver.record_stage_load_topology(&load).await;
+        let transport = receiver.direct_stage_transport(&load).await.unwrap();
+        transport.ready();
+        let (mut held_open, stream) = tokio::io::duplex(4096);
+        let task = {
+            let receiver = receiver.clone();
+            let peer = sender.id();
+            tokio::spawn(async move {
+                receiver
+                    .accept_application_stage_stream(peer, ProtocolStream::new(stream))
+                    .await
+            })
+        };
+        use prost::Message;
+        let header = skippy_protocol::proto::stage::StageTransportOpen {
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            requester_id: sender.id().as_bytes().to_vec(),
+            topology_id: "topology".into(),
+            run_id: "run".into(),
+            stage_id: "destination".into(),
+        }
+        .encode_to_vec();
+        held_open.write_u32_le(header.len() as u32).await.unwrap();
+        held_open.write_all(&header).await.unwrap();
+        task.await.unwrap().unwrap();
+        let mut accepted = transport.try_accept().unwrap();
+        let reader = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            accepted.read(&mut [0]).unwrap_err().kind()
+        });
+        if require_provider {
+            for protocol in &mut receiver
+                .state
+                .lock()
                 .await
-        })
-    };
-    tokio::task::yield_now().await;
-    for protocol in &mut receiver
-        .state
-        .lock()
-        .await
-        .peers
-        .get_mut(&sender.id())
-        .unwrap()
-        .application_protocols
-    {
-        protocol
-            .features
-            .retain(|feature| feature != REQUIRED_STAGE_PROVIDER_FEATURE);
+                .peers
+                .get_mut(&sender.id())
+                .unwrap()
+                .application_protocols
+            {
+                protocol
+                    .features
+                    .retain(|feature| feature != REQUIRED_STAGE_PROVIDER_FEATURE);
+            }
+            receiver.refresh_application_peers().await;
+        } else {
+            receiver.state.lock().await.peers.remove(&sender.id());
+            receiver.peer_change_tx.send_replace(0);
+        }
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), reader)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(error, std::io::ErrorKind::ConnectionAborted);
+        sender.close_endpoint().await;
+        receiver.close_endpoint().await;
     }
-    receiver.refresh_application_peers().await;
-    let error = tokio::time::timeout(std::time::Duration::from_secs(1), task)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap_err();
-    assert!(error.to_string().contains("required stage provider policy"));
-    sender.close_endpoint().await;
-    receiver.close_endpoint().await;
+}
+
+#[tokio::test]
+async fn direct_stage_ingress_is_bounded_and_teardown_interrupts_execution() {
+    let node = start_node().await;
+    let mut load = super::stage_load_request();
+    load.upstream = None;
+    load.downstream = None;
+    let transport = node.direct_stage_transport(&load).await.unwrap();
+    let open = skippy_protocol::proto::stage::StageTransportOpen {
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        requester_id: node.id().as_bytes().to_vec(),
+        topology_id: load.topology_id.clone(),
+        run_id: load.run_id.clone(),
+        stage_id: load.stage_id.clone(),
+    };
+    let (_other, stream) = tokio::io::duplex(64);
+    assert!(
+        node.deliver_direct_stage(node.id(), &open, ProtocolStream::new(stream))
+            .await
+            .is_err()
+    );
+    transport.ready();
+    let mut peers = Vec::new();
+    for _ in 0..32 {
+        let (other, stream) = tokio::io::duplex(64);
+        peers.push(other);
+        node.deliver_direct_stage(node.id(), &open, ProtocolStream::new(stream))
+            .await
+            .unwrap();
+    }
+    let (_other, overflow) = tokio::io::duplex(64);
+    assert!(
+        node.deliver_direct_stage(node.id(), &open, ProtocolStream::new(overflow))
+            .await
+            .is_err()
+    );
+    let mut stream = transport.try_accept().unwrap();
+    let reader = tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        stream.read(&mut [0]).unwrap_err().kind()
+    });
+    node.stop_direct_stage_connections(&load.topology_id, &load.run_id, &load.stage_id)
+        .await;
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), reader)
+            .await
+            .unwrap()
+            .unwrap(),
+        std::io::ErrorKind::ConnectionAborted
+    );
+    assert!(transport.try_accept().is_err());
+    let (_other, stale) = tokio::io::duplex(64);
+    assert!(
+        node.deliver_direct_stage(node.id(), &open, ProtocolStream::new(stale))
+            .await
+            .is_err()
+    );
+    node.close_endpoint().await;
 }

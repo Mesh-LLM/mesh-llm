@@ -1941,6 +1941,7 @@ fn lane_checkout_connect_failure_emits_connect_event() {
     );
 
     let pool = crate::frontend::generation::PersistentStageLanePool {
+        stage_transport: None,
         config: config.clone(),
         timeout_secs: 1,
         telemetry,

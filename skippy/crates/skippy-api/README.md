@@ -51,3 +51,8 @@ owns publisher-declared live-KV dtype selection and model compatibility fallback
 [`speculative`](src/speculative.rs) owns installed sibling draft discovery and
 conservative automatic pairing. Standalone Skippy and Mesh consume these same
 policies. Explicit caller settings take precedence.
+
+Embedded split consumers can supply `EmbeddedRuntimeOptions::stage_transport`.
+The serving lifecycle forwards it to persistent lanes and uses its execution
+ingress for prediction returns, without binding a TCP prediction listener.
+See [the connection contract](../skippy-serving/README.md#supplied-stage-connections).

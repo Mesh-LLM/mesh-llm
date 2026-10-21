@@ -216,16 +216,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             .await;
     }
 
-    let stage0_return_port = alloc_local_port().await?;
-    let stage0_return_endpoint = format!("127.0.0.1:{stage0_return_port}");
-    spec.node
-        .register_stage_transport_alias(
-            &spec.generation.topology_id,
-            &spec.generation.run_id,
-            &settings.stage0.stage_id,
-            stage0_return_endpoint.clone(),
-        )
-        .await;
+    let stage0_return_endpoint = "127.0.0.1:0".to_string();
     let downstream = Box::pin(load_downstream_split_runtime_stages(
         spec,
         &settings,
@@ -235,20 +226,7 @@ pub(super) async fn load_split_runtime_generation_inner(
         &stage0_return_endpoint,
     ))
     .await?;
-    let downstream_endpoint = if downstream.node_id == Some(spec.node.id()) {
-        downstream.endpoint.clone()
-    } else {
-        spec.node
-            .ensure_stage_transport_bridge(
-                downstream
-                    .node_id
-                    .context("downstream split stage is missing node id")?,
-                spec.generation.topology_id.clone(),
-                spec.generation.run_id.clone(),
-                downstream.stage_id.clone(),
-            )
-            .await?
-    };
+    let downstream_endpoint = crate::mesh::direct_stage_connections::endpoint(&downstream.stage_id);
     let first_downstream_stage_id = downstream.stage_id.clone();
     let stage0_status_load = split_runtime_stage_load_request(
         spec,
@@ -258,7 +236,7 @@ pub(super) async fn load_split_runtime_generation_inner(
         &stage0_return_endpoint,
         &ready_by_stage,
     )?;
-    let runtime_options = stage0_runtime_options(
+    let mut runtime_options = stage0_runtime_options(
         spec,
         &settings,
         &downstream,
@@ -266,6 +244,11 @@ pub(super) async fn load_split_runtime_generation_inner(
         &stage0_return_endpoint,
     )
     .await?;
+    runtime_options.stage_transport = Some(
+        spec.node
+            .direct_stage_transport(&stage0_status_load)
+            .await?,
+    );
     let media_capability_evidence = models::runtime_media_capability_evidence(
         runtime_options
             .config
@@ -695,6 +678,7 @@ pub(super) fn split_runtime_stage_load_request(
         })?
         .clone();
     Ok(skippy::StageLoadRequest {
+        stage_transport: None,
         topology_id: spec.generation.topology_id.clone(),
         run_id: spec.generation.run_id.clone(),
         model_id: spec.model_ref.to_string(),

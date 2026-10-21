@@ -169,6 +169,7 @@ mod tests {
         manifest_sha256: String,
     ) -> StageLoadRequest {
         StageLoadRequest {
+            stage_transport: None,
             topology_id: "topology-a".to_string(),
             run_id: "run-a".to_string(),
             model_id: "model-a".to_string(),
@@ -328,6 +329,7 @@ mod tests {
         let manifest_bytes = fs::read(dir.path().join("model-package.json")).unwrap();
         let manifest_sha256 = sha256_hex(&manifest_bytes);
         let load = StageLoadRequest {
+            stage_transport: None,
             topology_id: "topology-a".to_string(),
             run_id: "run-a".to_string(),
             model_id: "model-a".to_string(),
