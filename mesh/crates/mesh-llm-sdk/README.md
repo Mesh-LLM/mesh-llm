@@ -147,7 +147,10 @@ impl StageTransportProvider for MyProtocol {
 // context.accept_stage(incoming.peer, connected_stream).await?;
 ```
 
-At most one stage provider may be registered. It must supply reliable, ordered
+At most one stage provider may be registered. Protocols with a stage provider admit inbound
+streams from a dedicated 32-permit pool, so long-lived stage channels cannot exhaust the shared
+application-stream pool (and excess stage opens are rejected rather than queued, like the shared
+pool). The provider must supply reliable, ordered
 bytes, support half-close, and release its owned work when the stream is dropped. Errors fail the connection; Mesh never
 replays stage bytes over another transport. Stage control, artifacts and activation
 encoding retain their existing contracts. See the

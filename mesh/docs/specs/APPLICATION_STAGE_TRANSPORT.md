@@ -18,6 +18,9 @@ destination stage and local readiness before opening the local stage socket. The
 header has a ten-second deadline. Admission loss or node shutdown terminates the
 channel; providers must also cancel outstanding setup and native work on stream drop.
 Providers must not interpret remote stage addresses as local TCP destinations.
+Protocols with a stage provider admit their inbound streams from a dedicated
+32-permit pool so long-lived stage channels cannot starve the shared
+application-stream pool; excess stage opens are rejected, not queued.
 
 ```mermaid
 flowchart LR

@@ -348,3 +348,164 @@ async fn application_stage_setup_is_cancelled_on_admission_loss_and_shutdown() -
     }
     Ok(())
 }
+
+#[derive(Debug)]
+struct Park {
+    contexts: tokio::sync::mpsc::UnboundedSender<ProtocolContext>,
+    accepted: tokio::sync::mpsc::UnboundedSender<()>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl MeshProtocol for Park {
+    fn descriptor(&self) -> ProtocolDescriptor {
+        ProtocolDescriptor::new("park", 1)
+    }
+
+    async fn run(&self, context: ProtocolContext) -> anyhow::Result<()> {
+        self.contexts.send(context.clone())?;
+        context.cancelled().await;
+        Ok(())
+    }
+
+    async fn accept(
+        &self,
+        _context: ProtocolContext,
+        _incoming: IncomingProtocolStream,
+    ) -> anyhow::Result<()> {
+        // Hold the stream permit until the test releases it.
+        self.accepted.send(())?;
+        self.release.notified().await;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct StageEcho {
+    contexts: tokio::sync::mpsc::UnboundedSender<ProtocolContext>,
+}
+
+#[async_trait]
+impl mesh_llm_transport::protocol::StageTransportProvider for StageEcho {
+    async fn open_stage(
+        &self,
+        _context: ProtocolContext,
+        _peer: EndpointId,
+    ) -> anyhow::Result<Option<mesh_llm_transport::protocol::ProtocolStream>> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl MeshProtocol for StageEcho {
+    fn descriptor(&self) -> ProtocolDescriptor {
+        ProtocolDescriptor::new("stage-echo", 1)
+    }
+
+    fn stage_transport(&self) -> Option<&dyn mesh_llm_transport::protocol::StageTransportProvider> {
+        Some(self)
+    }
+
+    async fn run(&self, context: ProtocolContext) -> anyhow::Result<()> {
+        self.contexts.send(context.clone())?;
+        context.cancelled().await;
+        Ok(())
+    }
+
+    async fn accept(
+        &self,
+        _context: ProtocolContext,
+        mut incoming: IncomingProtocolStream,
+    ) -> anyhow::Result<()> {
+        let value = incoming.stream.read_u32().await?;
+        incoming.stream.write_u32(value).await?;
+        incoming.stream.shutdown().await?;
+        Ok(())
+    }
+}
+
+/// Proves protocols with a stage transport provider draw from a dedicated
+/// permit pool: filling the shared 32-stream pool with parked handlers must
+/// not starve stage-provider streams (and the 33rd shared-pool stream is
+/// still rejected).
+#[tokio::test]
+async fn stage_provider_streams_use_a_dedicated_permit_pool() -> anyhow::Result<()> {
+    let sender = start_node().await;
+    let receiver = start_node().await;
+    let (park_contexts, mut park_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (accepted, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (stage_contexts, mut stage_rx) = tokio::sync::mpsc::unbounded_channel();
+    let park: Arc<dyn MeshProtocol> = Arc::new(Park {
+        contexts: park_contexts,
+        accepted,
+        release: Arc::new(tokio::sync::Notify::new()),
+    });
+    let stage_echo: Arc<dyn MeshProtocol> = Arc::new(StageEcho {
+        contexts: stage_contexts,
+    });
+    sender
+        .install_application_protocols(vec![park.clone(), stage_echo.clone()])
+        .await?;
+    receiver
+        .install_application_protocols(vec![park, stage_echo])
+        .await?;
+    sender.start_accepting();
+    receiver.start_accepting();
+    sender
+        .connect_to_peer(receiver.endpoint_addr_for_advertisement())
+        .await?;
+    sender.refresh_application_peers().await;
+    receiver.refresh_application_peers().await;
+
+    let park_context = {
+        let first = park_rx.recv().await.unwrap();
+        let second = park_rx.recv().await.unwrap();
+        if first.local_peer_id() == sender.id() {
+            first
+        } else {
+            second
+        }
+    };
+    let stage_context = {
+        let first = stage_rx.recv().await.unwrap();
+        let second = stage_rx.recv().await.unwrap();
+        if first.local_peer_id() == sender.id() {
+            first
+        } else {
+            second
+        }
+    };
+
+    let mut parked = Vec::new();
+    for _ in 0..32 {
+        parked.push(park_context.open(receiver.id()).await?);
+    }
+    // All 32 shared-pool streams reached their parked handlers.
+    for _ in 0..32 {
+        tokio::time::timeout(std::time::Duration::from_secs(5), accepted_rx.recv())
+            .await?
+            .unwrap();
+    }
+    // The shared pool is exhausted: one more stream on the same protocol is
+    // rejected rather than queued, so its handler never runs. Stream opens
+    // are not acknowledged, so rejection is observed at the receiver.
+    let _rejected = park_context.open(receiver.id()).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        accepted_rx.try_recv().is_err(),
+        "the exhausted shared pool must reject the 33rd stream"
+    );
+
+    // Stage-provider protocols use their own pool, so their streams still
+    // reach a handler while the shared pool is full.
+    let mut stream = stage_context.open(receiver.id()).await?;
+    stream.write_u32(42).await?;
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), stream.read_u32()).await??,
+        42
+    );
+
+    sender.close_endpoint().await;
+    receiver.close_endpoint().await;
+    Ok(())
+}
