@@ -1,10 +1,13 @@
 //! Preserve native allocation evidence without equating offered load with slots.
+use super::Profile;
 use serde_json::{Value, json};
 use std::path::Path;
 
-pub(super) fn policy(engine: &str) -> &'static str {
+pub(super) fn policy(engine: &str, profile: Profile) -> &'static str {
     if engine == "skippy" {
         "engine_default"
+    } else if profile == Profile::Comparison {
+        "common_128k_per_slot_explicit_parallel"
     } else {
         "auto_context_explicit_parallel"
     }
@@ -57,6 +60,19 @@ fn observations_in_line(stream: &str, line: &str) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comparison_capacity_policy_distinguishes_matched_context() {
+        assert_eq!(
+            policy("llama", Profile::Comparison),
+            "common_128k_per_slot_explicit_parallel"
+        );
+        assert_eq!(
+            policy("llama", Profile::Smoke),
+            "auto_context_explicit_parallel"
+        );
+        assert_eq!(policy("skippy", Profile::Comparison), "engine_default");
+    }
 
     #[test]
     fn retains_context_shapes_without_claiming_offered_load_is_capacity() {

@@ -161,8 +161,8 @@ submitting the smoke, and submit the benchmark only after the smoke passes.
 | Context per slot / KV precision | Engine default / F16 | Engine default / F16 |
 | Logical batch / microbatch tokens | 2,048 / 512 | 2,048 / 512 |
 
-Both profiles sweep offered request concurrency independently of serving capacity.
-Neither engine receives a context override. Skippy plans context and parallelism;
+Smoke and full profiles sweep offered request concurrency independently of serving capacity.
+Neither engine receives a context override in those profiles. Skippy plans context and parallelism;
 llama keeps explicit slots matching offered concurrency to preserve the baseline
 KV policy while automatically sizing context. These are
 default-serving comparisons, not equal-capacity kernel comparisons.
@@ -256,8 +256,10 @@ No retained requests, outputs, or subagent topology are truncated. The root
 `cohort.json` records every source trace's peak, digest, and eligibility; each
 cell records the selected cohort digest and excluded count. Preflight exclusions
 are workload scope, not failed requests. This is a common
-recorded-token budget, not a server-context override or a rendered chat-template
-token guarantee. Unexpected wire overflows still invalidate a cell. Compare
+recorded-token budget, not a server-context override for smoke/full or a rendered
+chat-template token guarantee. The separate fixed-work comparison profile also
+sets llama's non-unified per-slot context to 131,072 tokens while leaving Skippy's
+automatic planner and 128K cap in place. Unexpected wire overflows still invalidate a cell. Compare
 only matching cohort digests and completed raw trace/turn sets. Older workload
 versions remain separate. Skippy keeps its automatic planner and 128K cap.
 

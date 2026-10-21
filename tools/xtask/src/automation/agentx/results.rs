@@ -119,7 +119,7 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
         "name":format!("agentx/{}/{}/{}/c{}",input.model.key,engine,input.profile.label(),concurrency),
         "engine":engine,"offered_sessions":concurrency,
         "cohort":serde_json::from_slice::<Value>(&std::fs::read(input.output.join("cohort.json"))?)?,
-        "capacity_policy":super::capacity::policy(engine),
+        "capacity_policy":super::capacity::policy(engine, input.profile),
         "native_capacity":super::capacity::read(&input.output),
         "submission_valid":false,"request_count":metric(&export,"request_count")?,
         "phase_outcome":phase_outcome,

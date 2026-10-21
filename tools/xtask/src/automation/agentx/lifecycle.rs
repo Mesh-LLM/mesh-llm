@@ -1,4 +1,4 @@
-use super::{Prepared, Profile, command, inputs, write};
+use super::{Prepared, Profile, command, inputs, trace_context, write};
 use crate::{
     command::DynResult,
     process::{
@@ -11,6 +11,13 @@ use std::time::Duration;
 
 pub(super) const STARTUP_TIMEOUT_SECS: u64 = 900;
 
+fn llama_comparison_context(concurrency: u32) -> DynResult<u32> {
+    trace_context::LIMIT
+        .checked_mul(u64::from(concurrency))
+        .and_then(|tokens| u32::try_from(tokens).ok())
+        .ok_or_else(|| "llama comparison context exceeds supported size".into())
+}
+
 fn server(
     input: &Prepared,
     engine: &str,
@@ -19,8 +26,11 @@ fn server(
 ) -> DynResult<process::ProcessSpec> {
     // Skippy plans its own capacity. Preserve llama's explicit parallel setting:
     // its auto-parallel mode also changes the baseline's unified-KV policy.
+    // For the fixed-work comparison, match the per-slot context ceiling to the
+    // common trace budget; llama otherwise allocates the model's full native
+    // context for every slot and pays for capacity the workload cannot use.
     let weights = input.weights.to_str().ok_or("weight path")?;
-    let (binary, args) = if engine == "llama" {
+    let (binary, mut args) = if engine == "llama" {
         (
             input.root.join(".deps/agentx-llama-build/bin/llama-server"),
             command::strings(&[
@@ -93,6 +103,10 @@ fn server(
             ]),
         )
     };
+    if engine == "llama" && input.profile == Profile::Comparison {
+        let total_context = llama_comparison_context(concurrency)?;
+        args.extend(["--ctx-size".into(), total_context.to_string()]);
+    }
     let mut spec = command::spec(&input.root, binary.to_str().ok_or("server path")?, &args)?;
     if engine == "skippy" {
         spec.arguments.extend([
@@ -194,6 +208,11 @@ fn launch_identity(
     engine: &str,
     concurrency: u32,
 ) -> DynResult<serde_json::Value> {
+    let matched_llama_context = if engine == "llama" && input.profile == Profile::Comparison {
+        Some(llama_comparison_context(concurrency)?)
+    } else {
+        None
+    };
     let runtime = if engine == "skippy" {
         input.root.join("dist/native-runtimes")
     } else {
@@ -215,8 +234,9 @@ fn launch_identity(
         "binary_sha256":crate::product::digest::file_sha256(&server.executable).map_err(|error|error.error)?,
         "runtime_tree_sha256":crate::product::digest::tree_sha256(&runtime).map_err(|error|error.error)?,
         "harness_lock_sha256":crate::product::digest::file_sha256(&input.root.join("skippy/evals/agentx/uv.lock")).map_err(|error|error.error)?,
-        "capacity_policy":super::capacity::policy(engine),
-        "context_tokens":null,"total_context_tokens":null,
+        "capacity_policy":super::capacity::policy(engine, input.profile),
+        "context_tokens":matched_llama_context.map(|_| trace_context::LIMIT),
+        "total_context_tokens":matched_llama_context,
         "generation_slots":null,"offered_sessions":concurrency,
         "batch_tokens":2048,"microbatch_tokens":512,
         "speculation":false,"dataset_sha256":inputs::DATA_SHA,
@@ -338,6 +358,47 @@ mod tests {
                     args == ["--startup-timeout-secs", &STARTUP_TIMEOUT_SECS.to_string()]
                 }));
             }
+        }
+    }
+
+    #[test]
+    fn comparison_matches_llama_slot_context_to_common_trace_budget() {
+        let models: Vec<super::super::Model> = serde_json::from_str(include_str!(
+            "../../../../../skippy/evals/agentx/models.json"
+        ))
+        .unwrap();
+        let input = Prepared {
+            root: "/repo".into(),
+            output: "/output".into(),
+            weights: "/cache/model.gguf".into(),
+            dataset: "/traces".into(),
+            model: models[0].clone(),
+            profile: Profile::Comparison,
+        };
+        for concurrency in [1, 2, 4] {
+            let llama = server(&input, "llama", 8080, concurrency).unwrap();
+            let arguments: Vec<_> = llama
+                .arguments
+                .iter()
+                .map(|value| match value {
+                    process::Value::Public(value) => value.to_string_lossy().into_owned(),
+                    process::Value::Secret(_) => panic!("unexpected secret in server arguments"),
+                })
+                .collect();
+            let expected_context = (trace_context::LIMIT * u64::from(concurrency)).to_string();
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|args| args == ["--ctx-size", &expected_context])
+            );
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|args| args == ["--parallel", &concurrency.to_string()])
+            );
+            let skippy = server(&input, "skippy", 8080, concurrency).unwrap();
+            assert!(!skippy.arguments.iter().any(|value| matches!(value,
+                process::Value::Public(argument) if argument == "--ctx-size")));
         }
     }
 }

@@ -51,9 +51,11 @@ failure/cancellation, and resident-memory measurements.
 Skippy must match or beat llama on both CUDA and Metal before this performance
 work is considered complete. Qualify each backend independently with the same
 pinned Q4 weights, AgentX traces, sampling settings,
-and offered concurrency. Default-serving comparisons let Skippy plan context and parallelism; llama
-plans context with explicit slots matching offered concurrency; record the realized capacities instead of assuming they
-match. Include both single-session and concurrent serving;
+and offered concurrency. The fixed-work comparison matches llama's per-slot
+context to the common 128K trace limit while Skippy plans its own capacity and
+parallelism. Smoke and full profiles retain llama's automatic context. Record
+realized capacities rather than assuming equal allocation. Include both
+single-session and concurrent serving;
 a single-session win does not qualify concurrent serving.
 
 Run llama (A) and Skippy (B) in ABBAAB order on the same otherwise idle worker.
@@ -66,7 +68,7 @@ and inspect grace-period cancellations before declaring a winner.
 ## Fixed-work comparison
 
 Use `--profile comparison` for the small repeated comparison report. Its workload
-version is `agentx-1.0.12.post2-local-comparison-2`, separate from smoke 9 and full 8.
+version is `agentx-1.0.12.post2-local-comparison-3`, separate from smoke 9 and full 8.
 For each model, run whole c=1/2/4 sweeps in **llama, Skippy, Skippy, llama, llama,
 Skippy** order on the same host. The four Q4_K_M model categories are dense
 (Qwen3-4B-Instruct-2507), hybrid dense (Qwen3.5-4B), attention MoE
@@ -78,6 +80,12 @@ the last recorded request start at most 600 seconds, take the two smallest
 output totals in the <=64K peak-input band, and one each in the 64–96K and
 96–128K bands. Ties use trace ID. Original rows, output lengths, child topology
 and recorded think times remain intact.
+
+For this profile only, llama starts with `--ctx-size = 131072 * --parallel`,
+giving each non-unified slot the same 128K ceiling as the selected workload.
+Skippy keeps its automatic planner and 128K cap. This avoids charging llama
+for an unused 262K native slot on Qwen3 models; the server's observed slot
+capacity and each engine's memory footprint remain reportable evidence.
 
 | Trace ID | Source requests | Requested output tokens | Peak input tokens |
 |---|---:|---:|---:|

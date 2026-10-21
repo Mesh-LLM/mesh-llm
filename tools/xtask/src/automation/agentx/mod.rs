@@ -31,7 +31,7 @@ impl Profile {
         match self {
             Self::Smoke => "agentx-1.0.12.post2-local-smoke-9",
             Self::Benchmark => "agentx-1.0.12.post2-local-benchmark-8",
-            Self::Comparison => "agentx-1.0.12.post2-local-comparison-2",
+            Self::Comparison => "agentx-1.0.12.post2-local-comparison-3",
         }
     }
     fn label(self) -> &'static str {
