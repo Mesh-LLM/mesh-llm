@@ -731,42 +731,64 @@ fn model_swapped(mine: &Value, theirs: &Value) -> bool {
     crate::record_push_receive::names_other_model(theirs, &[mine])
 }
 
+/// Whether an own record and a received half pair in one pass.
+type PairsWith<'f> = dyn Fn(&Value, &Value) -> bool + 'f;
+
 /// One exchange-key group's records paired ONE-TO-ONE.
 ///
 /// `exchange_key_for` groups by request digest alone, so two requests with the
 /// same wire bytes (a user asking the same thing twice) land in one group.
 /// Pairing every received half with every own record there set request 1's
 /// record against request 2's half and rendered a false CONTRADICTED, although
-/// both halves of each real exchange agreed. Here each
-/// received half closes at most ONE own record: first an unpaired one whose
-/// response digest also matches; only a half that matches none of them is set
-/// against a leftover own record naming the same serving node, which is a
-/// real disagreement and still renders CONTRADICTED. Own records and halves left over stand alone.
-/// Order: own records in ledger order, then the halves that paired with none.
+/// both halves of each real exchange agreed. Here each received half closes
+/// at most ONE own record, in passes over all the halves:
+///
+/// 1. an unpaired own record with the same response digest that names the
+///    same serving node;
+/// 2. for a half that names a serving node, one with the same response
+///    digest that names no other node (ours may not know it);
+/// 3. a leftover own record naming the same serving node, which is a real
+///    disagreement and still renders CONTRADICTED;
+/// 4. for the halves that name no node, one with the same response digest.
+///
+/// An agreeing answer is always placed before a disagreement, and a
+/// disagreement before a half of unknown provider.
+/// A half that names no provider pairs last, so it never takes the record of
+/// a provider whose own half is here, agreeing or not, and two providers
+/// that gave the same answer to the same request are never crossed, whatever
+/// order their halves arrive in. The halves are taken in one canonical order
+/// (provider, answer, record id), so the pairs are a function of the set of
+/// halves received. Own records and halves left over stand alone.
+/// Order: own records in ledger order, then the halves that paired with none,
+/// in that canonical order.
 fn pair_one_to_one<'a>(
     own: &[&'a Value],
     received: &[&'a Value],
 ) -> Vec<(Option<&'a Value>, Option<&'a Value>)> {
+    let same_answer = |mine: &Value, half: &Value| {
+        response_digest(mine).is_some() && response_digest(mine) == response_digest(half)
+    };
+    let unconflicted =
+        |mine: &Value, half: &Value| same_answer(mine, half) && !other_provider(mine, half);
     let mut theirs_for: Vec<Option<&'a Value>> = vec![None; own.len()];
-    let mut leftover: Vec<&'a Value> = Vec::new();
-    for half in received {
-        let same_answer = (0..own.len()).find(|&i| {
-            theirs_for[i].is_none()
-                && response_digest(own[i]).is_some()
-                && response_digest(own[i]) == response_digest(half)
-        });
-        match same_answer {
-            Some(i) => theirs_for[i] = Some(*half),
-            None => leftover.push(*half),
-        }
-    }
-    let mut unmatched: Vec<&'a Value> = Vec::new();
-    for half in leftover {
-        match (0..own.len()).find(|&i| theirs_for[i].is_none() && same_provider(own[i], half)) {
-            Some(i) => theirs_for[i] = Some(half),
-            None => unmatched.push(half),
-        }
-    }
+    // The halves in one canonical order, so the pairs depend on which halves
+    // were received and never on the order they arrived in.
+    let mut unmatched: Vec<&'a Value> = received.to_vec();
+    unmatched.sort_by_key(|half| {
+        (
+            served_by(half),
+            response_digest(half),
+            half.get("capsule_id").and_then(Value::as_str),
+        )
+    });
+    let unmatched = pair_pass(own, &mut theirs_for, unmatched, &|mine, half| {
+        same_answer(mine, half) && same_provider(mine, half)
+    });
+    let unmatched = pair_pass(own, &mut theirs_for, unmatched, &|mine, half| {
+        unconflicted(mine, half) && served_by(half).is_some()
+    });
+    let unmatched = pair_pass(own, &mut theirs_for, unmatched, &same_provider);
+    let unmatched = pair_pass(own, &mut theirs_for, unmatched, &unconflicted);
     let mut pairs: Vec<(Option<&'a Value>, Option<&'a Value>)> = own
         .iter()
         .zip(theirs_for)
@@ -776,18 +798,42 @@ fn pair_one_to_one<'a>(
     pairs
 }
 
+/// One pass of [`pair_one_to_one`]: each half, in order, closes the first
+/// free own record `pairs_with` accepts. Returns the halves left over.
+fn pair_pass<'a>(
+    own: &[&'a Value],
+    theirs_for: &mut [Option<&'a Value>],
+    halves: Vec<&'a Value>,
+    pairs_with: &PairsWith<'_>,
+) -> Vec<&'a Value> {
+    let mut rest = Vec::new();
+    for half in halves {
+        match (0..own.len()).find(|&i| theirs_for[i].is_none() && pairs_with(own[i], half)) {
+            Some(i) => theirs_for[i] = Some(half),
+            None => rest.push(half),
+        }
+    }
+    rest
+}
+
 /// Both records name the same serving node. A half that answers none of our
 /// records is set against one only when it comes from the node that served
 /// it: a half from any other node is not a disagreement about our exchange.
 fn same_provider(mine: &Value, theirs: &Value) -> bool {
-    let served_by = |record: &Value| {
-        poc_block(record)
-            .and_then(|poc| poc.pointer("/serving_provenance/served_by_node_id"))
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty() && *s != "unknown")
-            .map(str::to_string)
-    };
-    served_by(mine).is_some_and(|node| served_by(theirs).as_deref() == Some(node.as_str()))
+    served_by(mine).is_some_and(|node| served_by(theirs) == Some(node))
+}
+
+/// Both records name a serving node, and not the same one.
+fn other_provider(mine: &Value, theirs: &Value) -> bool {
+    matches!((served_by(mine), served_by(theirs)), (Some(a), Some(b)) if a != b)
+}
+
+/// The serving node a record names, when it names one.
+fn served_by(record: &Value) -> Option<&str> {
+    poc_block(record)
+        .and_then(|poc| poc.pointer("/serving_provenance/served_by_node_id"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty() && *s != "unknown")
 }
 
 fn is_received_record(
@@ -5939,6 +5985,191 @@ mod tests {
         assert_eq!(siblings.len(), 1, "the half closes ONE of our records");
         assert_eq!(siblings[0]["digest_match"]["state"], json!(STATE_VERIFIED));
         assert_eq!(siblings[0]["mine"]["record"]["capsule_id"], json!("mine-2"));
+    }
+
+    /// The same request answered identically by two providers: each received
+    /// half pairs with our record of its own provider, whichever order the
+    /// halves arrive in, and both exchanges verify. Pairing by answer alone
+    /// crossed them when provider B's half came first.
+    #[test]
+    fn identical_answers_from_two_providers_pair_by_provider_in_either_order() {
+        let (d, e) = ("d".repeat(64), "e".repeat(64));
+        let (a, b) = ("provider-a", "provider-b");
+        let mine_a = mesh_half_served_by("mine-a", "requested", &d, &e, "x-a", a);
+        let mine_b = mesh_half_served_by("mine-b", "requested", &d, &e, "x-b", b);
+        let theirs_a = mesh_half_served_by("theirs-a", "served", &d, &e, "x-a", a);
+        let theirs_b = mesh_half_served_by("theirs-b", "served", &d, &e, "x-b", b);
+        let provenance: HashMap<String, ReceivedProvenance> = [
+            provenance_for("theirs-a", "node-a"),
+            provenance_for("theirs-b", "node-b"),
+        ]
+        .into_iter()
+        .collect();
+        let id = |v: Option<&Value>| v.and_then(|v| v["capsule_id"].as_str()).map(str::to_string);
+        for received in [[&theirs_a, &theirs_b], [&theirs_b, &theirs_a]] {
+            let order = id(Some(received[0])).unwrap();
+            let pairs: Vec<_> = pair_one_to_one(&[&mine_a, &mine_b], &received)
+                .into_iter()
+                .map(|(mine, theirs)| (id(mine), id(theirs)))
+                .collect();
+            assert_eq!(
+                pairs,
+                [
+                    (Some("mine-a".into()), Some("theirs-a".into())),
+                    (Some("mine-b".into()), Some("theirs-b".into())),
+                ],
+                "{order} first"
+            );
+            let records = [
+                mine_a.clone(),
+                mine_b.clone(),
+                received[0].clone(),
+                received[1].clone(),
+            ];
+            let pane = build_pane_c_list(&records, &provenance);
+            let rows = pane["rows"].as_array().unwrap();
+            assert_eq!(rows.len(), 2, "{order} first");
+            assert!(
+                rows.iter()
+                    .all(|r| r["digest_match"]["state"] == json!(STATE_VERIFIED)),
+                "{order} first: {rows:?}"
+            );
+        }
+    }
+
+    /// The pairing is a function of the set of received halves, never of
+    /// their arrival order: every permutation of each fixture pairs the same
+    /// way, and the way it pairs is pinned. The fixtures cover halves naming
+    /// no provider, one provider's agreeing and disagreeing halves, and the
+    /// same answer from two providers and from no provider.
+    #[test]
+    fn pairing_is_the_same_for_every_arrival_order() {
+        let d = "d".repeat(64);
+        let [x, y, z] = ["1", "2", "3"].map(|c| c.repeat(64));
+        let half = |id: &str, answer: &str, provider: &str| {
+            mesh_half_served_by(id, "served", &d, answer, id, provider)
+        };
+        let mine = |id: &str, answer: &str, provider: &str| {
+            mesh_half_served_by(id, "requested", &d, answer, id, provider)
+        };
+        type Fixture = (
+            &'static str,
+            Vec<Value>,
+            Vec<Value>,
+            Vec<(&'static str, &'static str)>,
+        );
+        let fixtures: Vec<Fixture> = vec![
+            (
+                "a half naming no provider leaves a named provider's record to it",
+                vec![
+                    mine("mine-a", &x, "provider-a"),
+                    mine("mine-b", &x, "provider-b"),
+                ],
+                vec![
+                    half("theirs-u", &x, "unknown"),
+                    half("theirs-a", &x, "provider-a"),
+                ],
+                vec![("mine-a", "theirs-a"), ("mine-b", "theirs-u")],
+            ),
+            (
+                "a half naming no provider never hides our provider's disagreement",
+                vec![mine("mine-a", &x, "provider-a")],
+                vec![
+                    half("theirs-u", &x, "unknown"),
+                    half("theirs-a", &y, "provider-a"),
+                ],
+                vec![("mine-a", "theirs-a"), ("", "theirs-u")],
+            ),
+            (
+                "a matching answer is never paired as a disagreement",
+                vec![
+                    mine("mine-a", &x, "provider-a"),
+                    mine("mine-u", &y, "unknown"),
+                ],
+                vec![
+                    half("theirs-y", &y, "provider-a"),
+                    half("theirs-z", &z, "provider-a"),
+                ],
+                vec![("mine-a", "theirs-z"), ("mine-u", "theirs-y")],
+            ),
+            (
+                "a record paired in the first pass never hides a disagreement",
+                vec![
+                    mine("mine-x", &x, "provider-a"),
+                    mine("mine-w", &y, "provider-a"),
+                ],
+                vec![
+                    half("theirs-1", &x, "provider-a"),
+                    half("theirs-2", &x, "provider-a"),
+                ],
+                vec![("mine-x", "theirs-1"), ("mine-w", "theirs-2")],
+            ),
+            (
+                "a half of unknown provider never hides a named provider's disagreement",
+                vec![
+                    mine("mine-a", &x, "provider-a"),
+                    mine("mine-u", &y, "unknown"),
+                ],
+                vec![
+                    half("theirs-1", &y, "provider-a"),
+                    half("theirs-2", &y, "provider-a"),
+                    half("theirs-u", &x, "unknown"),
+                ],
+                vec![
+                    ("mine-a", "theirs-2"),
+                    ("mine-u", "theirs-1"),
+                    ("", "theirs-u"),
+                ],
+            ),
+            (
+                "records of unknown provider pair as many halves as they can",
+                vec![
+                    mine("mine-u", &x, "unknown"),
+                    mine("mine-a", &x, "provider-a"),
+                ],
+                vec![
+                    half("theirs-u", &x, "unknown"),
+                    half("theirs-c", &x, "provider-c"),
+                    half("theirs-v", &x, "unknown"),
+                ],
+                vec![
+                    ("mine-u", "theirs-c"),
+                    ("mine-a", "theirs-u"),
+                    ("", "theirs-v"),
+                ],
+            ),
+        ];
+        fn id(v: Option<&Value>) -> &str {
+            v.and_then(|v| v["capsule_id"].as_str()).unwrap_or("")
+        }
+        for (what, own, received, expected) in &fixtures {
+            let own: Vec<&Value> = own.iter().collect();
+            for order in permutations(received.len()) {
+                let arrived: Vec<&Value> = order.iter().map(|&i| &received[i]).collect();
+                let pairs: Vec<(&str, &str)> = pair_one_to_one(&own, &arrived)
+                    .into_iter()
+                    .map(|(mine, theirs)| (id(mine), id(theirs)))
+                    .collect();
+                assert_eq!(&pairs, expected, "{what}, arrival order {order:?}");
+            }
+        }
+    }
+
+    /// Every ordering of `0..n`.
+    fn permutations(n: usize) -> Vec<Vec<usize>> {
+        if n == 0 {
+            return vec![Vec::new()];
+        }
+        permutations(n - 1)
+            .into_iter()
+            .flat_map(|shorter| {
+                (0..n).map(move |at| {
+                    let mut order = shorter.clone();
+                    order.insert(at, n - 1);
+                    order
+                })
+            })
+            .collect()
     }
 
     /// One-to-one never hides a real disagreement: a pushed half whose answer
