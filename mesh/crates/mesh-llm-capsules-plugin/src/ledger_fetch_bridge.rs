@@ -52,10 +52,10 @@ use mesh_llm_plugin::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use crate::capsule_emit::CapsuleState;
-use crate::mesh_evidence_bridge::{env_millis, next_stream_id};
+use crate::mesh_evidence_bridge::{env_millis, next_stream_id, read_to_end_bounded};
 
 /// The mesh channel this plugin declares on both ends, alongside
 /// `mesh_evidence_bridge::EVIDENCE_REQUEST_CHANNEL`.
@@ -179,11 +179,12 @@ async fn bridge_inbound_ledger_fetch_stream(
 
     // The requester writes the whole `{"capsule_id": ...}` request then
     // half-closes (same convention `mesh_evidence_bridge` uses) -- read to
-    // EOF to get exactly the request bytes.
-    let mut request_bytes = Vec::new();
-    tokio::time::timeout(
+    // EOF to get exactly the request bytes, bounded in bytes as well as in
+    // time: these are peer-controlled bytes read before the request is
+    // authenticated. An oversized request gets no answer.
+    let request_bytes = tokio::time::timeout(
         responder_timeout(),
-        read_half.read_to_end(&mut request_bytes),
+        read_to_end_bounded(&mut read_half, "inbound ledger-fetch request"),
     )
     .await??;
 
@@ -417,17 +418,9 @@ pub async fn handle_mesh_ledger_fetch(
     );
     let request_bytes = serde_json::to_vec(&request).expect("a map of strings always serializes");
 
-    let write_and_read = async {
-        write_half.write_all(&request_bytes).await?;
-        write_half.shutdown().await?;
-        let mut response_bytes = Vec::new();
-        read_half.read_to_end(&mut response_bytes).await?;
-        Ok::<Vec<u8>, std::io::Error>(response_bytes)
-    };
-
     let response_bytes = tokio::time::timeout(
         Duration::from_millis(requester_idle_timeout_ms()),
-        write_and_read,
+        exchange(&mut read_half, &mut write_half, &request_bytes),
     )
     .await
     .map_err(|_| PluginError::internal("peer does not answer ledger-fetch requests"))?
@@ -442,6 +435,18 @@ pub async fn handle_mesh_ledger_fetch(
             "peer returned malformed ledger-fetch response: {error}"
         ))
     })
+}
+
+/// Send `request_bytes`, half-close, and read the peer's whole response,
+/// bounded in bytes: the response is peer-controlled too.
+async fn exchange<R, W>(read: R, write: &mut W, request_bytes: &[u8]) -> std::io::Result<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    write.write_all(request_bytes).await?;
+    write.shutdown().await?;
+    read_to_end_bounded(read, "peer ledger-fetch response").await
 }
 
 #[cfg(test)]
@@ -913,5 +918,66 @@ mod tests {
         let mut other_tag = untagged;
         other_tag.metadata_json = Some("some-other-carrier/1".to_string());
         assert!(!is_ledger_fetch_request(&other_tag));
+    }
+
+    /// An inbound request over the side-stream cap is refused before it is
+    /// authenticated or answered: the responder errors and writes nothing
+    /// back. Peer-controlled bytes never control this process's memory.
+    #[tokio::test]
+    async fn an_oversized_inbound_request_is_refused_unanswered() {
+        use crate::mesh_evidence_bridge::MAX_SIDE_STREAM_BYTES;
+        use tokio::io::AsyncReadExt;
+        let state = Arc::new(open_state("oversized-request"));
+        // Short ids: the socket path must fit the platform limit (104 bytes
+        // on macOS).
+        let listener = bind_side_stream("c", &next_stream_id("lf")).await.unwrap();
+        let (endpoint, kind) = (listener.endpoint(), listener.transport_kind());
+        let responder = tokio::spawn(bridge_inbound_ledger_fetch_stream(listener, state, None));
+        let stream = mesh_llm_plugin::connect_side_stream(&endpoint, kind)
+            .await
+            .unwrap();
+        let (mut read, mut write) = stream.into_split();
+        write
+            .write_all(&vec![b' '; MAX_SIDE_STREAM_BYTES as usize + 1])
+            .await
+            .unwrap();
+        // The responder may already have dropped the stream.
+        let _ = write.shutdown().await;
+        let err = responder.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("side-stream cap"), "{err}");
+        let mut answer = Vec::new();
+        let _ = read.read_to_end(&mut answer).await;
+        assert!(answer.is_empty());
+    }
+
+    /// The requester reads a peer's response up to the cap and refuses one
+    /// byte more.
+    #[tokio::test]
+    async fn an_oversized_peer_response_is_refused() {
+        use crate::mesh_evidence_bridge::MAX_SIDE_STREAM_BYTES;
+        use tokio::io::AsyncReadExt;
+        for (len, accepted) in [
+            (MAX_SIDE_STREAM_BYTES as usize, true),
+            (MAX_SIDE_STREAM_BYTES as usize + 1, false),
+        ] {
+            let (ours, mut theirs) = tokio::io::duplex(64 * 1024);
+            let peer = tokio::spawn(async move {
+                let mut request = Vec::new();
+                theirs.read_to_end(&mut request).await.unwrap();
+                let _ = theirs.write_all(&vec![b' '; len]).await;
+                let _ = theirs.shutdown().await;
+                request
+            });
+            let (read, mut write) = tokio::io::split(ours);
+            let response = exchange(read, &mut write, b"{}").await;
+            assert_eq!(peer.await.unwrap(), b"{}");
+            match response {
+                Ok(bytes) => assert!(accepted && bytes.len() == len, "{len}"),
+                Err(e) => assert!(
+                    !accepted && e.to_string().contains("side-stream cap"),
+                    "{len}: {e}"
+                ),
+            }
+        }
     }
 }
