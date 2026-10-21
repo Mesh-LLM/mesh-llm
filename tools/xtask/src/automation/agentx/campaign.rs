@@ -1,5 +1,5 @@
 //! Sweep ownership and partial-result publication, separate from child lifecycle.
-use super::{Engine, Prepared, inputs, lifecycle, results, write};
+use super::{Engine, Prepared, lifecycle, results, write};
 use crate::command::DynResult;
 use serde_json::{Value, json};
 
@@ -14,7 +14,6 @@ pub(super) fn run(
     let mut points = Vec::new();
     let mut notes = Vec::new();
     let engine = engine.label();
-    inputs::recheck(input)?;
     for &concurrency in &concurrencies {
         let mut cell: Prepared = serde_json::from_value(serde_json::to_value(input)?)?;
         cell.output = input.output.join(format!("{engine}-c{concurrency}"));

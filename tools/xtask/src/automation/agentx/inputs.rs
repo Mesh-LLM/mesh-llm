@@ -1,4 +1,4 @@
-use super::{FilePin, Model, Prepared, Profile, command, write};
+use super::{Model, Prepared, Profile, command, write};
 use crate::command::DynResult;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -25,6 +25,7 @@ pub(super) fn prepare(
             &output,
             &format!("download-weight-{index}"),
         )?;
+        // Preparation verifies each pin once before any serving cell starts.
         verify(&path, &file.sha256)?;
         weights.get_or_insert(path);
     }
@@ -126,14 +127,6 @@ pub(super) fn verify(path: &Path, expected: &str) -> DynResult<()> {
     let actual = crate::product::digest::file_sha256(path).map_err(|failure| failure.error)?;
     if actual != expected {
         return Err(format!("SHA-256 mismatch for {}", path.display()).into());
-    }
-    Ok(())
-}
-pub(super) fn recheck(prepared: &Prepared) -> DynResult<()> {
-    let parent = prepared.weights.parent().ok_or("weights parent")?;
-    let directory = parent;
-    for FilePin { name, sha256 } in &prepared.model.files {
-        verify(&directory.join(name), sha256)?;
     }
     Ok(())
 }
