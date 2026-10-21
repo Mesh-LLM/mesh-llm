@@ -379,7 +379,7 @@ impl Clock for TestClock {
     fn now(&self) -> String {
         let n = self
             .counter
-            .fetch_update(
+            .try_update(
                 AtomicOrdering::Relaxed,
                 AtomicOrdering::Relaxed,
                 |current| current.checked_add(1),

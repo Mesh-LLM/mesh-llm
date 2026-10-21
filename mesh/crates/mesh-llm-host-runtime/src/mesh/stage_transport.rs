@@ -566,7 +566,7 @@ pub struct InflightRequestGuard {
 
 impl Drop for InflightRequestGuard {
     fn drop(&mut self) {
-        let _ = self.inflight_requests.fetch_update(
+        let _ = self.inflight_requests.try_update(
             std::sync::atomic::Ordering::Relaxed,
             std::sync::atomic::Ordering::Relaxed,
             |current| current.checked_sub(1),
