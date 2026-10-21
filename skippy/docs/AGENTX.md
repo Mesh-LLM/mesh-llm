@@ -207,6 +207,13 @@ each engine's cache-retention policy; an aggregate throughput lead after
 different cache-hit counts is not a decode-kernel comparison. Report the
 per-request cache-read tokens alongside such a result.
 
+For a llama-only cache retention sensitivity run, set
+`AGENTX_LLAMA_CACHE_RAM_MIB=65536` on the AgentX
+runner. Comparison launches then pass `--cache-ram 65536` to llama-server and
+record that argument in launch evidence; unset the variable for the default
+8,192 MiB baseline. This control leaves Skippy's planner and cache policy
+unchanged and is not an ABBAAB winner by itself.
+
 Large CUDA snapshot reads into pageable host memory use a reusable 64 MiB
 pinned staging buffer per physical GPU. Capture remains synchronous so later
 inference cannot change the exported state. Large staging-to-host copies use

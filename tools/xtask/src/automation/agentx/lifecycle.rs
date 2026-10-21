@@ -10,12 +10,42 @@ use serde_json::json;
 use std::time::Duration;
 
 pub(super) const STARTUP_TIMEOUT_SECS: u64 = 900;
+const LLAMA_CACHE_RAM_MIB_ENV: &str = "AGENTX_LLAMA_CACHE_RAM_MIB";
 
 fn llama_comparison_context(concurrency: u32) -> DynResult<u32> {
     trace_context::LIMIT
         .checked_mul(u64::from(concurrency))
         .and_then(|tokens| u32::try_from(tokens).ok())
         .ok_or_else(|| "llama comparison context exceeds supported size".into())
+}
+
+fn parse_llama_cache_ram_mib(value: &str) -> DynResult<u32> {
+    match value.parse::<u32>() {
+        Ok(mib) if mib > 0 => Ok(mib),
+        _ => Err(format!("{LLAMA_CACHE_RAM_MIB_ENV} must be a positive MiB count").into()),
+    }
+}
+
+fn llama_cache_ram_mib() -> DynResult<Option<u32>> {
+    match std::env::var(LLAMA_CACHE_RAM_MIB_ENV) {
+        Ok(value) => parse_llama_cache_ram_mib(&value).map(Some),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(format!("{LLAMA_CACHE_RAM_MIB_ENV}: {error}").into()),
+    }
+}
+
+fn llama_comparison_arguments(
+    concurrency: u32,
+    cache_ram_mib: Option<u32>,
+) -> DynResult<Vec<String>> {
+    let mut args = vec![
+        "--ctx-size".into(),
+        llama_comparison_context(concurrency)?.to_string(),
+    ];
+    if let Some(mib) = cache_ram_mib {
+        args.extend(["--cache-ram".into(), mib.to_string()]);
+    }
+    Ok(args)
 }
 
 fn server(
@@ -104,8 +134,10 @@ fn server(
         )
     };
     if engine == "llama" && input.profile == Profile::Comparison {
-        let total_context = llama_comparison_context(concurrency)?;
-        args.extend(["--ctx-size".into(), total_context.to_string()]);
+        args.extend(llama_comparison_arguments(
+            concurrency,
+            llama_cache_ram_mib()?,
+        )?);
     }
     let mut spec = command::spec(&input.root, binary.to_str().ok_or("server path")?, &args)?;
     if engine == "skippy" {
@@ -439,5 +471,21 @@ mod tests {
             assert!(!skippy.arguments.iter().any(|value| matches!(value,
                 process::Value::Public(argument) if argument == "--ctx-size")));
         }
+    }
+
+    #[test]
+    fn llama_cache_budget_control_is_explicit_and_rejects_invalid_values() {
+        assert_eq!(parse_llama_cache_ram_mib("65536").unwrap(), 65536);
+        for value in ["", "0", "-1", "8GiB", "4294967296"] {
+            assert!(parse_llama_cache_ram_mib(value).is_err(), "{value}");
+        }
+        assert_eq!(
+            llama_comparison_arguments(2, Some(65536)).unwrap(),
+            ["--ctx-size", "262144", "--cache-ram", "65536"]
+        );
+        assert_eq!(
+            llama_comparison_arguments(2, None).unwrap(),
+            ["--ctx-size", "262144"]
+        );
     }
 }
