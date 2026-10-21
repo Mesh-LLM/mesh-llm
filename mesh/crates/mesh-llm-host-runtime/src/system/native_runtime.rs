@@ -21,6 +21,8 @@ mod dynamic {
     #[derive(Clone, Debug)]
     pub(crate) struct LoadedNativeRuntime {
         pub(crate) native_runtime_id: String,
+        /// The release the runtime was loaded from; ids repeat across releases.
+        pub(crate) release_version: String,
         pub(crate) libraries: Vec<PathBuf>,
     }
 
@@ -180,6 +182,7 @@ mod dynamic {
         resolution.completed();
         Ok(Some(LoadedNativeRuntime {
             native_runtime_id: plan.native_runtime_id,
+            release_version: plan.cache_mesh_version,
             libraries: plan.libraries,
         }))
     }
@@ -351,6 +354,7 @@ mod dynamic {
         })?;
         Ok(Some(LoadedNativeRuntime {
             native_runtime_id: plan.native_runtime_id,
+            release_version: plan.cache_mesh_version,
             libraries: plan.libraries,
         }))
     }
