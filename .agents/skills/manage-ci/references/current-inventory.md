@@ -1561,6 +1561,14 @@ Jinja tests remain selected by the complete native suite. The optional developer
 llama-benchy wrapper defaults to a full upstream source commit; explicit caller
 overrides remain available. Neither dependency adds repository Python code.
 
+The native Python-tooling census runs through `just ci-crate-lists` in normal
+Quality validation. `ci/python-tooling-policy.json` records exact retained
+external dependency inputs, source pins and invocation exceptions. It rejects
+repository Python source and shebangs, undeclared package inputs and direct
+interpreter invocations in maintained automation. Historical receipts remain
+data. Mutation tests cover added hidden files, suffixless scripts and inline
+process execution; static checks do not replace review of semantic emulation.
+
 ### Self-hosted job disk cleanup
 
 The persistent build and family jobs run `cargo xtool ci-ops runner-cleanup`
