@@ -1,5 +1,6 @@
-//! Local benchmark memory observations. RSS and cgroup bytes are not GPU
-//! residency on unified-memory systems; unavailable GPU counters stay absent.
+//! Local benchmark memory observations. RSS, cgroup bytes and CUDA's
+//! per-process device-memory accounting are not physical GPU residency on
+//! unified-memory systems; unavailable counters stay absent.
 use crate::command::DynResult;
 use serde::Serialize;
 use std::fs::File;
@@ -23,6 +24,7 @@ struct Sample {
     process_rss_high_water_bytes: Option<u64>,
     process_anonymous_rss_bytes: Option<u64>,
     process_physical_footprint_bytes: Option<u64>,
+    cuda_process_accounted_memory_bytes: Option<u64>,
     container_memory_bytes: Option<u64>,
     host_available_bytes: Option<u64>,
 }
@@ -33,6 +35,7 @@ pub(super) struct Summary {
     sampled_peak_process_rss_bytes: Option<u64>,
     sampled_peak_process_physical_footprint_bytes: Option<u64>,
     process_rss_high_water_bytes: Option<u64>,
+    sampled_peak_cuda_process_accounted_memory_bytes: Option<u64>,
     sampled_peak_container_memory_bytes: Option<u64>,
     minimum_host_available_bytes: Option<u64>,
 }
@@ -128,6 +131,7 @@ fn read_proc_sample(pid: u32, elapsed_ms: u128, cgroup: Option<&Path>) -> Sample
         process_rss_high_water_bytes: kib_field(&status, "VmHWM:"),
         process_anonymous_rss_bytes: kib_field(&status, "RssAnon:"),
         process_physical_footprint_bytes: None,
+        cuda_process_accounted_memory_bytes: None,
         container_memory_bytes: cgroup
             .and_then(|path| std::fs::read_to_string(path).ok())
             .and_then(|value| value.trim().parse().ok()),
@@ -135,17 +139,67 @@ fn read_proc_sample(pid: u32, elapsed_ms: u128, cgroup: Option<&Path>) -> Sample
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn parse_cuda_process_memory(output: &str, pid: u32) -> Option<u64> {
+    let mut total = None;
+    for line in output.lines() {
+        let Some((listed_pid, mib)) = line.split_once(',') else {
+            continue;
+        };
+        if listed_pid.trim().parse::<u32>().ok() != Some(pid) {
+            continue;
+        }
+        let bytes = mib.trim().parse::<u64>().ok()?.checked_mul(1024 * 1024)?;
+        total = Some(total.unwrap_or(0_u64).checked_add(bytes)?);
+    }
+    total
+}
+
+#[cfg(target_os = "linux")]
+fn cuda_process_memory(pid: u32) -> Option<u64> {
+    let output = std::process::Command::new("timeout")
+        .args([
+            "-k",
+            "1s",
+            "4s",
+            "nvidia-smi",
+            "--query-compute-apps=pid,used_memory",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_cuda_process_memory(std::str::from_utf8(&output.stdout).ok()?, pid)
+}
+
 fn sample_loop(file: File, pid: &AtomicU32, stop: &mpsc::Receiver<()>) -> DynResult<Summary> {
     let mut writer = BufWriter::new(file);
     let mut summary = Summary::default();
     let started = Instant::now();
     let cgroup = cgroup_memory_path();
+    #[cfg(target_os = "linux")]
+    let mut next_cuda_probe = Instant::now();
     loop {
+        let current_pid = pid.load(Ordering::Relaxed);
         let sample = read_sample(
-            pid.load(Ordering::Relaxed),
+            current_pid,
             started.elapsed().as_millis(),
             cgroup.as_deref(),
         );
+        #[cfg(target_os = "linux")]
+        let sample = Sample {
+            cuda_process_accounted_memory_bytes: if current_pid != 0
+                && Instant::now() >= next_cuda_probe
+            {
+                next_cuda_probe = Instant::now() + Duration::from_secs(30);
+                cuda_process_memory(current_pid)
+            } else {
+                None
+            },
+            ..sample
+        };
         summary.samples += 1;
         summary.sampled_peak_process_rss_bytes = summary
             .sampled_peak_process_rss_bytes
@@ -156,6 +210,9 @@ fn sample_loop(file: File, pid: &AtomicU32, stop: &mpsc::Receiver<()>) -> DynRes
         summary.process_rss_high_water_bytes = summary
             .process_rss_high_water_bytes
             .max(sample.process_rss_high_water_bytes);
+        summary.sampled_peak_cuda_process_accounted_memory_bytes = summary
+            .sampled_peak_cuda_process_accounted_memory_bytes
+            .max(sample.cuda_process_accounted_memory_bytes);
         summary.sampled_peak_container_memory_bytes = summary
             .sampled_peak_container_memory_bytes
             .max(sample.container_memory_bytes);
@@ -188,5 +245,20 @@ mod tests {
         assert_eq!(kib_field(status, "MemAvailable:"), None);
         assert_eq!(kib_field("VmRSS: 12 MB", "VmRSS:"), None);
         assert_eq!(kib_field("VmRSS: 18446744073709551615 kB", "VmRSS:"), None);
+    }
+
+    #[test]
+    fn cuda_process_memory_matches_container_pid_and_preserves_missing_values() {
+        let output = "122, 5544\n817739, 5544\n122, 100\n";
+        assert_eq!(
+            parse_cuda_process_memory(output, 122),
+            Some((5544 + 100) * 1024 * 1024)
+        );
+        assert_eq!(parse_cuda_process_memory(output, 1), None);
+        assert_eq!(parse_cuda_process_memory("122, N/A\n", 122), None);
+        assert_eq!(
+            parse_cuda_process_memory("122, 18446744073709551615\n", 122),
+            None
+        );
     }
 }

@@ -115,8 +115,11 @@ retained alongside it. macOS samples process RSS and physical footprint through
 `sampled_peak_process_physical_footprint_bytes`. The latter is the process's
 memory-accounting footprint, not GPU residency. macOS does not provide an RSS
 high-water mark through this API, so that field remains unavailable. Linux keeps
-its `/proc` RSS/high-water and cgroup observations. Sampling can miss short peaks
-on either platform; none of these process fields substitutes for GPU residency.
+its `/proc` RSS/high-water and cgroup observations. On CUDA it also queries
+`nvidia-smi --query-compute-apps=pid,used_memory` for the server's container PID
+every thirty seconds. This is driver-accounted device memory, not physical GPU
+residency on unified-memory Spark; unsupported or timed-out observations stay
+null. Sampling can miss short peaks on either platform.
 
 ## Q4 model matrix
 
@@ -272,14 +275,16 @@ for metric units and validity reasons. Engine identities are never collapsed
 into one concurrency series. Build and input preparation are outside measurement.
 
 Each cell also retains `memory.jsonl` with one-second samples and
-`memory-summary.json` with sampled process RSS and container-memory peaks,
-the process RSS high-water mark, and minimum host available memory. Sampling
-covers the server lifecycle, including loading and warmup. Container memory
-includes the harness and file cache; missing counters remain null. These OS
-measurements are not GPU residency. Hardware evidence includes NVIDIA memory
-counters where supported; GB10 currently reports them as unavailable because
-Spark uses unified memory. No native GPU allocation or KV allocation totals
-are inferred from RSS.
+`memory-summary.json` with sampled process RSS, CUDA process-accounted and
+container-memory peaks, the process RSS high-water mark, and minimum host
+available memory. Sampling covers the server lifecycle, including loading and
+warmup. Container memory includes the harness and file cache; missing counters
+remain null. These OS
+measurements are not GPU residency. Hardware evidence includes global NVIDIA
+memory counters where supported; GB10 reports those as unavailable, but its
+per-process `used_memory` query works in the benchmark container. That value
+reflects CUDA device-memory accounting, not confirmed physical residency. No
+native GPU allocation or KV allocation totals are inferred from RSS.
 
 A passing cell requires a zero-exit harness, completed measured requests,
 positive output token usage, streaming TTFT/ITL observations, zero request or

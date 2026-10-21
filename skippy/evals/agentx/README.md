@@ -121,9 +121,11 @@ throughput. Keep raw exports and failed cells in the comparison report.
 
 Report throughput, decode, TTFT, completed work and sampled process RSS/physical
 footprint separately for each category/model/backend/concurrency, with all three
-arms per engine and their variation. GPU residency remains unavailable where
-the platform exposes no separate counter. Standalone JY artifact jobs can run
-this profile without merging or syncing template configuration.
+arms per engine and their variation. On CUDA, report the sampled peak
+`nvidia-smi` process-accounted device memory where available; it is not a
+physical-residency counter on unified-memory Spark. Missing values remain null.
+Standalone JY artifact jobs can run this profile without merging or syncing
+template configuration.
 
 ## Duration-bounded smoke and full profiles
 
