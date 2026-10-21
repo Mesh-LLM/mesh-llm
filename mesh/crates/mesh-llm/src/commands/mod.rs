@@ -169,7 +169,8 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::RotateKey => {
             mesh_llm_host_runtime::command_support::discovery::nostr::rotate_keys()
         }
-        Command::Goose { .. }
+        Command::Agent { .. }
+        | Command::Goose { .. }
         | Command::Claude { .. }
         | Command::Pi { .. }
         | Command::Opencode { .. } => dispatch_agent_command(cmd).await,
@@ -189,6 +190,26 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
 
 async fn dispatch_agent_command(cmd: &Command) -> Result<()> {
     match cmd {
+        Command::Agent {
+            text,
+            model,
+            port,
+            max_turns,
+            cwd,
+            quiet,
+        } => {
+            mesh_llm_commands::agent_cli::mesh_agent::run(
+                mesh_llm_commands::agent_cli::mesh_agent::MeshAgentArgs {
+                    text: text.clone(),
+                    model: model.clone(),
+                    port: *port,
+                    max_turns: *max_turns,
+                    cwd: cwd.clone(),
+                    quiet: *quiet,
+                },
+            )
+            .await
+        }
         Command::Goose {
             model,
             port,

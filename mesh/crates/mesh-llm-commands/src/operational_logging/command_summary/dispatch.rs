@@ -117,6 +117,13 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             assembly.redact("--relay", !relay.is_empty());
         }
         Command::RotateKey => assembly.command.push_str(" rotate-key"),
+        Command::Agent {
+            model, port, quiet, ..
+        } => {
+            format_agent("agent", model, *port, assembly);
+            assembly.redact("--text", true);
+            assembly.flag("quiet", *quiet);
+        }
         Command::Goose { model, port, .. } => format_agent("goose", model, *port, assembly),
         Command::Claude { model, port, .. } => format_agent("claude", model, *port, assembly),
         Command::Pi { model, host, write } => format_client("pi", model, host, *write, assembly),

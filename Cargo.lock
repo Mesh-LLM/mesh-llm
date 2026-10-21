@@ -459,6 +459,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3312,6 +3334,83 @@ dependencies = [
 ]
 
 [[package]]
+name = "goose-agent"
+version = "0.1.0-alpha.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56134acbd10c43e00b5a7c623c3efaed614f2939b5f329473527ce885883b46a"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "goose-provider-types",
+ "rmcp",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-futures",
+ "uuid",
+]
+
+[[package]]
+name = "goose-provider-types"
+version = "0.1.0-alpha.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca00f997b11a9b6c7cb4cafa2eef69f5168462b5291642985204468d61b15814"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "base64 0.23.1",
+ "chrono",
+ "futures",
+ "getrandom 0.4.3",
+ "gloo-timers",
+ "once_cell",
+ "rand 0.10.2",
+ "regex",
+ "reqwest 0.13.5",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
+name = "goose-providers"
+version = "0.1.0-alpha.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b3daa9998c0a69755b4815bc454a24b6f18c096467344140b1f1c9d1fd250db"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "base64 0.23.1",
+ "chrono",
+ "futures",
+ "goose-provider-types",
+ "include_dir",
+ "reqwest 0.13.5",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "url",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
 name = "gpu-allocator"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4685,6 +4784,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-agent"
+version = "0.78.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dirs",
+ "goose-agent",
+ "goose-provider-types",
+ "goose-providers",
+ "rmcp",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "mesh-llm-analytics"
 version = "0.78.0"
 dependencies = [
@@ -4779,6 +4895,7 @@ dependencies = [
  "iroh",
  "json5",
  "libc",
+ "mesh-llm-agent",
  "mesh-llm-analytics",
  "mesh-llm-build-info",
  "mesh-llm-cli",
@@ -9939,6 +10056,7 @@ checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "futures-util",
  "libc",
@@ -10282,6 +10400,18 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
  "valuable",
+]
+
+[[package]]
+name = "tracing-futures"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
+dependencies = [
+ "futures",
+ "futures-task",
+ "pin-project",
+ "tracing",
 ]
 
 [[package]]

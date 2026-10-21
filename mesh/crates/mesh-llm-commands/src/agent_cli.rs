@@ -1,4 +1,5 @@
 pub mod config_write;
+pub mod mesh_agent;
 mod model_inventory;
 use model_inventory::ModelInventory;
 

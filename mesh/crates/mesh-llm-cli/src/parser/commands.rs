@@ -1095,6 +1095,30 @@ pub enum Command {
         #[arg(long, default_value = "3131")]
         console: u16,
     },
+    /// Run a one-shot agent on the mesh with a shell tool and skills.
+    ///
+    /// If no mesh is running on --port, this auto-joins the mesh as a client.
+    #[command(name = "agent")]
+    Agent {
+        /// Instructions for the agent. Use - to read them from stdin.
+        #[arg(short = 't', long = "text", value_name = "TEXT")]
+        text: String,
+        /// Model id to use from /v1/models (default: auto = mesh picks best)
+        #[arg(long)]
+        model: Option<String>,
+        /// API port for mesh-llm (default: 9337)
+        #[arg(long, default_value = "9337")]
+        port: u16,
+        /// Stop after this many model turns.
+        #[arg(long, default_value = "30")]
+        max_turns: u32,
+        /// Working directory for shell commands (default: current directory).
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Print only the final answer, without tool progress.
+        #[arg(short, long)]
+        quiet: bool,
+    },
     /// Launch Claude Code with mesh-llm as the inference provider.
     ///
     /// If no mesh is running on --port, this auto-joins the mesh as a client.

@@ -155,7 +155,8 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         Command::Doctor { .. } => CliCommandFamily::Diagnostics,
         Command::Discover { .. } => CliCommandFamily::Discovery,
         Command::RotateKey | Command::Auth { .. } => CliCommandFamily::Identity,
-        Command::Goose { .. }
+        Command::Agent { .. }
+        | Command::Goose { .. }
         | Command::Claude { .. }
         | Command::Hermes(_)
         | Command::Openclaw(_)
