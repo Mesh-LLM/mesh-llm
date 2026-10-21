@@ -127,6 +127,13 @@ physical-residency counter on unified-memory Spark. Missing values remain null.
 Standalone JY artifact jobs can run this profile without merging or syncing
 template configuration.
 
+For a cache-path diagnostic, set `AGENTX_SKIPPY_DEBUG_TELEMETRY=1` on the
+AgentX runner. It enables Skippy's debug level and stderr telemetry only in its
+server child; the cell's `server.stderr.log` then records cache source and
+restore timings.
+Leave it unset for paired performance results because debug event emission can
+perturb latency.
+
 ## Duration-bounded smoke and full profiles
 
 Smoke version 8 uses a 60-second dispatch window and drains outstanding requests.

@@ -113,6 +113,16 @@ fn server(
             process::Value::Public("--runtime-bundle".into()),
             process::Value::Public(input.root.join("dist/native-runtimes").into_os_string()),
         ]);
+        if std::env::var("AGENTX_SKIPPY_DEBUG_TELEMETRY").as_deref() == Ok("1") {
+            spec.arguments.extend([
+                process::Value::Public("--telemetry-level".into()),
+                process::Value::Public("debug".into()),
+            ]);
+            spec.environment.insert(
+                "SKIPPY_TELEMETRY_STDERR".into(),
+                process::Value::Public("1".into()),
+            );
+        }
     }
     spec.environment.insert(
         "MESH_AGENT_SESSION_HEADER".into(),
