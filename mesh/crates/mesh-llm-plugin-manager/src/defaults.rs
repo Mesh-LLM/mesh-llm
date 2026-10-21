@@ -109,28 +109,25 @@ impl DefaultPlugin {
     }
 }
 
+// The capsules archive this build ships with (`build.rs`).
+include!(concat!(env!("OUT_DIR"), "/bundled_capsules_pins.rs"));
+
 /// The plugins a node installs from its release's bundled copy. Each entry
 /// is added by its own PR, and bumping one is a one-entry change.
 /// Payment and wallet plugins are never on this list: a node pays or gets paid
-/// only through a plugin its operator chose. A target with no pin (Windows
-/// today: the plugin has no Windows build) reports it unsupported.
+/// only through a plugin its operator chose. A target with no pin reports it
+/// unsupported.
+///
+/// The capsules plugin is built in this workspace, so its release archive
+/// comes from the same commit as the host and has the same version. The
+/// release job builds that archive first and compiles its digest into this
+/// build for the host's own target (`build.rs`); a build made without it
+/// (a development build, or Windows, which the plugin does not support)
+/// pins none and installs none.
 pub const DEFAULT_PLUGINS: &[DefaultPlugin] = &[DefaultPlugin {
     name: "capsules",
-    version: "0.1.4",
-    sha256: &[
-        (
-            "aarch64-apple-darwin",
-            "800416eec9b696f29693e47e0e11013ec0805ff744324a7087a211effd3eaa54",
-        ),
-        (
-            "aarch64-unknown-linux-gnu",
-            "16f3f2111825bcb2d9c1c6fdca5cc33d228312dcd0496f4b3ad024d2ea57a06a",
-        ),
-        (
-            "x86_64-unknown-linux-gnu",
-            "b6b87b062ed9804e928233864a2011452bc21114a7a443fcd53776809df6d0aa",
-        ),
-    ],
+    version: env!("CARGO_PKG_VERSION"),
+    sha256: BUNDLED_CAPSULES_PINS,
     // An audit plugin: records, its page and its settings; it serves no model.
     // Other (non-inference) endpoints stay allowed so a later release can
     // declare an MCP endpoint without the host stripping it.
@@ -404,6 +401,21 @@ mod tests {
                     default.name
                 );
             }
+        }
+    }
+
+    /// A build pins at most one capsules archive: the one built for its own
+    /// target, at its own version (`build.rs`).
+    #[test]
+    fn the_capsules_pin_is_for_this_build_only() {
+        let capsules = default_plugin("capsules").unwrap();
+        assert_eq!(capsules.version, env!("CARGO_PKG_VERSION"));
+        assert!(capsules.sha256.len() <= 1, "{:?}", capsules.sha256);
+        if let Some((triple, _)) = capsules.sha256.first() {
+            assert_eq!(
+                *triple,
+                crate::target::PluginTarget::current().unwrap().triple()
+            );
         }
     }
 

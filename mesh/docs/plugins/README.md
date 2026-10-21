@@ -540,9 +540,14 @@ the installed archive, extracted files, and local plugin metadata.
 ## Default Plugins
 
 The reviewed default list is `mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`.
-Today it contains `capsules` 0.1.4. Each entry pins a release version and an
-archive SHA-256 per supported platform. Payment and wallet plugins are excluded
-from the default list.
+Today it contains `capsules`, which is built in this repository
+(`mesh/crates/mesh-llm-capsules-plugin`) and has the same version as
+`mesh-llm`. Each entry pins a release version and an archive SHA-256 per
+platform. For `capsules`, the release job builds the plugin archive from the
+same commit as the host, before the host, and compiles that archive's SHA-256
+into the host for the host's own platform (`MESH_LLM_BUNDLED_CAPSULES_SHA256`);
+a development build pins none. Payment and wallet plugins are excluded from the
+default list.
 
 **A node installs a default only from its release's bundled copy, never from
 a download.** The bundled copy is the plugin archive in a `plugins/` directory
@@ -557,10 +562,12 @@ beside the `mesh-llm` binary; native packages keep it at
   directory at all ("this install bundles no plugins") it is an info line;
   a `plugins/` directory without the archive is a warning. Nothing is
   downloaded instead, and there is no fallback. A digest mismatch is refused.
-  Release archives do not carry a `plugins/` directory yet, so until they do
-  every install reports the info line.
-- **Windows:** the list pins no Windows build, so the default reports "no
-  reviewed release for this platform".
+  macOS and Linux release archives carry the `capsules` archive in
+  `plugins/`; the release fails if the host it ships with does not install
+  that archive at its compiled-in pin.
+- **Windows, and development builds:** the build pins no `capsules` archive,
+  so the default reports "this build pins no capsules release for this
+  platform".
 
 To turn the defaults off, pass `--no-default-plugins` to `mesh-llm update`, or
 run `mesh-llm plugins install-defaults --off`. Each records the choice in the plugin store:
@@ -570,7 +577,7 @@ covers the defaults the build that wrote it lists, not a default a later
 release adds. `MESH_LLM_NO_DEFAULT_PLUGINS=1`, or `--no-default-plugins` on
 `serve` or `client`, skips defaults for the processes that see it. Provisioning prints one line for
 a default it leaves alone: one you run from your own `[[plugin]]` entry or
-install, one disabled or turned off, a platform with no reviewed release, or
+install, one disabled or turned off, a platform this build pins no release for, or
 an install with no bundled copy.
 
 `plugin-install.json` records whether an installation is default managed. A

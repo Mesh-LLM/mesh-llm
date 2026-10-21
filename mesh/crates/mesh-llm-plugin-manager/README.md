@@ -11,3 +11,9 @@ authoring and release validation can pass a `.tar.gz` or `.zip` directly to
 boundary. It deliberately
 does not render CLI output; callers should render progress and status events in
 the host application.
+
+It also owns the default plugin list (`defaults`) and installing a default
+from a release's bundled copy (`bundled`). The `capsules` pin is compiled in
+by `build.rs` from `MESH_LLM_BUNDLED_CAPSULES_SHA256`, which the release job
+sets to the SHA-256 of the capsules archive it built from the same commit; a
+build without it pins no capsules archive.

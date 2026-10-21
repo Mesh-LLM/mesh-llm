@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use mesh_llm_plugin_manager::defaults::{
-    DEFAULT_PLUGINS, DefaultPluginOutcome, NO_DEFAULT_PLUGINS_ENV, default_plugin,
+    DEFAULT_PLUGINS, DefaultPlugin, DefaultPluginOutcome, NO_DEFAULT_PLUGINS_ENV, default_plugin,
     default_plugins_opted_out, provision_bundled_defaults, turn_off_defaults,
 };
 use mesh_llm_plugin_manager::install::install_plugin_archive;
@@ -234,11 +234,22 @@ fn set_enabled_in(
     target: Option<&str>,
     err: &mut impl Write,
 ) -> Result<()> {
+    set_enabled_with(store, name, enabled, default_plugin(name), target, err)
+}
+
+/// [`set_enabled_in`] with `name`'s entry on this build's default list.
+fn set_enabled_with(
+    store: &PluginStore,
+    name: &str,
+    enabled: bool,
+    default: Option<&DefaultPlugin>,
+    target: Option<&str>,
+    err: &mut impl Write,
+) -> Result<()> {
     // A default that is not installed (for example right after a delete) is
     // turned off, or back on, by a record a node start respects.
     // Enabling a default always removes that record, installed or not, so a
     // stale one never outlives an install.
-    let default = default_plugin(name);
     let is_default = default.is_some();
     if is_default && enabled {
         store.set_default_turned_off(name, false)?;
@@ -320,7 +331,7 @@ fn deleted_default_note(name: &str) -> String {
 
 /// A default with no pin for this platform: nothing is installed.
 fn no_reviewed_release_line(name: &str) -> String {
-    format!("ℹ️  No reviewed {name} release for this platform; not installed")
+    format!("ℹ️  This build pins no {name} release for this platform; not installed")
 }
 
 /// One line for a default that provisioning left alone; none for one already current.
@@ -703,7 +714,7 @@ url = "unix:///run/remote.sock"
             .unwrap();
     }
 
-    /// A target this build pins capsules for.
+    /// A target a release build pins capsules for.
     const PINNED: Option<&str> = Some("x86_64-unknown-linux-gnu");
 
     #[test]
@@ -711,7 +722,12 @@ url = "unix:///run/remote.sock"
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
         let mut err = Vec::new();
-        set_enabled_in(&store, "capsules", true, PINNED, &mut err).unwrap();
+        // A release build pins the archive it ships with; a test build pins none.
+        let pinned = DefaultPlugin {
+            sha256: &[("x86_64-unknown-linux-gnu", "00")],
+            ..*default_plugin("capsules").unwrap()
+        };
+        set_enabled_with(&store, "capsules", true, Some(&pinned), PINNED, &mut err).unwrap();
         let err = String::from_utf8(err).unwrap();
         assert_eq!(
             err,
