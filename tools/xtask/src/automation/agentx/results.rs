@@ -120,7 +120,7 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
         "engine":engine,"offered_sessions":concurrency,
         "cohort":serde_json::from_slice::<Value>(&std::fs::read(input.output.join("cohort.json"))?)?,
         "capacity_policy":super::capacity::policy(engine, input.profile),
-        "native_capacity":super::capacity::read(&input.output),
+        "native_capacity":super::capacity::read_verified(&input.output, engine, input.profile, concurrency)?,
         "submission_valid":false,"request_count":metric(&export,"request_count")?,
         "phase_outcome":phase_outcome,
         "completed_work":completed_work,

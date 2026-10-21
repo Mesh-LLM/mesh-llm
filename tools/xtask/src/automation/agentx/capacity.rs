@@ -1,5 +1,6 @@
 //! Preserve native allocation evidence without equating offered load with slots.
-use super::Profile;
+use super::{Profile, trace_context};
+use crate::command::DynResult;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -27,6 +28,37 @@ pub(super) fn read(output: &Path) -> Value {
         "status": if observations.is_empty() { "unavailable" } else { "observed" },
         "observations": observations,
     })
+}
+
+pub(super) fn read_verified(
+    output: &Path,
+    engine: &str,
+    profile: Profile,
+    concurrency: u32,
+) -> DynResult<Value> {
+    let evidence = read(output);
+    if engine == "llama" && profile == Profile::Comparison {
+        let observations = evidence["observations"]
+            .as_array()
+            .ok_or("missing native context observations")?;
+        for (field, expected) in [
+            ("n_slots", u64::from(concurrency)),
+            ("n_ctx_slot", trace_context::LIMIT),
+        ] {
+            let values: Vec<_> = observations
+                .iter()
+                .filter(|observation| observation["field"] == field)
+                .filter_map(|observation| observation["value"].as_u64())
+                .collect();
+            if values.is_empty() || values.iter().any(|&value| value != expected) {
+                return Err(format!(
+                    "llama comparison {field} must be {expected}; observed {values:?}"
+                )
+                .into());
+            }
+        }
+    }
+    Ok(evidence)
 }
 
 fn observations_in_line(stream: &str, line: &str) -> Vec<Value> {
@@ -72,6 +104,27 @@ mod tests {
             "auto_context_explicit_parallel"
         );
         assert_eq!(policy("skippy", Profile::Comparison), "engine_default");
+    }
+
+    #[test]
+    fn comparison_requires_observed_matched_llama_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_verified(dir.path(), "llama", Profile::Comparison, 4).is_err());
+        std::fs::write(
+            dir.path().join("server.stderr.log"),
+            "srv load_model: initializing, n_slots = 4, n_ctx_slot = 131072, kv_unified = 'false'",
+        )
+        .unwrap();
+        assert!(read_verified(dir.path(), "llama", Profile::Comparison, 4).is_ok());
+        assert!(read_verified(dir.path(), "llama", Profile::Comparison, 2).is_err());
+        std::fs::write(
+            dir.path().join("server.stderr.log"),
+            "srv load_model: initializing, n_slots = 4, n_ctx_slot = 262144, kv_unified = 'false'",
+        )
+        .unwrap();
+        assert!(read_verified(dir.path(), "llama", Profile::Comparison, 4).is_err());
+        assert!(read_verified(dir.path(), "llama", Profile::Smoke, 4).is_ok());
+        assert!(read_verified(dir.path(), "skippy", Profile::Comparison, 4).is_ok());
     }
 
     #[test]

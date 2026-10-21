@@ -86,6 +86,9 @@ giving each non-unified slot the same 128K ceiling as the selected workload.
 Skippy keeps its automatic planner and 128K cap. This avoids charging llama
 for an unused 262K native slot on Qwen3 models; the server's observed slot
 capacity and each engine's memory footprint remain reportable evidence.
+The runner rejects a llama comparison cell unless its server log confirms
+the expected slot count and 131,072-token context per slot; rejected cells
+publish no throughput point.
 
 | Trace ID | Source requests | Requested output tokens | Peak input tokens |
 |---|---:|---:|---:|
