@@ -87,9 +87,7 @@ pub(super) fn system_powershell() -> PathBuf {
     path
 }
 pub(super) fn fixture_host() -> Vec<u8> {
-    let unit_binary = std::env::current_exe().unwrap();
-    let target_debug = unit_binary.parent().unwrap().parent().unwrap();
-    let path = target_debug.join("examples/migration_generator_fixture.exe");
+    let path = crate::fixture_paths::examples_dir().join("migration_generator_fixture.exe");
     let metadata = fs::symlink_metadata(&path).unwrap_or_else(|error| {
         panic!(
             "build existing migration_generator_fixture example before native installer tests: {}: {error}",
