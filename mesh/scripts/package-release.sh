@@ -495,6 +495,33 @@ copy_and_verify_precomposed_product() {
         --check
 }
 
+# Place the plugin archives the release built from this commit (Mesh-LLM/mesh-llm#2514)
+# under plugins/ beside the host, where a node installs its defaults from, and
+# check that the host installs each one at the pin compiled into it.
+place_bundled_plugins() {
+    local bundle_dir="$1"
+    local input_dir="${MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR:-}"
+    local plugins_dir="$bundle_dir/plugins"
+    local archive=""
+    local placed=0
+
+    if [[ -z "$input_dir" ]]; then
+        return 0
+    fi
+    mkdir -p "$plugins_dir"
+    for archive in "$input_dir"/*.tar.gz; do
+        if [[ -f "$archive" ]]; then
+            cp "$archive" "$plugins_dir/"
+            placed=$((placed + 1))
+        fi
+    done
+    if [[ "$placed" -eq 0 ]]; then
+        echo "No plugin archive in $input_dir" >&2
+        exit 1
+    fi
+    mesh_automation repository capsules-bundle-check --bundle "$bundle_dir"
+}
+
 main() {
     if [[ $# -lt 1 || -z "${1:-}" ]]; then
         usage
@@ -557,6 +584,8 @@ main() {
             "$version" \
             "$(effective_release_flavor)"
     fi
+
+    place_bundled_plugins "$bundle_dir"
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
     create_archive "$bundle_dir" "$output_dir/$STABLE_ASSET" "$ARCHIVE_EXT"

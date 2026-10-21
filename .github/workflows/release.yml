@@ -307,9 +307,45 @@ jobs:
       release_tag: ${{ needs.metadata.outputs.tag }}
       retention_days: 90
 
+  # The capsules plugin's Evidence page, built once from the release commit for
+  # every host producer that packages the plugin (Mesh-LLM/mesh-llm#2514). The
+  # page carries no version, so the release version step is not needed here.
+  capsules_web_ui:
+    name: Build the capsules plugin's Evidence page
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          package-manager-cache: false
+      - name: Build the Evidence page
+        working-directory: mesh/crates/mesh-llm-capsules-plugin/web-ui
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm build
+          test "$(ls ../bundle)" = register-mesh-plugin-ui.js
+      - name: Upload the Evidence page
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: capsules-web-ui-${{ needs.metadata.outputs.tag }}-${{ needs.metadata.outputs.source_sha }}
+          path: mesh/crates/mesh-llm-capsules-plugin/bundle/register-mesh-plugin-ui.js
+          if-no-files-found: error
+
   build:
     name: Build immutable host ${{ matrix.name }}
-    needs: [metadata, release_ui]
+    needs: [metadata, release_ui, capsules_web_ui]
     # Host attestation consumes the signing key. Keep this producer on GitHub
     # until compilation and signing are split into separate jobs.
     runs-on: ${{ matrix.os }}
@@ -350,7 +386,7 @@ jobs:
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install cmake ninja
+        run: brew install cmake ninja gnu-tar
 
       - name: Install macOS linker
         if: runner.os == 'macOS'
@@ -395,6 +431,22 @@ jobs:
           path: skippy-release/*
           if-no-files-found: error
 
+      - name: Restore the capsules plugin's Evidence page
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: capsules-web-ui-${{ needs.metadata.outputs.tag }}-${{ needs.metadata.outputs.source_sha }}
+          path: capsules-web-ui
+      - name: Build the bundled capsules plugin from this commit
+        run: cargo xtool repository capsules-plugin-archive --out capsules-plugin-input --web-bundle capsules-web-ui/register-mesh-plugin-ui.js
+      - name: Pin the bundled capsules archive in the host
+        shell: bash
+        run: |
+          set -euo pipefail
+          sidecars=(capsules-plugin-input/*.tar.gz.sha256)
+          [[ ${#sidecars[@]} -eq 1 && -f "${sidecars[0]}" ]]
+          read -r sha256 _ < "${sidecars[0]}"
+          printf 'MESH_LLM_BUNDLED_CAPSULES_SHA256=%s\n' "$sha256" >> "$GITHUB_ENV"
+
       - name: Build and attest release host
         uses: ./.github/actions/prepare-host-input
         with:
@@ -413,6 +465,12 @@ jobs:
         with:
           name: host-input-${{ matrix.target }}
           path: host-input/*
+          if-no-files-found: error
+      - name: Upload the bundled capsules plugin
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: capsules-plugin-input-${{ matrix.target }}
+          path: capsules-plugin-input/*
           if-no-files-found: error
 
   compose_cpu_products:
@@ -474,8 +532,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download the bundled capsules plugin
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: capsules-plugin-input-${{ matrix.host_target }}
+          path: capsules-plugin-input
       - name: Package verified product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR: ${{ github.workspace }}/capsules-plugin-input
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: ${{ matrix.release_os }}
           MESH_RELEASE_ARCH: ${{ matrix.release_arch }}
@@ -964,7 +1028,7 @@ jobs:
 
   build_linux_arm64:
     name: Build immutable host Linux ARM64
-    needs: [metadata, release_ui]
+    needs: [metadata, release_ui, capsules_web_ui]
     # Host attestation consumes the signing key. Keep this producer on GitHub
     # until compilation and signing are split into separate jobs.
     runs-on: ubuntu-24.04-arm
@@ -1022,6 +1086,22 @@ jobs:
           path: skippy-release/*
           if-no-files-found: error
 
+      - name: Restore the capsules plugin's Evidence page
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: capsules-web-ui-${{ needs.metadata.outputs.tag }}-${{ needs.metadata.outputs.source_sha }}
+          path: capsules-web-ui
+      - name: Build the bundled capsules plugin from this commit
+        run: cargo xtool repository capsules-plugin-archive --out capsules-plugin-input --web-bundle capsules-web-ui/register-mesh-plugin-ui.js
+      - name: Pin the bundled capsules archive in the ARM64 host
+        shell: bash
+        run: |
+          set -euo pipefail
+          sidecars=(capsules-plugin-input/*.tar.gz.sha256)
+          [[ ${#sidecars[@]} -eq 1 && -f "${sidecars[0]}" ]]
+          read -r sha256 _ < "${sidecars[0]}"
+          printf 'MESH_LLM_BUNDLED_CAPSULES_SHA256=%s\n' "$sha256" >> "$GITHUB_ENV"
+
       - name: Build and attest ARM64 release host
         uses: ./.github/actions/prepare-host-input
         with:
@@ -1039,6 +1119,12 @@ jobs:
         with:
           name: host-input-linux-aarch64
           path: host-input/*
+          if-no-files-found: error
+      - name: Upload the bundled capsules plugin
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: capsules-plugin-input-linux-aarch64
+          path: capsules-plugin-input/*
           if-no-files-found: error
 
   compose_linux_arm64_cpu:
@@ -1078,8 +1164,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download the bundled capsules plugin
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: capsules-plugin-input-linux-aarch64
+          path: capsules-plugin-input
       - name: Package verified ARM64 CPU product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR: ${{ github.workspace }}/capsules-plugin-input
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: aarch64
@@ -1197,8 +1289,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download the bundled capsules plugin
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: capsules-plugin-input-linux-aarch64
+          path: capsules-plugin-input
       - name: Package verified aarch64 CUDA product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR: ${{ github.workspace }}/capsules-plugin-input
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: aarch64
@@ -1276,8 +1374,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download the bundled capsules plugin
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: capsules-plugin-input-linux-x86_64
+          path: capsules-plugin-input
       - name: Package verified CUDA product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR: ${{ github.workspace }}/capsules-plugin-input
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: x86_64
@@ -1347,8 +1451,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download the bundled capsules plugin
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: capsules-plugin-input-linux-x86_64
+          path: capsules-plugin-input
       - name: Package verified ROCm product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR: ${{ github.workspace }}/capsules-plugin-input
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: x86_64
@@ -1416,8 +1526,14 @@ jobs:
           readiness_smoke: "true"
           attestation_public_key_file: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
+      - name: Download the bundled capsules plugin
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: capsules-plugin-input-linux-x86_64
+          path: capsules-plugin-input
       - name: Package verified Vulkan product
         env:
+          MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR: ${{ github.workspace }}/capsules-plugin-input
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_RELEASE_OS: Linux
           MESH_RELEASE_ARCH: x86_64

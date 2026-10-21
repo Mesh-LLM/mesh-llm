@@ -604,7 +604,7 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `nightly-stability-run.yml` | `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
 | `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
 | `release.yml` (CUDA/ROCm/Vulkan compiler rows) | per-backend `public` digests | Native compiler/toolkit images remain backend-specific; amd64 CUDA preserves its intentional ARC self-hosted placement |
-| `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit |
+| `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit; place the host producer's `capsules-plugin-input-<target>` archive under `plugins/` and run the host's default-plugin install against it (`repository capsules-bundle-check`) |
 
 `public cpu` and `public web` are separate image builds (the latter adds
 `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`,

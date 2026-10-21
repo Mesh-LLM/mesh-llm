@@ -554,6 +554,22 @@ publisher's dry-run checks. The fixed publication roster remains checked by
 `repo-consistency publish-crates`. The L8 smoke restore action uses Rust product
 composition and the transitional Python composer is deleted.
 
+The three release host producers that have a capsules plugin target (macOS
+aarch64, Linux x86_64, Linux aarch64) first build the in-tree capsules plugin
+archive from the same checkout with `repository capsules-plugin-archive`
+from the Evidence page that `capsules_web_ui` builds once with pnpm (the
+executable checked against the shipped-binary native policy and built for the
+macOS deployment floor), then build the host with that archive's SHA-256 in
+`MESH_LLM_BUNDLED_CAPSULES_SHA256`, which `mesh-llm-plugin-manager`'s build
+script compiles into the host's default-plugin pin. Each uploads the archive as
+`capsules-plugin-input-<host target>`. The six non-Windows composition jobs
+download their host's archive and pass it to `package-release.sh`
+(`MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR`), which places it under `plugins/` in the
+bundle and runs `repository capsules-bundle-check`: the stamped release host
+installs its defaults from that `plugins/` into a scratch store, and the job
+fails unless every placed archive is installed at the host's compiled-in pin.
+Windows hosts pin no capsules archive and bundle no `plugins/`.
+
 If crates.io accepts only a prefix of the stable package chain,
 `resume-crates-release.yml` resumes publication from the existing immutable
 release tag. The operator supplies both the stable tag and its exact peeled

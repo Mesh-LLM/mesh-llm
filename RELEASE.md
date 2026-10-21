@@ -130,7 +130,10 @@ just bundle
 This creates `/tmp/mesh-llm-bundle.tar.gz` for local deployment. Platform
 release archives contain `mesh-llm`, `host-imports.json`,
 `product-manifest.json`, and exactly one
-`native-runtimes/<runtime-id>` directory. Backend-flavored archive names select
+`native-runtimes/<runtime-id>` directory. macOS and Linux archives also carry
+`plugins/` with the capsules plugin archive (`capsules-<version>-<target>.tar.gz`)
+built from the same commit, whose SHA-256 the host was built with; the release
+fails if that host does not install it (`repository capsules-bundle-check`). Backend-flavored archive names select
 different runtimes while retaining byte-identical host input for an OS/arch.
 
 Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
