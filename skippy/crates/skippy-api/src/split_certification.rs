@@ -83,6 +83,13 @@ fn validate_recipe(roster: &SplitCertificationRoster) -> Result<()> {
 
 fn architecture_is_certified(architecture: &str) -> Result<bool> {
     let roster = roster().context("load split certification roster")?;
+    architecture_is_certified_by(roster, architecture)
+}
+
+fn architecture_is_certified_by(
+    roster: &SplitCertificationRoster,
+    architecture: &str,
+) -> Result<bool> {
     validate_recipe(roster).context("validate split certification roster recipe")?;
     Ok(roster
         .architectures
@@ -95,7 +102,21 @@ pub fn require_split_certification(
     architecture: &str,
     allow_uncertified: bool,
 ) -> Result<SplitCertificationAdmission> {
-    match architecture_is_certified(architecture) {
+    admit_split_certification(
+        package,
+        architecture,
+        allow_uncertified,
+        architecture_is_certified(architecture),
+    )
+}
+
+fn admit_split_certification(
+    package: &SkippyPackageIdentity,
+    architecture: &str,
+    allow_uncertified: bool,
+    certification: Result<bool>,
+) -> Result<SplitCertificationAdmission> {
+    match certification {
         Ok(true) => {}
         Ok(false) => return handle_uncertified(package, architecture, allow_uncertified, None),
         Err(error) => {
@@ -160,6 +181,34 @@ fn handle_uncertified(
 mod tests {
     use super::*;
 
+    // Admission behavior is tested with an explicit fixture. The bundled roster
+    // remains bound to its certified recipe, even in experimental native builds.
+    fn certified_fixture() -> SplitCertificationRoster {
+        SplitCertificationRoster {
+            schema_version: 2,
+            native_recipe: NativeRecipe {
+                llama_upstream_sha: env!("SKIPPY_LLAMA_UPSTREAM_SHA").to_string(),
+                skippy_abi: compiled_skippy_abi(),
+                patch_queue_sha256: env!("SKIPPY_PATCH_QUEUE_SHA256").to_string(),
+            },
+            architectures: vec!["fixture-architecture".to_string()],
+        }
+    }
+
+    fn require_with_roster(
+        roster: &SplitCertificationRoster,
+        package: &SkippyPackageIdentity,
+        architecture: &str,
+        allow_uncertified: bool,
+    ) -> Result<SplitCertificationAdmission> {
+        admit_split_certification(
+            package,
+            architecture,
+            allow_uncertified,
+            architecture_is_certified_by(roster, architecture),
+        )
+    }
+
     fn package(source_model_sha256: &str) -> SkippyPackageIdentity {
         SkippyPackageIdentity {
             package_ref: format!("local-gguf://sha256/{source_model_sha256}"),
@@ -179,19 +228,29 @@ mod tests {
 
     #[test]
     fn admits_different_artifact_of_certified_architecture() {
-        let roster = roster().unwrap();
-        validate_recipe(roster).unwrap();
+        let roster = certified_fixture();
+        validate_recipe(&roster).unwrap();
         let architecture = &roster.architectures[0];
         assert_eq!(
-            require_split_certification(&package(&"f".repeat(64)), architecture, false).unwrap(),
+            require_with_roster(&roster, &package(&"f".repeat(64)), architecture, false).unwrap(),
             SplitCertificationAdmission::Certified
         );
     }
 
     #[test]
     fn rejects_uncertified_architecture_with_actionable_override() {
-        let error =
-            require_split_certification(&package(&"f".repeat(64)), "unknown", false).unwrap_err();
+        let error = require_with_roster(
+            &certified_fixture(),
+            &package(&"f".repeat(64)),
+            "unknown",
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("architecture unknown is not certified")
+        );
         assert!(
             error
                 .to_string()
@@ -202,7 +261,13 @@ mod tests {
     #[test]
     fn explicit_override_admits_uncertified_architecture() {
         assert_eq!(
-            require_split_certification(&package(&"f".repeat(64)), "unknown", true).unwrap(),
+            require_with_roster(
+                &certified_fixture(),
+                &package(&"f".repeat(64)),
+                "unknown",
+                true,
+            )
+            .unwrap(),
             SplitCertificationAdmission::UncertifiedOverride
         );
     }
@@ -212,8 +277,66 @@ mod tests {
         let mut package = package(&"f".repeat(64));
         package.package_ref = "hf://example/package".to_string();
         assert_eq!(
-            require_split_certification(&package, "inkling", false).unwrap(),
+            require_with_roster(
+                &certified_fixture(),
+                &package,
+                "fixture-architecture",
+                false
+            )
+            .unwrap(),
             SplitCertificationAdmission::Certified
         );
+    }
+
+    #[test]
+    fn mismatched_recipes_reject_even_listed_architectures_without_override() {
+        for mismatch in ["schema", "upstream", "patch_queue", "abi"] {
+            let mut roster = certified_fixture();
+            let expected_error = match mismatch {
+                "schema" => {
+                    roster.schema_version = 0;
+                    "unsupported split certification roster schema"
+                }
+                "upstream" => {
+                    roster.native_recipe.llama_upstream_sha = "uncertified-upstream".to_string();
+                    "split certification roster targets llama.cpp"
+                }
+                "patch_queue" => {
+                    roster.native_recipe.patch_queue_sha256 = "uncertified-patches".to_string();
+                    "split certification roster does not match this build's Skippy patch queue"
+                }
+                _ => {
+                    roster.native_recipe.skippy_abi = "uncertified-abi".to_string();
+                    "split certification roster targets Skippy ABI"
+                }
+            };
+            let package = package(&"f".repeat(64));
+            let error =
+                require_with_roster(&roster, &package, "fixture-architecture", false).unwrap_err();
+            assert!(format!("{error:#}").contains(expected_error), "{mismatch}");
+            assert_eq!(
+                require_with_roster(&roster, &package, "fixture-architecture", true).unwrap(),
+                SplitCertificationAdmission::UncertifiedOverride,
+                "{mismatch}"
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_roster_never_certifies_a_different_native_recipe() {
+        let roster = roster().unwrap();
+        let architecture = roster.architectures.first().unwrap();
+        let package = package(&"f".repeat(64));
+        let admission = require_split_certification(&package, architecture, false);
+        if let Err(recipe_error) = validate_recipe(roster) {
+            let error = admission.unwrap_err();
+            assert!(format!("{error:#}").contains(&recipe_error.to_string()));
+            assert_eq!(
+                require_split_certification(&package, architecture, true).unwrap(),
+                SplitCertificationAdmission::UncertifiedOverride
+            );
+        } else {
+            assert_eq!(admission.unwrap(), SplitCertificationAdmission::Certified);
+        }
     }
 }
