@@ -106,8 +106,10 @@ lowercase ASCII letters, digits, dots and hyphens (1–64 bytes), major
 versions are positive, and features are at most 32 strings of 1–64 ASCII letters, digits, dots,
 hyphens or underscores. Keep `descriptor()` stable for the lifetime of the handler.
 
-The runtime allows at most 32 concurrent incoming application streams; once the cap is reached,
-additional incoming opens are rejected rather than queued. It cancels incoming
+The runtime limits concurrent incoming application streams to 32 per pool: protocols without a
+stage provider use the shared application-stream pool, while protocols with a stage provider use
+the dedicated stage pool. When the selected pool reaches its cap, additional incoming opens are
+rejected rather than queued. It cancels incoming
 handlers when the node stops and signals `context.cancelled()` to background work, allowing one
 second for cleanup before aborting remaining tasks. Await work inside `run`/`accept`; detached
 tasks created by a handler are the application's responsibility. Registrations cannot change
