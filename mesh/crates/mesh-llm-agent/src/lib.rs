@@ -1,20 +1,21 @@
 //! A minimal one-shot agent on goose's unrolled loop (`goose-agent`).
 //!
 //! Steps, in order: max turns, tool execution (`shell`, `load_skill`), then
-//! inference through goose's OpenAI provider against a mesh endpoint. The
+//! inference through a small OpenAI client (goose's request/response mapping) against a mesh endpoint. The
 //! loop, message types and provider are goose's; the two tools, skill
 //! discovery and the short system prompt live here, so mesh links only
 //! goose's split-out crates and not the `goose` crate.
 
 mod fenced;
 mod prompt;
+mod provider;
 pub mod shell;
 pub mod skills;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use goose_agent::events::AgentEvent;
 use goose_agent::inference::{InferenceEffect, InferenceRunner};
@@ -28,8 +29,6 @@ use goose_provider_types::conversation::Conversation;
 use goose_provider_types::conversation::message::Message;
 use goose_provider_types::conversation::token_usage::ProviderUsage;
 use goose_provider_types::model::ModelConfig;
-use goose_providers::api_client::{ApiClient, AuthMethod};
-use goose_providers::openai::OpenAiProviderBuilder;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ErrorData, Tool};
 use tokio_util::sync::CancellationToken;
 
@@ -232,14 +231,7 @@ pub async fn run(
     let skills = skills::discover(&options.cwd, home.as_deref());
     let system = prompt::system_prompt(&options.cwd, &skills);
 
-    let client = ApiClient::new_with_tls(options.base_url.clone(), AuthMethod::NoAuth, None)
-        .context("building the mesh API client")?;
-    let provider = Arc::new(
-        OpenAiProviderBuilder::new(client)
-            .name("mesh")
-            .base_path("v1/chat/completions")
-            .build(),
-    );
+    let provider = Arc::new(provider::MeshProvider::new(&options.base_url));
     let model_config = ModelConfig::new(&options.model);
 
     let tools = ToolOperation::new().with_provider(Arc::new(MeshTools {

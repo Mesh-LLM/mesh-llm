@@ -3383,34 +3383,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "goose-providers"
-version = "0.1.0-alpha.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b3daa9998c0a69755b4815bc454a24b6f18c096467344140b1f1c9d1fd250db"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "base64 0.23.1",
- "chrono",
- "futures",
- "goose-provider-types",
- "include_dir",
- "reqwest 0.13.5",
- "rmcp",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "url",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
 name = "gpu-allocator"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4792,7 +4764,7 @@ dependencies = [
  "dirs",
  "goose-agent",
  "goose-provider-types",
- "goose-providers",
+ "reqwest 0.13.5",
  "rmcp",
  "serde_json",
  "tempfile",

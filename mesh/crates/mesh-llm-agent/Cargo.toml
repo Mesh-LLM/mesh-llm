@@ -17,7 +17,7 @@ async-trait = "0.1"
 dirs = "6"
 goose-agent = "=0.1.0-alpha.12"
 goose-provider-types = { version = "=0.1.0-alpha.12", default-features = false }
-goose-providers = { version = "=0.1.0-alpha.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", features = ["json"] }
 rmcp = { version = "3", default-features = false }
 serde_json.workspace = true
 tokio = { version = "1", features = ["process", "time", "io-util", "rt-multi-thread", "macros", "sync"] }

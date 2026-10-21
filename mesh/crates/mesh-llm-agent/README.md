@@ -3,7 +3,7 @@
 A minimal one-shot agent behind `mesh-llm agent -t "..."`.
 
 It runs goose's unrolled loop ([`goose-agent`](https://crates.io/crates/goose-agent))
-with goose's OpenAI provider pointed at the local mesh API, and two tools:
+with a small OpenAI client pointed at the local mesh API, and two tools:
 
 - `shell` — one `sh -c` command with a timeout; long output is cut to head and
   tail, with the full output saved to a temp file.
