@@ -110,6 +110,17 @@ pub(super) fn configuration(input: &Prepared, port: u16, concurrency: u32) -> Dy
         ))
         .join("snapshots")
         .join(&input.model.tokenizer_revision);
+    let cohort = input
+        .dataset
+        .parent()
+        .ok_or("comparison cohort parent")?
+        .join("cohort.json");
+    let cohort_digest =
+        crate::product::digest::file_sha256(&cohort).map_err(|failure| failure.error)?;
+    let marker_namespace = format!(
+        "mesh-agentx-comparison-v2:{}:{cohort_digest}",
+        input.model.key
+    );
     // Explicit local config avoids AgentX scenario defaults reinstating a
     // duration or advancing traces during one-token cache-pressure warmup.
     Ok(json!({"schema_version":"2.0","random_seed":42,"benchmark":{
@@ -121,7 +132,7 @@ pub(super) fn configuration(input: &Prepared, port: u16, concurrency: u32) -> Dy
         "dataset":{"type":"file","path":input.dataset,"format":"weka_trace",
             "sampling":"sequential","entries":4,"max_context_length":trace_context::LIMIT,
             "ignore_trace_delays":false,"use_think_time_only":true,
-            "cache_bust":{"target":"first_turn_prefix"}},
+            "cache_bust":{"target":"first_turn_prefix","namespace":marker_namespace}},
         "phases":[{"name":"profiling","type":"concurrency","timing_mode":"agentic_replay",
             "concurrency":concurrency,"sessions":4,"trajectory_start_min_ratio":0,
             "trajectory_start_max_ratio":0,"burst_phase_starts":true}],
@@ -143,17 +154,28 @@ mod tests {
             "../../../../../skippy/evals/agentx/models.json"
         ))
         .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let dataset = dir.path().join("traces");
+        std::fs::create_dir(&dataset).unwrap();
+        std::fs::write(dir.path().join("cohort.json"), b"fixed source cohort").unwrap();
         let input = Prepared {
             root: "/repo".into(),
             output: "/results".into(),
             weights: "/weights/model.gguf".into(),
-            dataset: "/traces".into(),
+            dataset,
             model: models[0].clone(),
             profile: super::super::Profile::Comparison,
         };
+        let namespace = configuration(&input, 8080, 1).unwrap()["benchmark"]["dataset"]
+            ["cache_bust"]["namespace"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(namespace.starts_with("mesh-agentx-comparison-v2:"));
         for concurrency in [1, 2, 4] {
             let config = configuration(&input, 8080, concurrency).unwrap();
             let benchmark = &config["benchmark"];
+            assert_eq!(benchmark["dataset"]["cache_bust"]["namespace"], namespace);
             assert!(benchmark["scenario"].is_null());
             assert_eq!(
                 benchmark["phases"],
@@ -171,6 +193,11 @@ mod tests {
             assert_eq!(benchmark["artifacts"]["records"], json!(["jsonl"]));
             assert_eq!(benchmark["runtime"]["record_processors"], 1);
         }
+        std::fs::write(dir.path().join("cohort.json"), b"different source cohort").unwrap();
+        assert_ne!(
+            configuration(&input, 8080, 1).unwrap()["benchmark"]["dataset"]["cache_bust"]["namespace"],
+            namespace
+        );
         assert!(configuration(&input, 8080, 8).is_err());
     }
     #[test]

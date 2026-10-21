@@ -66,7 +66,7 @@ and inspect grace-period cancellations before declaring a winner.
 ## Fixed-work comparison
 
 Use `--profile comparison` for the small repeated comparison report. Its workload
-version is `agentx-1.0.12.post1-local-comparison-1`, separate from smoke 8 and full 7.
+version is `agentx-1.0.12.post2-local-comparison-2`, separate from smoke 9 and full 8.
 For each model, run whole c=1/2/4 sweeps in **llama, Skippy, Skippy, llama, llama,
 Skippy** order on the same host. The four Q4_K_M model categories are dense
 (Qwen3-4B-Instruct-2507), hybrid dense (Qwen3.5-4B), attention MoE
@@ -170,9 +170,9 @@ token guarantee. Unexpected wire overflows still invalidate a cell. Compare
 only matching cohort digests and completed raw trace/turn sets. Older workload
 versions remain separate. Skippy keeps its automatic planner and 128K cap.
 
-The harness is pinned to the [MeshLLM AgentX 1.0.12.post1 fork](https://github.com/Mesh-LLM/agentx-harness/releases/tag/agentx-v1.0.12.post1),
-based on upstream 1.0.12 plus drain fixes at commit
-`8a37952a686d9fe49a2c7376b5b965e8f6480cc9`. The wheel uses the upstream release
+The harness is pinned to the [MeshLLM AgentX 1.0.12.post2 fork](https://github.com/Mesh-LLM/agentx-harness/releases/tag/agentx-v1.0.12.post2),
+based on upstream 1.0.12 plus drain fixes and stable cache-bust namespaces at commit
+`6633517b9d3d83441dc110613c80e70458f3d75d`. The wheel uses the upstream release
 builder, embeds its source commit and is SHA-256 verified by `uv.lock`.
 Upstream [PR #50](https://github.com/SemiAnalysisAI/agentx-harness/pull/50)
 retires timers already pending at cutoff. The fork also retires delayed children
@@ -180,7 +180,14 @@ and join timers created by responses that arrive after cleanup. In-flight
 requests still finish normally; immediate DAG children retain existing issuer
 admission checks, including root-session quota semantics.
 
-Smoke 8 and full 7 use the same fork for both engines. Recorded timing and
+The comparison namespace includes the model key and SHA-256 of the materialized
+cohort manifest. It remains the same across engines, concurrencies and ABBAAB
+repetitions for unchanged work, while distinct trajectory trees and recycled
+plays still get distinct markers. Each server starts with a fresh cache. This
+removes run-ID variation from the marker; equal source work alone still does
+not prove that the engines rendered identical token IDs.
+
+Smoke 9 and full 8 use the same fork for both engines. Recorded timing and
 requested outputs remain intact. Never-issued future requests are reported as
 truncated children, not failed HTTP requests. Compare completed raw request/turn
 sets as well as the selected cohort digest. Earlier harness versions stay separate.

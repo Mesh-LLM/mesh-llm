@@ -232,7 +232,7 @@ records the candidate IDs and context eligibility; each cell's `cohort.json`
 records the filtered selection and its digest. Parent/child relationships remain
 upstream-owned.
 
-AgentX 1.0.12.post1's public loader does not expose a dataset revision option. We use
+AgentX 1.0.12.post2's public loader does not expose a dataset revision option. We use
 its stock local Weka loader and `--unsafe-override` with our independently
 verified corpus. **Both profiles retain `submission_valid=false`.** These are
 reproducible local comparisons, not InferenceX leaderboard submissions. Smoke
@@ -304,12 +304,15 @@ Request overlap is not proof of concurrent GPU decode. Full record and HTTP
 timing exports are retained for overlap analysis. GPU residency remains
 unavailable where the driver does not supply it; host RSS is separate.
 
-Smoke 8 and full 7 pin the [MeshLLM AgentX 1.0.12.post1 fork](https://github.com/Mesh-LLM/agentx-harness/releases/tag/agentx-v1.0.12.post1)
-at source commit `8a37952a686d9fe49a2c7376b5b965e8f6480cc9`, with the wheel URL
+Smoke 9 and full 8 pin the [MeshLLM AgentX 1.0.12.post2 fork](https://github.com/Mesh-LLM/agentx-harness/releases/tag/agentx-v1.0.12.post2)
+at source commit `6633517b9d3d83441dc110613c80e70458f3d75d`, with the wheel URL
 and SHA-256 locked in the environment. It contains upstream 1.0.12, including
 [PR #50](https://github.com/SemiAnalysisAI/agentx-harness/pull/50), plus cleanup
 for delayed children and joins declared by responses arriving after the sending
 cutoff. Existing HTTP requests drain normally; immediate children still use
-the existing issuer admission rules. Both engines consume the same artifact,
+the existing issuer admission rules. The comparison profile supplies a stable
+cache-bust namespace derived from the materialized cohort manifest and model
+key, so paired runs no longer vary their marker with the random benchmark ID.
+Both engines consume the same artifact,
 without shortening outputs or clamping recorded inter-turn delays. Older
 harness versions remain separate.

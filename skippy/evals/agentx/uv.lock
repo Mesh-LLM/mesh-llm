@@ -4,8 +4,8 @@ requires-python = "==3.12.*"
 
 [[package]]
 name = "agentx-harness"
-version = "1.0.12.post1"
-source = { url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post1/agentx_harness-1.0.12.post1-py3-none-any.whl" }
+version = "1.0.12.post2"
+source = { url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post2/agentx_harness-1.0.12.post2-py3-none-any.whl" }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiohttp" },
@@ -54,7 +54,7 @@ dependencies = [
     { name = "zstandard" },
 ]
 wheels = [
-    { url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post1/agentx_harness-1.0.12.post1-py3-none-any.whl", hash = "sha256:9f4d63bb3f25c37afda9b253851bd5ae654662b5018f4ade4e59103d526c4999" },
+    { url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post2/agentx_harness-1.0.12.post2-py3-none-any.whl", hash = "sha256:0f9a9e85ec7f9273bfc96de00a492daf9898acfb66cfeeb6aba85a07c89e8a2f" },
 ]
 
 [package.metadata]
@@ -1765,7 +1765,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "agentx-harness", url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post1/agentx_harness-1.0.12.post1-py3-none-any.whl" }]
+requires-dist = [{ name = "agentx-harness", url = "https://github.com/Mesh-LLM/agentx-harness/releases/download/agentx-v1.0.12.post2/agentx_harness-1.0.12.post2-py3-none-any.whl" }]
 
 [[package]]
 name = "soundfile"
