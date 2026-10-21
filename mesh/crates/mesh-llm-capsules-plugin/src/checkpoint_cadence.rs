@@ -668,17 +668,18 @@ mod tests {
         let dir = TempDir(dir);
         let handle = handle_over(dir.path());
 
+        // The window opens at the first cut, so start the clock before it.
+        let started = Instant::now();
         let a = append_capsule(dir.path(), "a");
         let first = handle.coverage_for(&a).await.unwrap();
         assert!(first.cut_new);
 
         let b = append_capsule(dir.path(), "b");
         let c = append_capsule(dir.path(), "c");
-        let started = Instant::now();
         let (cov_b, cov_c) = tokio::join!(handle.coverage_for(&b), handle.coverage_for(&c));
         let (cov_b, cov_c) = (cov_b.unwrap(), cov_c.unwrap());
         assert!(
-            started.elapsed() >= PUSH_COALESCE_WINDOW - Duration::from_millis(10),
+            started.elapsed() >= PUSH_COALESCE_WINDOW,
             "the second cut must wait out the window"
         );
         assert_eq!(
