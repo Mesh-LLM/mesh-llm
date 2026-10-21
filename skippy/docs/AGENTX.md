@@ -14,17 +14,25 @@ before accepting throughput. See the [fixed-work cohort and result contract](../
 This profile can use standalone JY artifact jobs without changing installed
 repository templates; keep its workload version separate from smoke/full.
 
-One job owns one model and one engine. Separate llama.cpp and Skippy templates
-record standard JY serving points without mixing engines into one concurrency
-series. Run each comparison sequentially on the same DGX Spark; separate model
-pairs can occupy separate Sparks. Smoke and full benchmark templates are separate. Both engines and AgentX execute inside the same ARM64 CUDA Docker image,
-built and launched on the JY-leased Spark. No benchmark cells run on the host.
+Once registered, each repository template owns one model and one engine.
+Separate llama.cpp and Skippy templates record standard JY serving points
+without mixing engines into one concurrency series. The standalone fixed-work
+comparison instead runs both engines sequentially in one job on one DGX Spark;
+separate model pairs can occupy separate Sparks. Smoke and full benchmark
+templates are separate. On Spark, both engines and AgentX execute inside the
+same ARM64 CUDA Docker image, built and launched on the JY-leased machine. No
+Spark benchmark cells run on the host.
 Each engine gets the identical verified GGUF shards; speculative decode
 is disabled, and both chat templates receive `enable_thinking=false`.
 The baseline source is the exact commit in
 `skippy/llama_cpp/upstream.txt`, built independently with CUDA.
 
 ## Run
+
+The `jy repos run` commands below require the repository templates to be
+registered. While that registration remains unmerged, use standalone fixed-work
+jobs; their reports are available in the linked JY job artifacts, not on the
+Benchmarks page.
 
 ```sh
 jy repos run mesh-llm agentx-llama-smoke --ref pr:2463 --input 'model=hf:unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523#Qwen3.5-4B-Q4_K_M.gguf'
@@ -39,12 +47,13 @@ runs populate its trend charts. Throughput, TTFT, inter-token latency and reques
 latency use JY's standard result fields. Detailed exports and memory samples
 remain attached as `agentx.tar.gz`. No custom schema registration is needed.
 
-Before the Mesh PR merges, install these four template blocks in the current
-registered template source (`general-inference/jianyang`,
-`pilot/templates/mesh-llm.yaml`) through a configuration-only PR, then
-`jy repos sync mesh-llm`. Launch with `jy repos run`, which records the actual
-repository/template association. Ad hoc `jy submit` jobs do not populate these
-benchmark pages. Do not change the production default ref to a PR branch.
+If pre-merge Benchmarks-page publication is approved, install these four
+template blocks in the currently registered template source
+(`general-inference/jianyang`, `pilot/templates/mesh-llm.yaml`) through a
+configuration-only PR, then `jy repos sync mesh-llm`. Launch with `jy repos
+run`, which records the actual repository/template association. Ad hoc `jy
+submit` jobs do not populate those benchmark pages. Do not change the
+production default ref to a PR branch.
 After merging, move `templates_repo` to null and `templates_path` to
 `skippy/evals/agentx/templates.yaml`, then sync. That cutover replaces the old
 `agentic-replay` entry while preserving unrelated templates.
