@@ -142,6 +142,16 @@ Use `--only-concurrency 2` with `automation agentx run` to isolate a failing
 cell; the default still runs the full 1/2/4 sweep. A single-cell diagnostic is
 not a complete comparison report.
 
+For a c=4 Skippy serving sensitivity run, set
+`AGENTX_SKIPPY_PREFILL_CHUNK_SIZE=256` or
+`AGENTX_SKIPPY_GENERATION_CONCURRENCY=2` on the native `automation agentx run`
+process and pass `--only-concurrency 4`. Either override must be a positive
+integer; unset variables keep the normal automatic serving plan. The exact
+server arguments are recorded in the cell's `launch.json`. Compare each variant
+with a default Skippy c=4 cell from the same source and machine, with identical
+traces and model weights. These diagnostic variants do not replace the default
+llama-versus-Skippy ABBAAB qualification.
+
 ## Duration-bounded smoke and full profiles
 
 Smoke version 8 uses a 60-second dispatch window and drains outstanding requests.

@@ -13,6 +13,8 @@ use std::time::Duration;
 
 pub(super) const STARTUP_TIMEOUT_SECS: u64 = 900;
 const LLAMA_CACHE_RAM_MIB_ENV: &str = "AGENTX_LLAMA_CACHE_RAM_MIB";
+const SKIPPY_PREFILL_CHUNK_SIZE_ENV: &str = "AGENTX_SKIPPY_PREFILL_CHUNK_SIZE";
+const SKIPPY_GENERATION_CONCURRENCY_ENV: &str = "AGENTX_SKIPPY_GENERATION_CONCURRENCY";
 
 fn llama_comparison_context(concurrency: u32) -> DynResult<u32> {
     trace_context::LIMIT
@@ -48,6 +50,41 @@ fn llama_comparison_arguments(
         args.extend(["--cache-ram".into(), mib.to_string()]);
     }
     Ok(args)
+}
+
+fn positive_override(name: &str, value: &str) -> DynResult<usize> {
+    match value.parse::<usize>() {
+        Ok(count) if count > 0 => Ok(count),
+        _ => Err(format!("{name} must be a positive integer").into()),
+    }
+}
+
+fn skippy_diagnostic_arguments(
+    prefill_chunk_size: Option<usize>,
+    generation_concurrency: Option<usize>,
+) -> Vec<String> {
+    let mut arguments = Vec::new();
+    if let Some(size) = prefill_chunk_size {
+        arguments.extend(["--prefill-chunk-size".into(), size.to_string()]);
+    }
+    if let Some(permits) = generation_concurrency {
+        arguments.extend(["--generation-concurrency".into(), permits.to_string()]);
+    }
+    arguments
+}
+
+fn skippy_overrides() -> DynResult<Vec<String>> {
+    fn read(name: &str) -> DynResult<Option<usize>> {
+        match std::env::var(name) {
+            Ok(value) => positive_override(name, &value).map(Some),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(error) => Err(format!("{name}: {error}").into()),
+        }
+    }
+    Ok(skippy_diagnostic_arguments(
+        read(SKIPPY_PREFILL_CHUNK_SIZE_ENV)?,
+        read(SKIPPY_GENERATION_CONCURRENCY_ENV)?,
+    ))
 }
 
 fn server(
@@ -140,6 +177,8 @@ fn server(
             concurrency,
             llama_cache_ram_mib()?,
         )?);
+    } else if engine == "skippy" {
+        args.extend(skippy_overrides()?);
     }
     let mut spec = command::spec(&input.root, binary.to_str().ok_or("server path")?, &args)?;
     if engine == "skippy" {
@@ -399,6 +438,28 @@ impl Coordinator for Owner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn skippy_diagnostic_overrides_are_explicit_and_positive() {
+        assert!(skippy_diagnostic_arguments(None, None).is_empty());
+        assert_eq!(
+            skippy_diagnostic_arguments(Some(256), Some(2)),
+            [
+                "--prefill-chunk-size",
+                "256",
+                "--generation-concurrency",
+                "2"
+            ]
+        );
+        for name in [
+            SKIPPY_PREFILL_CHUNK_SIZE_ENV,
+            SKIPPY_GENERATION_CONCURRENCY_ENV,
+        ] {
+            assert_eq!(positive_override(name, "1").unwrap(), 1);
+            for value in ["", "0", "-1", "oops"] {
+                assert!(positive_override(name, value).is_err(), "{name}={value}");
+            }
+        }
+    }
     #[test]
     fn exact_state_diagnostics_reach_the_server_process() {
         let mut spec = command::spec(&std::env::temp_dir(), "sh", &[]).unwrap();
