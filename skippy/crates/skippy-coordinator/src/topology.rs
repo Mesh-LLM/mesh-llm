@@ -618,6 +618,11 @@ fn latency_candidate_ordering(
     right: &CandidatePlan,
     input: &TopologyPlanningInput,
 ) -> Ordering {
+    if left.plan.estimated_decode_network_ms_per_token.is_none()
+        && right.plan.estimated_decode_network_ms_per_token.is_none()
+    {
+        return Ordering::Equal;
+    }
     let left_estimate = left.network_cost_nanos;
     let right_estimate = right.network_cost_nanos;
     let left_target_met = decode_tpot_target_met(

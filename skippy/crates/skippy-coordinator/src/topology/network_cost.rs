@@ -71,6 +71,25 @@ mod tests {
     }
 
     #[test]
+    fn unknown_network_costs_preserve_the_first_fitting_shape() {
+        let mut request = input(vec![
+            latency_node("a", 23, 10),
+            latency_node("b", 23, 10),
+            latency_node("c", 23, 10),
+        ]);
+        request.minimum_nodes = 2;
+        for node in &mut request.nodes {
+            node.stage_transfer_latency_ms = None;
+        }
+        let first_fitting = plan_topology(&request).unwrap();
+        assert_eq!(first_fitting.stages.len(), 2);
+        assert_eq!(first_fitting.estimated_decode_network_ms_per_token, None);
+
+        request.stage_links = vec![link("a", "b", 100)];
+        assert_eq!(plan_topology(&request).unwrap(), first_fitting);
+    }
+
+    #[test]
     fn chooses_measured_pair_with_submillisecond_precision_and_keeps_missing_edge_cost() {
         let mut request = input(vec![
             latency_node("a", 23, 10),
