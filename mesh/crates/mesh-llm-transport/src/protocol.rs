@@ -249,7 +249,7 @@ pub struct IncomingProtocolStream {
     pub stream: ProtocolStream,
 }
 
-/// Supplies reliable, ordered, confidential duplex stage streams with half-close.
+/// Supplies reliable, ordered duplex stage streams with half-close.
 #[async_trait]
 pub trait StageTransportProvider: Debug + Send + Sync {
     /// Decline with `None` before sending stage bytes. Errors fail the connection;

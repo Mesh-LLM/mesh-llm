@@ -8,7 +8,7 @@ Mesh calls `open_stage(context, peer)` only for admitted peers advertising the s
 application protocol. `Ok(None)` declines before stage bytes have been sent and
 preserves the existing dedicated Iroh transport. `Err` fails opening; Mesh never
 replays stage bytes over a different transport. `Ok(Some(stream))` supplies a
-reliable, ordered, confidential and integrity-protected duplex byte stream with
+reliable, ordered duplex byte stream with
 half-close semantics. The application binds this channel to the authenticated setup
 peer. Mesh writes the existing `StageTransportOpen` followed by unchanged stage bytes.
 

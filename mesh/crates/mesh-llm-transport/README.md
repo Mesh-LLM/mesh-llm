@@ -21,5 +21,5 @@ Application protocols may supply a `protocol::StageTransportProvider` through
 `MeshProtocol::stage_transport`. The SDK owns registration and cancellation;
 `ProtocolContext::accept_stage` delegates stage admission and routing to the host.
 Providers return owned `ProtocolStream` values and must preserve ordered reliable
-bytes, confidentiality, integrity and half-close. See the
+bytes and half-close. See the
 [contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).
