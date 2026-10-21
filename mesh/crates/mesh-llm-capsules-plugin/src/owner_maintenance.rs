@@ -209,6 +209,13 @@ struct PendingNewHistory {
     archived_as: Option<String>,
     #[serde(default)]
     prior_record_count: Option<usize>,
+    /// The archive slot the old `ledger/` moves to, journalled with
+    /// `prior_record_count` and `new_log_id` before the move, so a start
+    /// that dies between the move and recording it finishes the same move.
+    #[serde(default)]
+    archive_slot: Option<String>,
+    #[serde(default)]
+    new_log_id: Option<String>,
 }
 
 fn read_pending(data_dir: &Path) -> Option<PendingNewHistory> {
@@ -263,33 +270,79 @@ pub fn is_archived(data_dir: &Path, capsule_id: &str) -> bool {
 
 /// Phase 1, BEFORE `CapsuleState::open` and the checkpoint cadence: if a new
 /// history was requested, move the old `ledger/` aside and take the new log
-/// id. Returns the log id to run under. Idempotent across a crash: the
-/// pending file records how far it got.
+/// id. Returns the log id to run under. Idempotent across a crash at any
+/// point: the archive slot, the prior record count and the new log id are
+/// journalled before the move, and the move is recorded after it.
 pub fn apply_pending_before_open(data_dir: &Path, default_log_id: &str) -> anyhow::Result<String> {
     let Some(mut pending) = read_pending(data_dir) else {
         return Ok(current_log_id(data_dir, default_log_id));
     };
     if pending.archived_as.is_none() {
-        let ledger_dir = data_dir.join("ledger");
-        let (slot, archive_path) = next_archive_slot(data_dir);
-        fs::create_dir_all(archive_path.parent().expect("archive slot has a parent"))?;
-        // Count before moving, for the new history's first record.
-        let prior_count = count_records(&ledger_dir.join("capsules.jsonl"));
-        if ledger_dir.exists() {
-            fs::rename(&ledger_dir, &archive_path)?;
-        }
-        let new_log_id = format!(
-            "{}/h{}",
-            default_log_id,
-            slot.parse::<u32>().unwrap_or(1) + 1
-        );
-        write_atomically(&data_dir.join(LOG_ID_FILE), new_log_id.as_bytes())?;
-        pending.archived_as = Some(format!("{ARCHIVE_DIR}/{slot}"));
-        pending.prior_record_count = Some(prior_count);
-        write_pending(data_dir, &pending)?;
-        tracing::info!(archived_as = ?pending.archived_as, log_id = %new_log_id, "started a new history");
+        plan_move(data_dir, &mut pending, default_log_id)?;
+        move_ledger(data_dir, &pending)?;
+        record_move(data_dir, &mut pending)?;
     }
     Ok(current_log_id(data_dir, default_log_id))
+}
+
+/// Journal where the old ledger goes, how many records it holds and the new
+/// log id, unless a start that died already journalled them.
+fn plan_move(
+    data_dir: &Path,
+    pending: &mut PendingNewHistory,
+    default_log_id: &str,
+) -> anyhow::Result<()> {
+    if pending.archive_slot.is_some() {
+        return Ok(());
+    }
+    let (slot, _) = next_archive_slot(data_dir);
+    // Counted before the move, for the new history's first record.
+    pending.prior_record_count = Some(count_records(
+        &data_dir.join("ledger").join("capsules.jsonl"),
+    ));
+    pending.new_log_id = Some(format!(
+        "{}/h{}",
+        default_log_id,
+        slot.parse::<u32>().unwrap_or(1) + 1
+    ));
+    pending.archive_slot = Some(slot);
+    write_pending(data_dir, pending)?;
+    Ok(())
+}
+
+/// Move `ledger/` to the journalled slot. A ledger already there, with none
+/// left behind, is a move a start made before it died.
+fn move_ledger(data_dir: &Path, pending: &PendingNewHistory) -> anyhow::Result<()> {
+    let slot = pending
+        .archive_slot
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("the new history's archive slot is not journalled"))?;
+    let ledger_dir = data_dir.join("ledger");
+    let archive_path = data_dir.join(ARCHIVE_DIR).join(slot);
+    if !ledger_dir.exists() {
+        return Ok(());
+    }
+    if archive_path.exists() {
+        anyhow::bail!(
+            "archive slot {} is taken and ledger/ is still in place",
+            archive_path.display()
+        );
+    }
+    fs::create_dir_all(data_dir.join(ARCHIVE_DIR))?;
+    fs::rename(&ledger_dir, &archive_path)?;
+    Ok(())
+}
+
+/// Take the journalled log id and record the move as done.
+fn record_move(data_dir: &Path, pending: &mut PendingNewHistory) -> anyhow::Result<()> {
+    let (Some(slot), Some(new_log_id)) = (&pending.archive_slot, &pending.new_log_id) else {
+        anyhow::bail!("the new history's move is not journalled");
+    };
+    write_atomically(&data_dir.join(LOG_ID_FILE), new_log_id.as_bytes())?;
+    pending.archived_as = Some(format!("{ARCHIVE_DIR}/{slot}"));
+    write_pending(data_dir, pending)?;
+    tracing::info!(archived_as = ?pending.archived_as, log_id = %new_log_id, "started a new history");
+    Ok(())
 }
 
 /// Phase 2, AFTER `CapsuleState::open` on the fresh ledger: seal the new
@@ -633,6 +686,8 @@ impl Maintenance {
             closing_record_id: emitted.capsule_id.clone(),
             archived_as: None,
             prior_record_count: None,
+            archive_slot: None,
+            new_log_id: None,
         };
         write_pending(&self.data_dir, &pending).map_err(internal)?;
         Ok(json!({
@@ -1242,5 +1297,56 @@ mod tests {
         finish_pending_after_open(&dir, &state, &log_id).unwrap();
         assert_eq!(reopen_clean(&dir).len(), 1);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A crash between moving the old ledger and recording the move, or
+    /// between journalling the move and making it: the next start finishes
+    /// the same move. The new history's first record names the slot the old
+    /// ledger is in and its record count, never the next slot or zero.
+    #[test]
+    fn a_start_that_died_around_the_move_finishes_it_on_the_next_start() {
+        type Died = fn(&Path, &mut PendingNewHistory);
+        let after_the_move: Died = |dir, pending| {
+            plan_move(dir, pending, "node-under-test").unwrap();
+            move_ledger(dir, pending).unwrap();
+        };
+        let before_the_move: Died = |dir, pending| {
+            plan_move(dir, pending, "node-under-test").unwrap();
+        };
+        for (what, died) in [
+            ("after the move", after_the_move),
+            ("before the move", before_the_move),
+        ] {
+            let dir = temp_dir("crash-around-move");
+            let (m, _) = maintenance(&dir, 2);
+            m.start_new_history(StartNewHistoryArgs { confirm: true })
+                .unwrap();
+            drop(m);
+            let mut pending = read_pending(&dir).unwrap();
+            died(&dir, &mut pending);
+
+            // --- restart ---
+            let log_id = apply_pending_before_open(&dir, "node-under-test").unwrap();
+            assert_eq!(log_id, "node-under-test/h2", "{what}");
+            assert!(!dir.join("archive/2").exists(), "{what}");
+            let (old, _) = crate::producer::index::open_ledger(&dir.join("archive/1"))
+                .expect("the old history is in the journalled slot");
+            assert_eq!(old.len(), 3, "{what}");
+            let state = CapsuleState::open(&dir, "node-under-test").unwrap();
+            finish_pending_after_open(&dir, &state, &log_id).unwrap();
+            let new = reopen_clean(&dir);
+            let first = new
+                .lookup(new.chain_head().unwrap())
+                .unwrap()
+                .unwrap()
+                .capsule;
+            assert_eq!(
+                block(&first)["prior_history_kept"],
+                json!("archive/1"),
+                "{what}"
+            );
+            assert_eq!(block(&first)["prior_record_count"], json!(3), "{what}");
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 }
