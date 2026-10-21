@@ -232,6 +232,7 @@ impl Node {
             release_attestation: data.release_attestation,
             direct_admission_proof: data.direct_admission_proof,
             artifact_transfer_supported: data.artifact_transfer_supported,
+            application_protocols: self.application_protocols.descriptors(),
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,

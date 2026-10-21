@@ -9,6 +9,9 @@ pub use embedded_node::{MeshNode, MeshNodeBuilder, MeshNodeStatus, OpenAiClient}
 #[cfg(feature = "serving")]
 pub use mesh_llm_embedded_runtime::initialize_host_runtime;
 
+#[cfg(feature = "serving")]
+pub use mesh_llm_embedded_runtime::protocol;
+
 #[cfg(feature = "console")]
 pub mod console {
     pub use mesh_llm_console_server::{

@@ -246,6 +246,7 @@ pub fn apply_transitive_ann(
     existing.served_model_descriptors = ann.served_model_descriptors.clone();
     existing.served_model_runtime = ann.served_model_runtime.clone();
     existing.artifact_transfer_supported = ann.artifact_transfer_supported;
+    existing.application_protocols = ann.application_protocols.clone();
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     // `stage_protocol_generation_supported` and
     // `local_gguf_content_id_supported` require capability provenance from the
@@ -337,6 +338,7 @@ pub fn announcement_from_peer(peer: &PeerInfo) -> PeerAnnouncement {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: peer.artifact_transfer_supported,
+        application_protocols: peer.application_protocols.clone(),
         stage_protocol_generation_supported: peer.stage_protocol_generation_supported,
         stage_status_list_supported: peer.stage_status_list_supported,
         local_gguf_content_id_supported: peer.local_gguf_content_id_supported,
@@ -423,6 +425,7 @@ pub fn update_existing_direct_peer(
     existing.served_model_descriptors = ann.served_model_descriptors.clone();
     existing.served_model_runtime = ann.served_model_runtime.clone();
     existing.artifact_transfer_supported = ann.artifact_transfer_supported;
+    existing.application_protocols = ann.application_protocols.clone();
     existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.local_gguf_content_id_supported = ann.local_gguf_content_id_supported;

@@ -178,6 +178,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         owner_attestation: None,
         release_attestation_summary: crate::ReleaseAttestationSummary::default(),
         artifact_transfer_supported: false,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,

@@ -83,6 +83,7 @@ pub(crate) enum EmbeddedRuntimeDiscoveryMode {
 }
 
 pub(crate) struct EmbeddedRuntimeOptions {
+    pub(crate) protocols: Vec<std::sync::Arc<dyn mesh_llm_transport::protocol::MeshProtocol>>,
     pub(crate) mode: EmbeddedRuntimeMode,
     pub(crate) models: Vec<String>,
     pub(crate) join: Vec<String>,
@@ -192,6 +193,7 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
 
 pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
     RuntimeOptions {
+        application_protocols: embedded.protocols,
         log_format: embedded.log_format,
         client: matches!(embedded.mode, EmbeddedRuntimeMode::Client),
         model: embedded.models.into_iter().map(PathBuf::from).collect(),
@@ -930,6 +932,12 @@ pub(super) async fn start_run_auto_node_and_plugins(
     )
     .await?;
     node.set_swarm_capture_recorder(swarm_capture);
+    if let Err(error) = node
+        .install_application_protocols(options.application_protocols.clone())
+        .await
+    {
+        return Err(cleanup_failed_node_start(&node, error).await);
+    }
     attach_local_release_attestation(&node).await?;
     node.set_stage_control_handle(skippy::spawn_stage_control_loop(skippy_telemetry_options(
         options,

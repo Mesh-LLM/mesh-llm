@@ -136,6 +136,7 @@ pub(super) fn split_test_peer(
 ) -> mesh::PeerInfo {
     let id = make_id(seed);
     mesh::PeerInfo {
+        application_protocols: Vec::new(),
         id,
         addr: iroh::EndpointAddr {
             id,

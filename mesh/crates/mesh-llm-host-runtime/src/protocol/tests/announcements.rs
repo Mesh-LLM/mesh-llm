@@ -56,6 +56,11 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: true,
+        application_protocols: vec![crate::proto::node::MeshSubprotocol {
+            name: "echo".into(),
+            major: 2,
+            features: vec!["messages".into()],
+        }],
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
@@ -101,6 +106,10 @@ fn owner_fields_roundtrip_through_proto_announcement() {
     );
 
     let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert_eq!(
+        roundtripped.application_protocols,
+        ann.application_protocols
+    );
     assert!(roundtripped.artifact_transfer_supported);
     assert!(roundtripped.stage_status_list_supported);
     assert!(roundtripped.stage_protocol_generation_supported);
@@ -190,6 +199,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: false,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
@@ -405,6 +415,7 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: false,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
@@ -666,6 +677,7 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: true,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
@@ -1075,6 +1087,7 @@ fn claimed_log_head_test_announcement(
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: false,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
@@ -1190,6 +1203,7 @@ fn proto_announcement_without_claimed_log_head_decodes_as_absent() {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: false,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
