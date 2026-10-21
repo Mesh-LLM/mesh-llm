@@ -172,6 +172,10 @@ default-serving comparisons, not equal-capacity kernel comparisons.
 Native context allocation observations are retained in each summary, with raw
 server logs preserved; missing observations remain unavailable. Do not infer
 execution slots from offered concurrency or native sequence reservations.
+New Skippy launches also report the effective configured context per lane and
+lane count in a separate `configured_capacity` field. This is the serving plan,
+not proof of native allocation or GPU memory residency. Older campaign cells
+without the startup event retain `unavailable` rather than inferred values.
 Skippy retains its automatic 131,072-token per-request cap even when the model
 supports a longer native context. Both engines filter whole traces to the same
 recorded input-plus-output budget before measurement. Exclusions are retained

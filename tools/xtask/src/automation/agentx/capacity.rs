@@ -30,6 +30,36 @@ pub(super) fn read(output: &Path) -> Value {
     })
 }
 
+/// The CLI reports the effective stage configuration before model load. Keep
+/// this distinct from native allocation observations, which may be unavailable.
+pub(super) fn read_configured(output: &Path) -> Value {
+    let observations = std::fs::read_to_string(output.join("server.stdout.log"))
+        .ok()
+        .map(|log| {
+            log.lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|event| event["type"] == "serving_capacity")
+                .filter_map(|event| {
+                    let context_tokens_per_lane =
+                        event["data"]["context_tokens_per_lane"].as_u64()?;
+                    let lanes = event["data"]["lanes"].as_u64()?;
+                    (context_tokens_per_lane > 0 && lanes > 0).then(|| {
+                        json!({
+                            "source":"server.stdout.log:serving_capacity",
+                            "context_tokens_per_lane":context_tokens_per_lane,
+                            "lanes":lanes,
+                        })
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "status": if observations.is_empty() { "unavailable" } else { "observed" },
+        "observations": observations,
+    })
+}
+
 pub(super) fn read_verified(
     output: &Path,
     engine: &str,
@@ -104,6 +134,27 @@ mod tests {
             "auto_context_explicit_parallel"
         );
         assert_eq!(policy("skippy", Profile::Comparison), "engine_default");
+    }
+
+    #[test]
+    fn configured_capacity_is_separate_from_native_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("server.stdout.log"),
+            concat!(
+                "{\"type\":\"serving_capacity\",\"data\":{\"context_tokens_per_lane\":131072,\"lanes\":4}}\n",
+                "{\"type\":\"status\",\"data\":{\"message\":\"ready\"}}\n",
+            ),
+        )
+        .unwrap();
+        let configured = read_configured(dir.path());
+        assert_eq!(configured["status"], "observed");
+        assert_eq!(
+            configured["observations"][0]["context_tokens_per_lane"],
+            131072
+        );
+        assert_eq!(configured["observations"][0]["lanes"], 4);
+        assert_eq!(read(dir.path())["status"], "unavailable");
     }
 
     #[test]

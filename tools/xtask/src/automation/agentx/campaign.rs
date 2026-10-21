@@ -50,6 +50,7 @@ pub(super) fn run(
                         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()),
                     "memory_scope":"partial_attempt_not_comparable_to_completed_cells",
                     "capacity_policy":super::capacity::policy(engine, input.profile),
+                    "configured_capacity":super::capacity::read_configured(&cell.output),
                     "native_capacity":super::capacity::read(&cell.output)}));
             }
         }
