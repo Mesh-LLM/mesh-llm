@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use super::local::{SplitParticipant, SplitParticipantExclusion};
 use super::split_topology_lock::LockedSplitStageAssignment;
+mod stage_links;
 
 // Skippy owns the split runtime's fixed headroom and KV compute reserve.
 // Mesh supplies measured node budgets and reports the selected placement.
@@ -31,6 +32,7 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) target_decode_tpot_ms: Option<u32>,
     pub(super) minimum_nodes: usize,
     pub(super) nodes: Vec<SplitTopologyPlanNode>,
+    pub(super) stage_links: Vec<skippy_coordinator::topology::StageLink>,
     pub(super) auto_balance: bool,
     /// What the re-cut optimises for. Only read when `auto_balance` is set.
     pub(super) placement_objective: PlacementObjective,
@@ -269,6 +271,7 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
         recurrent_bytes_per_sequence_by_layer: input.recurrent_bytes_per_sequence_by_layer,
         reserved_sequence_ids: input.reserved_sequence_ids,
         minimum_nodes: input.minimum_nodes,
+        stage_links: input.stage_links,
         nodes: input
             .nodes
             .into_iter()
@@ -687,6 +690,7 @@ fn runtime_slice_plan_input(
         parallel_lanes_override: resources.parallel_override,
         target_decode_tpot_ms: Some(DEFAULT_TARGET_DECODE_TPOT_MS),
         minimum_nodes: super::local::SPLIT_DEFAULT_MIN_PARTICIPANTS,
+        stage_links: stage_links::planning_links(participants),
         nodes: participants
             .iter()
             .map(|participant| SplitTopologyPlanNode {

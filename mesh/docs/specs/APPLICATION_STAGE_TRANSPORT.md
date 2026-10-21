@@ -31,3 +31,28 @@ flowchart LR
 The application protocol is the setup/control channel. It does not replace built-in
 stage control or artifact transfer. No stage encoding or dedicated Iroh wire changes
 are required, and nodes without a provider continue using the existing path.
+
+## Local link observations
+
+`StageTransportProvider::stage_link(peer)` optionally reports outgoing delivery
+observations for an active channel. `StageLinkObservation` preserves `Duration`
+precision and separates acknowledgement latency from acknowledged payload goodput.
+Goodput includes polling, framing, acknowledgements and receiver backpressure; it
+is not a raw link speed. Samples exclude idle application time and local enqueue
+time. Providers invalidate observations when the stream fails, closes or becomes
+unusable, and return `None` when a new connection would decline to the default path.
+
+The host consumes observations only for currently admitted, protocol-compatible
+peers, with at least three samples and an age below thirty seconds. It supplies
+directed coordinator-to-peer latency edges to the pure topology planner. Missing
+edges retain the existing RTT estimate, clamped to at least one millisecond when
+comparing measured paths because legacy RTTs truncate sub-millisecond values.
+Candidate comparisons retain nanosecond
+precision; the existing millisecond diagnostic rounds up. Without observations,
+planning is unchanged. Goodput is exposed for diagnostics and future payload-aware
+costing; it is not charged against a guessed activation size.
+
+These are in-process SDK values. Nothing is added to gossip, setup frames or stage
+messages. Remote-to-remote observations are not inferred or propagated. Cold start
+uses existing RTTs until live traffic supplies enough samples; this does not
+introduce probe traffic or force replanning an active topology.

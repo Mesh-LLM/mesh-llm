@@ -153,6 +153,15 @@ replays stage bytes over another transport. Stage control, artifacts and activat
 encoding retain their existing contracts. See the
 [application stage transport contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).
 
+`StageTransportProvider::stage_link(peer)` optionally supplies a
+`StageLinkObservation` for an active outgoing path: acknowledgement latency,
+payload goodput, sample count and age. Return `None` when the channel is closed,
+failed, unmeasured, or a new connection would decline to the default path. The
+default implementation returns `None`, preserving existing providers. Mesh uses
+fresh latency observations with at least three samples for local directed planning
+edges; it retains peer RTT estimates elsewhere. Goodput does not yet drive cuts.
+Observations remain in process and introduce no gossip or stage wire changes.
+
 ```mermaid
 flowchart LR
     SDK[SDK protocol registration] --> Provider[Application stage provider]

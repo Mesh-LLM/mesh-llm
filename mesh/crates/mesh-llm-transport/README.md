@@ -23,3 +23,9 @@ Application protocols may supply a `protocol::StageTransportProvider` through
 Providers return owned `ProtocolStream` values and must preserve ordered reliable
 bytes and half-close. See the
 [contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).
+
+Providers may implement `stage_link(peer) -> Option<StageLinkObservation>` to
+report acknowledgement latency, acknowledged payload goodput, sample count and
+age for an active outgoing channel. These are local SDK observations with
+`Duration` precision; they do not change the wire protocol. The host filters
+insufficient or stale samples before supplying directed latency costs to planning.

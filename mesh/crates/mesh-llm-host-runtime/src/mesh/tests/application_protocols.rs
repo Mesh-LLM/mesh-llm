@@ -158,9 +158,23 @@ async fn application_protocols_exchange_on_admitted_connections_and_stop_with_no
 }
 
 #[derive(Debug)]
-struct StageBridge(&'static str);
+struct StageBridge(
+    &'static str,
+    std::sync::Mutex<Option<mesh_llm_transport::protocol::StageLinkObservation>>,
+);
+impl StageBridge {
+    fn new(name: &'static str) -> Self {
+        Self(name, std::sync::Mutex::new(None))
+    }
+}
 #[async_trait]
 impl mesh_llm_transport::protocol::StageTransportProvider for StageBridge {
+    fn stage_link(
+        &self,
+        _: EndpointId,
+    ) -> Option<mesh_llm_transport::protocol::StageLinkObservation> {
+        *self.1.lock().unwrap()
+    }
     async fn open_stage(
         &self,
         context: ProtocolContext,
@@ -193,7 +207,11 @@ async fn application_stage_provider_routes_only_authorized_runs_and_preserves_ha
     use mesh_llm_transport::protocol::ProtocolStream;
     use prost::Message;
     assert!(
-        validate_protocols(&[Arc::new(StageBridge("one")), Arc::new(StageBridge("two"))]).is_err()
+        validate_protocols(&[
+            Arc::new(StageBridge::new("one")),
+            Arc::new(StageBridge::new("two"))
+        ])
+        .is_err()
     );
     let sender = start_node().await;
     let receiver = start_node().await;
@@ -204,10 +222,10 @@ async fn application_stage_provider_routes_only_authorized_runs_and_preserves_ha
             .is_none()
     );
     sender
-        .install_application_protocols(vec![Arc::new(StageBridge("stage-bridge"))])
+        .install_application_protocols(vec![Arc::new(StageBridge::new("stage-bridge"))])
         .await?;
     receiver
-        .install_application_protocols(vec![Arc::new(StageBridge("stage-bridge"))])
+        .install_application_protocols(vec![Arc::new(StageBridge::new("stage-bridge"))])
         .await?;
     sender.start_accepting();
     receiver.start_accepting();
@@ -347,4 +365,71 @@ async fn application_stage_setup_is_cancelled_on_admission_loss_and_shutdown() -
         receiver.close_endpoint().await;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn stage_link_planning_requires_fresh_samples_and_current_admission() {
+    use mesh_llm_transport::protocol::StageLinkObservation;
+    let sender = start_node().await;
+    let receiver = start_node().await;
+    let provider = Arc::new(StageBridge::new("measured-stage"));
+    sender
+        .install_application_protocols(vec![provider.clone()])
+        .await
+        .unwrap();
+    receiver
+        .install_application_protocols(vec![Arc::new(StageBridge::new("measured-stage"))])
+        .await
+        .unwrap();
+    let valid = StageLinkObservation {
+        acknowledgement_latency: std::time::Duration::from_micros(150),
+        payload_bytes_per_second: 10_000_000,
+        samples: 3,
+        age: std::time::Duration::ZERO,
+    };
+    *provider.1.lock().unwrap() = Some(valid);
+    assert!(sender.application_stage_link(receiver.id()).await.is_none());
+    sender.start_accepting();
+    receiver.start_accepting();
+    sender
+        .connect_to_peer(receiver.endpoint_addr_for_advertisement())
+        .await
+        .unwrap();
+    sender.refresh_application_peers().await;
+    assert_eq!(
+        sender.application_stage_link(receiver.id()).await,
+        Some(valid)
+    );
+    for invalid in [
+        StageLinkObservation {
+            samples: 2,
+            ..valid
+        },
+        StageLinkObservation {
+            age: std::time::Duration::from_secs(30),
+            ..valid
+        },
+        StageLinkObservation {
+            acknowledgement_latency: std::time::Duration::ZERO,
+            ..valid
+        },
+    ] {
+        *provider.1.lock().unwrap() = Some(invalid);
+        assert!(sender.application_stage_link(receiver.id()).await.is_none());
+    }
+    *provider.1.lock().unwrap() = Some(valid);
+    sender
+        .state
+        .lock()
+        .await
+        .peers
+        .get_mut(&receiver.id())
+        .unwrap()
+        .application_protocols
+        .clear();
+    sender.refresh_application_peers().await;
+    assert!(sender.application_stage_link(receiver.id()).await.is_none());
+    sender.close_endpoint().await;
+    receiver.close_endpoint().await;
+    assert!(sender.application_stage_link(receiver.id()).await.is_none());
 }

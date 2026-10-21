@@ -249,9 +249,28 @@ pub struct IncomingProtocolStream {
     pub stream: ProtocolStream,
 }
 
+/// Outgoing delivery measurements supplied locally by a stage transport provider.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageLinkObservation {
+    /// Mean outgoing DATA-to-receive-acknowledgement time, including backpressure.
+    pub acknowledgement_latency: std::time::Duration,
+    /// Acknowledged payload bytes divided by active delivery time; not raw link speed.
+    pub payload_bytes_per_second: u64,
+    pub samples: u32,
+    /// Age of the newest sample. Providers must also exclude stale older samples.
+    pub age: std::time::Duration,
+}
+
 /// Supplies reliable, ordered duplex stage streams with half-close.
 #[async_trait]
 pub trait StageTransportProvider: Debug + Send + Sync {
+    /// Local observations of an active outgoing path. Return `None` when closed,
+    /// failed, unmeasured, or when a new open would decline to the default path.
+    /// This synchronous snapshot must not perform network I/O or native probes.
+    fn stage_link(&self, _peer: PeerId) -> Option<StageLinkObservation> {
+        None
+    }
+
     /// Decline with `None` before sending stage bytes. Errors fail the connection;
     /// they never trigger replay through the default transport.
     async fn open_stage(

@@ -271,6 +271,38 @@ impl Node {
         self.application_protocols.cancelled.subscribe()
     }
 
+    pub(crate) async fn application_stage_link(
+        &self,
+        peer: PeerId,
+    ) -> Option<mesh_llm_transport::protocol::StageLinkObservation> {
+        if *self.application_protocols.cancelled.borrow() {
+            return None;
+        }
+        let registry = self.application_protocols.registrations.get()?;
+        let state = self.state.lock().await;
+        let remote = state
+            .peers
+            .get(&peer)
+            .filter(|remote| remote.is_admitted())?;
+        let entry = registry.values().find(|entry| {
+            entry.handler.stage_transport().is_some()
+                && remote.application_protocols.iter().any(|protocol| {
+                    protocol.name == entry.descriptor.name
+                        && protocol.major == entry.descriptor.major
+                })
+        })?;
+        drop(state);
+        entry
+            .handler
+            .stage_transport()?
+            .stage_link(peer)
+            .filter(|observation| {
+                observation.samples >= 3
+                    && observation.age < std::time::Duration::from_secs(30)
+                    && !observation.acknowledgement_latency.is_zero()
+            })
+    }
+
     pub(crate) fn application_stage_peers(&self) -> watch::Receiver<Vec<ProtocolPeer>> {
         self.application_protocols.peers.subscribe()
     }

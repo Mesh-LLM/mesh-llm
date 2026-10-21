@@ -281,6 +281,10 @@ pub(super) struct SplitParticipant {
     pub(super) cached_slice_bytes: u64,
     pub(super) missing_artifact_bytes: u64,
     pub(super) rtt_ms: Option<u32>,
+    pub(super) stage_link: Option<(
+        iroh::EndpointId,
+        mesh_llm_transport::protocol::StageLinkObservation,
+    )>,
     pub(super) artifact_transfer_supported: bool,
     /// Whether this peer honours `StageLoad.last_stage_decode_batch`. A peer
     /// predating the field ignores it and serves unbatched, which looks like
@@ -306,6 +310,7 @@ impl SplitParticipant {
             cached_slice_bytes: 0,
             missing_artifact_bytes: 0,
             rtt_ms: None,
+            stage_link: None,
             artifact_transfer_supported: false,
             decode_batch_policy_supported: false,
             availability_score: 0,
@@ -635,6 +640,7 @@ pub(super) async fn collect_split_participants(
                             artifact_transfer_allowed,
                         )
                         .with_decode_batch_policy(peer.decode_batch_policy_supported)
+                        .with_stage_link(node.id(), node.application_stage_link(peer.id).await)
                         .with_decode_speed(decode_bytes_per_second_from_gossip(
                             peer.gpu_mem_bandwidth_gbps.as_deref(),
                         )),

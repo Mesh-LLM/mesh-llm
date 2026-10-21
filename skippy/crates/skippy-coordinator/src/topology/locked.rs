@@ -1,6 +1,6 @@
 use super::{
     CandidatePlan, TopologyPlan, TopologyPlanError, TopologyPlanningInput, TopologyStagePlan,
-    UsableNode, context_candidates, decode_tpot_target_met, estimate_decode_network_ms_per_token,
+    UsableNode, context_candidates, decode_tpot_target_met, estimate_network_cost,
     layer_required_bytes, layer_weight_bytes, minimum_valid_context, parallel_lane_candidates,
     recurrent_bytes_by_layer, sum_u64, usable_nodes, validate_input,
 };
@@ -163,8 +163,10 @@ fn fit_locked_candidate(
         });
     }
 
-    let estimated_decode_network_ms_per_token = estimate_decode_network_ms_per_token(nodes);
+    let (estimated_decode_network_ms_per_token, network_cost_nanos) =
+        estimate_network_cost(input, nodes, &stages);
     Some(CandidatePlan {
+        network_cost_nanos,
         plan: TopologyPlan {
             context_length,
             parallel_lanes,
@@ -210,6 +212,7 @@ mod tests {
             reserved_sequence_ids: 16,
             minimum_nodes: 2,
             nodes,
+            stage_links: Vec::new(),
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
