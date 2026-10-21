@@ -896,11 +896,16 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_file_path(prefix: &str) -> PathBuf {
+        // The nanosecond clock can be coarse on virtualized runners; the
+        // atomic sequence keeps parallel tests in this binary from colliding
+        // on the same temp file name and deleting each other's fixtures.
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("{prefix}-{unique}.gguf"))
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("{prefix}-{unique}-{sequence}.gguf"))
     }
 
     fn write_bytes(prefix: &str, bytes: &[u8]) -> PathBuf {
