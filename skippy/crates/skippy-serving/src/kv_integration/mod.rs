@@ -29,6 +29,7 @@ mod cache_affinity;
 mod cache_payload;
 mod config;
 mod exact_state;
+pub(crate) mod exact_state_diagnostics;
 mod snapshot_validation;
 pub(crate) use exact_state::CaptureAdmission;
 mod identity;

@@ -216,6 +216,13 @@ each engine's cache-retention policy; an aggregate throughput lead after
 different cache-hit counts is not a decode-kernel comparison. Report the
 per-request cache-read tokens alongside such a result.
 
+Set `SKIPPY_EXACT_STATE_DIAGNOSTICS=1` on a diagnostic Skippy server to
+record numeric-only exact-state demotion, L1 publication, and eviction events
+in the server log. This opt-in trace identifies whether a missing long prefix
+was rejected before export, queued but not published, or evicted after
+publication. It records token counts and byte sizes, never token content or
+cache identities. Leave it unset for timing comparisons.
+
 For a llama-only cache retention sensitivity run, set
 `AGENTX_LLAMA_CACHE_RAM_MIB=65536` on the AgentX
 runner. Comparison launches then pass `--cache-ram 65536` to llama-server and

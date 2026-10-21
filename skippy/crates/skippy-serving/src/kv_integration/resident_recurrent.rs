@@ -1,5 +1,6 @@
 //! Converts a lane-owned hybrid checkpoint to the existing serialized tiers.
 use super::exact_state::{CaptureAdmission, ExactStateAdmissionCredit};
+use super::exact_state_diagnostics::emit_exact_state_diagnostic;
 use super::*;
 
 #[derive(Clone, Copy)]
@@ -40,10 +41,15 @@ impl KvStageIntegration {
             &self.admission_best_effort_outstanding,
             CaptureAdmission::Continuation,
         ) else {
+            emit_exact_state_diagnostic(
+                "demotion_credit_full",
+                &[("position", identity.token_ids.len() as u64)],
+            );
             self.notify_demotion_error();
             return Ok(ExactStateRecordAdmission::DroppedFull);
         };
         let token_count = identity.token_ids.len() as u64;
+        let recurrent_bytes = recurrent.len();
         let kv_bytes = match session.kv_page_export_size(layer_start, layer_end, 0, token_count) {
             Ok(bytes) => bytes as u64,
             Err(error) if super::exact_state::is_native_kv_unavailable(&error) => 0,
@@ -51,13 +57,30 @@ impl KvStageIntegration {
         };
         if !admission_credit.reserve_bytes(
             &self.exact_state_record_queue_bytes,
-            kv_bytes.saturating_add(recurrent.len() as u64),
+            kv_bytes.saturating_add(recurrent_bytes as u64),
             EXACT_STATE_RECORD_QUEUE_BYTES,
         ) {
+            emit_exact_state_diagnostic(
+                "demotion_byte_full",
+                &[
+                    ("position", token_count),
+                    ("kv_bytes", kv_bytes),
+                    ("recurrent_bytes", recurrent_bytes as u64),
+                    (
+                        "pending_bytes",
+                        self.exact_state_record_queue_bytes
+                            .load(std::sync::atomic::Ordering::Acquire),
+                    ),
+                ],
+            );
             self.notify_demotion_error();
             return Ok(ExactStateRecordAdmission::DroppedFull);
         }
         if !self.try_begin_record(&identity.page_id) {
+            emit_exact_state_diagnostic(
+                "demotion_duplicate_or_stopped",
+                &[("position", token_count)],
+            );
             return Ok(
                 if self
                     .exact_state_record_worker_healthy
@@ -92,7 +115,7 @@ impl KvStageIntegration {
                 return Err(error);
             }
         };
-        Ok(self.enqueue_exact_state_record(PendingExactStateRecord {
+        let outcome = self.enqueue_exact_state_record(PendingExactStateRecord {
             page_id: identity.page_id.clone(),
             payload,
             extra,
@@ -103,6 +126,20 @@ impl KvStageIntegration {
             l2_promotion_digest: None,
             l3_cost: policy.l3_cost,
             admission_credit,
-        }))
+        });
+        let event = match outcome {
+            ExactStateRecordAdmission::Queued => "demotion_queued",
+            ExactStateRecordAdmission::DroppedFull => "demotion_queue_full",
+            ExactStateRecordAdmission::WorkerStopped => "demotion_worker_stopped",
+        };
+        emit_exact_state_diagnostic(
+            event,
+            &[
+                ("position", token_count),
+                ("kv_bytes", kv_bytes),
+                ("recurrent_bytes", recurrent_bytes as u64),
+            ],
+        );
+        Ok(outcome)
     }
 }

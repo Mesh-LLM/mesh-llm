@@ -23,10 +23,13 @@ use super::cache_payload::{durable_cache_payload, effective_cache_payload};
 
 mod durable_spill;
 mod exact_state_limits;
+mod exact_state_retention;
+use super::exact_state_diagnostics::emit_exact_state_diagnostic;
 use durable_spill::{
     DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
 use exact_state_limits::exact_state_byte_limits;
+use exact_state_retention::evict_exact_entries_over;
 
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
 // sequence lanes, so their exact-state catalog must remain deliberately small.
@@ -768,8 +771,16 @@ fn store_exact_radix_record_with_codec(
         blobs,
         limits.soft_bytes,
         EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries),
+        "soft",
     )?;
-    evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1)?;
+    evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1, "hard")?;
+    emit_exact_state_diagnostic(
+        "published_l1",
+        &[
+            ("position", token_ids.len() as u64),
+            ("logical_bytes", logical_bytes),
+        ],
+    );
     #[cfg(test)]
     crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
 
@@ -842,50 +853,6 @@ fn cachegen_descriptor_is_qualified(desc: &RuntimeKvPageDesc) -> bool {
             | (skippy_runtime::GGML_TYPE_F32, skippy_runtime::GGML_TYPE_F16)
             | (skippy_runtime::GGML_TYPE_F16, skippy_runtime::GGML_TYPE_F32)
     )
-}
-
-/// Evicts least-recently-used exact entries while the catalog holds more than
-/// `limit_bytes`, never dropping below `min_retained_entries`. A zero limit
-/// means the catalog has no byte ceiling and nothing is evicted.
-fn evict_exact_entries_over(
-    radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
-    blobs: &Mutex<CacheBlobStore>,
-    limit_bytes: u64,
-    min_retained_entries: usize,
-) -> Result<()> {
-    if limit_bytes == 0 {
-        return Ok(());
-    }
-    let floor = min_retained_entries.max(1);
-    loop {
-        let over_bytes = blobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .physical_bytes()
-            > limit_bytes;
-        let above_floor = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .stats()
-            .recurrent_entries
-            > floor;
-        if !over_bytes || !above_floor {
-            break;
-        }
-        let evicted = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .evict_lru_recurrent();
-        let Some(evicted) = evicted else {
-            break;
-        };
-        evicted.value.payload.release_from(
-            &mut blobs
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )?;
-    }
-    Ok(())
 }
 
 /// Either kill-switch variable resolving to `off` disables the cache, so an

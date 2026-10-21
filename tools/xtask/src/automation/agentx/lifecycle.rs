@@ -157,6 +157,9 @@ fn server(
                 process::Value::Public("1".into()),
             );
         }
+        if std::env::var("SKIPPY_EXACT_STATE_DIAGNOSTICS").as_deref() == Ok("1") {
+            enable_exact_state_diagnostics(&mut spec);
+        }
         if std::env::var("AGENTX_SKIPPY_KV_SPAN_DEBUG").as_deref() == Ok("1") {
             enable_native_kv_span_debug(&mut spec);
         }
@@ -170,6 +173,13 @@ fn server(
         process::Value::Public("1800".into()),
     );
     Ok(spec)
+}
+
+fn enable_exact_state_diagnostics(spec: &mut process::ProcessSpec) {
+    spec.environment.insert(
+        "SKIPPY_EXACT_STATE_DIAGNOSTICS".into(),
+        process::Value::Public("1".into()),
+    );
 }
 
 fn enable_native_kv_span_debug(spec: &mut process::ProcessSpec) {
@@ -389,6 +399,17 @@ impl Coordinator for Owner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exact_state_diagnostics_reach_the_server_process() {
+        let mut spec = command::spec(&std::env::temp_dir(), "sh", &[]).unwrap();
+        enable_exact_state_diagnostics(&mut spec);
+        assert!(matches!(
+            spec.environment
+                .get(std::ffi::OsStr::new("SKIPPY_EXACT_STATE_DIAGNOSTICS")),
+            Some(process::Value::Public(value)) if value == "1"
+        ));
+    }
+
     #[test]
     fn kv_span_diagnostic_enables_native_cell_span_logging() {
         let mut spec = command::spec(&std::env::temp_dir(), "sh", &[]).unwrap();

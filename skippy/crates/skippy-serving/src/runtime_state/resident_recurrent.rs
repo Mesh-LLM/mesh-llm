@@ -4,6 +4,7 @@
 //! their lane: reset/error cleanup drops them; reuse on a miss exports eligible
 //! snapshots before resetting the lane.
 use super::*;
+use crate::kv_integration::exact_state_diagnostics::emit_exact_state_diagnostic;
 use crate::kv_integration::{
     ExactStateRestore, KvStageIntegration, PrefillKvIdentity, ResidentRecurrentPolicy,
 };
@@ -235,6 +236,10 @@ impl RuntimeState {
             .session
             .has_resident_recurrent_prefix(entry.identity.token_ids.len() as u64)
         {
+            emit_exact_state_diagnostic(
+                "demotion_no_native_prefix",
+                &[("position", entry.identity.token_ids.len() as u64)],
+            );
             return;
         }
         if let Err(error) = entry.cache.demote_resident_recurrent(
@@ -246,6 +251,10 @@ impl RuntimeState {
             entry.policy,
         ) {
             entry.cache.notify_demotion_error();
+            emit_exact_state_diagnostic(
+                "demotion_error",
+                &[("position", entry.identity.token_ids.len() as u64)],
+            );
             // Errors affect optional cache retention, never generation output.
             tracing::debug!(error = %error, "resident recurrent checkpoint demotion failed");
         }
