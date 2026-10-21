@@ -84,6 +84,7 @@ mod tests {
 
     #[test]
     fn cache_is_a_standalone_proposer() {
+        skippy_runtime::test_support::require_native_runtime();
         let proposal = propose(
             &config(NgramProposerKind::Cache, 2, 4),
             &[1, 2, 3, 1, 2, 3, 1, 2],

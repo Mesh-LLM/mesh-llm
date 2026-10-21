@@ -982,7 +982,12 @@ model cadence, device gates and protected action references remain unchanged.
   its runner lacks `vulkaninfo`; model startup and golden reads still exercise
   the device. The source-checked Laya action repeats the gate from that same
   normalized input so an older protected workflow cannot run the smoke on an
-  uncertified PR runner before the workflow gate reaches main.
+  uncertified PR runner before the workflow gate reaches main. Because a
+  gated row that stays skipped only shows as a skipped job, the gate job also
+  writes each planned Vulkan or ROCm row to its step summary from the same
+  normalized result, either as scheduled on its qualified runner or as skipped
+  with the variable that is not `true`, so packaging success is never read as
+  inference coverage.
   Windows product restore passes LF-terminated manifest fields to Git Bash so
   its runtime path does not retain Python's Windows carriage return. The Laya
   parity driver is Rust `automation laya parity`, with UTF-8 fixture decoding

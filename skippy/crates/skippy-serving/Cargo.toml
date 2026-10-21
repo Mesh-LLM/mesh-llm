@@ -47,5 +47,6 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+skippy-runtime = { path = "../skippy-runtime", version = "0.78.0", features = ["test-support"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

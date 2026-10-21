@@ -277,6 +277,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
 
 #[test]
 fn generated_text_timings_prefer_composite_proposal_totals() {
+    skippy_runtime::test_support::require_native_runtime();
     let mut counters = NativeMtpDecodeCounters::default();
     let context = [1, 2, 3, 1, 2, 3, 1, 2];
     let mut cache = HistoryNgramProposer::new_cache(2, 2).unwrap();

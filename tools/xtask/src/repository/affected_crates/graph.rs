@@ -38,6 +38,9 @@ impl CrateGraph {
             Value::Null => "null".to_owned(),
             _ => return Err(FailOpen(JQ_ERROR)),
         };
+        // On Windows Cargo reports `C:\ws\crates\a\Cargo.toml`, while the
+        // changed paths from git use `/`; compare in one separator.
+        let root = root.replace('\\', "/");
         let packages = document
             .get("packages")
             .and_then(Value::as_array)
@@ -49,7 +52,10 @@ impl CrateGraph {
                 package.get("name").and_then(Value::as_str),
                 package.get("manifest_path").and_then(Value::as_str),
             ) {
-                dirs.insert(name.to_owned(), relative_dir(&root, manifest));
+                dirs.insert(
+                    name.to_owned(),
+                    relative_dir(&root, &manifest.replace('\\', "/")),
+                );
             }
         }
         let mut dependents: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -147,6 +153,22 @@ mod tests {
         assert_eq!(graph.owner("crates/a"), Some("a"));
         assert_eq!(graph.owner("crates/ab/src/lib.rs"), None);
         assert_eq!(graph.owner("Cargo.toml"), None);
+    }
+
+    #[test]
+    fn migration_repository_affected_owner_accepts_windows_metadata_paths() {
+        let metadata = serde_json::json!({
+            "workspace_root": "C:\\ws",
+            "packages": [
+                {"name": "a", "manifest_path": "C:\\ws\\crates\\a\\Cargo.toml", "dependencies": []},
+                {"name": "b", "manifest_path": "C:\\ws\\crates\\b\\Cargo.toml",
+                 "dependencies": [{"name": "a"}]}
+            ]
+        });
+        let graph = CrateGraph::parse(metadata.to_string().as_bytes()).expect("valid metadata");
+        assert_eq!(graph.owner("crates/a/src/lib.rs"), Some("a"));
+        assert_eq!(graph.owner("crates/ab/src/lib.rs"), None);
+        assert_eq!(graph.closure(&["a".to_owned()]), ["a", "b"]);
     }
 
     #[test]
