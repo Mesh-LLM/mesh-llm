@@ -88,6 +88,16 @@ fixtures may be retained only with an explicit maintainer decision; new Python
 tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
 Python-free or remove legacy validation before its Rust replacement passes.
 
+Retained external Python dependencies have bounded owners: the admitted external
+Python SDK and its locked client environments, llama.cpp's upstream Jinja tests
+using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
+an immutable default source commit. These interfaces do not authorize new
+repository Python implementations. The canary Jinja environment belongs to its
+run's state directory and must use a preinstalled interpreter; dependency
+restoration must not download an interpreter or skip upstream tests. Freeze the
+Jinja project before selecting historical source checkouts so older sources do
+not need to contain the dependency manifest.
+
 ## Required procedure
 
 1. Inspect `git status`, applicable `AGENTS.md` files, the complete workflows,
