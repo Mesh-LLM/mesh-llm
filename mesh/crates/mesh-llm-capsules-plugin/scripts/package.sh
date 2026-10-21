@@ -36,8 +36,10 @@ case "$target" in
 esac
 core=$(printf '%s' "$version" | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\(-[0-9A-Za-z.-][0-9A-Za-z.-]*\)\{0,1\}$/\1/p')
 [ -n "$core" ] || fail "version $version is not MAJOR.MINOR.PATCH[-PRERELEASE]"
+# plugin.toml carries mesh-llm's full version, prerelease included
+# (scripts/release-version.sh writes it), and so does the archive name.
 declared=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' "$root/plugin.toml")
-[ "$declared" = "$core" ] || fail "plugin.toml declares $declared, the release is $version; bump plugin.toml first"
+[ "$declared" = "$version" ] || fail "plugin.toml declares $declared, the release is $version; bump plugin.toml first"
 [ -x "$binary" ] || fail "no executable at $binary"
 [ "$(ls "$root/bundle" 2>/dev/null)" = "register-mesh-plugin-ui.js" ] ||
   fail "bundle/ must hold exactly register-mesh-plugin-ui.js (run pnpm build in web-ui/)"

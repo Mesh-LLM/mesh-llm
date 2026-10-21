@@ -1,5 +1,6 @@
 mod affected_crates;
 mod capsules_gate;
+mod capsules_release;
 pub(crate) mod cargo_packages;
 mod cargo_projection;
 pub(crate) mod check_args;
@@ -50,6 +51,8 @@ pub(crate) fn run_check(
         RepositoryCheck::SelectedRef => selected_ref::run(args, default_root),
         RepositoryCheck::DockerPrecheck => docker_precheck::run(args, default_root),
         RepositoryCheck::CapsulesPluginGate => capsules_gate::run(args, default_root),
+        RepositoryCheck::CapsulesPluginArchive => capsules_release::archive(args, default_root),
+        RepositoryCheck::CapsulesBundleCheck => capsules_release::bundle_check(args),
     }
 }
 

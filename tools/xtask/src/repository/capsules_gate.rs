@@ -21,7 +21,7 @@ const GRAMMAR: Grammar = Grammar {
     flags: &[],
 };
 
-const PLUGIN_DIR: &str = "mesh/crates/mesh-llm-capsules-plugin";
+pub(super) const PLUGIN_DIR: &str = "mesh/crates/mesh-llm-capsules-plugin";
 const PACKAGE: &str = "mesh-llm-capsules-plugin";
 const BIN: &str = "capsules";
 /// The plugin's mutant table: each feature, its tests, and what they print.
@@ -29,7 +29,7 @@ const MUTANTS: &str = "gates/mutants.json";
 /// The referee's mutants, each with the corpus cases that must catch it.
 const REFEREE_MUTANTS: &str = "vectors/parity/referee/mutants.json";
 const REFEREE_RUN: &str = "referee::parity::the_referee_answers_the_corpus_as_expected";
-const BUNDLE_ENTRY: &str = "register-mesh-plugin-ui.js";
+pub(super) const BUNDLE_ENTRY: &str = "register-mesh-plugin-ui.js";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Gate {
@@ -367,7 +367,7 @@ fn web_ui(plugin: &Path) -> DynResult<CheckReport> {
     )))
 }
 
-fn build_web_ui(plugin: &Path, checks: &[&[&str]]) -> DynResult<()> {
+pub(super) fn build_web_ui(plugin: &Path, checks: &[&[&str]]) -> DynResult<()> {
     let web_ui = plugin.join("web-ui");
     pnpm(&web_ui, &["install", "--frozen-lockfile"])?;
     for check in checks {
@@ -385,31 +385,15 @@ fn build_web_ui(plugin: &Path, checks: &[&[&str]]) -> DynResult<()> {
 /// the two archives must be byte-identical.
 fn package_twice(root: &Path, plugin: &Path) -> DynResult<CheckReport> {
     build_web_ui(plugin, &[])?;
-    let build = cargo(plugin)
-        .args(["build", "--locked", "-p", PACKAGE, "--bin", BIN])
-        .status()?;
-    if !build.success() {
-        return Err("the plugin did not build".into());
-    }
-    let binary = target_directory(root)?.join("debug").join(BIN);
+    let binary = build_plugin(root, plugin, "debug")?;
     let version = plugin_version(&fs::read_to_string(plugin.join("plugin.toml"))?)?;
     let host = host_triple()?;
     let out = tempfile::tempdir()?;
     let mut archives = Vec::new();
     for run in ["a", "b"] {
-        let dir = out.path().join(run);
-        let status = Command::new(plugin.join("scripts/package.sh"))
-            .args([version.as_str(), host.as_str()])
-            .arg(&binary)
-            .arg(&dir)
-            .env("SOURCE_DATE_EPOCH", "0")
-            .status()?;
-        if !status.success() {
-            return Err(format!("scripts/package.sh failed (run {run})").into());
-        }
-        archives.push(fs::read(
-            dir.join(format!("{BIN}-{version}-{host}.tar.gz")),
-        )?);
+        let archive = package(plugin, &binary, &version, &host, &out.path().join(run))
+            .map_err(|e| format!("{e} (run {run})"))?;
+        archives.push(fs::read(archive)?);
     }
     let digests: Vec<_> = archives
         .iter()
@@ -431,6 +415,52 @@ fn package_twice(root: &Path, plugin: &Path) -> DynResult<CheckReport> {
     )))
 }
 
+/// Build the plugin executable in `profile` (`debug` or `release`) and
+/// return its path.
+pub(super) fn build_plugin(root: &Path, plugin: &Path, profile: &str) -> DynResult<PathBuf> {
+    let mut build = cargo(plugin);
+    build.args(["build", "--locked", "-p", PACKAGE, "--bin", BIN]);
+    if profile == "release" {
+        build.arg("--release");
+    }
+    // The macOS floor every shipped executable is built for
+    // (`scripts/lib/macos-deployment-target.sh`), unless the caller set one.
+    if cfg!(target_os = "macos") && std::env::var_os("MACOSX_DEPLOYMENT_TARGET").is_none() {
+        let target = fs::read_to_string(root.join("scripts/lib/macos-deployment-target.txt"))?;
+        build.env("MACOSX_DEPLOYMENT_TARGET", target.trim());
+    }
+    if !build.status()?.success() {
+        return Err("the plugin did not build".into());
+    }
+    Ok(target_directory(root)?.join(profile).join(BIN))
+}
+
+/// Package `binary` with `scripts/package.sh` into `out`, deterministically
+/// (`SOURCE_DATE_EPOCH=0`), and return the archive's path.
+pub(super) fn package(
+    plugin: &Path,
+    binary: &Path,
+    version: &str,
+    target: &str,
+    out: &Path,
+) -> DynResult<PathBuf> {
+    let status = Command::new(plugin.join("scripts/package.sh"))
+        .args([version, target])
+        .arg(binary)
+        .arg(out)
+        .env("SOURCE_DATE_EPOCH", "0")
+        .status()?;
+    if !status.success() {
+        return Err("scripts/package.sh failed".into());
+    }
+    Ok(out.join(archive_name(version, target)))
+}
+
+/// The archive name `scripts/package.sh` writes and a release bundles.
+pub(super) fn archive_name(version: &str, target: &str) -> String {
+    format!("{BIN}-{version}-{target}.tar.gz")
+}
+
 fn archive_listing(gz: &[u8]) -> DynResult<String> {
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(gz));
     let mut names = Vec::new();
@@ -441,7 +471,7 @@ fn archive_listing(gz: &[u8]) -> DynResult<String> {
     Ok(names.iter().map(|name| format!("{name}\n")).collect())
 }
 
-fn plugin_version(plugin_toml: &str) -> DynResult<String> {
+pub(super) fn plugin_version(plugin_toml: &str) -> DynResult<String> {
     let marker: toml::Value = toml::from_str(plugin_toml)?;
     marker
         .get("version")
@@ -450,7 +480,7 @@ fn plugin_version(plugin_toml: &str) -> DynResult<String> {
         .ok_or_else(|| "plugin.toml has no version".into())
 }
 
-fn host_triple() -> DynResult<String> {
+pub(super) fn host_triple() -> DynResult<String> {
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let output = Command::new(rustc).arg("-vV").output()?;
     if !output.status.success() {
