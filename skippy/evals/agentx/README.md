@@ -133,6 +133,9 @@ server child; the cell's `server.stderr.log` then records cache source and
 restore timings.
 Leave it unset for paired performance results because debug event emission can
 perturb latency.
+Use `--only-concurrency 2` with `automation agentx run` to isolate a failing
+cell; the default still runs the full 1/2/4 sweep. A single-cell diagnostic is
+not a complete comparison report.
 
 ## Duration-bounded smoke and full profiles
 

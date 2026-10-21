@@ -3,14 +3,19 @@ use super::{Engine, Prepared, inputs, lifecycle, results, write};
 use crate::command::DynResult;
 use serde_json::{Value, json};
 
-pub(super) fn run(input: &Prepared, engine: Engine) -> DynResult<()> {
+pub(super) fn run(
+    input: &Prepared,
+    engine: Engine,
+    only_concurrency: Option<u32>,
+) -> DynResult<()> {
+    let concurrencies = selected_concurrencies(input.profile, only_concurrency)?;
     super::hardware::capture(input)?;
     let mut cells = Vec::new();
     let mut points = Vec::new();
     let mut notes = Vec::new();
     let engine = engine.label();
     inputs::recheck(input)?;
-    for &concurrency in input.profile.concurrencies() {
+    for &concurrency in &concurrencies {
         let mut cell: Prepared = serde_json::from_value(serde_json::to_value(input)?)?;
         cell.output = input.output.join(format!("{engine}-c{concurrency}"));
         std::fs::create_dir(&cell.output)?;
@@ -58,7 +63,17 @@ pub(super) fn run(input: &Prepared, engine: Engine) -> DynResult<()> {
             );
         }
     }
-    finish_sweep(input.profile.concurrencies().len(), points.len())
+    finish_sweep(concurrencies.len(), points.len())
+}
+
+fn selected_concurrencies(profile: super::Profile, only: Option<u32>) -> DynResult<Vec<u32>> {
+    match only {
+        Some(concurrency) if profile.concurrencies().contains(&concurrency) => {
+            Ok(vec![concurrency])
+        }
+        Some(_) => Err("only-concurrency must be 1, 2 or 4".into()),
+        None => Ok(profile.concurrencies().to_vec()),
+    }
 }
 
 fn finish_sweep(expected: usize, completed: usize) -> DynResult<()> {
@@ -176,6 +191,18 @@ mod tests {
         ] {
             assert_eq!(profile.concurrencies(), &[1, 2, 4]);
         }
+    }
+    #[test]
+    fn diagnostic_concurrency_runs_one_cell_without_changing_default_sweep() {
+        assert_eq!(
+            selected_concurrencies(super::super::Profile::Comparison, None).unwrap(),
+            [1, 2, 4]
+        );
+        assert_eq!(
+            selected_concurrencies(super::super::Profile::Comparison, Some(2)).unwrap(),
+            [2]
+        );
+        assert!(selected_concurrencies(super::super::Profile::Comparison, Some(8)).is_err());
     }
     #[test]
     fn memory_failure_requires_explicit_evidence() {

@@ -107,7 +107,7 @@ struct Prepared {
 }
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     const GRAMMAR: Grammar = Grammar {
-        usage: "cargo xtool automation agentx {container|run} --engine {llama|skippy} --model KEY --profile {smoke|benchmark|comparison} --output PATH | worker --input PATH --port PORT --concurrency N",
+        usage: "cargo xtool automation agentx {container|run} --engine {llama|skippy} --model KEY --profile {smoke|benchmark|comparison} --output PATH [--only-concurrency {1|2|4}] | worker --input PATH --port PORT --concurrency N",
         values: &[
             "--model",
             "--engine",
@@ -116,6 +116,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
             "--input",
             "--port",
             "--concurrency",
+            "--only-concurrency",
         ],
         flags: &["--help"],
     };
@@ -126,12 +127,19 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return crate::repository::check_report::CheckReport::success(GRAMMAR.usage.into()).emit();
     }
     match parsed.positionals.as_slice() {
-        [verb] if *verb == "container" => container::run(
-            Engine::parse(parsed.last("--engine").ok_or("missing engine")?)?,
-            parsed.last("--model").ok_or("missing model")?,
-            Profile::parse(parsed.last("--profile").ok_or("missing profile")?)?,
-            PathBuf::from(parsed.last("--output").ok_or("missing output")?),
-        ),
+        [verb] if *verb == "container" => {
+            if parsed.last("--only-concurrency").is_some() {
+                return Err(
+                    "only-concurrency applies to a native run, not a container launch".into(),
+                );
+            }
+            container::run(
+                Engine::parse(parsed.last("--engine").ok_or("missing engine")?)?,
+                parsed.last("--model").ok_or("missing model")?,
+                Profile::parse(parsed.last("--profile").ok_or("missing profile")?)?,
+                PathBuf::from(parsed.last("--output").ok_or("missing output")?),
+            )
+        }
         [verb] if *verb == "run" => {
             hardware::admit_execution()?;
             let root = std::env::current_dir()?;
@@ -142,13 +150,18 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
             }
             std::fs::create_dir(&output)?;
             let engine = Engine::parse(parsed.last("--engine").ok_or("missing engine")?)?;
+            let only_concurrency = parsed
+                .last("--only-concurrency")
+                .map(str::parse::<u32>)
+                .transpose()?;
             let prepared = inputs::prepare(
                 root,
                 output.clone(),
                 parsed.last("--model").ok_or("missing model")?,
                 profile,
             );
-            let result = prepared.and_then(|prepared| campaign::run(&prepared, engine));
+            let result =
+                prepared.and_then(|prepared| campaign::run(&prepared, engine, only_concurrency));
             let archive = results::archive(&output);
             result?;
             archive
