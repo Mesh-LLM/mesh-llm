@@ -21,9 +21,26 @@ struct Settings {
     nonblocking: bool,
 }
 
+#[derive(Clone, Copy)]
+enum Operation {
+    Read,
+    Write,
+    CloseWrite,
+}
+
+impl Operation {
+    fn is_closed(self, closed: u8) -> bool {
+        match self {
+            Self::Read => closed & 1 != 0,
+            Self::Write => closed & 2 != 0,
+            Self::CloseWrite => closed == 3,
+        }
+    }
+}
+
 pub(super) struct AsyncConnection {
-    read: Mutex<BufReader<ReadHalf<Stream>>>,
-    write: Mutex<WriteHalf<Stream>>,
+    read: Mutex<Option<BufReader<ReadHalf<Stream>>>>,
+    write: Mutex<Option<WriteHalf<Stream>>>,
     settings: Mutex<Settings>,
     closed: watch::Sender<u8>,
     runtime: Handle,
@@ -44,8 +61,8 @@ impl AsyncConnection {
     {
         let (read, write) = tokio::io::split(Box::new(stream) as Stream);
         Self {
-            read: Mutex::new(BufReader::new(read)),
-            write: Mutex::new(write),
+            read: Mutex::new(Some(BufReader::new(read))),
+            write: Mutex::new(Some(write)),
             settings: Mutex::new(Settings::default()),
             closed: watch::channel(0).0,
             runtime,
@@ -54,22 +71,22 @@ impl AsyncConnection {
 
     fn run<T>(
         &self,
-        direction: u8,
+        direction: Operation,
         operation: impl Future<Output = io::Result<T>>,
     ) -> io::Result<T> {
         let settings = *self.settings.lock().map_err(poisoned)?;
-        let timeout = if direction == 1 {
+        let timeout = if matches!(direction, Operation::Read) {
             settings.read_timeout
         } else {
             settings.write_timeout
         };
         let mut closed = self.closed.subscribe();
         self.runtime.block_on(async {
-            if *closed.borrow() & direction != 0 {
+            if direction.is_closed(*closed.borrow()) {
                 return Err(io::ErrorKind::ConnectionAborted.into());
             }
             let operation = async {
-                if settings.nonblocking {
+                if settings.nonblocking && !matches!(direction, Operation::CloseWrite) {
                     operation
                         .now_or_never()
                         .unwrap_or_else(|| Err(io::ErrorKind::WouldBlock.into()))
@@ -86,7 +103,7 @@ impl AsyncConnection {
                 tokio::select! {
                     biased;
                     result = closed.changed() => {
-                        if result.is_err() || *closed.borrow() & direction != 0 {
+                        if result.is_err() || direction.is_closed(*closed.borrow()) {
                             return Err(io::ErrorKind::ConnectionAborted.into());
                         }
                     }
@@ -98,7 +115,8 @@ impl AsyncConnection {
 
     pub(super) fn read(&self, buffer: &mut [u8]) -> io::Result<usize> {
         let mut reader = self.read.lock().map_err(poisoned)?;
-        self.run(1, reader.read(buffer))
+        let reader = reader.as_mut().ok_or(io::ErrorKind::ConnectionAborted)?;
+        self.run(Operation::Read, reader.read(buffer))
     }
 
     pub(super) fn peek(&self, buffer: &mut [u8]) -> io::Result<usize> {
@@ -106,7 +124,8 @@ impl AsyncConnection {
             return Ok(0);
         }
         let mut reader = self.read.lock().map_err(poisoned)?;
-        self.run(1, async {
+        let reader = reader.as_mut().ok_or(io::ErrorKind::ConnectionAborted)?;
+        self.run(Operation::Read, async {
             let bytes = reader.fill_buf().await?;
             let count = bytes.len().min(buffer.len());
             buffer[..count].copy_from_slice(&bytes[..count]);
@@ -116,12 +135,14 @@ impl AsyncConnection {
 
     pub(super) fn write(&self, buffer: &[u8]) -> io::Result<usize> {
         let mut writer = self.write.lock().map_err(poisoned)?;
-        self.run(2, writer.write(buffer))
+        let writer = writer.as_mut().ok_or(io::ErrorKind::ConnectionAborted)?;
+        self.run(Operation::Write, writer.write(buffer))
     }
 
     pub(super) fn flush(&self) -> io::Result<()> {
         let mut writer = self.write.lock().map_err(poisoned)?;
-        self.run(2, writer.flush())
+        let writer = writer.as_mut().ok_or(io::ErrorKind::ConnectionAborted)?;
+        self.run(Operation::Write, writer.flush())
     }
 
     pub(super) fn shutdown(&self, direction: Shutdown) -> io::Result<()> {
@@ -132,13 +153,15 @@ impl AsyncConnection {
         };
         // Wake blocked operations before acquiring either I/O lock.
         self.closed.send_modify(|closed| *closed |= mask);
+        if *self.closed.borrow() == 3 {
+            self.read.lock().map_err(poisoned)?.take();
+            self.write.lock().map_err(poisoned)?.take();
+            return Ok(());
+        }
         if mask & 2 != 0 {
             let mut writer = self.write.lock().map_err(poisoned)?;
-            self.runtime.block_on(async {
-                tokio::time::timeout(Duration::from_secs(1), writer.shutdown())
-                    .await
-                    .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
-            })?;
+            let writer = writer.as_mut().ok_or(io::ErrorKind::ConnectionAborted)?;
+            self.run(Operation::CloseWrite, writer.shutdown())?;
         }
         Ok(())
     }

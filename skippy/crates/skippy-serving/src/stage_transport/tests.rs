@@ -89,3 +89,65 @@ async fn shutdown_interrupts_a_backpressured_writer() {
     .await
     .unwrap();
 }
+
+struct PendingClose {
+    stream: tokio::io::DuplexStream,
+    closing: std::sync::mpsc::Sender<()>,
+}
+
+impl AsyncRead for PendingClose {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.stream).poll_read(cx, buffer)
+    }
+}
+
+impl AsyncWrite for PendingClose {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::pin::Pin::new(&mut self.stream).poll_write(cx, buffer)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        let _ = self.closing.send(());
+        std::task::Poll::Pending
+    }
+}
+
+#[tokio::test]
+async fn teardown_interrupts_a_provider_waiting_for_graceful_close() {
+    let (stream, _peer) = tokio::io::duplex(64);
+    let (closing, waiting) = std::sync::mpsc::channel();
+    let source = StageConnection::from_async(
+        PendingClose { stream, closing },
+        tokio::runtime::Handle::current(),
+    );
+    tokio::task::spawn_blocking(move || {
+        let half_close = source.try_clone().unwrap();
+        let task = std::thread::spawn(move || half_close.shutdown(Shutdown::Write));
+        waiting.recv_timeout(Duration::from_secs(1)).unwrap();
+        source.shutdown(Shutdown::Both).unwrap();
+        assert_eq!(
+            task.join().unwrap().unwrap_err().kind(),
+            io::ErrorKind::ConnectionAborted
+        );
+    })
+    .await
+    .unwrap();
+}

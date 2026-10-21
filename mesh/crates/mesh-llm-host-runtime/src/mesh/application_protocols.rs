@@ -13,6 +13,7 @@ use tokio::sync::{Mutex, Semaphore, watch};
 
 use super::Node;
 mod stage_policy;
+mod stream_admission;
 
 struct Registration {
     descriptor: ProtocolDescriptor,
@@ -31,7 +32,11 @@ pub(crate) struct ApplicationProtocols {
     peers: watch::Sender<Vec<ProtocolPeer>>,
     cancelled: watch::Sender<bool>,
     tasks: Mutex<tokio::task::JoinSet<()>>,
+    /// Permit pool for protocols without a stage transport provider.
     streams: Arc<Semaphore>,
+    /// Dedicated pool for protocols with a stage transport provider, whose
+    /// streams stay open for the lifetime of a stage transfer.
+    stage_streams: Arc<Semaphore>,
 }
 
 impl Default for ApplicationProtocols {
@@ -44,6 +49,7 @@ impl Default for ApplicationProtocols {
             cancelled: watch::channel(false).0,
             tasks: Mutex::new(tokio::task::JoinSet::new()),
             streams: Arc::new(Semaphore::new(32)),
+            stage_streams: Arc::new(Semaphore::new(32)),
         }
     }
 }
@@ -81,6 +87,7 @@ impl ApplicationProtocols {
     pub(crate) async fn shutdown(&self) {
         self.cancelled.send_replace(true);
         self.streams.close();
+        self.stage_streams.close();
         let mut tasks = self.tasks.lock().await;
         let _ = tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while tasks.join_next().await.is_some() {}
@@ -289,16 +296,23 @@ impl Node {
             .get()
             .and_then(|registry| registry.get(&(name.into(), major)))
             .ok_or_else(|| anyhow::anyhow!("unsupported mesh subprotocol {name}/{major}"))?;
-        let permit = self
-            .application_protocols
-            .streams
-            .clone()
-            .try_acquire_owned()?;
+        // Protocols that register a stage transport provider host long-lived
+        // stage channels, so they draw from a dedicated permit pool: a full
+        // stage pool must not starve the shared application-stream pool (and
+        // vice versa is bounded by the separate cap).
+        let semaphore = if entry.handler.stage_transport().is_some() {
+            self.application_protocols.stage_streams.clone()
+        } else {
+            self.application_protocols.streams.clone()
+        };
+        let permit = semaphore.try_acquire_owned()?;
         let context = self.application_protocol_context(entry.descriptor.clone());
         let handler = entry.handler.clone();
         self.application_protocols.spawn(async move {
-            let _permit = permit;
-            let incoming = IncomingProtocolStream { peer: remote, stream: ProtocolStream::from_iroh(send, recv) };
+            let incoming = IncomingProtocolStream {
+                peer: remote,
+                stream: stream_admission::hold_permit(ProtocolStream::from_iroh(send, recv), permit),
+            };
             let result = tokio::select! {
                 result = handler.accept(context.clone(), incoming) => result,
                 () = context.cancelled() => return,

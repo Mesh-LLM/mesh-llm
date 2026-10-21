@@ -106,8 +106,10 @@ lowercase ASCII letters, digits, dots and hyphens (1–64 bytes), major
 versions are positive, and features are at most 32 strings of 1–64 ASCII letters, digits, dots,
 hyphens or underscores. Keep `descriptor()` stable for the lifetime of the handler.
 
-The runtime allows at most 32 concurrent incoming application streams; once the cap is reached,
-additional incoming opens are rejected rather than queued. It cancels incoming
+The runtime limits concurrent incoming application streams to 32 per pool: protocols without a
+stage provider use the shared application-stream pool, while protocols with a stage provider use
+the dedicated stage pool. When the selected pool reaches its cap, additional incoming opens are
+rejected rather than queued. It cancels incoming
 handlers when the node stops and signals `context.cancelled()` to background work, allowing one
 second for cleanup before aborting remaining tasks. Await work inside `run`/`accept`; detached
 tasks created by a handler are the application's responsibility. Registrations cannot change
@@ -148,7 +150,10 @@ impl StageTransportProvider for MyProtocol {
 // context.accept_stage(incoming.peer, connected_stream).await?;
 ```
 
-At most one stage provider may be registered. It must supply reliable, ordered
+At most one stage provider may be registered. Protocols with a stage provider admit inbound
+streams from a dedicated 32-permit pool, so long-lived stage channels cannot exhaust the shared
+application-stream pool (and excess stage opens are rejected rather than queued, like the shared
+pool). The provider must supply reliable, ordered
 bytes, support half-close, and release its owned work when the stream is dropped. Errors fail the connection; Mesh never
 replays stage bytes over another transport. Stage control, artifacts and activation
 encoding retain their existing contracts. See the

@@ -52,6 +52,10 @@ Accepted streams enter a bounded queue for the exact local stage generation; a
 full, stopped or unready ingress rejects the channel. The accept call returns
 after handoff. Mesh retains admission and policy monitoring for the stream's
 lifetime, including while execution is blocked on reads or writes.
+Protocols with a stage provider admit their inbound application streams from a
+dedicated 32-permit pool so long-lived channels cannot starve the shared
+application-stream pool. A permit follows the application stream through execution
+handoff and is released when that stream drops. Excess opens are rejected.
 
 ```mermaid
 flowchart LR
