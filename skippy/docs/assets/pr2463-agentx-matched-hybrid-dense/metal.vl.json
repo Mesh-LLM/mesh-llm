@@ -1,0 +1,769 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "background": "#ffffff",
+  "padding": 24,
+  "title": {
+    "text": "Hybrid dense · Qwen3.5-4B · Q4_K_M",
+    "subtitle": [
+      "Platform: M3 Ultra / Metal · Model category: hybrid dense",
+      "AgentX post2 · fixed 69 requests / 18,713 output tokens per cell · ABBAAB · c1/c2/c4",
+      "Three repetitions per engine and concurrency; identical completed work; source 853836f49",
+      "Error bars show observed range; RSS is process memory, not isolated GPU residency."
+    ],
+    "fontSize": 23,
+    "subtitleFontSize": 12,
+    "subtitleLineHeight": 19,
+    "anchor": "start",
+    "offset": 24
+  },
+  "spacing": 35,
+  "vconcat": [
+    {
+      "hconcat": [
+        {
+          "width": 400,
+          "height": 230,
+          "title": {
+            "text": "Aggregate output throughput",
+            "subtitle": "tokens / second · Higher is better · median and min–max",
+            "anchor": "start"
+          },
+          "data": {
+            "values": [
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c1",
+                "value": 12.947309728514293,
+                "low": 12.945633921729932,
+                "high": 12.95071896608757
+              },
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c2",
+                "value": 19.850558676221624,
+                "low": 19.843462745052953,
+                "high": 19.8681603536809
+              },
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c4",
+                "value": 26.77244743495052,
+                "low": 26.770638736524845,
+                "high": 26.79282591753881
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c1",
+                "value": 12.935962385708208,
+                "low": 12.932819109296325,
+                "high": 12.936906163868755
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c2",
+                "value": 18.578349086242124,
+                "low": 18.577115902329286,
+                "high": 18.57916736460168
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c4",
+                "value": 25.29798359415827,
+                "low": 25.261993180198722,
+                "high": 25.304894362512265
+              }
+            ]
+          },
+          "encoding": {
+            "x": {
+              "field": "concurrency",
+              "type": "ordinal",
+              "scale": {
+                "domain": [
+                  "c1",
+                  "c2",
+                  "c4"
+                ]
+              },
+              "axis": {
+                "title": null,
+                "labelAngle": 0,
+                "labelFontSize": 13
+              }
+            },
+            "xOffset": {
+              "field": "engine",
+              "sort": [
+                "llama.cpp",
+                "Skippy"
+              ]
+            }
+          },
+          "layer": [
+            {
+              "mark": {
+                "type": "bar",
+                "size": 48,
+                "cornerRadiusTopLeft": 3,
+                "cornerRadiusTopRight": 3
+              },
+              "encoding": {
+                "y": {
+                  "field": "value",
+                  "type": "quantitative",
+                  "scale": {
+                    "zero": true,
+                    "domainMax": 31.615534582695794
+                  },
+                  "axis": {
+                    "title": null,
+                    "grid": true,
+                    "tickCount": 5
+                  }
+                },
+                "color": {
+                  "field": "engine",
+                  "type": "nominal",
+                  "scale": {
+                    "domain": [
+                      "llama.cpp",
+                      "Skippy"
+                    ],
+                    "range": [
+                      "#2563eb",
+                      "#e87722"
+                    ]
+                  },
+                  "legend": {
+                    "title": null,
+                    "orient": "top",
+                    "direction": "horizontal"
+                  }
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "rule",
+                "color": "#263244",
+                "strokeWidth": 1.5
+              },
+              "encoding": {
+                "y": {
+                  "field": "low",
+                  "type": "quantitative"
+                },
+                "y2": {
+                  "field": "high"
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "tick",
+                "color": "#263244",
+                "size": 12,
+                "thickness": 1.5
+              },
+              "encoding": {
+                "y": {
+                  "field": "low",
+                  "type": "quantitative"
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "tick",
+                "color": "#263244",
+                "size": 12,
+                "thickness": 1.5
+              },
+              "encoding": {
+                "y": {
+                  "field": "high",
+                  "type": "quantitative"
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "text",
+                "dy": -12,
+                "fontSize": 12,
+                "fontWeight": 600,
+                "color": "#182638"
+              },
+              "encoding": {
+                "y": {
+                  "field": "high",
+                  "type": "quantitative"
+                },
+                "text": {
+                  "field": "value",
+                  "type": "quantitative",
+                  "format": ".2f"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "width": 400,
+          "height": 230,
+          "title": {
+            "text": "Derived decode rate",
+            "subtitle": "1000 / median ITL (ms) · Higher is better · median and min–max",
+            "anchor": "start"
+          },
+          "data": {
+            "values": [
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c1",
+                "value": 88.01362212690451,
+                "low": 87.70751586287983,
+                "high": 88.05723954714131
+              },
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c2",
+                "value": 65.01543968029054,
+                "low": 64.88432691134685,
+                "high": 65.04854114490803
+              },
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c4",
+                "value": 33.30419732411618,
+                "low": 33.22562174669499,
+                "high": 33.33554406749488
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c1",
+                "value": 88.3247850580266,
+                "low": 87.96687962609545,
+                "high": 88.45856672928005
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c2",
+                "value": 64.76136854175243,
+                "low": 64.738764672774,
+                "high": 65.55879897606768
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c4",
+                "value": 31.767037368437723,
+                "low": 31.75589479986035,
+                "high": 31.919251183552632
+              }
+            ]
+          },
+          "encoding": {
+            "x": {
+              "field": "concurrency",
+              "type": "ordinal",
+              "scale": {
+                "domain": [
+                  "c1",
+                  "c2",
+                  "c4"
+                ]
+              },
+              "axis": {
+                "title": null,
+                "labelAngle": 0,
+                "labelFontSize": 13
+              }
+            },
+            "xOffset": {
+              "field": "engine",
+              "sort": [
+                "llama.cpp",
+                "Skippy"
+              ]
+            }
+          },
+          "layer": [
+            {
+              "mark": {
+                "type": "bar",
+                "size": 48,
+                "cornerRadiusTopLeft": 3,
+                "cornerRadiusTopRight": 3
+              },
+              "encoding": {
+                "y": {
+                  "field": "value",
+                  "type": "quantitative",
+                  "scale": {
+                    "zero": true,
+                    "domainMax": 104.38110874055046
+                  },
+                  "axis": {
+                    "title": null,
+                    "grid": true,
+                    "tickCount": 5
+                  }
+                },
+                "color": {
+                  "field": "engine",
+                  "type": "nominal",
+                  "scale": {
+                    "domain": [
+                      "llama.cpp",
+                      "Skippy"
+                    ],
+                    "range": [
+                      "#2563eb",
+                      "#e87722"
+                    ]
+                  },
+                  "legend": {
+                    "title": null,
+                    "orient": "top",
+                    "direction": "horizontal"
+                  }
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "rule",
+                "color": "#263244",
+                "strokeWidth": 1.5
+              },
+              "encoding": {
+                "y": {
+                  "field": "low",
+                  "type": "quantitative"
+                },
+                "y2": {
+                  "field": "high"
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "tick",
+                "color": "#263244",
+                "size": 12,
+                "thickness": 1.5
+              },
+              "encoding": {
+                "y": {
+                  "field": "low",
+                  "type": "quantitative"
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "tick",
+                "color": "#263244",
+                "size": 12,
+                "thickness": 1.5
+              },
+              "encoding": {
+                "y": {
+                  "field": "high",
+                  "type": "quantitative"
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "text",
+                "dy": -12,
+                "fontSize": 12,
+                "fontWeight": 600,
+                "color": "#182638"
+              },
+              "encoding": {
+                "y": {
+                  "field": "high",
+                  "type": "quantitative"
+                },
+                "text": {
+                  "field": "value",
+                  "type": "quantitative",
+                  "format": ".2f"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hconcat": [
+        {
+          "width": 400,
+          "height": 230,
+          "title": {
+            "text": "Time to first token (p50)",
+            "subtitle": "seconds · Lower is better · median and min–max",
+            "anchor": "start"
+          },
+          "data": {
+            "values": [
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c1",
+                "value": 1.41989375,
+                "low": 1.4032947919999998,
+                "high": 1.4237379999999997
+              },
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c2",
+                "value": 1.519169625,
+                "low": 1.486094292,
+                "high": 1.527153709
+              },
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c4",
+                "value": 2.77732375,
+                "low": 2.758848833,
+                "high": 2.9149321660000003
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c1",
+                "value": 1.479613875,
+                "low": 1.47764625,
+                "high": 1.480064333
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c2",
+                "value": 1.986466167,
+                "low": 1.982234917,
+                "high": 1.9869254589999998
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c4",
+                "value": 3.1166712079999996,
+                "low": 3.104024458,
+                "high": 3.117865958
+              }
+            ]
+          },
+          "encoding": {
+            "x": {
+              "field": "concurrency",
+              "type": "ordinal",
+              "scale": {
+                "domain": [
+                  "c1",
+                  "c2",
+                  "c4"
+                ]
+              },
+              "axis": {
+                "title": null,
+                "labelAngle": 0,
+                "labelFontSize": 13
+              }
+            },
+            "xOffset": {
+              "field": "engine",
+              "sort": [
+                "llama.cpp",
+                "Skippy"
+              ]
+            }
+          },
+          "layer": [
+            {
+              "mark": {
+                "type": "bar",
+                "size": 48,
+                "cornerRadiusTopLeft": 3,
+                "cornerRadiusTopRight": 3
+              },
+              "encoding": {
+                "y": {
+                  "field": "value",
+                  "type": "quantitative",
+                  "scale": {
+                    "zero": true,
+                    "domainMax": 3.6790818304399995
+                  },
+                  "axis": {
+                    "title": null,
+                    "grid": true,
+                    "tickCount": 5
+                  }
+                },
+                "color": {
+                  "field": "engine",
+                  "type": "nominal",
+                  "scale": {
+                    "domain": [
+                      "llama.cpp",
+                      "Skippy"
+                    ],
+                    "range": [
+                      "#2563eb",
+                      "#e87722"
+                    ]
+                  },
+                  "legend": {
+                    "title": null,
+                    "orient": "top",
+                    "direction": "horizontal"
+                  }
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "rule",
+                "color": "#263244",
+                "strokeWidth": 1.5
+              },
+              "encoding": {
+                "y": {
+                  "field": "low",
+                  "type": "quantitative"
+                },
+                "y2": {
+                  "field": "high"
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "tick",
+                "color": "#263244",
+                "size": 12,
+                "thickness": 1.5
+              },
+              "encoding": {
+                "y": {
+                  "field": "low",
+                  "type": "quantitative"
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "tick",
+                "color": "#263244",
+                "size": 12,
+                "thickness": 1.5
+              },
+              "encoding": {
+                "y": {
+                  "field": "high",
+                  "type": "quantitative"
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "text",
+                "dy": -12,
+                "fontSize": 12,
+                "fontWeight": 600,
+                "color": "#182638"
+              },
+              "encoding": {
+                "y": {
+                  "field": "high",
+                  "type": "quantitative"
+                },
+                "text": {
+                  "field": "value",
+                  "type": "quantitative",
+                  "format": ".3f"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "width": 400,
+          "height": 230,
+          "title": {
+            "text": "Peak process RSS",
+            "subtitle": "GiB · maximum sampled in three arms · Lower is better",
+            "anchor": "start"
+          },
+          "data": {
+            "values": [
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c1",
+                "value": 18.212203979492188,
+                "low": 18.209426879882812,
+                "high": 18.212203979492188
+              },
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c2",
+                "value": 27.482284545898438,
+                "low": 26.925430297851562,
+                "high": 27.482284545898438
+              },
+              {
+                "engine": "llama.cpp",
+                "concurrency": "c4",
+                "value": 38.98509216308594,
+                "low": 38.978485107421875,
+                "high": 38.98509216308594
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c1",
+                "value": 28.518646240234375,
+                "low": 28.492095947265625,
+                "high": 28.518646240234375
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c2",
+                "value": 33.99562072753906,
+                "low": 33.991180419921875,
+                "high": 33.99562072753906
+              },
+              {
+                "engine": "Skippy",
+                "concurrency": "c4",
+                "value": 35.8017578125,
+                "low": 35.793548583984375,
+                "high": 35.8017578125
+              }
+            ]
+          },
+          "encoding": {
+            "x": {
+              "field": "concurrency",
+              "type": "ordinal",
+              "scale": {
+                "domain": [
+                  "c1",
+                  "c2",
+                  "c4"
+                ]
+              },
+              "axis": {
+                "title": null,
+                "labelAngle": 0,
+                "labelFontSize": 13
+              }
+            },
+            "xOffset": {
+              "field": "engine",
+              "sort": [
+                "llama.cpp",
+                "Skippy"
+              ]
+            }
+          },
+          "layer": [
+            {
+              "mark": {
+                "type": "bar",
+                "size": 48,
+                "cornerRadiusTopLeft": 3,
+                "cornerRadiusTopRight": 3
+              },
+              "encoding": {
+                "y": {
+                  "field": "value",
+                  "type": "quantitative",
+                  "scale": {
+                    "zero": true,
+                    "domainMax": 46.002408752441404
+                  },
+                  "axis": {
+                    "title": null,
+                    "grid": true,
+                    "tickCount": 5
+                  }
+                },
+                "color": {
+                  "field": "engine",
+                  "type": "nominal",
+                  "scale": {
+                    "domain": [
+                      "llama.cpp",
+                      "Skippy"
+                    ],
+                    "range": [
+                      "#2563eb",
+                      "#e87722"
+                    ]
+                  },
+                  "legend": {
+                    "title": null,
+                    "orient": "top",
+                    "direction": "horizontal"
+                  }
+                }
+              }
+            },
+            {
+              "mark": {
+                "type": "text",
+                "dy": -12,
+                "fontSize": 12,
+                "fontWeight": 600,
+                "color": "#182638"
+              },
+              "encoding": {
+                "y": {
+                  "field": "high",
+                  "type": "quantitative"
+                },
+                "text": {
+                  "field": "value",
+                  "type": "quantitative",
+                  "format": ".2f"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "resolve": {
+    "scale": {
+      "color": "shared"
+    }
+  },
+  "config": {
+    "font": "Arial",
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "domain": false,
+      "tickColor": "#b9c3d0",
+      "gridColor": "#e9edf3",
+      "labelColor": "#526174",
+      "labelFontSize": 12
+    },
+    "title": {
+      "color": "#17253b",
+      "subtitleColor": "#56657a",
+      "fontSize": 17,
+      "subtitleFontSize": 11,
+      "offset": 12
+    },
+    "legend": {
+      "labelFontSize": 13,
+      "symbolType": "square",
+      "symbolSize": 110,
+      "padding": 4
+    }
+  }
+}

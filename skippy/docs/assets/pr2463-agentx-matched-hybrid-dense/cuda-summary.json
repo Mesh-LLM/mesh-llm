@@ -1,0 +1,183 @@
+{
+  "job": "job_j2ragfvg86fc06x",
+  "source": "853836f49",
+  "completed_work_hash": "6880ae208381ea0edffcf9ccedc28423948536f70d40a5a5160aa39fc915dff7",
+  "rows": {
+    "output": [
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c1",
+        "value": 12.554926414022074,
+        "low": 12.53555621111419,
+        "high": 12.578199286336481
+      },
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c2",
+        "value": 19.817794250151046,
+        "low": 19.769640743706866,
+        "high": 19.843746568413145
+      },
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c4",
+        "value": 26.7520518139075,
+        "low": 26.52288960499121,
+        "high": 27.11458351493302
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c1",
+        "value": 11.63420271450364,
+        "low": 11.624882398410076,
+        "high": 11.641664667942958
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c2",
+        "value": 17.44129455440209,
+        "low": 17.39470781372176,
+        "high": 17.784856583244476
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c4",
+        "value": 23.08762381275953,
+        "low": 22.863365805845177,
+        "high": 23.20629756736742
+      }
+    ],
+    "decode": [
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c1",
+        "value": 43.603142878682306,
+        "low": 43.57707276848434,
+        "high": 44.26638344089232
+      },
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c2",
+        "value": 32.57389600642602,
+        "low": 32.275245874805606,
+        "high": 32.70661368248963
+      },
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c4",
+        "value": 17.542029964631087,
+        "low": 17.192505832257748,
+        "high": 18.409480800492478
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c1",
+        "value": 33.59440816127126,
+        "low": 33.529566900046845,
+        "high": 33.620627761335705
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c2",
+        "value": 24.369703885332285,
+        "low": 24.13186698785471,
+        "high": 25.97828691063014
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c4",
+        "value": 16.893158759019165,
+        "low": 16.17928357122161,
+        "high": 17.18754614695152
+      }
+    ],
+    "ttft": [
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c1",
+        "value": 0.821484641,
+        "low": 0.8203142179999999,
+        "high": 0.822783689
+      },
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c2",
+        "value": 1.188652411,
+        "low": 1.17712248,
+        "high": 1.200922224
+      },
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c4",
+        "value": 1.917304333,
+        "low": 1.874616801,
+        "high": 2.053811577
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c1",
+        "value": 0.954944492,
+        "low": 0.9527316690000001,
+        "high": 0.9594815189999999
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c2",
+        "value": 1.168015801,
+        "low": 1.1536619590000001,
+        "high": 1.191076605
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c4",
+        "value": 1.931668148,
+        "low": 1.930446487,
+        "high": 1.9760583159999998
+      }
+    ],
+    "rss": [
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c1",
+        "value": 10.850025177001953,
+        "low": 10.849205017089844,
+        "high": 10.850025177001953
+      },
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c2",
+        "value": 11.979984283447266,
+        "low": 11.978096008300781,
+        "high": 11.979984283447266
+      },
+      {
+        "engine": "llama.cpp",
+        "concurrency": "c4",
+        "value": 14.202228546142578,
+        "low": 13.909248352050781,
+        "high": 14.202228546142578
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c1",
+        "value": 9.617080688476562,
+        "low": 9.614429473876953,
+        "high": 9.617080688476562
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c2",
+        "value": 13.932628631591797,
+        "low": 13.151512145996094,
+        "high": 13.932628631591797
+      },
+      {
+        "engine": "Skippy",
+        "concurrency": "c4",
+        "value": 15.119110107421875,
+        "low": 13.359066009521484,
+        "high": 15.119110107421875
+      }
+    ]
+  }
+}
