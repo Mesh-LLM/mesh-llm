@@ -710,6 +710,7 @@ fn store_exact_radix_record_with_codec(
     // the radix value share Arc-backed blocks, so L2/L3 can retain the exact
     // bytes without delaying an immediate repeat request's L1 lookup.
     let mut released = Vec::new();
+    let mut count_evictions = Vec::new();
     let insert_result = {
         let mut radix = radix
             .lock()
@@ -735,6 +736,7 @@ fn store_exact_radix_record_with_codec(
                     let Some(evicted) = radix.evict_lru_recurrent() else {
                         break;
                     };
+                    count_evictions.push((evicted.tokens.len() as u64, evicted.logical_bytes));
                     released.push(evicted.value.payload);
                 }
                 Ok(())
@@ -748,6 +750,16 @@ fn store_exact_radix_record_with_codec(
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         )?;
         return Err(error);
+    }
+    for (position, evicted_bytes) in count_evictions {
+        emit_exact_state_diagnostic(
+            "evicted_l1_count",
+            &[
+                ("position", position),
+                ("logical_bytes", evicted_bytes),
+                ("max_entries", max_entries as u64),
+            ],
+        );
     }
     if !released.is_empty() {
         let mut blobs = blobs
