@@ -161,7 +161,10 @@ and working Git/xcrun. The toolchain uses the canonical shared HF cache at
 `/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
 `HF_HUB_OFFLINE=0` so missing pinned models and trajectories can be downloaded.
 Pinned input verification uses the installed `hf download --format quiet` CLI
-for path-only stdout; it does not require Hugging Face in system Python. Model
+for path-only stdout; it does not require Hugging Face in system Python.
+The replay toolchain gate requires the installed `hf` CLI without separate
+`python3` or `uv` command checks; runner provisioning owns the CLI and its runtime.
+Model
 and trajectory downloads retain revision and SHA-256 checks. The native `trajectory-reader` supplies the compressed Parquet reader. The
 history existence probe uses the typed native HTTP owner and permits bootstrap
 only on 404.
@@ -1420,8 +1423,8 @@ graph, and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix;
 its `Justfile` and `just/**` inputs are part of the exact seed key.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
-without changing execution. The existing Python test discovery verifies the
-catalog against workflow bindings and real planner rows. Historical tool
+without changing execution. The native `migration_ci_operations` contracts
+verify the catalog against workflow bindings and real planner rows. Historical tool
 receipts and source provenance remain unknown until qualified image receipts
 exist. Other consumer workload coverage remains unknown. The measured CPU
 runtime workload had zero seed hits in all three warm samples; the separate
