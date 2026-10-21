@@ -191,8 +191,14 @@ copied from the container into the JY result. A green job therefore requires
 every requested cell to complete. Harness versions 4 and later separate these
 measurements from the previous fixed-context sweep.
 Skippy's in-memory prefix retention target is explicitly 8 GiB, with disk
-caching off; exact snapshots can exceed that target. llama-server retains its
-per-slot prompt caches. These cache policies are recorded in launch arguments.
+caching off. That target is a soft cap for exact snapshots: the default hard
+cap is eight times larger, and the last indivisible snapshot can exceed even
+that cap. The pinned llama-server instead defaults to an 8,192 MiB hard
+`--cache-ram` limit and skips saving any prompt state larger than it. Its
+per-slot KV may still hit while resident. These comparisons therefore include
+each engine's cache-retention policy; an aggregate throughput lead after
+different cache-hit counts is not a decode-kernel comparison. Report the
+per-request cache-read tokens alongside such a result.
 
 Large CUDA snapshot reads into pageable host memory use a reusable 64 MiB
 pinned staging buffer per physical GPU. Capture remains synchronous so later
