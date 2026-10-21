@@ -1835,6 +1835,15 @@ source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
 
+The canary build and generated-patch checks share the locked external Jinja
+project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
+selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
+state directory and uses the prepared SDK interpreter when available, otherwise
+the installed `python3`. Interpreter downloads are disabled. Both upstream
+Jinja tests remain selected by the complete native suite. The optional developer
+llama-benchy wrapper defaults to a full upstream source commit; explicit caller
+overrides remain available. Neither dependency adds repository Python code.
+
 ### Self-hosted job disk cleanup
 
 The persistent build and family jobs run `cargo xtool ci-ops runner-cleanup`
