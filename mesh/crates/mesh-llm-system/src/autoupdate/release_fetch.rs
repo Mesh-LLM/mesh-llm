@@ -19,6 +19,9 @@ use release_integrity::{
 const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
 const PRODUCT_MANIFEST_NAME: &str = "product-manifest.json";
 const NATIVE_RUNTIMES_DIR_NAME: &str = "native-runtimes";
+/// The default plugins a release bundles beside the host, which a node
+/// installs from when it starts (`mesh_llm_plugin_manager::bundled`).
+const BUNDLED_PLUGINS_DIR_NAME: &str = "plugins";
 const PATH_WRITE_PROBE_PREFIX: &str = ".mesh-llm-write-probe";
 #[cfg(not(windows))]
 pub(super) const INSTALL_SCRIPT_URL: &str =
@@ -668,7 +671,9 @@ mod zip_tests {
 ///   mesh-llm binary.
 /// - composed product-v2 bundles (v0.75.0 and newer): the mesh-llm binary plus
 ///   product-manifest.json, host-imports.json, and a native-runtimes/ directory
-///   holding the packaged runtime tree.
+///   holding the packaged runtime tree; macOS and Linux bundles from v0.79.0
+///   also carry a plugins/ directory with the default plugins built for that
+///   release, which installs with the host so the updated node installs them.
 ///
 /// The returned paths are relative to the extracted bundle root, sorted so the
 /// mesh binary installs first.
@@ -721,6 +726,9 @@ fn collect_bundle_files(
     let mut staged = files;
     if dirs.contains(&NATIVE_RUNTIMES_DIR_NAME.to_string()) {
         staged.push(NATIVE_RUNTIMES_DIR_NAME.to_string());
+        if dirs.contains(&BUNDLED_PLUGINS_DIR_NAME.to_string()) {
+            staged.push(BUNDLED_PLUGINS_DIR_NAME.to_string());
+        }
     }
     // The mesh binary must install first so a mid-install failure can never
     // leave the new runtime tree beside an old host.
@@ -854,6 +862,43 @@ mod composed_product_regression_tests {
             .unwrap(),
             b"runtime"
         );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A bundle's plugins/ installs with the host, replacing the previous
+    /// release's, so the updated node installs the defaults built for its
+    /// own release.
+    #[test]
+    fn test_stage_composed_product_bundle_installs_its_plugins() {
+        let base = temp_dir("self-update-pv2-plugins");
+        let extracted = base.join("extracted");
+        std::fs::create_dir_all(extracted.join(NATIVE_RUNTIMES_DIR_NAME).join("runtime")).unwrap();
+        std::fs::create_dir_all(extracted.join(BUNDLED_PLUGINS_DIR_NAME)).unwrap();
+        std::fs::write(extracted.join(mesh_binary_name()), b"binary").unwrap();
+        std::fs::write(extracted.join(PRODUCT_MANIFEST_NAME), b"{}").unwrap();
+        std::fs::write(
+            extracted
+                .join(BUNDLED_PLUGINS_DIR_NAME)
+                .join("capsules-0.80.0-x.tar.gz"),
+            b"new",
+        )
+        .unwrap();
+
+        let staged = collect_bundle_files(&extracted, backend::BinaryFlavor::Cpu).unwrap();
+        assert!(staged.contains(&BUNDLED_PLUGINS_DIR_NAME.to_string()));
+
+        let install_dir = base.join("install");
+        let old_plugins = install_dir.join(BUNDLED_PLUGINS_DIR_NAME);
+        std::fs::create_dir_all(&old_plugins).unwrap();
+        std::fs::write(old_plugins.join("capsules-0.79.0-x.tar.gz"), b"old").unwrap();
+        replace_bundle_files(&install_dir, &extracted, &base.join("backup"), &staged).unwrap();
+
+        let mut installed: Vec<_> = std::fs::read_dir(&old_plugins)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        installed.sort();
+        assert_eq!(installed, ["capsules-0.80.0-x.tar.gz"]);
         let _ = std::fs::remove_dir_all(base);
     }
 
