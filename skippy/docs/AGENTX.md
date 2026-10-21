@@ -70,6 +70,13 @@ image by immutable ID after checking its ARM64 architecture and source label.
 The image contains both compiled engines, native runtimes, and the harness.
 Build time is outside the measured cells.
 
+For a native KV-span diagnostic, set `AGENTX_SKIPPY_KV_SPAN_DEBUG=1` on the
+`agentx run` process. It launches Skippy with verbose native logging and
+`LLAMA_KV_CACHE_DEBUG=1`; the per-decode `llama_kv_cache::find_slot` lines report
+the highest occupied KV cell and the occupied-cell count. This option is
+Skippy-only, appears in `launch.json`, and is intentionally excluded from
+performance qualification because the extra logging changes timing.
+
 The host's `HF_HOME`, campaign output and JY artifact directory are mounted.
 The registered Spark template sets `HF_HOME=/mnt/lab/huggingface`, the existing
 NFS-backed Hugging Face cache, and binds it at the identical path inside Docker.

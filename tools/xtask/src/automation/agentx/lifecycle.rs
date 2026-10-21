@@ -123,6 +123,9 @@ fn server(
                 process::Value::Public("1".into()),
             );
         }
+        if std::env::var("AGENTX_SKIPPY_KV_SPAN_DEBUG").as_deref() == Ok("1") {
+            enable_native_kv_span_debug(&mut spec);
+        }
     }
     spec.environment.insert(
         "MESH_AGENT_SESSION_HEADER".into(),
@@ -133,6 +136,19 @@ fn server(
         process::Value::Public("1800".into()),
     );
     Ok(spec)
+}
+
+fn enable_native_kv_span_debug(spec: &mut process::ProcessSpec) {
+    spec.arguments
+        .push(process::Value::Public("--debug".into()));
+    spec.environment.insert(
+        "LLAMA_KV_CACHE_DEBUG".into(),
+        process::Value::Public("1".into()),
+    );
+    spec.environment.insert(
+        "GGML_LLAMA_LOG_LEVEL".into(),
+        process::Value::Public("4".into()),
+    );
 }
 pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynResult<()> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
@@ -248,6 +264,7 @@ fn launch_identity(
         "context_tokens":matched_llama_context.map(|_| trace_context::LIMIT),
         "total_context_tokens":matched_llama_context,
         "generation_slots":null,"offered_sessions":concurrency,
+        "native_kv_span_debug":engine == "skippy" && std::env::var("AGENTX_SKIPPY_KV_SPAN_DEBUG").as_deref() == Ok("1"),
         "batch_tokens":2048,"microbatch_tokens":512,
         "speculation":false,"dataset_sha256":inputs::DATA_SHA,
         "llama_upstream":std::fs::read_to_string(input.root.join("skippy/llama_cpp/upstream.txt"))?.trim()
@@ -327,6 +344,18 @@ impl Coordinator for Owner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn kv_span_diagnostic_enables_native_cell_span_logging() {
+        let mut spec = command::spec(&std::env::temp_dir(), "sh", &[]).unwrap();
+        enable_native_kv_span_debug(&mut spec);
+        assert!(spec.arguments.iter().any(|argument| matches!(argument,
+            process::Value::Public(value) if value == "--debug")));
+        for (key, expected) in [("LLAMA_KV_CACHE_DEBUG", "1"), ("GGML_LLAMA_LOG_LEVEL", "4")] {
+            assert!(
+                matches!(spec.environment.get(std::ffi::OsStr::new(key)), Some(process::Value::Public(value)) if value == expected)
+            );
+        }
+    }
     #[test]
     fn paired_engines_pin_identical_batch_capacity() {
         let models: Vec<super::super::Model> = serde_json::from_str(include_str!(
