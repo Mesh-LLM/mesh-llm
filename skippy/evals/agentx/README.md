@@ -16,8 +16,8 @@ Do not sync a partial inventory: sync replaces all installed entries.
 
 For a pre-merge benchmark while template registration remains unmerged, submit
 standalone jobs with `jy submit` at an immutable Mesh PR SHA. Their comparison
-reports remain in the JY job artifacts; standalone results do not create
-repository benchmark lines or a `jy result` record. After the definitions are
+reports remain in the JY job artifacts; the current jobs have neither
+repository benchmark lines nor a `jy result` record. After the definitions are
 registered and synced, launch with `jy repos run` to publish on the existing
 Benchmarks pages. See [AgentX operations](../../docs/AGENTX.md).
 
