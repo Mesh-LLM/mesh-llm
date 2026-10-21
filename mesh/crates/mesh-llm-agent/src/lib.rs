@@ -6,6 +6,7 @@
 //! discovery and the short system prompt live here, so mesh links only
 //! goose's split-out crates and not the `goose` crate.
 
+mod fenced;
 mod prompt;
 pub mod shell;
 pub mod skills;
@@ -181,6 +182,34 @@ impl ToolProvider<Session> for MeshTools {
     }
 }
 
+/// Runs a fenced `sh` block (or unparsed raw tool call) from a plain-text
+/// reply, for models whose native tool calls don't come through.
+struct FencedShell {
+    cwd: PathBuf,
+}
+
+#[async_trait]
+impl Operation<Session, Effect> for FencedShell {
+    fn name(&self) -> &'static str {
+        "fenced_shell"
+    }
+    async fn run(
+        &self,
+        _: &Session,
+        conversation: &Conversation,
+        emit: &Emitter,
+    ) -> Result<OperationResult<Effect>> {
+        let Some(command) = conversation.last().and_then(fenced::extract) else {
+            return not_applicable();
+        };
+        emit.emit(AgentEvent::Message(
+            Message::assistant().with_text(format!("[fenced] $ {command}")),
+        ));
+        let reply = emit.message(fenced::run(&self.cwd, &command).await);
+        goose_agent::operation::applied([Effect::Append(reply)])
+    }
+}
+
 /// Lean system prompt, contributed as a prompt part so the loop assembles it.
 struct SystemPrompt(String);
 
@@ -221,6 +250,9 @@ pub async fn run(
         Step::Operation(Arc::new(SystemPrompt(system))),
         Step::Operation(Arc::new(MaxTurns(options.max_turns))),
         Step::Operation(Arc::new(tools)),
+        Step::Operation(Arc::new(FencedShell {
+            cwd: options.cwd.clone(),
+        })),
         Step::Inference(Arc::new(InferenceRunner::new(provider, model_config))),
     ];
     let cancel = CancellationToken::new();
