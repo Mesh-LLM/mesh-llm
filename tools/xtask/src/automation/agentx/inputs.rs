@@ -13,13 +13,7 @@ pub(super) fn prepare(
     key: &str,
     profile: Profile,
 ) -> DynResult<Prepared> {
-    let models: Vec<Model> = serde_json::from_slice(&std::fs::read(
-        root.join("skippy/evals/agentx/models.json"),
-    )?)?;
-    let model = models
-        .into_iter()
-        .find(|model| model.key == key || model.registry_ref() == key)
-        .ok_or("unknown AgentX model")?;
+    let model = select_model(&root, key)?;
     let mut weights = None;
     for (index, file) in model.files.iter().enumerate() {
         let path = download(
@@ -65,6 +59,16 @@ pub(super) fn prepare(
     };
     write(&prepared.output.join("inputs.json"), &prepared)?;
     Ok(prepared)
+}
+
+pub(super) fn select_model(root: &Path, key: &str) -> DynResult<Model> {
+    let models: Vec<Model> = serde_json::from_slice(&std::fs::read(
+        root.join("skippy/evals/agentx/models.json"),
+    )?)?;
+    models
+        .into_iter()
+        .find(|model| model.key == key || model.registry_ref() == key)
+        .ok_or_else(|| "unknown AgentX model".into())
 }
 fn download(
     root: &Path,

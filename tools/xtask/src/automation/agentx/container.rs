@@ -1,5 +1,5 @@
 //! Own the Docker daemon's container as well as its attached client process.
-use super::{Engine, Profile, command, write};
+use super::{Engine, Model, Profile, command, inputs, write};
 use crate::{command::DynResult, process};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ struct Launch {
 }
 
 pub(super) fn run(engine: Engine, model: &str, profile: Profile, output: PathBuf) -> DynResult<()> {
-    let launch = prepare(output)?;
+    let launch = prepare(output, model)?;
     let image = inspect(&launch)?;
     let args = create_args(&launch, &image, engine, model, profile)?;
     let spec = command::spec(&launch.root, "docker", &args)?;
@@ -62,7 +62,7 @@ fn retain_result(source: &Path, destination: &Path, outcome: DynResult<()>) -> D
     }
 }
 
-fn prepare(output: PathBuf) -> DynResult<Launch> {
+fn prepare(output: PathBuf, model_key: &str) -> DynResult<Launch> {
     if std::env::consts::OS != "linux" || std::env::consts::ARCH != "aarch64" {
         return Err("AgentX Docker jobs must execute on the Linux ARM64 Spark".into());
     }
@@ -77,10 +77,17 @@ fn prepare(output: PathBuf) -> DynResult<Launch> {
         std::env::var_os("JIANYANG_ARTIFACT_DIR").ok_or("JY artifact directory missing")?,
     )
     .canonicalize()?;
-    let hf_home = PathBuf::from(std::env::var_os("HF_HOME").ok_or("host HF_HOME missing")?);
-    if !hf_home.is_absolute() || !hf_home.is_dir() {
-        return Err("host HF_HOME must be an existing absolute directory".into());
-    }
+    let model = inputs::select_model(&std::env::current_dir()?, model_key)?;
+    let requested = std::env::var_os("HF_HOME").map(PathBuf::from);
+    let fallbacks = [
+        PathBuf::from("/mnt/lab/huggingface"),
+        PathBuf::from("/mnt/model-store/hf"),
+    ];
+    let hf_home = resolve_hf_home(requested.as_deref(), &fallbacks, &model)?;
+    write(
+        &artifacts.join("hf-home-selection.json"),
+        &json!({"requested":requested,"selected":hf_home,"model":model.key}),
+    )?;
     let seconds = remaining(std::env::var("JIANYANG_DEADLINE_EPOCH")?.parse()?)?;
     Ok(Launch {
         root: std::env::current_dir()?,
@@ -91,6 +98,38 @@ fn prepare(output: PathBuf) -> DynResult<Launch> {
         name: format!("agentx-{run}"),
         seconds,
     })
+}
+
+fn resolve_hf_home(
+    requested: Option<&Path>,
+    fallbacks: &[PathBuf],
+    model: &Model,
+) -> DynResult<PathBuf> {
+    let snapshot = format!("models--{}", model.repo.replace('/', "--"));
+    requested
+        .into_iter()
+        .chain(fallbacks.iter().map(PathBuf::as_path))
+        .find(|home| {
+            home.is_absolute()
+                && home.is_dir()
+                && !model.files.is_empty()
+                && model.files.iter().all(|file| {
+                    home.join("hub")
+                        .join(&snapshot)
+                        .join("snapshots")
+                        .join(&model.revision)
+                        .join(&file.name)
+                        .is_file()
+                })
+        })
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            format!(
+                "pinned model weights are absent from host HF_HOME for {}",
+                model.key
+            )
+            .into()
+        })
 }
 
 fn validate_identity(commit: &str, run: &str) -> DynResult<()> {
@@ -266,7 +305,68 @@ fn docker_limits(seconds: u64) -> process::Limits {
 
 #[cfg(test)]
 mod tests {
+    use super::super::FilePin;
     use super::*;
+
+    fn test_model(files: &[&str]) -> Model {
+        Model {
+            key: "test-model".into(),
+            family: "dense".into(),
+            repo: "org/model".into(),
+            revision: "pinned-revision".into(),
+            tokenizer: "org/model".into(),
+            tokenizer_revision: "pinned-revision".into(),
+            files: files
+                .iter()
+                .map(|name| FilePin {
+                    name: (*name).into(),
+                    sha256: "0".repeat(64),
+                })
+                .collect(),
+        }
+    }
+
+    fn cache_file(home: &Path, name: &str) {
+        let path = home
+            .join("hub/models--org--model/snapshots/pinned-revision")
+            .join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"weight").unwrap();
+    }
+
+    #[test]
+    fn selects_cache_containing_every_pinned_model_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let requested = dir.path().join("empty");
+        let fallback = dir.path().join("cached");
+        std::fs::create_dir_all(&requested).unwrap();
+        let model = test_model(&["BF16/part-1.gguf", "BF16/part-2.gguf"]);
+        cache_file(&requested, "BF16/part-1.gguf");
+        cache_file(&fallback, "BF16/part-1.gguf");
+        cache_file(&fallback, "BF16/part-2.gguf");
+        assert_eq!(
+            resolve_hf_home(Some(&requested), std::slice::from_ref(&fallback), &model).unwrap(),
+            fallback
+        );
+        cache_file(&requested, "BF16/part-2.gguf");
+        assert_eq!(
+            resolve_hf_home(Some(&requested), &[fallback], &model).unwrap(),
+            requested
+        );
+    }
+
+    #[test]
+    fn missing_cache_fails_before_container_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            resolve_hf_home(
+                None,
+                &[dir.path().to_path_buf()],
+                &test_model(&["model.gguf"])
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn failed_container_retains_partial_results_without_becoming_successful() {
         let dir = tempfile::tempdir().unwrap();
