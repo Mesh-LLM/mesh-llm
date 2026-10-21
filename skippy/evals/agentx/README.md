@@ -129,8 +129,12 @@ template configuration.
 
 For a cache-path diagnostic, set `AGENTX_SKIPPY_DEBUG_TELEMETRY=1` on the
 AgentX runner. It enables Skippy's debug level and stderr telemetry only in its
-server child; the cell's `server.stderr.log` then records cache source and
-restore timings.
+server child. The cell's `cache-decisions.json` projects at most 512 cache
+record/lookup decisions with fixed outcome labels, timestamps and numeric
+positions. It excludes raw prompts, cache keys and arbitrary telemetry fields;
+`omitted_events` reports if the bound was reached. The ordinary
+`server.stderr.log` remains sanitized and size-limited, so it is not a complete
+cache-decision trace.
 Leave it unset for paired performance results because debug event emission can
 perturb latency.
 Use `--only-concurrency 2` with `automation agentx run` to isolate a failing

@@ -1,4 +1,6 @@
-use super::{Prepared, Profile, command, inputs, trace_context, write};
+use super::{
+    Prepared, Profile, cache_decisions::CacheDecisions, command, inputs, trace_context, write,
+};
 use crate::{
     command::DynResult,
     process::{
@@ -218,6 +220,9 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
     let memory = super::memory::Monitor::start(&input.output)?;
     let mut owner = Owner {
         memory_pid: std::sync::Arc::clone(&memory.pid),
+        cache_decisions: (engine == "skippy"
+            && std::env::var("AGENTX_SKIPPY_DEBUG_TELEMETRY").as_deref() == Ok("1"))
+        .then(CacheDecisions::new),
         server: Some(launch(input, server, MemberId::Seed, "server", seconds)),
         worker: Some(launch(
             input,
@@ -230,7 +235,11 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
         policy: ExpectedExit::new(&[0], Duration::from_secs(seconds))?,
     };
     drop(listener);
-    let report = super::super::retained_session::run(&mut owner, &command::limits(seconds))?;
+    let report = super::super::retained_session::run(&mut owner, &command::limits(seconds));
+    if let Some(decisions) = owner.cache_decisions.as_ref() {
+        write(&input.output.join("cache-decisions.json"), decisions)?;
+    }
+    let report = report?;
     write(
         &input.output.join("memory-summary.json"),
         &serde_json::to_value(memory.finish()?)?,
@@ -321,6 +330,7 @@ fn launch(
 }
 struct Owner {
     memory_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    cache_decisions: Option<CacheDecisions>,
     server: Option<Launch>,
     worker: Option<Launch>,
     stop: bool,
@@ -331,9 +341,12 @@ impl Coordinator for Owner {
     type Rejection = String;
     fn line(
         &mut self,
-        _member: MemberId,
-        _line: process::ObservedLine<'_>,
+        member: MemberId,
+        line: process::ObservedLine<'_>,
     ) -> process::ProbeDecision<String> {
+        if let Some(decisions) = self.cache_decisions.as_mut() {
+            decisions.observe(member, line);
+        }
         process::ProbeDecision::Pending
     }
     fn tick(&mut self, context: Context<'_>) -> Action<String> {

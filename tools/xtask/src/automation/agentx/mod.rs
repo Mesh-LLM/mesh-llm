@@ -1,4 +1,5 @@
 //! AgentX owns its workload, provenance and lifecycle independently of replay-matrix.
+mod cache_decisions;
 mod campaign;
 mod capacity;
 mod command;
