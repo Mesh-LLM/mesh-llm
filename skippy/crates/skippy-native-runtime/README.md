@@ -307,6 +307,19 @@ scripts/package-native-runtime.sh --backend vulkan --out "$prefix/share/mesh-llm
   --keep-runpath --no-model-package-tool
 ```
 
+`--id-suffix NAME` appends `-NAME` to the runtime id (and to its directory and
+archive), so `mesh-llm runtime list` tells the distribution's build apart from
+the release runtime of the same backend. `MESH_LLM_NATIVE_RUNTIME_RANK` sets
+the manifest's rank (default 0); among compatible runtimes the highest rank
+wins, so a distribution can make its bundle preferred over a newer catalog
+entry:
+
+```bash
+MESH_LLM_NATIVE_RUNTIME_RANK=1000 scripts/package-native-runtime.sh --backend vulkan \
+  --out "$prefix/share/mesh-llm/runtimes" --keep-runpath --no-model-package-tool \
+  --id-suffix nixpkgs
+```
+
 Generate the release manifest:
 
 ```bash
