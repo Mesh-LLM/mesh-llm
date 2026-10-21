@@ -88,6 +88,10 @@ pub(crate) async fn outbound(
     loop {
         ensure!(!*cancellation.borrow(), "stage transport stopped");
         ensure!(
+            node.stage_required_peer_allowed(peer, false).await,
+            "peer no longer enforces the required stage provider policy"
+        );
+        ensure!(
             peers.borrow().iter().any(|p| p.id == peer),
             "stage peer is no longer admitted"
         );

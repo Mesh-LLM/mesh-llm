@@ -27,6 +27,7 @@ pub enum MeshGuardrailMode {
 #[derive(Clone, Debug)]
 pub struct RuntimeOptions {
     pub application_protocols: Vec<std::sync::Arc<dyn mesh_llm_transport::protocol::MeshProtocol>>,
+    pub stage_transport_policy: mesh_llm_transport::protocol::StageTransportPolicy,
     pub log_format: LogFormat,
     pub debug: bool,
     pub skippy_metrics_otlp_grpc: Option<String>,
@@ -125,6 +126,7 @@ impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
             application_protocols: Vec::new(),
+            stage_transport_policy: Default::default(),
             log_format: LogFormat::Pretty,
             debug: false,
             skippy_metrics_otlp_grpc: None,

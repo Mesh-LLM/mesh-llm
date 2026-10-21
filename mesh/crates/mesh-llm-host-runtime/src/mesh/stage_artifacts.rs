@@ -412,10 +412,26 @@ impl Node {
         run_id: &str,
         peer: &mut crate::inference::skippy::StagePeerDescriptor,
     ) -> anyhow::Result<()> {
+        let required = self.stage_transport_policy()
+            == mesh_llm_transport::protocol::StageTransportPolicy::RequireProvider;
         let Some(peer_node) = peer.node_id else {
+            anyhow::ensure!(
+                !required,
+                "required stage provider needs a peer node identity"
+            );
             return Ok(());
         };
         if peer_node == self.endpoint.id() {
+            if required {
+                let address: std::net::SocketAddr = peer
+                    .endpoint
+                    .parse()
+                    .context("local stage endpoint must be a loopback socket address")?;
+                anyhow::ensure!(
+                    address.ip().is_loopback(),
+                    "local stage endpoint must be loopback under the required provider policy"
+                );
+            }
             return Ok(());
         }
         let bridge_addr = self

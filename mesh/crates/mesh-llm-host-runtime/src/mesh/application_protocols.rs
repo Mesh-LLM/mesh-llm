@@ -6,11 +6,13 @@ use std::{
 use anyhow::{Result, ensure};
 use mesh_llm_transport::protocol::{
     IncomingProtocolStream, MeshProtocol, PeerId, ProtocolContext, ProtocolDescriptor,
-    ProtocolNetwork, ProtocolPeer, ProtocolStream, async_trait, validate_protocols,
+    ProtocolNetwork, ProtocolPeer, ProtocolStream, REQUIRED_STAGE_PROVIDER_FEATURE,
+    StageTransportPolicy, async_trait,
 };
 use tokio::sync::{Mutex, Semaphore, watch};
 
 use super::Node;
+mod stage_policy;
 
 struct Registration {
     descriptor: ProtocolDescriptor,
@@ -18,6 +20,7 @@ struct Registration {
 }
 
 pub(crate) struct ApplicationProtocols {
+    policy: OnceLock<StageTransportPolicy>,
     registrations: OnceLock<BTreeMap<(String, u32), Registration>>,
     peers: watch::Sender<Vec<ProtocolPeer>>,
     cancelled: watch::Sender<bool>,
@@ -28,6 +31,7 @@ pub(crate) struct ApplicationProtocols {
 impl Default for ApplicationProtocols {
     fn default() -> Self {
         Self {
+            policy: OnceLock::new(),
             registrations: OnceLock::new(),
             peers: watch::channel(Vec::new()).0,
             cancelled: watch::channel(false).0,
@@ -43,10 +47,18 @@ impl ApplicationProtocols {
             .get()
             .into_iter()
             .flat_map(|registry| registry.values())
-            .map(|entry| crate::proto::node::MeshSubprotocol {
-                name: entry.descriptor.name.clone(),
-                major: entry.descriptor.major,
-                features: entry.descriptor.features.clone(),
+            .map(|entry| {
+                let mut features = entry.descriptor.features.clone();
+                if self.policy.get() == Some(&StageTransportPolicy::RequireProvider)
+                    && entry.handler.stage_transport().is_some()
+                {
+                    features.push(REQUIRED_STAGE_PROVIDER_FEATURE.to_owned());
+                }
+                crate::proto::node::MeshSubprotocol {
+                    name: entry.descriptor.name.clone(),
+                    major: entry.descriptor.major,
+                    features,
+                }
             })
             .collect()
     }
@@ -74,7 +86,10 @@ impl ApplicationProtocols {
 }
 
 #[derive(Clone)]
-struct NodeProtocolNetwork(Node);
+struct NodeProtocolNetwork {
+    node: Node,
+    descriptor: ProtocolDescriptor,
+}
 
 impl std::fmt::Debug for NodeProtocolNetwork {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -86,7 +101,7 @@ impl std::fmt::Debug for NodeProtocolNetwork {
 #[async_trait]
 impl ProtocolNetwork for NodeProtocolNetwork {
     async fn open(&self, peer: PeerId, protocol: &ProtocolDescriptor) -> Result<ProtocolStream> {
-        let state = self.0.state.lock().await;
+        let state = self.node.state.lock().await;
         let remote = state
             .peers
             .get(&peer)
@@ -102,13 +117,19 @@ impl ProtocolNetwork for NodeProtocolNetwork {
         );
         drop(state);
         let (send, recv) = self
-            .0
+            .node
             .open_mesh_subprotocol_stream(peer, &protocol.name, protocol.major)
             .await?;
         Ok(ProtocolStream::from_iroh(send, recv))
     }
     async fn accept_stage(&self, peer: PeerId, stream: ProtocolStream) -> Result<()> {
-        self.0.accept_application_stage_stream(peer, stream).await
+        ensure!(
+            self.node.stage_provider_context_allowed(&self.descriptor),
+            "required stage transport can only be accepted by the registered provider"
+        );
+        self.node
+            .accept_application_stage_stream(peer, stream)
+            .await
     }
 }
 
@@ -119,18 +140,31 @@ impl Node {
     ) -> ProtocolContext {
         ProtocolContext::new(
             self.endpoint.id(),
-            descriptor,
-            Arc::new(NodeProtocolNetwork(self.clone())),
+            descriptor.clone(),
+            Arc::new(NodeProtocolNetwork {
+                node: self.clone(),
+                descriptor,
+            }),
             self.application_protocols.peers.subscribe(),
             self.application_protocols.cancelled.subscribe(),
         )
     }
 
+    #[cfg(test)]
     pub(crate) async fn install_application_protocols(
         &self,
         protocols: Vec<Arc<dyn MeshProtocol>>,
     ) -> Result<()> {
-        validate_protocols(&protocols)?;
+        self.install_application_protocols_with_policy(protocols, StageTransportPolicy::default())
+            .await
+    }
+
+    pub(crate) async fn install_application_protocols_with_policy(
+        &self,
+        protocols: Vec<Arc<dyn MeshProtocol>>,
+        policy: StageTransportPolicy,
+    ) -> Result<()> {
+        policy.validate(&protocols)?;
         let registry = protocols
             .into_iter()
             .map(|handler| {
@@ -152,6 +186,10 @@ impl Node {
             .registrations
             .set(registry)
             .map_err(|_| anyhow::anyhow!("application protocols already installed"))?;
+        self.application_protocols
+            .policy
+            .set(policy)
+            .map_err(|_| anyhow::anyhow!("stage transport policy already installed"))?;
         self.refresh_application_peers().await;
         let registry = self
             .application_protocols
@@ -311,19 +349,27 @@ impl Node {
         &self,
         peer: PeerId,
     ) -> Result<Option<ProtocolStream>> {
+        let required = self.stage_transport_policy() == StageTransportPolicy::RequireProvider;
         let Some(registry) = self.application_protocols.registrations.get() else {
+            ensure!(
+                !required,
+                "required stage transport provider is not installed"
+            );
             return Ok(None);
         };
         for entry in registry.values() {
             let Some(provider) = entry.handler.stage_transport() else {
                 continue;
             };
-            let supported = self
-                .application_protocols
-                .peers
-                .borrow()
-                .iter()
-                .any(|p| p.id == peer && p.supports(&entry.descriptor));
+            let supported = if required {
+                self.stage_required_peer_allowed(peer, false).await
+            } else {
+                self.application_protocols
+                    .peers
+                    .borrow()
+                    .iter()
+                    .any(|p| p.id == peer && p.supports(&entry.descriptor))
+            };
             if !supported {
                 continue;
             }
@@ -331,15 +377,30 @@ impl Node {
                 self.stage_stream_admitted(peer).await,
                 "stage peer is not admitted"
             );
+            ensure!(
+                !required || provider.stage_available(peer),
+                "required stage transport is unavailable for peer {}",
+                peer.fmt_short()
+            );
             let context = self.application_protocol_context(entry.descriptor.clone());
-            return tokio::select! {
+            let stream = tokio::select! {
                 result = tokio::time::timeout(
                     mesh_llm_transport::protocol::OPEN_STREAM_TIMEOUT,
                     provider.open_stage(context.clone(), peer),
                 ) => result?,
                 () = context.cancelled() => anyhow::bail!("stage transport stopped during open"),
-            };
+            }?;
+            ensure!(
+                !required || stream.is_some(),
+                "required stage transport provider declined peer {}",
+                peer.fmt_short()
+            );
+            return Ok(stream);
         }
+        ensure!(
+            !required,
+            "peer does not advertise the required stage provider policy"
+        );
         Ok(None)
     }
 
@@ -348,6 +409,10 @@ impl Node {
         peer: PeerId,
         stream: ProtocolStream,
     ) -> Result<()> {
+        ensure!(
+            self.stage_required_peer_allowed(peer, false).await,
+            "peer does not enforce the required stage provider policy"
+        );
         let mut peers = self.application_protocols.peers.subscribe();
         let mut cancellation = self.application_protocols.cancelled.subscribe();
         let transfer =
@@ -355,6 +420,10 @@ impl Node {
         tokio::pin!(transfer);
         loop {
             ensure!(!*cancellation.borrow(), "stage transport stopped");
+            ensure!(
+                self.stage_required_peer_allowed(peer, false).await,
+                "peer no longer enforces the required stage provider policy"
+            );
             ensure!(
                 peers.borrow().iter().any(|p| p.id == peer),
                 "stage peer is no longer admitted"

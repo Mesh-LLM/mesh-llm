@@ -62,7 +62,7 @@ fn application_protocol_registration_rejects_invalid_or_reserved_descriptors() {
     assert!(validate_protocols(&[echo("echo", 1), echo("echo", 2)]).is_ok());
 }
 
-async fn start_node() -> Node {
+pub(super) async fn start_node() -> Node {
     let (node, _channels) = Node::start(
         super::super::NodeRole::Client,
         RelayConfig {
@@ -203,9 +203,19 @@ impl MeshProtocol for StageBridge {
 #[tokio::test]
 async fn application_stage_provider_routes_only_authorized_runs_and_preserves_half_close()
 -> anyhow::Result<()> {
+    for policy in [
+        mesh_llm_transport::protocol::StageTransportPolicy::PreferProvider,
+        mesh_llm_transport::protocol::StageTransportPolicy::RequireProvider,
+    ] {
+        authorized_stage_exchange(policy).await?;
+    }
+    Ok(())
+}
+
+async fn authorized_stage_exchange(
+    policy: mesh_llm_transport::protocol::StageTransportPolicy,
+) -> anyhow::Result<()> {
     use crate::mesh::stage_transport::StageTopologyInstance;
-    use mesh_llm_transport::protocol::ProtocolStream;
-    use prost::Message;
     assert!(
         validate_protocols(&[
             Arc::new(StageBridge::new("one")),
@@ -222,10 +232,16 @@ async fn application_stage_provider_routes_only_authorized_runs_and_preserves_ha
             .is_none()
     );
     sender
-        .install_application_protocols(vec![Arc::new(StageBridge::new("stage-bridge"))])
+        .install_application_protocols_with_policy(
+            vec![Arc::new(StageBridge::new("stage-bridge"))],
+            policy,
+        )
         .await?;
     receiver
-        .install_application_protocols(vec![Arc::new(StageBridge::new("stage-bridge"))])
+        .install_application_protocols_with_policy(
+            vec![Arc::new(StageBridge::new("stage-bridge"))],
+            policy,
+        )
         .await?;
     sender.start_accepting();
     receiver.start_accepting();
@@ -258,29 +274,7 @@ async fn application_stage_provider_routes_only_authorized_runs_and_preserves_ha
             ],
         })
         .await;
-    for (requester, run, stage) in [
-        (receiver.id(), "run", "destination"),
-        (sender.id(), "stale-run", "destination"),
-        (sender.id(), "run", "unknown-stage"),
-    ] {
-        let open = skippy_protocol::proto::stage::StageTransportOpen {
-            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
-            requester_id: requester.as_bytes().to_vec(),
-            topology_id: "topology".into(),
-            run_id: run.into(),
-            stage_id: stage.into(),
-        }
-        .encode_to_vec();
-        let (mut writer, stream) = tokio::io::duplex(4096);
-        writer.write_u32_le(u32::try_from(open.len())?).await?;
-        writer.write_all(&open).await?;
-        assert!(
-            receiver
-                .accept_application_stage_stream(sender.id(), ProtocolStream::new(stream))
-                .await
-                .is_err()
-        );
-    }
+    reject_invalid_stage_headers(&sender, &receiver).await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     receiver
         .register_stage_transport_alias(
@@ -317,6 +311,35 @@ async fn application_stage_provider_routes_only_authorized_runs_and_preserves_ha
     .await??;
     sender.close_endpoint().await;
     receiver.close_endpoint().await;
+    Ok(())
+}
+
+async fn reject_invalid_stage_headers(sender: &Node, receiver: &Node) -> anyhow::Result<()> {
+    use mesh_llm_transport::protocol::ProtocolStream;
+    use prost::Message;
+    for (requester, run, stage) in [
+        (receiver.id(), "run", "destination"),
+        (sender.id(), "stale-run", "destination"),
+        (sender.id(), "run", "unknown-stage"),
+    ] {
+        let open = skippy_protocol::proto::stage::StageTransportOpen {
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            requester_id: requester.as_bytes().to_vec(),
+            topology_id: "topology".into(),
+            run_id: run.into(),
+            stage_id: stage.into(),
+        }
+        .encode_to_vec();
+        let (mut writer, stream) = tokio::io::duplex(4096);
+        writer.write_u32_le(u32::try_from(open.len())?).await?;
+        writer.write_all(&open).await?;
+        assert!(
+            receiver
+                .accept_application_stage_stream(sender.id(), ProtocolStream::new(stream))
+                .await
+                .is_err()
+        );
+    }
     Ok(())
 }
 

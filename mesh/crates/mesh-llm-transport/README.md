@@ -29,3 +29,10 @@ report acknowledgement latency, acknowledged payload goodput, sample count and
 age for an active outgoing channel. These are local SDK observations with
 `Duration` precision; they do not change the wire protocol. The host filters
 insufficient or stale samples before supplying directed latency costs to planning.
+
+`StageTransportPolicy::RequireProvider` disables default activation fallback and
+requires a registered provider on each split participant. The host advertises the
+reserved `stage-provider-required` feature on that provider's existing descriptor.
+`stage_available(peer)` supplies a cached readiness hint; actual setup is verified
+before stage loading and repeated for activation connections. The default
+`PreferProvider` preserves existing behavior. No wire formats or versions change.

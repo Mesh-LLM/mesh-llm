@@ -114,6 +114,7 @@ async fn handle_inbound_stage_transport(
     quic_send: iroh::endpoint::SendStream,
     mut quic_recv: iroh::endpoint::RecvStream,
 ) -> Result<()> {
+    node.ensure_default_stage_transport_allowed()?;
     let buf = read_len_prefixed(&mut quic_recv).await?;
     let open = skippy_protocol::proto::stage::StageTransportOpen::decode(buf.as_slice())
         .map_err(|e| anyhow::anyhow!("StageTransportOpen decode error: {e}"))?;

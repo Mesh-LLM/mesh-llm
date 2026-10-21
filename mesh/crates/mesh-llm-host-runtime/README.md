@@ -49,3 +49,12 @@ by current peer admission, matching protocol, sample count and freshness. It pas
 directed local-to-peer latency edges to Skippy's pure planner; remote-to-remote
 edges retain existing RTT estimates. These local observations require no wire
 changes and do not trigger topology reloads on their own.
+
+Embedded nodes may require their registered provider through
+`StageTransportPolicy::RequireProvider`. The host validates registration, advertises
+the policy through an existing capability feature, filters split participants,
+verifies outgoing setup before stage loading and refuses default activation streams
+in both directions. Each participant must enforce the policy. Required mode also
+rejects identity-free remote stage endpoints and non-loopback local endpoints;
+control, artifacts and ordinary mesh membership remain available. See the
+[SDK example](../mesh-llm-sdk/README.md#application-stage-transport).

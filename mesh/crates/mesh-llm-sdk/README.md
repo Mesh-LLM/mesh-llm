@@ -162,6 +162,40 @@ fresh latency observations with at least three samples for local directed planni
 edges; it retains peer RTT estimates elsewhere. Goodput does not yet drive cuts.
 Observations remain in process and introduce no gossip or stage wire changes.
 
+To restrict splits to the registered provider, set the policy on every participant:
+
+```rust,ignore
+use mesh_llm_sdk::{MeshNode, protocol::StageTransportPolicy};
+
+let node = MeshNode::builder()
+    .protocol(provider)
+    .stage_transport_policy(StageTransportPolicy::RequireProvider)
+    .serve()
+    .model(model)
+    .start()
+    .await?;
+```
+
+`PreferProvider` is the default. Required mode rejects configuration without a
+provider, excludes peers without the same required-provider capability and consults
+the provider's nonblocking `stage_available(peer)` readiness hint. Before loading
+each stage, Mesh verifies its remote provider setup by opening and dropping a stream
+without stage bytes. Actual activation connections repeat setup; declines or failures
+never fall back. Incoming default activation streams are rejected too. Connections
+are not reserved by verification, so later capacity or link failures still return
+errors. Local stage sockets, discovery, control and artifact transfers retain their
+existing behavior. Every participant must opt in; a coordinator cannot impose local
+configuration on another machine. The host advertises the policy through the
+existing feature list; wire formats and protocol versions do not change.
+
+```mermaid
+flowchart LR
+    Policy[Required provider policy] --> Cap[Matching peer policy and cached readiness]
+    Cap --> Verify[Verify provider setup before stage load]
+    Verify -->|Success| Load[Load stage; use provider activation streams]
+    Verify -->|Failure or decline| Fail[Fail stage loading]
+```
+
 ```mermaid
 flowchart LR
     SDK[SDK protocol registration] --> Provider[Application stage provider]

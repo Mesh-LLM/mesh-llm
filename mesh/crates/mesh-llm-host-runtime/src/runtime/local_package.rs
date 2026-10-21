@@ -202,6 +202,7 @@ pub(super) enum SplitParticipantExclusionReason {
     MissingModelInterest,
     StageProtocolGeneration,
     StageControlUnreachable,
+    RequiredStageTransport,
     ArtifactTransferUnavailable,
     StageInventoryEmpty,
     PackageManifestMismatch,
@@ -218,6 +219,7 @@ impl SplitParticipantExclusionReason {
             Self::MissingModelInterest => "missing_model_interest",
             Self::StageProtocolGeneration => "stage_protocol_generation",
             Self::StageControlUnreachable => "stage_control_unreachable",
+            Self::RequiredStageTransport => "required_stage_transport",
             Self::ArtifactTransferUnavailable => "artifact_transfer_unavailable",
             Self::StageInventoryEmpty => "stage_inventory_empty",
             Self::PackageManifestMismatch => "package_manifest_mismatch",
@@ -243,6 +245,9 @@ impl SplitParticipantExclusionReason {
             }
             Self::StageControlUnreachable => {
                 "Check stage-control connectivity and peer runtime logs before retrying split serving."
+            }
+            Self::RequiredStageTransport => {
+                "Enable the same required stage provider on each peer and restore its local connection readiness."
             }
             Self::ArtifactTransferUnavailable => {
                 "Enable artifact transfer, use an HF-resolvable package, or choose a peer with the package already cached."
@@ -480,9 +485,10 @@ fn split_participant_blocker(
 }
 
 pub(super) const fn split_participant_exclusion_reason_order()
--> [SplitParticipantExclusionReason; 11] {
+-> [SplitParticipantExclusionReason; 12] {
     [
         SplitParticipantExclusionReason::Blocked,
+        SplitParticipantExclusionReason::RequiredStageTransport,
         SplitParticipantExclusionReason::StageControlUnreachable,
         SplitParticipantExclusionReason::PackageManifestMismatch,
         SplitParticipantExclusionReason::UnverifiedLocalSource,
@@ -533,6 +539,13 @@ pub(super) async fn collect_split_participant_membership(
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
                 reason,
+            });
+            continue;
+        }
+        if !node.stage_required_peer_allowed(peer.id, true).await {
+            excluded.push(SplitParticipantExclusion {
+                node_id: peer.id,
+                reason: SplitParticipantExclusionReason::RequiredStageTransport,
             });
             continue;
         }
@@ -619,6 +632,13 @@ pub(super) async fn collect_split_participants(
             continue;
         }
 
+        if !node.stage_required_peer_allowed(peer.id, true).await {
+            excluded.push(SplitParticipantExclusion {
+                node_id: peer.id,
+                reason: SplitParticipantExclusionReason::RequiredStageTransport,
+            });
+            continue;
+        }
         let artifact_transfer_allowed = node.artifact_transfer_allowed_for_peer(&peer).await;
         match split_peer_package_signal(
             node,

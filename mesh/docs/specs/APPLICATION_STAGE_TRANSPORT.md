@@ -1,5 +1,35 @@
 # Application stage transports
 
+## Required provider policy
+
+SDK builders accept `.stage_transport_policy(StageTransportPolicy::RequireProvider)`.
+The default `PreferProvider` preserves fallback. Required mode needs a registered
+stage provider and fails configuration validation before starting the runtime if
+one is absent. The host adds the reserved `stage-provider-required` feature to that
+provider's existing capability descriptor; applications must not set it themselves.
+All participants must opt in to provide a whole-split requirement. Peers with no
+matching required-provider capability are excluded from planning.
+
+`StageTransportProvider::stage_available(peer)` supplies a nonblocking cached
+readiness hint for planning. Its default permits an attempt; implementations may
+exclude known unavailable paths without requiring performance samples. Before
+planning excludes a peer for exhausted capacity, the provider must account for
+usable existing channels so a healthy split is not withdrawn just for using its
+connection budget. Before
+creating a remote stage bridge, required mode opens and drops a provider stream
+to verify setup. This sends no stage bytes and reserves no long-lived capacity.
+Each node performs this check for its own stage neighbors during load, including
+the last stage's return connection. Setup errors prevent that load from becoming
+ready; opening an actual activation connection repeats setup and can still fail.
+
+Missing support, unavailable paths, provider declines and setup failures never
+fall back in required mode. Direct outbound and inbound dedicated Iroh activation
+streams are also rejected. Discovery, authenticated setup, stage control and
+artifact traffic retain their existing paths. The policy remains local SDK state;
+only the existing capability feature list changes, without wire-format or protocol
+version changes. Unsupported or preferred-provider nodes remain interoperable for
+ordinary mesh operations but cannot participate in a required-provider split.
+
 An SDK application protocol can implement `StageTransportProvider` and return it
 from `MeshProtocol::stage_transport`. At most one provider may be registered per
 node. The existing `.protocol(handler)` registration owns its lifetime.

@@ -1025,6 +1025,7 @@ impl Node {
         run_id: impl Into<String>,
         stage_id: impl Into<String>,
     ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+        self.ensure_default_stage_transport_allowed()?;
         use prost::Message as _;
 
         let open = skippy_protocol::proto::stage::StageTransportOpen {
@@ -1051,6 +1052,7 @@ impl Node {
         run_id: impl Into<String>,
         stage_id: impl Into<String>,
     ) -> Result<String> {
+        self.verify_required_stage_provider(peer_id).await?;
         let topology_id = topology_id.into();
         let run_id = run_id.into();
         let stage_id = stage_id.into();
@@ -1278,6 +1280,10 @@ impl Node {
                 "Quarantine: skippy stage stream from unadmitted peer {} rejected",
                 remote.fmt_short()
             );
+            drop((send, recv));
+            return StageBiAccept::Continue;
+        }
+        if self.ensure_default_stage_transport_allowed().is_err() {
             drop((send, recv));
             return StageBiAccept::Continue;
         }
