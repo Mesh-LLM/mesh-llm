@@ -13,8 +13,10 @@ use std::time::Duration;
 
 pub(super) const STARTUP_TIMEOUT_SECS: u64 = 900;
 const LLAMA_CACHE_RAM_MIB_ENV: &str = "AGENTX_LLAMA_CACHE_RAM_MIB";
-const SKIPPY_PREFILL_CHUNK_SIZE_ENV: &str = "AGENTX_SKIPPY_PREFILL_CHUNK_SIZE";
+const SKIPPY_MICROBATCH_TOKENS_ENV: &str = "AGENTX_SKIPPY_MICROBATCH_TOKENS";
 const SKIPPY_GENERATION_CONCURRENCY_ENV: &str = "AGENTX_SKIPPY_GENERATION_CONCURRENCY";
+const BASELINE_MICROBATCH_TOKENS: usize = 512;
+const BATCH_TOKENS: usize = 2_048;
 
 fn llama_comparison_context(concurrency: u32) -> DynResult<u32> {
     trace_context::LIMIT
@@ -59,14 +61,34 @@ fn positive_override(name: &str, value: &str) -> DynResult<usize> {
     }
 }
 
-fn skippy_diagnostic_arguments(
-    prefill_chunk_size: Option<usize>,
-    generation_concurrency: Option<usize>,
-) -> Vec<String> {
-    let mut arguments = Vec::new();
-    if let Some(size) = prefill_chunk_size {
-        arguments.extend(["--prefill-chunk-size".into(), size.to_string()]);
+fn positive_env_override(name: &str) -> DynResult<Option<usize>> {
+    match std::env::var(name) {
+        Ok(value) => positive_override(name, &value).map(Some),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(format!("{name}: {error}").into()),
     }
+}
+
+fn parse_microbatch_tokens(value: &str) -> DynResult<usize> {
+    let tokens = positive_override(SKIPPY_MICROBATCH_TOKENS_ENV, value)?;
+    if tokens > BATCH_TOKENS {
+        return Err(
+            format!("{SKIPPY_MICROBATCH_TOKENS_ENV} must not exceed {BATCH_TOKENS}").into(),
+        );
+    }
+    Ok(tokens)
+}
+
+fn skippy_microbatch_tokens() -> DynResult<usize> {
+    match std::env::var(SKIPPY_MICROBATCH_TOKENS_ENV) {
+        Ok(value) => parse_microbatch_tokens(&value),
+        Err(std::env::VarError::NotPresent) => Ok(BASELINE_MICROBATCH_TOKENS),
+        Err(error) => Err(format!("{SKIPPY_MICROBATCH_TOKENS_ENV}: {error}").into()),
+    }
+}
+
+fn skippy_diagnostic_arguments(generation_concurrency: Option<usize>) -> Vec<String> {
+    let mut arguments = Vec::new();
     if let Some(permits) = generation_concurrency {
         arguments.extend(["--generation-concurrency".into(), permits.to_string()]);
     }
@@ -74,17 +96,24 @@ fn skippy_diagnostic_arguments(
 }
 
 fn skippy_overrides() -> DynResult<Vec<String>> {
-    fn read(name: &str) -> DynResult<Option<usize>> {
-        match std::env::var(name) {
-            Ok(value) => positive_override(name, &value).map(Some),
-            Err(std::env::VarError::NotPresent) => Ok(None),
-            Err(error) => Err(format!("{name}: {error}").into()),
-        }
-    }
-    Ok(skippy_diagnostic_arguments(
-        read(SKIPPY_PREFILL_CHUNK_SIZE_ENV)?,
-        read(SKIPPY_GENERATION_CONCURRENCY_ENV)?,
-    ))
+    Ok(skippy_diagnostic_arguments(positive_env_override(
+        SKIPPY_GENERATION_CONCURRENCY_ENV,
+    )?))
+}
+
+fn launch_microbatch_tokens(arguments: &[String], engine: &str) -> DynResult<usize> {
+    let flag = if engine == "skippy" {
+        "--microbatch-size"
+    } else {
+        "--ubatch-size"
+    };
+    let pair = arguments
+        .windows(2)
+        .find(|pair| pair[0] == flag)
+        .ok_or("missing server microbatch argument")?;
+    pair[1]
+        .parse::<usize>()
+        .map_err(|error| format!("invalid {flag} argument: {error}").into())
 }
 
 fn server(
@@ -99,6 +128,11 @@ fn server(
     // common trace budget; llama otherwise allocates the model's full native
     // context for every slot and pays for capacity the workload cannot use.
     let weights = input.weights.to_str().ok_or("weight path")?;
+    let microbatch_tokens = if engine == "skippy" {
+        skippy_microbatch_tokens()?
+    } else {
+        BASELINE_MICROBATCH_TOKENS
+    };
     let (binary, mut args) = if engine == "llama" {
         (
             input.root.join(".deps/agentx-llama-build/bin/llama-server"),
@@ -146,7 +180,7 @@ fn server(
                 "--batch-size",
                 "2048",
                 "--microbatch-size",
-                "512",
+                &microbatch_tokens.to_string(),
                 "--generation-queue-capacity",
                 "256",
                 "--generation-admission-timeout-secs",
@@ -342,6 +376,7 @@ fn launch_identity(
             process::Value::Secret(_) => "<redacted>".into(),
         })
         .collect();
+    let microbatch_tokens = launch_microbatch_tokens(&arguments, engine)?;
     Ok(json!({
         "engine":engine,"command":arguments,
         "container_image":std::env::var("AGENTX_CONTAINER_IMAGE").ok(),
@@ -355,7 +390,7 @@ fn launch_identity(
         "total_context_tokens":matched_llama_context,
         "generation_slots":null,"offered_sessions":concurrency,
         "native_kv_span_debug":engine == "skippy" && std::env::var("AGENTX_SKIPPY_KV_SPAN_DEBUG").as_deref() == Ok("1"),
-        "batch_tokens":2048,"microbatch_tokens":512,
+        "batch_tokens":BATCH_TOKENS,"microbatch_tokens":microbatch_tokens,
         "speculation":false,"dataset_sha256":inputs::DATA_SHA,
         "llama_upstream":std::fs::read_to_string(input.root.join("skippy/llama_cpp/upstream.txt"))?.trim()
     }))
@@ -440,18 +475,13 @@ mod tests {
     use super::*;
     #[test]
     fn skippy_diagnostic_overrides_are_explicit_and_positive() {
-        assert!(skippy_diagnostic_arguments(None, None).is_empty());
+        assert!(skippy_diagnostic_arguments(None).is_empty());
         assert_eq!(
-            skippy_diagnostic_arguments(Some(256), Some(2)),
-            [
-                "--prefill-chunk-size",
-                "256",
-                "--generation-concurrency",
-                "2"
-            ]
+            skippy_diagnostic_arguments(Some(2)),
+            ["--generation-concurrency", "2"]
         );
         for name in [
-            SKIPPY_PREFILL_CHUNK_SIZE_ENV,
+            SKIPPY_MICROBATCH_TOKENS_ENV,
             SKIPPY_GENERATION_CONCURRENCY_ENV,
         ] {
             assert_eq!(positive_override(name, "1").unwrap(), 1);
@@ -459,6 +489,9 @@ mod tests {
                 assert!(positive_override(name, value).is_err(), "{name}={value}");
             }
         }
+        assert_eq!(parse_microbatch_tokens("256").unwrap(), 256);
+        assert_eq!(parse_microbatch_tokens("2048").unwrap(), 2048);
+        assert!(parse_microbatch_tokens("2049").is_err());
     }
     #[test]
     fn exact_state_diagnostics_reach_the_server_process() {
@@ -513,6 +546,7 @@ mod tests {
                     "{engine}: {pair:?}"
                 );
             }
+            assert_eq!(launch_microbatch_tokens(&arguments, engine).unwrap(), 512);
             for flag in ["--generation-concurrency", "--ctx-size"] {
                 assert!(!arguments.iter().any(|arg| arg == flag), "{engine}: {flag}");
             }

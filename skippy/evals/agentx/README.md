@@ -143,10 +143,13 @@ cell; the default still runs the full 1/2/4 sweep. A single-cell diagnostic is
 not a complete comparison report.
 
 For a c=4 Skippy serving sensitivity run, set
-`AGENTX_SKIPPY_PREFILL_CHUNK_SIZE=256` or
+`AGENTX_SKIPPY_MICROBATCH_TOKENS=1024` or
 `AGENTX_SKIPPY_GENERATION_CONCURRENCY=2` on the native `automation agentx run`
-process and pass `--only-concurrency 4`. Either override must be a positive
-integer; unset variables keep the normal automatic serving plan. The exact
+process and pass `--only-concurrency 4`. The microbatch override must be a
+positive integer no larger than the 2,048-token batch, and the generation
+override must be positive; unset variables keep the normal serving plan.
+Local cache-aware prefill chunks follow the native microbatch size rather than
+the embedded-stage `--prefill-chunk-size` setting. The exact
 server arguments are recorded in the cell's `launch.json`. Compare each variant
 with a default Skippy c=4 cell from the same source and machine, with identical
 traces and model weights. These diagnostic variants do not replace the default
