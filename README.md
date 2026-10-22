@@ -387,54 +387,6 @@ mesh-llm --llama-flavor cuda serve \
   --auto
 ```
 
-## Documentation hub
-
-| Doc | Use it for |
-|---|---|
-| [docs/MESHES.md](mesh/docs/MESHES.md) | Private meshes, public discovery, publishing, invite tokens, API-only clients |
-| [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) | Running big models with package-backed Skippy stage splits |
-| [docs/LAYER_PACKAGE_REPOS.md](skippy/docs/LAYER_PACKAGE_REPOS.md) | Contributing and publishing layer package repositories |
-| [docs/AGENTS.md](mesh/docs/AGENTS.md) | Goose, Claude Code, OpenCode, Pi, curl, and blackboard |
-| [docs/EXO_COMPARISON.md](mesh/docs/EXO_COMPARISON.md) | Balanced comparison with Exo |
-| [docs/CLI.md](mesh/docs/CLI.md) | Command reference and JSON automation |
-| [docs/USAGE.md](mesh/docs/USAGE.md) | Longer operational usage guide, runtime control, owner-control operator flows |
-| [docs/design/TESTING.md](mesh/docs/design/TESTING.md) | Testing playbook, mixed-version QA, remote deploy checks |
-| [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) | Optional Flash-MoE SSD expert streaming backend setup |
-| [docs/plugins/dwarfstar.md](mesh/docs/plugins/dwarfstar.md) | DwarfStar (ds4) alternative engine setup on Apple Silicon |
-| [docs/skippy/FAMILY_STATUS.md](skippy/docs/FAMILY_STATUS.md) | Certified Skippy model-family status |
-| [docs/specs/layer-package-repos.md](skippy/docs/specs/layer-package-repos.md) | Manifest and artifact format spec |
-| [docs/specs/mesh-setup-installer.md](mesh/docs/specs/mesh-setup-installer.md) | Installer/bootstrap and setup command behavior spec |
-
-## CI infrastructure
-
-<a href="https://depot.dev">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-light.svg">
-    <img alt="Depot" src="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-light.svg" width="128">
-  </picture>
-</a>
-
-Trusted `main` Linux jobs may use [Depot's managed GitHub Actions
-runners](https://depot.dev/docs/github-actions/overview) through the checked-in
-runner policy. Pull requests remain on GitHub-hosted runners until the cache
-isolation and protected-workflow gates in [`ci/DEPOT_MIGRATION.md`](ci/DEPOT_MIGRATION.md)
-are proven. Hardware-qualified GPU tests remain on dedicated runners.
-
-## Community
-
-Mesh LLM is experimental distributed-systems software. When you report bugs,
-include the command you ran, platform/backend flavor, `/api/status` output if
-available, and whether the node was private, published, or joined with `--auto`.
-
-## Support
-
-<a href="https://spiral.xyz">
-  <img alt="Spiral" src="https://spiral.xyz/images/spiral-logo.svg" width="128">
-</a>
-
-The Mesh LLM project thanks [spiral.xyz](https://spiral.xyz) for their support.
-
 ## Paid inference over Lightning (preview)
 
 > [!NOTE]
@@ -555,3 +507,51 @@ under its saved spending policy.
 
 See the [Lightning payments specification](mesh/docs/specs/lightning-payments.md)
 for settlement, recovery, fees, compatibility, and operator details.
+
+## Documentation hub
+
+| Doc | Use it for |
+|---|---|
+| [docs/MESHES.md](mesh/docs/MESHES.md) | Private meshes, public discovery, publishing, invite tokens, API-only clients |
+| [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) | Running big models with package-backed Skippy stage splits |
+| [docs/LAYER_PACKAGE_REPOS.md](skippy/docs/LAYER_PACKAGE_REPOS.md) | Contributing and publishing layer package repositories |
+| [docs/AGENTS.md](mesh/docs/AGENTS.md) | Goose, Claude Code, OpenCode, Pi, curl, and blackboard |
+| [docs/EXO_COMPARISON.md](mesh/docs/EXO_COMPARISON.md) | Balanced comparison with Exo |
+| [docs/CLI.md](mesh/docs/CLI.md) | Command reference and JSON automation |
+| [docs/USAGE.md](mesh/docs/USAGE.md) | Longer operational usage guide, runtime control, owner-control operator flows |
+| [docs/design/TESTING.md](mesh/docs/design/TESTING.md) | Testing playbook, mixed-version QA, remote deploy checks |
+| [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) | Optional Flash-MoE SSD expert streaming backend setup |
+| [docs/plugins/dwarfstar.md](mesh/docs/plugins/dwarfstar.md) | DwarfStar (ds4) alternative engine setup on Apple Silicon |
+| [docs/skippy/FAMILY_STATUS.md](skippy/docs/FAMILY_STATUS.md) | Certified Skippy model-family status |
+| [docs/specs/layer-package-repos.md](skippy/docs/specs/layer-package-repos.md) | Manifest and artifact format spec |
+| [docs/specs/mesh-setup-installer.md](mesh/docs/specs/mesh-setup-installer.md) | Installer/bootstrap and setup command behavior spec |
+
+## CI infrastructure
+
+<a href="https://depot.dev">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-light.svg">
+    <img alt="Depot" src="https://depot.dev/assets/brand/1693758816/depot-logo-horizontal-on-light.svg" width="128">
+  </picture>
+</a>
+
+Trusted `main` Linux jobs may use [Depot's managed GitHub Actions
+runners](https://depot.dev/docs/github-actions/overview) through the checked-in
+runner policy. Pull requests remain on GitHub-hosted runners until the cache
+isolation and protected-workflow gates in [`ci/DEPOT_MIGRATION.md`](ci/DEPOT_MIGRATION.md)
+are proven. Hardware-qualified GPU tests remain on dedicated runners.
+
+## Community
+
+Mesh LLM is experimental distributed-systems software. When you report bugs,
+include the command you ran, platform/backend flavor, `/api/status` output if
+available, and whether the node was private, published, or joined with `--auto`.
+
+## Support
+
+<a href="https://spiral.xyz">
+  <img alt="Spiral" src="https://spiral.xyz/images/spiral-logo.svg" width="128">
+</a>
+
+The Mesh LLM project thanks [spiral.xyz](https://spiral.xyz) for their support.
