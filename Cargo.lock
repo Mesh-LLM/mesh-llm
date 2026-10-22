@@ -5231,6 +5231,7 @@ name = "mesh-llm-sdk"
 version = "0.78.0"
 dependencies = [
  "anyhow",
+ "futures-util",
  "mesh-llm-console-server",
  "mesh-llm-embedded-runtime",
  "mesh-llm-host-runtime",
@@ -5242,6 +5243,7 @@ dependencies = [
  "serde_json",
  "skippy-runtime-install",
  "tokio",
+ "tokio-tungstenite 0.28.0",
 ]
 
 [[package]]

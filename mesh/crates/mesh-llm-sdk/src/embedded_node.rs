@@ -45,6 +45,15 @@ impl MeshNode {
         Ok(OpenAiClient::new(self.api_base_url()))
     }
 
+    /// Starts live transcription on this node; see
+    /// [`crate::live_transcription`].
+    pub async fn start_live_transcription(
+        &self,
+        options: crate::live_transcription::LiveTranscriptionOptions,
+    ) -> anyhow::Result<crate::live_transcription::LiveTranscription> {
+        crate::live_transcription::LiveTranscription::start(self.api_base_url(), options).await
+    }
+
     pub async fn status(&self) -> anyhow::Result<MeshNodeStatus> {
         self.handle.status().await
     }
@@ -409,6 +418,15 @@ impl OpenAiClient {
             .bearer_auth(&self.api_key)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body_json)
+    }
+
+    /// Starts live transcription against this client's node; see
+    /// [`crate::live_transcription`].
+    pub async fn start_live_transcription(
+        &self,
+        options: crate::live_transcription::LiveTranscriptionOptions,
+    ) -> anyhow::Result<crate::live_transcription::LiveTranscription> {
+        crate::live_transcription::LiveTranscription::start(&self.base_url, options).await
     }
 
     pub async fn models(&self) -> anyhow::Result<serde_json::Value> {
