@@ -21,8 +21,8 @@ Bumps the Skippy ABI to 0.1.72.
  include/skippy/common.h |   4 +-
  src/CMakeLists.txt      |  27 +++
  src/skippy/abi.cpp      |   6 +-
- src/skippy/asr.cpp      | 442 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 643 insertions(+), 2 deletions(-)
+ src/skippy/asr.cpp      | 447 ++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 648 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/asr.h
  create mode 100644 src/skippy/asr.cpp
 
@@ -301,10 +301,10 @@ index f806cdbdc..ed9825df3 100644
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/asr.cpp b/src/skippy/asr.cpp
 new file mode 100644
-index 000000000..1f7c048bc
+index 000000000..06d59dcaa
 --- /dev/null
 +++ b/src/skippy/asr.cpp
-@@ -0,0 +1,442 @@
+@@ -0,0 +1,447 @@
 +#include "skippy/asr.h"
 +#include "skippy/errors.h"
 +
@@ -318,6 +318,11 @@ index 000000000..1f7c048bc
 +#include <vector>
 +
 +#if defined(SKIPPY_HAS_WHISPER)
++// miniaudio includes windows.h, whose min/max macros would rewrite
++// std::min/std::max below; the calls are parenthesized for the same reason.
++#if defined(_WIN32) && !defined(NOMINMAX)
++#define NOMINMAX
++#endif
 +#include "ggml-backend.h"
 +#include "whisper.h"
 +
@@ -654,12 +659,12 @@ index 000000000..1f7c048bc
 +        whisper_full_params full = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
 +        full.n_threads = params->n_threads > 0
 +                ? params->n_threads
-+                : static_cast<int>(std::min(4u, std::max(1u, std::thread::hardware_concurrency())));
++                : static_cast<int>((std::min)(4u, (std::max)(1u, std::thread::hardware_concurrency())));
 +        full.translate = params->translate;
 +        full.language = whisper_is_multilingual(ctx) ? language.c_str() : "en";
 +        full.detect_language = false;
 +        full.initial_prompt = params->prompt != nullptr && params->prompt[0] != '\0' ? params->prompt : nullptr;
-+        full.temperature = std::max(0.0f, params->temperature);
++        full.temperature = (std::max)(0.0f, params->temperature);
 +        full.print_progress = false;
 +        full.print_realtime = false;
 +        full.print_special = false;
@@ -685,7 +690,7 @@ index 000000000..1f7c048bc
 +
 +        auto result = std::make_unique<skippy_asr_result>();
 +        const int n_segments = whisper_full_n_segments_from_state(state.get());
-+        result->segments.reserve(static_cast<size_t>(std::max(0, n_segments)));
++        result->segments.reserve(static_cast<size_t>((std::max)(0, n_segments)));
 +        for (int i = 0; i < n_segments; ++i) {
 +            skippy_asr_segment_text segment;
 +            // whisper.cpp reports segment bounds in 10 ms ticks.

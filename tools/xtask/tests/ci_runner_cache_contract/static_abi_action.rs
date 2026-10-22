@@ -8,7 +8,7 @@ use std::{
     process::{Command, Output},
 };
 const BUILD: &str = ".deps/llama.cpp/build-stage-abi-static";
-const ARCHIVES: [&str; 8] = [
+const ARCHIVES: [&str; 9] = [
     "src/libllama.a",
     "common/libllama-common.a",
     "common/libllama-common-base.a",
@@ -16,6 +16,7 @@ const ARCHIVES: [&str; 8] = [
     "ggml/src/libggml-base.a",
     "tools/mtmd/libmtmd.a",
     "vendor/hash/libvendor-hash.a",
+    "whisper/src/libwhisper.a",
     "ggml/src/libggml-cpu.a",
 ];
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
