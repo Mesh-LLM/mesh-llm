@@ -24,6 +24,7 @@ mod runtime_event_reporter;
 mod runtime_events;
 mod session;
 mod speech_recognition;
+mod speech_stream;
 mod stage_planning;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -87,6 +88,9 @@ pub use speech_recognition::{
     MAX_SPEECH_SAMPLES, SPEECH_SAMPLE_RATE, SpeechModelHeader, SpeechRecognitionModel,
     SpeechRecognitionModelInfo, TranscriptSegment, Transcription, TranscriptionOptions,
     decode_audio, is_speech_recognition_model_file, speech_recognition_supported,
+};
+pub use speech_stream::{
+    PcmResampler, SpeechStream, SpeechStreamConfig, SpeechStreamEvent, Transcribe, TurnDetection,
 };
 pub use stage_planning::{
     GgufStageRuntimePlan, gguf_shard_paths, plan_gguf_stage_resident_tensor_names,
