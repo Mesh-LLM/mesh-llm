@@ -271,3 +271,28 @@ fn speech_recognition_without_verified_audio_is_not_routable() {
         &descriptors
     ));
 }
+
+#[test]
+/// The mixed-version promise: a peer whose metadata decodes as an unknown
+/// class (an older node reading a newer class, or the reverse) is never sent
+/// audio, even when it advertises verified audio.
+fn unknown_class_peers_never_receive_audio() {
+    let mut future = descriptor_with_workload("whisper", mesh::ModelWorkloadClass::Unknown);
+    future.capabilities_known = true;
+    future.capabilities = crate::models::ModelCapabilities {
+        audio: crate::models::CapabilityLevel::Supported,
+        multimodal: true,
+        ..Default::default()
+    };
+    let descriptors = [future];
+    for path in [
+        "/v1/audio/transcriptions",
+        "/v1/audio/translations",
+        "/v1/chat/completions",
+    ] {
+        assert!(
+            !model_satisfies_request("whisper", path, &descriptors),
+            "{path}"
+        );
+    }
+}
