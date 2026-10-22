@@ -22,7 +22,7 @@ pub trait SpeechTranscriber: Send + Sync {
         &self,
         samples: &[f32],
         options: &TranscriptionOptions,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> anyhow::Result<Transcription>;
 }
 
@@ -35,7 +35,7 @@ impl SpeechTranscriber for SpeechRecognitionModel {
         &self,
         samples: &[f32],
         options: &TranscriptionOptions,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> anyhow::Result<Transcription> {
         SpeechRecognitionModel::transcribe(self, samples, options, cancelled)
     }
@@ -86,7 +86,7 @@ impl SpeechRecognitionBackend {
             temperature: request.temperature.unwrap_or(0.0),
             threads: 0,
         };
-        let _lane = self
+        let lane = self
             .lanes
             .clone()
             .acquire_owned()
@@ -95,6 +95,12 @@ impl SpeechRecognitionBackend {
         let model = self.model.clone();
         let cancellation = context.cancellation_token();
         let transcription = task::spawn_blocking(move || {
+            // The lane is held for as long as the work runs, even when the
+            // request future is dropped and nobody awaits the result.
+            let _lane = lane;
+            if cancellation.is_cancelled() {
+                return Err(InferenceError::backend("transcription cancelled"));
+            }
             let samples = model
                 .decode(&request.file)
                 .map_err(|error| InferenceError::invalid_request(format!("{error:#}")))?;
@@ -209,7 +215,7 @@ mod tests {
             &self,
             samples: &[f32],
             options: &TranscriptionOptions,
-            cancelled: &dyn Fn() -> bool,
+            cancelled: &(dyn Fn() -> bool + Sync),
         ) -> anyhow::Result<Transcription> {
             assert!(!cancelled());
             self.seen.lock().unwrap().push(options.clone());
@@ -270,6 +276,96 @@ mod tests {
         let status = response.status();
         let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
         (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    /// Holds each transcription open for a while and records how many ran
+    /// at once.
+    #[derive(Default)]
+    struct SlowModel {
+        active: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        finished: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SpeechTranscriber for SlowModel {
+        fn decode(&self, _audio: &[u8]) -> anyhow::Result<Vec<f32>> {
+            Ok(vec![0.0; 16_000])
+        }
+
+        fn transcribe(
+            &self,
+            _samples: &[f32],
+            _options: &TranscriptionOptions,
+            _cancelled: &(dyn Fn() -> bool + Sync),
+        ) -> anyhow::Result<Transcription> {
+            use std::sync::atomic::Ordering::SeqCst;
+            let now = self.active.fetch_add(1, SeqCst) + 1;
+            self.peak.fetch_max(now, SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            self.active.fetch_sub(1, SeqCst);
+            self.finished.fetch_add(1, SeqCst);
+            Ok(Transcription {
+                segments: Vec::new(),
+                language: "en".into(),
+                duration_seconds: 1.0,
+            })
+        }
+    }
+
+    fn slow_request() -> AudioTranscriptionRequest {
+        AudioTranscriptionRequest {
+            model: "whisper-test".into(),
+            file: b"RIFFdata".to_vec(),
+            filename: None,
+            language: None,
+            prompt: None,
+            response_format: "json".into(),
+            temperature: None,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_abandoned_request_keeps_its_lane_until_its_work_ends() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let model = Arc::new(SlowModel::default());
+        let backend = Arc::new(SpeechRecognitionBackend::new(
+            "whisper-test",
+            model.clone(),
+            1,
+        ));
+        let first = {
+            let backend = backend.clone();
+            tokio::spawn(async move {
+                backend
+                    .audio_transcription(slow_request(), InferenceRequestContext::new())
+                    .await
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // The client goes away while the first transcription is running.
+        first.abort();
+        backend
+            .audio_transcription(slow_request(), InferenceRequestContext::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            model.peak.load(SeqCst),
+            1,
+            "one lane admits one transcription"
+        );
+        assert_eq!(model.finished.load(SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn text_responses_come_back_as_plain_text() {
+        let (status, body) = post(
+            Arc::new(FakeModel::default()),
+            "/v1/audio/transcriptions",
+            upload("whisper-test", b"RIFFdata", &[("response_format", "text")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body, "Hello there.");
     }
 
     #[tokio::test]

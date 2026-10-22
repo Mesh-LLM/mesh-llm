@@ -98,6 +98,15 @@ pub struct AudioTranscriptionRequest {
 impl AudioTranscriptionRequest {
     pub const MAX_FILE_BYTES: usize = MAX_AUDIO_BYTES;
 
+    /// Whether the requested format needs per-segment timing
+    /// (`verbose_json`, `srt`, `vtt`), which only some models report.
+    pub fn needs_segment_timing(&self) -> bool {
+        matches!(
+            self.response_format.as_str(),
+            "verbose_json" | "srt" | "vtt"
+        )
+    }
+
     /// Enforce upload size, output format, and the finite `[0, 1]` temperature range.
     pub fn validate(&self) -> InferenceResult<()> {
         if self.model.trim().is_empty() {
@@ -197,7 +206,7 @@ pub(crate) fn srt(timing: &AudioTranscriptionTiming) -> String {
             "{}\n{} --> {}\n{}\n\n",
             index + 1,
             subtitle_time(segment.start, ','),
-            subtitle_time(segment.end, ','),
+            subtitle_time(cue_end(segment), ','),
             segment.text.trim()
         ));
     }
@@ -211,11 +220,17 @@ pub(crate) fn vtt(timing: &AudioTranscriptionTiming) -> String {
         out.push_str(&format!(
             "{} --> {}\n{}\n\n",
             subtitle_time(segment.start, '.'),
-            subtitle_time(segment.end, '.'),
+            subtitle_time(cue_end(segment), '.'),
             segment.text.trim()
         ));
     }
     out
+}
+
+/// A cue's end, never before its start: Whisper can emit zero-length or
+/// rounded segments, and players reject an end earlier than the start.
+fn cue_end(segment: &AudioTranscriptionSegment) -> f64 {
+    segment.end.max(segment.start)
 }
 
 fn subtitle_time(seconds: f64, separator: char) -> String {
@@ -279,6 +294,13 @@ mod tests {
             vtt(&timing()),
             "WEBVTT\n\n00:00:00.000 --> 00:00:01.250\nHello.\n\n01:02:03.000 --> 01:02:05.500\nBye.\n\n"
         );
+    }
+
+    #[test]
+    fn subtitle_cues_never_end_before_they_start() {
+        let mut timing = timing();
+        timing.segments[0].end = -1.0;
+        assert!(srt(&timing).starts_with("1\n00:00:00,000 --> 00:00:00,000\n"));
     }
 
     #[test]

@@ -607,7 +607,10 @@ fn render_transcription(
             crate::audio::srt(timing()?),
         ),
         "vtt" => plain("text/vtt; charset=utf-8", crate::audio::vtt(timing()?)),
-        _ => Ok(Json(response).into_response()),
+        "json" => Ok(Json(response).into_response()),
+        other => Err(InferenceError::unsupported(format!(
+            "response_format '{other}' is not supported"
+        ))),
     }
 }
 

@@ -99,6 +99,14 @@ impl StageOpenAiBackend {
         context: InferenceRequestContext,
     ) -> InferenceResult<AudioTranscriptionResponse> {
         self.ensure_model(&request.model)?;
+        // Generation models with an audio encoder return plain text; refuse
+        // timed formats before spending the transcription.
+        if request.needs_segment_timing() {
+            return Err(InferenceError::unsupported(format!(
+                "response_format '{}' needs a model that reports segment timing",
+                request.response_format
+            )));
+        }
         if !self.has_unsplit_full_model_topology() {
             return Err(InferenceError::unsupported(
                 "audio transcription currently requires an unsplit local runtime",

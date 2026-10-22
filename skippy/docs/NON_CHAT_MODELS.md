@@ -134,7 +134,10 @@ Transcription and translation accept `multipart/form-data` with a required
 `model` field and one `file` field. Uploads are bounded at 64 MiB. Every model
 answers `json` and `text`. Models that report segment timing, such as Whisper,
 also answer `verbose_json`, `srt`, and `vtt`; the others refuse those formats
-with a structured unsupported error.
+with a structured unsupported error before transcribing. `verbose_json` carries
+`task`, `language`, `duration`, `text`, and `segments` with `id`, `start`,
+`end`, `text`, and `no_speech_prob`. It omits OpenAI's per-segment `seek`,
+`tokens`, `temperature`, `avg_logprob`, and `compression_ratio`.
 
 ```bash
 curl -sS http://127.0.0.1:9337/v1/audio/transcriptions \
