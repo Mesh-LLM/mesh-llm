@@ -10,6 +10,10 @@ const HALF_TAPS: usize = 16;
 /// across chunks so chunk boundaries leave no seams. Downsampling low-passes
 /// at the output Nyquist rate with a Hann-windowed sinc, so content above
 /// 8 kHz does not alias into the speech band.
+///
+/// The last [`HALF_TAPS`] input samples of a stream wait for look-ahead and
+/// are never emitted: about 1 ms, which a stream that ends a turn on silence
+/// does not miss.
 #[derive(Debug, Clone)]
 pub struct PcmResampler {
     input_rate: u32,
@@ -67,6 +71,7 @@ impl PcmResampler {
     fn sample_at(&self, position: f64, cutoff: f64) -> f32 {
         let center = position.floor() as i64;
         let mut acc = 0.0f64;
+        let mut gain = 0.0f64;
         for index in (center - HALF_TAPS as i64 + 1)..=(center + HALF_TAPS as i64) {
             if index < self.history_start as i64 {
                 continue;
@@ -80,7 +85,14 @@ impl PcmResampler {
             let distance = position - index as f64;
             let window =
                 0.5 + 0.5 * (std::f64::consts::PI * distance / (HALF_TAPS as f64 + 1.0)).cos();
-            acc += f64::from(*sample) * cutoff * sinc(cutoff * distance) * window;
+            let weight = cutoff * sinc(cutoff * distance) * window;
+            acc += f64::from(*sample) * weight;
+            gain += weight;
+        }
+        // Normalize per output position: the truncated kernel's gain varies
+        // with the fractional phase, which would ripple the amplitude.
+        if gain.abs() > f64::EPSILON {
+            acc /= gain;
         }
         acc as f32
     }
@@ -146,6 +158,34 @@ mod tests {
         assert_eq!(a.len(), b.len());
         for (x, y) in a.iter().zip(&b) {
             assert!((x - y).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn forty_eight_khz_downsamples_and_eight_khz_upsamples_at_the_right_level() {
+        for rate in [48_000, 8_000] {
+            let input = tone(rate, 440.0, 1.0);
+            let mut resampler = PcmResampler::new(rate);
+            let out = input
+                .chunks(rate as usize / 50)
+                .flat_map(|chunk| resampler.push(chunk))
+                .collect::<Vec<_>>();
+            assert!(
+                (15_950..=16_000).contains(&out.len()),
+                "{rate}: {}",
+                out.len()
+            );
+            let level = rms(&out[200..out.len() - 200]);
+            assert!((level - 0.345).abs() < 0.01, "{rate}: {level}");
+        }
+    }
+
+    #[test]
+    fn a_constant_signal_stays_constant_at_every_phase() {
+        let mut resampler = PcmResampler::new(24_000);
+        let out = resampler.push(&vec![16_384; 4_800]);
+        for sample in &out[40..out.len() - 40] {
+            assert!((sample - 0.5).abs() < 1e-4, "{sample}");
         }
     }
 

@@ -19,9 +19,12 @@ use anyhow::Result;
 
 pub use resample::PcmResampler;
 
+use crate::logging::write_native_log_note;
 use crate::speech_recognition::{SPEECH_SAMPLE_RATE, Transcription, TranscriptionOptions};
 
 const SAMPLES_PER_MS: u64 = SPEECH_SAMPLE_RATE as u64 / 1000;
+// Millisecond arithmetic below assumes a whole number of samples per ms.
+const _: () = assert!(SPEECH_SAMPLE_RATE.is_multiple_of(1000));
 /// Voice-activity frames are 20 ms.
 const FRAME_SAMPLES: usize = 320;
 /// Consecutive speech frames that open a turn, so a click does not.
@@ -170,14 +173,17 @@ impl SpeechStream {
         &self.config
     }
 
-    /// Replaces the configuration; it applies from the next turn on.
+    /// Replaces the configuration immediately, including mid-turn: a new
+    /// `turn_detection`, `step_ms`, or buffer bound governs the very next
+    /// frame and pass. Language and prompt reach the next pass.
     pub fn set_config(&mut self, config: SpeechStreamConfig) {
         self.config = config;
     }
 
-    /// Whether audio is waiting for a turn to end.
+    /// Whether a turn is open with audio or confirmed words that its
+    /// `Completed` has not reported yet.
     pub fn has_pending_audio(&self) -> bool {
-        self.in_turn && !self.buffer.is_empty()
+        self.in_turn && (!self.buffer.is_empty() || !self.confirmed.is_empty())
     }
 
     /// The turn the next events belong to.
@@ -239,10 +245,15 @@ impl SpeechStream {
         transcribe: &mut Transcribe<'_>,
         events: &mut Vec<SpeechStreamEvent>,
     ) -> Result<()> {
-        let speech = self
-            .config
-            .turn_detection
-            .is_none_or(|detection| rms(frame) > detection.rms_threshold());
+        // With turn detection off the caller owns turn boundaries, but the
+        // default detector still decides whether a buffer holds speech worth
+        // transcribing; silence is never sent to Whisper.
+        let speech = rms(frame)
+            > self
+                .config
+                .turn_detection
+                .unwrap_or_default()
+                .rms_threshold();
         if !self.in_turn {
             match self.config.turn_detection {
                 None => self.start_turn(frame, None, speech),
@@ -303,11 +314,31 @@ impl SpeechStream {
     ) -> Result<()> {
         self.last_pass_at = self.received;
         if !self.buffer_has_speech {
+            // Silence is never transcribed, but with turn detection off it
+            // still accumulates; keep it bounded like any other buffer.
+            let max = u64::from(self.config.max_buffer_ms) * SAMPLES_PER_MS;
+            if self.buffer.len() as u64 > max {
+                self.buffer_start += self.buffer.len() as u64;
+                self.buffer.clear();
+            }
             return Ok(());
         }
         let segments = self.transcribe_buffer(transcribe)?;
         let words = segments.iter().flatten().cloned().collect::<Vec<_>>();
-        let tail = &words[self.confirmed_in_buffer.min(words.len())..];
+        if words.len() < self.confirmed_in_buffer {
+            // Whisper now hears fewer words than were confirmed from this
+            // audio (merged words, or a segment dropped as silence). The
+            // confirmed words stand; realign so the next words can still be
+            // confirmed rather than waiting for the count to catch up.
+            write_native_log_note(format!(
+                "speech stream desync: pass heard {} words, {} already confirmed; realigning",
+                words.len(),
+                self.confirmed_in_buffer
+            ));
+            self.confirmed_in_buffer = words.len();
+            self.pending.clear();
+        }
+        let tail = &words[self.confirmed_in_buffer..];
         let agreed = tail
             .iter()
             .zip(&self.pending)

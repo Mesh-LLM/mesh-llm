@@ -197,7 +197,10 @@ fn an_overlong_buffer_confirms_what_it_has_and_starts_over() {
     let mut stream = SpeechStream::new(config);
     let events = stream.push(&loud(2_500), &mut transcribe).unwrap();
     assert_eq!(deltas(&events), ["Never settles"]);
-    assert!(!stream.has_pending_audio());
+    // The audio is gone but the turn stays open until its words are
+    // reported in a `Completed`.
+    assert!(stream.buffer.is_empty());
+    assert!(stream.has_pending_audio());
 }
 
 #[test]
@@ -225,6 +228,155 @@ fn commit_without_audio_reports_nothing_and_clear_drops_the_turn() {
 }
 
 #[test]
+fn a_pass_hearing_fewer_words_than_confirmed_realigns_instead_of_stalling() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B C")],
+        vec![(1_900, " A B C D")],
+        // Whisper merges words: fewer than the three already confirmed.
+        vec![(2_900, " A B")],
+        vec![(3_900, " A B E")],
+        vec![(4_900, " A B E F")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut all = Vec::new();
+    for _ in 0..5 {
+        all.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    assert_eq!(deltas(&all), ["A B C", " E"]);
+}
+
+#[test]
+fn silence_without_turn_detection_is_bounded_and_never_transcribed() {
+    let config = SpeechStreamConfig {
+        max_buffer_ms: 2_000,
+        ..manual()
+    };
+    let mut script = Script::new(vec![vec![(900, " Never")]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(config);
+    for _ in 0..10 {
+        stream.push(&quiet(1_000), &mut transcribe).unwrap();
+    }
+    assert!(stream.buffer.len() <= 3_000 * MS, "{}", stream.buffer.len());
+    assert!(script.seen.is_empty());
+}
+
+#[test]
+fn turn_detection_can_be_switched_off_mid_turn() {
+    let mut script = Script::new(vec![vec![(400, " Hold")]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig::default());
+    stream.push(&loud(400), &mut transcribe).unwrap();
+    stream.set_config(manual());
+    // Silence no longer ends the turn; the caller does.
+    let events = stream.push(&quiet(1_000), &mut transcribe).unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SpeechStreamEvent::Completed { .. }))
+    );
+    assert!(stream.has_pending_audio());
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert!(matches!(
+        done.last(),
+        Some(SpeechStreamEvent::Completed { .. })
+    ));
+}
+
+#[test]
+fn two_turns_inside_one_push_are_reported_in_order() {
+    let mut script = Script::new(vec![vec![(400, " One.")], vec![(400, " Two.")]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig::default());
+    let audio = [loud(400), quiet(600), loud(400), quiet(600)].concat();
+    let events = stream.push(&audio, &mut transcribe).unwrap();
+    let kinds = events
+        .iter()
+        .map(|event| match event {
+            SpeechStreamEvent::SpeechStarted { turn, .. } => format!("start{turn}"),
+            SpeechStreamEvent::SpeechStopped { turn, .. } => format!("stop{turn}"),
+            SpeechStreamEvent::Delta { turn, .. } => format!("delta{turn}"),
+            SpeechStreamEvent::Completed { turn, transcript } => format!("done{turn}:{transcript}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        [
+            "start0",
+            "stop0",
+            "delta0",
+            "done0:One.",
+            "start1",
+            "stop1",
+            "delta1",
+            "done1:Two."
+        ]
+    );
+}
+
+#[test]
+fn a_commit_after_an_overlong_reset_still_completes_the_turn() {
+    let config = SpeechStreamConfig {
+        max_buffer_ms: 2_000,
+        ..manual()
+    };
+    let mut script = Script::new(vec![vec![(2_400, " Never settles")]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(config);
+    stream.push(&loud(2_500), &mut transcribe).unwrap();
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert_eq!(
+        done.last(),
+        Some(&SpeechStreamEvent::Completed {
+            turn: 0,
+            transcript: "Never settles".into()
+        })
+    );
+}
+
+/// Over many scripted runs, the deltas of each turn always join to exactly
+/// its completed transcript, whatever Whisper revises between passes.
+#[test]
+fn deltas_always_join_to_the_completed_transcript() {
+    const WORDS: [&str; 6] = ["alpha", "Beta,", "gamma", "delta.", "eps", "zeta"];
+    let mut seed = 0x2545_f491_u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for _ in 0..200 {
+        let passes = (0..6)
+            .map(|_| {
+                let count = 1 + (next() % 7) as usize;
+                let text = (0..count)
+                    .map(|_| WORDS[(next() % WORDS.len() as u64) as usize])
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                vec![(
+                    1_000,
+                    Box::leak(format!(" {text}").into_boxed_str()) as &'static str,
+                )]
+            })
+            .collect::<Vec<_>>();
+        let mut script = Script::new(passes);
+        let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+        let mut stream = SpeechStream::new(manual());
+        let mut events = Vec::new();
+        for _ in 0..5 {
+            events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+        }
+        events.extend(stream.commit(&mut transcribe).unwrap());
+        let Some(SpeechStreamEvent::Completed { transcript, .. }) = events.last() else {
+            panic!("the turn completes");
+        };
+        assert_eq!(&deltas(&events).concat(), transcript);
+    }
+}
+
+#[test]
 fn word_matching_ignores_case_and_punctuation_only() {
     assert!(same_word("Hello,", "hello"));
     assert!(same_word("—", "—"));
@@ -232,16 +384,13 @@ fn word_matching_ignores_case_and_punctuation_only() {
     assert!(!same_word("their", "there"));
 }
 
-/// Streams a real clip through a real model in 100 ms chunks when
-/// `SKIPPY_ASR_TEST_MODEL` and `SKIPPY_ASR_TEST_AUDIO` are set.
+/// Streams the clip named by `SKIPPY_ASR_TEST_AUDIO` through the model named
+/// by `SKIPPY_ASR_TEST_MODEL` in 100 ms chunks.
 #[test]
-fn streams_a_real_clip_when_configured() {
-    let (Some(model), Some(audio)) = (
-        std::env::var_os("SKIPPY_ASR_TEST_MODEL"),
-        std::env::var_os("SKIPPY_ASR_TEST_AUDIO"),
-    ) else {
-        return;
-    };
+#[ignore = "needs SKIPPY_ASR_TEST_MODEL and SKIPPY_ASR_TEST_AUDIO"]
+fn streams_a_real_clip() {
+    let model = std::env::var_os("SKIPPY_ASR_TEST_MODEL").expect("set SKIPPY_ASR_TEST_MODEL");
+    let audio = std::env::var_os("SKIPPY_ASR_TEST_AUDIO").expect("set SKIPPY_ASR_TEST_AUDIO");
     let device = std::env::var("SKIPPY_ASR_TEST_DEVICE").ok();
     let model = crate::SpeechRecognitionModel::open(model, device.as_deref()).unwrap();
     let samples = crate::decode_audio(&std::fs::read(audio).unwrap()).unwrap();
