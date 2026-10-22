@@ -1237,4 +1237,18 @@ async fn exact_whisper_model_files_resolve_without_gguf_selection() {
     assert_eq!(resolved, "ggml-large-v3-turbo-q5_0.bin");
     assert!(is_whisper_model_file_name("models/ggml-base.en.bin"));
     assert!(!is_whisper_model_file_name("pytorch_model.bin"));
+    assert!(!is_whisper_model_file_name("ggml-model-q4_0.bin"));
+    // A Whisper name missing from the repo is refused before any download.
+    let missing = resolve_huggingface_file_from_sibling_entries(
+        "ggerganov/whisper.cpp",
+        None,
+        "ggml-large-v9.bin",
+        &siblings,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        missing.to_string().contains("No file ggml-large-v9.bin"),
+        "{missing}"
+    );
 }

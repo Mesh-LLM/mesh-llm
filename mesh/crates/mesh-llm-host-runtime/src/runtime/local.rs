@@ -97,10 +97,17 @@ pub(super) enum LocalRuntimeBackendHandle {
     /// decision model or a Whisper speech-recognition model: no sessions, KV
     /// cache, or guardrails.
     Dedicated {
-        _model: Arc<dyn std::any::Any + Send + Sync>,
+        model: DedicatedModel,
         http: skippy::SkippyHttpHandle,
         _death_tx: tokio::sync::oneshot::Sender<()>,
     },
+}
+
+/// The native model behind a dedicated backend. Its HTTP server holds
+/// another reference; the model is freed once both are dropped.
+pub(super) enum DedicatedModel {
+    Laya(Arc<skippy_runtime::LayaModel>),
+    Speech(Arc<skippy_runtime::SpeechRecognitionModel>),
 }
 
 pub(super) struct LocalRuntimeModelHandle {
@@ -212,8 +219,14 @@ impl LocalRuntimeModelHandle {
                 let _ = http.shutdown().await;
                 model.shutdown();
             }
-            LocalRuntimeBackendHandle::Dedicated { http, .. } => {
+            LocalRuntimeBackendHandle::Dedicated { model, http, .. } => {
+                // Stop serving first so no request still holds the model,
+                // then release this handle's reference.
                 let _ = http.shutdown().await;
+                match model {
+                    DedicatedModel::Laya(model) => drop(model),
+                    DedicatedModel::Speech(model) => drop(model),
+                }
             }
         }
     }
@@ -476,6 +489,8 @@ pub(super) enum ModelLoadSource {
     DirectGguf,
     /// A catalog or repository model reference.
     LayerPackage,
+    /// A whisper.cpp model file, by path or repository reference.
+    WhisperFile,
 }
 
 impl ModelLoadSource {
@@ -483,6 +498,7 @@ impl ModelLoadSource {
         match self {
             Self::DirectGguf => "direct_gguf",
             Self::LayerPackage => "layer_package",
+            Self::WhisperFile => "whisper_file",
         }
     }
 
@@ -499,6 +515,8 @@ impl ModelLoadSource {
         match self {
             Self::DirectGguf => false,
             Self::LayerPackage => true,
+            // The name may come from a local path, so it is never reported.
+            Self::WhisperFile => false,
         }
     }
 }
@@ -965,6 +983,29 @@ pub(super) async fn start_local_openai_model(
         .unwrap_or_else(|| election::total_model_bytes(spec.model_path));
     let my_vram = spec.capacity_budget_bytes;
 
+    // Whisper models are whisper.cpp files, not GGUF, and open through their
+    // own native entry point, with their own capacity check. A ggml file of
+    // another layout or an unreadable file fails here with its real cause
+    // instead of as a GGUF parse error.
+    if package.is_none() {
+        let model_path = spec.model_path.to_path_buf();
+        let speech_header = tokio::task::spawn_blocking(move || {
+            skippy_runtime::SpeechModelHeader::read(&model_path)
+        })
+        .await
+        .context("join speech model header task")?
+        .with_context(|| format!("read model header of {}", spec.model_path.display()))?;
+        if let Some(header) = speech_header {
+            return super::local_speech::start_local_speech_model(
+                spec,
+                model_name,
+                total_model_bytes,
+                header,
+            )
+            .await;
+        }
+    }
+
     // For split/layer-package models, compute the local share of model weights
     // and the layer fraction so the context planner budgets correctly.
     // At planning time the exact layer assignment is not yet known, so we
@@ -983,26 +1024,6 @@ pub(super) async fn start_local_openai_model(
         format_gb(required_bytes),
         format_gb(my_vram)
     );
-
-    // Whisper models are whisper.cpp files, not GGUF, and open through their
-    // own native entry point.
-    if package.is_none() {
-        let model_path = spec.model_path.to_path_buf();
-        let speech_header = tokio::task::spawn_blocking(move || {
-            skippy_runtime::SpeechModelHeader::read(&model_path)
-        })
-        .await
-        .context("join speech model header task")?;
-        if let Some(header) = speech_header {
-            return super::local_speech::start_local_speech_model(
-                spec,
-                model_name,
-                total_model_bytes,
-                header,
-            )
-            .await;
-        }
-    }
 
     // Read GGUF metadata first: it carries the model's native context length,
     // head counts, and KV dimensions needed for accurate KV budget planning,

@@ -131,7 +131,7 @@ pub(super) async fn start_local_speech_model(
         model: model_name.clone(),
         bytes: None,
     });
-    report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf, None);
+    report_model_loaded_analytics(&model_name, ModelLoadSource::WhisperFile, None);
     let capabilities = models::ModelCapabilities {
         audio: models::CapabilityLevel::Supported,
         ..Default::default()
@@ -155,7 +155,7 @@ pub(super) async fn start_local_speech_model(
             workload_class: mesh::ModelWorkloadClass::SpeechRecognition,
             thinking: None,
             inner: LocalRuntimeBackendHandle::Dedicated {
-                _model: model,
+                model: super::local::DedicatedModel::Speech(model),
                 http,
                 _death_tx: death_tx,
             },

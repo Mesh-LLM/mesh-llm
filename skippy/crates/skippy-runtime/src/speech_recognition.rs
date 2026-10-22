@@ -272,18 +272,27 @@ const DECODER_COMPUTE_BYTES: u64 = 256 << 20;
 
 impl SpeechModelHeader {
     /// Reads the header of a whisper.cpp model file: the `ggml` magic followed
-    /// by Whisper's audio-context and mel-bin layout. Legacy llama.cpp `ggml`
-    /// files share the magic but not that layout, so they read as `None`.
-    pub fn read(path: impl AsRef<Path>) -> Option<Self> {
+    /// by Whisper's audio-context and mel-bin layout.
+    ///
+    /// Returns `Ok(None)` for files without the `ggml` magic (GGUF and the
+    /// rest) or too short to hold a header. A file with the magic but another
+    /// layout, such as a legacy llama.cpp `ggml` model, is an
+    /// `InvalidData` error rather than silently "not Whisper", and so are I/O
+    /// failures such as permissions. The layout check accepts the vocabulary
+    /// sizes Whisper has shipped (51864 English-only, 51865, 51866 for
+    /// large-v3); a future vocabulary would need adding here.
+    pub fn read(path: impl AsRef<Path>) -> std::io::Result<Option<Self>> {
         use std::io::Read;
 
         const GGML_MAGIC: u32 = 0x6767_6d6c;
         /// Encoder positions every Whisper size uses: 30 s of audio at 50 Hz.
         const WHISPER_AUDIO_CTX: u32 = 1500;
         let mut bytes = [0u8; 44];
-        std::fs::File::open(path)
-            .and_then(|mut file| file.read_exact(&mut bytes))
-            .ok()?;
+        match std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut bytes)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(error) => return Err(error),
+        }
         let word = |index: usize| {
             u32::from_le_bytes([
                 bytes[index * 4],
@@ -302,11 +311,22 @@ impl SpeechModelHeader {
             text_layer_count: word(9),
             mel_count: word(10),
         };
-        (word(0) == GGML_MAGIC
-            && (51_864..=51_866).contains(&header.vocab_size)
+        if word(0) != GGML_MAGIC {
+            return Ok(None);
+        }
+        if (51_864..=51_866).contains(&header.vocab_size)
             && header.audio_ctx == WHISPER_AUDIO_CTX
-            && matches!(header.mel_count, 80 | 128))
-        .then_some(header)
+            && matches!(header.mel_count, 80 | 128)
+        {
+            return Ok(Some(header));
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "ggml model file is not a Whisper layout (vocabulary {}, audio context {}, mel bins {})",
+                header.vocab_size, header.audio_ctx, header.mel_count
+            ),
+        ))
     }
 
     /// Bytes one transcription's decoder state holds: f16 self- and
@@ -320,7 +340,7 @@ impl SpeechModelHeader {
 
 /// Whether `path` holds a whisper.cpp model; see [`SpeechModelHeader::read`].
 pub fn is_speech_recognition_model_file(path: impl AsRef<Path>) -> bool {
-    SpeechModelHeader::read(path).is_some()
+    matches!(SpeechModelHeader::read(path), Ok(Some(_)))
 }
 
 /// Whether the loaded native runtime was built with speech recognition.
@@ -450,7 +470,9 @@ mod tests {
         assert!(is_speech_recognition_model_file(write(
             "base.bin", &base_en
         )));
-        let v3 = SpeechModelHeader::read(write("v3.bin", &large_v3)).unwrap();
+        let v3 = SpeechModelHeader::read(write("v3.bin", &large_v3))
+            .unwrap()
+            .unwrap();
         assert_eq!(v3.text_layer_count, 4);
         assert_eq!(v3.mel_count, 128);
         // (1500 + 448) positions x 4 layers x 1280 wide, K and V in f16.
@@ -469,6 +491,22 @@ mod tests {
         assert!(!is_speech_recognition_model_file(
             dir.path().join("missing")
         ));
+        // Not ggml at all (GGUF), too short, and a ggml file of another
+        // layout are told apart.
+        let gguf = dir.path().join("model.gguf");
+        std::fs::write(
+            &gguf,
+            b"GGUF\x03\x00\x00\x00 and more than forty-four bytes of header",
+        )
+        .unwrap();
+        assert!(matches!(SpeechModelHeader::read(&gguf), Ok(None)));
+        assert!(matches!(
+            SpeechModelHeader::read(write("tiny.bin", &[magic])),
+            Ok(None)
+        ));
+        let error = SpeechModelHeader::read(write("llama2.bin", &llama)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(SpeechModelHeader::read(dir.path().join("missing")).is_err());
     }
 
     #[test]
