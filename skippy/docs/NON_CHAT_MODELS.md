@@ -131,8 +131,10 @@ curl -sS http://127.0.0.1:9337/v1/audio/speech \
 ```
 
 Transcription and translation accept `multipart/form-data` with a required
-`model` field and one `file` field. Uploads are bounded at 64 MiB. The supported
-response formats are `json` and `text`.
+`model` field and one `file` field. Uploads are bounded at 64 MiB. Every model
+answers `json` and `text`. Models that report segment timing, such as Whisper,
+also answer `verbose_json`, `srt`, and `vtt`; the others refuse those formats
+with a structured unsupported error.
 
 ```bash
 curl -sS http://127.0.0.1:9337/v1/audio/transcriptions \

@@ -577,14 +577,37 @@ async fn audio_text_request(
         },
     )
     .await?;
-    if response_format == "text" {
-        Ok((
-            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            response.text,
-        )
-            .into_response())
-    } else {
-        Ok(Json(response).into_response())
+    render_transcription(&response_format, response, translate)
+}
+
+/// Render a transcript in the requested OpenAI `response_format`. Timed
+/// formats need a model that reports segment timing.
+fn render_transcription(
+    response_format: &str,
+    response: AudioTranscriptionResponse,
+    translate: bool,
+) -> Result<Response, InferenceError> {
+    let plain = |content_type: &'static str, body: String| {
+        Ok(([(header::CONTENT_TYPE, content_type)], body).into_response())
+    };
+    let timing = || {
+        response.timing.as_ref().ok_or_else(|| {
+            InferenceError::unsupported(format!(
+                "response_format '{response_format}' needs a model that reports segment timing"
+            ))
+        })
+    };
+    match response_format {
+        "text" => plain("text/plain; charset=utf-8", response.text),
+        "verbose_json" => {
+            Ok(Json(crate::audio::verbose_json(&response, timing()?, translate)).into_response())
+        }
+        "srt" => plain(
+            "application/x-subrip; charset=utf-8",
+            crate::audio::srt(timing()?),
+        ),
+        "vtt" => plain("text/vtt; charset=utf-8", crate::audio::vtt(timing()?)),
+        _ => Ok(Json(response).into_response()),
     }
 }
 

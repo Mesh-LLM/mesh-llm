@@ -153,9 +153,9 @@ impl StageOpenAiBackend {
                 ids,
             )
             .await?;
-        Ok(AudioTranscriptionResponse {
-            text: audio_transcript_text(&output.text),
-        })
+        Ok(AudioTranscriptionResponse::text(audio_transcript_text(
+            &output.text,
+        )))
     }
 
     /// Reject split execution and mismatched native workload descriptors before work.

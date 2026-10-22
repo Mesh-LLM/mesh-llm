@@ -26,7 +26,7 @@ pub mod wire_bytes;
 
 pub use audio::{
     AudioFormat, AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest,
-    AudioTranscriptionResponse,
+    AudioTranscriptionResponse, AudioTranscriptionSegment, AudioTranscriptionTiming,
 };
 pub use backend::{
     CancellationToken, ChatCompletionStream, CompletionStream, InferenceBackend,
