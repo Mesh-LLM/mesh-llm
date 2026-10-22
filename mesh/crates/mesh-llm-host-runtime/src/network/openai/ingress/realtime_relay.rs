@@ -9,73 +9,152 @@
 //!
 //! A session that arrives from a peer was already assigned to this host: it is
 //! served by a local model or refused, never forwarded again.
+//!
+//! Sessions draw on their own bounded budget and end after a quiet spell, so
+//! parked websockets cannot starve ordinary requests. Exchange-admission
+//! plugins (payments, policy) see request/response exchanges only, so a node
+//! that runs them refuses live sessions rather than bypassing them.
 
-use tokio::io::AsyncWriteExt;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::Semaphore;
 
 use crate::inference::election::{self, InferenceTarget};
 use crate::mesh;
 use crate::network::openai::client_stream::ClientStream;
+use crate::network::openai::request_parse::{header_values_from_raw, internal_model_for_public_id};
 use crate::network::openai::transport as proxy;
 use crate::network::openai::workload_routing::eligible_targets;
 
 pub(super) const REALTIME_PATH: &str = "/v1/realtime";
+/// Live sessions one node relays at once, out of the shared ingress budget.
+const MAX_REALTIME_SESSIONS: usize = 64;
+/// A session with no bytes in either direction for this long is closed.
+const REALTIME_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Websocket Close frame (server to client, unmasked) with status 1011,
+/// "internal error", sent when the host side fails mid-session.
+const CLOSE_INTERNAL_ERROR: [u8; 4] = [0x88, 0x02, 0x03, 0xf3];
+
+fn session_budget() -> &'static Arc<Semaphore> {
+    static BUDGET: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    BUDGET.get_or_init(|| Arc::new(Semaphore::new(MAX_REALTIME_SESSIONS)))
+}
 
 /// Whether a request opens a realtime websocket session.
 pub(super) fn is_realtime_upgrade(request: &proxy::BufferedHttpRequest) -> bool {
-    request.method.eq_ignore_ascii_case("GET")
-        && request.path.split('?').next() == Some(REALTIME_PATH)
-        && header_values(&request.raw, "upgrade")
+    opens_realtime_session(&request.method, &request.path, &request.raw)
+}
+
+fn opens_realtime_session(method: &str, path: &str, raw: &[u8]) -> bool {
+    method.eq_ignore_ascii_case("GET")
+        && path.split('?').next() == Some(REALTIME_PATH)
+        && header_values_from_raw(raw, "upgrade")
+            .unwrap_or_default()
             .iter()
-            .any(|value| value.eq_ignore_ascii_case("websocket"))
+            .flat_map(|value| value.split(','))
+            .any(|token| token.trim().eq_ignore_ascii_case("websocket"))
 }
 
 /// Relays one realtime session to its host. `requested_by` is the peer that
 /// assigned this session to us, if it came over the mesh.
 pub(super) async fn relay(
     node: &mesh::Node,
-    mut client: ClientStream,
+    client: ClientStream,
     request: &proxy::BufferedHttpRequest,
     targets: &election::ModelTargets,
     ingress_type: crate::runtime::IngressType,
     requested_by: Option<iroh::EndpointId>,
 ) {
     let _inflight = node.begin_inflight_request();
-    if let crate::runtime::AdmissionResult::Paused { reason, .. } =
-        node.activity_policy_guard.check_admission(ingress_type)
-    {
-        let _ =
-            crate::network::openai::send_503(client, &format!("inference paused: {reason}")).await;
+    if let Err(message) = admit(node, ingress_type).await {
+        let _ = crate::network::openai::send_503(client, &message).await;
         return;
     }
-    let target = match choose_host(node, request, targets, requested_by.is_some()).await {
-        Ok(target) => target,
+    let Ok(_slot) = session_budget().clone().try_acquire_owned() else {
+        let _ = crate::network::openai::send_503(
+            client,
+            "too many live transcription sessions on this node; try again later",
+        )
+        .await;
+        return;
+    };
+    let (model, target) = match choose_host(node, request, targets, requested_by.is_some()).await {
+        Ok(chosen) => chosen,
         Err(message) => {
             let _ = crate::network::openai::send_503(client, &message).await;
             return;
         }
     };
-    let head = upgrade_head(&request.raw);
+    run_session(node, client, &request.raw, &model, target).await;
+}
+
+/// Relays an admitted session to its host and logs how it ended.
+async fn run_session(
+    node: &mesh::Node,
+    mut client: ClientStream,
+    raw: &[u8],
+    model: &str,
+    target: InferenceTarget,
+) {
+    let opening = upgrade_request(raw);
+    let started = Instant::now();
+    tracing::info!(model, target = ?target, "realtime transcription session started");
     let result = match target {
-        InferenceTarget::Local(port) => relay_local(&mut client, &head, port).await,
-        InferenceTarget::Remote(peer) => relay_remote(node, &mut client, &head, peer).await,
-        InferenceTarget::None => return,
+        InferenceTarget::Local(port) => relay_local(&mut client, &opening, port).await,
+        InferenceTarget::Remote(peer) => relay_remote(node, &mut client, &opening, peer).await,
+        InferenceTarget::None => Err(anyhow::anyhow!("no target")),
     };
-    if let Err(error) = result {
-        tracing::debug!(%error, "realtime transcription session ended");
+    log_session_end(model, started.elapsed().as_secs(), result);
+}
+
+fn log_session_end(model: &str, seconds: u64, result: anyhow::Result<SessionEnd>) {
+    match result {
+        Ok(ended) => tracing::info!(
+            model,
+            seconds,
+            bytes_to_host = ended.to_host,
+            bytes_to_client = ended.to_client,
+            reason = ended.reason,
+            "realtime transcription session ended"
+        ),
+        Err(error) => {
+            tracing::warn!(model, seconds, %error, "realtime transcription session failed")
+        }
     }
 }
 
-/// The host for a session: the requested (or first live-capable) model, on
-/// this node if it serves it. A session assigned by a peer may only be served
-/// here; otherwise the nearest capable peer takes it.
+/// Live sessions honour activity pauses, and are refused where exchange
+/// admission plugins would otherwise be bypassed.
+async fn admit(node: &mesh::Node, ingress_type: crate::runtime::IngressType) -> Result<(), String> {
+    if let crate::runtime::AdmissionResult::Paused { reason, .. } =
+        node.activity_policy_guard.check_admission(ingress_type)
+    {
+        return Err(format!("inference paused: {reason}"));
+    }
+    if let Some(manager) = node.plugin_manager().await
+        && manager.has_exchange_hooks().await
+    {
+        return Err(
+            "live transcription is unavailable on a node with exchange admission plugins".into(),
+        );
+    }
+    Ok(())
+}
+
+/// The model and host for a session. The requested model goes through the
+/// same public-alias and `#profile` handling as other requests; with none, the
+/// first live-capable model is used. A session assigned by a peer may only be
+/// served here; otherwise the nearest capable, unblocked peer takes it.
 async fn choose_host(
     node: &mesh::Node,
     request: &proxy::BufferedHttpRequest,
     targets: &election::ModelTargets,
     assigned_by_peer: bool,
-) -> Result<InferenceTarget, String> {
+) -> Result<(String, InferenceTarget), String> {
     let model = match query_model(&request.path) {
-        Some(model) => model,
+        Some(requested) => resolve_model(node, targets, &requested, assigned_by_peer).await,
         None => first_realtime_model(node, targets)
             .await
             .ok_or("no served model supports live transcription")?,
@@ -88,9 +167,10 @@ async fn choose_host(
     if assigned_by_peer {
         candidates.retain(|target| matches!(target, InferenceTarget::Local(_)));
     } else if !has_local {
-        let remote = node
-            .hosts_for_model(&model)
-            .await
+        let mut hosts = node.hosts_for_model(&model).await;
+        node.peer_blocks
+            .retain_unblocked(&mut hosts, crate::network::peer_blocks::now_ms());
+        let remote = hosts
             .into_iter()
             .map(InferenceTarget::Remote)
             .collect::<Vec<_>>();
@@ -103,29 +183,112 @@ async fn choose_host(
             format!("no host serves {model} for live transcription")
         }
     })?;
-    tracing::info!(model = %model, target = ?target, "relaying realtime transcription session");
-    Ok(target)
+    Ok((model, target))
 }
 
-async fn relay_local(client: &mut ClientStream, head: &[u8], port: u16) -> anyhow::Result<()> {
+/// Maps a public model id to the internal one and drops a `#profile` suffix.
+/// A peer-assigned session already carries the internal name.
+async fn resolve_model(
+    node: &mesh::Node,
+    targets: &election::ModelTargets,
+    requested: &str,
+    assigned_by_peer: bool,
+) -> String {
+    let model = if assigned_by_peer {
+        requested.to_string()
+    } else {
+        let callable = super::callable_models(targets);
+        let descriptors = node.all_served_model_descriptors().await;
+        internal_model_for_public_id(requested, &callable, &descriptors)
+            .unwrap_or_else(|| requested.to_string())
+    };
+    super::parse_model_with_profile(&model).0.to_string()
+}
+
+/// How a relayed session ended, for the session log.
+struct SessionEnd {
+    to_host: u64,
+    to_client: u64,
+    reason: &'static str,
+}
+
+async fn relay_local(
+    client: &mut ClientStream,
+    opening: &[u8],
+    port: u16,
+) -> anyhow::Result<SessionEnd> {
     let mut upstream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
     upstream.set_nodelay(true)?;
-    upstream.write_all(head).await?;
-    tokio::io::copy_bidirectional(client, &mut upstream).await?;
-    Ok(())
+    upstream.write_all(opening).await?;
+    relay_bytes(client, upstream, REALTIME_IDLE_TIMEOUT).await
 }
 
 async fn relay_remote(
     node: &mesh::Node,
     client: &mut ClientStream,
-    head: &[u8],
+    opening: &[u8],
     peer: iroh::EndpointId,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<SessionEnd> {
     let (mut send, recv) = node.open_http_tunnel(peer).await?;
-    send.write_all(head).await?;
-    let mut upstream = ClientStream::from_quic_with_prefix(recv, send, Vec::new());
-    tokio::io::copy_bidirectional(client, &mut upstream).await?;
-    Ok(())
+    send.write_all(opening).await?;
+    let upstream = ClientStream::from_quic_with_prefix(recv, send, Vec::new());
+    relay_bytes(client, upstream, REALTIME_IDLE_TIMEOUT).await
+}
+
+/// Copies bytes both ways until either side closes or nothing moves for
+/// `idle`. If the host side fails, the client gets a websocket Close frame
+/// rather than a bare connection reset.
+async fn relay_bytes<C, U>(
+    client: &mut C,
+    upstream: U,
+    idle: Duration,
+) -> anyhow::Result<SessionEnd>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    let (mut host_read, mut host_write) = tokio::io::split(upstream);
+    let (mut client_read, mut client_write) = tokio::io::split(client);
+    let mut to_host = 0u64;
+    let mut to_client = 0u64;
+    let mut from_client = vec![0u8; 16 * 1024];
+    let mut from_host = vec![0u8; 16 * 1024];
+    let reason = loop {
+        tokio::select! {
+            read = tokio::time::timeout(idle, client_read.read(&mut from_client)) => match read {
+                Err(_) => break "idle",
+                Ok(Ok(0)) | Ok(Err(_)) => break "client closed",
+                Ok(Ok(n)) => {
+                    if host_write.write_all(&from_client[..n]).await.is_err() {
+                        let _ = client_write.write_all(&CLOSE_INTERNAL_ERROR).await;
+                        break "host write failed";
+                    }
+                    to_host += n as u64;
+                }
+            },
+            read = tokio::time::timeout(idle, host_read.read(&mut from_host)) => match read {
+                Err(_) => break "idle",
+                Ok(Ok(0)) => break "host closed",
+                Ok(Err(_)) => {
+                    let _ = client_write.write_all(&CLOSE_INTERNAL_ERROR).await;
+                    break "host read failed";
+                }
+                Ok(Ok(n)) => {
+                    if client_write.write_all(&from_host[..n]).await.is_err() {
+                        break "client write failed";
+                    }
+                    to_client += n as u64;
+                }
+            },
+        }
+    };
+    let _ = client_write.flush().await;
+    let _ = host_write.shutdown().await;
+    Ok(SessionEnd {
+        to_host,
+        to_client,
+        reason,
+    })
 }
 
 /// Local first; among peers, the lowest measured direct RTT, then the rest.
@@ -164,8 +327,12 @@ async fn first_realtime_model(
             return Some(model);
         }
     }
+    let now = crate::network::peer_blocks::now_ms();
     let state = node.state.lock().await;
-    state.peers.values().find_map(|peer| {
+    state.peers.iter().find_map(|(id, peer)| {
+        if node.peer_blocks.is_blocked(id, now) {
+            return None;
+        }
         peer.served_model_descriptors
             .iter()
             .find(|descriptor| {
@@ -217,10 +384,11 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The request head to forward. Ingress parsing normalizes `Connection` for
-/// request/response forwarding; a websocket handshake needs it to name the
-/// upgrade again.
-fn upgrade_head(raw: &[u8]) -> Vec<u8> {
+/// The bytes to send the host: the request head with `Connection: Upgrade`
+/// restored (ingress parsing normalizes it for request/response forwarding),
+/// then any websocket frames the client sent together with its handshake.
+/// Ingress rebuilds every head with CRLF line ends.
+fn upgrade_request(raw: &[u8]) -> Vec<u8> {
     let head_end = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -238,28 +406,13 @@ fn upgrade_head(raw: &[u8]) -> Vec<u8> {
         head.push_str(line);
     }
     head.push_str("\r\n\r\n");
-    head.into_bytes()
+    let mut bytes = head.into_bytes();
+    bytes.extend_from_slice(raw.get(head_end + 4..).unwrap_or_default());
+    bytes
 }
 
-/// Values of one header in a raw request head, case-insensitively.
-fn header_values(raw: &[u8], name: &str) -> Vec<String> {
-    let head_end = raw
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .unwrap_or(raw.len());
-    String::from_utf8_lossy(&raw[..head_end])
-        .split("\r\n")
-        .skip(1)
-        .filter_map(|line| line.split_once(':'))
-        .filter(|(key, _)| key.trim().eq_ignore_ascii_case(name))
-        .flat_map(|(_, value)| {
-            value
-                .split(',')
-                .map(|token| token.trim().to_string())
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
+#[cfg(test)]
+mod quic_tests;
 
 #[cfg(test)]
 mod tests {
@@ -281,19 +434,105 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_heads_name_the_upgrade_once() {
-        let raw = b"GET /v1/realtime HTTP/1.1\r\nHost: x\r\nconnection: close\r\nUpgrade: websocket\r\n\r\n";
+    fn forwarded_heads_name_the_upgrade_once_and_keep_early_frames() {
+        let raw = b"GET /v1/realtime HTTP/1.1\r\nHost: x\r\nconnection: close\r\nUpgrade: websocket\r\n\r\n\x81\x05early";
         assert_eq!(
-            String::from_utf8(upgrade_head(raw)).unwrap(),
-            "GET /v1/realtime HTTP/1.1\r\nConnection: Upgrade\r\nHost: x\r\nUpgrade: websocket\r\n\r\n"
+            upgrade_request(raw),
+            b"GET /v1/realtime HTTP/1.1\r\nConnection: Upgrade\r\nHost: x\r\nUpgrade: websocket\r\n\r\n\x81\x05early"
         );
     }
 
     #[test]
-    fn upgrade_headers_are_matched_case_insensitively_across_tokens() {
-        let raw = b"GET /v1/realtime HTTP/1.1\r\nHost: x\r\nConnection: keep-alive, Upgrade\r\nUPGRADE: WebSocket\r\n\r\n";
-        assert_eq!(header_values(raw, "upgrade"), ["WebSocket"]);
-        assert_eq!(header_values(raw, "connection"), ["keep-alive", "Upgrade"]);
-        assert!(header_values(raw, "x-missing").is_empty());
+    fn only_websocket_gets_on_the_realtime_path_open_sessions() {
+        let upgrade = b"GET /v1/realtime HTTP/1.1\r\nHost: x\r\nConnection: keep-alive, Upgrade\r\nUPGRADE: WebSocket\r\n\r\n";
+        let plain = b"GET /v1/realtime HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert!(opens_realtime_session(
+            "GET",
+            "/v1/realtime?model=m",
+            upgrade
+        ));
+        assert!(!opens_realtime_session("POST", "/v1/realtime", upgrade));
+        assert!(!opens_realtime_session("GET", "/v1/realtime", plain));
+        assert!(!opens_realtime_session("GET", "/v1/models", upgrade));
+    }
+
+    #[tokio::test]
+    async fn bytes_flow_both_ways_until_a_side_closes() {
+        let (mut client, mut client_side) = tokio::io::duplex(1024);
+        let (host_side, mut host) = tokio::io::duplex(1024);
+        let relay = tokio::spawn(async move {
+            relay_bytes(&mut client_side, host_side, Duration::from_secs(5)).await
+        });
+        client.write_all(b"hello").await.unwrap();
+        let mut buf = [0u8; 5];
+        host.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"hello");
+        host.write_all(b"world").await.unwrap();
+        client.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"world");
+        drop(host);
+        let ended = relay.await.unwrap().unwrap();
+        assert_eq!((ended.to_host, ended.to_client), (5, 5));
+        assert_eq!(ended.reason, "host closed");
+    }
+
+    #[tokio::test]
+    async fn a_quiet_session_is_closed_after_the_idle_timeout() {
+        let (_client, mut client_side) = tokio::io::duplex(1024);
+        let (host_side, _host) = tokio::io::duplex(1024);
+        let ended = relay_bytes(&mut client_side, host_side, Duration::from_millis(50))
+            .await
+            .unwrap();
+        assert_eq!(ended.reason, "idle");
+    }
+
+    /// A host stream whose reads fail, as a dropped QUIC tunnel does.
+    struct FailingHost;
+
+    impl AsyncRead for FailingHost {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Err(std::io::ErrorKind::ConnectionReset.into()))
+        }
+    }
+
+    impl AsyncWrite for FailingHost {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            std::task::Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failing_host_gets_the_client_a_close_frame() {
+        let (mut client, mut client_side) = tokio::io::duplex(1024);
+        let ended = relay_bytes(&mut client_side, FailingHost, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(ended.reason, "host read failed");
+        drop(client_side);
+        let mut frame = Vec::new();
+        client.read_to_end(&mut frame).await.unwrap();
+        assert_eq!(frame, CLOSE_INTERNAL_ERROR);
     }
 }
