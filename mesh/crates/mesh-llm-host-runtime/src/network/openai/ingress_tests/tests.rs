@@ -1119,7 +1119,7 @@ fn test_endpoint_id(seed: u8) -> iroh::EndpointId {
 /// fake address. `hosts_for_model` returns the peer's `EndpointId` without
 /// any gossip round trip, so `resolve_remote_mesh_route` finds it and
 /// `route_missing_local_model` takes the remote-mesh branch.
-fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
+pub(super) fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
     // Deterministic fake id derived from seed so callers can build multiple
     // non-colliding peers.
     let secret = {

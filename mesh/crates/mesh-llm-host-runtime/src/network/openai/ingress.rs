@@ -527,8 +527,8 @@ struct IngressRouteContext<'a> {
     /// request on this node's local API. Carried onto the host-served
     /// terminal as `ServingProvenance.requested_by_node_id`.
     requested_by_node_id: Option<String>,
-    /// Explicit exchange channel for the remote-mesh publish pair.
-    /// When `None`, falls back to `plugin_manager` as the channel
+    /// Explicit exchange channel for the remote-mesh and host-served publish
+    /// pairs. When `None`, falls back to `plugin_manager` as the channel
     /// (production path). Set to `Some` in tests to inject a recording double,
     /// because the production call sites set `plugin_manager: None` in tests
     /// and the publish calls are guarded by `if let Some(plugin_manager) =
@@ -537,6 +537,19 @@ struct IngressRouteContext<'a> {
     /// requiring a live `PluginManager`.
     #[cfg(test)]
     exchange_channel: Option<&'a dyn OpenAiExchangeChannel>,
+}
+
+impl<'a> IngressRouteContext<'a> {
+    /// Where this route publishes its `openai.exchange.v1` events:
+    /// `plugin_manager` in production, or the double a test injected.
+    fn exchange_events_channel(&self) -> Option<&'a dyn OpenAiExchangeChannel> {
+        #[cfg(test)]
+        if let Some(channel) = self.exchange_channel {
+            return Some(channel);
+        }
+        self.plugin_manager
+            .map(|plugin_manager| plugin_manager as &dyn OpenAiExchangeChannel)
+    }
 }
 
 struct ProxyConnectionContext<'a> {
@@ -1133,19 +1146,7 @@ async fn route_missing_local_model(
             let nonce_source = client_nonce_source(&forwarded_nonce, &nonce_origin);
             // Validated in `route_request`; copied onto both events unread.
             let twin_bracket = twin_bracket_id(request).ok().flatten();
-            // In tests, `exchange_channel` may be injected directly so the
-            // publish pair is observable even when `plugin_manager` is
-            // `None`. In production (and in non-test builds)
-            // `plugin_manager` is the channel.
-            #[cfg(test)]
-            let channel: Option<&dyn OpenAiExchangeChannel> = ctx.exchange_channel.or_else(|| {
-                ctx.plugin_manager
-                    .map(|pm| pm as &dyn OpenAiExchangeChannel)
-            });
-            #[cfg(not(test))]
-            let channel: Option<&dyn OpenAiExchangeChannel> = ctx
-                .plugin_manager
-                .map(|pm| pm as &dyn OpenAiExchangeChannel);
+            let channel = ctx.exchange_events_channel();
             if let Some(ch) = channel {
                 ch.publish(
                     &OpenAiExchangeEnvelope::effective_remote_mesh(
@@ -1783,14 +1784,15 @@ async fn route_request(
         // either case there is no subscriber, so skip minting an exchange id
         // and, below, the body digest and served-model provenance lookup
         // that only exist to build an event nobody would receive.
-        let has_subscriber = match ctx.plugin_manager {
-            Some(plugin_manager) => plugin_manager.has_subscriber().await,
+        let channel = ctx.exchange_events_channel();
+        let has_subscriber = match channel {
+            Some(channel) => channel.has_subscriber().await,
             None => false,
         };
         let announce = (!request.is_tokenize_request() && has_subscriber)
-            .then_some(ctx.plugin_manager)
+            .then_some(channel)
             .flatten()
-            .map(|plugin_manager| (plugin_manager, uuid::Uuid::new_v4().to_string()));
+            .map(|channel| (channel, uuid::Uuid::new_v4().to_string()));
         // Digest the REAL request body up front, while the parsed body is still
         // in hand and before `route_model_request` streams it to the backend —
         // this is the one binding a downstream capsule needs to tie its
@@ -1805,8 +1807,8 @@ async fn route_request(
                 .as_ref()
                 .and_then(|body| request_body_digest(body, request.body_bytes.as_deref()))
         });
-        if let Some((plugin_manager, exchange_id)) = announce.as_ref() {
-            plugin_manager
+        if let Some((channel, exchange_id)) = announce.as_ref() {
+            channel
                 .publish(&OpenAiExchangeEnvelope::effective(
                     exchange_id.clone(),
                     OpenAiExchangeDispatchPath::RawProxy,
@@ -1844,7 +1846,7 @@ async fn route_request(
             },
         )
         .await;
-        if let Some((plugin_manager, exchange_id)) = announce.as_ref() {
+        if let Some((channel, exchange_id)) = announce.as_ref() {
             let delivered_by_peer = served_by_node_id_sink.take().map(|peer_hex| {
                 local_route_delivered_by_peer(
                     request,
@@ -1858,7 +1860,7 @@ async fn route_request(
             let client_nonce = request_client_nonce(request);
             publish_local_route_terminal(
                 ctx.node,
-                *plugin_manager,
+                *channel,
                 exchange_id,
                 model_name,
                 &outcome,

@@ -353,8 +353,10 @@ pub struct OpenAiExchangeEnvelope {
     /// exactly when `capsule_id` is `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capsule_id_provenance: Option<CapsuleIdProvenance>,
-    /// The nonce the marker is correlated against, so a plugin observing
-    /// this event knows what a later client ack must sign over.
+    /// The request's stabilized client nonce: what a minted marker is
+    /// correlated against, so a plugin observing this event knows what a
+    /// later client ack must sign over. A host-served `RawProxy` terminal
+    /// carries it with no marker (`capsule_id` absent).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
     /// Which side contributed `nonce` — see [`ClientNonceSource`]. `None`
@@ -364,7 +366,7 @@ pub struct OpenAiExchangeEnvelope {
     /// fallback nonce (the client sent none), A reads its own
     /// `x-capsule-nonce-origin` header and reports
     /// `SidecarGeneratedFallback`. Node B strips that header deliberately
-    /// (anti-smuggling, `request_parse.rs:582`) so it sees a
+    /// (anti-smuggling, `finalize_forwarded_request` in `request_parse.rs`) so it sees a
     /// well-formed nonce with no origin marker and reports `ClientSupplied`
     /// for the same nonce. Both are locally correct: A reports what it
     /// minted; B cannot trust the origin claim. A consumer joining both
