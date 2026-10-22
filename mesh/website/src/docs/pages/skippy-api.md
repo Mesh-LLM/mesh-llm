@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **18 headers** and **111 exported functions**.
+Current generated surface: **19 headers** and **122 exported functions**.
 
 ## Quick navigation
 
@@ -26,6 +26,22 @@ Current generated surface: **18 headers** and **111 exported functions**.
     <p class="skippy-api-index__hint">Select a function to jump directly to its native declaration.</p>
   </div>
   <div class="skippy-api-index__groups">
+    <section class="skippy-api-index__group">
+      <a class="skippy-api-index__group-title" href="#skippy-header-asr-h"><code>asr.h</code><span>11 functions</span></a>
+      <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-asr-model-open"><code>skippy_asr_model_open</code></a>
+        <a href="#skippy-fn-skippy-asr-model-free"><code>skippy_asr_model_free</code></a>
+        <a href="#skippy-fn-skippy-asr-model-info-v1"><code>skippy_asr_model_info_v1</code></a>
+        <a href="#skippy-fn-skippy-asr-decode-audio"><code>skippy_asr_decode_audio</code></a>
+        <a href="#skippy-fn-skippy-asr-samples-free"><code>skippy_asr_samples_free</code></a>
+        <a href="#skippy-fn-skippy-asr-transcribe"><code>skippy_asr_transcribe</code></a>
+        <a href="#skippy-fn-skippy-asr-result-segment-count"><code>skippy_asr_result_segment_count</code></a>
+        <a href="#skippy-fn-skippy-asr-result-segment-v1"><code>skippy_asr_result_segment_v1</code></a>
+        <a href="#skippy-fn-skippy-asr-result-language"><code>skippy_asr_result_language</code></a>
+        <a href="#skippy-fn-skippy-asr-result-duration-seconds"><code>skippy_asr_result_duration_seconds</code></a>
+        <a href="#skippy-fn-skippy-asr-result-free"><code>skippy_asr_result_free</code></a>
+      </div>
+    </section>
     <section class="skippy-api-index__group">
       <a class="skippy-api-index__group-title" href="#skippy-header-common-h"><code>common.h</code><span>3 functions</span></a>
       <div class="skippy-api-index__functions">
@@ -230,6 +246,7 @@ Capability consumers can include a narrower header:
 |---|---|
 | `include/skippy.h` | Umbrella include for the capability-oriented Skippy C API. Include a narrower header when a consumer only needs one capability. This file exists for consumers that want the complete staged-runtime surface. |
 | `include/skippy/activation.h` | Describes activation-frame payloads exchanged between stages. The descriptor carries a typed directory for every tensor crossing a stage frontier. Parts are matched by planner identity rather than model family. |
+| `include/skippy/asr.h` | Full-model speech recognition (Whisper) over uploaded audio. An ASR model does not load through `skippy_model_open`; it owns its whisper.cpp model file and runs on the runtime's ggml backends. Callers decode an upload to 16 kHz mono PCM with `skippy_asr_decode_audio`, then transcribe or translate it with `skippy_asr_transcribe`. Each transcription holds its own decoder state, so calls on one model may run concurrently. Runtimes built without whisper.cpp still export every symbol; they leave SKIPPY_FEATURE_SPEECH_RECOGNITION clear and fail calls with SKIPPY_STATUS_UNSUPPORTED. |
 | `include/skippy/common.h` | ABI versioning, feature discovery, status codes, and errors. Every other public Skippy header depends on this capability boundary. The ABI is intentionally C-compatible so Rust and other native callers do not depend on private llama.cpp C++ layouts. |
 | `include/skippy/devices.h` | Enumerates backend devices available to the staged runtime. |
 | `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
@@ -258,6 +275,140 @@ Capability consumers can include a narrower header:
 
 <a id="skippy-exported-functions"></a>
 ## Exported functions
+
+<a id="skippy-header-asr-h"></a>
+### `asr.h`
+
+<a id="skippy-fn-skippy-asr-model-open"></a>
+#### `skippy_asr_model_open`
+
+Opens a whisper.cpp model file (`ggml-*.bin`). `device` follows `skippy_laya_model_open`: NULL or "" is the CPU backend, "auto" is the first GPU device when one exists, and any other value names a ggml backend device such as "CUDA0" or "MTL0". Fails with SKIPPY_STATUS_UNSUPPORTED when the runtime was built without whisper.cpp, and with SKIPPY_STATUS_MODEL_ERROR when the file is not a Whisper model.
+
+```cpp
+LLAMA_API enum skippy_status skippy_asr_model_open(
+         const char * model_path,
+        const char * device,
+        struct skippy_asr_model ** out_model,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-asr-model-free"></a>
+#### `skippy_asr_model_free`
+
+Releases a model returned by `skippy_asr_model_open`.
+
+```cpp
+LLAMA_API void skippy_asr_model_free(
+        struct skippy_asr_model * model);
+```
+
+<a id="skippy-fn-skippy-asr-model-info-v1"></a>
+#### `skippy_asr_model_info_v1`
+
+Reports the model's shape and weight memory. `out_info` must be initialized with its `struct_size` and `abi_version`.
+
+```cpp
+LLAMA_API enum skippy_status skippy_asr_model_info_v1(
+         const struct skippy_asr_model * model,
+        struct skippy_asr_info_v1 * out_info,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-asr-decode-audio"></a>
+#### `skippy_asr_decode_audio`
+
+Decodes a WAV, MP3, or FLAC upload to 16 kHz mono float PCM. Returns SKIPPY_STATUS_INVALID_ARGUMENT for any other container. Free `*out_samples` with `skippy_asr_samples_free`.
+
+```cpp
+LLAMA_API enum skippy_status skippy_asr_decode_audio(
+         const uint8_t * data,
+        size_t len,
+        float ** out_samples,
+        size_t * out_sample_count,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-asr-samples-free"></a>
+#### `skippy_asr_samples_free`
+
+Releases samples returned by `skippy_asr_decode_audio`.
+
+```cpp
+LLAMA_API void skippy_asr_samples_free(
+        float * samples);
+```
+
+<a id="skippy-fn-skippy-asr-transcribe"></a>
+#### `skippy_asr_transcribe`
+
+Transcribes 16 kHz mono PCM. `params` must be initialized with its `struct_size` and `abi_version`. `abort_callback` may be NULL. A cancelled call fails with SKIPPY_STATUS_RUNTIME_ERROR and returns no result.
+
+```cpp
+LLAMA_API enum skippy_status skippy_asr_transcribe(
+         struct skippy_asr_model * model,
+        const float * samples,
+        size_t sample_count,
+        const struct skippy_asr_transcribe_params_v1 * params,
+        skippy_asr_abort_callback abort_callback,
+        void * abort_user_data,
+        struct skippy_asr_result ** out_result,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-asr-result-segment-count"></a>
+#### `skippy_asr_result_segment_count`
+
+Number of segments in a transcription.
+
+```cpp
+LLAMA_API size_t skippy_asr_result_segment_count(
+        const struct skippy_asr_result * result);
+```
+
+<a id="skippy-fn-skippy-asr-result-segment-v1"></a>
+#### `skippy_asr_result_segment_v1`
+
+Reads one segment. `out_segment` must be initialized with its `struct_size` and `abi_version`.
+
+```cpp
+LLAMA_API enum skippy_status skippy_asr_result_segment_v1(
+         const struct skippy_asr_result * result,
+        size_t index,
+        struct skippy_asr_segment_v1 * out_segment,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-asr-result-language"></a>
+#### `skippy_asr_result_language`
+
+ISO 639-1 code of the spoken language, owned by the result.
+
+```cpp
+LLAMA_API const char * skippy_asr_result_language(
+        const struct skippy_asr_result * result);
+```
+
+<a id="skippy-fn-skippy-asr-result-duration-seconds"></a>
+#### `skippy_asr_result_duration_seconds`
+
+Seconds of audio the result covers.
+
+```cpp
+LLAMA_API double skippy_asr_result_duration_seconds(
+        const struct skippy_asr_result * result);
+```
+
+<a id="skippy-fn-skippy-asr-result-free"></a>
+#### `skippy_asr_result_free`
+
+Releases a result returned by `skippy_asr_transcribe`.
+
+```cpp
+LLAMA_API void skippy_asr_result_free(
+        struct skippy_asr_result * result);
+```
+
+<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
 
 <a id="skippy-header-common-h"></a>
 ### `common.h`
@@ -1891,7 +2042,8 @@ LLAMA_API enum skippy_status skippy_session_encode_prompt(
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 71`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`
+- `asr.h`: `skippy_asr_model`, `skippy_asr_result`, `skippy_asr_info_v1`, `skippy_asr_transcribe_params_v1`, `skippy_asr_segment_v1`, `SKIPPY_ASR_INFO_V1_ABI_VERSION = 1`, `SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SEGMENT_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SAMPLE_RATE = 16000`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 72`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`

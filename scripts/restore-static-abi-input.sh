@@ -93,6 +93,7 @@ required_archives=(
     "$restored_dir/ggml/src/libggml-base.a"
     "$restored_dir/tools/mtmd/libmtmd.a"
     "$restored_dir/vendor/hash/libvendor-hash.a"
+    "$restored_dir/whisper/src/libwhisper.a"
 )
 test -s "$manifest"
 test -s "$build_stamp"

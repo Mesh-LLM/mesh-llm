@@ -9,7 +9,7 @@ const PATCHED_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 const STALE_SHA: &str = "abcdef0123456789abcdef0123456789abcdef01";
 
 const EPOCH: &str = "test-runner-image-sha256-deadbeef";
-const ARCHIVES: [&str; 8] = [
+const ARCHIVES: [&str; 9] = [
     "src/libllama.a",
     "common/libllama-common.a",
     "common/libllama-common-base.a",
@@ -18,6 +18,7 @@ const ARCHIVES: [&str; 8] = [
     "ggml/src/ggml-cpu/libggml-cpu.a",
     "tools/mtmd/libmtmd.a",
     "vendor/hash/libvendor-hash.a",
+    "whisper/src/libwhisper.a",
 ];
 
 fn fixture(root: &Path, mutation: &str) -> std::path::PathBuf {
@@ -110,6 +111,7 @@ fn restore_checks_real_archive_identity_and_complete_link_closure() {
         "extra",
         "common/libllama-common-base.a",
         "vendor/hash/libvendor-hash.a",
+        "whisper/src/libwhisper.a",
     ] {
         let temporary = tempfile::tempdir().unwrap();
         let download = fixture(temporary.path(), mutation);

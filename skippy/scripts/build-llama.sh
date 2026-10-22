@@ -17,6 +17,10 @@ LLAMA_STAGE_BUILD_TESTS="${LLAMA_STAGE_BUILD_TESTS:-OFF}"
 LLAMA_STAGE_FULL_REPLAY="${LLAMA_STAGE_FULL_REPLAY:-OFF}"
 LLAMA_STAGE_UPSTREAM_TESTS="${LLAMA_STAGE_UPSTREAM_TESTS:-OFF}"
 LLAMA_STAGE_WORKLOAD_ORACLE="${LLAMA_STAGE_WORKLOAD_ORACLE:-OFF}"
+# Speech recognition folds pinned whisper.cpp into libllama on this tree's
+# ggml. OFF builds a runtime whose skippy_asr_* calls report UNSUPPORTED.
+SKIPPY_SPEECH_RECOGNITION="${SKIPPY_SPEECH_RECOGNITION:-ON}"
+WHISPER_WORKDIR="${WHISPER_WORKDIR:-$ROOT/.deps/whisper.cpp}"
 LLAMA_BUILD_TESTS=OFF
 LLAMA_BUILD_SERVER=OFF
 if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" || "$LLAMA_STAGE_UPSTREAM_TESTS" == "ON" ]]; then
@@ -60,6 +64,14 @@ case "$LLAMA_BACKEND" in
   *)
     echo "unsupported LLAMA_STAGE_BACKEND: $LLAMA_BACKEND" >&2
     echo "expected one of: cpu, cuda, rocm, hip, vulkan, metal" >&2
+    exit 1
+    ;;
+esac
+
+case "$SKIPPY_SPEECH_RECOGNITION" in
+  ON|OFF) ;;
+  *)
+    echo "unsupported SKIPPY_SPEECH_RECOGNITION: $SKIPPY_SPEECH_RECOGNITION (expected ON or OFF)" >&2
     exit 1
     ;;
 esac
@@ -129,6 +141,9 @@ required_static_archives() {
     "$LLAMA_BUILD_DIR/ggml/src/libggml-base.a" \
     "$LLAMA_BUILD_DIR/tools/mtmd/libmtmd.a" \
     "$LLAMA_BUILD_DIR/vendor/hash/libvendor-hash.a"
+  if [[ "$SKIPPY_SPEECH_RECOGNITION" == "ON" ]]; then
+    printf '%s\n' "$LLAMA_BUILD_DIR/whisper/src/libwhisper.a"
+  fi
 }
 
 static_archive_exists() {
@@ -404,6 +419,12 @@ else
   CMAKE_ARGS+=(-DGGML_CCACHE=OFF)
 fi
 
+WHISPER_PIN=""
+if [[ "$SKIPPY_SPEECH_RECOGNITION" == "ON" ]]; then
+  WHISPER_PIN="$(tr -d '[:space:]' < "$ROOT/skippy/whisper_cpp/upstream.txt")"
+  CMAKE_ARGS+=(-DSKIPPY_WHISPER_SOURCE_DIR="$WHISPER_WORKDIR")
+fi
+
 if [[ "$#" -gt 0 ]]; then
   CMAKE_ARGS+=("$@")
 fi
@@ -425,6 +446,7 @@ normalize_build_stamp_arg() {
 CURRENT_BUILD_STAMP="$(
   printf 'stamp-version=3\n'
   printf 'patched-sha=%s\n' "$PATCHED_SHA"
+  printf 'whisper-sha=%s\n' "$WHISPER_PIN"
   printf 'backend=%s\n' "$LLAMA_BACKEND"
   printf 'link-mode=%s\n' "$LLAMA_LINK_MODE"
   printf 'toolchain-epoch=%s\n' "${MESH_LLM_LLAMA_TOOLCHAIN_EPOCH:-local}"
@@ -475,6 +497,10 @@ if [[ -f "$LLAMA_BUILD_DIR/CMakeCache.txt" ]]; then
     echo "clearing stale CMake cache in $LLAMA_BUILD_DIR (configured with '$cached_generator', now using '$SELECTED_CMAKE_GENERATOR')"
     rm -rf "$LLAMA_BUILD_DIR"
   fi
+fi
+
+if [[ "$SKIPPY_SPEECH_RECOGNITION" == "ON" ]]; then
+  WHISPER_WORKDIR="$WHISPER_WORKDIR" "$ROOT/skippy/scripts/prepare-whisper.sh"
 fi
 
 cmake "${CMAKE_ARGS[@]}"

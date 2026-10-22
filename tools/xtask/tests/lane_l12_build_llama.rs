@@ -78,6 +78,8 @@ impl Fixture {
             .env("LLAMA_WORKDIR", &self.work)
             .env("LLAMA_STAGE_BUILD_DIR", &self.build)
             .env("LLAMA_STAGE_BACKEND", "cpu")
+            // Keep the stubbed build offline: no whisper.cpp fetch.
+            .env("SKIPPY_SPEECH_RECOGNITION", "OFF")
             .env("LLAMA_STAGE_LINK_MODE", "dynamic")
             .env("LLAMA_STAGE_USE_SCCACHE", "0")
             .env("CMAKE_BUILD_PARALLEL_LEVEL", "1")

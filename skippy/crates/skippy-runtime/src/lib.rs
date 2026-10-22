@@ -23,6 +23,7 @@ mod path_cstring;
 mod runtime_event_reporter;
 mod runtime_events;
 mod session;
+mod speech_recognition;
 mod stage_planning;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -81,6 +82,10 @@ pub use skippy_ffi::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 pub use skippy_ffi::{
     ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES, ACTIVATION_MAX_DIMS, ACTIVATION_MAX_PARTS,
     ACTIVATION_PART_OPTIONAL,
+};
+pub use speech_recognition::{
+    SPEECH_SAMPLE_RATE, SpeechRecognitionModel, SpeechRecognitionModelInfo, TranscriptSegment,
+    Transcription, TranscriptionOptions, decode_audio, speech_recognition_supported,
 };
 pub use stage_planning::{
     GgufStageRuntimePlan, gguf_shard_paths, plan_gguf_stage_resident_tensor_names,
