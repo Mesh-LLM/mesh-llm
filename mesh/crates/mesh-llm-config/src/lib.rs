@@ -74,7 +74,7 @@ mod tests {
         ConfigApplyMode, ConfigRestartScope, ConfigStore, ConfigValueSource, GpuAssignment,
         KvDiskTierMode, LifecycleLogParserMode, LocalServingNodeConfig, MeshConfig,
         SpeculativeConfig, built_in_config_schema, canonicalize_built_in_config_identifier,
-        parse_config_toml, resolve_lifecycle_log_parser_override, validate_config,
+        config_to_toml, parse_config_toml, resolve_lifecycle_log_parser_override, validate_config,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
@@ -120,6 +120,24 @@ mod tests {
 
         assert_eq!(selection.mode, LifecycleLogParserMode::Enabled);
         assert_eq!(selection.source, ConfigValueSource::Env);
+    }
+
+    #[test]
+    fn lifecycle_log_parser_override_wins_but_is_never_saved() {
+        let mut config = parse_config_toml("[runtime]\nlifecycle_log_parser = \"disabled\"\n")
+            .expect("closed enum should parse");
+        config.runtime.lifecycle_log_parser_override = Some(LifecycleLogParserMode::Enabled);
+
+        let selection = config.runtime.lifecycle_log_parser_selection();
+        assert_eq!(selection.mode, LifecycleLogParserMode::Enabled);
+        assert_eq!(selection.source, ConfigValueSource::Env);
+
+        let reloaded = parse_config_toml(&config_to_toml(&config).unwrap()).unwrap();
+        assert_eq!(
+            reloaded.runtime.lifecycle_log_parser,
+            LifecycleLogParserMode::Disabled
+        );
+        assert_eq!(reloaded.runtime.lifecycle_log_parser_override, None);
     }
 
     #[test]
@@ -1089,6 +1107,7 @@ gpu_id = "pci:0000:65:00.0"
             "extra",
             "gpu_id_from_legacy_shim",
             "lifecycle_log_parser_source",
+            "lifecycle_log_parser_override",
             "models",
             "plugins",
             "settings",

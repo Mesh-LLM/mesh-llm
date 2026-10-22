@@ -24,6 +24,8 @@ mod runtime_event_reporter;
 mod runtime_events;
 mod session;
 mod stage_planning;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 mod types;
 mod vocabulary;
 

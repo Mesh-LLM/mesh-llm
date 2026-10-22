@@ -1,5 +1,7 @@
 use super::normalization::RuntimeSurface;
 
+/// Help text for the serve/client runtime surfaces, shown instead of the root
+/// help when the pseudo-subcommand surface is detected in argv.
 pub fn runtime_surface_help(surface: RuntimeSurface) -> String {
     match surface {
         RuntimeSurface::Serve => concat!(
@@ -33,7 +35,7 @@ pub fn runtime_surface_help(surface: RuntimeSurface) -> String {
             "Usage: mesh-llm client [OPTIONS]\n\n",
             "Common client options:\n",
             "      --auto                   Auto-join the best discovered mesh\n",
-            "      --discover [NAME]        Discover and join a mesh by name\n",
+            "      --discover[=<NAME>]      Discover and join a mesh by name\n",
             "      --join <JOIN>            Join a mesh via invite token\n",
             "      --join-file <PATH>       Read the invite token from a file (re-read on rejoin)\n",
             "      --port <PORT>            Local OpenAI-compatible proxy port [default: 9337]\n",

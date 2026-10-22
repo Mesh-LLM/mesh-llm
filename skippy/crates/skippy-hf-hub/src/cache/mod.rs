@@ -2,7 +2,8 @@
 //!
 //! [`HFClient::scan_cache`] walks the cache directory and produces an
 //! [`HFCacheInfo`] tree: cached repositories, their revisions, and the
-//! individual files in each revision.
+//! individual files in each revision. [`scan_cache_dir`] does the same without
+//! a client.
 //!
 //! On disk, downloads are content-addressed — files in
 //! `<cache>/<repo_folder>/snapshots/<commit>/<filename>` are pointers (symlinks
@@ -119,7 +120,7 @@ impl HFClient {
     /// [`HFCacheInfo::warnings`] rather than failing the scan.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn scan_cache(&self) -> HFResult<HFCacheInfo> {
-        storage::scan_cache_dir(self.cache_dir()).await
+        scan_cache_dir(self.cache_dir()).await
     }
 }
 
@@ -131,6 +132,13 @@ impl crate::blocking::HFClientSync {
     pub fn scan_cache(&self) -> HFResult<HFCacheInfo> {
         self.runtime.block_on(self.inner.scan_cache().send())
     }
+}
+
+/// Scan the cache at `cache_dir`, as [`HFClient::scan_cache`] does, without a
+/// client. Building a client loads the system's TLS roots, which reading the
+/// local cache never needs.
+pub async fn scan_cache_dir(cache_dir: &std::path::Path) -> HFResult<HFCacheInfo> {
+    storage::scan_cache_dir(cache_dir).await
 }
 
 /// Scan one cached repository, without walking the rest of the cache.

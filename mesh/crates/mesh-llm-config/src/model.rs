@@ -133,6 +133,11 @@ pub struct RuntimeConfig {
     pub lifecycle_log_parser: LifecycleLogParserMode,
     #[serde(skip)]
     pub lifecycle_log_parser_source: ConfigValueSource,
+    /// Set by `MESH_LLM_LIFECYCLE_LOG_PARSER` for this process only. Never
+    /// saved, so an applied config cannot write the variable into
+    /// `config.toml`.
+    #[serde(skip)]
+    pub lifecycle_log_parser_override: Option<LifecycleLogParserMode>,
     /// Seconds before forcibly unloading a draining instance (default 30).
     #[serde(default = "default_drain_timeout_secs")]
     pub drain_timeout_secs: u64,
@@ -166,6 +171,7 @@ impl Default for RuntimeConfig {
             startup_failure_policy: runtime::StartupFailurePolicy::default(),
             lifecycle_log_parser: LifecycleLogParserMode::default(),
             lifecycle_log_parser_source: ConfigValueSource::Default,
+            lifecycle_log_parser_override: None,
             drain_timeout_secs: runtime::DEFAULT_DRAIN_TIMEOUT_SECS,
             drain_timeout_max_secs: runtime::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
             activity: runtime::RuntimeActivityConfig::default(),

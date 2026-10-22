@@ -37,6 +37,7 @@ mod tests {
 
     #[test]
     fn invalid_selected_backend_device_fails_before_model_open() {
+        crate::test_support::require_native_runtime();
         let _native_log_guard = crate::logging::native_log_test_guard();
         let config = RuntimeConfig {
             selected_backend_device: Some("definitely-not-a-device".to_string()),

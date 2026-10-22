@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 
 use anyhow::{Result, bail};
 
-use crate::{LifecycleLogParserMode, MeshConfig};
+use crate::{LifecycleLogParserMode, MeshConfig, RuntimeConfig};
 
 pub const MESH_LLM_LIFECYCLE_LOG_PARSER_ENV: &str = "MESH_LLM_LIFECYCLE_LOG_PARSER";
 pub const MESH_LLM_CONFIG_ENV: &str = "MESH_LLM_CONFIG";
@@ -79,6 +79,23 @@ pub fn resolve_lifecycle_log_parser_override(
     })
 }
 
+impl RuntimeConfig {
+    /// The parser mode in effect: [`MESH_LLM_LIFECYCLE_LOG_PARSER_ENV`] if it
+    /// was set, otherwise `lifecycle_log_parser`.
+    pub fn lifecycle_log_parser_selection(&self) -> LifecycleLogParserSelection {
+        match self.lifecycle_log_parser_override {
+            Some(mode) => LifecycleLogParserSelection {
+                mode,
+                source: ConfigValueSource::Env,
+            },
+            None => LifecycleLogParserSelection {
+                mode: self.lifecycle_log_parser,
+                source: self.lifecycle_log_parser_source,
+            },
+        }
+    }
+}
+
 pub(crate) fn config_path_override() -> Option<std::path::PathBuf> {
     std::env::var_os(MESH_LLM_CONFIG_ENV).map(std::path::PathBuf::from)
 }
@@ -97,8 +114,7 @@ pub fn apply_env_overrides(config: &mut MeshConfig) -> Result<()> {
             config.runtime.lifecycle_log_parser_source,
             environment.as_deref(),
         )?;
-        config.runtime.lifecycle_log_parser = selection.mode;
-        config.runtime.lifecycle_log_parser_source = selection.source;
+        config.runtime.lifecycle_log_parser_override = Some(selection.mode);
     }
     if let Some(check) =
         resolve_no_update_check_override(std::env::var_os(MESH_LLM_NO_UPDATE_CHECK_ENV).as_deref())?

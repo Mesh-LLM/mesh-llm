@@ -436,8 +436,9 @@ pub fn load_runtime_with_overrides_and_open_events(
 
 /// Effective lane-admission bound for a loaded model.
 ///
-/// Mirrors the native encoder-decoder serialization (skippy/llama_cpp
-/// patches/0010: `lane_count = encoder_decoder ? 1 : configured_lane_count`):
+/// Mirrors the native encoder-decoder serialization (skippy/llama_cpp/patches/
+/// 0002-skippy-implement-graph-planning-realization-and-runt.patch:
+/// `lane_count = encoder_decoder ? 1 : configured_lane_count`):
 /// encoder output is context-global in llama.cpp, so native only ever serves
 /// lane 0 for encoder-decoder models. Admission must not assign lane indices
 /// that native will never serve. The load-bypass dummy has no native model,
@@ -709,10 +710,10 @@ mod tests {
     #[test]
     /// Rust admission must match the one native lane sharing encoder output.
     fn encoder_decoder_lane_admission_clamps_to_the_native_single_lane() {
-        // Native serializes encoder-decoder work onto one lane
-        // (skippy/llama_cpp patches/0010), so admission must not hand
-        // out lane indices native will never serve. Every other workload
-        // keeps the configured bound.
+        // Native serializes encoder-decoder work onto one lane (see
+        // `lane_count_for_workload`), so admission must not hand out lane
+        // indices native will never serve. Every other workload keeps the
+        // configured bound.
         assert_eq!(lane_count_for_workload(4, ModelWorkload::EncoderDecoder), 1);
         assert_eq!(lane_count_for_workload(1, ModelWorkload::EncoderDecoder), 1);
         assert_eq!(
