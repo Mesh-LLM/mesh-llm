@@ -14,15 +14,17 @@ its runtime-probed workload class for safe routing.
 | Encoder-decoder | `POST /v1/completions`, `POST /v1/chat/completions` | Unsplit local full model |
 | OCR | `POST /v1/chat/completions` or `POST /v1/responses` with an image input | Causal trunk and projector colocated on one node |
 | Speech synthesis | `POST /v1/audio/speech` | Unsplit local full model and projector |
-| Speech recognition / translation | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | Causal trunk and audio projector colocated on one node |
+| Speech recognition / translation (audio-input chat models) | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | Causal trunk and audio projector colocated on one node |
 | Speech recognition (Whisper) | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations`, `GET /v1/realtime` (live) | Unsplit local whisper.cpp model |
 | Laya decision (encoder + decision head) | `POST /systemone` | Unsplit local full model; see [the OpenJEV runbook](design/OPENJEV_SKIPPY_POC.md#laya-backend) |
 
 Embedding, rerank, encoder-decoder, and speech-synthesis workloads do not
 silently enter the stage-split generation path. A filtered stage model returns
-a structured `unsupported` error. OCR and speech recognition use causal trunks,
-but their projector remains local to the trunk; they are not claims of a
-distributed projector implementation.
+a structured `unsupported` error. OCR and speech recognition through
+audio-input chat models use causal trunks, but their projector remains local
+to the trunk; they are not claims of a distributed projector implementation.
+Whisper models are not causal trunks: they run unsplit in their own
+whisper.cpp runtime.
 
 ## Mixed-version routing
 
@@ -186,7 +188,10 @@ change and trail speech by about one to two seconds.
 Any node can take the websocket. It relays the session to a node serving the
 model, preferring itself and then the peer with the lowest measured
 round-trip time, and the session stays on that host until it closes. If the
-host leaves, the session ends and the client reconnects.
+host leaves, the session ends and the client reconnects. Each node relays at
+most 64 sessions at once and closes a session after 120 s with no traffic in
+either direction. Live sessions are not seen by exchange-admission plugins
+(payments, policy), so a node running one refuses them with a 503.
 
 Uploads must be WAV, MP3, or FLAC. Each concurrent transcription holds its own
 decoder state; `MESH_LLM_SPEECH_LANES` (default 2) sets how many run at once,
