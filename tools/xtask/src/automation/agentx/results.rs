@@ -17,6 +17,18 @@ fn count(export: &Value, name: &str) -> DynResult<u64> {
     Ok(value as u64)
 }
 
+fn validate_output_numerator(export: &Value, completed_work: &Value) -> DynResult<()> {
+    let output_tokens = completed_work["output_tokens"]
+        .as_u64()
+        .ok_or("missing completed AgentX output count")?;
+    if count(export, "total_output_tokens")? != output_tokens
+        || count(export, "total_osl")? != output_tokens
+    {
+        return Err("AgentX throughput numerator differs from completed fixed work".into());
+    }
+    Ok(())
+}
+
 fn distribution(export: &Value, name: &str) -> DynResult<Value> {
     if export[name]["unit"] != "ms" || metric(export, name)? < 0.0 {
         return Err(format!("expected nonnegative milliseconds: {name}").into());
@@ -111,7 +123,9 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
     let memory: Value =
         serde_json::from_slice(&std::fs::read(input.output.join("memory-summary.json"))?)?;
     let completed_work = if input.profile == Profile::Comparison {
-        Some(super::completed_work::validate(input)?)
+        let completed_work = super::completed_work::validate(input)?;
+        validate_output_numerator(&export, &completed_work)?;
+        Some(completed_work)
     } else {
         None
     };
@@ -205,5 +219,20 @@ mod tests {
             failed[name] = value;
             assert!(validate(&failed, Profile::Smoke).is_err(), "{name}");
         }
+    }
+
+    #[test]
+    fn comparison_requires_throughput_numerator_to_match_completed_output() {
+        let mut export = json!({
+            "total_output_tokens":{"avg":18_713},
+            "total_osl":{"avg":18_713}
+        });
+        let work = json!({"output_tokens":18_713});
+        validate_output_numerator(&export, &work).unwrap();
+        export["total_osl"]["avg"] = json!(18_714);
+        assert!(validate_output_numerator(&export, &work).is_err());
+        export["total_osl"]["avg"] = json!(18_713);
+        export["total_output_tokens"]["avg"] = json!(18_712);
+        assert!(validate_output_numerator(&export, &work).is_err());
     }
 }
