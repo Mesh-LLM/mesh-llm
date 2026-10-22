@@ -1,26 +1,26 @@
-From c68f7f87c95675d47f6138f0d3b7e991c30de6c2 Mon Sep 17 00:00:00 2001
+From 68285b165368bff4fd3f387c6f2151fd7966fb3b Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 1/6] feat(skippy): define graph-derived native ABI
+Subject: [PATCH] feat(skippy): define graph-derived native ABI
 
 ---
  include/skippy.h                      |  29 +++
  include/skippy/activation.h           |  66 ++++++
- include/skippy/common.h               | 146 ++++++++++++++
- include/skippy/devices.h              |  56 ++++++
- include/skippy/events.h               | 229 +++++++++++++++++++++
- include/skippy/execution.h            | 264 ++++++++++++++++++++++++
+ include/skippy/common.h               | 146 +++++++++++++
+ include/skippy/devices.h              |  56 +++++
+ include/skippy/events.h               | 229 ++++++++++++++++++++
+ include/skippy/execution.h            | 264 +++++++++++++++++++++++
  include/skippy/model_package.h        |  93 +++++++++
  include/skippy/model_source.h         |  84 ++++++++
- include/skippy/runtime.h              | 277 ++++++++++++++++++++++++++
+ include/skippy/runtime.h              | 289 ++++++++++++++++++++++++++
  include/skippy/sampling.h             |  76 +++++++
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
- include/skippy/stage_plan.h           | 252 +++++++++++++++++++++++
- include/skippy/state.h                | 236 ++++++++++++++++++++++
+ include/skippy/stage_plan.h           | 252 ++++++++++++++++++++++
+ include/skippy/state.h                | 268 ++++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2110 insertions(+)
+ 16 files changed, 2154 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -147,7 +147,7 @@ index 000000000..673c1d81c
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..3f6aab137
+index 000000000..b8818a75b
 --- /dev/null
 +++ b/include/skippy/common.h
 @@ -0,0 +1,146 @@
@@ -199,7 +199,7 @@ index 000000000..3f6aab137
 +
 +#define SKIPPY_ABI_VERSION_MAJOR 0
 +#define SKIPPY_ABI_VERSION_MINOR 1
-+#define SKIPPY_ABI_VERSION_PATCH 67
++#define SKIPPY_ABI_VERSION_PATCH 73
 +
 +#if defined(_MSC_VER)
 +#define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -1055,10 +1055,10 @@ index 000000000..5d77f4804
 +#endif // SKIPPY_MODEL_SOURCE_H
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 new file mode 100644
-index 000000000..799bdca2d
+index 000000000..2486a85b3
 --- /dev/null
 +++ b/include/skippy/runtime.h
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,289 @@
 +#ifndef SKIPPY_RUNTIME_H
 +#define SKIPPY_RUNTIME_H
 +
@@ -1099,6 +1099,18 @@ index 000000000..799bdca2d
 +struct skippy_model;
 +struct skippy_session;
 +struct skippy_activation_boundary_desc;
++
++/**
++ * @brief Reads context execution activity without synchronizing the device.
++ *
++ * Bit zero indicates potentially pending device work. The remaining bits change
++ * on submission and synchronization, including state transfer fences. Equality
++ * detects intervening activity; callers must not interpret the numeric delta.
++ * Read under the same external serialization as model/session mutations. A null
++ * model returns zero. This is an activity marker, not a GPU duration or counter
++ * of completed tokens.
++ */
++LLAMA_API uint64_t skippy_model_execution_epoch(const struct skippy_model * model);
 +
 +/** @brief Model, stage, memory, cache, device, and family-policy load options. */
 +struct skippy_runtime_config {
@@ -1814,10 +1826,10 @@ index 000000000..962674190
 +#endif // SKIPPY_STAGE_PLAN_H
 diff --git a/include/skippy/state.h b/include/skippy/state.h
 new file mode 100644
-index 000000000..1cfaaa5c6
+index 000000000..dcdd70b10
 --- /dev/null
 +++ b/include/skippy/state.h
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,268 @@
 +#ifndef SKIPPY_STATE_H
 +#define SKIPPY_STATE_H
 +
@@ -1845,6 +1857,13 @@ index 000000000..1cfaaa5c6
 + * cache representation is available; callers cannot supply capability labels.
 + */
 +LLAMA_API uint32_t skippy_model_memory_cache_capabilities(const struct skippy_model * model);
++
++/** @brief Tests whether a sequential lane retains complete attention coverage for a recurrent checkpoint.
++ * Requires graph-admitted KV/recurrent state and every attention cache to retain
++ * positions zero through token_count - 1. Does not copy or mutate state.
++ * The caller must own the lane exclusively and verify its token identity.
++ */
++LLAMA_API bool skippy_session_has_resident_recurrent_prefix(const struct skippy_session * session, uint64_t token_count);
 +
 +enum skippy_kv_page_flag {
 +    SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
@@ -1975,6 +1994,31 @@ index 000000000..1cfaaa5c6
 +
 +/** @brief Imports recurrent state into a session. */
 +LLAMA_API enum skippy_status skippy_import_recurrent_state(
++        struct skippy_session * session,
++        const void * input,
++        size_t input_bytes,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Exports recurrent and bounded sliding-window state for a KV cache entry.
++ * Omits full-attention KV. The caller must retain that KV in the live lane or
++ * export matching KV pages separately. This is not a standalone checkpoint;
++ * use skippy_export_full_state or skippy_export_recurrent_state for that.
++ */
++LLAMA_API enum skippy_status skippy_export_recurrent_cache_state(
++        struct skippy_session * session,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Restores a cache-side recurrent payload without replacing full-attention KV.
++ * Accepts only skippy_export_recurrent_cache_state payloads. Matching attention
++ * KV must already be resident or restored from the entry's KV pages. The caller
++ * must restore the matching logical position and token history before decode.
++ */
++LLAMA_API enum skippy_status skippy_import_recurrent_cache_state(
 +        struct skippy_session * session,
 +        const void * input,
 +        size_t input_bytes,
@@ -2245,5 +2289,5 @@ index 000000000..6aff32414
 +
 +#endif  // SKIPPY_WORKLOADS_H
 -- 
-2.55.0
+2.56.0
 

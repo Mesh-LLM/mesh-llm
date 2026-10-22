@@ -176,7 +176,7 @@ fn capacity_rejection_notifies_the_real_admission_deficit() {
         .with_kv_lifecycle_observer(observer.clone());
     let mut runtime = crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(
         config.lane_count,
-        8,
+        4, // Two lanes reserve an eight-token pool.
     );
 
     let rejected = kv

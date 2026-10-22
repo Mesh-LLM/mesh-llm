@@ -124,6 +124,48 @@ skippy-native-tests backend="cpu":
     scripts/prepare-llama.sh pinned
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_BUILD_TESTS=ON scripts/build-llama.sh
 
+# Check pageable, pinned, concurrent, and fallback CUDA host readbacks.
+[unix]
+skippy-cuda-readback-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir="$PWD/.deps/llama-build/build-cuda-readback-tests"
+    scripts/prepare-llama.sh pinned
+    LLAMA_STAGE_BACKEND=cuda LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_FULL_REPLAY=ON \
+      LLAMA_STAGE_BUILD_DIR="$build_dir" scripts/build-llama.sh --build-only
+    cmake --build "$build_dir" --target test-cuda-host-readback
+    ctest --test-dir "$build_dir" --output-on-failure --no-tests=error \
+      -R '^test-cuda-host-readback(-unpinned)?$'
+
+# Locate attention tests using the native source/backend/architecture build identity.
+[unix]
+skippy-attention-tests-dir backend="cpu":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir=$(env -u LLAMA_BUILD_DIR -u LLAMA_STAGE_BUILD_DIR -u SKIPPY_LLAMA_BUILD_DIR \
+      LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static \
+      scripts/build-llama.sh --print-build-dir)
+    printf '%s-attention-tests\n' "$build_dir"
+
+# Build the native attention correctness harness without requiring an accelerator.
+[unix]
+skippy-attention-tests-build backend="cpu":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scripts/prepare-llama.sh pinned
+    build_dir=$(just --quiet skippy-attention-tests-dir "{{ backend }}")
+    LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_FULL_REPLAY=ON \
+      LLAMA_BUILD_DIR="$build_dir" LLAMA_STAGE_BUILD_DIR="$build_dir" scripts/build-llama.sh --build-only
+    cmake --build "$build_dir" --target test-backend-ops
+
+# Compare attention against CPU reference (CUDA: -b CUDA0; Metal: -b MTL0).
+[unix]
+skippy-attention-tests backend="cuda" *ARGS="": (skippy-attention-tests-build backend)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    build_dir=$(just --quiet skippy-attention-tests-dir "{{ backend }}")
+    "$build_dir/bin/test-backend-ops" -o FLASH_ATTN_EXT {{ ARGS }}
+
 # Replay every retained and current native Skippy gate without broad upstream tests.
 [unix]
 skippy-native-full-replay backend="cpu":
@@ -236,3 +278,30 @@ skippy-layer-package-fetch *ARGS:
 [positional-arguments]
 decisions-smoke *ARGS:
     @just automation-run automation decisions-smoke "$@"
+
+# AgentX's external environment is locked; its Python harness stays upstream-owned.
+agentx-setup:
+    uv sync --locked --managed-python --python 3.12 --project skippy/evals/agentx
+
+# Independent unpatched llama.cpp baseline, pinned to the candidate's upstream.
+[positional-arguments]
+agentx-build backend="cuda": agentx-setup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "$1" in
+        cuda) backend_args=(-DGGML_CUDA=ON -DGGML_METAL=OFF -DCMAKE_CUDA_ARCHITECTURES=121) ;;
+        metal) backend_args=(-DGGML_CUDA=OFF -DGGML_METAL=ON) ;;
+        *) printf 'AgentX backend must be cuda or metal\n' >&2; exit 2 ;;
+    esac
+    just skippy-release "$1"
+    git init .deps/agentx-llama
+    git -C .deps/agentx-llama fetch --depth 1 https://github.com/ggml-org/llama.cpp.git {{ trim(read("skippy/llama_cpp/upstream.txt")) }}
+    git -C .deps/agentx-llama checkout --detach FETCH_HEAD
+    cmake -S .deps/agentx-llama -B .deps/agentx-llama-build -DCMAKE_BUILD_TYPE=Release "${backend_args[@]}" -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON
+    cmake --build .deps/agentx-llama-build --config Release --target llama-server -j 8
+
+agentx engine model profile output:
+    just automation-run automation agentx container --engine {{ quote(engine) }} --model {{ quote(model) }} --profile {{ quote(profile) }} --output {{ quote(output) }}
+
+agentx-container-build:
+    docker build --platform linux/arm64 --progress plain --build-arg SOURCE_COMMIT="$JIANYANG_COMMIT" --tag "mesh-agentx:$JIANYANG_COMMIT" --file skippy/evals/agentx/Dockerfile .

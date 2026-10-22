@@ -28,6 +28,17 @@ use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
+mod active_kv_window;
+mod native_cache_concurrency;
+mod native_decode_shapes;
+mod native_execution_accounting;
+mod recurrent_concurrency;
+mod recurrent_early_stop;
+mod recurrent_verification;
+mod resident_checkpoint_shapes;
+mod resident_recurrent;
+mod shortened_tail;
+
 // The real-model tests below are deliberately ignored by default. The
 // fixture contract is explicit: run them with both model-path variables set;
 // optionally set SKIPPY_RECURRENT_CACHE_TEST_MODEL_ID to override the model id.
@@ -165,10 +176,53 @@ fn recurrent_test_backend(
     run_id: &str,
     backend_model_id: &str,
     ctx_size: usize,
-    batch_size: u32,
+    (batch_size, microbatch_size): (u32, u32),
     default_max_tokens: u32,
     token_budget: usize,
 ) -> Result<(StageOpenAiBackend, SpeculativeDecodeConfig)> {
+    recurrent_test_backend_with_lanes(
+        run_id,
+        backend_model_id,
+        ctx_size,
+        (batch_size, microbatch_size, 1),
+        default_max_tokens,
+        token_budget,
+        None,
+    )
+}
+
+fn recurrent_test_backend_with_lanes(
+    run_id: &str,
+    backend_model_id: &str,
+    ctx_size: usize,
+    (batch_size, microbatch_size, lanes): (u32, u32, u32),
+    default_max_tokens: u32,
+    token_budget: usize,
+    cache_idle_slots: Option<u32>,
+) -> Result<(StageOpenAiBackend, SpeculativeDecodeConfig)> {
+    #[cfg(feature = "dynamic-native-runtime")]
+    if !skippy_runtime::native_runtime_loaded() {
+        let directory = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_BUNDLE")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_RUNTIME_BUNDLE must name a native bundle built from this source revision"))?;
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("manifest.json"))?)?;
+        let libraries = manifest["runtime"]["libraries"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("native test bundle has no library list"))?
+            .iter()
+            .map(|path| {
+                path.as_str()
+                    .map(|path| directory.join(path))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("native test bundle library path is not a string")
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // SAFETY: this explicit native test input must be produced by the same
+        // source's `just skippy-release` build, never a downloaded release.
+        unsafe { skippy_runtime::load_native_runtime_libraries(libraries)? };
+    }
     let model_path = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL").ok_or_else(|| {
         anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_MODEL is required for this ignored test")
     })?;
@@ -202,10 +256,12 @@ fn recurrent_test_backend(
         layer_end: layer_count,
         ctx_size: u32::try_from(ctx_size)
             .map_err(|error| anyhow::anyhow!("invalid recurrent test context size: {error}"))?,
-        lane_count: 1,
+        lane_count: lanes,
         n_batch: Some(batch_size),
-        n_ubatch: Some(batch_size),
-        n_gpu_layers: 0,
+        n_ubatch: Some(microbatch_size),
+        n_gpu_layers: std::env::var("SKIPPY_RECURRENT_CACHE_TEST_GPU_LAYERS")
+            .unwrap_or_else(|_| "0".into())
+            .parse()?,
         mmap: Some(true),
         mlock: false,
         repack: false,
@@ -221,7 +277,7 @@ fn recurrent_test_backend(
         kv_offload: None,
         kv_unified: None,
         swa_full: None,
-        cache_idle_slots: None,
+        cache_idle_slots,
         resident_tensor_names: Vec::new(),
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {
@@ -244,17 +300,28 @@ fn recurrent_test_backend(
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
-    let kv =
-        KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Recurrent)?
-            .map(Arc::new)
-            .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
+    let kv = KvStageIntegration::from_loaded_model(
+        &config,
+        crate::runtime_state::loaded_model_state_kind(Some(&runtime)),
+        crate::runtime_state::loaded_memory_cache_capabilities(Some(&runtime)),
+        None,
+    )?
+    .map(Arc::new)
+    .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
-    let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())?;
+    let iteration_scheduler = IterationScheduler::new(
+        runtime.clone(),
+        &config,
+        lanes as usize,
+        true,
+        None,
+        telemetry.clone(),
+    )?;
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         workload: Default::default(),
+        prompt_model: Default::default(),
         config,
         telemetry,
         model_id: backend_model_id.to_string(),
@@ -270,11 +337,11 @@ fn recurrent_test_backend(
         speculative: speculative.clone(),
         speculation_governor: None,
         runahead_governor: None,
-        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(lanes as usize)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
         generation_admission_timeout: std::time::Duration::from_secs(10),
-        generation_service_estimator: Arc::new(crate::frontend::GenerationServiceEstimator::new(1)),
+        generation_service_estimator: iteration_scheduler.service_estimator(),
         generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         generation_token_budget: Arc::new(GenerationTokenBudget::new(token_budget)),
         hook_policy: None,
@@ -312,6 +379,7 @@ fn local_generation_signal_window_uses_configured_value() {
     let backend = StageOpenAiBackend {
         runtime,
         workload: Default::default(),
+        prompt_model: Default::default(),
         config,
         telemetry,
         model_id: "signal-window-test".to_string(),
@@ -391,7 +459,7 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
         "recurrent-cache-test",
         "recurrent-cache-test",
         128,
-        32,
+        (32, 32),
         2,
         128,
     )?;
@@ -497,7 +565,7 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
         "recurrent-chat-cache-test",
         "recurrent-chat-cache-test",
         512,
-        64,
+        (64, 64),
         8,
         512,
     )?;
@@ -796,6 +864,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         workload: Default::default(),
+        prompt_model: Default::default(),
         config,
         telemetry,
         model_id: "generation-receipt-test".to_string(),

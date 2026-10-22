@@ -5,7 +5,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result};
 
 #[derive(Debug, Clone)]
 pub struct CacheBytes {
@@ -136,27 +136,12 @@ impl CacheBytes {
         match &self.repr {
             CacheBytesRepr::Inline(bytes) => Ok(Cow::Borrowed(bytes.as_slice())),
             CacheBytesRepr::Blocks { blocks, contiguous } => {
-                let capacity = usize::try_from(self.len)
-                    .map_err(|_| anyhow!("cache payload too large to reconstruct"))?;
+                let len =
+                    usize::try_from(self.len).context("cache payload too large to reconstruct")?;
                 if let Some(bytes) = contiguous {
                     return Ok(Cow::Borrowed(bytes.as_slice()));
                 }
-                let mut out = Vec::with_capacity(capacity);
-                for block in blocks.iter() {
-                    let bytes = block
-                        .bytes
-                        .read()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    out.extend_from_slice(bytes.as_slice());
-                }
-                if out.len() as u64 != self.len {
-                    return Err(anyhow!(
-                        "cache payload reconstruction length mismatch: expected {} got {}",
-                        self.len,
-                        out.len()
-                    ));
-                }
-                Ok(Cow::Owned(out))
+                super::reconstruction::reconstruct_blocks(blocks, len).map(Cow::Owned)
             }
         }
     }

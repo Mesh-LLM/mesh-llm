@@ -5,6 +5,26 @@ use std::time::Instant;
 
 const MAX_NATIVE_ITERATION_TOKENS: usize = 2_048;
 
+fn suffix_chunk_tokens(
+    lane_count: u32,
+    exports_activations: bool,
+    n_batch: Option<u32>,
+    n_ubatch: Option<u32>,
+) -> usize {
+    let batch = usize::try_from(n_batch.unwrap_or(2048))
+        .unwrap_or(MAX_NATIVE_ITERATION_TOKENS)
+        .clamp(1, MAX_NATIVE_ITERATION_TOKENS);
+    if lane_count == 1 && !exports_activations {
+        // Native decode performs its own microbatch splitting. With no other
+        // lane to schedule and no activation export to materialize, submitting
+        // one microbatch at a time adds an unnecessary synchronization boundary.
+        return batch;
+    }
+    usize::try_from(n_ubatch.unwrap_or(256))
+        .unwrap_or(batch)
+        .clamp(1, batch)
+}
+
 fn suffix_chunk_sample_flags(
     suffix_len: usize,
     chunk_tokens: usize,
@@ -43,9 +63,12 @@ impl StageOpenAiBackend {
                 "deferred suffix prefill requires at least one token",
             ));
         }
-        let chunk_tokens = usize::try_from(self.config.n_ubatch.unwrap_or(256))
-            .unwrap_or(MAX_NATIVE_ITERATION_TOKENS)
-            .clamp(1, MAX_NATIVE_ITERATION_TOKENS);
+        let chunk_tokens = suffix_chunk_tokens(
+            self.config.lane_count,
+            self.config.emits_activation_frame(),
+            self.config.n_batch,
+            self.config.n_ubatch,
+        );
         let sample_flags = suffix_chunk_sample_flags(suffix.len(), chunk_tokens, sample_last);
         let channel = self.iteration_scheduler.direct_iteration_channel();
         let mut predicted = None;
@@ -103,7 +126,17 @@ fn ensure_suffix_prefill_active(
 
 #[cfg(test)]
 mod tests {
-    use super::suffix_chunk_sample_flags;
+    use super::{suffix_chunk_sample_flags, suffix_chunk_tokens};
+
+    #[test]
+    fn single_lane_prefill_batches_preserve_microbatch_export_and_fairness_limits() {
+        assert_eq!(suffix_chunk_tokens(1, false, Some(2048), Some(512)), 2048);
+        assert_eq!(suffix_chunk_tokens(1, true, Some(2048), Some(512)), 512);
+        assert_eq!(suffix_chunk_tokens(2, false, Some(2048), Some(512)), 512);
+        assert_eq!(suffix_chunk_tokens(1, false, Some(4096), Some(512)), 2048);
+        assert_eq!(suffix_chunk_tokens(2, false, Some(128), Some(512)), 128);
+        assert_eq!(suffix_chunk_tokens(1, false, Some(0), Some(0)), 1);
+    }
 
     #[test]
     fn deferred_suffix_samples_only_the_final_chunk() {

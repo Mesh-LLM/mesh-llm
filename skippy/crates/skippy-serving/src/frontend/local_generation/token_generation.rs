@@ -41,7 +41,10 @@ use super::receipt_lifecycle::begin_generation_receipt;
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
 use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
 
+mod cache_prefill;
 mod exact_state_recording;
+mod prefill_checkpoints;
+mod scheduler_decode;
 // Test-only: lets iteration_scheduler tests exercise the real outstanding-
 // capture accounting through the real channel/command types.
 #[cfg(test)]
@@ -322,45 +325,18 @@ fn scheduler_generation_driver_eligible(
 
 fn deferred_suffix_prefill_enabled(
     payload: Option<StagePrefixCachePayload>,
-    max_tokens: u32,
+    _max_tokens: u32,
 ) -> bool {
-    // Resident KV suffixes must remain in the serialized cache operation. Releasing
-    // it between restore and suffix prefill lets another request interleave and
-    // destroys prefill phase locality on a shared accelerator.
-    max_tokens > 0
-        && matches!(
-            payload,
-            Some(StagePrefixCachePayload::KvRecurrent | StagePrefixCachePayload::FullState)
+    // Cache restoration remains serialized, but every suffix chunk returns to
+    // the worker so long prompts cannot block another lane's decode.
+    matches!(
+        payload,
+        Some(
+            StagePrefixCachePayload::ResidentKv
+                | StagePrefixCachePayload::KvRecurrent
+                | StagePrefixCachePayload::FullState
         )
-}
-
-fn deferred_suffix_split(
-    restored_prefill_tokens: usize,
-    prompt_token_count: usize,
-    checkpoint_token_count: Option<usize>,
-) -> (usize, Option<usize>) {
-    let suffix_start = restored_prefill_tokens.min(prompt_token_count);
-    let checkpoint = checkpoint_token_count
-        .filter(|&boundary| boundary > suffix_start && boundary < prompt_token_count);
-    (suffix_start, checkpoint)
-}
-
-/// Pick the deferred-prefill checkpoint boundary. A valid EXPLICIT chat
-/// boundary wins: it is the reusable message-history prefix a follow-up
-/// request shares token-for-token, so it is the checkpoint most likely to be
-/// on a future request's path. The shared-grid checkpoint is the fallback for
-/// absent, invalid, or already-restored chat boundaries.
-fn select_deferred_checkpoint_boundary(
-    shared_checkpoint: Option<usize>,
-    chat_checkpoint: Option<usize>,
-    restored_prefill_tokens: usize,
-    prompt_token_count: usize,
-) -> Option<usize> {
-    let valid =
-        |boundary: &usize| *boundary > restored_prefill_tokens && *boundary < prompt_token_count;
-    chat_checkpoint
-        .filter(valid)
-        .or_else(|| shared_checkpoint.filter(valid))
+    )
 }
 
 impl StageOpenAiBackend {
@@ -491,7 +467,13 @@ impl StageOpenAiBackend {
                 lifecycle.finish(generation_succeeded);
                 receipt_result
             },
-            || self.cleanup_local_generation_session(&session_id, request.ids),
+            || {
+                self.finish_local_generation_session(
+                    &session_id,
+                    request.ids,
+                    generation_succeeded && !receipt_cancelled,
+                )
+            },
         )?;
         Ok(cache_stats)
     }
@@ -649,8 +631,9 @@ impl StageOpenAiBackend {
         }
         if request.prompt_token_ids.len() > 1 {
             let chat_sampling_configured = if self.kv.as_ref().is_some_and(|kv| {
-                kv.payload == StagePrefixCachePayload::ResidentKv
-                    || deferred_suffix_prefill_enabled(Some(kv.payload), request.max_tokens)
+                kv.payload != StagePrefixCachePayload::KvRecurrent
+                    && (kv.payload == StagePrefixCachePayload::ResidentKv
+                        || deferred_suffix_prefill_enabled(Some(kv.payload), request.max_tokens))
             }) {
                 if let Some(metadata) = request.chat_sampling_metadata {
                     self.configure_chat_sampling(
@@ -670,7 +653,12 @@ impl StageOpenAiBackend {
                 self.restore_or_record_kv(request, session_id, cache_stats)?;
             return Ok(PromptPrefillResult {
                 prompt_prefill_sample,
-                chat_sampling_configured,
+                chat_sampling_configured: chat_sampling_configured
+                    || (request.chat_sampling_metadata.is_some()
+                        && self
+                            .kv
+                            .as_ref()
+                            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent)),
             });
         }
         Ok(PromptPrefillResult {
@@ -756,6 +744,19 @@ impl StageOpenAiBackend {
             .recurrent_cache_prefix_token_ids
             .map(<[i32]>::to_vec);
         let max_tokens = request.max_tokens;
+        let hybrid_sampling = (self
+            .kv
+            .as_ref()
+            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent))
+        .then(|| {
+            request.chat_sampling_metadata.map(|metadata| {
+                (
+                    metadata.to_owned(),
+                    request.sampling.enabled.then(|| request.sampling.clone()),
+                )
+            })
+        })
+        .flatten();
         let identity_timer = PhaseTimer::start();
         let (lookup_identities, refresh_cache_affinity) = match self.kv.as_ref() {
             Some(kv) => {
@@ -819,6 +820,7 @@ impl StageOpenAiBackend {
                     kv_identity_ms,
                     recurrent_cache_prefix_token_ids.as_deref(),
                     max_tokens,
+                    hybrid_sampling,
                     &mut scheduler_cache_stats,
                 )?;
                 Ok((outcome, scheduler_cache_stats))
@@ -843,28 +845,21 @@ impl StageOpenAiBackend {
         let deferred_suffix_prefill =
             deferred_suffix_prefill_enabled(self.kv.as_ref().map(|kv| kv.payload), max_tokens);
         if deferred_suffix_prefill && capacity.admitted {
+            let _prefill_turn = self
+                .iteration_scheduler
+                .acquire_prefill_turn(cache_operation_deadline, request.cancellation)?;
             let exact_state = self
                 .kv
                 .as_ref()
                 .is_some_and(|kv| kv.payload_is_exact_state());
-            let checkpoint = exact_state
-                .then(|| {
-                    self.deferred_exact_checkpoint_identity(
-                        request,
-                        session_id,
-                        &prefill_tokens,
-                        restored_prefill_tokens,
-                    )
-                })
-                .flatten();
-            let (mut suffix_start, checkpoint_boundary) = deferred_suffix_split(
+            let checkpoints = self.deferred_exact_checkpoint_boundaries(
+                request,
+                &prefill_tokens,
                 restored_prefill_tokens,
-                request.prompt_token_ids.len(),
-                checkpoint
-                    .as_ref()
-                    .and_then(|identity| usize::try_from(identity.identity.token_count).ok()),
             );
-            if exact_state && let Some(boundary) = checkpoint_boundary {
+            let mut suffix_start = restored_prefill_tokens.min(request.prompt_token_ids.len());
+            prefill_chunk_count = 0;
+            for boundary in checkpoints {
                 let checkpoint_prefill = self.prefill_suffix(
                     session_id,
                     &request.prompt_token_ids[suffix_start..boundary],
@@ -873,9 +868,8 @@ impl StageOpenAiBackend {
                     cache_operation_deadline,
                     request.cancellation,
                 )?;
-                prefill_chunk_count = prefill_chunk_count
-                    .saturating_add(checkpoint_prefill.chunk_count)
-                    .saturating_sub(1);
+                prefill_chunk_count =
+                    prefill_chunk_count.saturating_add(checkpoint_prefill.chunk_count);
                 scheduler_batch_size_max =
                     scheduler_batch_size_max.max(checkpoint_prefill.max_batch_size);
                 runtime_lock_wait_ms += checkpoint_prefill.runtime_lock_wait_ms;
@@ -900,18 +894,18 @@ impl StageOpenAiBackend {
                 session_id,
                 &request.prompt_token_ids[suffix_start..],
                 request.sampling.enabled.then_some(request.sampling),
-                true,
+                max_tokens > 0,
                 cache_operation_deadline,
                 request.cancellation,
             )?;
-            prompt_prefill_sample = Some(suffix_outcome.predicted.ok_or_else(|| {
-                InferenceError::backend("deferred suffix prefill was not sampled")
-            })?);
-            prefill_chunk_count = if prefill_chunk_count == 1 {
-                suffix_outcome.chunk_count
-            } else {
-                prefill_chunk_count.saturating_add(suffix_outcome.chunk_count)
-            };
+            prompt_prefill_sample = suffix_outcome.predicted;
+            if max_tokens > 0 && prompt_prefill_sample.is_none() {
+                return Err(InferenceError::backend(
+                    "deferred suffix prefill was not sampled",
+                ));
+            }
+
+            prefill_chunk_count = prefill_chunk_count.saturating_add(suffix_outcome.chunk_count);
             scheduler_batch_size_max = scheduler_batch_size_max.max(suffix_outcome.max_batch_size);
             runtime_lock_wait_ms += suffix_outcome.runtime_lock_wait_ms;
             runtime_lock_hold_ms += suffix_outcome.runtime_lock_hold_ms;
@@ -965,7 +959,7 @@ impl StageOpenAiBackend {
                 (record, runtime_sessions_after) = record_outcome.value;
             }
         }
-        if prompt_prefill_sample.is_some() {
+        if deferred_suffix_prefill && capacity.admitted {
             cache_stats.suffix_prefill_tokens = saturating_u32(
                 request
                     .prompt_token_ids
@@ -973,7 +967,7 @@ impl StageOpenAiBackend {
                     .saturating_sub(restored_prefill_tokens),
             );
         }
-        let prompt_tail_tokens = usize::from(prompt_prefill_sample.is_some());
+        let prompt_tail_tokens = usize::from(deferred_suffix_prefill && capacity.admitted);
         cache_stats.prompt_ms = prefill_timer.elapsed_ms();
         if self.telemetry.is_debug_enabled() {
             let mut attrs = self.openai_attrs(request.ids);
@@ -1072,267 +1066,6 @@ impl StageOpenAiBackend {
             return Err(openai_backend_error(error));
         }
         Ok(prompt_prefill_sample)
-    }
-
-    fn deferred_exact_checkpoint_identity(
-        &self,
-        request: &LocalGeneration<'_>,
-        session_id: &str,
-        prefill_tokens: &[i32],
-        restored_prefill_tokens: usize,
-    ) -> Option<PrefillKvIdentity> {
-        let kv = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state())?;
-        let base = self.local_kv_message_base(session_id, request.ids);
-        let shared_checkpoint =
-            kv.exact_shared_checkpoint_identity(&self.config, &base, 0, prefill_tokens);
-        let chat_checkpoint = request
-            .recurrent_cache_prefix_token_ids
-            .filter(|checkpoint_tokens| {
-                !checkpoint_tokens.is_empty()
-                    && checkpoint_tokens.len() <= prefill_tokens.len()
-                    && prefill_tokens.starts_with(checkpoint_tokens)
-            })
-            .map(|checkpoint_tokens| {
-                kv.prefill_identity(&self.config, &base, 0, checkpoint_tokens)
-            });
-        let shared_boundary = shared_checkpoint
-            .as_ref()
-            .and_then(|identity| usize::try_from(identity.identity.token_count).ok());
-        let chat_boundary = chat_checkpoint
-            .as_ref()
-            .and_then(|identity| usize::try_from(identity.identity.token_count).ok());
-        let selected_boundary = select_deferred_checkpoint_boundary(
-            shared_boundary,
-            chat_boundary,
-            restored_prefill_tokens,
-            prefill_tokens.len().saturating_add(1),
-        );
-        if selected_boundary == shared_boundary {
-            shared_checkpoint
-        } else {
-            chat_checkpoint
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn restore_or_record_kv_on_runtime(
-        &self,
-        runtime: &mut RuntimeState,
-        cache_operation: &CacheRuntimeContext,
-        ids: &InferenceGenerationIds,
-        session_id: &str,
-        prefill_tokens: &[i32],
-        lookup_identities: &[PrefillKvIdentity],
-        kv_identity_ms: f64,
-        recurrent_cache_prefix_token_ids: Option<&[i32]>,
-        max_tokens: u32,
-        cache_stats: &mut GenerationCacheStats,
-    ) -> InferenceResult<KvRestoreOutcome> {
-        ensure_cache_operation_active(runtime, session_id, cache_operation)?;
-        let emit_debug = self.telemetry.is_debug_enabled();
-        let runtime_sessions_before = emit_debug.then(|| runtime.session_stats());
-        let (restored_prefill, restored_prefill_tokens, protected_resident_seq_id) =
-            if let Some(kv) = self.kv.as_ref() {
-                cache_stats.status = "miss";
-                self.lookup_and_restore_kv(
-                    kv,
-                    runtime,
-                    session_id,
-                    ids,
-                    prefill_tokens,
-                    lookup_identities,
-                    kv_identity_ms,
-                    cache_stats,
-                )
-            } else {
-                (false, 0, None)
-            };
-        ensure_cache_operation_active(runtime, session_id, cache_operation)?;
-        let capacity = if let Some(kv) = self.kv.as_ref() {
-            let decode_batch_tokens = u64::from(self.config.n_batch.unwrap_or(2048));
-            let target_free_tokens =
-                decode_batch_tokens.saturating_add(u64::from(max_tokens).min(decode_batch_tokens));
-            let request_tokens = if kv.payload == StagePrefixCachePayload::ResidentKv {
-                prefill_tokens
-                    .len()
-                    .saturating_sub(restored_prefill_tokens)
-                    .saturating_add(usize::from(max_tokens > 0)) as u64
-            } else {
-                prefill_tokens.len() as u64
-            };
-            kv.admit_resident_capacity(
-                runtime,
-                session_id,
-                request_tokens,
-                decode_batch_tokens,
-                target_free_tokens,
-                protected_resident_seq_id,
-            )
-            .map_err(openai_backend_error)?
-        } else {
-            crate::kv_integration::ResidentCapacityDecision {
-                admitted: true,
-                ..crate::kv_integration::ResidentCapacityDecision::default()
-            }
-        };
-        ensure_cache_operation_active(runtime, session_id, cache_operation)?;
-        if !capacity.admitted {
-            return Ok(KvRestoreOutcome {
-                runtime_sessions_before,
-                runtime_sessions_after: emit_debug.then(|| runtime.session_stats()),
-                restored_prefill: false,
-                restored_prefill_tokens: 0,
-                capacity,
-                record: KvRecordResult::default(),
-                prompt_prefill_sample: None,
-            });
-        }
-        let deferred_suffix_prefill =
-            deferred_suffix_prefill_enabled(self.kv.as_ref().map(|kv| kv.payload), max_tokens);
-        if deferred_suffix_prefill {
-            runtime
-                .ensure_session_active(session_id)
-                .map_err(openai_backend_error)?;
-            cache_stats.matched_prefix_tokens = saturating_u32(restored_prefill_tokens);
-            cache_stats.suffix_prefill_tokens =
-                saturating_u32(prefill_tokens.len().saturating_sub(restored_prefill_tokens));
-            return Ok(KvRestoreOutcome {
-                runtime_sessions_before,
-                runtime_sessions_after: emit_debug.then(|| runtime.session_stats()),
-                restored_prefill,
-                restored_prefill_tokens,
-                capacity,
-                record: KvRecordResult::default(),
-                prompt_prefill_sample: None,
-            });
-        }
-        let prompt_prefill_sample = None;
-        let mut decoded_prefill_suffix = false;
-        let cache_prefill_chunk_tokens = usize::try_from(self.config.n_ubatch.unwrap_or(256))
-            .unwrap_or(2_048)
-            .clamp(1, 2_048);
-        if restored_prefill_tokens < prefill_tokens.len() {
-            decoded_prefill_suffix = true;
-            if let Some(checkpoint_tokens) =
-                recurrent_cache_prefix_token_ids.filter(|checkpoint_tokens| {
-                    !checkpoint_tokens.is_empty()
-                        && checkpoint_tokens.len() <= prefill_tokens.len()
-                        && prefill_tokens.starts_with(checkpoint_tokens)
-                        && restored_prefill_tokens < checkpoint_tokens.len()
-                })
-            {
-                prefill_cache_chunks(
-                    runtime,
-                    session_id,
-                    &checkpoint_tokens[restored_prefill_tokens..],
-                    cache_prefill_chunk_tokens,
-                    cache_operation,
-                )?;
-                ensure_cache_operation_active(runtime, session_id, cache_operation)?;
-                // This branch is the max_tokens=0 prefill-only fallback. The
-                // chat-prefix state must be exported before this same runtime
-                // operation advances through the remaining suffix. A detached
-                // command cannot run until this operation releases the scheduler,
-                // by which point the canonical-position guard would reject the
-                // earlier checkpoint. Generation requests use the split, detached
-                // FIFO checkpoint path in `restore_or_record_kv` instead.
-                let _ = self.record_exact_state_at_tokens(
-                    runtime,
-                    session_id,
-                    ids,
-                    checkpoint_tokens,
-                    "chat_prefix_checkpoint",
-                    true,
-                );
-                prefill_cache_chunks(
-                    runtime,
-                    session_id,
-                    &prefill_tokens[checkpoint_tokens.len()..],
-                    cache_prefill_chunk_tokens,
-                    cache_operation,
-                )?;
-            } else if let Some(kv) = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state()) {
-                // Recurrent and full-state payloads cannot reconstruct a shorter
-                // shared prefix from the state at the end of the request. Stop
-                // at the near-tail grid boundary while prefilling and snapshot
-                // native state there; the final exact state is recorded by
-                // `record_and_evict_kv` below. One checkpoint bounds both the
-                // extra prefill split and the very large recurrent-state export.
-                let base = self.local_kv_message_base(session_id, ids);
-                let checkpoint =
-                    kv.exact_shared_checkpoint_identity(&self.config, &base, 0, prefill_tokens);
-                if let Some(identity) = checkpoint.filter(|identity| {
-                    identity.identity.token_count as usize > restored_prefill_tokens
-                }) {
-                    let boundary = identity.identity.token_count as usize;
-                    prefill_cache_chunks(
-                        runtime,
-                        session_id,
-                        &prefill_tokens[restored_prefill_tokens..boundary],
-                        cache_prefill_chunk_tokens,
-                        cache_operation,
-                    )?;
-                    ensure_cache_operation_active(runtime, session_id, cache_operation)?;
-                    let cold_prefill_cost = self
-                        .generation_service_estimator
-                        .estimated_prefill_ms(boundary);
-                    let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
-                    kv.record_exact_state_with_cost(
-                        runtime,
-                        session_id,
-                        &identity,
-                        crate::kv_integration::CaptureAdmission::BestEffort,
-                        l3_cost,
-                    )
-                    .map_err(openai_backend_error)?;
-                    prefill_cache_chunks(
-                        runtime,
-                        session_id,
-                        &prefill_tokens[boundary..],
-                        cache_prefill_chunk_tokens,
-                        cache_operation,
-                    )?;
-                } else {
-                    prefill_cache_chunks(
-                        runtime,
-                        session_id,
-                        &prefill_tokens[restored_prefill_tokens..],
-                        cache_prefill_chunk_tokens,
-                        cache_operation,
-                    )?;
-                }
-            } else {
-                prefill_cache_chunks(
-                    runtime,
-                    session_id,
-                    &prefill_tokens[restored_prefill_tokens..],
-                    cache_prefill_chunk_tokens,
-                    cache_operation,
-                )?;
-            }
-        }
-        ensure_cache_operation_active(runtime, session_id, cache_operation)?;
-        cache_stats.matched_prefix_tokens = saturating_u32(restored_prefill_tokens);
-        cache_stats.suffix_prefill_tokens =
-            saturating_u32(prefill_tokens.len().saturating_sub(restored_prefill_tokens));
-        let record = self.record_and_evict_kv(
-            runtime,
-            session_id,
-            ids,
-            prefill_tokens,
-            restored_prefill,
-            decoded_prefill_suffix,
-        );
-        let runtime_sessions_after = emit_debug.then(|| runtime.session_stats());
-        Ok(KvRestoreOutcome {
-            runtime_sessions_before,
-            runtime_sessions_after,
-            restored_prefill,
-            restored_prefill_tokens,
-            capacity,
-            record,
-            prompt_prefill_sample,
-        })
     }
 
     fn configure_chat_sampling(
@@ -1468,134 +1201,6 @@ impl StageOpenAiBackend {
             direct_iteration_channel: None,
         })
     }
-
-    /// Drives feature-specific proposal/checkpoint state while the iteration
-    /// scheduler worker remains the sole owner of target runtime execution.
-    /// This is not a fallback serving scheduler: native MTP, linear proposals,
-    /// hooks, and cache operations submit their target work to that worker.
-    fn run_scheduler_feature_loop(
-        &self,
-        request: &mut LocalGeneration<'_>,
-        session_id: &str,
-        prompt_prefill_sample: Option<i32>,
-        cache_stats: &mut GenerationCacheStats,
-        receipt_cancelled: &mut bool,
-        emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
-    ) -> InferenceResult<Duration> {
-        let decode_timer = PhaseTimer::start();
-        let mut state =
-            self.prepare_decode_state(request, session_id, prompt_prefill_sample, emit_token)?;
-        let recurrent_checkpoint_required = self
-            .kv
-            .as_ref()
-            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent);
-        let resume_scheduler_decode = prompt_prefill_sample.is_some()
-            && !state.stopped
-            && state.decoded_tokens < request.max_tokens as usize
-            && !recurrent_checkpoint_required
-            && self.linear_proposal_ingress.is_none()
-            && self.draft.is_none()
-            && !request.native_mtp_enabled
-            && !state.generation_hooks_active;
-        if resume_scheduler_decode {
-            let initial_generated_tokens = state.generated_token_ids.clone();
-            let stats = self.iteration_scheduler.resume_generation(
-                ScheduledResumeRequest {
-                    id: session_id,
-                    prompt_tokens: request.prompt_token_ids,
-                    generated_tokens: &initial_generated_tokens,
-                    max_tokens: request.max_tokens,
-                    sampling: request.sampling.enabled.then_some(request.sampling),
-                    cancellation: request.cancellation,
-                },
-                |token| {
-                    state.current = token;
-                    state.decoded_tokens = state.decoded_tokens.saturating_add(1);
-                    state.generated_token_ids.push(token);
-                    emit_token(token)
-                },
-            )?;
-            cache_stats.predicted_ms = stats.predicted_ms;
-            let model_generation_elapsed =
-                self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;
-            if state.generated_token_ids.len() > 1 {
-                let _ = self.record_post_decode_exact_state(request, session_id, &state);
-            }
-            return Ok(model_generation_elapsed);
-        }
-        // A recurrent request needs one serial decode before proposals can
-        // advance the native session beyond the prompt boundary. The serial
-        // attempt is the gate: a short prompt may be below the policy's
-        // minimum checkpoint size, in which case recording is correctly
-        // skipped but proposals must not remain disabled for the rest of the
-        // request.
-        let mut first_post_decode_checkpoint_attempted = initial_recurrent_checkpoint_attempted(
-            recurrent_checkpoint_required,
-            prompt_prefill_sample,
-        );
-        while !state.stopped && state.decoded_tokens < request.max_tokens as usize {
-            if request
-                .cancellation
-                .is_some_and(skippy_inference_api::CancellationToken::is_cancelled)
-            {
-                *receipt_cancelled = true;
-                break;
-            }
-            let linear_progress = if linear_proposal_allowed(
-                recurrent_checkpoint_required,
-                first_post_decode_checkpoint_attempted,
-            ) {
-                self.try_execute_linear_proposal(request, session_id, &mut state, emit_token)?
-            } else {
-                // A proposal can consume the final prompt token and commit
-                // multiple target tokens in one call. Give recurrent caches
-                // one serial decode first so the exact full-prompt boundary
-                // is published before that proposal advances the session.
-                LinearProposalProgress::NotUsed
-            };
-            match linear_progress {
-                LinearProposalProgress::Continue => continue,
-                LinearProposalProgress::Stop => break,
-                LinearProposalProgress::NotUsed => {}
-            }
-            // A batched MTP span commits multiple tokens from one forward. It
-            // shares the recurrent-checkpoint gate with linear proposals for
-            // the same reason: it can advance the session past the prompt
-            // boundary before that boundary has been published.
-            if linear_proposal_allowed(
-                recurrent_checkpoint_required,
-                first_post_decode_checkpoint_attempted,
-            ) {
-                match self
-                    .try_execute_native_mtp_span(request, session_id, &mut state, emit_token)?
-                {
-                    NativeMtpSpanProgress::Continue => continue,
-                    NativeMtpSpanProgress::Stop => break,
-                    NativeMtpSpanProgress::NotUsed => {}
-                }
-            }
-            let control = self.decode_one_token(request, session_id, &mut state, emit_token)?;
-            if !first_post_decode_checkpoint_attempted && state.generated_token_ids.len() == 1 {
-                first_post_decode_checkpoint_attempted = true;
-                self.record_post_decode_exact_state(request, session_id, &state);
-            }
-            if state.linear_proposal_max_tokens > 0 {
-                state.pending_linear_proposal_tokens.push(state.current);
-            }
-            if control == TokenControl::Stop {
-                break;
-            }
-        }
-        let model_generation_elapsed =
-            self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;
-        // The first-token checkpoint names the prompt boundary. Avoid
-        // exporting the same recurrent state twice for a one-token response;
-        // longer responses still get their final exact boundary recorded.
-        if state.generated_token_ids.len() > 1 {
-            let _ = self.record_post_decode_exact_state(request, session_id, &state);
-        }
-        Ok(model_generation_elapsed)
-    }
 }
 
 pub(super) trait NativeMtpRuntime {
@@ -1686,8 +1291,8 @@ fn default_local_text_serving_selects_iteration_scheduler() {
 
 #[cfg(test)]
 #[test]
-fn resident_kv_suffix_prefill_stays_inside_the_cache_operation() {
-    assert!(!deferred_suffix_prefill_enabled(
+fn resident_kv_suffix_prefill_yields_to_the_scheduler() {
+    assert!(deferred_suffix_prefill_enabled(
         Some(StagePrefixCachePayload::ResidentKv),
         1,
     ));
@@ -1695,7 +1300,7 @@ fn resident_kv_suffix_prefill_stays_inside_the_cache_operation() {
 
 #[cfg(test)]
 #[test]
-fn recurrent_suffix_prefill_requires_a_nonzero_generation_budget() {
+fn cache_suffix_prefill_also_yields_for_prefill_only_requests() {
     assert!(deferred_suffix_prefill_enabled(
         Some(StagePrefixCachePayload::KvRecurrent),
         1,
@@ -1704,67 +1309,11 @@ fn recurrent_suffix_prefill_requires_a_nonzero_generation_budget() {
         Some(StagePrefixCachePayload::FullState),
         1,
     ));
-    assert!(!deferred_suffix_prefill_enabled(
+    assert!(deferred_suffix_prefill_enabled(
         Some(StagePrefixCachePayload::KvRecurrent),
         0,
     ));
     assert!(!deferred_suffix_prefill_enabled(None, 1));
-}
-
-#[cfg(test)]
-#[test]
-fn deferred_suffix_split_respects_restore_and_prompt_boundaries() {
-    assert_eq!(deferred_suffix_split(0, 10, Some(4)), (0, Some(4)));
-    assert_eq!(deferred_suffix_split(4, 10, Some(4)), (4, None));
-    assert_eq!(deferred_suffix_split(8, 10, Some(4)), (8, None));
-    assert_eq!(deferred_suffix_split(4, 10, Some(10)), (4, None));
-    assert_eq!(deferred_suffix_split(99, 10, Some(4)), (10, None));
-}
-
-#[cfg(test)]
-#[test]
-fn deferred_checkpoint_prefers_chat_boundary_with_shared_grid_fallback() {
-    let prompt = 10;
-    // Both valid: the explicit chat boundary wins over the shared grid.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), Some(6), 0, prompt),
-        Some(6)
-    );
-    // Chat absent or None: shared grid is the fallback.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), None, 0, prompt),
-        Some(8)
-    );
-    // Chat already restored (equal to the restored prefix): shared fallback.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), Some(4), 4, prompt),
-        Some(8)
-    );
-    // Chat at the prompt end: invalid, shared fallback.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), Some(10), 0, prompt),
-        Some(8)
-    );
-    // Chat beyond the prompt: invalid, shared fallback.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(8), Some(99), 0, prompt),
-        Some(8)
-    );
-    // Shared already restored but chat valid: chat wins.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(4), Some(6), 4, prompt),
-        Some(6)
-    );
-    // Both invalid: nothing selected.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(Some(4), Some(10), 4, prompt),
-        None
-    );
-    // Neither candidate exists: nothing selected.
-    assert_eq!(
-        select_deferred_checkpoint_boundary(None, None, 0, prompt),
-        None
-    );
 }
 
 #[cfg(test)]

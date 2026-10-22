@@ -1,7 +1,7 @@
-From d19aa5379c0734e0de464e7859fdce61435da64a Mon Sep 17 00:00:00 2001
+From 13e850b884dbf74680312e18d7f0ab3651c2382b Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
-Subject: [PATCH 4/6] skippy: add DiffusionGemma system-one reads
+Subject: [PATCH] skippy: add DiffusionGemma system-one reads
 
 Expose a narrow native operation that prefills a DiffusionGemma prompt, performs one zero-self-conditioning canvas read, and returns normalized probabilities over caller-declared label tokens.
 
@@ -10,12 +10,12 @@ Co-authored-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 ---
  include/skippy.h            |   1 +
- include/skippy/common.h     |   3 +-
+ include/skippy/common.h     |   1 +
  include/skippy/system_one.h |  60 +++++++++
  src/CMakeLists.txt          |   1 +
  src/skippy/abi.cpp          |   1 +
  src/skippy/system_one.cpp   | 243 ++++++++++++++++++++++++++++++++++++
- 6 files changed, 308 insertions(+), 1 deletion(-)
+ 6 files changed, 307 insertions(+)
  create mode 100644 include/skippy/system_one.h
  create mode 100644 src/skippy/system_one.cpp
 
@@ -31,18 +31,9 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 3f6aab137..772028cfc 100644
+index b8818a75b..516719ddb 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 67
-+#define SKIPPY_ABI_VERSION_PATCH 68
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 @@ -105,6 +105,7 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_UNLOAD_EVENTS          ((uint64_t)1 << 36)
  /** @brief Full-model embedding, reranking, and encoder-decoder execution. */
@@ -118,7 +109,7 @@ index 000000000..4faf057ba
 +
 +#endif // SKIPPY_SYSTEM_ONE_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index e47cf0408..3edf17e64 100644
+index 528edfa99..0b6fb0cff 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -80,6 +80,7 @@ add_library(llama
@@ -391,5 +382,5 @@ index 000000000..d0c51d87a
 +    }
 +}
 -- 
-2.55.0
+2.56.0
 

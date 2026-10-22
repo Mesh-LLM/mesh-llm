@@ -78,7 +78,10 @@ impl RuntimeState {
         let idle_index = self
             .idle_sessions
             .iter()
-            .position(|idle| idle.resident_prefix.is_none());
+            .position(|idle| idle.resident_prefix.is_none() && idle.recurrent_prefixes.is_empty());
+        if idle_index.is_none() && !self.idle_sessions.is_empty() {
+            return Ok(false);
+        }
         let mut lane = match idle_index {
             Some(index) => self.idle_sessions.swap_remove(index),
             None => self.create_lane_session()?,
@@ -136,6 +139,7 @@ impl RuntimeState {
     /// long after the owning sessions were gone, producing
     /// `failed to find a memory slot` errors on subsequent admissions.
     pub fn drop_session_timed(&mut self, session_id: &str) -> Result<RuntimeSessionDropStats> {
+        self.resident_recurrent_requests.remove(session_id);
         self.forget_reset_session(session_id);
         let reset_started = Instant::now();
         let mut reset_session = false;
@@ -177,6 +181,7 @@ impl RuntimeState {
                 }
                 Ok(()) => {
                     lane_session.resident_prefix = None;
+                    lane_session.recurrent_prefixes.clear();
                     self.idle_sessions.push(lane_session);
                 }
                 Err(reset_err) => {
@@ -278,7 +283,9 @@ impl RuntimeState {
             idle_resident_prefixes: self
                 .idle_sessions
                 .iter()
-                .filter(|idle| idle.resident_prefix.is_some())
+                .filter(|idle| {
+                    idle.resident_prefix.is_some() || !idle.recurrent_prefixes.is_empty()
+                })
                 .count(),
             tracked_token_counts: self.session_token_counts.len(),
             max_session_tokens,
@@ -290,14 +297,16 @@ impl RuntimeState {
     }
 
     pub(super) fn take_idle_session(&mut self) -> Option<RuntimeLaneSession> {
-        if let Some(index) = self
-            .idle_sessions
-            .iter()
-            .position(|idle| idle.resident_prefix.is_none())
-        {
-            return Some(self.idle_sessions.swap_remove(index));
-        }
-        self.idle_sessions.pop()
+        let index = super::idle_retention::select_idle_victim(
+            self.idle_sessions.iter().enumerate().map(|(index, lane)| {
+                (
+                    index,
+                    lane.resident_prefix.is_none() && lane.recurrent_prefixes.is_empty(),
+                    lane.parked_at,
+                )
+            }),
+        )?;
+        Some(self.idle_sessions.swap_remove(index))
     }
 
     pub fn retain_resident_prefix_on_drop(
@@ -474,9 +483,11 @@ impl RuntimeState {
             || model.create_session_from_resident_prefix(cache_seq_id, token_ids),
         )?;
         let lane_session = RuntimeLaneSession {
+            parked_at: Instant::now(),
             index,
             session,
             resident_prefix: None,
+            recurrent_prefixes: Default::default(),
         };
         self.sessions.insert(session_id.to_string(), lane_session);
         self.session_token_counts
@@ -542,9 +553,11 @@ impl RuntimeState {
             || model.create_session(),
         )?;
         Ok(RuntimeLaneSession {
+            parked_at: Instant::now(),
             index,
             session,
             resident_prefix: None,
+            recurrent_prefixes: Default::default(),
         })
     }
 }

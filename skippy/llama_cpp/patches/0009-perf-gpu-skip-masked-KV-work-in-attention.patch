@@ -1,0 +1,755 @@
+From 75a9b1c7b0608aa74a82cd97f2b7fac3685f96f8 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 20 Oct 2026 03:03:07 +1100
+Subject: [PATCH] perf(gpu): skip masked KV work in CUDA and Metal attention
+
+---
+ ggml/src/ggml-cpu/ops.cpp                     |  10 +-
+ ggml/src/ggml-cuda/fattn-common.cuh           |  71 +------
+ ggml/src/ggml-cuda/fattn-mask.cuh             |  62 ++++++
+ ggml/src/ggml-cuda/fattn-mma-f16.cuh          |  18 +-
+ ggml/src/ggml-cuda/fattn-tile.cuh             |   6 +-
+ ggml/src/ggml-cuda/fattn-vec.cuh              |  26 ++-
+ .../ggml-metal-attention-dispatch.h           |  22 +++
+ ggml/src/ggml-metal/ggml-metal-ops.cpp        |   6 +-
+ ggml/src/ggml-metal/kernels/fa_aux.metal      |  11 +-
+ tests/CMakeLists.txt                          |   6 +
+ tests/test-backend-ops.cpp                    |   3 +
+ tests/test-flash-attn-kv-bounds.h             | 180 ++++++++++++++++++
+ tests/test-metal-attention-dispatch.cpp       |  49 +++++
+ 13 files changed, 387 insertions(+), 83 deletions(-)
+ create mode 100644 ggml/src/ggml-cuda/fattn-mask.cuh
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-attention-dispatch.h
+ create mode 100644 tests/test-flash-attn-kv-bounds.h
+ create mode 100644 tests/test-metal-attention-dispatch.cpp
+
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index 7a73e138e..267be4948 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -8996,6 +8996,10 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+     ggml_vec_dot_t    const kq_vec_dot     = ggml_get_type_traits_cpu(k->type)->vec_dot;
+     ggml_to_float_t   const v_to_float     = ggml_get_type_traits(v->type)->to_float;
+ 
++    // Keep the test reference accumulation in FP32 even for FP16 storage.
++    // Repeated FP16 rounding across long KV rows can dominate GPU comparisons.
++    const bool accumulate_f16 = v->type == GGML_TYPE_F16 && !params->use_ref;
++
+     GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
+     GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
+ 
+@@ -9018,7 +9022,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+         ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
+         ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
+ 
+-        if (v->type == GGML_TYPE_F16) {
++        if (accumulate_f16) {
+             memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
+         } else {
+             memset(VKQ32, 0, DV*sizeof(float));
+@@ -9067,7 +9071,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+ 
+             const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
+ 
+-            if (v->type == GGML_TYPE_F16) {
++            if (accumulate_f16) {
+                 if (s > M) {
+                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
+                     M = s;
+@@ -9108,7 +9112,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+             S = S*ms + vs; // scale and increment sum with partial sum
+         }
+ 
+-        if (v->type == GGML_TYPE_F16) {
++        if (accumulate_f16) {
+             for (int64_t d = 0; d < DV; ++d) {
+                 VKQ32[d] = GGML_CPU_FP16_TO_FP32(VKQ16[d]);
+             }
+diff --git a/ggml/src/ggml-cuda/fattn-common.cuh b/ggml/src/ggml-cuda/fattn-common.cuh
+index 41d948335..746009bea 100644
+--- a/ggml/src/ggml-cuda/fattn-common.cuh
++++ b/ggml/src/ggml-cuda/fattn-common.cuh
+@@ -666,62 +666,7 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
+     }
+ }
+ 
+-template <int ncols1>
+-__launch_bounds__(FATTN_KQ_STRIDE/2, 1)
+-static __global__ void flash_attn_mask_to_KV_max(
+-        const half2 * mask_ptr, int * KV_max_ptr, const int ne30, const int64_t s31, const int64_t s33) {
+-    const half2 * GGML_CUDA_RESTRICT mask   = mask_ptr;
+-    int         * GGML_CUDA_RESTRICT KV_max = KV_max_ptr;
+-
+-    const int ne31     = gridDim.x;
+-    const int tid      = threadIdx.x;
+-    const int sequence = blockIdx.y;
+-    const int jt       = blockIdx.x;
+-
+-    mask += sequence*s33 + jt*ncols1*s31;
+-
+-    __shared__ int buf_iw[WARP_SIZE];
+-    if (tid < WARP_SIZE) {
+-        buf_iw[tid] = 1;
+-    }
+-    ggml_cuda_pdl_sync();
+-    __syncthreads();
+-
+-    int KV_max_sj = (ne30 - 1) * FATTN_KQ_STRIDE;
+-    for (; KV_max_sj >= 0; KV_max_sj -= FATTN_KQ_STRIDE) {
+-        int all_inf = 1;
+-
+-#pragma unroll
+-        for (int j = 0; j < ncols1; ++j) {
+-            const float2 tmp = __half22float2(mask[j*s31 + KV_max_sj/2 + tid]);
+-            all_inf = all_inf && int(isinf(tmp.x)) && int(isinf(tmp.y));
+-        }
+-
+-        all_inf = warp_reduce_all(all_inf);
+-        if (tid % WARP_SIZE == 0) {
+-            buf_iw[tid / WARP_SIZE] = all_inf;
+-        }
+-        __syncthreads();
+-        all_inf = buf_iw[tid % WARP_SIZE];
+-        __syncthreads();
+-        all_inf = warp_reduce_all(all_inf);
+-
+-        if (!all_inf) {
+-            break;
+-        }
+-    }
+-
+-    // If the break in the loop was not triggered, KV_max_sj is now -FATTN_KQ_STRIDE.
+-    // If the break was triggered it's the lower edge of the tile with the first non-masked values.
+-    // In either case, walk back the decrementation by FATTN_KQ_STRIDE.
+-    KV_max_sj += FATTN_KQ_STRIDE;
+-
+-    if (threadIdx.x != 0) {
+-        return;
+-    }
+-
+-    KV_max[sequence*ne31 + jt] = KV_max_sj;
+-}
++#include "fattn-mask.cuh"
+ 
+ void ggml_cuda_flash_attn_ext_compact_mask(
+         const ggml_tensor * mask, int32_t * indices, int32_t * counts, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream);
+@@ -1111,10 +1056,10 @@ void launch_fattn(
+         ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists, Q->ne[1], ncols1, n_kv_max, main_stream);
+     }
+ 
+-    // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
+-    // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
+-    //     multiple sequences of possibly different lengths.
+-    const bool scan_mask = !use_sparse && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1);
++    // A unified cache can have masked leading cells even for a single decode
++    // query. Scan long contexts as well as large batches and separate streams.
++    const bool scan_mask = !use_sparse && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 &&
++            (K->ne[1] >= 4096 || Q->ne[1] >= 1024 || Q->ne[3] > 1);
+     if (scan_mask) {
+         const int64_t s31 = mask->nb[1] / sizeof(half2);
+         const int64_t s33 = mask->nb[3] / sizeof(half2);
+@@ -1125,10 +1070,10 @@ void launch_fattn(
+         const int ne_KV_max = blocks_num_KV_max.x*blocks_num_KV_max.y;
+         const int iter_k = K->ne[1] / FATTN_KQ_STRIDE;
+ 
+-        KV_max.alloc(ne_KV_max);
++        KV_max.alloc(2*ne_KV_max);
+         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_KV_max, block_dim_KV_max, 0, main_stream);
+-        ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max<ncols1>, launch_params,
+-            (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
++        ggml_cuda_kernel_launch(flash_attn_mask_to_KV_bounds<ncols1>, launch_params,
++            (const half2 *) mask->data, KV_max.ptr, iter_k, int(Q->ne[1]), int(mask->ne[3]), s31, s33);
+         CUDA_CHECK(cudaGetLastError());
+     }
+ 
+diff --git a/ggml/src/ggml-cuda/fattn-mask.cuh b/ggml/src/ggml-cuda/fattn-mask.cuh
+new file mode 100644
+index 000000000..5242acd4c
+--- /dev/null
++++ b/ggml/src/ggml-cuda/fattn-mask.cuh
+@@ -0,0 +1,62 @@
++#pragma once
++
++// Dense attention keeps the physical KV layout (and resident prefix aliases).
++// Bound each query tile by the union of its visible columns. Bounds are aligned
++// outwards to FATTN_KQ_STRIDE; holes inside the interval still use the full mask.
++// The first plane contains exclusive ends, the second inclusive starts.
++template <int ncols1>
++__launch_bounds__(FATTN_KQ_STRIDE / 2, 1) static __global__ void flash_attn_mask_to_KV_bounds(
++    const half2 * mask,
++    int *         bounds,
++    const int     ntiles_k,
++    const int     n_queries,
++    const int     n_mask_sequences,
++    const int64_t s31,
++    const int64_t s33) {
++    const int tid = threadIdx.x;
++    const int row = blockIdx.x * ncols1;
++    mask += (blockIdx.y % n_mask_sequences) * s33 + row * s31;
++    ggml_cuda_pdl_sync();
++
++    int first = 0;
++    int last  = ntiles_k;
++    // __syncthreads_and makes the result uniform across the entire block.
++    // Only -infinity is invisible; finite biases (and NaNs) must not be skipped.
++    for (; first < last; ++first) {
++        int invisible = 1;
++#pragma unroll
++        for (int j = 0; j < ncols1; ++j) {
++            if (row + j < n_queries) {
++                const float2 value = __half22float2(mask[j * s31 + first * (FATTN_KQ_STRIDE / 2) + tid]);
++                invisible &= value.x == -INFINITY && value.y == -INFINITY;
++            }
++        }
++        if (!__syncthreads_and(invisible)) {
++            break;
++        }
++    }
++    for (; last > first; --last) {
++        int invisible = 1;
++#pragma unroll
++        for (int j = 0; j < ncols1; ++j) {
++            if (row + j < n_queries) {
++                const float2 value = __half22float2(mask[j * s31 + (last - 1) * (FATTN_KQ_STRIDE / 2) + tid]);
++                invisible &= value.x == -INFINITY && value.y == -INFINITY;
++            }
++        }
++        if (!__syncthreads_and(invisible)) {
++            break;
++        }
++    }
++    if (tid == 0) {
++        const int index                       = blockIdx.y * gridDim.x + blockIdx.x;
++        bounds[index]                         = last * FATTN_KQ_STRIDE;
++        bounds[gridDim.x * gridDim.y + index] = first * FATTN_KQ_STRIDE;
++    }
++}
++
++// Preserve each parallel block's original strided partition while skipping
++// complete masked rounds at its beginning.
++static __device__ __forceinline__ int flash_attn_KV_first(const int start, const int lower, const int stride) {
++    return start + (lower > start ? (lower - start + stride - 1) / stride : 0) * stride;
++}
+diff --git a/ggml/src/ggml-cuda/fattn-mma-f16.cuh b/ggml/src/ggml-cuda/fattn-mma-f16.cuh
+index 296aa2b34..bc0c57ba4 100644
+--- a/ggml/src/ggml-cuda/fattn-mma-f16.cuh
++++ b/ggml/src/ggml-cuda/fattn-mma-f16.cuh
+@@ -1211,7 +1211,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
+         const int jt,
+         const int zt_gqa,
+         const int kb0_start,
+-        const int kb0_stop) {
++        const int kb0_stop,
++        const int kv_min) {
+ #if defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
+     //In this kernel Q, K, V are matrices while i, j, k are matrix indices.
+ 
+@@ -1329,7 +1330,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
+ 
+     __syncthreads();
+ 
+-    int kb0 = kb0_start;
++    // Keep the stream-K partition/fixup ownership unchanged. A partition wholly
++    // before the visible interval evaluates one masked tile so its zero partial
++    // result and any attention sink are still written through the normal path.
++    int kb0 = max(kb0_start, min(kv_min/nbatch_fa, kb0_stop - 1));
+ 
+     // Preload mask and K data for first iteration when using cp_async with multiple stages:
+     if constexpr (nstages > 1) {
+@@ -1780,7 +1784,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
+     GGML_UNUSED_VARS(Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dstk_fixup,
+         scale, slope, logit_softcap, ne01, ne02, gqa_ratio,
+         stride_Q1, stride_Q2, stride_K, stride_V, stride_mask,
+-        jt, kb0_start, kb0_stop);
++        jt, kb0_start, kb0_stop, kv_min);
+     NO_DEVICE_CODE;
+ #endif // defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
+ }
+@@ -1934,16 +1938,17 @@ static __global__ void flash_attn_ext_f16(
+             kb0_stop = min(kb0_stop, KV_max[sequence*iter_j + jt] / nbatch_fa);
+         }
+         constexpr bool is_fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
++        const int kv_min = !use_sparse && KV_max ? KV_max[iter_j*ne03 + sequence*iter_j + jt] : 0;
+         if (kb0_start == 0) {
+             constexpr bool needs_fixup = false; // CUDA block is working on an entire tile.
+             flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup>
+                 (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
+-                 ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
++                 ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop, kv_min);
+         } else {
+             constexpr bool needs_fixup = true; // CUDA block is missing the beginning of a tile.
+             flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup>
+                 (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
+-                 ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
++                 ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop, kv_min);
+         }
+ 
+         kbc += iter_k;
+@@ -1985,9 +1990,10 @@ static __global__ void flash_attn_ext_f16(
+ 
+     constexpr bool is_fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
+     constexpr bool needs_fixup = false;
++    const int kv_min = !use_sparse && KV_max ? KV_max[iter_j*ne03 + sequence*iter_j + jt] : 0;
+     flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup>
+         (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
+-         ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
++         ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop, kv_min);
+ #else
+     GGML_UNUSED_VARS(Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale,
+         max_bias, m0, m1, n_head_log2, logit_softcap,
+diff --git a/ggml/src/ggml-cuda/fattn-tile.cuh b/ggml/src/ggml-cuda/fattn-tile.cuh
+index b5ea915e1..8da1efe43 100644
+--- a/ggml/src/ggml-cuda/fattn-tile.cuh
++++ b/ggml/src/ggml-cuda/fattn-tile.cuh
+@@ -952,9 +952,11 @@ static __global__ void flash_attn_tile(
+ 
+     // Main loop over KV cache:
+     const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
++    const int k_VKQ_min = KV_max ? KV_max[gridDim.x*ne03 + sequence*gridDim.x + blockIdx.x] : 0;
++    const int k_VKQ_start = flash_attn_KV_first(blockIdx.y*nbatch_fa, k_VKQ_min/nbatch_fa*nbatch_fa, gridDim.y*nbatch_fa);
+     if (ncols2 == 1) {
+         // Branch with out-of-bounds checks.
+-        int k_VKQ_0 = blockIdx.y*nbatch_fa;
++        int k_VKQ_0 = k_VKQ_start;
+         while (k_VKQ_0 < k_VKQ_max - nbatch_fa) {
+             constexpr bool oob_check = false;
+             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap, oob_check>
+@@ -970,7 +972,7 @@ static __global__ void flash_attn_tile(
+         }
+     } else {
+         // Branch without out-of-bounds checks.
+-        for (int k_VKQ_0 = blockIdx.y*nbatch_fa; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*nbatch_fa) {
++        for (int k_VKQ_0 = k_VKQ_start; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*nbatch_fa) {
+             constexpr bool oob_check = false;
+             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap, oob_check>
+                 (Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp,
+diff --git a/ggml/src/ggml-cuda/fattn-vec.cuh b/ggml/src/ggml-cuda/fattn-vec.cuh
+index 57a285565..d06cfbc0f 100644
+--- a/ggml/src/ggml-cuda/fattn-vec.cuh
++++ b/ggml/src/ggml-cuda/fattn-vec.cuh
+@@ -248,13 +248,31 @@ static __global__ void flash_attn_ext_vec(
+     }
+ 
+     const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
+-    K     += blockIdx.y*nthreads * nb11;
+-    V     += blockIdx.y*nthreads * nb21;
+-    maskh += blockIdx.y*nthreads;
+-    for (int k_VKQ_0 = blockIdx.y*nthreads; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*nthreads,
++    const int k_VKQ_min = KV_max ? KV_max[gridDim.x*ne03 + sequence*gridDim.x + blockIdx.x] : 0;
++    const int k_VKQ_start = flash_attn_KV_first(blockIdx.y*nthreads, k_VKQ_min/nthreads*nthreads, gridDim.y*nthreads);
++    K     += k_VKQ_start * nb11;
++    V     += k_VKQ_start * nb21;
++    maskh += k_VKQ_start;
++    for (int k_VKQ_0 = k_VKQ_start; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*nthreads,
+              // Increment pointers after each loop:
+              K += gridDim.y*nthreads*nb11, V += gridDim.y*nthreads*nb21, maskh += gridDim.y*nthreads) {
+ 
++        // Bounds remove masked prefixes and suffixes, but a unified cache may
++        // have fully masked tiles between live regions. Check every live query
++        // row before loading K/V; finite biases and NaNs remain visible.
++        if (KV_max && mask) {
++            int invisible = 1;
++#pragma unroll
++            for (int j = 0; j < ncols; ++j) {
++                if (ncols == 1 || ic0 + j < int(ne01.z)) {
++                    invisible &= __half2float(maskh[j*ne11 + tid]) == -INFINITY;
++                }
++            }
++            if (__syncthreads_and(invisible)) {
++                continue;
++            }
++        }
++
+         // Calculate KQ tile and keep track of new maximum KQ values:
+         float KQ_reg[ncols]; // KQ in registers.
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal-attention-dispatch.h b/ggml/src/ggml-metal/ggml-metal-attention-dispatch.h
+new file mode 100644
+index 000000000..49eab36da
+--- /dev/null
++++ b/ggml/src/ggml-metal/ggml-metal-attention-dispatch.h
+@@ -0,0 +1,22 @@
++#pragma once
++
++#include "ggml-metal-device.h"
++#include "ggml-impl.h"
++
++#include <algorithm>
++
++struct ggml_metal_attention_reduction {
++    int32_t nsg;
++    ggml_metal_pipeline_with_params pipeline;
++};
++
++// Keep the producer's partial-result count unchanged. Each reduction SIMD group
++// reads all 32 partials, but fewer groups can cover the output head in more steps
++// when the compiled pipeline has a lower thread limit (e.g. shader validation).
++static inline ggml_metal_attention_reduction ggml_metal_select_attention_reduction(
++        ggml_metal_library_t lib, const ggml_tensor * op, int32_t dv, int32_t nwg) {
++    auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(lib, op, dv, nwg);
++    const int32_t nsg = std::min(nwg, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)/32);
++    GGML_ASSERT(nsg > 0);
++    return { nsg, pipeline };
++}
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 53c981618..c04c3e10b 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -9,6 +9,7 @@
+ #include "ggml-metal-device.h"
+ #include "ggml-metal-fusion.h"
+ #include "ggml-metal-tuning.h"
++#include "ggml-metal-attention-dispatch.h"
+ 
+ #include <cassert>
+ #include <algorithm>
+@@ -4098,14 +4099,15 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+                     nrows,
+                 };
+ 
+-                auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(lib, op, ne20, nwg);
++                const auto reduction = ggml_metal_select_attention_reduction(lib, op, ne20, nwg);
++                auto pipeline0 = reduction.pipeline;
+ 
+                 ggml_metal_encoder_set_pipeline(enc, pipeline0);
+                 ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
+                 ggml_metal_encoder_set_buffer  (enc, bid_tmp, 1);
+                 ggml_metal_encoder_set_buffer  (enc, bid_dst, 2);
+ 
+-                ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, 32*nwg, 1, 1);
++                ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, 32*reduction.nsg, 1, 1);
+             }
+         }
+     }
+diff --git a/ggml/src/ggml-metal/kernels/fa_aux.metal b/ggml/src/ggml-metal/kernels/fa_aux.metal
+index ebee1becd..a481bd52d 100644
+--- a/ggml/src/ggml-metal/kernels/fa_aux.metal
++++ b/ggml/src/ggml-metal/kernels/fa_aux.metal
+@@ -142,7 +142,7 @@ kernel void kernel_flash_attn_ext_blk(
+     const int32_t i1 = tgpig[1];
+     const int32_t i0 = tgpig[0];
+ 
+-    char res = i0*C + C > args.ne30 || i1*Q + Q > args.ne31 ? 1 : 0;
++    char res = i0*C + C > args.ne30 ? 1 : 0;
+ 
+     device const half * mask_src = (device const half *) (mask + (i1*Q)*args.nb31 + i2*args.nb32 + i3*args.nb33) + i0*C + tiisg;
+ 
+@@ -152,6 +152,10 @@ kernel void kernel_flash_attn_ext_blk(
+         half mmax = -MAXHALF;
+ 
+         FOR_UNROLL (short j = 0; j < Q; ++j) {
++            // Padded query rows cannot make a masked KV block visible.
++            if (i1*Q + j >= args.ne01) {
++                break;
++            }
+             FOR_UNROLL (short ii = 0; ii < C/NW; ++ii) {
+                 mmin = min(mmin, mask_src[ii*NW]);
+                 mmax = max(mmax, mask_src[ii*NW]);
+@@ -293,7 +297,8 @@ kernel void kernel_flash_attn_ext_vec_reduce(
+         device        char * dst,
+         uint   tgpig[[threadgroup_position_in_grid]],
+         ushort tiisg[[thread_index_in_simdgroup]],
+-        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
++        ushort sgitg[[simdgroup_index_in_threadgroup]],
++        ushort sgptg[[simdgroups_per_threadgroup]]) {
+ #define NWG (FC_flash_attn_ext_vec_reduce_NWG)
+ #define DV  (FC_flash_attn_ext_vec_reduce_DV)
+ 
+@@ -317,7 +322,7 @@ kernel void kernel_flash_attn_ext_vec_reduce(
+     device const float4 * htmp4 = (device const float4 *) htmp + rid*DV4*NWG;
+     device       float4 * dst4  = (device       float4 *) dst  + rid*DV4;
+ 
+-    for (short i = sgitg; i < DV4; i += NWG) {
++    for (short i = sgitg; i < DV4; i += sgptg) {
+         const float4 v = simd_sum(htmp4[i*NWG + iwg]*ms);
+ 
+         if (iwg == 0) {
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 8202770c3..33f7ff295 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -353,6 +353,12 @@ endif()
+ llama_build(test-backend-ops.cpp LINK ggml)
+ 
+ llama_build_and_test(test-tiled-mulmat.cpp LINK ggml)
++# Host launch-policy coverage also runs without a Metal device.
++add_executable(test-metal-attention-dispatch test-metal-attention-dispatch.cpp)
++target_include_directories(test-metal-attention-dispatch PRIVATE ../ggml/src)
++target_link_libraries(test-metal-attention-dispatch PRIVATE ggml-base)
++llama_test(test-metal-attention-dispatch)
++
+ llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
+ llama_build_and_test(test-autorelease.cpp       LABEL "model")
+ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index ba7f7eb4e..391d9a796 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -8528,6 +8528,7 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
+         init_tensor_uniform(ggml_get_tensor(ctx, "q"), -(float) q_range, (float) q_range);
+     }
+ };
++#include "test-flash-attn-kv-bounds.h"
+ 
+ // GGML_OP_CROSS_ENTROPY_LOSS
+ struct test_cross_entropy_loss : public test_case {
+@@ -11823,6 +11824,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {8, 1}, 512, 288, true, false, 0, 30.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
+     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {8, 1}, 1024, 320, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16, {0, 2, 1, 3}, false));
+     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {8, 1}, 512, 259, true, false, 8.0f, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16, {0, 2, 1, 3}, false));
++    add_flash_attn_kv_bounds_tests(test_cases);
+ 
+     // FLASH_ATTN_EXT MMA: non-pow2 head size and MLA K/V view.
+     test_cases.emplace_back(new test_flash_attn_ext(192, 128, 8, {8, 1}, 4096, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+@@ -12044,6 +12046,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+ // Test cases for performance evaluation: should be representative of real-world use cases
+ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+     std::vector<std::unique_ptr<test_case>> test_cases;
++    add_flash_attn_kv_bounds_perf_tests(test_cases);
+ 
+     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
+     // note: same bytes either way, so a backend that indexes them differently shows it here
+diff --git a/tests/test-flash-attn-kv-bounds.h b/tests/test-flash-attn-kv-bounds.h
+new file mode 100644
+index 000000000..822f56f63
+--- /dev/null
++++ b/tests/test-flash-attn-kv-bounds.h
+@@ -0,0 +1,180 @@
++#pragma once
++
++// Exercise physical KV layouts that arise from unified caches. Each query has
++// its own mask, so a query tile must use the union, not one representative row.
++struct test_flash_attn_kv_bounds : public test_flash_attn_ext {
++    const int pattern;
++
++    test_flash_attn_kv_bounds(int       pattern,
++                              int64_t   queries,
++                              int64_t   streams,
++                              ggml_type kv_type,
++                              bool      with_sinks,
++                              int64_t   kv_size = 4096, int64_t head_size = 128) :
++        test_flash_attn_ext(head_size,
++                            head_size,
++                            2,
++                            { 4, streams },
++                            kv_size,
++                            queries,
++                            true,
++                            with_sinks,
++                            0,
++                            0,
++                            GGML_PREC_F32,
++                            kv_type,
++                            kv_type),
++        pattern(pattern) {}
++
++    std::string vars() override {
++        return test_flash_attn_ext::vars() + ",kv_bounds_pattern=" + std::to_string(pattern);
++    }
++
++    void initialize_tensors(ggml_context * ctx) override {
++        test_flash_attn_ext::initialize_tensors(ctx);
++        for (auto * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
++            if (strcmp(t->name, "m") != 0) {
++                continue;
++            }
++            std::vector<ggml_fp16_t> values(ggml_nelements(t), ggml_fp32_to_fp16(-INFINITY));
++            for (int64_t s = 0; s < t->ne[3]; ++s) {
++                for (int64_t q = 0; q < t->ne[1]; ++q) {
++                    for (int64_t k = 0; k < t->ne[0]; ++k) {
++                        if (q >= nb) {
++                            // Deliberately visible padding must not expand the
++                            // live query tile's mask or alter its output.
++                            values[(s * t->ne[1] + q) * t->ne[0] + k] = ggml_fp32_to_fp16(0.0f);
++                            continue;
++                        }
++                        bool visible = false;
++                        switch (pattern) {
++                            case 0:
++                                visible = k >= 2051 && k < 3077;
++                                break;  // unaligned middle
++                            case 1:
++                                visible = k < 513;
++                                break;  // masked suffix
++                            case 2:
++                                visible = k >= kv - 515;
++                                break;  // masked prefix
++                            case 3:     // unrelated interleaved sequences in one query tile
++                                visible = (q + s) % 2 ? k >= 3071 : k < 257;
++                                break;
++                            case 4:
++                                visible = k < 129 || (k >= 2053 && k < 3073);
++                                break;  // shared prefix + hole
++                            case 5:
++                                visible = k == (q * 257 + s * 131) % kv;
++                                break;  // one live column
++                            case 6:
++                                visible = q % 2 && k >= 2051 && k < 3077;
++                                break;  // empty rows, with sinks
++                            case 7:
++                                visible = true;
++                                break;  // finite negative biases must remain live
++                            case 8:
++                                visible = k < 129 || k >= kv - 515;
++                                break;  // large interior hole with live endpoints
++                            case 9:
++                                visible = (q + s) % 2 ? k >= kv / 2 : k < kv / 2;
++                                break;  // each row sparse, but a two-row union is dense
++                            case 10:
++                                visible = (k / 512) % 4 == (q / 16 + s) % 4;
++                                break;  // chunk-interleaved physical lanes
++                            case 11:
++                                visible = k <= kv - nb + q;
++                                break;  // ordinary contiguous causal prefill
++                            default:
++
++                                GGML_ABORT("invalid KV bounds pattern");
++                        }
++                        if (visible) {
++                            const float bias                          = -float((k + q) % 7) / 8.0f;
++                            values[(s * t->ne[1] + q) * t->ne[0] + k] = ggml_fp32_to_fp16(bias);
++                        }
++                    }
++                }
++            }
++            ggml_backend_tensor_set(t, values.data(), 0, values.size() * sizeof(values[0]));
++        }
++    }
++};
++
++static void add_flash_attn_kv_bounds_tests(std::vector<std::unique_ptr<test_case>> & tests) {
++    // The one-query 256-wide vector path needs a long physical KV with live
++    // endpoints to exercise skipping a fully masked interior tile.
++    for (int pattern : { 2, 7, 8, 10 }) {
++        tests.emplace_back(new test_flash_attn_kv_bounds(pattern, 1, 1, GGML_TYPE_F16, false, 65536, 256));
++    }
++    tests.emplace_back(new test_flash_attn_kv_bounds(8, 1, 1, GGML_TYPE_F16, true, 65536, 256));
++    for (int pattern : { 2, 6, 7, 8, 10, 11 }) {
++        for (int64_t queries : { 1, 2, 17, 512 }) {
++            tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, GGML_TYPE_F16, true, 4096, 256));
++        }
++    }
++    for (int pattern : { 7, 8, 10, 11 }) {
++        for (int64_t queries : { 17, 512 }) {
++            tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, GGML_TYPE_F16, true, 65536, 256));
++        }
++    }
++    for (int pattern : { 7, 8, 9 }) {
++        for (int64_t queries : { 1, 2, 3 }) {
++            for (auto type : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
++                for (bool sinks : { false, true }) {
++                    tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, type, sinks, 65536));
++                }
++            }
++        }
++    }
++    for (int pattern = 0; pattern < 8; ++pattern) {
++        for (int64_t queries : { 1, 2, 3, 4, 17, 64 }) {
++            for (int64_t streams : { 1, 2 }) {
++                for (auto type : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
++                    for (bool sinks : { false, true }) {
++                        if (pattern == 6 && !sinks) {
++                            continue;  // all-masked rows need a sink for a defined CPU reference
++                        }
++                        tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, streams, type, sinks));
++                    }
++                }
++            }
++        }
++    }
++    // Chunked prefill below the former 1024-query cutoff, and unaligned KV
++    // extents which must retain the existing unoptimized path.
++    for (int pattern : { 0, 3, 4 }) {
++        tests.emplace_back(new test_flash_attn_kv_bounds(pattern, 65, 1, GGML_TYPE_F16, false));
++        tests.emplace_back(new test_flash_attn_kv_bounds(pattern, 512, 1, GGML_TYPE_F16, false));
++        tests.emplace_back(new test_flash_attn_kv_bounds(pattern, 513, 1, GGML_TYPE_F16, false));
++        tests.emplace_back(new test_flash_attn_kv_bounds(pattern, 3, 1, GGML_TYPE_F16, true, 4097));
++    }
++}
++
++static void add_flash_attn_kv_bounds_perf_tests(std::vector<std::unique_ptr<test_case>> & tests) {
++    for (int pattern : { 2, 7, 8, 10, 11 }) {
++        for (int64_t queries : { 1, 2, 17, 512 }) {
++            for (int64_t kv_size : { 4096, 65536, 196608 }) {
++                tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, GGML_TYPE_F16, false, kv_size, 256));
++            }
++        }
++    }
++    for (int pattern : { 0, 3, 4 }) {
++        for (int64_t queries : { 65, 513 }) {
++            tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, GGML_TYPE_F16, false, 16384));
++        }
++    }
++    // Include dense masks and short contexts to expose classification overhead,
++    // alongside long unified layouts with masked prefixes and interior holes.
++    for (int pattern : { 0, 2, 3, 4, 7, 8, 9 }) {
++        for (int64_t kv_size : { 1024, 4096, 16384, 65536 }) {
++            if (kv_size < 4096 && pattern != 7) {
++                continue;
++            }
++            for (int64_t queries : { 1, 2, 3, 17 }) {
++                for (auto type : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
++                    tests.emplace_back(new test_flash_attn_kv_bounds(pattern, queries, 1, type, false, kv_size));
++                }
++            }
++        }
++    }
++}
+diff --git a/tests/test-metal-attention-dispatch.cpp b/tests/test-metal-attention-dispatch.cpp
+new file mode 100644
+index 000000000..0a0673d0d
+--- /dev/null
++++ b/tests/test-metal-attention-dispatch.cpp
+@@ -0,0 +1,49 @@
++#include "ggml-metal/ggml-metal-attention-dispatch.h"
++
++#include <array>
++#include <cassert>
++#include <cstdint>
++
++static int compiled_limit;
++static int compiled_partials;
++static ggml_metal_pipeline_with_params selected_pipeline = {};
++
++ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(
++        ggml_metal_library_t, const ggml_tensor *, int32_t, int32_t nwg) {
++    compiled_partials = nwg;
++    return selected_pipeline;
++}
++
++int ggml_metal_pipeline_max_theads_per_threadgroup(ggml_metal_pipeline_with_params) {
++    return compiled_limit;
++}
++
++int main() {
++    // 832 reproduces the instrumented M1 Ultra pipeline limit. Nonmultiples
++    // ensure the host rounds down to complete SIMD groups, never up past it.
++    for (const int limit : { 1024, 832, 831, 512, 63, 32 }) {
++        compiled_limit = limit;
++        const auto dispatch = ggml_metal_select_attention_reduction(nullptr, nullptr, 256, 32);
++        GGML_ASSERT(compiled_partials == 32);
++        GGML_ASSERT(dispatch.nsg*32 <= limit);
++        GGML_ASSERT(dispatch.nsg > 0);
++        if (limit == 1024) {
++            GGML_ASSERT(dispatch.nsg == 32);
++        }
++        if (limit == 832) {
++            GGML_ASSERT(dispatch.nsg == 26);
++        }
++        for (const int head_values : { 16, 32, 64, 128 }) {
++            std::array<int, 128> writes = {};
++            for (int group = 0; group < dispatch.nsg; ++group) {
++                for (int value = group; value < head_values; value += dispatch.nsg) {
++                    ++writes[value];
++                }
++            }
++            for (int value = 0; value < head_values; ++value) {
++                GGML_ASSERT(writes[value] == 1);
++            }
++        }
++    }
++    return 0;
++}
+-- 
+2.56.0
+

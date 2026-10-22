@@ -750,3 +750,72 @@ Also run what applies:
 Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
+
+## Repository-owned Jianyang AgentX
+
+`skippy/evals/agentx/templates.yaml` owns Jianyang repository jobs. AgentX orchestration belongs
+in typed Rust automation, with thin Just build/run recipes and a locked upstream
+harness environment under `skippy/evals/agentx`. Local-corpus `submission_valid=false` describes upstream leaderboard eligibility,
+not JY visibility. Emit standard JY serving points through registered repository
+templates. Separate engine and profile template keys prevent mixed-engine series
+and smoke/full comparisons. PR results remain provisional in JY's existing view.
+Default-serving concurrency sweeps vary offered sessions independently of the
+automatically planned context and Skippy parallelism. Record native allocation
+evidence separately from offered load; do not silently truncate traces to fit.
+Smoke must exercise the concurrent path before full sweeps. Changes to serving
+capacity require a new harness version rather than mixing queue-only results.
+Benchmark engines and the harness execute inside the same ARM64 CUDA container
+on the JY-leased Spark. The host may build the image and lifecycle controller,
+but must not run benchmark cells natively. Record the immutable image ID and
+source label, bind the host's existing `HF_HOME` at the same container path for
+standard HF cache reuse (never a separate weight download directory), mount
+JY artifacts, and remove the owned
+container on success, failure, timeout, and cancellation. An in-container hard
+deadline bounds work even if the host controller disappears.
+Before the Mesh PR merges, register the AgentX blocks through a configuration-only
+change to the current template source, then sync and use `jy repos run` at the
+immutable PR source. Keep unrelated jobs and the production default ref intact.
+Move the source registration to Mesh after merge.
+
+AgentX sweeps 1, 2 and 4 offered sessions per engine job with automatic
+context on both engines and automatic Skippy parallelism; llama slots match offered sessions.
+Smoke version 8 uses upstream `--burst-phase-starts` so every lane's first
+profiling request is eligible inside its 60-second sending window. Subsequent
+recorded inter-turn delays remain intact. Full benchmark version 7 preserves
+upstream phase-start spacing. Keep these workload versions separate.
+Repeated comparisons order whole engine jobs ABBAAB on the same Spark. Preserve
+complete traces, exclude drain cancellations from serving points, retain failed
+cells, and continue only after confirmed child cleanup. Cache inputs are offline.
+
+AgentX smoke version 8 and full benchmark version 7 apply the same upstream
+`--max-context-length 131072` filter to both engines before selecting traces.
+AgentX excludes a whole trace if any parent or subagent turn's recorded input
+plus requested output exceeds the limit (zero recorded output reserves one token).
+No retained requests, outputs, or subagent topology are truncated. The root
+`cohort.json` records every source trace's peak, digest, and eligibility; each
+cell records the selected cohort digest and excluded count. This is a common
+recorded-token budget, not a server-context override or a rendered chat-template
+token guarantee. Unexpected wire overflows still invalidate a cell. Compare
+only matching cohort digests and completed raw trace/turn sets. Older workload
+versions remain separate. Skippy keeps its automatic planner and 128K cap.
+
+AgentX smoke 8 and full 7 pin the MeshLLM AgentX 1.0.12.post1 fork, based on
+upstream 1.0.12 with late-return drain fixes at commit
+`8a37952a686d9fe49a2c7376b5b965e8f6480cc9`. The locked wheel is built with the
+upstream release builder and verified by SHA-256. Upstream PR #50 retires timers
+already pending at cutoff; the fork also retires delayed children and join timers
+created by later responses. In-flight requests drain normally and immediate DAG
+children retain the issuer's admission checks. Both engines use the same fork,
+whole-trace filter and recorded timing. No inter-turn delay cap is added.
+Earlier harness versions remain separate.
+
+The standalone `comparison` profile (`agentx-1.0.12.post1-local-comparison-1`)
+replays four pinned complete traces once per cell, with no dispatch duration,
+request cutoff or accelerated warmup. It uses an explicit local AgentX config
+and four root sessions, preserving child work and recorded think times. Its
+69 source requests must produce exactly 18,713 output tokens. Before publishing
+throughput, Rust checks each source trace/outer/inner turn against the expected
+output count, rejecting missing, duplicated, failed, cancelled or shortened
+work. A safety deadline fails an incomplete cell; it never supplies a comparable
+partial result. Run ABBAAB on one host at c=1/2/4, separately from smoke/full
+workload versions. Standalone artifact jobs need no template registration change.

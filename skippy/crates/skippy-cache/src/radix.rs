@@ -352,12 +352,30 @@ impl<R, E> UnifiedRadixCache<R, E> {
 
     pub fn evict_lru_recurrent(&mut self) -> Option<RadixEviction<E>> {
         let victim = self.lru_victim(ComponentKind::KvRecurrent)?;
-        let value = self.remove_recurrent(&victim.namespace, &victim.tokens)?;
+        self.evict_recurrent_candidate(&victim.namespace, &victim.tokens)
+    }
+
+    /// Remove one unreferenced recurrent entry selected by a capacity policy.
+    /// The active-reference check and deletion share the caller's radix lock.
+    pub fn evict_recurrent_candidate(
+        &mut self,
+        namespace: &str,
+        tokens: &[i32],
+    ) -> Option<RadixEviction<E>> {
+        let entry = node_at(self.roots.get(namespace)?, tokens)?
+            .components
+            .recurrent
+            .as_ref()?;
+        if entry.active_refs > 0 {
+            return None;
+        }
+        let logical_bytes = entry.logical_bytes;
+        let value = self.remove_recurrent(namespace, tokens)?;
         self.recurrent_evictions = self.recurrent_evictions.saturating_add(1);
         Some(RadixEviction {
-            namespace: victim.namespace,
-            tokens: victim.tokens,
-            logical_bytes: victim.logical_bytes,
+            namespace: namespace.to_string(),
+            tokens: tokens.to_vec(),
+            logical_bytes,
             value,
         })
     }
@@ -522,6 +540,20 @@ impl<R: Clone, E> UnifiedRadixCache<R, E> {
 }
 
 impl<R, E: Clone> UnifiedRadixCache<R, E> {
+    /// Snapshot unreferenced recurrent entries without changing recency.
+    pub fn recurrent_eviction_candidates(&self) -> Vec<RadixEvictionCandidate<E>> {
+        let mut candidates = Vec::new();
+        for (namespace, root) in &self.roots {
+            collect_recurrent_eviction_candidates(
+                namespace,
+                root,
+                &mut Vec::new(),
+                &mut candidates,
+            );
+        }
+        candidates
+    }
+
     /// Find the recurrent prefix without changing recency or active references.
     /// Scheduler scans must not make merely considered entries look hot.
     pub fn peek_recurrent(&self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<E>> {
@@ -983,6 +1015,34 @@ fn collect_resident_eviction_candidates<R: Clone, E>(
     }
     for child in node.children.values() {
         collect_resident_eviction_candidates(namespace, child, path, candidates);
+    }
+    path.truncate(original_len);
+}
+
+fn collect_recurrent_eviction_candidates<R, E: Clone>(
+    namespace: &str,
+    node: &RadixNode<R, E>,
+    path: &mut Vec<i32>,
+    candidates: &mut Vec<RadixEvictionCandidate<E>>,
+) {
+    let original_len = path.len();
+    path.extend_from_slice(&node.edge);
+    if let Some(entry) = node
+        .components
+        .recurrent
+        .as_ref()
+        .filter(|entry| entry.active_refs == 0)
+    {
+        candidates.push(RadixEvictionCandidate {
+            namespace: namespace.to_string(),
+            tokens: path.clone(),
+            logical_bytes: entry.logical_bytes,
+            last_used: entry.last_used,
+            value: entry.value.clone(),
+        });
+    }
+    for child in node.children.values() {
+        collect_recurrent_eviction_candidates(namespace, child, path, candidates);
     }
     path.truncate(original_len);
 }

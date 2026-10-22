@@ -1,7 +1,7 @@
-From deffabcb3b09a6fa9eb136aafb7af2399d34ae7f Mon Sep 17 00:00:00 2001
+From ddca5f3e984002a90fd3d00adac06ffbc989b3ec Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 18:30:01 +1000
-Subject: [PATCH 1/6] models: add inkling family support
+Subject: [PATCH] models: add inkling family support
 
 ---
  common/chat.cpp                     |   8 +
@@ -15,6 +15,7 @@ Subject: [PATCH 1/6] models: add inkling family support
  src/llama-graph.cpp                 |  21 +-
  src/llama-hparams.cpp               |   2 +-
  src/llama-hparams.h                 |  10 +-
+ src/llama-kv-cache.cpp              |  16 +-
  src/llama-kv-cache.h                |   5 +
  src/llama-model-saver.cpp           |   1 +
  src/llama-model.cpp                 |  14 +
@@ -39,7 +40,7 @@ Subject: [PATCH 1/6] models: add inkling family support
  tools/mtmd/mtmd-image.cpp           |  72 +++
  tools/mtmd/mtmd-image.h             |  20 +
  tools/mtmd/mtmd.cpp                 |  37 +-
- 35 files changed, 2070 insertions(+), 22 deletions(-)
+ 36 files changed, 2080 insertions(+), 28 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
  create mode 100644 models/templates/Inkling.jinja
  create mode 100644 src/models/inkling.cpp
@@ -836,7 +837,7 @@ index d822d6d76..fe46aa888 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index b966f8ccd..56390f221 100644
+index d69181c29..3a0b01b55 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -272,6 +272,12 @@ llama_context::llama_context(
@@ -853,10 +854,10 @@ index b966f8ccd..56390f221 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index ec6e4d075..569b27022 100644
+index b93a0ec14..9d3b02d42 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3401,9 +3401,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3402,9 +3402,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -921,22 +922,68 @@ index a7c608537..bc30ead2f 100644
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 741d0ef30..ba2f19cb7 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -2702,7 +2702,10 @@ void llama_kv_cache::set_input_k_shift(ggml_tensor * dst) const {
+     }
+ }
+ 
+-void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
++void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor *        dst,
++                                            const llama_ubatch * ubatch,
++                                            uint32_t             extent,
++                                            uint32_t             kv_begin) const {
+     const int64_t n_tokens = ubatch->n_tokens;
+ 
+     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+@@ -2722,15 +2725,16 @@ void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatc
+ 
+         for (int64_t j = 0; j < n_kv; ++j) {
+             // use the ACTUAL absolute position in the KV cell; physical slot order is not monotonic
+-            int32_t rel = (int32_t) extent; // zero-bias column
+-            if (!cells.is_empty(j)) {
+-                const llama_pos d = p1 - cells.pos_get(j);
++            int32_t        rel  = (int32_t) extent;  // zero-bias column
++            const uint32_t cell = kv_begin + j;
++            if (!cells.is_empty(cell)) {
++                const llama_pos d = p1 - cells.pos_get(cell);
+                 if (d >= 0 && d < (llama_pos) extent) {
+                     rel = (int32_t) d;
+                 }
+             }
+ 
+-            data[i*n_kv + j] = (int32_t) (i*(extent + 1)) + rel;
++            data[i * n_kv + j] = (int32_t) (i * (extent + 1)) + rel;
+         }
+     }
+ }
+@@ -3999,7 +4003,7 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
+ }
+ 
+ void llama_kv_cache_context::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
+-    kv->set_input_pos_rel_flat(dst, ubatch, extent);
++    kv->set_input_pos_rel_flat(dst, ubatch, extent, get_kv_begin());
+ }
+ 
+ void llama_kv_cache_context::set_input_k_rot(ggml_tensor * dst) const {
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 80edf6865..021fdfe2e 100644
+index 611c1379d..7193ad270 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
-@@ -287,6 +287,10 @@ public:
-     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
-     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+@@ -292,6 +292,10 @@ public:
+     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, uint32_t kv_begin = 0) const;
+     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t kv_begin = 0) const;
  
 +    // inkling: fill dst I32 [n_kv, n_tokens] with flat rel-bias gather indices,
 +    // idx(i, j) = i*(extent + 1) + rel; empty/out-of-band cells map to the zero-bias column `extent`
-+    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const;
++    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent, uint32_t kv_begin = 0) const;
 +
      void set_input_k_rot(ggml_tensor * dst) const;
      void set_input_v_rot(ggml_tensor * dst) const;
  
-@@ -504,6 +508,7 @@ public:
+@@ -511,6 +515,7 @@ public:
      void set_input_k_shift   (ggml_tensor * dst) const;
      void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
      void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
@@ -1809,7 +1856,7 @@ index a80d7970e..7b454ba00 100644
      ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens
                            : (model.tok_embd          ? model.tok_embd
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 3d15111fb..258c86143 100644
+index 7f55c0d88..5ab739c9d 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
 @@ -7,6 +7,7 @@
@@ -1863,7 +1910,7 @@ index 3d15111fb..258c86143 100644
      llama_context * ctx;
      uint32_t depth_count;
  };
-@@ -101,8 +124,12 @@ void skippy_mtp_clear_session_state(skippy_session * session) {
+@@ -175,8 +198,12 @@ void skippy_mtp_trim_session_state(skippy_session * session, llama_pos token_cou
  static bool skippy_mtp_shares_target_memory(
          const llama_context * mtp_ctx,
          const llama_context * target_ctx) {
@@ -1878,7 +1925,7 @@ index 3d15111fb..258c86143 100644
  }
  
  enum skippy_status skippy_mtp_sync_target_inputs(
-@@ -126,7 +153,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -200,7 +227,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
      skippy_mtp_depth_scope mtp_depth_scope(mtp_ctx);
      const bool mtp_shares_target_memory = skippy_mtp_shares_target_memory(mtp_ctx, session->ctx);
      const bool chain_heads = mtp_depth_scope.chains_heads();
@@ -1887,7 +1934,7 @@ index 3d15111fb..258c86143 100644
      // MTP consumes complete pre-norm output rows, which can be wider than
      // token embeddings (for example DeepSeek4 hyperconnections).
      const int32_t n_hidden = llama_model_n_embd_out(session->stage_model->model);
-@@ -340,9 +367,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -416,9 +443,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
  }
  
  int skippy_external_decode_observe(llama_context * ctx, const llama_batch & batch) {
@@ -1946,7 +1993,7 @@ index 3d15111fb..258c86143 100644
  }
  
  skippy_graph_build_inputs skippy_external_decode_build_inputs(llama_context * ctx) {
-@@ -393,7 +466,7 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -469,7 +542,7 @@ enum skippy_status skippy_mtp_propose_next(
              max_draft_tokens,
              SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS);
      const bool chain_heads = mtp_depth_scope.chains_heads();
@@ -2096,10 +2143,10 @@ index bff571609..c6be5a10a 100644
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index ef56c4c61..e791fcaf9 100644
+index 56fbaa548..18257fb2e 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -936,6 +936,10 @@ static bool arch_supported(const llm_arch arch) {
+@@ -937,6 +937,10 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -2737,5 +2784,5 @@ index 2fa02f83e..ef113a3a0 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.55.0
+2.56.0
 

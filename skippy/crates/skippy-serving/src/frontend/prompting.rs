@@ -37,10 +37,9 @@ struct RenderedChatPrompt {
 impl StageOpenAiBackend {
     /// Offload [`Self::prepare_chat_prompt`] to a blocking thread.
     ///
-    /// Template rendering takes the runtime mutex and runs the template
-    /// engine synchronously (FFI). Under a connect burst (e.g. a c256
-    /// benchmark wave) running that on tokio workers starves the accept
-    /// task: every worker blocks on the mutex or renders while SYNs pile
+    /// Template rendering runs synchronously (FFI). Under a connect burst
+    /// (e.g. a c256 benchmark wave), running it on tokio workers starves
+    /// the accept task: every worker renders while SYNs pile
     /// up behind the listen backlog. Moving it to the blocking pool keeps
     /// the async workers (and therefore the accept loop) responsive. This
     /// mirrors the `spawn_blocking` already used for prompt tokenization.
@@ -63,13 +62,10 @@ impl StageOpenAiBackend {
         request: &ChatCompletionRequest,
         options: ChatTemplateOptions,
     ) -> InferenceResult<PreparedGenerationPrompt> {
-        let marker = {
-            let runtime = lock_runtime(&self.runtime);
-            runtime.media_marker()
-        };
+        let marker = self.prompt_media_marker();
 
         // Native path: render with tools and use the template's own metadata.
-        let native = self.render_chat_prompt(request, &options, &marker, None, true)?;
+        let native = self.render_chat_prompt(request, &options, marker, None, true)?;
 
         // If the request carries tools but the template does not support native
         // tool calling, re-render with server-side tool-call emulation: strip
@@ -84,7 +80,7 @@ impl StageOpenAiBackend {
             let rewritten =
                 tool_emulation::rewrite_history_for_emulation(&request.messages, &instruction);
             let emulated =
-                self.render_chat_prompt(request, &options, &marker, Some(&rewritten), false)?;
+                self.render_chat_prompt(request, &options, marker, Some(&rewritten), false)?;
             let recurrent_cache_prefix_text = if self
                 .kv
                 .as_ref()
@@ -94,7 +90,7 @@ impl StageOpenAiBackend {
             {
                 let mut prefix_options = options.clone();
                 prefix_options.add_assistant = false;
-                self.render_chat_prompt(request, &prefix_options, &marker, Some(&rewritten), false)
+                self.render_chat_prompt(request, &prefix_options, marker, Some(&rewritten), false)
                     .ok()
                     .map(|rendered| rendered.prompt)
             } else {
@@ -117,7 +113,7 @@ impl StageOpenAiBackend {
         {
             let mut prefix_options = options.clone();
             prefix_options.add_assistant = false;
-            self.render_chat_prompt(request, &prefix_options, &marker, None, true)
+            self.render_chat_prompt(request, &prefix_options, marker, None, true)
                 .ok()
                 .map(|rendered| rendered.prompt)
         } else {
@@ -175,10 +171,9 @@ impl StageOpenAiBackend {
         } else {
             None
         };
-        // Short-lock reader pattern: clone the immutable reader and run the
-        // template FFI on it, so template rendering never waits behind
-        // decode's hold of the runtime mutex (and vice versa).
-        let reader = lock_runtime(&self.runtime).model.reader();
+        // The cached immutable reader does not acquire the inference mutex.
+        // Even a brief acquisition can starve behind continuous decode.
+        let reader = self.prompt_model_reader();
         let result = reader
             .apply_chat_template_json(
                 &messages_json,
@@ -229,7 +224,7 @@ impl StageOpenAiBackend {
             }));
         }
 
-        let model = lock_runtime(&self.runtime).model.reader();
+        let model = self.prompt_model_reader();
         self.parse_chat_output_with_reader(&model, text, request, metadata, is_partial)
     }
 
@@ -269,11 +264,9 @@ impl StageOpenAiBackend {
         text: &str,
         add_special: bool,
     ) -> InferenceResult<Vec<i32>> {
-        // Hold the inference mutex only long enough to clone the immutable
-        // reader; the tokenizer FFI runs on the reader, so decode can hold
-        // the runtime lock concurrently without serializing tokenization
-        // behind it (see render_chat_prompt for the same pattern).
-        let reader = lock_runtime(&self.runtime).model.reader();
+        // Tokenization reads immutable vocabulary without entering the
+        // inference context's mutex, including when cloning the reader.
+        let reader = self.prompt_model_reader();
         reader
             .tokenize(text, add_special)
             .map_err(openai_backend_error)

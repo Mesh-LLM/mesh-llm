@@ -4,6 +4,7 @@ use anyhow::{Result, anyhow};
 
 mod blob_store;
 pub(super) mod bytes;
+mod reconstruction;
 
 pub use blob_store::{CacheBlobStore, CacheDedupeStats};
 pub use bytes::{CacheBytes, CacheBytesReconstructStats};

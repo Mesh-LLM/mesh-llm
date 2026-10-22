@@ -1,6 +1,10 @@
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageKvCacheCodec};
 
-pub const NATIVE_KV_RUNTIME_ABI_VERSION: &str = "stage-abi-0.1.52/native-kv-page-v3";
+// ABI 73 separates the cache-side recurrent payload from complete checkpoints.
+// Invalidate older L2/L3 entries rather than importing their complete state as
+// a recurrent-only side payload beside independently restored attention pages.
+pub const NATIVE_KV_RUNTIME_ABI_VERSION: &str =
+    "stage-abi-0.1.73/native-kv-page-v3/recurrent-cache-v1";
 pub const NATIVE_KV_DTYPE: &str = "ggml-native-kv";
 const NATIVE_KV_LAYER_CONTIGUOUS_LAYOUT: i32 = 4;
 

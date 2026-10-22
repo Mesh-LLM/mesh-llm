@@ -100,6 +100,7 @@ impl RuntimeState {
     /// release, so dropping the lane is safer than allowing a dirty session to
     /// be reused by a cache-off fallback.
     fn force_discard_session(&mut self, session_id: &str) {
+        self.resident_recurrent_requests.remove(session_id);
         if let Some(lane_session) = self.sessions.remove(session_id) {
             let lane_index = lane_session.index;
             drop(lane_session);

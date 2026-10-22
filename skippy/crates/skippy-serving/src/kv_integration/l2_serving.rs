@@ -290,7 +290,7 @@ impl KvStageIntegration {
                     if recurrent.is_empty() {
                         runtime.set_session_position(session_id, token_count)?;
                     } else {
-                        runtime.import_recurrent_state_for_token_count(
+                        runtime.import_recurrent_cache_state_for_token_count(
                             session_id,
                             recurrent.as_ref(),
                             token_count,

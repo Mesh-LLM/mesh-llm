@@ -1,0 +1,7 @@
+# Source-matched AgentX hybrid-dense comparison
+
+These charts show the completed [Metal](https://pilot.jianyang.cloud/jobs/job_gvsg9p4za04gjhj) and [CUDA](https://pilot.jianyang.cloud/jobs/job_j2ragfvg86fc06x) Qwen3.5-4B Q4_K_M jobs. Both used Mesh source `853836f49`, the AgentX post2 harness, one fixed 69-request cohort, 18,713 output tokens per cell, 128K context per llama slot, Skippy's 128K planning cap, and ABBAAB order at c1/c2/c4. All 18 cells in each job completed without errors and have the same completed-work hash (`6880ae208381ea0edffcf9ccedc28423948536f70d40a5a5160aa39fc915dff7`).
+
+Each plotted throughput, decode, or TTFT value is the median of three engine/concurrency repetitions; error bars span the observed minimum and maximum. Decode is derived as `1000 / median inter-token latency in milliseconds` within each repetition. Peak process RSS is the maximum of the three sampled peaks; it is **not** isolated GPU residency. Metal RSS includes unified memory; CUDA RSS is host process memory. Aggregate throughput includes AgentX's recorded think time.
+
+The Vega-Lite v6 specifications and machine-readable summaries are retained beside the rendered PNGs. `vl2svg` from `vega-cli@6.4.0` and `sharp@0.35.5` rendered the images. The source metrics and request-level artifacts remain in the linked JY jobs. These charts qualify source `853836f49`, before the subsequent cache and CUDA kernel candidates.

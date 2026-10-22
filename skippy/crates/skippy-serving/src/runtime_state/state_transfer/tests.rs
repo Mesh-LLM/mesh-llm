@@ -49,10 +49,14 @@ fn export_and_import_wrappers_on_a_lane_exhausted_runtime_notify_nothing() {
             .import_state_for_token_count("never-existed", &[], 0)
             .is_err()
     );
-    assert!(runtime.export_recurrent_state("never-existed").is_err());
     assert!(
         runtime
-            .import_recurrent_state_for_token_count("never-existed", &[], 0)
+            .export_recurrent_cache_state("never-existed")
+            .is_err()
+    );
+    assert!(
+        runtime
+            .import_recurrent_cache_state_for_token_count("never-existed", &[], 0)
             .is_err()
     );
 
