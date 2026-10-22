@@ -421,7 +421,7 @@ fi
 
 WHISPER_PIN=""
 if [[ "$SKIPPY_SPEECH_RECOGNITION" == "ON" ]]; then
-  WHISPER_PIN="$(tr -d '[:space:]' < "$ROOT/skippy/whisper_cpp/upstream.txt")"
+  WHISPER_PIN="$(tr -d '[:space:]' < "$ROOT/skippy/llama_cpp/whisper-upstream.txt")"
   CMAKE_ARGS+=(-DSKIPPY_WHISPER_SOURCE_DIR="$WHISPER_WORKDIR")
 fi
 

@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 WHISPER_UPSTREAM_URL="${WHISPER_UPSTREAM_URL:-https://github.com/ggml-org/whisper.cpp.git}"
 WHISPER_WORKDIR="${WHISPER_WORKDIR:-$ROOT/.deps/whisper.cpp}"
-PIN_FILE="${WHISPER_PIN_FILE:-$ROOT/skippy/whisper_cpp/upstream.txt}"
+PIN_FILE="${WHISPER_PIN_FILE:-$ROOT/skippy/llama_cpp/whisper-upstream.txt}"
 
 if [[ ! -f "$PIN_FILE" ]]; then
   echo "missing whisper.cpp upstream pin: $PIN_FILE" >&2
