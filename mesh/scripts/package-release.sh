@@ -510,8 +510,10 @@ copy_and_verify_precomposed_product() {
 # MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR names a directory that already holds the
 # archives, for offline or local runs; they are checked against the pins all
 # the same. A missing archive or a digest mismatch fails the release. The
-# bundle's own host must then install every placed archive as a default; it
-# runs on this machine, as verify_mesh_binary_version already requires.
+# bundle's own host must then install every placed archive as a default and
+# report no default it pins for this platform as missing, even when nothing
+# was listed; it runs on this machine, as verify_mesh_binary_version already
+# requires.
 place_bundled_plugins() {
     local bundle_dir="$1"
     local target="$2"
@@ -532,32 +534,35 @@ place_bundled_plugins() {
             --defaults "$REPO_ROOT/mesh/crates/mesh-llm-plugin-manager/src/defaults.rs"
     )"
     if [[ -z "$pins" ]]; then
+        # No plugins/ at all, not an empty one; the check below still asks
+        # the host whether it pins a default for this platform.
         echo "No default plugin is pinned for $target; bundling none"
-        return 0
-    fi
-    mkdir -p "$plugins_dir"
-    while read -r name version pinned_sha256 url; do
-        archive_name="$name-$version-$target.tar.gz"
-        archive="$plugins_dir/$archive_name"
-        if [[ -n "$input_dir" ]]; then
-            if [[ ! -f "$input_dir/$archive_name" ]]; then
-                echo "Bundled plugin archive is missing: $input_dir/$archive_name" >&2
+    else
+        mkdir -p "$plugins_dir"
+        while read -r name version pinned_sha256 url; do
+            archive_name="$name-$version-$target.tar.gz"
+            archive="$plugins_dir/$archive_name"
+            if [[ -n "$input_dir" ]]; then
+                if [[ ! -f "$input_dir/$archive_name" ]]; then
+                    echo "Bundled plugin archive is missing: $input_dir/$archive_name" >&2
+                    exit 1
+                fi
+                cp "$input_dir/$archive_name" "$archive"
+            elif ! curl --fail --location --silent --show-error \
+                --proto '=https' --proto-redir '=https' \
+                --retry 3 --retry-delay 2 --connect-timeout 30 \
+                --output "$archive" "$url"; then
+                echo "Could not download bundled plugin archive $url" >&2
                 exit 1
             fi
-            cp "$input_dir/$archive_name" "$archive"
-        elif ! curl --fail --location --silent --show-error \
-            --retry 3 --retry-delay 2 --connect-timeout 30 \
-            --output "$archive" "$url"; then
-            echo "Could not download bundled plugin archive $url" >&2
-            exit 1
-        fi
-        actual_sha256="$(sha256_hex "$archive")"
-        if [[ "$actual_sha256" != "$pinned_sha256" ]]; then
-            echo "Bundled plugin archive $archive_name is $actual_sha256, not the pinned $pinned_sha256" >&2
-            exit 1
-        fi
-        echo "Bundled default plugin $name $version ($archive_name)"
-    done <<< "$pins"
+            actual_sha256="$(sha256_hex "$archive")"
+            if [[ "$actual_sha256" != "$pinned_sha256" ]]; then
+                echo "Bundled plugin archive $archive_name is $actual_sha256, not the pinned $pinned_sha256" >&2
+                exit 1
+            fi
+            echo "Bundled default plugin $name $version ($archive_name)"
+        done <<< "$pins"
+    fi
     mesh_automation repository bundled-plugins-check --bundle "$bundle_dir"
 }
 

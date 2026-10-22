@@ -275,7 +275,8 @@ fn package_release_adapter_preserves_explicit_host_directory_and_prestamp_public
 /// from `MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR`, checked against its pin, placed
 /// under `plugins/`, and the bundle's (stand-in) host must install it. A
 /// tampered or missing archive fails before anything is installed, and a
-/// target with no pin bundles nothing.
+/// target with no pin bundles nothing, but still fails when the host pins a
+/// default there that the bundle lacks.
 #[test]
 fn package_release_adapter_places_pinned_plugin_archives_and_refuses_others() {
     const TARGET: &str = "x86_64-unknown-linux-gnu";
@@ -302,7 +303,13 @@ fn package_release_adapter_places_pinned_plugin_archives_and_refuses_others() {
         &bundle.join("mesh-llm"),
         r#"#!/bin/sh
 [ "$*" = '--log-format json plugins install-defaults' ] || exit 98
-for a in "$(dirname "$0")"/plugins/*.tar.gz; do
+[ "$MESH_LLM_INTERNAL_HELPER" = 1 ] || exit 97
+here="$(dirname "$0")"
+if [ -f "$here/host-pins-notes-here" ] && ! ls "$here"/plugins/notes-*.tar.gz >/dev/null 2>&1; then
+  echo "Default notes not installed: this install carries no bundled copy of it" >&2
+fi
+for a in "$here"/plugins/*.tar.gz; do
+  [ -f "$a" ] || continue
   n=$(basename "$a"); mkdir -p "$MESH_LLM_PLUGIN_DIR/${n%%-*}"
   printf '{"downloaded_asset_name":"%s","enabled":true,"default_managed":true}' "$n" \
     > "$MESH_LLM_PLUGIN_DIR/${n%%-*}/plugin-install.json"
@@ -328,7 +335,21 @@ done
     let unpinned = place("aarch64-apple-darwin");
     assert!(unpinned.process.success(), "{}", stderr(&unpinned));
     assert!(stdout(&unpinned).contains("bundling none"));
+    assert!(stdout(&unpinned).contains("pins no default plugin for this platform"));
     assert!(!bundle.join("plugins").exists());
+
+    // The host pins notes for this platform although the list read here does
+    // not: nothing was placed, and the check still fails.
+    let host_pins = bundle.join("host-pins-notes-here");
+    fs::write(&host_pins, b"").unwrap();
+    let diverged = place("aarch64-apple-darwin");
+    assert!(!diverged.process.success());
+    assert!(
+        stderr(&diverged).contains("that the bundle does not carry"),
+        "{}",
+        stderr(&diverged)
+    );
+    fs::remove_file(&host_pins).unwrap();
 
     let missing = place(TARGET);
     assert!(!missing.process.success());
