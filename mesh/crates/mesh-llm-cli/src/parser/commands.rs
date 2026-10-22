@@ -1097,7 +1097,7 @@ pub enum Command {
     },
     /// Run a one-shot agent on the mesh with a shell tool and skills.
     ///
-    /// If no mesh is running on --port, this auto-joins the mesh as a client.
+    /// Needs a mesh-llm node already running on --port; it never starts one.
     #[command(name = "agent")]
     Agent {
         /// Instructions for the agent. Use - to read them from stdin.

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use mesh_llm_agent::{AgentOptions, AgentUpdate};
 
-use super::check_mesh;
+use super::model_inventory::ModelInventory;
 
 pub struct MeshAgentArgs {
     pub text: String,
@@ -36,18 +36,7 @@ pub async fn run(args: MeshAgentArgs) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
-    let (models, model, mut mesh_child) = check_mesh(&client, args.port, None, &args.model).await?;
-    // With no --model, ask for the `mesh` virtual model so routing picks a
-    // target that can fit the request, instead of a name-matched guess.
-    let model = if args.model.is_none() && models.names.iter().any(|name| name == "mesh") {
-        let _ = writeln!(
-            mesh_llm_events::console_err(),
-            "   Using: mesh (routing picks the target)"
-        );
-        "mesh".to_string()
-    } else {
-        model
-    };
+    let model = pick_model(&client, args.port, args.model.as_deref()).await?;
 
     let options = AgentOptions {
         base_url: format!("http://127.0.0.1:{}", args.port),
@@ -63,14 +52,50 @@ pub async fn run(args: MeshAgentArgs) -> Result<()> {
     })
     .await;
 
-    if let Some(child) = mesh_child.as_mut() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
     let outcome = outcome?;
     let mut out = mesh_llm_events::console_out();
     writeln!(out, "{}", outcome.final_text.trim())?;
     Ok(())
+}
+
+/// Use the mesh-llm node already running on `port`; never start one.
+/// With no `--model`, ask for the `mesh` virtual model so routing picks a
+/// target that can fit the request.
+async fn pick_model(
+    client: &reqwest::Client,
+    port: u16,
+    requested: Option<&str>,
+) -> Result<String> {
+    let url = format!("http://127.0.0.1:{port}/v1/models");
+    let body: serde_json::Value = client
+        .get(&url)
+        .send()
+        .await
+        .and_then(|resp| resp.error_for_status())
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "no mesh-llm API on port {port}. Start one first \
+                 (e.g. `mesh-llm client --auto`), or pass --port"
+            )
+        })?
+        .json()
+        .await
+        .context("reading /v1/models")?;
+    let names = ModelInventory::from_response(&body).names;
+    let model = match requested {
+        Some(model) if names.iter().any(|name| name == model) => model.to_string(),
+        Some(model) => anyhow::bail!(
+            "model '{model}' not available on port {port}. Available: {}",
+            names.join(", ")
+        ),
+        None if names.iter().any(|name| name == "mesh") => "mesh".to_string(),
+        None => names
+            .first()
+            .cloned()
+            .with_context(|| format!("mesh-llm on port {port} has no models yet"))?,
+    };
+    let _ = writeln!(mesh_llm_events::console_err(), "   Using: {model}");
+    Ok(model)
 }
 
 fn progress(update: AgentUpdate) {

@@ -35,7 +35,7 @@ echo "Summarise what this repo does" | mesh-llm agent -t -
 mesh-llm agent --model <id from /v1/models> --cwd ./project -t "..."
 ```
 
-- Like `goose`, it reuses a local mesh on `--port` (default 9337). If no node is running there, it starts a client and stops it on exit.
+- It needs a mesh-llm node already running on `--port` (default 9337), for example `mesh-llm client --auto`. It never starts one itself.
 - If `--model` is omitted, it uses the `mesh` virtual model, so routing picks a target that can fit the request.
 - Progress goes to stderr. The final answer goes to stdout, and `-q` silences progress.
 - `--max-turns` (default 30) bounds the run.
