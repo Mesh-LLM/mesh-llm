@@ -15,7 +15,7 @@ its runtime-probed workload class for safe routing.
 | OCR | `POST /v1/chat/completions` or `POST /v1/responses` with an image input | Causal trunk and projector colocated on one node |
 | Speech synthesis | `POST /v1/audio/speech` | Unsplit local full model and projector |
 | Speech recognition / translation | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | Causal trunk and audio projector colocated on one node |
-| Speech recognition (Whisper) | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | Unsplit local whisper.cpp model |
+| Speech recognition (Whisper) | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations`, `GET /v1/realtime` (live) | Unsplit local whisper.cpp model |
 | Laya decision (encoder + decision head) | `POST /systemone` | Unsplit local full model; see [the OpenJEV runbook](design/OPENJEV_SKIPPY_POC.md#laya-backend) |
 
 Embedding, rerank, encoder-decoder, and speech-synthesis workloads do not
@@ -159,6 +159,34 @@ curl -sS http://127.0.0.1:9337/v1/audio/transcriptions \
   -F file=@recording.wav \
   -F response_format=srt
 ```
+
+### Live transcription
+
+`GET /v1/realtime` opens a websocket in OpenAI's realtime transcription
+protocol. Send 16-bit little-endian mono PCM (24 kHz unless the session sets
+another rate) as base64 `input_audio_buffer.append` events or as binary
+frames. Text arrives as `conversation.item.input_audio_transcription.delta`
+while you speak and as `.completed` when the turn ends:
+
+```text
+ws://127.0.0.1:9337/v1/realtime?model=ggerganov/whisper.cpp:ggml-large-v3-turbo-q5_0.bin
+→ {"type":"session.update","session":{"type":"transcription","audio":{"input":{"format":{"type":"audio/pcm","rate":16000}}}}}
+→ {"type":"input_audio_buffer.append","audio":"<base64 PCM>"}
+← {"type":"input_audio_buffer.speech_started", ...}
+← {"type":"conversation.item.input_audio_transcription.delta","delta":"And so", ...}
+← {"type":"conversation.item.input_audio_transcription.completed","transcript":"And so my fellow Americans!", ...}
+```
+
+Turns end on 500 ms of silence by default (`turn_detection` with
+`threshold`, `prefix_padding_ms`, and `silence_duration_ms`), or on
+`input_audio_buffer.commit` when `turn_detection` is `null`. A word is sent
+once two consecutive passes over the turn's audio agree on it, so deltas never
+change and trail speech by about one to two seconds.
+
+Any node can take the websocket. It relays the session to a node serving the
+model, preferring itself and then the peer with the lowest measured
+round-trip time, and the session stays on that host until it closes. If the
+host leaves, the session ends and the client reconnects.
 
 Uploads must be WAV, MP3, or FLAC. Each concurrent transcription holds its own
 decoder state; `MESH_LLM_SPEECH_LANES` (default 2) sets how many run at once,
