@@ -43,6 +43,43 @@ fn error_message(body: &Value) -> Option<String> {
     )
 }
 
+/// A freshly joined node can list a model before it has a route to its host
+/// (404 "no local or remote host"), and a busy peer can fail transiently
+/// (5xx, or an error inside a 200). Retry those a few times before giving up.
+const MAX_ATTEMPTS: u32 = 4;
+const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn is_retryable(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::NOT_FOUND || status.is_server_error() || status.is_success()
+}
+
+impl MeshProvider {
+    async fn post_once(&self, payload: &Value) -> Result<Value, (ProviderError, bool)> {
+        let response = self
+            .http
+            .post(&self.url)
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| (ProviderError::NetworkError(e.to_string()), true))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| (ProviderError::NetworkError(e.to_string()), true))?;
+        let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if let Some(message) = error_message(&body) {
+            let err = ProviderError::ServerError(format!("{status}: {message}"));
+            return Err((err, is_retryable(status)));
+        }
+        if !status.is_success() {
+            let err = ProviderError::ServerError(format!("{status}: {text}"));
+            return Err((err, is_retryable(status)));
+        }
+        Ok(body)
+    }
+}
+
 #[async_trait]
 impl Provider for MeshProvider {
     fn get_name(&self) -> &str {
@@ -65,25 +102,18 @@ impl Provider for MeshProvider {
             false,
         )
         .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
-        let response = self
-            .http
-            .post(&self.url)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| ProviderError::NetworkError(e.to_string()))?;
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| ProviderError::NetworkError(e.to_string()))?;
-        let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-        if let Some(message) = error_message(&body) {
-            return Err(ProviderError::ServerError(format!("{status}: {message}")));
-        }
-        if !status.is_success() {
-            return Err(ProviderError::ServerError(format!("{status}: {text}")));
-        }
+        let mut attempt = 0;
+        let body = loop {
+            attempt += 1;
+            match self.post_once(&payload).await {
+                Ok(body) => break body,
+                Err((err, retryable)) if retryable && attempt < MAX_ATTEMPTS => {
+                    tracing::warn!("mesh request failed (attempt {attempt}), retrying: {err}");
+                    tokio::time::sleep(RETRY_DELAY * attempt).await;
+                }
+                Err((err, _)) => return Err(err),
+            }
+        };
         let message =
             response_to_message(&body).map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
         let usage = body.get("usage").map(get_usage).unwrap_or_default();
