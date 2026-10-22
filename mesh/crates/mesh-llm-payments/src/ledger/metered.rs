@@ -4,8 +4,9 @@
 //! → `billed` (backend-reported usage priced at the admitted rates, deposit
 //! applied, remainder on one final invoice) or `abandoned` (no usage, no bill,
 //! no debt). There are no reservations, exposure sums or credits: the deposit
-//! is a flat 1 sat applied to the bill; every positive remainder has a 1 sat
-//! payment floor, and nothing is refunded or carried forward.
+//! is the operator's flat amount (default 1 sat) applied to the bill; every
+//! positive remainder is raised to the minimum payment, and nothing is
+//! refunded or carried forward.
 //!
 //! The deposit and final invoices live in `metered_invoices`
 //! ([`super::metered_invoices`]). A buyer is blocked only by [`STRIKE_LIMIT`]
@@ -26,7 +27,7 @@ pub const STRIKE_LIMIT: u64 = 3;
 const UNPAID_FINALS: &str =
     "SELECT COUNT(*) FROM metered_invoices WHERE peer=?1 AND kind='final' AND state='unpaid'";
 
-/// Admission inputs. The deposit is the flat minimum payment when
+/// Admission inputs. The deposit is the operator's admission deposit when
 /// `require_deposit`; the provider skips it for peers in its trust cache.
 #[derive(Clone, Copy, Debug)]
 pub struct MeteredRequest<'a> {
@@ -85,7 +86,7 @@ impl Ledger {
         } = *request;
         // Read before taking the connection: the settings read locks it too.
         let deposit = if require_deposit {
-            self.min_payment_msat()?
+            self.admission_deposit_msat()?
         } else {
             0
         };
@@ -238,7 +239,7 @@ impl Ledger {
     /// dispatches hears about it. If that reply is lost, the request is never
     /// dispatched and stays `admitted` until it is abandoned. Recovery never
     /// re-dispatches it, which is the safe direction. The buyer pays at most
-    /// the 1-sat deposit and receives no output.
+    /// the deposit and receives no output.
     pub fn metered_claim_dispatch(&self, id: &str, peer: &str) -> Result<bool> {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;

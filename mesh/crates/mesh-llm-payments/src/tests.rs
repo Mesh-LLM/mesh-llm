@@ -482,3 +482,77 @@ async fn min_payment_control_reads_defaults_sets_and_validates_offline() -> Resu
     assert_eq!(service.ledger.min_payment_msat()?, 5000);
     Ok(())
 }
+
+#[tokio::test]
+async fn admission_deposit_control_follows_the_minimum_until_set_and_never_drops_below_it()
+-> Result<()> {
+    use mesh_llm_payments_types::control::ControlCommand;
+    let dir = tempfile::tempdir()?;
+    let service = PaymentService::open(dir.path())?;
+    let read = service
+        .control(ControlCommand::AdmissionDeposit {
+            value_msat: None,
+            reset: false,
+        })
+        .await?;
+    assert_eq!(read["admission_deposit_msat"], 1000);
+    service.ledger.set_min_payment_msat(2000)?;
+    assert_eq!(
+        service.ledger.admission_deposit_msat()?,
+        2000,
+        "unset follows the minimum"
+    );
+    let set = service
+        .control(ControlCommand::AdmissionDeposit {
+            value_msat: Some(10_000),
+            reset: false,
+        })
+        .await?;
+    assert_eq!(set["admission_deposit_msat"], 10_000);
+    assert_eq!(
+        service.ledger.min_payment_msat()?,
+        2000,
+        "minimum unchanged"
+    );
+    for invalid in [0, 1999, 1_000_001] {
+        assert!(
+            service
+                .control(ControlCommand::AdmissionDeposit {
+                    value_msat: Some(invalid),
+                    reset: false,
+                })
+                .await
+                .is_err(),
+            "{invalid}"
+        );
+    }
+    // A minimum raised above a configured deposit raises the deposit with it.
+    service.ledger.set_min_payment_msat(20_000)?;
+    assert_eq!(service.ledger.admission_deposit_msat()?, 20_000);
+    // Reset follows the minimum again, below the deposit that was set.
+    service.ledger.set_min_payment_msat(3000)?;
+    assert_eq!(service.ledger.admission_deposit_msat()?, 10_000);
+    assert!(
+        service
+            .control(ControlCommand::AdmissionDeposit {
+                value_msat: Some(5000),
+                reset: true,
+            })
+            .await
+            .is_err(),
+        "set and reset together"
+    );
+    let reset = service
+        .control(ControlCommand::AdmissionDeposit {
+            value_msat: None,
+            reset: true,
+        })
+        .await?;
+    assert_eq!(reset["admission_deposit_msat"], 3000);
+    // A hand-edited value above the cap is refused on read, not quoted.
+    service
+        .ledger
+        .set_setting("admission_deposit_msat", "1000001")?;
+    assert!(service.ledger.admission_deposit_msat().is_err());
+    Ok(())
+}

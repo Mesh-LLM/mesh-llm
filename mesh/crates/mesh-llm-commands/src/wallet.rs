@@ -40,8 +40,8 @@ pub async fn run(command: &WalletCommand, port: u16, config: Option<&Path>) -> R
                 bail!(
                     "mesh-llm is not running on port {port}; wallet operations need the running \
                      node because only it owns the wallet plugin. Start `mesh-llm` and retry. \
-                     (ledger-only commands such as policy, pricing, min-payment, pending, \
-                     blocked, unblock and unpin work offline)"
+                     (ledger-only commands such as policy, pricing, min-payment, admission-deposit, \
+                     pending, blocked, unblock and unpin work offline)"
                 );
             }
             let directory = if let Some(config) = config {
@@ -127,6 +127,12 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                 .map(|sats| sats.checked_mul(1000).context("minimum payment overflow"))
                 .transpose()?,
         },
+        WalletCommand::AdmissionDeposit { sats, default } => ControlCommand::AdmissionDeposit {
+            value_msat: sats
+                .map(|sats| sats.checked_mul(1000).context("deposit overflow"))
+                .transpose()?,
+            reset: *default,
+        },
         WalletCommand::Pricing {
             model,
             input_msat_per_million,
@@ -204,6 +210,18 @@ mod tests {
         assert_eq!(
             serde_json::to_value(command)?,
             serde_json::json!({"command": "unpin"})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn admission_deposit_default_resets_the_set_deposit() -> Result<()> {
+        assert_eq!(
+            serde_json::to_value(control_command(&WalletCommand::AdmissionDeposit {
+                sats: None,
+                default: true,
+            })?)?,
+            serde_json::json!({"command": "admission_deposit", "value_msat": null, "reset": true})
         );
         Ok(())
     }
