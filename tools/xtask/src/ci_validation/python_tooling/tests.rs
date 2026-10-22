@@ -175,6 +175,27 @@ fn python_inside_executable_shell_heredoc_is_rejected() {
 }
 
 #[test]
+fn quoted_or_arithmetic_shift_does_not_open_a_heredoc() {
+    for opener in [
+        "echo \"usage: tool <<EOF\"",
+        "shift=$((1 << 2))",
+        "(( mask = 1 << 3 ))",
+    ] {
+        let (_temporary, root) = fixture();
+        write(
+            &root,
+            "scripts/new-check.sh",
+            &format!("{opener}\npython3 -m probe\nEOF\n2\n3\n"),
+        );
+        let error = check_fixture(&root).unwrap_err().to_string();
+        assert!(
+            error.contains("unreviewed Python tooling invocation"),
+            "{opener}: {error}"
+        );
+    }
+}
+
+#[test]
 fn python_text_in_cat_heredoc_remains_data() {
     let (_temporary, root) = fixture();
     write(

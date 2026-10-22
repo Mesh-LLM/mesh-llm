@@ -14,12 +14,18 @@ else
     printf '%s\n' "no packaged Skippy runtime found; run just skippy or set SKIPPY_RUNTIME_LIB" >&2
     exit 1
   fi
+  if ((${#runtime_libs[@]} > 1)); then
+    printf '%s\n' "multiple packaged Skippy runtimes found; set SKIPPY_RUNTIME_LIB to one of:" >&2
+    printf '  %s\n' "${runtime_libs[@]}" >&2
+    exit 1
+  fi
   lib="${runtime_libs[0]}"
 fi
 if [[ ! -d "$lib" ]]; then
   printf 'Skippy runtime library directory does not exist: %s\n' "$lib" >&2
   exit 1
 fi
+lib="$(cd "$lib" && pwd)"
 out="$root/target/debug/native-mtp-probes"
 mkdir -p "$out"
 for probe in mtp_parity_probe batch_invariance_probe margin_probe; do
