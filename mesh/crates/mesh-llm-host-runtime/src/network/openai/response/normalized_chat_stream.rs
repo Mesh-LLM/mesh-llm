@@ -70,6 +70,53 @@ async fn flush_pending_usage(
     Ok(())
 }
 
+/// Nothing is committed to the client yet: read the first SSE data frame so a
+/// backend that fails immediately (an OpenAI error body inside a 200 stream,
+/// e.g. `llama_decode failed`) is penalised and retried on another target
+/// instead of reaching the client as a "successful" response.
+async fn retry_error_first_frame<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    carry: &mut String,
+    retry_policy: ResponseRetryPolicy,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> Result<Option<RouteAttemptResult>> {
+    if !retry_policy.response_quality || !first_sse_data_frame_is_error(reader, carry).await? {
+        return Ok(None);
+    }
+    route_observer.stream_error("upstream_stream_error");
+    tracing::warn!("API proxy: upstream stream opened with an error frame before commit; retrying");
+    Ok(Some(RouteAttemptResult::RetryableUnavailable))
+}
+
+/// Read until the first SSE data frame is buffered in `carry` (or EOF) and
+/// report whether it is an OpenAI error body. Bounded so a slow first token
+/// cannot make the relay buffer without limit.
+async fn first_sse_data_frame_is_error<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    carry: &mut String,
+) -> Result<bool> {
+    const MAX_PREFIX_BYTES: usize = 64 * 1024;
+    loop {
+        let normalized = carry.replace("\r\n", "\n");
+        let mut rest = normalized.as_str();
+        while let Some(end) = rest.find("\n\n") {
+            if let Some(data) = frame_data(&rest[..end]) {
+                return Ok(data != "[DONE]" && sse_data_frame_is_openai_error(&data));
+            }
+            rest = &rest[end + 2..];
+        }
+        if carry.len() >= MAX_PREFIX_BYTES {
+            return Ok(false);
+        }
+        let mut chunk = [0u8; 8192];
+        let n = reader.read(&mut chunk).await?;
+        if n == 0 {
+            return Ok(false);
+        }
+        carry.push_str(&String::from_utf8_lossy(&chunk[..n]));
+    }
+}
+
 /// Relay a streaming chat-completions upstream response, normalizing tool-call ids.
 pub(in crate::network::openai::response) async fn relay_normalized_chat_completion_stream<
     R: AsyncRead + Unpin,
@@ -106,6 +153,34 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     }
 
     let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
+    if let Some(result) =
+        retry_error_first_frame(reader, &mut carry, retry_policy, route_observer).await?
+    {
+        return Ok(result);
+    }
+    relay_committed_chat_stream(
+        tcp_stream,
+        reader,
+        carry,
+        (
+            parsed.client_nonce.as_deref(),
+            parsed.nonce_origin.as_deref(),
+        ),
+        served_by,
+        route_observer,
+    )
+    .await
+}
+
+/// Commit the stream headers and relay the normalized SSE body.
+async fn relay_committed_chat_stream<R: AsyncRead + Unpin>(
+    tcp_stream: &mut ClientStream,
+    reader: &mut R,
+    mut carry: String,
+    capsule_nonce: (Option<&str>, Option<&str>),
+    served_by: Option<&str>,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> Result<RouteAttemptResult> {
     let mut state = ChatStreamNormalizationState::default();
     let mut assembly = StreamedChatAssembly::default();
     let mut observed_usage = None;
@@ -114,11 +189,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     let mut header = String::from(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
     );
-    append_capsule_nonce_headers(
-        &mut header,
-        parsed.client_nonce.as_deref(),
-        parsed.nonce_origin.as_deref(),
-    );
+    append_capsule_nonce_headers(&mut header, capsule_nonce.0, capsule_nonce.1);
     append_mesh_served_by_header(&mut header, served_by);
     header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;

@@ -1311,12 +1311,7 @@ data: [DONE]\n\n",
         // ...but the attempt no longer reports usage-backed success.
         assert_eq!(
             route_result,
-            RouteAttemptResult::Delivered {
-                status_code: 200,
-                usage: None,
-                cache_cost: None,
-                output_digests: Default::default(),
-            }
+            RouteAttemptResult::CommittedStreamFailure { status_code: 200 }
         );
     }
 
@@ -1369,13 +1364,57 @@ data: [DONE]\n\n",
         // incomplete-stream truncation error.
         assert_eq!(
             route_result,
-            RouteAttemptResult::Delivered {
-                status_code: 200,
-                usage: None,
-                cache_cost: None,
-                output_digests: Default::default(),
-            }
+            RouteAttemptResult::CommittedStreamFailure { status_code: 200 }
         );
+    }
+
+    #[tokio::test]
+    async fn upstream_error_first_frame_is_retried_before_commit() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let head =
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+            let probe = ResponseProbe {
+                buffered: head.to_vec(),
+                header_end: head.len(),
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            let result = relay_normalized_chat_completion_stream(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(true),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay");
+            drop(client_socket);
+            result
+        });
+
+        let error_frame = r#"{"error":{"code":"service_unavailable","message":"RuntimeError: llama_decode failed"}}"#;
+        upstream_writer
+            .write_all(format!("data: {error_frame}\n\n").as_bytes())
+            .await
+            .unwrap();
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        let route_result = server_task.await.expect("server task");
+
+        // Nothing reached the client, so the router can try another target.
+        assert!(output.is_empty(), "{}", String::from_utf8_lossy(&output));
+        assert_eq!(route_result, RouteAttemptResult::RetryableUnavailable);
     }
 
     #[tokio::test]

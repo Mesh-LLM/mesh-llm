@@ -30,12 +30,9 @@ pub(super) async fn finish_normalized_chat_stream(
     let _ = tcp_stream.shutdown().await;
     if upstream_error_seen {
         route_observer.stream_error("upstream_stream_error");
-        return Ok(RouteAttemptResult::Delivered {
-            status_code: 200,
-            usage: None,
-            cache_cost: None,
-            output_digests: Default::default(),
-        });
+        // Headers are already committed so this cannot be retried, but it is
+        // a backend failure, not a success, for target health.
+        return Ok(RouteAttemptResult::CommittedStreamFailure { status_code: 200 });
     }
     if !done_seen {
         route_observer.stream_error("upstream_stream_incomplete");

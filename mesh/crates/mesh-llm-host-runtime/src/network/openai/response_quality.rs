@@ -3,6 +3,7 @@ pub(crate) enum ResponseQualityFailure {
     EmptyAssistantOutput,
     LengthFinishReason,
     RepetitiveOutput,
+    UpstreamErrorBody,
 }
 
 impl ResponseQualityFailure {
@@ -11,12 +12,16 @@ impl ResponseQualityFailure {
             Self::EmptyAssistantOutput => "empty_assistant_output",
             Self::LengthFinishReason => "length_finish_reason",
             Self::RepetitiveOutput => "repetitive_output",
+            Self::UpstreamErrorBody => "upstream_error_body",
         }
     }
 }
 
 pub(crate) fn failure_from_json_body(body: &[u8]) -> Option<ResponseQualityFailure> {
     let json = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    if response_is_error_body(&json) {
+        return Some(ResponseQualityFailure::UpstreamErrorBody);
+    }
     if response_has_length_finish_reason(&json) {
         return Some(ResponseQualityFailure::LengthFinishReason);
     }
@@ -27,6 +32,15 @@ pub(crate) fn failure_from_json_body(body: &[u8]) -> Option<ResponseQualityFailu
         return Some(ResponseQualityFailure::RepetitiveOutput);
     }
     None
+}
+
+/// A 2xx body carrying only an OpenAI `error` object (no choices/output) is a
+/// backend failure dressed as success, e.g. `llama_decode failed`.
+fn response_is_error_body(json: &serde_json::Value) -> bool {
+    json.get("error")
+        .is_some_and(|error| error.is_object() || error.is_string())
+        && json.get("choices").is_none()
+        && json.get("output").is_none()
 }
 
 fn response_has_length_finish_reason(json: &serde_json::Value) -> bool {
@@ -238,6 +252,15 @@ fn repeated_prefix_covers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_error_body_in_success_response() {
+        let body = br#"{"error":{"code":"service_unavailable","message":"RuntimeError: llama_decode failed"}}"#;
+        assert_eq!(
+            failure_from_json_body(body),
+            Some(ResponseQualityFailure::UpstreamErrorBody)
+        );
+    }
 
     #[test]
     fn detects_empty_chat_output() {
