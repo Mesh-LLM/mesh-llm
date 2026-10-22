@@ -115,6 +115,7 @@ fn client(address: &str, method: &str, path: &str, body: &[u8]) -> std::io::Resu
 }
 
 fn raw_request(socket: &mut TcpStream) -> Vec<u8> {
+    socket.set_nonblocking(false).unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
