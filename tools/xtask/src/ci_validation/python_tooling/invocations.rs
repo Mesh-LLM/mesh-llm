@@ -435,7 +435,7 @@ fn command_substitution_runs_python(line: &str) -> bool {
 }
 
 fn heredoc_marker(line: &str) -> Option<String> {
-    let start = line.find("<<")? + 2;
+    let start = heredoc_operator_end(line)?;
     let tail = line[start..].trim_start_matches('-').trim_start();
     let quoted = tail.strip_prefix('\'').or_else(|| tail.strip_prefix('"'));
     if let Some(quoted) = quoted {
@@ -447,6 +447,53 @@ fn heredoc_marker(line: &str) -> Option<String> {
         .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
         .collect();
     (!marker.is_empty()).then_some(marker)
+}
+
+/// Byte offset just past the first `<<` that is a shell heredoc operator: outside
+/// quotes and `$((…))`/`((…))` arithmetic, and not part of a `<<<` here-string.
+fn heredoc_operator_end(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut quote = None;
+    let mut arithmetic_depth = 0usize;
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        if let Some(open) = quote {
+            if byte == b'\\' && open == b'"' {
+                cursor += 2;
+                continue;
+            }
+            if byte == open {
+                quote = None;
+            }
+            cursor += 1;
+            continue;
+        }
+        match byte {
+            b'\\' => cursor += 2,
+            b'\'' | b'"' => {
+                quote = Some(byte);
+                cursor += 1;
+            }
+            b'(' if bytes.get(cursor + 1) == Some(&b'(') => {
+                arithmetic_depth += 1;
+                cursor += 2;
+            }
+            b')' if arithmetic_depth > 0 && bytes.get(cursor + 1) == Some(&b')') => {
+                arithmetic_depth -= 1;
+                cursor += 2;
+            }
+            b'<' if arithmetic_depth == 0 && bytes.get(cursor + 1) == Some(&b'<') => {
+                if bytes.get(cursor + 2) == Some(&b'<') {
+                    cursor += 3;
+                    continue;
+                }
+                return Some(cursor + 2);
+            }
+            _ => cursor += 1,
+        }
+    }
+    None
 }
 
 pub(super) fn check_rust_process_invocations(path: &str, bytes: &[u8]) -> DynResult<()> {

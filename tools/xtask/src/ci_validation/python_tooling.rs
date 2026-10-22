@@ -75,7 +75,11 @@ fn repository_paths(repo_root: &Path) -> DynResult<BTreeSet<String>> {
         },
     )?;
     if !report.process.success() {
-        return Err("Git source inventory did not exit cleanly within its process bounds".into());
+        return Err(format!(
+            "Git source inventory did not exit cleanly within its process bounds: {}",
+            String::from_utf8_lossy(&report.process.stderr.bytes_retained).trim()
+        )
+        .into());
     }
     let output = report
         .stdout
