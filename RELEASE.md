@@ -139,8 +139,10 @@ archive of each default plugin the host pins for that target
 lists them with `cargo xtool repository bundled-plugins --target <triple>`,
 downloads each from the plugin's own GitHub release, and fails unless it
 matches the pinned SHA-256 and the bundle's own host installs it as a default
-(`cargo xtool repository bundled-plugins-check --bundle <dir>`). Packaging
-therefore needs network access to GitHub; for an offline run, set
+(`cargo xtool repository bundled-plugins-check --bundle <dir>`). The check runs
+even when nothing is listed, and fails if the host reports a default it pins for
+that platform as missing from the bundle. Packaging
+needs network access to GitHub; for an offline run, set
 `MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR` to a directory that already holds the
 archives, which are checked against the pins all the same. Windows packaging
 (`package-release.ps1`) bundles no plugins; no default pins a Windows build

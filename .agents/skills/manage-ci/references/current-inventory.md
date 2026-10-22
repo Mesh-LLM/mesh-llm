@@ -604,7 +604,7 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `nightly-stability-run.yml` | `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
 | `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
 | `release.yml` (CUDA/ROCm/Vulkan compiler rows) | per-backend `public` digests | Native compiler/toolkit images remain backend-specific; amd64 CUDA preserves its intentional ARC self-hosted placement |
-| `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit |
+| `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit; packaging also fetches the pinned default-plugin archives from their GitHub releases (curl, HTTPS only) and checks them against the pins |
 
 `public cpu` and `public web` are separate image builds (the latter adds
 `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`,
@@ -877,7 +877,12 @@ typed attestation verdict projection, and the exact RC `rc-ok` predicate.
 Release host producers use `upload-automation` to publish one immutable xtask
 per OS/architecture and source SHA. Every release composer has its host producer
 in `needs` and uses `restore-automation` to verify checksums/source identity and
-export `MESH_LLM_AUTOMATION_BIN`, without Cargo or compiler bootstrap. The shared
+export `MESH_LLM_AUTOMATION_BIN`, without Cargo or compiler bootstrap.
+Composition is not fully offline: on macOS and Linux, `package-release.sh`
+fetches each default plugin archive the host pins (`repository bundled-plugins`)
+from that plugin's GitHub release over HTTPS, checks it against the pinned
+SHA-256, places it under `plugins/`, and runs `repository bundled-plugins-check`
+with the composed host. The shared
 artifact actions remain reusable; L2 bare-hosted callers use hosted-bare preparation.
 Windows release composers no longer use `prepare-automation`; the release workflow has
 no setup-python steps. Runtime-package verification embeds the GLIBC policy
