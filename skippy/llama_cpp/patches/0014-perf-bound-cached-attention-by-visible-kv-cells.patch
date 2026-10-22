@@ -1,0 +1,354 @@
+From 6d16d5854570773d555db4e722beaffb6eb137cf Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 22 Oct 2026 18:58:24 +1100
+Subject: [PATCH] perf: bound cached attention by visible KV cells
+
+---
+ src/llama-graph.cpp                       | 13 +++-
+ src/llama-graph.h                         |  4 ++
+ src/llama-kv-cache-extent.cpp             | 15 +++++
+ src/llama-kv-cache.cpp                    | 15 +++++
+ src/llama-kv-cache.h                      |  2 +
+ src/llama-kv-cells.h                      |  6 ++
+ tests/test-skippy-kv-cache-extent.h       | 80 +++++++++++++++++++++++
+ tests/test-skippy-kv-cells-contiguous.cpp |  1 +
+ tests/test-skippy-kv-cells-extent.h       |  3 +
+ 9 files changed, 138 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index b93a0ec14..59645f157 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -617,9 +617,15 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
+         res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams, self_kq_mask_begin);
+     }
+ 
++    res &= can_reuse_visible_bound(mctx);
++
+     return res;
+ }
+ 
++bool llm_graph_input_attn_kv::can_reuse_visible_bound(const llama_kv_cache_context * context) const {
++    return !self_kq_mask_visible_bound_used || self_kq_mask_visible_bound == context->get_n_kv_visible_bound();
++}
++
+ void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
+     // Filtered stages can omit their attention path, leaving these declared
+     // graph inputs unallocated by the scheduler.
+@@ -685,6 +691,7 @@ bool llm_graph_input_attn_kv_msa::can_reuse(const llm_graph_params & params) {
+     if (self_kq_mask && self_kq_mask->buffer) {
+         res &= can_reuse_kq_mask(self_kq_mask, this->mctx, params.ubatch, params.cparams, self_kq_mask_begin);
+     }
++    res &= can_reuse_visible_bound(this->mctx);
+ 
+     return res;
+ }
+@@ -1310,6 +1317,7 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
+     if (inp_attn->self_kq_mask && inp_attn->self_kq_mask->buffer) {
+         res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams, inp_attn->self_kq_mask_begin);
+     }
++    res &= inp_attn->can_reuse_visible_bound(mctx->get_attn());
+ 
+     if (inp_rs->s_copy && inp_rs->s_copy->buffer) {
+         res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
+@@ -3708,7 +3716,10 @@ ggml_tensor * llm_graph_context::build_attn(
+ 
+     ggml_tensor * kq_mask = inp->get_kq_mask();
+ 
+-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
++    inp->self_kq_mask_visible_bound = mctx_cur->get_n_kv_visible_bound();
++    inp->self_kq_mask_visible_bound_used = true;
++    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla,
++            inp->self_kq_mask_visible_bound, kq_scale, il);
+     cb(cur, "kqv_out", il);
+ 
+     if (inp->self_v_rot) {
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index d4541e19d..bb188971e 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -431,6 +431,8 @@ public:
+ 
+     bool can_reuse(const llm_graph_params & params) override;
+ 
++    bool can_reuse_visible_bound(const llama_kv_cache_context * context) const;
++
+     ggml_tensor * get_k_idxs() const { return self_k_idxs; }
+     ggml_tensor * get_v_idxs() const { return self_v_idxs; }
+ 
+@@ -441,6 +443,8 @@ public:
+ 
+     ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
+     uint32_t self_kq_mask_begin = 0; // physical KV origin captured when building this graph
++    uint32_t self_kq_mask_visible_bound = 0; // sparse attention capacity captured when building this graph
++    bool self_kq_mask_visible_bound_used = false;
+     ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
+ 
+     // note: assumes v_rot^2 == I
+diff --git a/src/llama-kv-cache-extent.cpp b/src/llama-kv-cache-extent.cpp
+index 23edf3c64..24ca3014d 100644
+--- a/src/llama-kv-cache-extent.cpp
++++ b/src/llama-kv-cache-extent.cpp
+@@ -71,6 +71,21 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo, const llama_ubatch &
+     return span;
+ }
+ 
++uint32_t llama_kv_cache::get_n_kv_visible_bound(const llama_ubatch & ubatch) const {
++    if (n_stream != 1 || !supports_active_extent(ubatch)) {
++        return 0;
++    }
++
++    // A query can see at most the union of cells owned by its active sequences.
++    // Summing their indexed counts can overestimate shared cells, which is safe:
++    // the attention mask remains the source of truth for sparse gathering.
++    uint64_t bound = 0;
++    for (uint32_t i = 0; i < ubatch.n_seqs_unq; ++i) {
++        bound += v_cells[0].seq_used_count(ubatch.seq_id_unq[i]);
++    }
++    return static_cast<uint32_t>(std::min<uint64_t>(bound, v_cells[0].size()));
++}
++
+ uint32_t llama_kv_cache::get_n_kv_pos_contiguous(const slot_info & sinfo, const llama_ubatch & ubatch) const {
+     if (sinfo.n_stream() != 1 || ubatch.n_seqs_unq != 1 || ubatch.n_tokens == 0 || ubatch.pos == nullptr ||
+         ubatch.n_seq_id == nullptr || ubatch.seq_id == nullptr || ubatch.seq_id[0] == nullptr) {
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 741d0ef30..70bf31bcc 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -3907,6 +3907,21 @@ uint32_t llama_kv_cache_context::get_kv_begin() const {
+     return sinfos[i_cur].kv_begin;
+ }
+ 
++uint32_t llama_kv_cache_context::get_n_kv_visible_bound() const {
++    if (kv == nullptr || ubatches.empty() || i_cur >= ubatches.size()) {
++        return 0;
++    }
++    const uint32_t bound = kv->get_n_kv_visible_bound(ubatches[i_cur]);
++    if (bound == 0) {
++        return 0;
++    }
++    const uint32_t span = static_cast<uint32_t>(n_kv);
++    const uint32_t padded_bound = std::min(span, static_cast<uint32_t>(GGML_PAD(bound, 256)));
++    // A sparse index list is useful only when parked cells make the physical
++    // attention span at least twice as large as the visible KV set.
++    return span >= std::max<uint32_t>(4096, 2*padded_bound) ? padded_bound : 0;
++}
++
+ uint32_t llama_kv_cache_context::get_n_kv_pos_contiguous() const {
+     // Full-cache and update contexts do not carry a concrete ubatch/slot pair.
+     if (ubatches.empty() || sinfos.empty() || i_cur >= ubatches.size() || i_cur >= sinfos.size()) {
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 611c1379d..d749f3aad 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -238,6 +238,7 @@ public:
+ 
+     uint32_t get_n_kv(const slot_info & sinfo, const llama_ubatch & ubatch) const;
+     uint32_t get_kv_begin(const llama_ubatch & ubatch) const;
++    uint32_t get_n_kv_visible_bound(const llama_ubatch & ubatch) const;
+ 
+     // active cell count when position p lives in physical cell p; 0 for any non-contiguous layout
+     uint32_t get_n_kv_pos_contiguous(const slot_info & sinfo, const llama_ubatch & ubatch) const;
+@@ -472,6 +473,7 @@ public:
+ 
+     uint32_t get_n_kv() const;
+     uint32_t get_kv_begin() const;
++    uint32_t get_n_kv_visible_bound() const;
+     uint32_t get_n_kv_pos_contiguous() const;
+ 
+     ggml_type type_k() const;
+diff --git a/src/llama-kv-cells.h b/src/llama-kv-cells.h
+index 9162919b8..952e8e625 100644
+--- a/src/llama-kv-cells.h
++++ b/src/llama-kv-cells.h
+@@ -92,6 +92,12 @@ public:
+         return used.size();
+     }
+ 
++    // Number of physical cells visible to one sequence, including shared cells.
++    uint32_t seq_used_count(llama_seq_id s) const {
++        assert(s >= 0 && s < LLAMA_MAX_SEQ);
++        return seq_pos[s].size();
++    }
++
+     // the index of the first cell that is used
+     // return 0 if no cells are used
+     uint32_t used_min() const {
+diff --git a/tests/test-skippy-kv-cache-extent.h b/tests/test-skippy-kv-cache-extent.h
+index 990ae9911..e92a991b6 100644
+--- a/tests/test-skippy-kv-cache-extent.h
++++ b/tests/test-skippy-kv-cache-extent.h
+@@ -22,18 +22,23 @@ static void check_mask_extent(const llama_kv_cache & kv,
+     for (bool causal : { false, true }) {
+         kv.set_input_kq_mask(full, &ubatch, causal);
+         kv.set_input_kq_mask(active, &ubatch, causal, begin);
++        const uint32_t visible_bound = kv.get_n_kv_visible_bound(ubatch);
+         const auto * full_data   = static_cast<const float *>(full->data);
+         const auto * active_data = static_cast<const float *>(active->data);
+         for (uint32_t row = 0; row < ubatch.n_tokens; ++row) {
++            uint32_t visible = 0;
+             for (uint32_t cell = 0; cell < 2048; ++cell) {
+                 const auto value = full_data[row * 2048 + cell];
+                 if (cell >= begin && cell < begin + end) {
+                     require_extent(value == active_data[row * end + cell - begin],
+                                    "active mask changed a retained cell");
++                    visible += std::isfinite(value);
+                 } else {
+                     require_extent(std::isinf(value) && value < 0, "active extent excluded an unmasked cell");
+                 }
+             }
++            require_extent(visible_bound == 0 || visible <= visible_bound,
++                           "visible KV bound is smaller than the attention mask");
+         }
+     }
+ }
+@@ -51,6 +56,10 @@ static void check_extent_graph_reuse(llama_kv_cache &                  kv,
+     next_batch.pos          = &next_pos;
+     llama_kv_cache_context context(&kv, { next_slot }, { next_batch });
+     require_extent(context.apply(), "cache context apply failed");
++    const auto visible_bound = context.get_n_kv_visible_bound();
++    require_extent(visible_bound == 0 || (visible_bound >= kv.get_n_kv_visible_bound(next_batch) &&
++                                          visible_bound <= context.get_n_kv()),
++                   "padded visible bound exceeds the attention view");
+     llama_cparams cparams = {};
+     cparams.kv_unified    = kv.get_n_stream() == 1;
+     llm_graph_input_attn_kv input(hparams, cparams, &context);
+@@ -65,6 +74,12 @@ static void check_extent_graph_reuse(llama_kv_cache &                  kv,
+     graph_params.ubatch           = ubatch;
+     graph_params.cparams          = cparams;
+     require_extent(input.can_reuse(graph_params), "unchanged physical view should reuse the graph");
++    input.self_kq_mask_visible_bound      = context.get_n_kv_visible_bound();
++    input.self_kq_mask_visible_bound_used = true;
++    require_extent(input.can_reuse(graph_params), "unchanged sparse bound should reuse the graph");
++    ++input.self_kq_mask_visible_bound;
++    require_extent(!input.can_reuse(graph_params), "changed sparse bound must rebuild the graph");
++    --input.self_kq_mask_visible_bound;
+     input.self_kq_mask_begin += 256;
+     require_extent(!input.can_reuse(graph_params), "same shape at a different physical origin must rebuild the graph");
+ }
+@@ -112,6 +127,8 @@ static void test_cache_extents(bool unified, bool v_trans = false) {
+     slot.s0 = slot.s1 = 0;
+     slot.strm         = { 0 };
+     require_extent(kv.get_n_kv(slot, ubatch) == 256, "parked sessions must not extend an active view");
++    require_extent(kv.get_n_kv_visible_bound(ubatch) == (unified ? 1u : 0u),
++                   "active visible bound includes parked cells");
+     require_extent(kv.get_cells(1).seq_used_max_p1(1) == 1901, "parked session must stay resident");
+     check_mask_extent(kv, ubatch, 256);
+ 
+@@ -156,16 +173,79 @@ static void test_cache_extents(bool unified, bool v_trans = false) {
+     }) {
+         ubatch.n_seqs_unq = group.first;
+         require_extent(kv.get_n_kv(slot, ubatch) == group.second, "active sequence union is incomplete");
++        uint32_t physical_count = 0;
++        for (uint32_t i = 0; i < group.first; ++i) {
++            const auto & cells = kv.get_cells(active[i]);
++            for (uint32_t cell = 0; cell < cells.size(); ++cell) {
++                physical_count += !cells.is_empty(cell) && cells.seq_has(cell, active[i]);
++            }
++        }
++        require_extent(kv.get_n_kv_visible_bound(ubatch) == (unified ? physical_count : 0u),
++                       "active visible bound omitted a sequence");
+     }
+     // Missing or invalid metadata must preserve the conservative old extent.
+     ubatch.seq_id_unq = nullptr;
+     require_extent(kv.get_n_kv(slot, ubatch) == 2048, "missing metadata must fall back");
++    require_extent(kv.get_n_kv_visible_bound(ubatch) == 0, "missing metadata must disable sparse hint");
+     active[0]         = -1;
+     ubatch.seq_id_unq = active;
+     require_extent(kv.get_n_kv(slot, ubatch) == 2048, "invalid metadata must fall back");
++    require_extent(kv.get_n_kv_visible_bound(ubatch) == 0, "invalid metadata must disable sparse hint");
+     active[0]             = 0;
+     ubatch.n_seqs_unq     = 1;
+     // The cache holds hparams by reference, matching the owning model lifetime.
+     hparams.indexer_kpool = 4;
+     require_extent(kv.get_n_kv(slot, ubatch) == 2048, "pooled indexer gathers need the complete extent");
++    require_extent(kv.get_n_kv_visible_bound(ubatch) == 0, "indexed attention must disable sparse hint");
++}
++
++static void test_sparse_hint_gate() {
++    std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
++    require_extent(model != nullptr, "test model creation failed");
++    llama_hparams hparams      = {};
++    hparams.n_layer_all        = 1;
++    hparams.n_embd_head_k_full = 4;
++    hparams.n_embd_head_v_full = 4;
++    hparams.n_head_arr[0]      = 1;
++    hparams.n_head_kv_arr[0]   = 1;
++    llama_kv_cache kv(*model, hparams, GGML_TYPE_F32, GGML_TYPE_F32, false, false, true, 8192, 4, 256, 0,
++                      LLAMA_SWA_TYPE_NONE, nullptr, [](int32_t) { return true; }, {}, {});
++
++    llama_pos      pos             = 0;
++    llama_seq_id   seq             = 0;
++    llama_seq_id * ids             = &seq;
++    int32_t        count           = 1;
++    llama_ubatch   ubatch          = {};
++    ubatch.n_tokens                = 1;
++    ubatch.n_pos                   = 1;
++    ubatch.pos                     = &pos;
++    ubatch.n_seq_id                = &count;
++    ubatch.seq_id                  = &ids;
++    ubatch.n_seqs_unq              = 1;
++    ubatch.seq_id_unq              = &seq;
++    llama_kv_cache::slot_info slot = {};
++    slot.s0 = slot.s1              = 0;
++    slot.strm                     = { 0 };
++    slot.idxs                     = { { 3 } };
++    kv.apply_ubatch(slot, ubatch);
++    pos       = 3900;
++    slot.idxs = { { 3900 } };
++    kv.apply_ubatch(slot, ubatch);
++    pos       = 3901;
++    slot.idxs = { { 3901 } };
++    llama_kv_cache_context fragmented(&kv, { slot }, { ubatch });
++    require_extent(fragmented.apply(), "fragmented context apply failed");
++    require_extent(fragmented.get_n_kv() == 4096 && fragmented.get_n_kv_visible_bound() == 256,
++                   "fragmented view should enable a bounded sparse hint");
++
++    seq       = 1;
++    pos       = 0;
++    slot.idxs = { { 3902 } };
++    kv.apply_ubatch(slot, ubatch);
++    pos       = 1;
++    slot.idxs = { { 3903 } };
++    llama_kv_cache_context compact(&kv, { slot }, { ubatch });
++    require_extent(compact.apply(), "compact context apply failed");
++    require_extent(compact.get_n_kv() == 256 && compact.get_n_kv_visible_bound() == 0,
++                   "compact view should not request sparse gathering");
+ }
+diff --git a/tests/test-skippy-kv-cells-contiguous.cpp b/tests/test-skippy-kv-cells-contiguous.cpp
+index 1a97dec48..a54bff200 100644
+--- a/tests/test-skippy-kv-cells-contiguous.cpp
++++ b/tests/test-skippy-kv-cells-contiguous.cpp
+@@ -8,6 +8,7 @@ int main() {
+     test_cache_extents(false);
+     test_cache_extents(true, true);
+     test_cache_extents(false, true);
++    test_sparse_hint_gate();
+     llama_kv_cells cells;
+     cells.resize(8);
+     for (uint32_t i = 0; i < 4; ++i) {
+diff --git a/tests/test-skippy-kv-cells-extent.h b/tests/test-skippy-kv-cells-extent.h
+index cdc19d17d..994c67a4d 100644
+--- a/tests/test-skippy-kv-cells-extent.h
++++ b/tests/test-skippy-kv-cells-extent.h
+@@ -17,14 +17,17 @@ static void check_cell_extents(const llama_kv_cells & cells) {
+     for (llama_seq_id seq = 0; seq < 4; ++seq) {
+         uint32_t expected = 0;
+         uint32_t first    = std::numeric_limits<uint32_t>::max();
++        uint32_t count    = 0;
+         for (uint32_t i = 0; i < cells.size(); ++i) {
+             if (!cells.is_empty(i) && cells.seq_has(i, seq)) {
+                 expected = i + 1;
+                 first    = std::min(first, i);
++                ++count;
+             }
+         }
+         require_extent(cells.seq_used_max_p1(seq) == expected, "physical scan disagrees with index");
+         require_extent(cells.seq_used_min(seq) == first, "physical minimum disagrees with index");
++        require_extent(cells.seq_used_count(seq) == count, "physical count disagrees with index");
+         require_extent(cells.seq_used_max_p1(seq) == expected, "repeated query changes the index");
+     }
+ }
+-- 
+2.56.0
+
