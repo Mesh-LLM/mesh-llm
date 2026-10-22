@@ -4,13 +4,20 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use skippy_inference_api::realtime::{
+    RealtimeInput, RealtimeOutput, RealtimeTranscriptionConfig, RealtimeTranscriptionSession,
+};
 use skippy_inference_api::{
     AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionSegment,
-    AudioTranscriptionTiming, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
-    InferenceBackend, InferenceError, InferenceRequestContext, InferenceResult, ModelObject,
+    AudioTranscriptionTiming, CancellationToken, ChatCompletionRequest, ChatCompletionResponse,
+    ChatCompletionStream, InferenceBackend, InferenceError, InferenceRequestContext,
+    InferenceResult, ModelObject,
 };
-use skippy_runtime::{SpeechRecognitionModel, Transcription, TranscriptionOptions};
-use tokio::sync::Semaphore;
+use skippy_runtime::{
+    PcmResampler, SpeechRecognitionModel, SpeechStream, SpeechStreamConfig, SpeechStreamEvent,
+    Transcription, TranscriptionOptions, TurnDetection,
+};
+use tokio::sync::{Semaphore, mpsc};
 use tokio::task;
 
 /// What [`SpeechRecognitionBackend`] needs from a loaded model.
@@ -162,6 +169,29 @@ impl InferenceBackend for SpeechRecognitionBackend {
         self.audio_to_text(request, true, context).await
     }
 
+    async fn realtime_transcription(
+        &self,
+        config: RealtimeTranscriptionConfig,
+        context: InferenceRequestContext,
+    ) -> InferenceResult<RealtimeTranscriptionSession> {
+        if config.model != self.model_id {
+            return Err(InferenceError::invalid_request(format!(
+                "model {:?} is not loaded; use {:?}",
+                config.model, self.model_id
+            )));
+        }
+        let (session, input, output) = RealtimeTranscriptionSession::channels();
+        let live = LiveSession {
+            model: self.model.clone(),
+            lanes: self.lanes.clone(),
+            runtime: tokio::runtime::Handle::current(),
+            cancellation: context.cancellation_token(),
+            output,
+        };
+        task::spawn_blocking(move || live.run(config, input));
+        Ok(session)
+    }
+
     async fn chat_completion(
         &self,
         _request: ChatCompletionRequest,
@@ -175,6 +205,130 @@ impl InferenceBackend for SpeechRecognitionBackend {
         _context: InferenceRequestContext,
     ) -> InferenceResult<ChatCompletionStream> {
         Err(speech_only())
+    }
+}
+
+/// One live transcription session, run on a blocking thread: it owns the
+/// stream state and takes a model lane only while a pass runs.
+struct LiveSession {
+    model: Arc<dyn SpeechTranscriber>,
+    lanes: Arc<Semaphore>,
+    runtime: tokio::runtime::Handle,
+    cancellation: CancellationToken,
+    output: mpsc::Sender<RealtimeOutput>,
+}
+
+impl LiveSession {
+    fn run(self, config: RealtimeTranscriptionConfig, mut input: mpsc::Receiver<RealtimeInput>) {
+        let mut stream = SpeechStream::new(stream_config(&config));
+        let mut resampler = PcmResampler::new(config.input_sample_rate);
+        let mut next = input.blocking_recv();
+        while let Some(command) = next.take() {
+            let events = match command {
+                RealtimeInput::Audio(samples) => {
+                    // Batch audio that queued up behind the last pass.
+                    let mut pcm = resampler.push(&samples);
+                    loop {
+                        match input.try_recv() {
+                            Ok(RealtimeInput::Audio(more)) => pcm.extend(resampler.push(&more)),
+                            Ok(other) => {
+                                next = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    stream.push(&pcm, &mut |samples, options| {
+                        self.transcribe(samples, options)
+                    })
+                }
+                RealtimeInput::Commit => {
+                    if !stream.has_pending_audio() {
+                        self.send(RealtimeOutput::CommitEmpty);
+                        next = next.or_else(|| input.blocking_recv());
+                        continue;
+                    }
+                    self.send(RealtimeOutput::Committed {
+                        turn: stream.current_turn(),
+                    });
+                    stream.commit(&mut |samples, options| self.transcribe(samples, options))
+                }
+                RealtimeInput::Clear => {
+                    stream.clear();
+                    Ok(Vec::new())
+                }
+                RealtimeInput::Configure(config) => {
+                    stream.set_config(stream_config(&config));
+                    if resampler.input_rate() != config.input_sample_rate {
+                        resampler = PcmResampler::new(config.input_sample_rate);
+                    }
+                    Ok(Vec::new())
+                }
+            };
+            match events {
+                Ok(events) => events.into_iter().for_each(|event| self.report(event)),
+                Err(error) => self.send(RealtimeOutput::Failed {
+                    message: format!("{error:#}"),
+                }),
+            }
+            if self.cancellation.is_cancelled() {
+                break;
+            }
+            next = next.or_else(|| input.blocking_recv());
+        }
+    }
+
+    fn transcribe(
+        &self,
+        samples: &[f32],
+        options: &TranscriptionOptions,
+    ) -> anyhow::Result<Transcription> {
+        let _lane = self
+            .runtime
+            .block_on(self.lanes.clone().acquire_owned())
+            .map_err(|_| anyhow::anyhow!("speech backend is shutting down"))?;
+        self.model
+            .transcribe(samples, options, &|| self.cancellation.is_cancelled())
+    }
+
+    fn report(&self, event: SpeechStreamEvent) {
+        match event {
+            SpeechStreamEvent::SpeechStarted {
+                turn,
+                audio_start_ms,
+            } => self.send(RealtimeOutput::SpeechStarted {
+                turn,
+                audio_start_ms,
+            }),
+            SpeechStreamEvent::SpeechStopped { turn, audio_end_ms } => {
+                self.send(RealtimeOutput::SpeechStopped { turn, audio_end_ms });
+                self.send(RealtimeOutput::Committed { turn });
+            }
+            SpeechStreamEvent::Delta { turn, text } => {
+                self.send(RealtimeOutput::Delta { turn, text })
+            }
+            SpeechStreamEvent::Completed { turn, transcript } => {
+                self.send(RealtimeOutput::Completed { turn, transcript })
+            }
+        }
+    }
+
+    fn send(&self, output: RealtimeOutput) {
+        // A closed receiver means the client left; the input side ends the loop.
+        let _ = self.output.blocking_send(output);
+    }
+}
+
+fn stream_config(config: &RealtimeTranscriptionConfig) -> SpeechStreamConfig {
+    SpeechStreamConfig {
+        turn_detection: config.turn_detection.map(|detection| TurnDetection {
+            threshold: detection.threshold,
+            prefix_padding_ms: detection.prefix_padding_ms,
+            silence_duration_ms: detection.silence_duration_ms,
+        }),
+        language: config.language.clone(),
+        prompt: config.prompt.clone(),
+        ..Default::default()
     }
 }
 
@@ -366,6 +520,71 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body, "Hello there.");
+    }
+
+    async fn next_output(session: &mut RealtimeTranscriptionSession) -> RealtimeOutput {
+        tokio::time::timeout(std::time::Duration::from_secs(5), session.output.recv())
+            .await
+            .expect("live session answers in time")
+            .expect("live session stays open")
+    }
+
+    #[tokio::test]
+    async fn live_sessions_confirm_words_and_complete_on_commit() {
+        let backend =
+            SpeechRecognitionBackend::new("whisper-test", Arc::new(FakeModel::default()), 1);
+        let config = RealtimeTranscriptionConfig {
+            turn_detection: None,
+            input_sample_rate: 16_000,
+            ..RealtimeTranscriptionConfig::new("whisper-test")
+        };
+        let mut session = backend
+            .realtime_transcription(config, InferenceRequestContext::new())
+            .await
+            .unwrap();
+        let second = vec![8_000i16; 16_000];
+        // Audio that queues behind a pass is batched into the next one, so
+        // how the words split across deltas depends on timing; their sum
+        // does not.
+        for _ in 0..2 {
+            session
+                .input
+                .send(RealtimeInput::Audio(second.clone()))
+                .await
+                .unwrap();
+        }
+        session.input.send(RealtimeInput::Commit).await.unwrap();
+        let mut streamed = String::new();
+        let mut committed = false;
+        let transcript = loop {
+            match next_output(&mut session).await {
+                RealtimeOutput::Delta { turn: 0, text } => streamed.push_str(&text),
+                RealtimeOutput::Committed { turn: 0 } => committed = true,
+                RealtimeOutput::Completed {
+                    turn: 0,
+                    transcript,
+                } => break transcript,
+                other => panic!("unexpected {other:?}"),
+            }
+        };
+        assert!(committed);
+        assert_eq!(streamed, "Hello there.");
+        assert_eq!(transcript, "Hello there.");
+        session.input.send(RealtimeInput::Commit).await.unwrap();
+        assert_eq!(next_output(&mut session).await, RealtimeOutput::CommitEmpty);
+    }
+
+    #[tokio::test]
+    async fn live_sessions_for_other_models_are_refused() {
+        let backend =
+            SpeechRecognitionBackend::new("whisper-test", Arc::new(FakeModel::default()), 1);
+        let refused = backend
+            .realtime_transcription(
+                RealtimeTranscriptionConfig::new("other"),
+                InferenceRequestContext::new(),
+            )
+            .await;
+        assert!(refused.is_err());
     }
 
     #[tokio::test]
