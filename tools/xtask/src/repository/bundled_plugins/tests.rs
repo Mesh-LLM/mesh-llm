@@ -1,7 +1,10 @@
 use super::check::{
-    CHECK_GRAMMAR, INSTALL_RECORD, NOT_BUNDLED_LINE, PLUGINS, check_bundle, installed_defaults,
-    not_installed, placed_archives, sandbox_env,
+    CHECK_GRAMMAR, INSTALL_RECORD, NOT_BUNDLED_LINE, installed_defaults, not_installed,
+    placed_archives, sandbox_env,
 };
+// The stand-in host is a shell script, so the tests that run it are Unix-only.
+#[cfg(unix)]
+use super::check::{PLUGINS, check_bundle};
 use super::pins::{PinnedDefault, parse};
 use super::*;
 use std::ffi::OsString;
@@ -270,7 +273,7 @@ done"#
     fs::write(
         &host,
         format!(
-            "#!/bin/sh\n[ \"$*\" = '--log-format json plugins install-defaults' ] || exit 9\n\
+            "#!/bin/sh\n[ \"$*\" = 'plugins install-defaults' ] || exit 9\n\
              [ -z \"$MESH_LLM_BUNDLED_PLUGINS_DIR\" ] || exit 8\n\
              [ \"$MESH_LLM_INTERNAL_HELPER\" = 1 ] || exit 7\n{script}\n"
         ),
@@ -279,11 +282,13 @@ done"#
     fs::set_permissions(&host, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+#[cfg(unix)]
 fn check(dir: &Path, behaviour: &str) -> CheckReport {
     stand_in_host(dir, behaviour);
     check_bundle(dir).unwrap()
 }
 
+#[cfg(unix)]
 fn says(report: &CheckReport, text: &str) -> bool {
     report.stdout.contains(text) || report.stderr.contains(text)
 }

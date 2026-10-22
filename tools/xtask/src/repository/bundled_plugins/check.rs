@@ -65,7 +65,9 @@ pub(super) fn check_bundle(bundle: &Path) -> DynResult<CheckReport> {
     let store = scratch.path().join("store");
     fs::create_dir_all(&home)?;
     let output = Command::new(&host)
-        .args(["--log-format", "json", "plugins", "install-defaults"])
+        // Plain output: the NotBundled line is console text, which a JSON
+        // output sink would drop.
+        .args(["plugins", "install-defaults"])
         .env_clear()
         .envs(sandbox_env(std::env::vars_os(), &home, &store))
         .output()

@@ -302,7 +302,7 @@ fn package_release_adapter_places_pinned_plugin_archives_and_refuses_others() {
     executable(
         &bundle.join("mesh-llm"),
         r#"#!/bin/sh
-[ "$*" = '--log-format json plugins install-defaults' ] || exit 98
+[ "$*" = 'plugins install-defaults' ] || exit 98
 [ "$MESH_LLM_INTERNAL_HELPER" = 1 ] || exit 97
 here="$(dirname "$0")"
 if [ -f "$here/host-pins-notes-here" ] && ! ls "$here"/plugins/notes-*.tar.gz >/dev/null 2>&1; then
