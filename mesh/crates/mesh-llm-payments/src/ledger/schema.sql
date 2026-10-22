@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS charges(
 CREATE INDEX IF NOT EXISTS charges_state ON charges(state);
 
 CREATE TABLE IF NOT EXISTS metered_requests(
-    id TEXT PRIMARY KEY, peer TEXT NOT NULL,
+    id TEXT PRIMARY KEY, peer TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
     pricing TEXT NOT NULL,
     require_deposit INTEGER NOT NULL, deposit_msat INTEGER NOT NULL,
     dispatched INTEGER NOT NULL DEFAULT 0,

@@ -75,9 +75,12 @@ impl PaymentService {
                 if let Some(value_msat) = value_msat {
                     self.ledger.set_admission_deposit_msat(value_msat)?;
                 }
-                Ok(serde_json::json!({
-                    "admission_deposit_msat": self.ledger.admission_deposit_msat()?
-                }))
+                self.admission_deposit_status()
+            }
+            ControlCommand::SetModelAdmissionDeposit { model, value_msat } => {
+                self.ledger
+                    .set_model_admission_deposit_msat(&model, value_msat)?;
+                self.admission_deposit_status()
             }
             ControlCommand::SetCacheDiscount { model, percent } => {
                 let mut pricing = self.ledger.pricing()?.remove(&model).ok_or_else(|| {
@@ -92,6 +95,22 @@ impl PaymentService {
                 Ok(serde_json::to_value(self.ledger.pricing()?)?)
             }
         }
+    }
+
+    /// The node-wide admission deposit and each model's own, as charged: a
+    /// deposit below the minimum payment is shown raised to it.
+    fn admission_deposit_status(&self) -> Result<Value> {
+        let floor_msat = self.ledger.min_payment_msat()?;
+        let models: std::collections::BTreeMap<String, u64> = self
+            .ledger
+            .model_admission_deposits()?
+            .into_iter()
+            .map(|(model, deposit_msat)| (model, deposit_msat.max(floor_msat)))
+            .collect();
+        Ok(serde_json::json!({
+            "admission_deposit_msat": self.ledger.admission_deposit_msat()?,
+            "models": models,
+        }))
     }
 
     fn unpin_wallet(&self) -> Result<Value> {

@@ -85,6 +85,7 @@ impl PaymentService {
         let deposit = self.ledger.metered_admit(&MeteredRequest {
             id: &request_id,
             peer: &buyer,
+            model: &model,
             pricing: &pricing,
             require_deposit,
         })?;

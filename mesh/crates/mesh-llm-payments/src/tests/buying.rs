@@ -475,6 +475,7 @@ async fn cached_discount_uses_frozen_price_and_same_seller_buyer_bill() -> Resul
     service.ledger.metered_admit(&MeteredRequest {
         id: "cached",
         peer: "peer",
+        model: "test-model",
         pricing: &price,
         require_deposit: false,
     })?;
@@ -526,6 +527,7 @@ async fn discounted_subsat_final_survives_both_restarts_and_pays_once() -> Resul
     seller.ledger.metered_admit(&MeteredRequest {
         id: "cached-floor",
         peer: "peer",
+        model: "test-model",
         pricing: &price,
         require_deposit: false,
     })?;

@@ -75,11 +75,19 @@ pub enum ControlCommand {
         #[serde(default)]
         value_msat: Option<u64>,
     },
-    /// Show, or set, the admission deposit in msat (default: the minimum
-    /// payment, and never below it): what this seller asks peers outside its
-    /// trust cache, and the largest seller deposit this node pays. Ledger-only.
+    /// Show, or set, the node-wide admission deposit in msat (default: the
+    /// minimum payment, and never below it): what this seller asks peers
+    /// outside its trust cache for a model without its own deposit, and the
+    /// largest seller deposit this node pays. Shows per-model deposits too.
+    /// Ledger-only.
     AdmissionDeposit {
         #[serde(default)]
+        value_msat: Option<u64>,
+    },
+    /// Set the admission deposit of one priced model, or with `None` return
+    /// it to the node-wide deposit. Ledger-only.
+    SetModelAdmissionDeposit {
+        model: String,
         value_msat: Option<u64>,
     },
     /// Patch only the cached-input discount of an already priced model.
