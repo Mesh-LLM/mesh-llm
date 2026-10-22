@@ -1856,7 +1856,6 @@ mod push_eligibility_tests {
         );
     }
 
-    // The host's JSON field lands in the mirror (and is optional on the wire).
     /// evidencebook#69 finding 1, through the real adapter: a host-served
     /// terminal naming the node that asked seals that node as the record's
     /// requesting party (`host_provenance_from` once dropped it).
@@ -1878,6 +1877,7 @@ mod push_eligibility_tests {
         assert_eq!(party(None), "unknown");
     }
 
+    // The host's JSON field lands in the mirror (and is optional on the wire).
     #[test]
     fn requested_by_node_id_deserializes_from_the_host_envelope_and_defaults_absent() {
         let with: HostServingProvenance = serde_json::from_value(
