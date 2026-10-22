@@ -117,13 +117,20 @@ async fn install_with_source_policy(
             return Err(err.context(explanation));
         }
     };
+    let trusted_bundle = trusted_explicit_bundle(&resolution, &options)?;
     let authenticated_artifact = authenticated_artifacts
         .as_deref()
+        .filter(|_| !trusted_bundle)
         .map(|artifacts| authenticated_catalog_artifact(&resolution.selected, artifacts))
         .transpose()?;
-    let mut outcome =
-        install_resolved_runtime_with_catalog(&cache, resolution, &options, authenticated_artifact)
-            .await?;
+    let mut outcome = install_resolved_runtime_with_catalog(
+        &cache,
+        resolution,
+        &options,
+        authenticated_artifact,
+        trusted_bundle,
+    )
+    .await?;
     outcome.sources = sources;
     Ok(outcome)
 }
@@ -133,7 +140,7 @@ fn authenticated_catalog_artifacts(
     merged_artifacts: &[NativeRuntimeArtifact],
     catalog_artifact_count: usize,
 ) -> Result<Option<Vec<NativeRuntimeArtifact>>> {
-    if policy != NativeRuntimeVerificationPolicy::RequireChecksumAndSignature {
+    if !policy.requires_signature() {
         return Ok(None);
     }
     merged_artifacts
@@ -323,7 +330,7 @@ pub(crate) async fn install_resolved_runtime(
     resolution: skippy_native_runtime::NativeRuntimeResolution,
     options: &NativeRuntimeInstallOptions,
 ) -> Result<NativeRuntimeInstallOutcome> {
-    install_resolved_runtime_with_catalog(cache, resolution, options, None).await
+    install_resolved_runtime_with_catalog(cache, resolution, options, None, false).await
 }
 
 async fn install_resolved_runtime_with_catalog(
@@ -331,9 +338,11 @@ async fn install_resolved_runtime_with_catalog(
     resolution: skippy_native_runtime::NativeRuntimeResolution,
     options: &NativeRuntimeInstallOptions,
     authenticated_artifact: Option<&NativeRuntimeArtifact>,
+    trusted_bundle: bool,
 ) -> Result<NativeRuntimeInstallOutcome> {
-    if options.verification_policy == NativeRuntimeVerificationPolicy::RequireChecksumAndSignature
+    if options.verification_policy.requires_signature()
         && authenticated_artifact.is_none()
+        && !trusted_bundle
     {
         bail!(
             "strict native runtime verification requires the selected runtime to be listed by the authenticated catalog"
@@ -374,6 +383,23 @@ async fn install_resolved_runtime_with_catalog(
                 resolution.selected.id
             )
         }
+    }
+}
+
+/// A runtime the host shipped in one of its explicit `bundle_dirs`, under a
+/// policy that trusts those like the host binary itself.
+fn trusted_explicit_bundle(
+    resolution: &skippy_native_runtime::NativeRuntimeResolution,
+    options: &NativeRuntimeInstallOptions,
+) -> Result<bool> {
+    if !options.verification_policy.trusts_explicit_bundles() {
+        return Ok(false);
+    }
+    match &resolution.source {
+        NativeRuntimeSource::Bundle { path } => {
+            bundle_path_matches_explicit_root(path, &options.bundle_dirs)
+        }
+        _ => Ok(false),
     }
 }
 

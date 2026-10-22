@@ -395,3 +395,90 @@ fn constructors_embed_the_reviewed_production_pin_without_enabling_strict_policy
         .into_public_key()
         .unwrap();
 }
+
+/// Re-sign the fixture catalog so it lists only an official runtime with a
+/// different id, as when a distro ships a runtime it built itself.
+fn sign_catalog_without_bundle(fixture: &SignedFixture) {
+    let mut official = fixture.artifact.clone();
+    official.id = "official-runtime".to_string();
+    write_signed_catalog(&fixture.catalog_path, RELEASE, &official, &fixture.key_pair);
+}
+
+fn assert_bundle_source(
+    outcome: &skippy_runtime_install::NativeRuntimeInstallOutcome,
+    fixture: &SignedFixture,
+) {
+    let NativeRuntimeSource::Bundle { path } = &outcome.resolution.source else {
+        panic!("expected the shipped bundle to satisfy the install");
+    };
+    assert_eq!(
+        path.canonicalize().unwrap(),
+        fixture.bundle_path.canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn strict_mode_rejects_a_shipped_bundle_the_catalog_does_not_list() {
+    let fixture = SignedFixture::new();
+    sign_catalog_without_bundle(&fixture);
+
+    let error = install(fixture.options()).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("is not listed by the authenticated catalog"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn trusted_explicit_bundles_accept_a_shipped_bundle_the_catalog_does_not_list() {
+    let fixture = SignedFixture::new();
+    sign_catalog_without_bundle(&fixture);
+    let mut options = fixture.options();
+    options.verification_policy =
+        NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
+
+    let outcome = install(options).unwrap();
+    assert_bundle_source(&outcome, &fixture);
+}
+
+#[test]
+fn trusted_explicit_bundles_work_offline_without_a_catalog() {
+    let fixture = SignedFixture::new();
+    let mut options = fixture.options();
+    options.manifest_path = None;
+    options.verification_policy =
+        NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
+
+    let outcome = install(options).unwrap();
+    assert_bundle_source(&outcome, &fixture);
+}
+
+#[test]
+fn trusted_explicit_bundles_still_require_a_signed_catalog_without_bundles() {
+    let fixture = SignedFixture::new();
+    let mut options = fixture.options();
+    options.manifest_path = None;
+    options.bundle_dirs.clear();
+    options.verification_policy =
+        NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
+
+    let error = install(options).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("unsigned bundle-only installation is not allowed"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn trusted_explicit_bundles_still_reject_a_tampered_catalog() {
+    let fixture = SignedFixture::new();
+    let mut bytes = std::fs::read(&fixture.catalog_path).unwrap();
+    bytes.extend_from_slice(b" ");
+    std::fs::write(&fixture.catalog_path, &bytes).unwrap();
+    write_checksum(&fixture.catalog_path, &bytes);
+    let mut options = fixture.options();
+    options.verification_policy =
+        NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
+
+    assert!(install(options).is_err());
+}

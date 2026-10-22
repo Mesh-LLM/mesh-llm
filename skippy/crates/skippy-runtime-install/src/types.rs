@@ -21,6 +21,23 @@ pub enum NativeRuntimeVerificationPolicy {
     #[default]
     RequireChecksum,
     RequireChecksumAndSignature,
+    /// Strict for downloads, the cache, and discovered bundles, but trusts
+    /// runtimes found under the host's explicit `bundle_dirs`. For packagers
+    /// (e.g. distro builds) that ship runtimes they built themselves beside
+    /// the binary; those are trusted like the binary that ships them.
+    RequireSignatureTrustExplicitBundles,
+}
+
+impl NativeRuntimeVerificationPolicy {
+    /// Whether catalogs must carry a valid detached signature.
+    pub fn requires_signature(self) -> bool {
+        !matches!(self, Self::RequireChecksum)
+    }
+
+    /// Whether runtimes under explicit `bundle_dirs` skip catalog authentication.
+    pub fn trusts_explicit_bundles(self) -> bool {
+        matches!(self, Self::RequireSignatureTrustExplicitBundles)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

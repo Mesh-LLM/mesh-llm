@@ -185,8 +185,9 @@ async fn merge_release_manifest_sources(
     let mut release_version = options.release_version.clone();
     let mut skippy_abi = current_skippy_abi_version();
     let mut manifest_loaded = false;
-    let strict =
-        options.verification_policy == NativeRuntimeVerificationPolicy::RequireChecksumAndSignature;
+    let strict = options.verification_policy.requires_signature();
+    let trusted_bundles =
+        options.verification_policy.trusts_explicit_bundles() && !options.bundle_dirs.is_empty();
     if let Some(path) = options.manifest_path.take() {
         let manifest = load_release_manifest_path(&path, &options)?;
         sources.manifest_path = Some(path);
@@ -203,13 +204,13 @@ async fn merge_release_manifest_sources(
                 artifacts.extend(manifest.artifacts);
                 manifest_loaded = true;
             }
-            Err(err) if !strict && !options.bundle_dirs.is_empty() => {
+            Err(err) if (!strict && !options.bundle_dirs.is_empty()) || trusted_bundles => {
                 sources.remote_error = Some(format!("{err:#}"));
             }
             Err(err) => return Err(err),
         }
     }
-    if strict && !manifest_loaded {
+    if strict && !manifest_loaded && !trusted_bundles {
         bail!(
             "strict native runtime verification requires an authenticated release catalog; unsigned bundle-only installation is not allowed"
         );
