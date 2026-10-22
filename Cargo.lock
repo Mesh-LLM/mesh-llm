@@ -5336,6 +5336,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "crossterm",
+ "crossterm_winapi",
  "mesh-llm-events",
  "ratatui",
  "rustix",

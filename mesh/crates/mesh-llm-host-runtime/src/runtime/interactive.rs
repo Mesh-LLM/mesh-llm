@@ -616,14 +616,24 @@ mod tests {
             console_session_mode_for_term(true, true, Some("dumb")),
             ConsoleSessionMode::Fallback
         );
-        assert_eq!(
-            console_session_mode_for_term(true, true, Some("")),
+    }
+
+    #[test]
+    fn a_missing_term_means_a_windows_console_elsewhere_an_unknown_terminal() {
+        // conhost and Windows Terminal never set TERM, and they run the
+        // dashboard; elsewhere a terminal without TERM can't be trusted to.
+        let expected = if cfg!(windows) {
+            ConsoleSessionMode::InteractiveDashboard
+        } else {
             ConsoleSessionMode::Fallback
-        );
-        assert_eq!(
-            console_session_mode_for_term(true, true, None),
-            ConsoleSessionMode::Fallback
-        );
+        };
+        for term in [None, Some(""), Some("  ")] {
+            assert_eq!(
+                console_session_mode_for_term(true, true, term),
+                expected,
+                "{term:?}"
+            );
+        }
     }
 
     #[test]
