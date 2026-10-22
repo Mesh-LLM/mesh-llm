@@ -1,0 +1,41 @@
+From bd41e439198167627bb8c842860429abbad2bf26 Mon Sep 17 00:00:00 2001
+From: James Dumay <james@generalinference.xyz>
+Date: Thu, 22 Oct 2026 18:25:20 +1100
+Subject: [PATCH] diag(kv): sample the active attention extent during decode
+
+---
+ src/llama-kv-cache-extent.cpp | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-kv-cache-extent.cpp b/src/llama-kv-cache-extent.cpp
+index 70e082eb7..23edf3c64 100644
+--- a/src/llama-kv-cache-extent.cpp
++++ b/src/llama-kv-cache-extent.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-kv-cache.h"
++#include "llama-impl.h"
+ 
+ #include <algorithm>
+ 
+@@ -57,7 +58,17 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo, const llama_ubatch &
+         result = std::max(std::min(cells.size(), std::max(n_pad_cur, GGML_PAD(end, n_pad_cur))), result);
+     }
+ 
+-    return result - sinfo.kv_begin;
++    const uint32_t span = result - sinfo.kv_begin;
++    // Sample single-query decode only; full debug logging would distort timing.
++    if (debug > 0 && ubatch.n_tokens == 1 && supports_active_extent(ubatch) &&
++        ubatch.n_seqs_unq == 1 && ubatch.pos != nullptr && ubatch.pos[0] >= 0 && ubatch.pos[0] % 64 == 0) {
++        const llama_seq_id seq_id = ubatch.seq_id_unq[0];
++        const auto & cells = v_cells[seq_to_stream[seq_id]];
++        LLAMA_LOG_DEBUG("%s: seq=%d pos=%d active_min=%u active_max=%u kv_begin=%u kv_span=%u occupied=%u\n",
++                __func__, seq_id, ubatch.pos[0], cells.seq_used_min(seq_id), cells.seq_used_max_p1(seq_id),
++                sinfo.kv_begin, span, cells.get_used());
++    }
++    return span;
+ }
+ 
+ uint32_t llama_kv_cache::get_n_kv_pos_contiguous(const slot_info & sinfo, const llama_ubatch & ubatch) const {
+-- 
+2.56.0
+

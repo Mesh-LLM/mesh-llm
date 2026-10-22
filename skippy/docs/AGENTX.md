@@ -82,7 +82,10 @@ Build time is outside the measured cells.
 For a native KV-span diagnostic, set `AGENTX_SKIPPY_KV_SPAN_DEBUG=1` on the
 `agentx run` process. It launches Skippy with verbose native logging and
 `LLAMA_KV_CACHE_DEBUG=1`; the per-decode `llama_kv_cache::find_slot` lines report
-the highest occupied KV cell and the occupied-cell count. This option is
+the highest occupied KV cell and the occupied-cell count. Every 64th
+single-token decode also logs `kv_span`, the actual padded attention extent,
+along with the active sequence's physical cell bounds. Occupancy alone does
+not establish that extent when parked sequences share the pool. This option is
 Skippy-only, appears in `launch.json`, and is intentionally excluded from
 performance qualification because the extra logging changes timing.
 
