@@ -87,6 +87,7 @@ impl SkippyModelHandle {
                 .and_then(|args| args.native_mtp_draft_model_path.as_deref()),
         );
         let runtime_options = EmbeddedRuntimeOptions {
+            stage_transport: None,
             config: stage_config,
             topology: None,
             n_threads: options.n_threads,
@@ -158,6 +159,7 @@ impl SkippyModelHandle {
             Arc::new(runtime_events::SkippySessionRuntimeEventObserver::new());
         Self::load_stage0_runtime_options_with_openai_args(
             EmbeddedRuntimeOptions {
+                stage_transport: None,
                 config,
                 topology: None,
                 n_threads: None,

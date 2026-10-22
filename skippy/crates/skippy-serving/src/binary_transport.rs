@@ -8,9 +8,11 @@ mod native_mtp_reply;
 mod options;
 mod peer_sampling;
 mod preconnect;
+mod prediction_return_open;
 mod prefill_execution;
 mod restore_prefill_decode;
 mod socket;
+mod stage_connections;
 mod stage_execution;
 mod wire;
 

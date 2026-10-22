@@ -54,6 +54,7 @@ async fn stage_control_preflight_rejects_an_unclaimed_load() {
 
 fn load_request() -> StageLoadRequest {
     StageLoadRequest {
+        stage_transport: None,
         topology_id: "topology-a".to_string(),
         run_id: "run-a".to_string(),
         model_id: "model-a".to_string(),

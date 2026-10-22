@@ -1,3 +1,4 @@
+use crate::stage_transport::{StageConnection, StageListener};
 mod public_frontend;
 mod server_lifecycle;
 
@@ -8,12 +9,11 @@ pub use server_lifecycle::{serve_binary_stage, serve_binary_stage_with_shutdown}
 use std::{
     collections::BTreeMap,
     io::{self, Write},
-    net::{TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    thread::{self, JoinHandle},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -49,6 +49,10 @@ use skippy_runtime::ActivationBoundaryDesc;
 
 pub(in crate::binary_transport) mod async_forwarder;
 mod connection;
+mod connection_workers;
+use connection_workers::{
+    ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers, finish_connection_workers,
+};
 mod control_messages;
 mod message_receive;
 mod prefill_recording;
@@ -61,13 +65,6 @@ mod telemetry;
 
 use self::connection::handle_binary_connection;
 use self::session_tracker::ConnectionSessionOwnership;
-
-/// How often a waiting connection worker rechecks the shutdown flag, matching
-/// the downstream DOWNSTREAM_SHUTDOWN_POLL cadence in stage_execution.
-const WORKER_SHUTDOWN_POLL: Duration = Duration::from_millis(100);
-
-/// Darwin `recv`/`peek` error for an expired `SO_RCVTIMEO` (os error 22).
-const EINVAL: i32 = 22;
 
 /// Per-request downstream activation-forward write failure, emitted at both
 /// forward sites (the sync write in `connection` and the async writer thread
@@ -129,8 +126,8 @@ pub(crate) fn acquire_downstream_or_emit_connect_error(
     config: &StageConfig,
     first_message: &StageWireMessage,
     telemetry: &Telemetry,
-    acquire: impl FnOnce() -> Result<Option<TcpStream>>,
-) -> Result<Option<TcpStream>> {
+    acquire: impl FnOnce() -> Result<Option<StageConnection>>,
+) -> Result<Option<StageConnection>> {
     acquire().map_err(|error| {
         telemetry.emit(
             STAGE_BINARY_DOWNSTREAM_CONNECT_ERROR,
@@ -146,7 +143,7 @@ pub(crate) fn acquire_downstream_or_emit_connect_error(
 /// propagating the error. Success emits nothing here — the caller owns the
 /// success-path write span.
 pub(crate) fn write_forwarded_stage_or_emit_forward_error(
-    downstream: &mut TcpStream,
+    downstream: &mut StageConnection,
     message: &StageWireMessage,
     condition: WireCondition,
     identity: BTreeMap<String, serde_json::Value>,
@@ -184,175 +181,6 @@ pub(crate) fn insert_downstream_identity(
     );
 }
 
-#[derive(Default)]
-struct ConnectionWorkerControl {
-    shutting_down: AtomicBool,
-    sockets: Mutex<Vec<std::net::TcpStream>>,
-}
-
-impl ConnectionWorkerControl {
-    fn track(&self, stream: &std::net::TcpStream) -> io::Result<()> {
-        let tracked = stream.try_clone()?;
-        let mut sockets = self
-            .sockets
-            .lock()
-            .expect("connection sockets lock poisoned");
-        if self.shutting_down.load(Ordering::Acquire) {
-            let _ = tracked.shutdown(std::net::Shutdown::Both);
-        }
-        sockets.push(tracked);
-        Ok(())
-    }
-
-    fn shutdown(&self) {
-        self.shutting_down.store(true, Ordering::Release);
-        let sockets = self
-            .sockets
-            .lock()
-            .expect("connection sockets lock poisoned");
-        for socket in sockets.iter() {
-            let _ = socket.shutdown(std::net::Shutdown::Both);
-        }
-    }
-
-    fn clear(&self) {
-        self.sockets
-            .lock()
-            .expect("connection sockets lock poisoned")
-            .clear();
-    }
-
-    fn is_shutting_down(&self) -> bool {
-        self.shutting_down.load(Ordering::Acquire)
-    }
-
-    /// Block until `stream` has readable data (or EOF), returning false when
-    /// shutdown is requested instead. Peeks under a short read timeout so no
-    /// message bytes are consumed and the worker never sits in an
-    /// uninterruptible blocking read: `TcpStream::shutdown` on a tracked
-    /// clone does not unblock an in-flight `read` on Windows (#1538).
-    ///
-    /// Darwin quirk: when a blocking socket has `SO_RCVTIMEO` set, an expired
-    /// timeout surfaces from `peek` as `EINVAL` (os error 22), not
-    /// `WouldBlock`/`TimedOut`. Treating EINVAL as fatal here killed healthy
-    /// stage connections on their first idle poll (two-node split smoke:
-    /// "wait for the first binary stage message: Invalid argument (os error
-    /// 22)"). We therefore tolerate EINVAL only while our own read timeout is
-    /// provably in effect — `timeout_armed` is captured when we set it, so the
-    /// guard cannot drift from the socket state — and a timeout-less EINVAL
-    /// still fails the connection loudly.
-    ///
-    /// The tail `set_read_timeout(None)` is best-effort for the same reason:
-    /// during teardown Darwin can reject the clear with EINVAL too, and that
-    /// cleanup failure must not flip an already-decided poll outcome into a
-    /// connection error. For the same teardown window, if even arming the
-    /// timeout fails with EINVAL while shutdown is in progress, report
-    /// `Ok(false)` — the worker is winding down either way.
-    fn wait_for_readable(&self, stream: &TcpStream) -> io::Result<bool> {
-        let timeout_armed = match stream.set_read_timeout(Some(WORKER_SHUTDOWN_POLL)) {
-            Ok(()) => true,
-            // Darwin rejects SO_RCVTIMEO operations with EINVAL (os error 22)
-            // on a socket that has been shut down for teardown. If the worker
-            // is shutting down, that is the expected outcome, not an error.
-            Err(_) if self.is_shutting_down() => return Ok(false),
-            Err(error) => return Err(error),
-        };
-        let mut probe = [0u8; 1];
-        let ready = loop {
-            if self.is_shutting_down() {
-                break false;
-            }
-            let probe_started = Instant::now();
-            match stream.peek(&mut probe) {
-                Ok(_) => break true,
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::Interrupted
-                            | io::ErrorKind::WouldBlock
-                            | io::ErrorKind::TimedOut
-                    ) => {}
-                Err(error)
-                    if timeout_armed
-                        && error.raw_os_error() == Some(EINVAL)
-                        && probe_started.elapsed() >= WORKER_SHUTDOWN_POLL => {}
-                Err(error) => {
-                    let _ = stream.set_read_timeout(None);
-                    return Err(error);
-                }
-            }
-        };
-        // Best-effort cleanup: on Darwin, clearing SO_RCVTIMEO during
-        // connection teardown can itself fail with EINVAL once the peer (or
-        // our own shutdown path) has closed the socket. The poll outcome is
-        // already established at this point, so a failing timeout clear must
-        // not flip a healthy idle shutdown into "binary stage connection
-        // failed: Invalid argument (os error 22)".
-        let _ = stream.set_read_timeout(None);
-        Ok(ready)
-    }
-}
-
-struct ConnectionWorker {
-    control: Arc<ConnectionWorkerControl>,
-    task: JoinHandle<()>,
-}
-
-#[derive(Default)]
-struct ConnectionWorkers(Vec<ConnectionWorker>);
-
-impl ConnectionWorkers {
-    fn push(&mut self, worker: ConnectionWorker) {
-        self.0.push(worker);
-    }
-
-    fn reap_finished(&mut self) -> usize {
-        let mut panicked = 0;
-        let mut index = 0;
-        while index < self.0.len() {
-            if self.0[index].task.is_finished() {
-                let worker = self.0.swap_remove(index);
-                if worker.task.join().is_err() {
-                    // A panicked worker only fails its own connection; the
-                    // accept loop must keep serving other clients.
-                    panicked += 1;
-                }
-            } else {
-                index += 1;
-            }
-        }
-        panicked
-    }
-
-    fn shutdown(mut self) -> Result<()> {
-        for worker in &self.0 {
-            worker.control.shutdown();
-        }
-        let mut panicked = false;
-        for worker in self.0.drain(..) {
-            panicked |= worker.task.join().is_err();
-        }
-        if panicked {
-            bail!("binary stage connection worker panicked during shutdown");
-        }
-        Ok(())
-    }
-}
-
-fn finish_connection_workers(
-    accept_result: Result<()>,
-    connection_workers: ConnectionWorkers,
-) -> Result<()> {
-    let shutdown_result = connection_workers.shutdown();
-    match (accept_result, shutdown_result) {
-        (Ok(()), result) => result,
-        (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(shutdown_error)) => Err(error.context(format!(
-            "connection worker shutdown also failed: {shutdown_error:#}"
-        ))),
-    }
-}
-
 fn run_binary_stage(
     options: BinaryStageOptions,
     shutdown: Arc<AtomicBool>,
@@ -361,6 +189,7 @@ fn run_binary_stage(
     options.tuning.validate()?;
     let mtp_source = options.resolved_mtp_source();
     let BinaryStageOptions {
+        stage_transport,
         tuning,
         config,
         topology,
@@ -479,13 +308,17 @@ fn run_binary_stage(
         telemetry.emit("stage.kv_payload_selected", attrs);
     }
     let prediction_returns = Arc::new(PredictionReturnHub::default());
-    let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
+    let prediction_return_sinks = Arc::new(PredictionReturnSinks::new(stage_transport.clone()));
     let session_ownership = Arc::new(ConnectionSessionOwnership::default());
     let mut connection_workers = ConnectionWorkers::default();
-    let listener = TcpListener::bind(bind_addr)?;
+    let listener = match stage_transport.as_ref() {
+        Some(transport) => StageListener::supplied(transport.clone()),
+        None => StageListener::bind(bind_addr)?,
+    };
     listener.set_nonblocking(true)?;
     boundary_observer(input_boundary, output_boundary);
     let frontend_task = public_frontend::start(public_frontend::PublicFrontendLaunch {
+        stage_transport: stage_transport.clone(),
         config: config.clone(),
         runtime: runtime.clone(),
         iteration_scheduler: iteration_scheduler.clone(),
@@ -504,7 +337,12 @@ fn run_binary_stage(
     })?;
     let _downstream_preconnector = warm_downstream_preconnect_enabled()
         .then(|| {
-            DownstreamPreconnector::spawn(config.clone(), warm_downstream.clone(), shutdown.clone())
+            DownstreamPreconnector::spawn(
+                config.clone(),
+                warm_downstream.clone(),
+                shutdown.clone(),
+                stage_transport.clone(),
+            )
         })
         .transpose()
         .context("spawn downstream preconnector")?;
@@ -554,6 +392,7 @@ fn run_binary_stage(
                 config.stage_id
             );
             let config = config.clone();
+            let stage_transport = stage_transport.clone();
             let topology = topology.clone();
             let iteration_scheduler = iteration_scheduler.clone();
             let kv = kv.clone();
@@ -621,6 +460,7 @@ fn run_binary_stage(
                         || {
                             take_ready_downstream(
                                 &config,
+                                stage_transport.as_ref(),
                                 &warm_downstream,
                                 downstream_connect_timeout_secs,
                                 &worker_shutdown,
@@ -709,11 +549,11 @@ mod shutdown_tests {
         ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers, activation_width_from_graph,
         finish_connection_workers,
     };
+    use crate::stage_transport::{StageConnection, StageListener};
     use crate::test_activation::boundary_f32;
     use anyhow::anyhow;
     use std::{
         io::{Read, Write},
-        net::{TcpListener, TcpStream},
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -779,8 +619,8 @@ mod shutdown_tests {
         // as EINVAL (os error 22). The worker must keep polling on an idle
         // connection instead of failing it, and must still observe data
         // arriving after several expired polls.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let mut client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (mut server, _) = listener.accept().unwrap();
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
@@ -824,8 +664,8 @@ mod shutdown_tests {
         // shut down ("Invalid argument (os error 22)" at shutdown). The
         // cleanup is best-effort — the poll's already-decided outcome must be
         // reported as Ok instead of surfacing a connection error.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let _client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
@@ -840,8 +680,8 @@ mod shutdown_tests {
 
     #[test]
     fn shutdown_closes_and_joins_an_active_connection_worker() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (mut server, _) = listener.accept().unwrap();
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
@@ -869,8 +709,8 @@ mod shutdown_tests {
 
     #[test]
     fn accept_error_still_closes_and_joins_active_connection_worker() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (mut server, _) = listener.accept().unwrap();
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
@@ -1104,11 +944,11 @@ mod downstream_error_telemetry_tests {
     /// frame's identity when the write fails against a reset peer.
     #[test]
     fn sync_forward_boundary_emits_error_event_on_write_failure() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let mut client = TcpStream::connect(address).unwrap();
+        let mut client = StageConnection::connect(address).unwrap();
         let (server, _) = listener.accept().unwrap();
-        socket2::SockRef::from(&server)
+        socket2::SockRef::from(server.tcp().unwrap())
             .set_linger(Some(Duration::from_secs(0)))
             .unwrap();
         drop(server);
@@ -1172,9 +1012,9 @@ mod downstream_error_telemetry_tests {
     /// to the peer.
     #[test]
     fn sync_forward_boundary_emits_nothing_on_success() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let mut client = TcpStream::connect(address).unwrap();
+        let mut client = StageConnection::connect(address).unwrap();
         let (mut server, _) = listener.accept().unwrap();
 
         let config = config_with_downstream();

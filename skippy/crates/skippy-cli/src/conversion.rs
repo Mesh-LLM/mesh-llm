@@ -126,6 +126,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
     });
     let native_mtp_enabled = config.native_mtp_enabled;
     Ok(BinaryStageOptions {
+        stage_transport: None,
         tuning: tuning.clone(),
         config,
         topology,

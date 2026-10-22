@@ -47,6 +47,9 @@ pub(crate) struct StageCoordinatorClaimAck {
 
 #[derive(Clone, Debug)]
 pub(crate) struct StageLoadRequest {
+    /// Host-local execution input, never encoded in stage control messages.
+    pub(crate) stage_transport:
+        Option<std::sync::Arc<dyn skippy_serving::stage_transport::StageTransport>>,
     pub(crate) topology_id: String,
     pub(crate) run_id: String,
     pub(crate) model_id: String,

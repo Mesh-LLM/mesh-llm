@@ -1,6 +1,6 @@
 use super::*;
 use crate::frontend::generation::EmbeddedFusedFirstDecode;
-use std::net::TcpStream;
+use crate::stage_transport::StageConnection;
 use std::time::Instant;
 
 pub(super) struct EmbeddedPrefixRestore {
@@ -17,7 +17,7 @@ impl StageOpenAiBackend {
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         prefill_tokens: &[i32],
         wire_sampling: Option<WireSamplingConfig>,
         cache_stats: &mut GenerationCacheStats,

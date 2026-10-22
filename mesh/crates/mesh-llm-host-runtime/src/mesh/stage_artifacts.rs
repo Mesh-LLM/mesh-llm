@@ -314,10 +314,7 @@ impl Node {
                 Self::authorize_stage_load(control_tx, load).await?;
                 self.resolve_stage_load_request(load).await?;
             }
-            crate::inference::skippy::StageControlRequest::Stop(stop) => {
-                self.stop_stage_transport_bridge(&stop.topology_id, &stop.run_id, &stop.stage_id)
-                    .await;
-            }
+            crate::inference::skippy::StageControlRequest::Stop(_) => {}
             crate::inference::skippy::StageControlRequest::Status(_)
             | crate::inference::skippy::StageControlRequest::Inventory(_) => {}
         }
@@ -393,35 +390,13 @@ impl Node {
                 }
             }
         }
-        let topology_id = load.topology_id.clone();
-        let run_id = load.run_id.clone();
+        load.stage_transport = Some(self.direct_stage_transport(load).await?);
         if let Some(upstream) = load.upstream.as_mut() {
-            self.resolve_stage_peer_endpoint(&topology_id, &run_id, upstream)
-                .await?;
+            upstream.endpoint = super::direct_stage_connections::endpoint(&upstream.stage_id);
         }
         if let Some(downstream) = load.downstream.as_mut() {
-            self.resolve_stage_peer_endpoint(&topology_id, &run_id, downstream)
-                .await?;
+            downstream.endpoint = super::direct_stage_connections::endpoint(&downstream.stage_id);
         }
-        Ok(())
-    }
-
-    pub(crate) async fn resolve_stage_peer_endpoint(
-        &self,
-        topology_id: &str,
-        run_id: &str,
-        peer: &mut crate::inference::skippy::StagePeerDescriptor,
-    ) -> anyhow::Result<()> {
-        let Some(peer_node) = peer.node_id else {
-            return Ok(());
-        };
-        if peer_node == self.endpoint.id() {
-            return Ok(());
-        }
-        let bridge_addr = self
-            .ensure_stage_transport_bridge(peer_node, topology_id, run_id, peer.stage_id.clone())
-            .await?;
-        peer.endpoint = bridge_addr;
         Ok(())
     }
 

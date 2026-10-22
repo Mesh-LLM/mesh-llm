@@ -211,6 +211,7 @@ impl ResolvedSkippyConfig {
         load_mode: LoadMode,
     ) -> Result<EmbeddedRuntimeOptions> {
         Ok(EmbeddedRuntimeOptions {
+            stage_transport: None,
             config: self.to_stage_config(package_identity, load_mode.clone())?,
             topology: None,
             n_threads: self.throughput.threads,

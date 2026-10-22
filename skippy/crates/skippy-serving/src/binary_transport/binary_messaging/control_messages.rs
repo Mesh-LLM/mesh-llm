@@ -19,6 +19,7 @@ use crate::binary_transport::stage_execution::{
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::kv_integration::KvStageIntegration;
+use crate::stage_transport::StageConnection;
 use crate::telemetry::{Telemetry, now_unix_nanos};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -28,7 +29,6 @@ use skippy_protocol::binary::{
 };
 use skippy_protocol::{StageConfig, StageTopology};
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -38,8 +38,8 @@ pub(super) fn handle_stop(
     iteration_scheduler: &IterationScheduler,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
-    upstream: &mut TcpStream,
-    mut downstream: Option<&mut TcpStream>,
+    upstream: &mut StageConnection,
+    mut downstream: Option<&mut StageConnection>,
     downstream_wire_condition: WireCondition,
     message: &StageWireMessage,
     session_key: &str,
@@ -49,7 +49,7 @@ pub(super) fn handle_stop(
     request_summary: &mut BinaryRequestSummary,
     async_forwarder: Option<&mut AsyncForwarder>,
     session_tracker: &mut ConnectionSessionTracker,
-    prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
+    prediction_return_streams: &mut BTreeMap<(u64, u64), StageConnection>,
     prediction_return_sinks: &PredictionReturnSinks,
 ) -> Result<()> {
     if pending_prefill_replies != 0 {
@@ -163,7 +163,7 @@ pub(super) fn handle_stop(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_verify_retirement(
     iteration_scheduler: &IterationScheduler,
-    mut downstream: Option<&mut TcpStream>,
+    mut downstream: Option<&mut StageConnection>,
     downstream_wire_condition: WireCondition,
     message: &StageWireMessage,
     session_key: &str,
@@ -199,8 +199,8 @@ pub(super) fn handle_verify_retirement(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_session_control(
     iteration_scheduler: &IterationScheduler,
-    upstream: &mut TcpStream,
-    mut downstream: Option<&mut TcpStream>,
+    upstream: &mut StageConnection,
+    mut downstream: Option<&mut StageConnection>,
     downstream_wire_condition: WireCondition,
     message: &StageWireMessage,
     session_key: &str,
@@ -254,8 +254,8 @@ pub(super) fn handle_generation_control(
     config: &StageConfig,
     topology: Option<&StageTopology>,
     iteration_scheduler: &IterationScheduler,
-    upstream: &mut TcpStream,
-    mut downstream: Option<&mut TcpStream>,
+    upstream: &mut StageConnection,
+    mut downstream: Option<&mut StageConnection>,
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     message: &StageWireMessage,
@@ -264,7 +264,7 @@ pub(super) fn handle_generation_control(
     pending_reply_stats: &mut StageReplyStats,
     async_forwarder: Option<&mut AsyncForwarder>,
     prediction_return_sinks: &PredictionReturnSinks,
-    prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
+    prediction_return_streams: &mut BTreeMap<(u64, u64), StageConnection>,
 ) -> Result<()> {
     let mut generation_stats = std::mem::take(pending_reply_stats);
     if let Some(forwarder) = async_forwarder {
@@ -328,8 +328,8 @@ pub(super) fn handle_prefix_cache_control(
     iteration_scheduler: &IterationScheduler,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
-    upstream: &mut TcpStream,
-    mut downstream: Option<&mut TcpStream>,
+    upstream: &mut StageConnection,
+    mut downstream: Option<&mut StageConnection>,
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     activation_width: i32,
@@ -341,7 +341,7 @@ pub(super) fn handle_prefix_cache_control(
     pending_reply_stats: &mut StageReplyStats,
     async_forwarder: Option<&mut AsyncForwarder>,
     prediction_return_sinks: &PredictionReturnSinks,
-    prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
+    prediction_return_streams: &mut BTreeMap<(u64, u64), StageConnection>,
 ) -> Result<()> {
     let control_started = Instant::now();
     let mut control_stats = std::mem::take(pending_reply_stats);

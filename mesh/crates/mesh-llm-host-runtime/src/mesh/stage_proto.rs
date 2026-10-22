@@ -467,6 +467,7 @@ pub(super) fn stage_load_from_proto(
         .try_into()
         .map_err(|error| anyhow::anyhow!("invalid stage load admission descriptor: {error}"))?;
     Ok(crate::inference::skippy::StageLoadRequest {
+        stage_transport: None,
         topology_id: load.topology_id,
         run_id: load.run_id,
         model_id: load.model_id,

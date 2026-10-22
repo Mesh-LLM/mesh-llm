@@ -156,8 +156,6 @@ pub struct Node {
     >,
     pub(crate) stage_control_lifecycle:
         Arc<Mutex<Option<crate::inference::skippy::StageControlHandle>>>,
-    pub(crate) stage_transport_bridges: Arc<Mutex<HashMap<String, StageTransportBridge>>>,
-    pub(crate) stage_transport_aliases: Arc<Mutex<HashMap<String, String>>>,
     pub(crate) stage_topologies: Arc<Mutex<StageTopologyState>>,
     pub(crate) plugin_manager: Arc<Mutex<Option<crate::plugin::PluginManager>>>,
     pub(crate) display_name: Arc<Mutex<Option<String>>>,
@@ -607,18 +605,6 @@ impl Node {
     }
 }
 impl Node {
-    pub(crate) async fn stop_stage_transport_bridge(
-        &self,
-        topology_id: &str,
-        run_id: &str,
-        stage_id: &str,
-    ) {
-        let key = stage_runtime_status_key(topology_id, run_id, stage_id);
-        if let Some(bridge) = self.stage_transport_bridges.lock().await.remove(&key) {
-            bridge.abort();
-        }
-    }
-
     pub fn local_request_metrics_snapshot(&self) -> LocalRequestMetricsSnapshot {
         self.local_request_metrics.snapshot()
     }
@@ -872,8 +858,6 @@ impl Node {
             stage_transport_tx,
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_control_lifecycle: Arc::new(Mutex::new(None)),
-            stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
-            stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
@@ -1058,8 +1042,6 @@ impl Node {
             stage_transport_tx,
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_control_lifecycle: Arc::new(Mutex::new(None)),
-            stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
-            stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),

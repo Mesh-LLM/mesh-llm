@@ -37,3 +37,26 @@ nonempty generated output through the OpenAI endpoint. Child deadlines turn
 leaked runtime threads into failures rather than hanging the test runner.
 These tests cover SDK lifecycle and native inference, not the Buzz UI or a
 multi-machine community mesh.
+
+SDK application stage providers supply connections directly to stage execution. The host
+checks authenticated peer identity, admission, topology/run ownership and local
+stage readiness before handing an inbound provider stream to a bounded execution
+ingress. Forward lanes and prediction returns use supplied connections without
+local TCP listeners or byte-copy relay tasks. Unhandled stage
+connections retain the dedicated Iroh path. The provider never selects a local
+TCP destination. See the [contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).
+
+For split planning the host also reads optional provider link observations, gated
+by current peer admission, matching protocol, sample count and freshness. It passes
+directed local-to-peer latency edges to Skippy's pure planner; remote-to-remote
+edges retain existing RTT estimates. These local observations require no wire
+changes and do not trigger topology reloads on their own.
+
+Embedded nodes may require their registered provider through
+`StageTransportPolicy::RequireProvider`. The host validates registration, advertises
+the policy through an existing capability feature, filters split participants,
+verifies outgoing setup before stage loading and refuses default activation streams
+in both directions. Each participant must enforce the policy. Required mode also
+requires stage peer identities and rejects raw socket endpoints on the injected path;
+control, artifacts and ordinary mesh membership remain available. See the
+[SDK example](../mesh-llm-sdk/README.md#application-stage-transport).

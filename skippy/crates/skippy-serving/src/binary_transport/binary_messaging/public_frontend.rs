@@ -3,6 +3,7 @@ use super::*;
 use crate::runtime_state::RuntimeState;
 
 pub(super) struct PublicFrontendLaunch {
+    pub stage_transport: Option<Arc<dyn crate::stage_transport::StageTransport>>,
     pub config: StageConfig,
     pub runtime: Arc<Mutex<RuntimeState>>,
     pub iteration_scheduler: IterationScheduler,
@@ -22,6 +23,7 @@ pub(super) struct PublicFrontendLaunch {
 
 pub(super) fn start(launch: PublicFrontendLaunch) -> Result<Option<EmbeddedFrontendTask>> {
     let PublicFrontendLaunch {
+        stage_transport,
         config,
         runtime,
         iteration_scheduler,
@@ -51,6 +53,7 @@ pub(super) fn start(launch: PublicFrontendLaunch) -> Result<Option<EmbeddedFront
         frontend_task = Some(EmbeddedFrontendTask(Some(tokio::spawn(async move {
             frontend::serve_embedded_openai_with_scheduler(
                 EmbeddedOpenAiArgs {
+                    stage_transport,
                     bind_addr: openai_options.bind_addr,
                     config: openai_config,
                     runtime: openai_runtime,

@@ -9,6 +9,8 @@ use super::WireCondition;
 
 #[derive(Clone)]
 pub struct BinaryStageOptions {
+    /// Supplied stage ingress and peer connections. `None` uses standalone TCP.
+    pub stage_transport: Option<std::sync::Arc<dyn crate::stage_transport::StageTransport>>,
     pub tuning: crate::settings::ServingTuning,
     pub config: StageConfig,
     pub topology: Option<StageTopology>,

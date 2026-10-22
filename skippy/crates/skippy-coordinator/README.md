@@ -12,6 +12,24 @@ Those parts live in `mesh-llm-host-runtime`; this crate only answers:
 - Is this load fenced by the current accepted claim?
 - How many planned stages must accept before a split can start?
 
+Topology inputs may include directed `StageLink` acknowledgement-latency
+observations supplied by the caller. Candidate selection sums costs along the
+stage chain and its return edge, preserving nanosecond precision internally.
+Missing edges keep the existing maximum participant RTT estimate, with a one
+millisecond floor to avoid treating truncated sub-millisecond RTTs as free; diagnostics
+round up to milliseconds. With no link observations, the previous cost calculation
+and placement behavior are preserved. The caller owns freshness and path validity.
+This does not infer payload sizes or charge an unmeasured bandwidth cost.
+
+```mermaid
+flowchart LR
+    O[Caller validates link observations] --> L[Directed stage latency costs]
+    R[Participant RTT fallback] --> L
+    M[Model and memory budgets] --> P[Topology candidate selection]
+    L --> P
+    P --> S[Stage assignments]
+```
+
 ## Mental Model
 
 A split runtime has one coordinator. The coordinator chooses a topology, asks

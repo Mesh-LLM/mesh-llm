@@ -38,6 +38,7 @@ pub(super) fn package(layer_count: u32) -> skippy::SkippyPackageIdentity {
 
 pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadRequest {
     skippy::StageLoadRequest {
+        stage_transport: None,
         topology_id: "topology-a".to_string(),
         run_id: "run-a".to_string(),
         model_id: "model-a".to_string(),

@@ -5,6 +5,7 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 
 mod application_protocols;
 mod control_listener;
+mod required_stage_provider;
 
 include!("connections.rs");
 include!("admission/helpers.rs");

@@ -1,6 +1,6 @@
+use crate::stage_transport::StageConnection;
 use std::{
     io,
-    net::TcpStream,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -25,8 +25,9 @@ pub(super) struct DownstreamPreconnector {
 impl DownstreamPreconnector {
     pub(super) fn spawn(
         config: StageConfig,
-        warm_downstream: Arc<Mutex<Option<TcpStream>>>,
+        warm_downstream: Arc<Mutex<Option<StageConnection>>>,
         shutdown: Arc<AtomicBool>,
+        transport: Option<Arc<dyn crate::stage_transport::StageTransport>>,
     ) -> io::Result<Self> {
         if config.downstream.is_none() {
             return Ok(Self {
@@ -36,9 +37,9 @@ impl DownstreamPreconnector {
         }
         let thread_name = format!("skippy-warm-downstream-{}", config.stage_index);
         let task_shutdown = shutdown.clone();
-        let task = thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || run_downstream_preconnector(config, warm_downstream, task_shutdown))?;
+        let task = thread::Builder::new().name(thread_name).spawn(move || {
+            run_downstream_preconnector(config, warm_downstream, task_shutdown, transport)
+        })?;
         Ok(Self {
             shutdown,
             task: Some(task),
@@ -57,8 +58,9 @@ impl Drop for DownstreamPreconnector {
 
 fn run_downstream_preconnector(
     config: StageConfig,
-    warm_downstream: Arc<Mutex<Option<TcpStream>>>,
+    warm_downstream: Arc<Mutex<Option<StageConnection>>>,
     shutdown: Arc<AtomicBool>,
+    transport: Option<Arc<dyn crate::stage_transport::StageTransport>>,
 ) {
     while !shutdown.load(Ordering::SeqCst) {
         if warm_slot_is_full(&warm_downstream) {
@@ -67,6 +69,7 @@ fn run_downstream_preconnector(
         }
         match connect_binary_downstream_cancellable(
             &config,
+            transport.as_ref(),
             WARM_DOWNSTREAM_CONNECT_TIMEOUT,
             &shutdown,
         ) {
@@ -105,14 +108,17 @@ fn sleep_until_retry_or_shutdown(shutdown: &AtomicBool) {
     }
 }
 
-fn warm_slot_is_full(warm_downstream: &Arc<Mutex<Option<TcpStream>>>) -> bool {
+fn warm_slot_is_full(warm_downstream: &Arc<Mutex<Option<StageConnection>>>) -> bool {
     warm_downstream
         .lock()
         .map(|guard| guard.is_some())
         .unwrap_or(true)
 }
 
-fn store_warm_stream(warm_downstream: &Arc<Mutex<Option<TcpStream>>>, stream: TcpStream) {
+fn store_warm_stream(
+    warm_downstream: &Arc<Mutex<Option<StageConnection>>>,
+    stream: StageConnection,
+) {
     let Ok(mut guard) = warm_downstream.lock() else {
         return;
     };
@@ -125,8 +131,8 @@ fn store_warm_stream(warm_downstream: &Arc<Mutex<Option<TcpStream>>>, stream: Tc
 mod tests {
     use super::DownstreamPreconnector;
     use crate::binary_transport::stage_execution::prefix_cache_test_config;
+    use crate::stage_transport::StageListener;
     use std::{
-        net::TcpListener,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
@@ -162,15 +168,19 @@ mod tests {
 
     #[test]
     fn spawned_preconnector_stops_and_joins_after_shutdown() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap().to_string();
         drop(listener);
         let mut config = prefix_cache_test_config();
         config.downstream.as_mut().unwrap().endpoint = endpoint;
         let shutdown = Arc::new(AtomicBool::new(false));
-        let preconnector =
-            DownstreamPreconnector::spawn(config, Arc::new(Mutex::new(None)), shutdown.clone())
-                .unwrap();
+        let preconnector = DownstreamPreconnector::spawn(
+            config,
+            Arc::new(Mutex::new(None)),
+            shutdown.clone(),
+            None,
+        )
+        .unwrap();
         thread::sleep(Duration::from_millis(20));
 
         shutdown.store(true, Ordering::Release);

@@ -306,7 +306,11 @@ impl StageControlState {
             existing.server.shutdown().await?;
         }
 
-        let bind_addr = materialize_stage_bind_addr(parse_bind_addr(&load.bind_addr)?)?;
+        let bind_addr = if load.stage_transport.is_some() {
+            parse_bind_addr(&load.bind_addr)?
+        } else {
+            materialize_stage_bind_addr(parse_bind_addr(&load.bind_addr)?)?
+        };
         let mut effective_load = load;
         effective_load.bind_addr = bind_addr.to_string();
         super::configure_materialized_stage_cache();
@@ -325,6 +329,7 @@ impl StageControlState {
         let config = stage_config(&effective_load, resolved_package.as_ref())?;
         let compute_meter = Arc::new(skippy_serving::compute_meter::StageComputeMeter::default());
         let server = skippy_serving::start_binary_stage(BinaryStageOptions {
+            stage_transport: effective_load.stage_transport.clone(),
             tuning: Default::default(),
             config,
             topology: None,
@@ -353,11 +358,29 @@ impl StageControlState {
                 package: resolved_package,
             },
         );
-        self.readiness_probe = Some(start_binary_stage_ready_probe(
-            bind_addr,
-            stage_load_timeout(&effective_load),
-        ));
-        let readiness_result = {
+        let readiness_result = if effective_load.stage_transport.is_some() {
+            let server = &self.stages.get(&key).expect("newly started stage").server;
+            tokio::time::timeout(stage_load_timeout(&effective_load), async {
+                loop {
+                    let status = server.status();
+                    match status.state {
+                        skippy_serving::EmbeddedState::Ready => return Ok(()),
+                        skippy_serving::EmbeddedState::Failed
+                        | skippy_serving::EmbeddedState::Stopped => {
+                            return Err(anyhow!("stage startup ended: {:?}", status.last_error));
+                        }
+                        _ => tokio::time::sleep(Duration::from_millis(20)).await,
+                    }
+                }
+            })
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|result| result)
+        } else {
+            self.readiness_probe = Some(start_binary_stage_ready_probe(
+                bind_addr,
+                stage_load_timeout(&effective_load),
+            ));
             let probe = self
                 .readiness_probe
                 .as_mut()

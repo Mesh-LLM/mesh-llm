@@ -462,6 +462,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
     let speculative_overrides = speculative_overrides_from_cli(&cli);
     mesh_llm_host_runtime::RuntimeOptions {
         application_protocols: Vec::new(),
+        stage_transport_policy: Default::default(),
         log_format: cli.log_format,
         debug: cli.debug,
         skippy_metrics_otlp_grpc: cli.skippy_metrics_otlp_grpc,

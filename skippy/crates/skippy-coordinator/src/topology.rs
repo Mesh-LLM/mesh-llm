@@ -2,7 +2,10 @@ use std::cmp::Ordering;
 
 mod capacity;
 mod locked;
+mod network_cost;
 mod performance;
+pub use network_cost::StageLink;
+use network_cost::estimate_network_cost;
 
 use capacity::layer_required_bytes;
 pub use capacity::{
@@ -51,6 +54,8 @@ pub struct TopologyPlanningInput {
     pub reserved_sequence_ids: usize,
     pub minimum_nodes: usize,
     pub nodes: Vec<TopologyNode>,
+    /// Directed observations supplied locally by the transport owner.
+    pub stage_links: Vec<StageLink>,
     pub context_length_override: Option<u32>,
     pub parallel_lanes_override: Option<usize>,
     pub target_decode_tpot_ms: Option<u32>,
@@ -441,6 +446,7 @@ fn visit_node_subsets(
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CandidatePlan {
     plan: TopologyPlan,
+    network_cost_nanos: u64,
     minimum_remaining_vram: u64,
     total_remaining_vram: u128,
 }
@@ -552,8 +558,10 @@ fn fit_candidate(
         return None;
     }
 
-    let estimated_decode_network_ms_per_token = estimate_decode_network_ms_per_token(nodes);
+    let (estimated_decode_network_ms_per_token, network_cost_nanos) =
+        estimate_network_cost(input, nodes, &stages);
     Some(CandidatePlan {
+        network_cost_nanos,
         plan: TopologyPlan {
             context_length,
             parallel_lanes,
@@ -570,10 +578,11 @@ fn fit_candidate(
     })
 }
 
-fn latency_aware_planning(_input: &TopologyPlanningInput, nodes: &[UsableNode]) -> bool {
-    nodes
-        .iter()
-        .any(|node| node.stage_transfer_latency_ms.is_some())
+fn latency_aware_planning(input: &TopologyPlanningInput, nodes: &[UsableNode]) -> bool {
+    !input.stage_links.is_empty()
+        || nodes
+            .iter()
+            .any(|node| node.stage_transfer_latency_ms.is_some())
 }
 
 fn candidate_has_required_stage0(
@@ -590,14 +599,8 @@ fn candidate_has_required_stage0(
 }
 
 fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
-    let candidate_estimate = candidate
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
-    let current_estimate = current
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
+    let candidate_estimate = candidate.network_cost_nanos;
+    let current_estimate = current.network_cost_nanos;
     candidate_estimate < current_estimate
         || (candidate_estimate == current_estimate && candidate.cmp(current) == Ordering::Greater)
 }
@@ -615,24 +618,23 @@ fn latency_candidate_ordering(
     right: &CandidatePlan,
     input: &TopologyPlanningInput,
 ) -> Ordering {
-    let left_estimate = left
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
-    let right_estimate = right
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
+    if left.plan.estimated_decode_network_ms_per_token.is_none()
+        && right.plan.estimated_decode_network_ms_per_token.is_none()
+    {
+        return Ordering::Equal;
+    }
+    let left_estimate = left.network_cost_nanos;
+    let right_estimate = right.network_cost_nanos;
     let left_target_met = decode_tpot_target_met(
         left.plan.estimated_decode_network_ms_per_token,
         input.target_decode_tpot_ms,
     )
-    .unwrap_or(true);
+    .unwrap_or(input.stage_links.is_empty());
     let right_target_met = decode_tpot_target_met(
         right.plan.estimated_decode_network_ms_per_token,
         input.target_decode_tpot_ms,
     )
-    .unwrap_or(true);
+    .unwrap_or(input.stage_links.is_empty());
 
     left_target_met
         .cmp(&right_target_met)
@@ -640,14 +642,6 @@ fn latency_candidate_ordering(
         .then_with(|| left.plan.context_length.cmp(&right.plan.context_length))
         .then_with(|| left.plan.parallel_lanes.cmp(&right.plan.parallel_lanes))
         .then_with(|| left.cmp(right))
-}
-
-fn estimate_decode_network_ms_per_token(nodes: &[UsableNode]) -> Option<u32> {
-    let hop_latency = nodes
-        .iter()
-        .filter_map(|node| node.stage_transfer_latency_ms)
-        .max()?;
-    Some(hop_latency.saturating_mul(nodes.len() as u32))
 }
 
 fn decode_tpot_target_met(estimate: Option<u32>, target: Option<u32>) -> Option<bool> {
@@ -720,14 +714,14 @@ mod tests {
         }
     }
 
-    fn latency_node(id: &str, gib: u64, stage_transfer_latency_ms: u32) -> TopologyNode {
+    pub(super) fn latency_node(id: &str, gib: u64, stage_transfer_latency_ms: u32) -> TopologyNode {
         TopologyNode {
             stage_transfer_latency_ms: Some(stage_transfer_latency_ms),
             ..node(id, gib)
         }
     }
 
-    fn input(nodes: Vec<TopologyNode>) -> TopologyPlanningInput {
+    pub(super) fn input(nodes: Vec<TopologyNode>) -> TopologyPlanningInput {
         TopologyPlanningInput {
             native_context_length: 65_536,
             layer_count: 40,
@@ -738,6 +732,7 @@ mod tests {
             reserved_sequence_ids: 16,
             minimum_nodes: 1,
             nodes,
+            stage_links: Vec::new(),
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
@@ -757,6 +752,7 @@ mod tests {
             reserved_sequence_ids: 16,
             minimum_nodes: 2,
             nodes,
+            stage_links: Vec::new(),
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
@@ -804,6 +800,7 @@ mod tests {
             reserved_sequence_ids: 0,
             minimum_nodes: 1,
             nodes: vec![node("falcon-node", 1)],
+            stage_links: Vec::new(),
             context_length_override: Some(65_536),
             parallel_lanes_override: Some(LANES),
             target_decode_tpot_ms: None,

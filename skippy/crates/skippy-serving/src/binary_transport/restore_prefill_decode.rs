@@ -1,4 +1,5 @@
-use std::{collections::BTreeMap, net::TcpStream, sync::Arc, time::Instant};
+use crate::stage_transport::StageConnection;
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -65,13 +66,13 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
     session_id: &str,
     wire_session_id: u64,
     mut message: StageWireMessage,
-    downstream: Option<&mut TcpStream>,
+    downstream: Option<&mut StageConnection>,
     downstream_wire_condition: WireCondition,
     activation_width: i32,
     control_started: Instant,
     mut control_stats: StageReplyStats,
     prediction_return_sinks: &PredictionReturnSinks,
-    prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
+    prediction_return_streams: &mut BTreeMap<(u64, u64), StageConnection>,
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
 ) -> Result<()> {
@@ -122,6 +123,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
         );
         send_restore_decode_direct_reply(
             config,
+            prediction_return_sinks.transport.as_ref(),
             topology,
             &message,
             downstream_connect_timeout_secs,
@@ -266,6 +268,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
     );
     send_restore_decode_direct_reply(
         config,
+        prediction_return_sinks.transport.as_ref(),
         topology,
         &message,
         downstream_connect_timeout_secs,
@@ -336,10 +339,11 @@ fn emit_restore_decode_control(
 
 fn send_restore_decode_direct_reply(
     config: &StageConfig,
+    transport: Option<&Arc<dyn crate::stage_transport::StageTransport>>,
     topology: Option<&StageTopology>,
     message: &StageWireMessage,
     downstream_connect_timeout_secs: u64,
-    prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
+    prediction_return_streams: &mut BTreeMap<(u64, u64), StageConnection>,
     reply: StageReply,
 ) -> Result<()> {
     if let Some(stream) =
@@ -349,6 +353,7 @@ fn send_restore_decode_direct_reply(
     }
     send_one_off_direct_return(
         config,
+        transport,
         topology,
         message,
         downstream_connect_timeout_secs,
@@ -358,6 +363,7 @@ fn send_restore_decode_direct_reply(
 
 fn send_one_off_direct_return(
     config: &StageConfig,
+    transport: Option<&Arc<dyn crate::stage_transport::StageTransport>>,
     topology: Option<&StageTopology>,
     message: &StageWireMessage,
     downstream_connect_timeout_secs: u64,
@@ -365,6 +371,7 @@ fn send_one_off_direct_return(
 ) -> Result<()> {
     let mut stream = direct_return::open_prediction_return_stream(
         config,
+        transport,
         topology,
         message.request_id,
         message.session_id,
