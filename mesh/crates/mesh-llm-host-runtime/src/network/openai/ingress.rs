@@ -216,6 +216,10 @@ pub(super) struct RawProxyTerminalFacts<'a> {
     /// The mesh node that asked, from the tunnel's authenticated remote id
     /// ([`IngressRouteContext::requested_by_node_id`]). Host-served only.
     pub(super) requested_by_node_id: Option<&'a str>,
+    /// The request's stabilized `x-capsule-client-nonce` and who contributed
+    /// it ([`request_client_nonce`]), as the `RemoteMesh` terminal reports it.
+    /// Host-served only.
+    pub(super) client_nonce: Option<(&'a str, ClientNonceSource)>,
 }
 
 /// Publish the raw-proxy path's terminal event for a served exchange, enriched
@@ -226,7 +230,10 @@ pub(super) struct RawProxyTerminalFacts<'a> {
 /// the dispatch didn't carry, stays omitted (never fabricated). No
 /// `X-Capsule-Id` marker exists on this path (it never runs through
 /// `skippy-inference-api`'s `InferenceHookPolicy`, the only place a marker is minted),
-/// so nonce/nonce_source are `None`.
+/// so `capsule_id` is `None`. `nonce`/`nonce_source` come from the request's
+/// own stabilized client nonce when the caller passes one (the host-served
+/// branch does), so a node serving a routed exchange reports the same nonce as
+/// the routing node's `RemoteMesh` terminal; otherwise they are `None`.
 ///
 /// `served_locally` distinguishes the host-served path (this node's own
 /// weights, via `route_model_request`) from the plugin-served path (a plugin
@@ -252,6 +259,7 @@ pub(super) async fn publish_raw_proxy_terminal(
         served_locally,
         request_digest,
         requested_by_node_id,
+        client_nonce,
     } = facts;
     let mut envelope = OpenAiExchangeEnvelope::terminal(
         exchange_id.to_string(),
@@ -259,8 +267,9 @@ pub(super) async fn publish_raw_proxy_terminal(
         model_name,
         plugin_route_status(final_outcome),
         None,
-        None,
+        client_nonce.map(|(_, source)| source),
     );
+    envelope.nonce = client_nonce.map(|(nonce, _)| nonce.to_string());
     // Nothing was served on a 503 / `Failed` / `Dropped` outcome, so there is
     // no hardware or model identity to report — and no reason to pay the
     // `served_model_descriptors()` lock for a lookup whose result would be
@@ -346,13 +355,13 @@ async fn mint_and_publish_effective_raw_proxy(
     Some(exchange_id)
 }
 
-/// Map a `RemoteMesh` forwarded nonce's origin marker (see
+/// Map a request nonce's origin marker (see
 /// [`proxy::BufferedHttpRequest::capsule_nonce_headers`]) to the tri-state a
 /// plugin uses to judge trust. An origin marker present means THIS frontend
 /// minted the nonce (the client sent none, so a fallback was generated at
 /// ingress); its absence means the value came from the client unchanged.
 /// `None` exactly when there is no nonce to report at all.
-fn remote_mesh_nonce_source(
+fn client_nonce_source(
     nonce: &Option<String>,
     nonce_origin: &Option<String>,
 ) -> Option<ClientNonceSource> {
@@ -363,6 +372,19 @@ fn remote_mesh_nonce_source(
             ClientNonceSource::ClientSupplied
         }
     })
+}
+
+/// The request's stabilized client nonce with its [`client_nonce_source`],
+/// for the host-served terminal. On a node serving a tunnelled request this
+/// is the routing node's nonce: ingress keeps a single valid inbound nonce and
+/// strips the origin marker, so it reads `ClientSupplied` (the cross-node
+/// asymmetry documented on `OpenAiExchangeEnvelope::nonce_source`).
+fn request_client_nonce(
+    request: &proxy::BufferedHttpRequest,
+) -> Option<(String, ClientNonceSource)> {
+    let (nonce, nonce_origin) = request.capsule_nonce_headers();
+    let source = client_nonce_source(&nonce, &nonce_origin)?;
+    nonce.map(|nonce| (nonce, source))
 }
 
 /// What this node knows about an exchange a peer delivered while this node
@@ -431,7 +453,7 @@ fn local_route_delivered_by_peer<'a>(
     request_digest: Option<String>,
 ) -> RemoteDeliveredFacts<'a> {
     let (nonce, nonce_origin) = request.capsule_nonce_headers();
-    let nonce_source = remote_mesh_nonce_source(&nonce, &nonce_origin);
+    let nonce_source = client_nonce_source(&nonce, &nonce_origin);
     RemoteDeliveredFacts {
         exchange_id,
         model_name,
@@ -1108,7 +1130,7 @@ async fn route_missing_local_model(
             // node forwards to the peer byte-for-byte, breaking "same nonce
             // both sides."
             let (forwarded_nonce, nonce_origin) = request.capsule_nonce_headers();
-            let nonce_source = remote_mesh_nonce_source(&forwarded_nonce, &nonce_origin);
+            let nonce_source = client_nonce_source(&forwarded_nonce, &nonce_origin);
             // Validated in `route_request`; copied onto both events unread.
             let twin_bracket = twin_bracket_id(request).ok().flatten();
             // In tests, `exchange_channel` may be injected directly so the
@@ -1625,6 +1647,7 @@ async fn try_route_plugin_model(
                     served_locally: false, // plugin-served: never this node's own hardware/weights
                     request_digest: request_digest.as_deref(),
                     requested_by_node_id: None, // no host-served provenance block on this path
+                    client_nonce: None,
                 },
             )
             .await;
@@ -1832,6 +1855,7 @@ async fn route_request(
                     request_digest.clone(),
                 )
             });
+            let client_nonce = request_client_nonce(request);
             publish_local_route_terminal(
                 ctx.node,
                 *plugin_manager,
@@ -1843,6 +1867,9 @@ async fn route_request(
                     served_locally: true, // host-served: this node's own weights and hardware survey
                     request_digest: request_digest.as_deref(),
                     requested_by_node_id: ctx.requested_by_node_id.as_deref(),
+                    client_nonce: client_nonce
+                        .as_ref()
+                        .map(|(nonce, source)| (nonce.as_str(), *source)),
                 },
             )
             .await;
@@ -2525,6 +2552,10 @@ mod audio_workloads;
 #[cfg(test)]
 #[path = "ingress_tests/request_object_cleanup.rs"]
 mod request_object_cleanup;
+
+#[cfg(test)]
+#[path = "ingress_tests/served_terminal_nonce.rs"]
+mod served_terminal_nonce;
 
 #[cfg(test)]
 #[path = "ingress_tests/tests.rs"]

@@ -358,7 +358,7 @@ pub struct OpenAiExchangeEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
     /// Which side contributed `nonce` — see [`ClientNonceSource`]. `None`
-    /// exactly when `nonce` is `None` (no marker minted).
+    /// exactly when `nonce` is `None` (no nonce to report).
     ///
     /// **Asymmetry across routing-node pairs:** when node A minted the
     /// fallback nonce (the client sent none), A reads its own

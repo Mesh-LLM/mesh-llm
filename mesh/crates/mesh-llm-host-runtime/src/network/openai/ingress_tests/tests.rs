@@ -1376,7 +1376,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
 /// Some(SidecarGeneratedFallback)` on both published envelopes when the
 /// request carries BOTH `x-capsule-client-nonce` AND `x-capsule-nonce-origin`.
 ///
-/// The `remote_mesh_nonce_source` helper (ingress.rs lines 35-46) maps:
+/// The `client_nonce_source` helper in ingress.rs maps:
 /// - nonce=Some, nonce_origin=None  → `ClientSupplied`   (covered by the
 ///   sibling test above)
 /// - nonce=Some, nonce_origin=Some  → `SidecarGeneratedFallback`  ← this test
@@ -2593,6 +2593,7 @@ async fn local_route_terminal_names_the_peer_that_delivered() {
             served_locally: true,
             request_digest: Some(&digest),
             requested_by_node_id: None,
+            client_nonce: None,
         },
     )
     .await;
