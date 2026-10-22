@@ -87,6 +87,11 @@ trusted. Under `counterparties` an unsigned request, or one whose signature
 fails, is refused before the record is looked up; under `peers` an unsigned
 request is answered, and a signature that fails any check is still refused.
 
+A record of an exchange this node served for a peer names that peer as the
+other side (mesh-llm reports it from the mesh connection, never from the
+request). That is what makes the peer its counterparty, and under `peers` it
+also means any peer that reads the record learns which node asked.
+
 **Evidence requests** (`evidence-request/1`, draft-mih-agent-evidence-request-00)
 are answered in-process by `evidence_answer.rs`, with the protocol from the
 `capsule-emit-evidence-request` crate. The same rule applies to every record
