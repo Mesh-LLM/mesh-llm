@@ -51,16 +51,14 @@ fn load_config_through_production_wrapper_applies_lifecycle_log_parser_env_overr
     });
 
     let config = result.expect("config should load through the production wrapper");
+    let selection = config.runtime.lifecycle_log_parser_selection();
     assert_eq!(
-        config.runtime.lifecycle_log_parser,
+        selection.mode,
         mesh_llm_config::LifecycleLogParserMode::Enabled,
         "the plugin-aware production load_config wrapper must honor \
              MESH_LLM_LIFECYCLE_LOG_PARSER the same way mesh_llm_config::load_config does"
     );
-    assert_eq!(
-        config.runtime.lifecycle_log_parser_source,
-        mesh_llm_config::ConfigValueSource::Env
-    );
+    assert_eq!(selection.source, mesh_llm_config::ConfigValueSource::Env);
 }
 
 #[test]
@@ -76,7 +74,7 @@ fn load_config_through_production_wrapper_applies_env_override_when_file_absent(
     let config =
         result.expect("a default config (no file on disk) must still honor the env override");
     assert_eq!(
-        config.runtime.lifecycle_log_parser,
+        config.runtime.lifecycle_log_parser_selection().mode,
         mesh_llm_config::LifecycleLogParserMode::Enabled
     );
 }

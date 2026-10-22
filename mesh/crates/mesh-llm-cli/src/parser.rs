@@ -18,6 +18,9 @@ pub use runtime_surface_help::runtime_surface_help;
 pub use validation::validate_discovery_mode_args;
 
 #[cfg(test)]
+mod agent_launcher_tests;
+
+#[cfg(test)]
 mod setup_tests;
 
 #[cfg(test)]

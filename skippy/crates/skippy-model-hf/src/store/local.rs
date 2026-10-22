@@ -1,5 +1,5 @@
 use hf_hub::cache::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
-use hf_hub::{HFClientBuilder, RepoType, RepoTypeModel};
+use hf_hub::{RepoType, RepoTypeModel};
 use sha2::{Digest, Sha256};
 use skippy_model_ref::{
     format_model_ref, gguf_matches_quant_selector, normalize_gguf_distribution_id,
@@ -135,7 +135,8 @@ pub fn huggingface_snapshot_path(
 }
 
 pub fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
-    let _ = crate::configure_hf_tls_provider();
+    // A scan only reads the cache: no client, so no TLS roots (a client fails
+    // to build on systems without a CA bundle).
     let cache_root = cache_root.to_path_buf();
     let scan = move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -143,14 +144,7 @@ pub fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
             .build()
             .ok()?;
         runtime
-            .block_on(
-                HFClientBuilder::new()
-                    .cache_dir(cache_root)
-                    .build()
-                    .ok()?
-                    .scan_cache()
-                    .send(),
-            )
+            .block_on(hf_hub::cache::scan_cache_dir(&cache_root))
             .ok()
     };
 
@@ -837,6 +831,59 @@ pub fn find_model_path(model_ref: &str) -> PathBuf {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    const SCAN_WITHOUT_CA_CHILD: &str = "SKIPPY_TEST_SCAN_WITHOUT_CA_CHILD";
+
+    // SSL_CERT_FILE and SSL_CERT_DIR point the system root loading at an empty
+    // file and directory on Linux; they are set on a child test process only.
+    #[test]
+    fn cache_scan_needs_no_ca_certificates() {
+        let temp = tempfile::tempdir().unwrap();
+        let empty_file = temp.path().join("empty.pem");
+        std::fs::write(&empty_file, "").unwrap();
+        let empty_dir = temp.path().join("certs");
+        std::fs::create_dir(&empty_dir).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "store::local::tests::cache_scan_child",
+                "--nocapture",
+            ])
+            .env(SCAN_WITHOUT_CA_CHILD, temp.path())
+            .env("SSL_CERT_FILE", &empty_file)
+            .env("SSL_CERT_DIR", &empty_dir)
+            .output()
+            .expect("spawn cache scan child");
+        assert!(
+            output.status.success(),
+            "cache scan child failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "child test filter must execute its assertion"
+        );
+    }
+
+    #[test]
+    fn cache_scan_child() {
+        let Some(root) = std::env::var_os(SCAN_WITHOUT_CA_CHILD) else {
+            return;
+        };
+        let repo = Path::new(&root).join("hub/models--org--model");
+        std::fs::create_dir_all(repo.join("snapshots/abcdef1234567890")).unwrap();
+        std::fs::create_dir_all(repo.join("refs")).unwrap();
+        std::fs::write(repo.join("refs/main"), "abcdef1234567890").unwrap();
+        std::fs::write(
+            repo.join("snapshots/abcdef1234567890/model-Q4_K_M.gguf"),
+            "GGUF fixture",
+        )
+        .unwrap();
+        let info = scan_hf_cache_info(&Path::new(&root).join("hub"))
+            .expect("scanning the local cache must not need TLS roots");
+        assert!(info.repos.iter().any(|repo| repo.repo_id == "org/model"));
+    }
 
     #[test]
     #[serial]

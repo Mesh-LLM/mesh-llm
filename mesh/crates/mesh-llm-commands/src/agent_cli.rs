@@ -19,7 +19,13 @@ const OPENCODE_DEFAULT_CONTEXT_LIMIT: u32 = 32_768;
 const OPENCODE_OUTPUT_LIMIT: u32 = 4_096;
 const MESH_MCP_SERVER_ID: &str = "mesh";
 const MESH_MCP_DISPLAY_NAME: &str = "Mesh LLM";
+#[cfg(test)]
 const DEFAULT_MESH_MCP_URL: &str = "http://127.0.0.1:3131/mcp";
+
+/// The MCP endpoint of a local node whose console listens on `console_port`.
+fn local_mcp_url(console_port: u16) -> String {
+    format!("http://127.0.0.1:{console_port}/mcp")
+}
 
 fn configure_interactive_stdio(command: &mut Command) {
     #[cfg(unix)]
@@ -407,9 +413,11 @@ fn cleanup_mesh_child(mesh_child: &mut Option<std::process::Child>) {
 }
 
 /// Ensure mesh-llm is running on `port`, then return available models, chosen model, spawned child.
+/// A node started here uses `console_port` for its console when one is given.
 async fn check_mesh(
     client: &reqwest::Client,
     port: u16,
+    console_port: Option<u16>,
     model: &Option<String>,
 ) -> Result<(ModelInventory, String, Option<std::process::Child>)> {
     let mut err = mesh_llm_events::console_err();
@@ -422,9 +430,13 @@ async fn check_mesh(
             "🚀 No mesh-llm on port {port}; starting background auto-join node"
         )?;
         let exe = std::env::current_exe().unwrap_or_else(|_| "mesh-llm".into());
+        let mut command = std::process::Command::new(&exe);
+        command.args(["client", "--auto", "--port", &port.to_string()]);
+        if let Some(console_port) = console_port {
+            command.args(["--console", &console_port.to_string()]);
+        }
         child = Some(
-            std::process::Command::new(&exe)
-                .args(["client", "--auto", "--port", &port.to_string()])
+            command
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
@@ -555,11 +567,12 @@ async fn fetch_mesh_models(
     Ok((models, chosen))
 }
 
-pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
+pub async fn run_goose(model: Option<String>, port: u16, console_port: u16) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
-    let (models, chosen, mut mesh_child) = check_mesh(&client, port, &model).await?;
+    let (models, chosen, mut mesh_child) =
+        check_mesh(&client, port, Some(console_port), &model).await?;
 
     let goose_config_dir = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -588,7 +601,7 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
     std::fs::write(&provider_path, serde_json::to_string_pretty(&provider)?)?;
     let mut err = mesh_llm_events::console_err();
     writeln!(err, "✅ Wrote {}", provider_path.display())?;
-    write_goose_mcp_config(DEFAULT_MESH_MCP_URL)?;
+    write_goose_mcp_config(&local_mcp_url(console_port))?;
     install_skills_for_agent(SkillAgent::Goose);
 
     let goose_app = std::path::Path::new("/Applications/Goose.app");
@@ -641,11 +654,12 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
     Ok(())
 }
 
-pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
+pub async fn run_claude(model: Option<String>, port: u16, console_port: u16) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
-    let (models, chosen, mut mesh_child) = check_mesh(&client, port, &model).await?;
+    let (models, chosen, mut mesh_child) =
+        check_mesh(&client, port, Some(console_port), &model).await?;
 
     let base_url = format!("http://127.0.0.1:{port}");
     let mut settings = serde_json::json!({
@@ -681,7 +695,7 @@ pub async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
         )?;
     }
     let settings_json = serde_json::to_string(&settings)?;
-    let mcp_config_json = mesh_mcp_claude_config_json(DEFAULT_MESH_MCP_URL)?;
+    let mcp_config_json = mesh_mcp_claude_config_json(&local_mcp_url(console_port))?;
     install_skills_for_agent(SkillAgent::Claude);
 
     let mut err = mesh_llm_events::console_err();
@@ -907,7 +921,7 @@ pub async fn run_pi(model: Option<String>, host: &str, write: bool) -> Result<()
         let port = target
             .local_port
             .ok_or_else(|| anyhow::anyhow!("Pi host '{}' is missing a usable port", host))?;
-        let (models, chosen, child) = check_mesh(&client, port, &model).await?;
+        let (models, chosen, child) = check_mesh(&client, port, None, &model).await?;
         (models, chosen, child)
     } else {
         let (models, chosen) = fetch_mesh_models(&client, &target.api_models_url, &model).await?;
@@ -972,7 +986,7 @@ pub async fn run_opencode(model: Option<String>, host: &str, write: bool) -> Res
         let port = target
             .local_port
             .ok_or_else(|| anyhow::anyhow!("OpenCode host '{}' is missing a usable port", host))?;
-        let (models, chosen, child) = check_mesh(&client, port, &model).await?;
+        let (models, chosen, child) = check_mesh(&client, port, None, &model).await?;
         (models, chosen, child)
     } else {
         let (models, chosen) = fetch_mesh_models(&client, &target.api_models_url, &model).await?;

@@ -474,7 +474,8 @@ fn scan_hf_cache_identity_for_path(path: &Path, cache_root: &Path) -> Option<HfM
 }
 
 fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
-    let _ = configure_hf_tls_provider();
+    // A scan only reads the cache: no client, so no TLS roots (a client fails
+    // to build on systems without a CA bundle).
     let cache_root = cache_root.to_path_buf();
     let scan = move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -482,14 +483,7 @@ fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
             .build()
             .ok()?;
         runtime
-            .block_on(
-                HFClientBuilder::new()
-                    .cache_dir(cache_root)
-                    .build()
-                    .ok()?
-                    .scan_cache()
-                    .send(),
-            )
+            .block_on(hf_hub::cache::scan_cache_dir(&cache_root))
             .ok()
     };
 

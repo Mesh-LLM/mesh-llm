@@ -114,10 +114,10 @@ index 85f06098a173c77025d50f9367513d5ed34018a4..d4ca79e860bc5e04302a964150676a88
  
      cur = inpL;
 diff --git a/src/models/clef.cpp b/src/models/clef.cpp
-index cd2889b2251c7fd89365da55e00ce3efe0e1470d..9399f40a17ce0ccaf9d8a22539f2ced1e2c0796e 100644
+index 6f872091380351a76a79abe4f56466c4562c170f..036185d48992c34b68082cd6d9c68b86afd7f7e5 100644
 --- a/src/models/clef.cpp
 +++ b/src/models/clef.cpp
-@@ -265,6 +265,8 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
+@@ -266,6 +266,8 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
      res->add_input(std::move(inp_decision_ptr));
  
      for (int il = 0; il < n_layer; ++il) {
@@ -126,7 +126,7 @@ index cd2889b2251c7fd89365da55e00ce3efe0e1470d..9399f40a17ce0ccaf9d8a22539f2ced1
          ggml_tensor * inpSA = inpL;
  
          cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
-@@ -296,6 +298,7 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
+@@ -297,6 +299,7 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
          cb(cur, "l_out", il);
  
          inpL = cur;
