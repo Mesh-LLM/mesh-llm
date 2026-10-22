@@ -2,6 +2,7 @@
 //! Whisper.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use skippy_inference_api::realtime::{
@@ -57,7 +58,16 @@ pub struct SpeechRecognitionBackend {
     model: Arc<dyn SpeechTranscriber>,
     /// Bounds concurrent transcriptions; each holds its own decoder state.
     lanes: Arc<Semaphore>,
+    /// Bounds live sessions, each of which holds a blocking thread.
+    live_sessions: Arc<Semaphore>,
+    /// A live session with no input for this long ends.
+    live_idle_timeout: Duration,
 }
+
+/// Live sessions one backend runs at once.
+const DEFAULT_MAX_LIVE_SESSIONS: usize = 32;
+/// Live sessions end after this long without client input.
+const DEFAULT_LIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl SpeechRecognitionBackend {
     pub fn new(
@@ -69,7 +79,17 @@ impl SpeechRecognitionBackend {
             model_id: model_id.into(),
             model,
             lanes: Arc::new(Semaphore::new(concurrency.max(1))),
+            live_sessions: Arc::new(Semaphore::new(DEFAULT_MAX_LIVE_SESSIONS)),
+            live_idle_timeout: DEFAULT_LIVE_IDLE_TIMEOUT,
         }
+    }
+
+    /// Overrides how many live sessions may run at once and how long one may
+    /// sit without input before it ends.
+    pub fn with_live_limits(mut self, max_sessions: usize, idle_timeout: Duration) -> Self {
+        self.live_sessions = Arc::new(Semaphore::new(max_sessions.max(1)));
+        self.live_idle_timeout = idle_timeout;
+        self
     }
 
     async fn audio_to_text(
@@ -180,15 +200,37 @@ impl InferenceBackend for SpeechRecognitionBackend {
                 config.model, self.model_id
             )));
         }
-        let (session, input, output) = RealtimeTranscriptionSession::channels();
+        let (session, mut input, output) = RealtimeTranscriptionSession::channels();
         let live = LiveSession {
             model: self.model.clone(),
             lanes: self.lanes.clone(),
             runtime: tokio::runtime::Handle::current(),
             cancellation: context.cancellation_token(),
+            idle_timeout: self.live_idle_timeout,
             output,
         };
-        task::spawn_blocking(move || live.run(config, input));
+        let sessions = self.live_sessions.clone();
+        tokio::spawn(async move {
+            // No thread until the client sends something: an idle or probing
+            // connection costs nothing here.
+            let Some(first) = input.recv().await else {
+                return;
+            };
+            let Ok(slot) = sessions.try_acquire_owned() else {
+                let _ = live
+                    .output
+                    .send(RealtimeOutput::Failed {
+                        message: "too many live transcription sessions; try again later".into(),
+                    })
+                    .await;
+                return;
+            };
+            let _ = task::spawn_blocking(move || {
+                let _slot = slot;
+                live.run(config, first, input);
+            })
+            .await;
+        });
         Ok(session)
     }
 
@@ -215,14 +257,20 @@ struct LiveSession {
     lanes: Arc<Semaphore>,
     runtime: tokio::runtime::Handle,
     cancellation: CancellationToken,
+    idle_timeout: Duration,
     output: mpsc::Sender<RealtimeOutput>,
 }
 
 impl LiveSession {
-    fn run(self, config: RealtimeTranscriptionConfig, mut input: mpsc::Receiver<RealtimeInput>) {
+    fn run(
+        self,
+        config: RealtimeTranscriptionConfig,
+        first: RealtimeInput,
+        mut input: mpsc::Receiver<RealtimeInput>,
+    ) {
         let mut stream = SpeechStream::new(stream_config(&config));
         let mut resampler = PcmResampler::new(config.input_sample_rate);
-        let mut next = input.blocking_recv();
+        let mut next = Some(first);
         while let Some(command) = next.take() {
             let events = match command {
                 RealtimeInput::Audio(samples) => {
@@ -245,7 +293,7 @@ impl LiveSession {
                 RealtimeInput::Commit => {
                     if !stream.has_pending_audio() {
                         self.send(RealtimeOutput::CommitEmpty);
-                        next = next.or_else(|| input.blocking_recv());
+                        next = next.or_else(|| self.receive(&mut input));
                         continue;
                     }
                     self.send(RealtimeOutput::Committed {
@@ -274,8 +322,33 @@ impl LiveSession {
             if self.cancellation.is_cancelled() {
                 break;
             }
-            next = next.or_else(|| input.blocking_recv());
+            next = next.or_else(|| self.receive(&mut input));
         }
+    }
+
+    /// The next client command, or `None` when the client is gone, the
+    /// session is cancelled, or it has been idle for `idle_timeout`.
+    fn receive(&self, input: &mut mpsc::Receiver<RealtimeInput>) -> Option<RealtimeInput> {
+        self.runtime.block_on(async {
+            tokio::select! {
+                command = tokio::time::timeout(self.idle_timeout, input.recv()) => match command {
+                    Ok(command) => command,
+                    Err(_) => {
+                        let _ = self
+                            .output
+                            .send(RealtimeOutput::Failed {
+                                message: format!(
+                                    "live transcription session idle for {} s",
+                                    self.idle_timeout.as_secs()
+                                ),
+                            })
+                            .await;
+                        None
+                    }
+                },
+                () = self.cancellation.cancelled() => None,
+            }
+        })
     }
 
     fn transcribe(
@@ -283,10 +356,18 @@ impl LiveSession {
         samples: &[f32],
         options: &TranscriptionOptions,
     ) -> anyhow::Result<Transcription> {
-        let _lane = self
-            .runtime
-            .block_on(self.lanes.clone().acquire_owned())
-            .map_err(|_| anyhow::anyhow!("speech backend is shutting down"))?;
+        // Waiting for a lane gives way to cancellation, so a client that
+        // leaves while every lane is busy does not park this thread.
+        let _lane = self.runtime.block_on(async {
+            tokio::select! {
+                lane = self.lanes.clone().acquire_owned() => {
+                    lane.map_err(|_| anyhow::anyhow!("speech backend is shutting down"))
+                }
+                () = self.cancellation.cancelled() => {
+                    Err(anyhow::anyhow!("live transcription cancelled"))
+                }
+            }
+        })?;
         self.model
             .transcribe(samples, options, &|| self.cancellation.is_cancelled())
     }
@@ -572,6 +653,143 @@ mod tests {
         assert_eq!(transcript, "Hello there.");
         session.input.send(RealtimeInput::Commit).await.unwrap();
         assert_eq!(next_output(&mut session).await, RealtimeOutput::CommitEmpty);
+    }
+
+    fn tone(samples: usize) -> Vec<i16> {
+        (0..samples)
+            .map(|n| ((n as f32 * 0.3).sin() * 8_000.0) as i16)
+            .collect()
+    }
+
+    fn live_config(turn_detection: bool) -> RealtimeTranscriptionConfig {
+        let mut config = RealtimeTranscriptionConfig {
+            input_sample_rate: 16_000,
+            ..RealtimeTranscriptionConfig::new("whisper-test")
+        };
+        if !turn_detection {
+            config.turn_detection = None;
+        }
+        config
+    }
+
+    #[tokio::test]
+    async fn a_pause_ends_a_turn_without_a_commit() {
+        let backend =
+            SpeechRecognitionBackend::new("whisper-test", Arc::new(FakeModel::default()), 1);
+        let mut session = backend
+            .realtime_transcription(live_config(true), InferenceRequestContext::new())
+            .await
+            .unwrap();
+        session
+            .input
+            .send(RealtimeInput::Audio(tone(16_000)))
+            .await
+            .unwrap();
+        session
+            .input
+            .send(RealtimeInput::Audio(vec![0; 16_000]))
+            .await
+            .unwrap();
+        let mut kinds = Vec::new();
+        loop {
+            let output = next_output(&mut session).await;
+            let done = matches!(output, RealtimeOutput::Completed { .. });
+            kinds.push(match output {
+                RealtimeOutput::SpeechStarted { .. } => "started",
+                RealtimeOutput::SpeechStopped { .. } => "stopped",
+                RealtimeOutput::Committed { .. } => "committed",
+                RealtimeOutput::Delta { .. } => "delta",
+                RealtimeOutput::Completed { .. } => "completed",
+                other => panic!("unexpected {other:?}"),
+            });
+            if done {
+                break;
+            }
+        }
+        assert_eq!(kinds.first(), Some(&"started"));
+        let stopped = kinds.iter().position(|kind| *kind == "stopped").unwrap();
+        assert_eq!(kinds[stopped + 1], "committed");
+        assert_eq!(kinds.last(), Some(&"completed"));
+    }
+
+    #[tokio::test]
+    async fn live_sessions_past_the_cap_are_refused() {
+        let backend =
+            SpeechRecognitionBackend::new("whisper-test", Arc::new(FakeModel::default()), 1)
+                .with_live_limits(1, Duration::from_secs(60));
+        let first = backend
+            .realtime_transcription(live_config(false), InferenceRequestContext::new())
+            .await
+            .unwrap();
+        first
+            .input
+            .send(RealtimeInput::Audio(tone(160)))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut second = backend
+            .realtime_transcription(live_config(false), InferenceRequestContext::new())
+            .await
+            .unwrap();
+        second
+            .input
+            .send(RealtimeInput::Audio(tone(160)))
+            .await
+            .unwrap();
+        match next_output(&mut second).await {
+            RealtimeOutput::Failed { message } => {
+                assert!(message.contains("too many"), "{message}")
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_idle_live_session_ends() {
+        let backend =
+            SpeechRecognitionBackend::new("whisper-test", Arc::new(FakeModel::default()), 1)
+                .with_live_limits(4, Duration::from_millis(200));
+        let mut session = backend
+            .realtime_transcription(live_config(false), InferenceRequestContext::new())
+            .await
+            .unwrap();
+        session
+            .input
+            .send(RealtimeInput::Audio(tone(160)))
+            .await
+            .unwrap();
+        match next_output(&mut session).await {
+            RealtimeOutput::Failed { message } => assert!(message.contains("idle"), "{message}"),
+            other => panic!("expected an idle timeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn two_live_sessions_share_one_lane() {
+        let backend =
+            SpeechRecognitionBackend::new("whisper-test", Arc::new(FakeModel::default()), 1);
+        let mut sessions = Vec::new();
+        for _ in 0..2 {
+            let session = backend
+                .realtime_transcription(live_config(false), InferenceRequestContext::new())
+                .await
+                .unwrap();
+            session
+                .input
+                .send(RealtimeInput::Audio(tone(32_000)))
+                .await
+                .unwrap();
+            session.input.send(RealtimeInput::Commit).await.unwrap();
+            sessions.push(session);
+        }
+        for session in &mut sessions {
+            let transcript = loop {
+                if let RealtimeOutput::Completed { transcript, .. } = next_output(session).await {
+                    break transcript;
+                }
+            };
+            assert_eq!(transcript, "Hello there.");
+        }
     }
 
     #[tokio::test]

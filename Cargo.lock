@@ -8934,7 +8934,7 @@ dependencies = [
  "skippy-events",
  "skippy-guardrails",
  "tokio",
- "tokio-tungstenite 0.28.0",
+ "tokio-tungstenite 0.29.0",
  "tower",
  "tracing",
  "uuid",
