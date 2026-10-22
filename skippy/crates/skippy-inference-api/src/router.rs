@@ -1364,6 +1364,7 @@ fn lifecycle_route(uri: &Uri) -> InferenceFrontendRoute {
         "/v1/messages/count_tokens" => InferenceFrontendRoute::MessagesCountTokens,
         "/v1/messages" => InferenceFrontendRoute::Messages,
         "/systemone" => InferenceFrontendRoute::SystemOne,
+        "/v1/realtime" => InferenceFrontendRoute::Realtime,
         _ => InferenceFrontendRoute::Unknown,
     }
 }
