@@ -172,6 +172,7 @@ impl Default for EmbeddedMeshStorageConfig {
 
 #[derive(Clone, Debug)]
 pub struct EmbeddedMeshNodeConfig {
+    pub protocols: Vec<std::sync::Arc<dyn super::protocol::MeshProtocol>>,
     pub mode: EmbeddedMeshNodeMode,
     pub http: EmbeddedMeshHttpConfig,
     pub serving: EmbeddedMeshServingConfig,
@@ -185,6 +186,7 @@ pub struct EmbeddedMeshNodeConfig {
 impl Default for EmbeddedMeshNodeConfig {
     fn default() -> Self {
         Self {
+            protocols: Vec::new(),
             mode: EmbeddedMeshNodeMode::Serve,
             http: EmbeddedMeshHttpConfig::default(),
             serving: EmbeddedMeshServingConfig::default(),
@@ -209,6 +211,12 @@ pub struct EmbeddedMeshNodeBuilder {
 }
 
 impl EmbeddedMeshNodeBuilder {
+    #[must_use]
+    pub fn protocol(mut self, handler: std::sync::Arc<dyn super::protocol::MeshProtocol>) -> Self {
+        self.config.protocols.push(handler);
+        self
+    }
+
     pub fn mode(mut self, mode: EmbeddedMeshNodeMode) -> Self {
         self.config.mode = mode;
         self
@@ -499,6 +507,7 @@ impl EmbeddedMeshNodeBuilder {
 
 #[derive(Clone, Debug)]
 pub struct EmbeddedServeConfig {
+    pub protocols: Vec<std::sync::Arc<dyn super::protocol::MeshProtocol>>,
     pub mode: EmbeddedMeshNodeMode,
     pub models: Vec<String>,
     pub join: Vec<String>,
@@ -530,6 +539,7 @@ pub struct EmbeddedServeConfig {
 impl Default for EmbeddedServeConfig {
     fn default() -> Self {
         Self {
+            protocols: Vec::new(),
             mode: EmbeddedMeshNodeMode::Serve,
             models: Vec::new(),
             join: Vec::new(),
@@ -563,6 +573,7 @@ impl Default for EmbeddedServeConfig {
 impl From<EmbeddedServeConfig> for EmbeddedMeshNodeConfig {
     fn from(config: EmbeddedServeConfig) -> Self {
         Self {
+            protocols: config.protocols,
             mode: config.mode,
             http: EmbeddedMeshHttpConfig {
                 api_port: config.api_port,
@@ -604,6 +615,7 @@ impl From<EmbeddedServeConfig> for EmbeddedMeshNodeConfig {
 impl From<EmbeddedMeshNodeConfig> for EmbeddedServeConfig {
     fn from(config: EmbeddedMeshNodeConfig) -> Self {
         Self {
+            protocols: config.protocols,
             mode: config.mode,
             models: config.serving.models,
             join: config.network.join_tokens,

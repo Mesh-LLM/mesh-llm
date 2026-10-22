@@ -40,12 +40,10 @@ impl Node {
                 self.handle_skippy_stage_subprotocol_stream(remote, send, recv)
                     .await
             }
-            _ => anyhow::bail!(
-                "unsupported mesh subprotocol {}/{} from {}",
-                open.name,
-                open.major,
-                remote.fmt_short()
-            ),
+            _ => {
+                self.accept_application_protocol(remote, &open.name, open.major, send, recv)
+                    .await
+            }
         }
     }
 

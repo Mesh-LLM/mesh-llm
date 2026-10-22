@@ -1,4 +1,5 @@
 //! Mesh transport primitives. Callers own peer admission, routing and service policy.
+pub mod protocol;
 mod relay;
 pub mod transport;
 pub mod transport_iroh;

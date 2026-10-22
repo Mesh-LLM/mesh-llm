@@ -3,6 +3,7 @@ use crate::mesh::artifact_transfer_io::{PartialArtifactGuard, write_artifact_tra
 use crate::mesh::node::LocalRequestMetricsSampler;
 use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 
+mod application_protocols;
 mod control_listener;
 
 include!("connections.rs");

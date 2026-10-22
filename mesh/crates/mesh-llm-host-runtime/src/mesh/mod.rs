@@ -78,6 +78,7 @@ pub(crate) fn elapsed_ms_u64(duration: std::time::Duration) -> u64 {
 
 mod advertisement;
 mod announcements;
+mod application_protocols;
 mod artifact_transfer_io;
 mod capacity;
 mod connections;

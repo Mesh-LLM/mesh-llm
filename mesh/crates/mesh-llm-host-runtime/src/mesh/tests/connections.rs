@@ -373,6 +373,7 @@ async fn make_test_node_with_requirements(
     );
 
     let node = Node {
+        application_protocols: Arc::new(Default::default()),
         adopted_membership_file: None,
         endpoint,
         endpoint_secret_key,

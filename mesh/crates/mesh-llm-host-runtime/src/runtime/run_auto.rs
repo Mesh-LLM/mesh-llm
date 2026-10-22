@@ -83,6 +83,7 @@ pub(crate) enum EmbeddedRuntimeDiscoveryMode {
 }
 
 pub(crate) struct EmbeddedRuntimeOptions {
+    pub(crate) protocols: Vec<std::sync::Arc<dyn mesh_llm_transport::protocol::MeshProtocol>>,
     pub(crate) mode: EmbeddedRuntimeMode,
     pub(crate) models: Vec<String>,
     pub(crate) join: Vec<String>,
@@ -192,6 +193,7 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
 
 pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
     RuntimeOptions {
+        application_protocols: embedded.protocols,
         log_format: embedded.log_format,
         client: matches!(embedded.mode, EmbeddedRuntimeMode::Client),
         model: embedded.models.into_iter().map(PathBuf::from).collect(),
@@ -885,6 +887,30 @@ pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
     });
 }
 
+/// Installs the node's per-subsystem handlers after `Node::start` succeeds.
+/// Each fallible step routes through `cleanup_failed_node_start` so a partial
+/// startup never leaves protocol or stage-control tasks holding a `Node`
+/// clone on an unwound runtime.
+async fn install_node_subsystems(
+    node: &mesh::Node,
+    options: &RuntimeOptions,
+    swarm_capture: Option<crate::capture::SwarmCaptureRecorder>,
+) -> Result<()> {
+    node.set_swarm_capture_recorder(swarm_capture);
+    if let Err(error) = node
+        .install_application_protocols(options.application_protocols.clone())
+        .await
+    {
+        return Err(cleanup_failed_node_start(node, error).await);
+    }
+    attach_local_release_attestation(node).await?;
+    node.set_stage_control_handle(skippy::spawn_stage_control_loop(skippy_telemetry_options(
+        options,
+    )))
+    .await;
+    Ok(())
+}
+
 pub(super) async fn start_run_auto_node_and_plugins(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -926,12 +952,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
         startup_mesh_creation_state.requirements.clone(),
     )
     .await?;
-    node.set_swarm_capture_recorder(swarm_capture);
-    attach_local_release_attestation(&node).await?;
-    node.set_stage_control_handle(skippy::spawn_stage_control_loop(skippy_telemetry_options(
-        options,
-    )))
-    .await;
+    install_node_subsystems(&node, options, swarm_capture).await?;
     node.start_accepting();
     node.set_display_name(node_display_name(options, &node))
         .await;
@@ -981,8 +1002,13 @@ pub(super) async fn start_run_auto_node_and_plugins(
     }
     crate::network::openai::virtual_model::install_inference_bridge(&plugin_manager, options.port)
         .await;
-    node.install_plugin_manager_with_exchange_grants(plugin_manager.clone())
-        .await?;
+    if let Err(error) = node
+        .install_plugin_manager_with_exchange_grants(plugin_manager.clone())
+        .await
+    {
+        plugin_manager.shutdown().await;
+        return Err(cleanup_failed_node_start(&node, error).await);
+    }
     #[cfg(feature = "payments")]
     crate::network::payments::spawn_payment_recovery(&node).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);

@@ -70,6 +70,7 @@ pub struct RouteEntry {
 
 #[derive(Clone)]
 pub struct Node {
+    pub(crate) application_protocols: Arc<super::application_protocols::ApplicationProtocols>,
     pub(crate) endpoint: Endpoint,
     pub(crate) endpoint_secret_key: SecretKey,
     pub(crate) public_addr: Option<stun::PublicAddr>,
@@ -640,6 +641,7 @@ impl Node {
     }
 
     pub async fn shutdown_control_listener(&self) {
+        self.application_protocols.shutdown().await;
         let lifecycle = self.control_listener.lock().await.take();
         if let Some(lifecycle) = lifecycle {
             lifecycle
@@ -682,6 +684,7 @@ impl Node {
     /// the final gossip updates) has finished. `accept_loop` observes the close
     /// as `Endpoint::accept` returning `None` and exits on its own.
     pub async fn close_endpoint(&self) {
+        self.application_protocols.shutdown().await;
         // Closing the registry to new installs is what makes this drain
         // complete: the relay-health monitor is an untracked task holding a
         // `Node` clone, so without the flag it could park a fresh rescue
@@ -810,6 +813,7 @@ impl Node {
             });
 
         let node = Node {
+            application_protocols: Default::default(),
             endpoint,
             endpoint_secret_key: secret_key.clone(),
             public_addr,
@@ -994,6 +998,7 @@ impl Node {
             });
 
         Node {
+            application_protocols: Default::default(),
             endpoint,
             endpoint_secret_key: secret_key,
             public_addr: None,
