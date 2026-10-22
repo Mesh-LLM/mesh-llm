@@ -22,21 +22,6 @@ pub struct PlanResult {
     pub elapsed_ms: u64,
 }
 
-/// Ask a small model to create a plan/analysis for a task.
-///
-/// The planner gets the user's message and produces a brief plan:
-/// what files to look at, what approach to take, potential pitfalls.
-/// This plan gets injected as a system message for the strong model.
-pub async fn pre_plan(
-    client: &Client,
-    planner_url: &str,
-    planner_model: &str,
-    user_messages: &[Value],
-) -> Result<PlanResult, String> {
-    let plan_request = prepare_plan_request(planner_model, user_messages)?;
-    pre_plan_prepared(client, planner_url, planner_model, &plan_request).await
-}
-
 pub(crate) fn prepare_plan_request(
     planner_model: &str,
     user_messages: &[Value],
