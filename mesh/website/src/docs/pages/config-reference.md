@@ -49,7 +49,11 @@ mesh-llm config validate --config-path ./mesh.toml
 mesh-llm config validate --config-path ./mesh.toml --json
 ```
 
-`config validate` checks the TOML file without starting a node.
+`config validate` checks the TOML file without starting a node. It also
+checks each `hardware.model_path` on the machine where it runs, the way `serve`
+does at startup (an absolute path to a regular file, not a symlink), and
+reports a path `serve` would refuse there as a warning: the file may be meant
+for another node.
 
 ## Group 1: file, schema, and reload
 

@@ -953,26 +953,26 @@ pub(super) fn build_startup_model_specs(
         let (model_ref, fallback_declared_ref) =
             if let Some(configured_path) = configured_model_path {
                 let path = PathBuf::from(configured_path);
-                if !path.is_absolute() {
-                    anyhow::bail!(
+                // `mesh-llm config validate` runs the same check.
+                match mesh_llm_config::check_local_model_path(&path) {
+                    Ok(()) => {}
+                    Err(mesh_llm_config::LocalModelPathError::NotAbsolute) => anyhow::bail!(
                         "configured hardware.model_path for {} must be absolute: {}",
                         model.model,
                         path.display()
-                    );
-                }
-                let metadata = std::fs::symlink_metadata(&path).with_context(|| {
-                    format!(
-                        "configured hardware.model_path for {} is unavailable: {}",
-                        model.model,
-                        path.display()
-                    )
-                })?;
-                if metadata.file_type().is_symlink() || !metadata.is_file() {
-                    anyhow::bail!(
+                    ),
+                    Err(mesh_llm_config::LocalModelPathError::Unavailable(error)) => {
+                        return Err(anyhow::Error::new(error).context(format!(
+                            "configured hardware.model_path for {} is unavailable: {}",
+                            model.model,
+                            path.display()
+                        )));
+                    }
+                    Err(mesh_llm_config::LocalModelPathError::NotRegularFile) => anyhow::bail!(
                         "configured hardware.model_path for {} must be a non-symlink file: {}",
                         model.model,
                         path.display()
-                    );
+                    ),
                 }
                 (path, Some(model.model.clone()))
             } else {

@@ -694,7 +694,9 @@ Use this to inspect local GPU identity and capacity, including per-device VRAM, 
 ### `config validate`
 
 Use this to validate a mesh-llm config file before starting a node or applying
-the file through owner-control.
+the file through owner-control. A `hardware.model_path` that `serve` would
+refuse on this machine (relative, missing, or a symlink) is reported as a
+warning.
 
 Usage:
 
