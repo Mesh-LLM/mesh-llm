@@ -98,9 +98,13 @@ runs:
           "ggml/src/libggml-base.a"
           "tools/mtmd/libmtmd.a"
           "vendor/hash/libvendor-hash.a"
-          "whisper/src/libwhisper.a"
         )
         test -s "$build_stamp"
+        # Speech recognition is optional: require its archive only when the
+        # build stamp records the whisper.cpp pin it was built from.
+        if grep -Eq '^whisper-sha=.+' "$build_stamp"; then
+          required_archives+=("whisper/src/libwhisper.a")
+        fi
         test -s "$patched_sha_file"
         test -s "$source_build_dir/CMakeCache.txt"
         for relative in "${required_archives[@]}"; do

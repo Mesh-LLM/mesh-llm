@@ -32,7 +32,7 @@ fn fixture() -> Fixture {
         format!("{SHA}\n"),
     )
     .unwrap();
-    fs::write(fixture.path().join(BUILD).join(".mesh-llm-build-stamp"),format!("stamp-version=3\npatched-sha={SHA}\nbackend=cpu\nlink-mode=static\ntoolchain-epoch=finite-epoch\ncmake-arg=-DGGML_NATIVE=OFF\n")).unwrap();
+    fs::write(fixture.path().join(BUILD).join(".mesh-llm-build-stamp"),format!("stamp-version=3\npatched-sha={SHA}\nwhisper-sha=231638a0\nbackend=cpu\nlink-mode=static\ntoolchain-epoch=finite-epoch\ncmake-arg=-DGGML_NATIVE=OFF\n")).unwrap();
     fs::write(fixture.path().join(BUILD).join("CMakeCache.txt"),format!("CMAKE_HOME_DIRECTORY:PATH={}\nGGML_OPENMP_ENABLED:BOOL=ON\nOpenMP_C_LIB_NAMES:STRING=gomp\n",fixture.path().display())).unwrap();
     fs::write(
         fixture.path().join(BUILD).join("not-a-link-input.o"),
@@ -224,7 +224,7 @@ fn static_abi_action_rejects_stamp_identity_and_producer_path_leakage_without_ar
     for case in ["stamp", "path"] {
         let fixture = fixture();
         if case == "stamp" {
-            fs::write(fixture.path().join(BUILD).join(".mesh-llm-build-stamp"),format!("stamp-version=3\npatched-sha={SHA}\nbackend=cpu\nlink-mode=static\ntoolchain-epoch=wrong-epoch\ncmake-arg=-DGGML_NATIVE=OFF\n")).unwrap();
+            fs::write(fixture.path().join(BUILD).join(".mesh-llm-build-stamp"),format!("stamp-version=3\npatched-sha={SHA}\nwhisper-sha=231638a0\nbackend=cpu\nlink-mode=static\ntoolchain-epoch=wrong-epoch\ncmake-arg=-DGGML_NATIVE=OFF\n")).unwrap();
         } else {
             fs::write(
                 fixture.path().join(BUILD).join(ARCHIVES[0]),

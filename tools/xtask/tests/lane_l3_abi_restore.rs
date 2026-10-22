@@ -23,8 +23,9 @@ const ARCHIVES: [&str; 9] = [
 
 fn fixture(root: &Path, mutation: &str) -> std::path::PathBuf {
     let source = root.join("source/build-stage-abi-static");
+    let speech = mutation != "speech-off";
     for archive in ARCHIVES {
-        if mutation == archive {
+        if mutation == archive || (!speech && archive == "whisper/src/libwhisper.a") {
             continue;
         }
         let path = source.join(archive);
@@ -36,8 +37,10 @@ fn fixture(root: &Path, mutation: &str) -> std::path::PathBuf {
     } else {
         "static"
     };
+    // A speech-off build records an empty whisper.cpp pin.
+    let whisper = if speech { "231638a0" } else { "" };
     let stamp = format!(
-        "stamp-version=3\npatched-sha={PATCHED_SHA}\nbackend=cpu\nlink-mode={linkage}\ntoolchain-epoch={EPOCH}\ncmake-arg=-DGGML_NATIVE=OFF\n"
+        "stamp-version=3\npatched-sha={PATCHED_SHA}\nwhisper-sha={whisper}\nbackend=cpu\nlink-mode={linkage}\ntoolchain-epoch={EPOCH}\ncmake-arg=-DGGML_NATIVE=OFF\n"
     );
     std::fs::write(source.join(".mesh-llm-build-stamp"), &stamp).unwrap();
     std::fs::write(
@@ -112,6 +115,7 @@ fn restore_checks_real_archive_identity_and_complete_link_closure() {
         "common/libllama-common-base.a",
         "vendor/hash/libvendor-hash.a",
         "whisper/src/libwhisper.a",
+        "speech-off",
     ] {
         let temporary = tempfile::tempdir().unwrap();
         let download = fixture(temporary.path(), mutation);
@@ -138,9 +142,10 @@ fn restore_checks_real_archive_identity_and_complete_link_closure() {
             .env("RUNNER_TEMP", &scratch)
             .output()
             .unwrap();
+        let admitted = mutation.is_empty() || mutation == "speech-off";
         assert_eq!(
             output.status.success(),
-            mutation.is_empty(),
+            admitted,
             "{mutation}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
@@ -157,7 +162,7 @@ fn restore_checks_real_archive_identity_and_complete_link_closure() {
             );
             assert!(!destination.parent().unwrap().exists());
         }
-        if mutation.is_empty() {
+        if admitted {
             assert_eq!(
                 std::fs::read(destination.join("vendor/hash/libvendor-hash.a")).unwrap(),
                 b"vendor/hash/libvendor-hash.a"

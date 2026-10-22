@@ -37,6 +37,8 @@ pub const ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION: u32 = 1;
 pub const ASR_SEGMENT_V1_ABI_VERSION: u32 = 1;
 /// Sample rate of the PCM `skippy_asr_decode_audio` returns.
 pub const ASR_SAMPLE_RATE: u32 = 16_000;
+/// Longest audio the ASR ABI decodes or transcribes: 30 minutes at 16 kHz.
+pub const ASR_MAX_SAMPLES: usize = 16_000 * 60 * 30;
 /// Question types the Laya decision head distinguishes, in native order.
 pub const LAYA_QTYPE_COUNT: usize = 3;
 

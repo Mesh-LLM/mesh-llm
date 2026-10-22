@@ -17,12 +17,12 @@ SKIPPY_FEATURE_SPEECH_RECOGNITION clear, and report UNSUPPORTED.
 Bumps the Skippy ABI to 0.1.72.
 ---
  include/skippy.h        |   1 +
- include/skippy/asr.h    | 165 +++++++++++++++
+ include/skippy/asr.h    | 172 +++++++++++++++
  include/skippy/common.h |   4 +-
- src/CMakeLists.txt      |  27 +++
+ src/CMakeLists.txt      |  35 +++
  src/skippy/abi.cpp      |   6 +-
- src/skippy/asr.cpp      | 447 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 648 insertions(+), 2 deletions(-)
+ src/skippy/asr.cpp      | 465 ++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 681 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/asr.h
  create mode 100644 src/skippy/asr.cpp
 
@@ -39,10 +39,10 @@ index ac091dd24..4e33847d9 100644
  #endif // SKIPPY_H
 diff --git a/include/skippy/asr.h b/include/skippy/asr.h
 new file mode 100644
-index 000000000..24bbc6f6b
+index 000000000..99d4a1094
 --- /dev/null
 +++ b/include/skippy/asr.h
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,172 @@
 +#ifndef SKIPPY_ASR_H
 +#define SKIPPY_ASR_H
 +
@@ -72,6 +72,12 @@ index 000000000..24bbc6f6b
 +#define SKIPPY_ASR_SEGMENT_V1_ABI_VERSION 1
 +/** Sample rate of the PCM that `skippy_asr_decode_audio` returns. */
 +#define SKIPPY_ASR_SAMPLE_RATE 16000
++/**
++ * Longest audio `skippy_asr_decode_audio` decodes and `skippy_asr_transcribe`
++ * accepts: 30 minutes. Compressed uploads can expand far beyond their size,
++ * so the bound is on decoded samples, not input bytes.
++ */
++#define SKIPPY_ASR_MAX_SAMPLES (SKIPPY_ASR_SAMPLE_RATE * 60 * 30)
 +
 +struct skippy_asr_model;
 +struct skippy_asr_result;
@@ -85,7 +91,7 @@ index 000000000..24bbc6f6b
 +    int32_t  n_audio_layer;
 +    int32_t  n_text_layer;
 +    int32_t  n_mels;
-+    uint64_t weights_bytes;    /**< the model file's tensor data */
++    uint64_t weights_bytes;    /**< size of the model file, which is almost all tensor data */
 +    bool     on_accelerator;   /**< weights live on a non-CPU device */
 +};
 +
@@ -151,8 +157,9 @@ index 000000000..24bbc6f6b
 +/**
 + * @brief Decodes a WAV, MP3, or FLAC upload to 16 kHz mono float PCM.
 + *
-+ * Returns SKIPPY_STATUS_INVALID_ARGUMENT for any other container. Free
-+ * `*out_samples` with `skippy_asr_samples_free`.
++ * Returns SKIPPY_STATUS_INVALID_ARGUMENT for any other container and for
++ * audio longer than SKIPPY_ASR_MAX_SAMPLES, which is refused while decoding
++ * rather than after. Free `*out_samples` with `skippy_asr_samples_free`.
 + */
 +LLAMA_API enum skippy_status skippy_asr_decode_audio(
 +        const uint8_t * data,
@@ -231,7 +238,7 @@ index 5180a2531..53326a4e7 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 2c47ef69e..341f81d1b 100644
+index 2c47ef69e..9fddadd3f 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -83,6 +83,7 @@ add_library(llama
@@ -253,7 +260,7 @@ index 2c47ef69e..341f81d1b 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -118,6 +123,28 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
+@@ -118,6 +123,36 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
  
  target_link_libraries(llama PUBLIC ggml)
  
@@ -263,18 +270,26 @@ index 2c47ef69e..341f81d1b 100644
 +set(SKIPPY_WHISPER_SOURCE_DIR "" CACHE PATH "whisper.cpp source tree to build speech recognition from")
 +target_include_directories(llama PRIVATE ../vendor)
 +if (SKIPPY_WHISPER_SOURCE_DIR)
-+    # Satisfy whisper.cpp's find_package(ggml) with the in-tree targets.
++    # Satisfy whisper.cpp's find_package(ggml) with the in-tree targets. The
++    # empty redirect makes find_package(ggml) succeed for the whole build
++    # without defining anything, which relies on whisper.cpp linking the bare
++    # `ggml` target (as its CMakeLists does) rather than ggml::ggml or
++    # variables a real ggml-config.cmake would set.
 +    file(WRITE ${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/ggml-config.cmake "")
 +    set(WHISPER_USE_SYSTEM_GGML ON  CACHE BOOL "" FORCE)
 +    set(WHISPER_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
 +    set(WHISPER_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
 +    set(WHISPER_BUILD_SERVER    OFF CACHE BOOL "" FORCE)
 +    set(WHISPER_ALL_WARNINGS    OFF CACHE BOOL "" FORCE)
++    # whisper.cpp is linked into libllama as a static, position-independent
++    # archive whatever the link mode; restore both settings afterwards.
 +    set(SKIPPY_SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
++    set(SKIPPY_SAVED_PIC ${CMAKE_POSITION_INDEPENDENT_CODE})
 +    set(BUILD_SHARED_LIBS OFF)
 +    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 +    add_subdirectory(${SKIPPY_WHISPER_SOURCE_DIR} ${CMAKE_BINARY_DIR}/whisper EXCLUDE_FROM_ALL)
 +    set(BUILD_SHARED_LIBS ${SKIPPY_SAVED_BUILD_SHARED_LIBS})
++    set(CMAKE_POSITION_INDEPENDENT_CODE ${SKIPPY_SAVED_PIC})
 +    target_link_libraries(llama PRIVATE whisper)
 +    target_compile_definitions(llama PRIVATE SKIPPY_HAS_WHISPER)
 +endif()
@@ -301,10 +316,10 @@ index f806cdbdc..ed9825df3 100644
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/asr.cpp b/src/skippy/asr.cpp
 new file mode 100644
-index 000000000..06d59dcaa
+index 000000000..680549066
 --- /dev/null
 +++ b/src/skippy/asr.cpp
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,465 @@
 +#include "skippy/asr.h"
 +#include "skippy/errors.h"
 +
@@ -453,16 +468,25 @@ index 000000000..06d59dcaa
 +    return stat(path, &info) == 0 ? static_cast<uint64_t>(info.st_size) : 0;
 +}
 +
-+bool decode_audio(const uint8_t * data, size_t len, std::vector<float> & samples) {
++enum class decode_outcome { ok, failed, too_long };
++
++decode_outcome decode_audio(const uint8_t * data, size_t len, std::vector<float> & samples) {
 +    ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 1, SKIPPY_ASR_SAMPLE_RATE);
++    // The linear resampler low-passes before it decimates; the steepest
++    // filter keeps 44.1/48 kHz content above 8 kHz out of the speech band.
++    config.resampling.linear.lpfOrder = MA_MAX_FILTER_ORDER;
 +    ma_decoder decoder;
 +    if (ma_decoder_init_memory(data, len, &config, &decoder) != MA_SUCCESS) {
-+        return false;
++        return decode_outcome::failed;
 +    }
 +    // Read in chunks: VBR MP3 cannot always report its length up front.
 +    constexpr ma_uint64 chunk = SKIPPY_ASR_SAMPLE_RATE;
-+    bool ok = true;
++    decode_outcome outcome = decode_outcome::ok;
 +    for (;;) {
++        if (samples.size() >= static_cast<size_t>(SKIPPY_ASR_MAX_SAMPLES)) {
++            outcome = decode_outcome::too_long;
++            break;
++        }
 +        const size_t offset = samples.size();
 +        samples.resize(offset + chunk);
 +        ma_uint64 read = 0;
@@ -472,12 +496,12 @@ index 000000000..06d59dcaa
 +            break;
 +        }
 +        if (result != MA_SUCCESS) {
-+            ok = false;
++            outcome = decode_outcome::failed;
 +            break;
 +        }
 +    }
 +    ma_decoder_uninit(&decoder);
-+    return ok;
++    return outcome;
 +}
 +
 +bool is_supported_container(const uint8_t * data, size_t len) {
@@ -596,8 +620,14 @@ index 000000000..06d59dcaa
 +                    "unsupported audio format; send WAV, MP3, or FLAC");
 +        }
 +        std::vector<float> samples;
-+        if (!decode_audio(data, len, samples)) {
-+            return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "failed to decode the audio upload");
++        switch (decode_audio(data, len, samples)) {
++            case decode_outcome::ok:
++                break;
++            case decode_outcome::too_long:
++                return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                        "the audio upload is longer than 30 minutes");
++            case decode_outcome::failed:
++                return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "failed to decode the audio upload");
 +        }
 +        if (samples.empty()) {
 +            return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "the audio upload holds no samples");
@@ -638,8 +668,9 @@ index 000000000..06d59dcaa
 +            params->abi_version != SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION) {
 +        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "unsupported skippy_asr_transcribe_params_v1 layout");
 +    }
-+    if (sample_count == 0 || sample_count > static_cast<size_t>(INT32_MAX)) {
-+        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "sample_count must be between 1 and INT32_MAX");
++    if (sample_count == 0 || sample_count > static_cast<size_t>(SKIPPY_ASR_MAX_SAMPLES)) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "sample_count must be between 1 and SKIPPY_ASR_MAX_SAMPLES (30 minutes)");
 +    }
 +#if defined(SKIPPY_HAS_WHISPER)
 +    return asr_entry(out_error, [&] {
@@ -657,9 +688,11 @@ index 000000000..06d59dcaa
 +        }
 +
 +        whisper_full_params full = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
++        // Default to at most four CPU threads; never exceed the hardware.
++        const int hardware = static_cast<int>((std::max)(1u, std::thread::hardware_concurrency()));
 +        full.n_threads = params->n_threads > 0
-+                ? params->n_threads
-+                : static_cast<int>((std::min)(4u, (std::max)(1u, std::thread::hardware_concurrency())));
++                ? (std::min)(params->n_threads, hardware)
++                : (std::min)(4, hardware);
 +        full.translate = params->translate;
 +        full.language = whisper_is_multilingual(ctx) ? language.c_str() : "en";
 +        full.detect_language = false;

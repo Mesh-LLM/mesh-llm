@@ -84,8 +84,9 @@ pub use skippy_ffi::{
     ACTIVATION_PART_OPTIONAL,
 };
 pub use speech_recognition::{
-    SPEECH_SAMPLE_RATE, SpeechRecognitionModel, SpeechRecognitionModelInfo, TranscriptSegment,
-    Transcription, TranscriptionOptions, decode_audio, speech_recognition_supported,
+    MAX_SPEECH_SAMPLES, SPEECH_SAMPLE_RATE, SpeechRecognitionModel, SpeechRecognitionModelInfo,
+    TranscriptSegment, Transcription, TranscriptionOptions, decode_audio,
+    speech_recognition_supported,
 };
 pub use stage_planning::{
     GgufStageRuntimePlan, gguf_shard_paths, plan_gguf_stage_resident_tensor_names,

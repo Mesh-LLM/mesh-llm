@@ -10,6 +10,8 @@ use crate::path_cstring::path_to_cstring;
 
 /// Sample rate of the PCM [`decode_audio`] returns and transcription expects.
 pub const SPEECH_SAMPLE_RATE: u32 = skippy_ffi::ASR_SAMPLE_RATE;
+/// Longest audio decoded or transcribed in one call: 30 minutes.
+pub const MAX_SPEECH_SAMPLES: usize = skippy_ffi::ASR_MAX_SAMPLES;
 
 /// Shape and weight memory of a loaded speech-recognition model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +38,7 @@ pub struct TranscriptionOptions {
     /// `0.0` decodes greedily; above it samples, with fallback on low confidence.
     pub temperature: f32,
     /// CPU threads for the parts that run on the CPU; `0` picks a default.
+    /// Values above the available parallelism are clamped to it.
     pub threads: usize,
 }
 
@@ -154,16 +157,25 @@ impl SpeechRecognitionModel {
         &self.info
     }
 
-    /// Transcribes 16 kHz mono PCM. `cancelled` is polled between decoder
-    /// steps; once it returns true the call fails instead of finishing.
-    pub fn transcribe(
+    /// Transcribes 16 kHz mono PCM, at most [`MAX_SPEECH_SAMPLES`].
+    /// `cancelled` is polled between decoder steps; once it returns true the
+    /// call fails instead of finishing. Backends poll it on the calling
+    /// thread today; the `Sync` bound keeps it sound if one ever polls from
+    /// a worker.
+    pub fn transcribe<F>(
         &self,
         samples: &[f32],
         options: &TranscriptionOptions,
-        cancelled: impl Fn() -> bool,
-    ) -> Result<Transcription> {
+        cancelled: F,
+    ) -> Result<Transcription>
+    where
+        F: Fn() -> bool + Sync,
+    {
         if samples.is_empty() {
             return Err(anyhow!("transcription needs at least one audio sample"));
+        }
+        if samples.len() > MAX_SPEECH_SAMPLES {
+            return Err(anyhow!("transcription takes at most 30 minutes of audio"));
         }
         let language = options
             .language
@@ -182,10 +194,9 @@ impl SpeechRecognitionModel {
             translate: options.translate,
             prompt: prompt.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
             temperature: options.temperature.max(0.0),
-            n_threads: i32::try_from(options.threads).unwrap_or(i32::MAX),
+            n_threads: clamp_threads(options.threads),
             ..Default::default()
         };
-        let cancelled: &dyn Fn() -> bool = &cancelled;
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status = unsafe {
@@ -194,8 +205,8 @@ impl SpeechRecognitionModel {
                 samples.as_ptr(),
                 samples.len(),
                 &params,
-                Some(poll_cancellation),
-                &cancelled as *const &dyn Fn() -> bool as *mut c_void,
+                Some(poll_cancellation::<F>),
+                &cancelled as *const F as *mut c_void,
                 &mut raw,
                 &mut error,
             )
@@ -217,7 +228,8 @@ impl Drop for SpeechRecognitionModel {
     }
 }
 
-/// Decodes a WAV, MP3, or FLAC upload to 16 kHz mono PCM.
+/// Decodes a WAV, MP3, or FLAC upload to 16 kHz mono PCM. Audio longer than
+/// [`MAX_SPEECH_SAMPLES`] is refused while decoding.
 pub fn decode_audio(bytes: &[u8]) -> Result<Vec<f32>> {
     ensure_speech_recognition_supported()?;
     let mut samples = ptr::null_mut();
@@ -257,9 +269,22 @@ fn ensure_speech_recognition_supported() -> Result<()> {
 }
 
 /// Bridges the native abort poll to the caller's cancellation closure.
-unsafe extern "C" fn poll_cancellation(user_data: *mut c_void) -> bool {
-    let cancelled = unsafe { &*(user_data as *const &dyn Fn() -> bool) };
+/// `user_data` is the `&F` that [`SpeechRecognitionModel::transcribe`]
+/// passes and keeps alive for the whole native call. A panicking closure
+/// cannot unwind into C, so it is treated as a request to cancel.
+unsafe extern "C" fn poll_cancellation<F: Fn() -> bool>(user_data: *mut c_void) -> bool {
+    let cancelled = unsafe { &*(user_data as *const F) };
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(cancelled)).unwrap_or(true)
+}
+
+/// Explicit thread counts are clamped to the available parallelism; zero
+/// leaves the choice to the runtime.
+fn clamp_threads(requested: usize) -> i32 {
+    if requested == 0 {
+        return 0;
+    }
+    let available = std::thread::available_parallelism().map_or(1, usize::from);
+    i32::try_from(requested.min(available)).unwrap_or(i32::MAX)
 }
 
 /// Owns a native result until its segments are copied out.
@@ -333,19 +358,55 @@ mod tests {
         assert_eq!(transcription.text(), "Hello world.");
     }
 
-    /// Runs against a real Whisper model when `SKIPPY_ASR_TEST_MODEL` and
-    /// `SKIPPY_ASR_TEST_AUDIO` name one and a WAV/MP3/FLAC clip.
     #[test]
-    fn transcribes_a_real_clip_when_configured() {
-        let (Some(model), Some(audio)) = (
-            std::env::var_os("SKIPPY_ASR_TEST_MODEL"),
-            std::env::var_os("SKIPPY_ASR_TEST_AUDIO"),
-        ) else {
-            return;
-        };
+    fn explicit_thread_counts_never_exceed_the_hardware() {
+        let available = std::thread::available_parallelism().map_or(1, usize::from);
+        assert_eq!(clamp_threads(0), 0);
+        assert_eq!(clamp_threads(1), 1);
+        assert_eq!(clamp_threads(usize::MAX), available as i32);
+    }
+
+    /// The model and clip named by `SKIPPY_ASR_TEST_MODEL` and
+    /// `SKIPPY_ASR_TEST_AUDIO` (WAV/MP3/FLAC).
+    fn real_model_and_clip() -> (SpeechRecognitionModel, Vec<f32>) {
+        let model = std::env::var_os("SKIPPY_ASR_TEST_MODEL").expect("set SKIPPY_ASR_TEST_MODEL");
+        let audio = std::env::var_os("SKIPPY_ASR_TEST_AUDIO").expect("set SKIPPY_ASR_TEST_AUDIO");
         let device = std::env::var("SKIPPY_ASR_TEST_DEVICE").ok();
         let model = SpeechRecognitionModel::open(model, device.as_deref()).unwrap();
         let samples = decode_audio(&std::fs::read(audio).unwrap()).unwrap();
+        (model, samples)
+    }
+
+    /// One model serves concurrent transcriptions, each with its own decoder
+    /// state, and they agree with each other.
+    #[test]
+    #[ignore = "needs SKIPPY_ASR_TEST_MODEL and SKIPPY_ASR_TEST_AUDIO"]
+    fn concurrent_transcriptions_share_one_model() {
+        let (model, samples) = real_model_and_clip();
+        let texts = std::thread::scope(|scope| {
+            let workers = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        model
+                            .transcribe(&samples, &TranscriptionOptions::default(), || false)
+                            .unwrap()
+                            .text()
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert!(!texts[0].is_empty());
+        assert_eq!(texts[0], texts[1]);
+    }
+
+    #[test]
+    #[ignore = "needs SKIPPY_ASR_TEST_MODEL and SKIPPY_ASR_TEST_AUDIO"]
+    fn transcribes_a_real_clip() {
+        let (model, samples) = real_model_and_clip();
         let transcription = model
             .transcribe(&samples, &TranscriptionOptions::default(), || false)
             .unwrap();
