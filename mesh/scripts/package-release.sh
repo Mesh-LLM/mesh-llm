@@ -109,17 +109,22 @@ create_archive() {
     mesh_automation product archive-write "$source_dir" "$archive_path" "$archive_kind"
 }
 
+sha256_hex() {
+    local file="$1"
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print tolower($1)}'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print tolower($1)}'
+    else
+        echo "shasum or sha256sum is required to hash release files" >&2
+        exit 1
+    fi
+}
+
 write_checksum_sidecar() {
     local file="$1"
     local digest
-    if command -v shasum >/dev/null 2>&1; then
-        digest="$(shasum -a 256 "$file" | awk '{print tolower($1)}')"
-    elif command -v sha256sum >/dev/null 2>&1; then
-        digest="$(sha256sum "$file" | awk '{print tolower($1)}')"
-    else
-        echo "shasum or sha256sum is required to write checksum sidecars" >&2
-        exit 1
-    fi
+    digest="$(sha256_hex "$file")"
     printf '%s  %s\n' "$digest" "$(basename "$file")" > "$file.sha256"
 }
 
@@ -402,6 +407,8 @@ resolve_release_target() {
     esac
 
     STABLE_ASSET="$(printf 'mesh-llm-%s%s.%s\n' "$TARGET_TRIPLE" "$(flavor_suffix "$effective_flavor")" "$ARCHIVE_EXT")"
+    # Plugins are built per target, not per backend flavor.
+    PLUGIN_TARGET_TRIPLE="$TARGET_TRIPLE"
     TARGET_TRIPLE="${TARGET_TRIPLE}$(flavor_suffix "$effective_flavor")"
 
     return 0
@@ -495,6 +502,65 @@ copy_and_verify_precomposed_product() {
         --check
 }
 
+# Place the default plugins this release bundles under plugins/ beside the
+# host, where a node installs its defaults from. Each one is the archive its
+# own release published, at the version and SHA-256 pinned in
+# mesh-llm-plugin-manager's DEFAULT_PLUGINS; `repository bundled-plugins`
+# lists the ones pinned for this target and where to fetch them.
+# MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR names a directory that already holds the
+# archives, for offline or local runs; they are checked against the pins all
+# the same. A missing archive or a digest mismatch fails the release. The
+# bundle's own host must then install every placed archive as a default; it
+# runs on this machine, as verify_mesh_binary_version already requires.
+place_bundled_plugins() {
+    local bundle_dir="$1"
+    local target="$2"
+    local input_dir="${MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR:-}"
+    local plugins_dir="$bundle_dir/plugins"
+    local pins
+    local name
+    local version
+    local pinned_sha256
+    local url
+    local archive_name
+    local archive
+    local actual_sha256
+
+    pins="$(
+        mesh_automation repository bundled-plugins \
+            --target "$target" \
+            --defaults "$REPO_ROOT/mesh/crates/mesh-llm-plugin-manager/src/defaults.rs"
+    )"
+    if [[ -z "$pins" ]]; then
+        echo "No default plugin is pinned for $target; bundling none"
+        return 0
+    fi
+    mkdir -p "$plugins_dir"
+    while read -r name version pinned_sha256 url; do
+        archive_name="$name-$version-$target.tar.gz"
+        archive="$plugins_dir/$archive_name"
+        if [[ -n "$input_dir" ]]; then
+            if [[ ! -f "$input_dir/$archive_name" ]]; then
+                echo "Bundled plugin archive is missing: $input_dir/$archive_name" >&2
+                exit 1
+            fi
+            cp "$input_dir/$archive_name" "$archive"
+        elif ! curl --fail --location --silent --show-error \
+            --retry 3 --retry-delay 2 --connect-timeout 30 \
+            --output "$archive" "$url"; then
+            echo "Could not download bundled plugin archive $url" >&2
+            exit 1
+        fi
+        actual_sha256="$(sha256_hex "$archive")"
+        if [[ "$actual_sha256" != "$pinned_sha256" ]]; then
+            echo "Bundled plugin archive $archive_name is $actual_sha256, not the pinned $pinned_sha256" >&2
+            exit 1
+        fi
+        echo "Bundled default plugin $name $version ($archive_name)"
+    done <<< "$pins"
+    mesh_automation repository bundled-plugins-check --bundle "$bundle_dir"
+}
+
 main() {
     if [[ $# -lt 1 || -z "${1:-}" ]]; then
         usage
@@ -557,6 +623,8 @@ main() {
             "$version" \
             "$(effective_release_flavor)"
     fi
+
+    place_bundled_plugins "$bundle_dir" "$PLUGIN_TARGET_TRIPLE"
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
     create_archive "$bundle_dir" "$output_dir/$STABLE_ASSET" "$ARCHIVE_EXT"
