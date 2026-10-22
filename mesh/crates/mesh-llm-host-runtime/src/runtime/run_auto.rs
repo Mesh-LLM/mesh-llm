@@ -772,10 +772,7 @@ pub(super) fn configure_run_auto_process_state(
     }
 
     let native_log_rx = skippy_runtime::register_filtered_native_logs();
-    configure_startup_lifecycle_log_parser(
-        config.runtime.lifecycle_log_parser,
-        config.runtime.lifecycle_log_parser_source.as_str(),
-    );
+    configure_startup_lifecycle_log_parser(config.runtime.lifecycle_log_parser_selection());
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));

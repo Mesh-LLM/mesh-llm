@@ -60,7 +60,7 @@ mesh-llm setup
 mesh-llm serve --auto
 mesh-llm serve --model Qwen2.5-32B
 mesh-llm serve --join <token>
-mesh-llm serve --discover "my-mesh"
+mesh-llm serve --discover=my-mesh
 mesh-llm serve --model MiniMax-M2.5-Q4_K_M --mesh-guardrails metrics
 mesh-llm client --auto
 mesh-llm gpus
