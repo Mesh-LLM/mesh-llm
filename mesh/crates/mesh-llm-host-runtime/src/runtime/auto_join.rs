@@ -22,14 +22,18 @@ pub(super) async fn maybe_discover_join_candidates(
     // a file is still a configured token, and discovery must not run over it.
     let effective_join_tokens = options.effective_join_tokens();
     let discover_active = options.auto || options.discover.is_some();
-    if !discover_active || !effective_join_tokens.is_empty() {
-        return Ok(None);
-    }
 
+    // `--discover <name>` names the mesh even when a join token, not
+    // discovery, picks it: `/api/status` and the Nostr or LAN rediscovery
+    // that follows a token join both read this name.
     if let Some(name) = options.discover.as_ref().filter(|name| !name.is_empty())
         && options.mesh_name.is_none()
     {
         options.mesh_name = Some(name.clone());
+    }
+
+    if !discover_active || !effective_join_tokens.is_empty() {
+        return Ok(None);
     }
 
     // Plan the model a new mesh starts with on what this node can hold without
