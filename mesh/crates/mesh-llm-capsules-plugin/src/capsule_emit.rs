@@ -3460,9 +3460,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A host-served OBSERVED exchange carries no requester identity, so it
-    /// is keyed on the honest "unknown" counterparty bucket -- never
-    /// invented -- and still sequences monotonically within that bucket.
+    /// A host-served OBSERVED exchange the host names no requester for (one
+    /// that reached the local API, or an older host) is keyed on the honest
+    /// "unknown" counterparty bucket -- never invented -- and still
+    /// sequences monotonically within that bucket.
     #[test]
     fn observed_host_exchange_seals_monotone_seq_under_the_unknown_counterparty_bucket() {
         let dir = std::env::temp_dir().join(format!("cap-seq-unk-{}", std::process::id()));

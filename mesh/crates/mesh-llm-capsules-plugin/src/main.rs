@@ -827,10 +827,15 @@ async fn chat_completions(
             // as most recently observed on the openai.exchange.v1 channel. `None`
             // when the host has published none yet -> capsule keeps honest
             // defaults; never fabricated.
+            // That envelope is another exchange's, so the node that asked
+            // for it is not carried over.
             let host_provenance = state
                 .lifecycle_events
                 .latest_provenance_for_model(&model)
-                .map(host_provenance_from);
+                .map(|observed| capsule_emit::HostProvenance {
+                    requested_by_node_id: None,
+                    ..host_provenance_from(observed)
+                });
 
             // Seal on `spawn_blocking`: `emit_for_exchange` holds the std
             // ledger mutex across two `sync_all()`s -- real disk waits that
@@ -1852,6 +1857,27 @@ mod push_eligibility_tests {
     }
 
     // The host's JSON field lands in the mirror (and is optional on the wire).
+    /// evidencebook#69 finding 1, through the real adapter: a host-served
+    /// terminal naming the node that asked seals that node as the record's
+    /// requesting party (`host_provenance_from` once dropped it).
+    #[test]
+    fn a_tunneled_host_served_record_names_the_node_that_asked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let capsules = CapsuleState::open(dir.path(), "node-under-test").expect("open state");
+        let party = |requested_by: Option<&str>| {
+            let capsule = seal_observed_host_exchange(
+                &capsules,
+                &tunneled_host_served_envelope(requested_by),
+            )
+            .expect("sealed");
+            capsule["model_attestation"]["compute_attestation"]["x-mesh-poc-v1"]
+                ["serving_provenance"]["requesting_party"]
+                .clone()
+        };
+        assert_eq!(party(Some("peer-node-b")), "peer-node-b");
+        assert_eq!(party(None), "unknown");
+    }
+
     #[test]
     fn requested_by_node_id_deserializes_from_the_host_envelope_and_defaults_absent() {
         let with: HostServingProvenance = serde_json::from_value(

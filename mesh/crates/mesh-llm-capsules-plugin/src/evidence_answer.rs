@@ -1715,8 +1715,7 @@ mod tests {
     /// `requested_by_node_id`), and under the default settings node-a's
     /// signed request for that record is answered with it. node-b, signing
     /// for itself while stating node-a's `requester_id` (T3's spoof), is
-    /// refused `not_authorized` before the ledger is read: the same request
-    /// is refused the same way with no ledger there at all.
+    /// refused `not_authorized` before the ledger is read.
     #[test]
     fn a_host_served_record_goes_to_the_peer_that_asked_and_not_to_a_spoofer() {
         use crate::capsule_emit::{CapsuleState, HostProvenance, ObservedHostExchange};
@@ -1802,15 +1801,12 @@ mod tests {
         let mut spoof = request.clone();
         spoof["requester_id"] = json!("node-a");
         let spoof = signed_by("node-b", &spoof);
-        let nowhere = data.path().join("no-such-ledger");
-        for ledger_dir in [state.ledger_dir(), nowhere.as_path()] {
-            assert_eq!(
-                refused(&ask_node(ledger_dir, &spoof)),
-                Some(Reason::NotAuthorized),
-                "{}",
-                ledger_dir.display()
-            );
-        }
+        let reads = evidence_log::index_reads();
+        assert_eq!(
+            refused(&ask_node(state.ledger_dir(), &spoof)),
+            Some(Reason::NotAuthorized)
+        );
+        assert_eq!(evidence_log::index_reads(), reads, "the ledger was read");
     }
 
     /// One member changed after signing, and the signature no longer covers

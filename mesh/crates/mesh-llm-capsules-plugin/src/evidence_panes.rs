@@ -2818,6 +2818,8 @@ mod tests {
     /// `role: requested` naming this node (the server) in `served_by_node_id`
     /// too, `requesting_party: unknown`. NEITHER half names the peer's mesh
     /// node-id -- the peer's only identity is the receiver's `received_from`.
+    /// (A served half sealed since the plugin binds the host's
+    /// `requested_by_node_id` names the peer; this is the earlier shape.)
     fn mesh_half_served_by(
         capsule_id: &str,
         role: &str,
