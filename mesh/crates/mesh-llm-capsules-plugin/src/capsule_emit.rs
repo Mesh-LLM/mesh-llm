@@ -440,6 +440,10 @@ pub struct HostProvenance {
     pub gpu: Option<String>,
     pub vram_bytes: Option<u64>,
     pub is_soc: Option<bool>,
+    /// The mesh node that asked this node to serve the exchange (mirror
+    /// `lifecycle_channel::HostServingProvenance::requested_by_node_id`):
+    /// the host's QUIC-authenticated remote id, never the request's word.
+    pub requested_by_node_id: Option<String>,
 }
 
 /// One admitted exchange to seal into a capsule — the raw request/response
@@ -1279,14 +1283,30 @@ impl CapsuleState {
         let binary_attestation =
             crate::producer::runtime_attest::measure_self(&self.keys, utc_now_minute());
 
-        // Observe path carries no requester identity (see the honest
-        // "unknown" requesting_party below) -- the pair is keyed on that same
-        // "unknown" bucket, never a fabricated counterparty.
+        // The node that asked this node to serve the exchange: the host's
+        // `requested_by_node_id`, which it sets only on a host-served
+        // exchange that came over the mesh, from that connection's
+        // QUIC-authenticated remote id (never from the request). It is what
+        // makes the asker this record's counterparty, so a signed request
+        // from that node can get the record back. Any other exchange (one
+        // that reached the local API, a requester-side half, an older host)
+        // keeps the honest "unknown", never a fabricated party. The pair is
+        // sequenced under the same id.
+        let requesting_party = if role == "served" {
+            host.requested_by_node_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty() && *id != "unknown")
+        } else {
+            None
+        }
+        .unwrap_or("unknown")
+        .to_string();
         let mut sequence_counters = self
             .sequence_counters
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let sequence = sequence_counters.peek(&self.node_id, "unknown");
+        let sequence = sequence_counters.peek(&self.node_id, &requesting_party);
 
         let input = CapsuleInput {
             action_id: format!("mesh-poc/capsule-emit-mesh-host-served/{agent_input_digest}"),
@@ -1351,9 +1371,7 @@ impl CapsuleState {
                         }
                     }),
                     dispatch_path: Some(dispatch_path_wire_value(dispatch_path).to_string()),
-                    // Requesting party is not carried on the host-served
-                    // observe path -- honest "unknown", never invented.
-                    requesting_party: "unknown".to_string(),
+                    requesting_party: requesting_party.clone(),
                     exchange_id: exchange_id.unwrap_or("unknown").to_string(),
                     hostname: sealed_hostname(&host, hostname_opt_in()),
                     quantization: host
@@ -1446,7 +1464,7 @@ impl CapsuleState {
             &self.keys.signing_key,
         );
         ledger.append(&capsule, &statement)?;
-        sequence_counters.commit(&self.node_id, "unknown", sequence)?;
+        sequence_counters.commit(&self.node_id, &requesting_party, sequence)?;
 
         Ok(EmittedCapsule {
             capsule_id,
@@ -3481,6 +3499,64 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// evidencebook#69 finding 1: a host-served exchange a mesh peer asked
+    /// for names that peer, the host's authenticated `requested_by_node_id`,
+    /// as its requesting party, so the peer is the record's counterparty.
+    /// Each requester is its own sequenced pair. A requester-side half never
+    /// takes the field (this node asked, it was not asked), and a blank one
+    /// stays the honest "unknown".
+    #[test]
+    fn observed_host_exchange_names_the_host_authenticated_requester() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = CapsuleState::open(dir.path(), "node-under-test").expect("open state");
+        let observed =
+            |dispatch_path: DispatchPath, requested_by: Option<&str>| ObservedHostExchange {
+                model: "m",
+                exchange_id: Some("e"),
+                request_digest: None,
+                response_digest: None,
+                tool_calls_digest: None,
+                reasoning_digest: None,
+                usage: None,
+                host_provenance: HostProvenance {
+                    requested_by_node_id: requested_by.map(str::to_string),
+                    ..HostProvenance::default()
+                },
+                dispatch_path,
+                nonce: None,
+                peer_capsule_id: None,
+                peer_capsule_id_provenance: None,
+                twin_bracket_id: None,
+                response_text_digest: None,
+            };
+        let seal = |dispatch_path, requested_by| {
+            let emitted = state
+                .emit_for_observed_host_exchange(&observed(dispatch_path, requested_by))
+                .expect("seal");
+            let party = poc_block(&emitted.capsule)["serving_provenance"]["requesting_party"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            (party, seq_of(&emitted.capsule))
+        };
+
+        assert_eq!(
+            seal(DispatchPath::RawProxy, Some("peer-a")),
+            ("peer-a".to_string(), (1, None))
+        );
+        assert_eq!(
+            seal(DispatchPath::RawProxy, Some(" peer-a ")),
+            ("peer-a".to_string(), (2, Some(1)))
+        );
+        assert_eq!(
+            seal(DispatchPath::RawProxy, Some("peer-b")),
+            ("peer-b".to_string(), (1, None))
+        );
+        assert_eq!(seal(DispatchPath::RemoteMesh, Some("peer-a")).0, "unknown");
+        assert_eq!(seal(DispatchPath::RawProxy, Some(" ")).0, "unknown");
+        assert_eq!(seal(DispatchPath::RawProxy, None).0, "unknown");
     }
 
     /// RESTART SAFETY: the sequence counter is persisted beside the ledger

@@ -1710,6 +1710,109 @@ mod tests {
         assert_eq!(verified["state"], json!("artifact"), "{verified}");
     }
 
+    /// evidencebook#69 finding 1, end to end: this node seals a host-served
+    /// exchange node-a asked for (the host names node-a as
+    /// `requested_by_node_id`), and under the default settings node-a's
+    /// signed request for that record is answered with it. node-b, signing
+    /// for itself while stating node-a's `requester_id` (T3's spoof), is
+    /// refused `not_authorized` before the ledger is read: the same request
+    /// is refused the same way with no ledger there at all.
+    #[test]
+    fn a_host_served_record_goes_to_the_peer_that_asked_and_not_to_a_spoofer() {
+        use crate::capsule_emit::{CapsuleState, HostProvenance, ObservedHostExchange};
+        use crate::lifecycle_channel::DispatchPath;
+        use crate::producer::anchor::AnchorClient;
+        use crate::producer::checkpoint::{CheckpointCadenceConfig, CheckpointState};
+
+        let data = tempfile::tempdir().unwrap();
+        let state = CapsuleState::open(data.path(), RESPONDER).unwrap();
+        let emitted = state
+            .emit_for_observed_host_exchange(&ObservedHostExchange {
+                model: "m",
+                exchange_id: Some("e-1"),
+                request_digest: Some(&"4b".repeat(32)),
+                response_digest: Some(&"33".repeat(32)),
+                tool_calls_digest: None,
+                reasoning_digest: None,
+                usage: None,
+                host_provenance: HostProvenance {
+                    served_by_node_id: Some(RESPONDER.to_string()),
+                    weights_digest: Some("ab".repeat(32)),
+                    requested_by_node_id: Some("node-a".to_string()),
+                    ..HostProvenance::default()
+                },
+                dispatch_path: DispatchPath::RawProxy,
+                nonce: None,
+                peer_capsule_id: None,
+                peer_capsule_id_provenance: None,
+                twin_bracket_id: None,
+                response_text_digest: None,
+            })
+            .unwrap();
+        let (mut checkpoints, _) = CheckpointState::load(
+            state.ledger_dir(),
+            RESPONDER,
+            CheckpointCadenceConfig::default(),
+        )
+        .unwrap();
+        let covering = checkpoints
+            .checkpoint_covering(
+                &emitted.capsule_id,
+                state.signing_key(),
+                &AnchorClient::new("http://127.0.0.1:1"),
+            )
+            .unwrap();
+        let request = json!({
+            "subject": {"record": emitted.capsule_id},
+            "coverage": {"expected_pin": covering.checkpoint.digest()},
+        });
+        let announced = announced();
+        let ask_node = |ledger_dir: &Path, bytes: &[u8]| {
+            answer(
+                bytes,
+                &Responder {
+                    ledger_dir,
+                    signing_key: state.signing_key(),
+                    now: NOW,
+                    history_segments: crate::share_policy::history_segments_for(None),
+                    share_standard_history: crate::share_policy::shares_standard_history_for(None),
+                    keys: Keys {
+                        announced: &announced,
+                        configured: None,
+                    },
+                    replay: &ReplayCache::default(),
+                    node_id: Some(RESPONDER),
+                },
+            )
+        };
+
+        let bytes = signed_by("node-a", &request);
+        let outcome = ask_node(state.ledger_dir(), &bytes);
+        let Outcome::Answered { wire, .. } = outcome else {
+            panic!("node-a asked for the record of its own exchange: {outcome:?}");
+        };
+        let verified = verify_response(
+            &bytes,
+            &wire,
+            &state.signing_key().verifying_key(),
+            &Default::default(),
+        );
+        assert_eq!(verified["state"], json!("artifact"), "{verified}");
+
+        let mut spoof = request.clone();
+        spoof["requester_id"] = json!("node-a");
+        let spoof = signed_by("node-b", &spoof);
+        let nowhere = data.path().join("no-such-ledger");
+        for ledger_dir in [state.ledger_dir(), nowhere.as_path()] {
+            assert_eq!(
+                refused(&ask_node(ledger_dir, &spoof)),
+                Some(Reason::NotAuthorized),
+                "{}",
+                ledger_dir.display()
+            );
+        }
+    }
+
     /// One member changed after signing, and the signature no longer covers
     /// the request: refused as an asker that proved nothing, `not_authorized`
     /// for a record and `policy_declined` once the change makes it Standard

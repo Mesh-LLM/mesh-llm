@@ -182,6 +182,7 @@ fn host_provenance_from(observed: HostServingProvenance) -> HostProvenance {
         gpu: observed.gpu,
         vram_bytes: observed.vram_bytes,
         is_soc: observed.is_soc,
+        requested_by_node_id: observed.requested_by_node_id,
     }
 }
 
