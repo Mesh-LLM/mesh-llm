@@ -29,6 +29,10 @@ pub struct DefaultPlugin {
     pub name: &'static str,
     /// The exact release to install.
     pub version: &'static str,
+    /// The GitHub repository (`owner/name`) whose release `v<version>`
+    /// publishes this plugin's archives. The release job fetches the pinned
+    /// archive from there and bundles it; a node never downloads it.
+    pub repository: &'static str,
     /// `(target triple, lowercase hex SHA-256 of that release's archive)`.
     pub sha256: &'static [(&'static str, &'static str)],
     /// The host surfaces this default may use. The host keeps only these from
@@ -117,6 +121,7 @@ impl DefaultPlugin {
 pub const DEFAULT_PLUGINS: &[DefaultPlugin] = &[DefaultPlugin {
     name: "capsules",
     version: "0.1.4",
+    repository: "Mesh-LLM/capsules",
     sha256: &[
         (
             "aarch64-apple-darwin",
@@ -264,6 +269,7 @@ mod tests {
     const NOTES: DefaultPlugin = DefaultPlugin {
         name: "notes",
         version: "1.0.0",
+        repository: "example/notes",
         sha256: &[(
             LINUX,
             "abababababababababababababababababababababababababababababababab",
@@ -358,6 +364,13 @@ mod tests {
                 "{} pins an invalid version {:?}",
                 default.name,
                 default.version
+            );
+            let parts: Vec<_> = default.repository.split('/').collect();
+            assert!(
+                parts.len() == 2 && parts.iter().all(|part| !part.is_empty()),
+                "{} names its release repository {:?}, not owner/name",
+                default.name,
+                default.repository
             );
             for (triple, _) in default.sha256 {
                 assert!(
