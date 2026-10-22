@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod http_exchange;
 pub mod lifecycle;
 pub mod models;
+pub mod realtime;
 mod request_lifecycle;
 pub mod rerank;
 pub mod responses;

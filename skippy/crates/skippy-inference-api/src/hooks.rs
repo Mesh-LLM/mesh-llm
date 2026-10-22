@@ -669,6 +669,15 @@ impl InferenceBackend for HookedInferenceBackend {
     ) -> InferenceResult<AudioTranscriptionResponse> {
         self.backend.audio_translation(request, context).await
     }
+
+    /// Forward live transcription unchanged.
+    async fn realtime_transcription(
+        &self,
+        config: crate::realtime::RealtimeTranscriptionConfig,
+        context: InferenceRequestContext,
+    ) -> InferenceResult<crate::realtime::RealtimeTranscriptionSession> {
+        self.backend.realtime_transcription(config, context).await
+    }
 }
 
 pub fn chat_skippy_hooks_enabled(request: &ChatCompletionRequest) -> bool {
