@@ -693,3 +693,35 @@ async fn a_replayed_admission_keeps_the_deposit_it_was_admitted_with() {
     let replay = service.serve_admit(admit("r", "peer")).await.unwrap();
     assert_eq!(deposit_invoice(&replay), invoice);
 }
+
+#[tokio::test]
+async fn a_configured_deposit_is_separate_from_the_minimum_payment() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    service.ledger.set_admission_deposit_msat(5000).unwrap();
+    let first = service.serve_admit(admit("r", "peer")).await.unwrap();
+    let ServeAdmitResponse::Deposit {
+        invoice,
+        min_payment_msat,
+        ..
+    } = first
+    else {
+        panic!("expected a deposit, got {first:?}");
+    };
+    assert_eq!((invoice.amount_msat, min_payment_msat), (Some(5000), 1000));
+    // The admitted deposit is frozen: a replay after the operator changes it
+    // returns the same invoice.
+    service.ledger.set_admission_deposit_msat(3000).unwrap();
+    let replay = service.serve_admit(admit("r", "peer")).await.unwrap();
+    assert_eq!(deposit_invoice(&replay), invoice);
+    received(&wallet, &invoice);
+    service.serve_deposit_confirmed("r").await.unwrap();
+    // A 5,500-msat bill leaves 500, raised to the 1,000 minimum, not the deposit.
+    let bill = service.serve_settle(settle("r", 300, 250)).await.unwrap();
+    assert_eq!(
+        (bill.bill_msat, bill.deposit_msat, bill.remaining_msat),
+        (5500, 5000, 1000)
+    );
+    assert_eq!(bill.invoice.unwrap().amount_msat, Some(1000));
+}

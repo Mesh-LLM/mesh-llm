@@ -71,6 +71,14 @@ impl PaymentService {
                 }
                 Ok(serde_json::json!({ "min_payment_msat": self.ledger.min_payment_msat()? }))
             }
+            ControlCommand::AdmissionDeposit { value_msat } => {
+                if let Some(value_msat) = value_msat {
+                    self.ledger.set_admission_deposit_msat(value_msat)?;
+                }
+                Ok(serde_json::json!({
+                    "admission_deposit_msat": self.ledger.admission_deposit_msat()?
+                }))
+            }
             ControlCommand::SetCacheDiscount { model, percent } => {
                 let mut pricing = self.ledger.pricing()?.remove(&model).ok_or_else(|| {
                     anyhow::anyhow!("set model input/output rates before a cache discount")

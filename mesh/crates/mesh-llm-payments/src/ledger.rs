@@ -77,8 +77,8 @@ impl Ledger {
     }
 
     /// The operator's minimum payment in msat (default 1 sat): the seller's
-    /// deposit and sub-minimum final round-up, and the largest seller minimum
-    /// this node will pay as a buyer.
+    /// sub-minimum final round-up, and the largest seller minimum this node
+    /// will pay as a buyer.
     pub fn min_payment_msat(&self) -> Result<u64> {
         Ok(match self.get_setting("min_payment_msat")? {
             Some(value) => value.parse()?,
@@ -89,6 +89,33 @@ impl Ledger {
     pub fn set_min_payment_msat(&self, floor_msat: u64) -> Result<()> {
         mesh_llm_payments_types::metering::validate_payment_floor(floor_msat)?;
         self.set_setting("min_payment_msat", &floor_msat.to_string())
+    }
+
+    /// The operator's admission deposit in msat: what this node asks, as a
+    /// seller, of peers outside its trust cache, and the largest seller
+    /// deposit it will pay as a buyer. Unset, it follows the minimum payment;
+    /// it is never below it, because the deposit is itself a Lightning payment.
+    pub fn admission_deposit_msat(&self) -> Result<u64> {
+        let floor_msat = self.min_payment_msat()?;
+        Ok(match self.get_setting("admission_deposit_msat")? {
+            Some(value) => value.parse::<u64>()?.max(floor_msat),
+            None => floor_msat,
+        })
+    }
+
+    pub fn set_admission_deposit_msat(&self, deposit_msat: u64) -> Result<()> {
+        self.validate_admission_deposit(deposit_msat)?;
+        self.set_setting("admission_deposit_msat", &deposit_msat.to_string())
+    }
+
+    fn validate_admission_deposit(&self, deposit_msat: u64) -> Result<()> {
+        mesh_llm_payments_types::metering::validate_deposit(deposit_msat)?;
+        let floor_msat = self.min_payment_msat()?;
+        ensure!(
+            deposit_msat >= floor_msat,
+            "deposit must be at least the minimum payment ({floor_msat} msat)"
+        );
+        Ok(())
     }
 
     pub(crate) fn get_setting(&self, key: &str) -> Result<Option<String>> {

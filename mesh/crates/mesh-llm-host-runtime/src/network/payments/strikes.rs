@@ -9,7 +9,8 @@
 //! because a shared blocklist would let any peer get an honest provider
 //! excluded by reporting fabricated strikes. It also does not stop a provider
 //! that returns under a fresh endpoint id; the per-strike loss is bounded by
-//! the 1-sat deposit because usage is paid for only after delivery.
+//! the deposit (at most this node's configured deposit) because usage is paid
+//! for only after delivery.
 //!
 //! State lives next to the payments ledger (`payments/payee_strikes.json`) so a
 //! restart does not clear it. An operator clears a false positive by removing

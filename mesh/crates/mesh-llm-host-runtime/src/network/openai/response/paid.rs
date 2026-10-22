@@ -11,7 +11,7 @@ use mesh_llm_payments_types::contract::{
     CancelRequest, CancelStage, Empty, RoutingBudgetRequest, RoutingBudgetResponse, ops,
 };
 use mesh_llm_payments_types::metered_wire::{self as wire, AdmissionTerms, Frame};
-use mesh_llm_payments_types::metering::validate_payment_floor;
+use mesh_llm_payments_types::metering::{validate_deposit, validate_payment_floor};
 use mesh_llm_payments_types::{RequestTerms, intent::PaymentIntent, pricing::Pricing};
 use tokio::io::{AsyncRead, AsyncWriteExt, DuplexStream};
 
@@ -313,7 +313,7 @@ async fn read_admission(recv: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
 }
 
 /// The admission must restate exactly what was asked, at the frozen price,
-/// with a deposit that is either absent or the single defined share.
+/// with a deposit that is either absent or within the configurable range.
 fn validate_admission(
     frame: Frame,
     request: &PaidRequest,
@@ -327,12 +327,12 @@ fn validate_admission(
         terms.id == id && terms.model == request.model && terms.pricing == *price,
         "admission terms mismatch"
     );
-    // The payment service also refuses a seller minimum above this node's own.
+    // The payment service also refuses a seller minimum or deposit above this
+    // node's own.
     validate_payment_floor(terms.min_payment_msat)?;
-    ensure!(
-        terms.deposit_msat == 0 || terms.deposit_msat == terms.min_payment_msat,
-        "deposit mismatch"
-    );
+    if terms.deposit_msat > 0 {
+        validate_deposit(terms.deposit_msat)?;
+    }
     match &invoice {
         Some(invoice) => {
             ensure!(

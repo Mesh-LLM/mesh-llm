@@ -51,10 +51,16 @@ pub enum WalletCommand {
         #[arg(long, requires = "mode")]
         daily_budget_sats: Option<u64>,
     },
-    /// Show or set the minimum Lightning payment (default 1 sat). Sellers ask it as
-    /// the deposit and raise any smaller final remainder to it; buyers refuse sellers
-    /// whose minimum is above theirs.
+    /// Show or set the minimum Lightning payment (default 1 sat). Sellers raise any
+    /// smaller final remainder to it; buyers refuse sellers whose minimum is above theirs.
     MinPayment {
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=1000))]
+        sats: Option<u64>,
+    },
+    /// Show or set the admission deposit new peers pay this node before it serves them
+    /// (default: the minimum payment, and never below it).
+    /// It is applied to the bill. Buyers refuse sellers whose deposit is above theirs.
+    AdmissionDeposit {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=1000))]
         sats: Option<u64>,
     },

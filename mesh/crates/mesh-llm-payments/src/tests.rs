@@ -482,3 +482,47 @@ async fn min_payment_control_reads_defaults_sets_and_validates_offline() -> Resu
     assert_eq!(service.ledger.min_payment_msat()?, 5000);
     Ok(())
 }
+
+#[tokio::test]
+async fn admission_deposit_control_follows_the_minimum_until_set_and_never_drops_below_it()
+-> Result<()> {
+    use mesh_llm_payments_types::control::ControlCommand;
+    let dir = tempfile::tempdir()?;
+    let service = PaymentService::open(dir.path())?;
+    let read = service
+        .control(ControlCommand::AdmissionDeposit { value_msat: None })
+        .await?;
+    assert_eq!(read["admission_deposit_msat"], 1000);
+    service.ledger.set_min_payment_msat(2000)?;
+    assert_eq!(
+        service.ledger.admission_deposit_msat()?,
+        2000,
+        "unset follows the minimum"
+    );
+    let set = service
+        .control(ControlCommand::AdmissionDeposit {
+            value_msat: Some(10_000),
+        })
+        .await?;
+    assert_eq!(set["admission_deposit_msat"], 10_000);
+    assert_eq!(
+        service.ledger.min_payment_msat()?,
+        2000,
+        "minimum unchanged"
+    );
+    for invalid in [0, 1999, 1_000_001] {
+        assert!(
+            service
+                .control(ControlCommand::AdmissionDeposit {
+                    value_msat: Some(invalid),
+                })
+                .await
+                .is_err(),
+            "{invalid}"
+        );
+    }
+    // A minimum raised above a configured deposit raises the deposit with it.
+    service.ledger.set_min_payment_msat(20_000)?;
+    assert_eq!(service.ledger.admission_deposit_msat()?, 20_000);
+    Ok(())
+}
