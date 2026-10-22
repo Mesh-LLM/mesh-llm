@@ -236,13 +236,13 @@ pub fn console_session_mode_for_runtime_surface(
 }
 
 pub(super) fn initial_console_session_mode_for_surface(
-    explicit_surface: Option<RuntimeSurface>,
+    _explicit_surface: Option<RuntimeSurface>,
     current_mode: ConsoleSessionMode,
 ) -> ConsoleSessionMode {
-    match explicit_surface {
-        Some(RuntimeSurface::Serve | RuntimeSurface::Client) => current_mode,
-        _ => ConsoleSessionMode::None,
-    }
+    // Bare runtime flags (`--auto`, `--model`, `--client`, ...) are
+    // compatibility spellings, not a request to disable the dashboard.
+    // One-shot commands and no-argument help return before this point.
+    current_mode
 }
 
 /// Pick which model this node should serve.

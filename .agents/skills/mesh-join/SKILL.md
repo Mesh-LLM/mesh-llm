@@ -84,8 +84,8 @@ their operating procedure must include rotation.
 mesh-llm serve --model Qwen3-8B-Q4_K_M --publish --mesh-name "lab-a"
 
 # Join by name from anywhere
-mesh-llm serve --discover "lab-a"
-mesh-llm client --discover "lab-a"
+mesh-llm serve --discover=lab-a
+mesh-llm client --discover=lab-a
 
 # Browse what's out there
 mesh-llm discover

@@ -23,7 +23,7 @@ curl -s http://localhost:3131/api/status | jq .
 If this fails, start a node:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
 
 ## Runtime lifecycle
@@ -66,7 +66,7 @@ inspect intents and daemon state. For a local load failure, try a smaller model:
 
 ```sh
 mesh-llm stop
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
 
 If you expected an external endpoint, check both layers:
@@ -110,7 +110,7 @@ mesh-llm goose
 For first-run testing, prefer a private mesh:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
 
 Then move back to `mesh-llm serve --auto` once the local install and model path work.

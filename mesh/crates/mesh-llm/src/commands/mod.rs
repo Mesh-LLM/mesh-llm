@@ -189,12 +189,16 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
 
 async fn dispatch_agent_command(cmd: &Command) -> Result<()> {
     match cmd {
-        Command::Goose { model, port } => {
-            mesh_llm_commands::agent_cli::run_goose(model.clone(), *port).await
-        }
-        Command::Claude { model, port } => {
-            mesh_llm_commands::agent_cli::run_claude(model.clone(), *port).await
-        }
+        Command::Goose {
+            model,
+            port,
+            console,
+        } => mesh_llm_commands::agent_cli::run_goose(model.clone(), *port, *console).await,
+        Command::Claude {
+            model,
+            port,
+            console,
+        } => mesh_llm_commands::agent_cli::run_claude(model.clone(), *port, *console).await,
         Command::Pi { model, host, write } => {
             mesh_llm_commands::agent_cli::run_pi(model.clone(), host, *write).await
         }
