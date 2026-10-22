@@ -118,7 +118,7 @@ mesh-llm serve --auto --headless
 | Attach a Flash-MoE SSD backend | `mesh-llm serve` with `[[plugin]] name = "flash-moe"` | [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) |
 | Fan out one prompt to every model in the mesh | `curl ... -d '{"model":"mesh", ...}'` | [docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md) |
 | Use Goose, OpenCode, Claude Code, or Pi | `mesh-llm goose`, `mesh-llm opencode`, `mesh-llm claude`, `mesh-llm pi` | [docs/AGENTS.md](mesh/docs/AGENTS.md) |
-| Set up paid inference over Lightning (preview) | `mesh-llm plugins install Mesh-LLM/lexe-wallet` | [Setup](#paid-inference-over-lightning-preview) |
+| Set up paid inference over Lightning | `mesh-llm plugins install Mesh-LLM/lexe-wallet` | [Setup](#paid-inference-over-lightning) |
 | Build or contribute | `just build` | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## How the mesh works
@@ -387,7 +387,7 @@ mesh-llm --llama-flavor cuda serve \
   --auto
 ```
 
-## Paid inference over Lightning (preview)
+## Paid inference over Lightning
 
 > [!NOTE]
 > Paid inference and wallet plugins are in early preview release and use Bitcoin mainnet.
@@ -504,6 +504,20 @@ provider normally skip the deposit. The provider streams the response,
 calculates the bill from backend-reported token usage after generation
 completes, and the client's wallet automatically pays any remaining amount
 under its saved spending policy.
+
+### 5. Limitations
+
+Payments in MeshLLM are still experimental, and the protocol may change rapidly.
+This early implementation has several known limitations that are being actively
+addressed:
+
+- Payments settle with a single provider node; revenue sharing among nodes
+  serving a split model is not yet supported.
+- The payment protocol does not verify inference results or token counts, so
+  buyers must trust providers for correct inference and honest usage reporting.
+- Responses stream normally, but the remaining balance is settled in one final
+  invoice after the backend response completes; incremental streaming payments
+  are not yet supported.
 
 See the [Lightning payments specification](mesh/docs/specs/lightning-payments.md)
 for settlement, recovery, fees, compatibility, and operator details.
