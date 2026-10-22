@@ -316,9 +316,12 @@ fn report(event: AgentEvent, on_update: &mut impl FnMut(AgentUpdate)) {
 fn finish(conversation: &Conversation) -> Result<AgentOutcome> {
     let turn = messages_since_kickoff(conversation)?;
     if let Some(kind) = conversation.last().and_then(Message::error_kind) {
+        // The provider error lives in an Error content block, which
+        // `as_concat_text` skips; read it directly so the cause is shown.
         let text = conversation
             .last()
-            .map(Message::as_concat_text)
+            .and_then(|m| m.content.iter().find_map(|c| c.as_error()))
+            .map(|e| e.message.clone())
             .unwrap_or_default();
         anyhow::bail!("model error ({kind:?}): {text}");
     }
