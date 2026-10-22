@@ -36,7 +36,18 @@ pub async fn run(args: MeshAgentArgs) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
-    let (_models, model, mut mesh_child) = check_mesh(&client, args.port, &args.model).await?;
+    let (models, model, mut mesh_child) = check_mesh(&client, args.port, &args.model).await?;
+    // With no --model, ask for the `mesh` virtual model so routing picks a
+    // target that can fit the request, instead of a name-matched guess.
+    let model = if args.model.is_none() && models.names.iter().any(|name| name == "mesh") {
+        let _ = writeln!(
+            mesh_llm_events::console_err(),
+            "   Using: mesh (routing picks the target)"
+        );
+        "mesh".to_string()
+    } else {
+        model
+    };
 
     let options = AgentOptions {
         base_url: format!("http://127.0.0.1:{}", args.port),
