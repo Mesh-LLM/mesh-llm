@@ -15,6 +15,7 @@ its runtime-probed workload class for safe routing.
 | OCR | `POST /v1/chat/completions` or `POST /v1/responses` with an image input | Causal trunk and projector colocated on one node |
 | Speech synthesis | `POST /v1/audio/speech` | Unsplit local full model and projector |
 | Speech recognition / translation | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | Causal trunk and audio projector colocated on one node |
+| Speech recognition (Whisper) | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | Unsplit local whisper.cpp model |
 | Laya decision (encoder + decision head) | `POST /systemone` | Unsplit local full model; see [the OpenJEV runbook](design/OPENJEV_SKIPPY_POC.md#laya-backend) |
 
 Embedding, rerank, encoder-decoder, and speech-synthesis workloads do not
@@ -145,6 +146,24 @@ curl -sS http://127.0.0.1:9337/v1/audio/transcriptions \
   -F file=@recording.wav \
   -F response_format=json
 ```
+
+Whisper models load from whisper.cpp model files rather than GGUF. Serve one
+by path or by its exact Hugging Face file ref; it advertises the
+`speech_recognition` workload class and answers only the two audio-to-text
+endpoints:
+
+```bash
+mesh-llm serve --model ggerganov/whisper.cpp/ggml-large-v3-turbo-q5_0.bin
+curl -sS http://127.0.0.1:9337/v1/audio/transcriptions \
+  -F model=ggerganov/whisper.cpp:ggml-large-v3-turbo-q5_0.bin \
+  -F file=@recording.wav \
+  -F response_format=srt
+```
+
+Uploads must be WAV, MP3, or FLAC. Each concurrent transcription holds its own
+decoder state; `MESH_LLM_SPEECH_LANES` (default 2) sets how many run at once,
+and the capacity ledger charges one decoder state per lane. Older peers decode
+the `speech_recognition` class as unknown and never route to it.
 
 Automatic audio routing filters for a runtime-verified audio capability. An
 explicitly selected incompatible model is rejected by the local backend rather
