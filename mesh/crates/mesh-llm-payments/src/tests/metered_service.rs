@@ -679,3 +679,17 @@ async fn a_never_paid_final_gives_up_promptly_and_still_blocks_the_buyer() {
         ServeAdmitResponse::Blocked { .. }
     ));
 }
+
+#[tokio::test]
+async fn a_replayed_admission_keeps_the_deposit_it_was_admitted_with() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet);
+    let first = service.serve_admit(admit("r", "peer")).await.unwrap();
+    let invoice = deposit_invoice(&first);
+    assert_eq!(invoice.amount_msat, Some(1000));
+    // The operator raises the minimum before the buyer's replay arrives.
+    service.ledger.set_min_payment_msat(2000).unwrap();
+    let replay = service.serve_admit(admit("r", "peer")).await.unwrap();
+    assert_eq!(deposit_invoice(&replay), invoice);
+}

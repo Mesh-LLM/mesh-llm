@@ -71,9 +71,11 @@ pub struct MeteredSettlement {
 
 impl Ledger {
     /// Record one metered admission in a single IMMEDIATE txn and return the
-    /// deposit to request. Rates are frozen here; `metered_finalize` accepts
-    /// usage only. Replaying the same arguments is idempotent; reusing the ID
-    /// with different terms fails. Refuses peers at the strike limit.
+    /// deposit to request. Rates and the deposit are frozen here;
+    /// `metered_finalize` accepts usage only. Replaying the same arguments is
+    /// idempotent and returns the recorded deposit, even if the operator has
+    /// since changed it; reusing the ID with different terms fails. Refuses
+    /// peers at the strike limit.
     pub fn metered_admit(&self, request: &MeteredRequest<'_>) -> Result<u64> {
         let MeteredRequest {
             id,
@@ -81,6 +83,7 @@ impl Ledger {
             pricing,
             require_deposit,
         } = *request;
+        // Read before taking the connection: the settings read locks it too.
         let deposit = if require_deposit {
             self.min_payment_msat()?
         } else {
@@ -91,19 +94,20 @@ impl Ledger {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Identity is the exact admitted terms, not the rounded msat amounts:
         // different token terms can round to the same charge at low rates.
-        let existing: Option<(String, String, bool)> = tx
+        let existing: Option<(String, String, bool, u64)> = tx
             .query_row(
-                "SELECT peer,pricing,require_deposit FROM metered_requests WHERE id=?",
+                "SELECT peer,pricing,require_deposit,deposit_msat FROM metered_requests WHERE id=?",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, read_amount(r, 3)?)),
             )
             .optional()?;
-        if let Some(row) = existing {
+        if let Some((row_peer, row_pricing, row_require_deposit, row_deposit)) = existing {
             ensure!(
-                row == (peer.to_owned(), pricing_json, require_deposit),
+                (row_peer, row_pricing, row_require_deposit)
+                    == (peer.to_owned(), pricing_json, require_deposit),
                 "request identity reused with different metered terms"
             );
-            return Ok(deposit);
+            return Ok(row_deposit);
         }
         let unpaid: u64 = tx.query_row(UNPAID_FINALS, [peer], |r| read_amount(r, 0))?;
         ensure!(
