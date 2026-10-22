@@ -499,6 +499,7 @@ mod tests {
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
             direct_iteration_channel: None,
+            dflash: None,
         };
         let mut emitted = Vec::new();
 

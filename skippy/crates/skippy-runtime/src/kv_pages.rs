@@ -192,7 +192,10 @@ impl StageSession {
                 &mut error,
             )
         };
-        ensure_ok(status, error)
+        ensure_ok(status, error)?;
+        // Imported target state has no matching draft features.
+        self.dflash_after_replace();
+        Ok(())
     }
 
     pub fn import_state_for_token_count(
@@ -262,7 +265,10 @@ impl StageSession {
                 &mut error,
             )
         };
-        ensure_ok(status, error)
+        ensure_ok(status, error)?;
+        // Imported target state has no matching draft features.
+        self.dflash_after_replace();
+        Ok(())
     }
 
     pub fn import_full_state_for_token_count(
@@ -389,6 +395,8 @@ impl StageSession {
         self.token_count = self
             .token_count
             .max(desc.token_start.saturating_add(desc.token_count));
+        // Imported target state has no matching draft features.
+        self.dflash_after_replace();
         Ok(())
     }
 
@@ -419,6 +427,8 @@ impl StageSession {
         self.token_count = self
             .token_count
             .max(desc.token_start.saturating_add(desc.token_count));
+        // Imported target state has no matching draft features.
+        self.dflash_after_replace();
         Ok(())
     }
 
@@ -467,7 +477,10 @@ impl StageSession {
                 &mut error,
             )
         };
-        ensure_ok(status, error)
+        ensure_ok(status, error)?;
+        // Imported target state has no matching draft features.
+        self.dflash_after_replace();
+        Ok(())
     }
 
     pub fn import_recurrent_state_for_token_count(

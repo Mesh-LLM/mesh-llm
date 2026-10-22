@@ -72,6 +72,12 @@ pub fn incompatible_draft_pair_reason(
     }
 }
 
+/// Whether `path` is a DFlash or DFlash2 block drafter, which reads target
+/// hidden states and so cannot run as an ordinary draft model.
+pub fn is_dflash_draft(path: &Path) -> bool {
+    model_architecture_from_path(path).as_deref() == Some("dflash")
+}
+
 fn model_architecture_from_path(path: &Path) -> Option<String> {
     scan_gguf_compact_meta(path)
         .or_else(|| scan_gguf_compact_meta(&path.join("shared/metadata.gguf")))
