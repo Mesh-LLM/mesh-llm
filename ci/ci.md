@@ -1167,6 +1167,12 @@ Every product has three immutable layers:
 
 `compose-product-input` verifies checksums, manifests and host import policy,
 then composes exact producer bytes without compiling or substituting inputs.
+In release, `scripts/package-release.sh` then adds `plugins/` to the macOS and
+Linux bundles: the default plugin archives the host pins, downloaded from each
+plugin's own GitHub release and checked against the pinned SHA-256, after
+which the bundle's own host must install each one as a default
+(`repository bundled-plugins` and `repository bundled-plugins-check`; see
+`RELEASE.md`). Nothing builds those plugins in this repository.
 Smoke and SDK consumers download those artifacts and never rebuild a missing
 producer. PR and smoke artifacts retain for one day; caches are acceleration,
 not correctness contracts.
