@@ -672,6 +672,13 @@ fn resolve_hf_file_from_siblings(requested: &str, siblings: &[String]) -> Option
         .map(|file| file.path)
 }
 
+/// whisper.cpp model files (`ggml-large-v3-turbo-q5_0.bin`), which are not
+/// GGUF and are only ever named exactly.
+fn is_whisper_model_file_name(file: &str) -> bool {
+    let basename = file.rsplit('/').next().unwrap_or(file);
+    basename.starts_with("ggml-") && basename.ends_with(".bin")
+}
+
 pub(super) fn is_known_gguf_sidecar(file: &str) -> bool {
     let basename = file.rsplit('/').next().unwrap_or(file);
     basename.to_ascii_lowercase().starts_with("mmproj")
@@ -993,6 +1000,7 @@ pub(crate) async fn resolve_huggingface_file_from_sibling_entries(
     if file.ends_with(".gguf")
         || file.ends_with(".safetensors")
         || file.ends_with(".safetensors.index.json")
+        || is_whisper_model_file_name(file)
     {
         return Ok(file.to_string());
     }

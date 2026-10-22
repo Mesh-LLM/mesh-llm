@@ -253,6 +253,76 @@ pub fn decode_audio(bytes: &[u8]) -> Result<Vec<f32>> {
     Ok(decoded)
 }
 
+/// The shape a whisper.cpp model file declares in its header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeechModelHeader {
+    pub vocab_size: u32,
+    pub audio_ctx: u32,
+    pub audio_state: u32,
+    pub audio_layer_count: u32,
+    pub text_ctx: u32,
+    pub text_state: u32,
+    pub text_layer_count: u32,
+    pub mel_count: u32,
+}
+
+/// Compute buffers one transcription allocates beyond its KV caches, sized
+/// for the largest Whisper models.
+const DECODER_COMPUTE_BYTES: u64 = 256 << 20;
+
+impl SpeechModelHeader {
+    /// Reads the header of a whisper.cpp model file: the `ggml` magic followed
+    /// by Whisper's audio-context and mel-bin layout. Legacy llama.cpp `ggml`
+    /// files share the magic but not that layout, so they read as `None`.
+    pub fn read(path: impl AsRef<Path>) -> Option<Self> {
+        use std::io::Read;
+
+        const GGML_MAGIC: u32 = 0x6767_6d6c;
+        /// Encoder positions every Whisper size uses: 30 s of audio at 50 Hz.
+        const WHISPER_AUDIO_CTX: u32 = 1500;
+        let mut bytes = [0u8; 44];
+        std::fs::File::open(path)
+            .and_then(|mut file| file.read_exact(&mut bytes))
+            .ok()?;
+        let word = |index: usize| {
+            u32::from_le_bytes([
+                bytes[index * 4],
+                bytes[index * 4 + 1],
+                bytes[index * 4 + 2],
+                bytes[index * 4 + 3],
+            ])
+        };
+        let header = Self {
+            vocab_size: word(1),
+            audio_ctx: word(2),
+            audio_state: word(3),
+            audio_layer_count: word(5),
+            text_ctx: word(6),
+            text_state: word(7),
+            text_layer_count: word(9),
+            mel_count: word(10),
+        };
+        (word(0) == GGML_MAGIC
+            && (51_864..=51_866).contains(&header.vocab_size)
+            && header.audio_ctx == WHISPER_AUDIO_CTX
+            && matches!(header.mel_count, 80 | 128))
+        .then_some(header)
+    }
+
+    /// Bytes one transcription's decoder state holds: f16 self- and
+    /// cross-attention KV caches over every text layer, plus compute buffers.
+    pub fn decoder_state_bytes(&self) -> u64 {
+        let positions = u64::from(self.audio_ctx) + u64::from(self.text_ctx);
+        let kv = 2 * 2 * positions * u64::from(self.text_layer_count) * u64::from(self.text_state);
+        kv + DECODER_COMPUTE_BYTES
+    }
+}
+
+/// Whether `path` holds a whisper.cpp model; see [`SpeechModelHeader::read`].
+pub fn is_speech_recognition_model_file(path: impl AsRef<Path>) -> bool {
+    SpeechModelHeader::read(path).is_some()
+}
+
 /// Whether the loaded native runtime was built with speech recognition.
 pub fn speech_recognition_supported() -> bool {
     skippy_ffi::try_abi_features()
@@ -356,6 +426,49 @@ mod tests {
             duration_seconds: 2.0,
         };
         assert_eq!(transcription.text(), "Hello world.");
+    }
+
+    #[test]
+    fn whisper_headers_are_told_apart_from_other_ggml_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, words: &[i32]| {
+            let path = dir.path().join(name);
+            let bytes = words
+                .iter()
+                .flat_map(|word| word.to_le_bytes())
+                .collect::<Vec<_>>();
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let magic = 0x6767_6d6c;
+        // magic, n_vocab, n_audio_ctx, n_audio_state, n_audio_head,
+        // n_audio_layer, n_text_ctx, n_text_state, n_text_head, n_text_layer,
+        // n_mels
+        let base_en = [magic, 51_864, 1500, 512, 8, 6, 448, 512, 8, 6, 80];
+        let large_v3 = [magic, 51_866, 1500, 1280, 20, 32, 448, 1280, 20, 4, 128];
+        let llama = [magic, 32_000, 4096, 256, 32, 32, 128, 1, 0, 0, 0];
+        assert!(is_speech_recognition_model_file(write(
+            "base.bin", &base_en
+        )));
+        let v3 = SpeechModelHeader::read(write("v3.bin", &large_v3)).unwrap();
+        assert_eq!(v3.text_layer_count, 4);
+        assert_eq!(v3.mel_count, 128);
+        // (1500 + 448) positions x 4 layers x 1280 wide, K and V in f16.
+        assert_eq!(
+            v3.decoder_state_bytes(),
+            4 * 1948 * 4 * 1280 + DECODER_COMPUTE_BYTES
+        );
+        assert!(!is_speech_recognition_model_file(write(
+            "llama.bin",
+            &llama
+        )));
+        assert!(!is_speech_recognition_model_file(write(
+            "short.bin",
+            &[magic]
+        )));
+        assert!(!is_speech_recognition_model_file(
+            dir.path().join("missing")
+        ));
     }
 
     #[test]

@@ -1215,3 +1215,26 @@ fn default_hf_file_follows_the_local_fit_budget_not_the_ram_credit() {
         Some("model-Q8_0.gguf")
     );
 }
+
+#[tokio::test]
+async fn exact_whisper_model_files_resolve_without_gguf_selection() {
+    let siblings = [
+        ("ggml-base.en.bin".to_string(), Some(147_964_211)),
+        (
+            "ggml-large-v3-turbo-q5_0.bin".to_string(),
+            Some(574_041_195),
+        ),
+        ("README.md".to_string(), Some(1_000)),
+    ];
+    let resolved = resolve_huggingface_file_from_sibling_entries(
+        "ggerganov/whisper.cpp",
+        None,
+        "ggml-large-v3-turbo-q5_0.bin",
+        &siblings,
+    )
+    .await
+    .unwrap();
+    assert_eq!(resolved, "ggml-large-v3-turbo-q5_0.bin");
+    assert!(is_whisper_model_file_name("models/ggml-base.en.bin"));
+    assert!(!is_whisper_model_file_name("pytorch_model.bin"));
+}

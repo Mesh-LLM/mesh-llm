@@ -224,3 +224,50 @@ fn system_one_requires_its_own_advertised_capability() {
         std::slice::from_ref(&unsupported)
     ));
 }
+
+#[test]
+/// A speech-recognition model with verified audio takes both audio-to-text
+/// endpoints and nothing that generates chat text.
+fn speech_recognition_models_serve_only_audio_to_text() {
+    let mut whisper =
+        descriptor_with_workload("whisper", mesh::ModelWorkloadClass::SpeechRecognition);
+    whisper.capabilities_known = true;
+    whisper.capabilities = crate::models::ModelCapabilities {
+        audio: crate::models::CapabilityLevel::Supported,
+        multimodal: true,
+        ..Default::default()
+    };
+    let descriptors = [whisper];
+    for path in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+        assert!(
+            model_satisfies_request("whisper", path, &descriptors),
+            "{path}"
+        );
+    }
+    for path in [
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/embeddings",
+        "/v1/audio/speech",
+    ] {
+        assert!(
+            !model_satisfies_request("whisper", path, &descriptors),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+/// The class alone is not enough: audio upload still needs verified audio.
+fn speech_recognition_without_verified_audio_is_not_routable() {
+    let descriptors = [descriptor_with_workload(
+        "whisper",
+        mesh::ModelWorkloadClass::SpeechRecognition,
+    )];
+    assert!(!model_satisfies_request(
+        "whisper",
+        "/v1/audio/transcriptions",
+        &descriptors
+    ));
+}

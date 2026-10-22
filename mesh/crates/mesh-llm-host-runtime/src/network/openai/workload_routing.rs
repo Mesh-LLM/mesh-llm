@@ -145,7 +145,9 @@ pub(super) fn model_satisfies_workload_class(
     })
 }
 
-/// Require verified audio and a known generation class on the same descriptor.
+/// Require verified audio and a known audio-to-text class on the same
+/// descriptor: a generation model with an audio encoder, or a dedicated
+/// speech-recognition model.
 fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool {
     descriptor.capabilities_known
         && descriptor.capabilities.supports_audio_runtime()
@@ -154,7 +156,11 @@ fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool 
                 .metadata
                 .as_ref()
                 .and_then(|metadata| metadata.workload_class),
-            Some(ModelWorkloadClass::CausalGeneration | ModelWorkloadClass::EncoderDecoder)
+            Some(
+                ModelWorkloadClass::CausalGeneration
+                    | ModelWorkloadClass::EncoderDecoder
+                    | ModelWorkloadClass::SpeechRecognition
+            )
         )
 }
 

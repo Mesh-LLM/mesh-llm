@@ -93,10 +93,11 @@ pub(super) enum LocalRuntimeBackendHandle {
         http: skippy::SkippyHttpHandle,
         _death_tx: tokio::sync::oneshot::Sender<()>,
     },
-    /// A Laya decision model: no sessions, KV cache, or guardrails, only
-    /// System One reads through its own HTTP server.
-    Laya {
-        _model: Arc<skippy_runtime::LayaModel>,
+    /// A single-purpose model behind its own HTTP backend, such as a Laya
+    /// decision model or a Whisper speech-recognition model: no sessions, KV
+    /// cache, or guardrails.
+    Dedicated {
+        _model: Arc<dyn std::any::Any + Send + Sync>,
         http: skippy::SkippyHttpHandle,
         _death_tx: tokio::sync::oneshot::Sender<()>,
     },
@@ -117,9 +118,8 @@ pub(super) struct LocalRuntimeModelHandle {
 impl LocalRuntimeModelHandle {
     pub(super) fn pid(&self) -> u32 {
         match &self.inner {
-            LocalRuntimeBackendHandle::Skippy { .. } | LocalRuntimeBackendHandle::Laya { .. } => {
-                std::process::id()
-            }
+            LocalRuntimeBackendHandle::Skippy { .. }
+            | LocalRuntimeBackendHandle::Dedicated { .. } => std::process::id(),
         }
     }
 
@@ -128,21 +128,21 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 Some(model.status().max_session_tokens)
             }
-            LocalRuntimeBackendHandle::Laya { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
         }
     }
 
     pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
-            LocalRuntimeBackendHandle::Laya { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
         }
     }
 
     pub(super) fn openai_server_status(&self) -> skippy_serving::EmbeddedServerStatus {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { http, .. }
-            | LocalRuntimeBackendHandle::Laya { http, .. } => http.status(),
+            | LocalRuntimeBackendHandle::Dedicated { http, .. } => http.status(),
         }
     }
 
@@ -154,7 +154,7 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 model.set_openai_guardrail_mode(mode)
             }
-            LocalRuntimeBackendHandle::Laya { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
         }
     }
 
@@ -202,7 +202,7 @@ impl LocalRuntimeModelHandle {
                         .collect(),
                 })
             }
-            LocalRuntimeBackendHandle::Laya { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
         }
     }
 
@@ -212,7 +212,7 @@ impl LocalRuntimeModelHandle {
                 let _ = http.shutdown().await;
                 model.shutdown();
             }
-            LocalRuntimeBackendHandle::Laya { http, .. } => {
+            LocalRuntimeBackendHandle::Dedicated { http, .. } => {
                 let _ = http.shutdown().await;
             }
         }
@@ -983,6 +983,26 @@ pub(super) async fn start_local_openai_model(
         format_gb(required_bytes),
         format_gb(my_vram)
     );
+
+    // Whisper models are whisper.cpp files, not GGUF, and open through their
+    // own native entry point.
+    if package.is_none() {
+        let model_path = spec.model_path.to_path_buf();
+        let speech_header = tokio::task::spawn_blocking(move || {
+            skippy_runtime::SpeechModelHeader::read(&model_path)
+        })
+        .await
+        .context("join speech model header task")?;
+        if let Some(header) = speech_header {
+            return super::local_speech::start_local_speech_model(
+                spec,
+                model_name,
+                total_model_bytes,
+                header,
+            )
+            .await;
+        }
+    }
 
     // Read GGUF metadata first: it carries the model's native context length,
     // head counts, and KV dimensions needed for accurate KV budget planning,
