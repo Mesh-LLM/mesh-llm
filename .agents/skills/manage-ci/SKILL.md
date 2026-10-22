@@ -237,17 +237,10 @@ Python-free or remove legacy validation before its Rust replacement passes.
   older main revisions. Main is exhaustive evidence; supersession cancellation
   remains PR-only. Planner-owned skips and matrix fail-fast behavior must not
   make the top-level main result disappear.
-- `ci-control.yml` defaults to an explicit default-branch manual-full run.
+- `ci-control.yml` is reserved for an explicit default-branch manual-full run.
   It may dispatch the five lanes with correlated synthetic checks because the
   operator deliberately chose the detached diagnostic surface. It must not be
   triggered by `push`, `pull_request`, or `workflow_run`.
-  The maintainer-authorized `runtime_signing_diagnostic` boolean selects only
-  the isolated signing/consumer reusable on the dispatched candidate revision;
-  it skips planning and lane dispatch entirely. This narrow diagnostic uses
-  read-only contents/actions permissions and ephemeral hosted Linux runners,
-  no release, checks-write, environments, Depot, or persistent runners. Only its
-  signer receives the two named repository secrets; its separate consumer uses
-  the compiled public pin. It is not a required PR/main lane or a full-CI pass.
 
 ### Planning and routing
 
@@ -503,30 +496,6 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Host artifacts include the executable checksum and import-policy report.
   Runtime artifacts include manifest, checksums, ABI/version, platform, and
   backend identity. Product manifests record exact host and runtime digests.
-- Treat the final `native-runtimes.json` bytes as the native-runtime trust
-  root. The protected release publisher may add a detached Minisign signature
-  only after final catalog generation and matrix validation. Scope the
-  encrypted key and password to that one signing step from ordinary repository
-  Actions secrets (no environment or additional approval gate), under the names
-  `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` and
-  `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD`; no PR, build, composition,
-  or smoke job receives them. The signer must prove that the secret key
-  matches a separately reviewed, repository-pinned public key before emitting
-  `native-runtimes.json.minisig`. Compile the publisher's signing tool in-run
-  with hosted executable cache reuse disabled and verify the new signature
-  before writing it. Missing, partial, invalid, or mismatched credentials must
-  fail publication, never silently produce an unsigned replacement. An explicitly
-  maintainer-authorized isolated diagnostic may use these repository secrets
-  only in its signing job; it must not publish releases, and its consumer receives
-  only public artifacts on a separate ephemeral hosted runner.
-- The reviewed production public key is committed in
-  `skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub` and
-  compiled into the SDK installer. Embedding the key does not change the existing
-  checksum-default policy; strict callers must opt in. Never fetch a trust pin
-  from the catalog server. Strict consumers authenticate the exact original catalog
-  bytes before parsing, require the requested release and selected artifact to
-  be present in that catalog, and verify catalog-bound archive and file hashes
-  even when satisfying the install from a bundle or cache.
 - Use the owning preparation and composition actions. A composer verifies and
   copies exact producer bytes; it never compiles, links, re-stamps, or silently
   substitutes an input.

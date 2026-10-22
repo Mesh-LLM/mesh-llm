@@ -17,7 +17,7 @@ dirs = "6.0.0"
 flate2 = "1"
 futures-util = "0.3"
 hex = "0.4"
-minisign.workspace = true
+minisign-verify = "=0.2.5"
 skippy-hardware-profile = { path = "../skippy-hardware-profile", version = "0.78.0" }
 skippy-native-runtime = { path = "../skippy-native-runtime", version = "0.78.0" }
 reqwest = { version = "0.13", features = ["stream", "json"] }
@@ -32,4 +32,5 @@ tokio = { version = "1", features = ["fs", "io-util", "rt"] }
 tracing = "0.1"
 
 [dev-dependencies]
+minisign.workspace = true
 skippy-ffi = { path = "../skippy-ffi", version = "0.78.0", features = ["dynamic-runtime"] }

@@ -101,68 +101,34 @@ means a footer was present, but signature verification failed.
 
 ## Native Runtime Catalog Signing Key
 
-Native runtime catalog signing is independent of executable release
-attestation and Apple code signing. The protected release publisher recognizes
-these dedicated repository Actions secrets (no environment or extra approval):
+The release publisher signs the final `native-runtimes.json` with a dedicated
+Minisign key held in two repository Actions secrets (no environment gate):
 
-- `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` — the full encrypted
-  Minisign secret-key file
-- `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD` — that key's password
+- `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` — the encrypted secret-key file
+- `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD` — its password
 
-Generate a dedicated production key interactively with the maintained Minisign
-CLI. Do not reuse another MeshLLM signing key and do not use `-W`, which would
-leave the secret key unencrypted:
+Generate the key once (never with `-W`), back up `.key`, password and `.pub` in
+the vault, then upload:
 
 ```bash
 umask 077
 KEYDIR=$(mktemp -d "$HOME/native-runtime-key.XXXXXX")
 minisign -G -p "$KEYDIR/native-runtime-catalog.pub" -s "$KEYDIR/native-runtime-catalog.key"
-```
-
-Enter a strong password at the prompt. Back up the encrypted `.key`, password,
-and `.pub` in the production password vault and confirm they can be retrieved.
-Do not regenerate an already provisioned key. The reviewed public key is committed
-at `skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub` and
-compiled into installer options; never obtain a trust pin from the download server.
-
-Upload the encrypted key and enter its password through the interactive prompt:
-
-```bash
 gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY --repo Mesh-LLM/mesh-llm < "$KEYDIR/native-runtime-catalog.key"
 gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD --repo Mesh-LLM/mesh-llm
 ```
 
-These are repository secrets, not environment secrets. Workflow authors with
-repository write access are trusted with their use. Only the signing step receives
-them; builds and download/load consumers do not. A maintainer-authorized isolated
-diagnostic can exercise signing without publishing a release.
-
-Missing or partial configuration, wrong passwords, and mismatched keys fail
-publication. The signer verifies its output against the reviewed key before
-writing it. The publisher signs the exact final catalog after matrix validation
-and publishes `native-runtimes.json.minisig` beside `.sha256` and the runtime
-archives. There is no unsigned fallback. Older releases are not rewritten, and
-consumers must explicitly select strict verification; embedding the public key
-alone does not change the checksum-only default.
-
-To verify a newly signed catalog, use the reviewed public-key checkout rather
-than a key downloaded with the release:
+The public key is committed at
+`skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub` and
+compiled into the installer. Only the signing step receives the secrets. Missing
+or mismatched credentials fail publication; there is no unsigned fallback. The
+signer checks its output against the committed key before writing
+`native-runtimes.json.minisig`. Verify a published catalog with:
 
 ```bash
-minisign -Vm /tmp/native-runtimes.json \
-  -x /tmp/native-runtimes.json.minisig \
+minisign -Vm native-runtimes.json -x native-runtimes.json.minisig \
   -p skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub
 ```
-
-Downstream prebuilt bundlers must authenticate the original catalog bytes
-before parsing them, select an entry whose release matches the requested
-release, verify the archive against that signed entry's `sha256`, and verify
-every extracted `files` and `tools` digest before copying the runtime into the
-bundle. Ship the original catalog, `.sha256`, and `.minisig` together when the
-application will install offline. Pin the public key independently in the
-application or caller configuration. A locally rewritten catalog or runtime
-manifest, an unsigned bundle, or an existing cache entry is not a substitute
-for this chain.
 
 ## Build
 
@@ -386,21 +352,3 @@ self-hosting path.
 Forks build without the secret and therefore never report. See
 `website/src/docs/pages/analytics.md` for the collected surface and the
 opt-out, and `crates/mesh-llm-analytics/README.md` for the design.
-
-### Isolated pre-merge signing qualification
-
-A maintainer can dispatch the existing manual controller at the candidate branch
-without publishing anything:
-
-```bash
-gh workflow run ci-control.yml --repo Mesh-LLM/mesh-llm --ref feat/runtime-catalog-signing -f runtime_signing_diagnostic=true
-```
-
-This mode skips normal CI dispatch. The dedicated reusable builds the signer
-without cached executables, signs a catalog for a retained real Linux CPU runtime
-artifact, and sends only public files to a separate hosted consumer. That consumer
-uses the compiled key (no key override) and exercises HTTP download, strict
-installation, missing/wrong signatures, catalog/archive/cache tampering, and actual
-native loading. The retained input is tied to PR source `8b34702e8`; artifact expiry
-is an explicit failure, not permission to substitute another build. This is
-signing-chain evidence, not a new native build or a full release-matrix pass.

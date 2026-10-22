@@ -44,7 +44,7 @@ fn signing_credentials_configured(secret_key: &str, password: &str) -> Result<()
     Ok(())
 }
 
-pub(super) fn sign_catalog(
+fn sign_catalog(
     catalog: &Path,
     signature_out: &Path,
     trusted_public_key_path: &Path,

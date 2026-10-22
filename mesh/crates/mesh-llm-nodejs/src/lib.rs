@@ -399,7 +399,9 @@ fn parse_native_runtime_install_options(
         verification_policy: parse_native_runtime_verification_policy(
             optional_string(&value, "verificationPolicy").as_deref(),
         )?,
-        trusted_public_key: optional_string(&value, "trustedPublicKey"),
+        trusted_public_key: Some(
+            mesh_llm_sdk::native_runtime::RELEASE_CATALOG_PUBLIC_KEY.to_string(),
+        ),
         bundle_install_policy: Default::default(),
         progress: None,
         allow_download: value

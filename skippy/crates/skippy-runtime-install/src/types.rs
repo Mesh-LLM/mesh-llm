@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 use skippy_native_runtime::{InstalledNativeRuntime, RuntimeSelection};
 use std::path::PathBuf;
 use std::sync::Arc;
+
 /// Reviewed MeshLLM release key, embedded at compile time rather than downloaded.
 /// Custom catalog publishers must supply their own independently trusted key.
-const RELEASE_CATALOG_PUBLIC_KEY: &str = include_str!("../trust/native-runtime-catalog.pub");
+pub const RELEASE_CATALOG_PUBLIC_KEY: &str = include_str!("../trust/native-runtime-catalog.pub");
 
 pub const NATIVE_RUNTIME_CACHE_DIR_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR";
 pub const NATIVE_RUNTIME_MANIFEST_URL_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL";

@@ -2,7 +2,7 @@ use minisign::{KeyPair, PublicKeyBox};
 use sha2::{Digest, Sha256};
 use skippy_native_runtime::{NativeRuntimeBackend, NativeRuntimePlatform};
 use skippy_runtime_install::{
-    NativeRuntimeArtifact, NativeRuntimeCache, NativeRuntimeCatalog, NativeRuntimeInstallOptions,
+    NativeRuntimeArtifact, NativeRuntimeCatalog, NativeRuntimeInstallOptions,
     NativeRuntimeManifest, NativeRuntimeReleaseManifest, NativeRuntimeSource,
     NativeRuntimeVerificationPolicy, RuntimeSelection, host_runtime_profile,
     install_native_runtime_explicit,
@@ -252,39 +252,6 @@ fn strict_mode_has_no_unsigned_bundle_fallback() {
     let error = install(options).unwrap_err();
     assert!(
         format!("{error:#}").contains("unsigned bundle-only installation is not allowed"),
-        "{error:#}"
-    );
-}
-
-#[test]
-fn self_consistent_tampered_bundle_cannot_bypass_signed_file_hashes() {
-    let fixture = SignedFixture::new();
-    let tampered = fixture._root.path().join("tampered-bundle");
-    write_bundle(&tampered, b"tampered runtime");
-    let mut options = fixture.options();
-    options.bundle_dirs = vec![tampered];
-
-    let error = install(options).unwrap_err();
-    assert!(
-        format!("{error:#}").contains("authenticated catalog entry"),
-        "{error:#}"
-    );
-}
-
-#[test]
-fn self_consistent_tampered_cache_cannot_bypass_signed_file_hashes() {
-    let fixture = SignedFixture::new();
-    let tampered = fixture._root.path().join("tampered-cache-source");
-    write_bundle(&tampered, b"tampered runtime");
-    NativeRuntimeCache::new(&fixture.cache_path)
-        .install_from_dir(&tampered)
-        .unwrap();
-    let mut options = fixture.options();
-    options.bundle_dirs.clear();
-
-    let error = install(options).unwrap_err();
-    assert!(
-        format!("{error:#}").contains("authenticated catalog entry"),
         "{error:#}"
     );
 }

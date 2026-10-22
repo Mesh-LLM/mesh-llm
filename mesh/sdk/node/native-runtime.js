@@ -78,7 +78,6 @@ function normalizeInstallOptions(options) {
     bundleDirs: options.bundleDirs || [],
     cacheDir: options.cacheDir || null,
     verificationPolicy: options.verificationPolicy || 'require_checksum',
-    trustedPublicKey: options.trustedPublicKey || null,
     allowDownload: options.allowDownload !== false
   }
 }

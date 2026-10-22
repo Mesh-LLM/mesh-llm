@@ -22,7 +22,6 @@ pub struct NativeRuntimeInstallOptionsNative {
     pub bundle_dirs: Vec<String>,
     pub cache_dir: Option<String>,
     pub verification_policy: NativeRuntimeVerificationPolicyNative,
-    pub trusted_public_key: Option<String>,
     pub allow_download: bool,
 }
 

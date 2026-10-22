@@ -12,8 +12,7 @@ It provides:
 - cache path selection and installed runtime discovery
 - checksum enforcement before installing downloaded archives
 - optional strict detached Minisign authentication of the exact release
-  catalog bytes, with catalog-bound archive and payload hashes for downloads,
-  bundles, and cache hits
+  catalog bytes, binding downloaded archives to the signed `sha256`
 - download progress callbacks for SDK and CLI callers
 - stale runtime pruning through `NativeRuntimeCache`
 
@@ -67,9 +66,9 @@ Embedding the key does **not** enable strict mode: checksum-only remains the
 default for compatibility with existing unsigned releases. A local catalog requires adjacent
 `.sha256` and `.minisig` sidecars; a remote catalog fetches those sidecars from
 the same asset basename. The exact bytes are authenticated before parsing.
-Strict mode rejects unsigned bundle-only fallback and verifies the selected
-signed entry's file hashes even when resolution finds the runtime in a bundle
-or cache.
+Strict mode rejects unsigned bundle-only fallback and requires the selected
+runtime to match its signed catalog entry. Re-hashing bundle and cache payloads
+against the signed file hashes is a follow-up.
 
 ## Migrating callers
 

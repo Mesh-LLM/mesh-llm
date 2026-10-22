@@ -2,9 +2,8 @@
 
 use crate::manifest::normalize_sha256;
 use anyhow::{Context, Result, bail};
-use minisign::{PublicKeyBox, SignatureBox};
+use minisign_verify::{PublicKey, Signature};
 use skippy_native_runtime::{NativeRuntimeArtifact, NativeRuntimeReleaseManifest};
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 pub(crate) const CATALOG_SIGNATURE_SUFFIX: &str = ".minisig";
@@ -20,21 +19,13 @@ pub(crate) fn verify_catalog_bytes(
     let trusted_public_key = trusted_public_key
         .filter(|key| !key.trim().is_empty())
         .context("strict native runtime catalog verification requires a trusted Minisign public key supplied independently of the catalog")?;
-    let public_key = PublicKeyBox::from_string(trusted_public_key)
-        .context("parse trusted native runtime catalog Minisign public key")?
-        .into_public_key()
+    let public_key = PublicKey::decode(trusted_public_key)
         .context("decode trusted native runtime catalog Minisign public key")?;
-    let signature = SignatureBox::from_string(signature_text)
+    let signature = Signature::decode(signature_text)
         .context("parse detached native runtime catalog Minisign signature")?;
-    minisign::verify(
-        &public_key,
-        &signature,
-        Cursor::new(catalog_bytes),
-        true,
-        false,
-        false,
-    )
-    .context("verify detached native runtime catalog Minisign signature")
+    public_key
+        .verify(catalog_bytes, &signature, false)
+        .context("verify detached native runtime catalog Minisign signature")
 }
 
 /// Enforce the signed catalog contract after authentication and parsing.
@@ -112,6 +103,7 @@ mod tests {
     use super::*;
     use minisign::KeyPair;
     use sha2::{Digest, Sha256};
+    use std::io::Cursor;
 
     #[test]
     fn exact_bytes_are_authenticated_and_legacy_signatures_are_not_enabled() {

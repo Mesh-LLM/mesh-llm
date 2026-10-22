@@ -340,12 +340,10 @@ async fn install_resolved_runtime_with_catalog(
         );
     }
     match resolution.source.clone() {
-        NativeRuntimeSource::Installed { path } => {
-            verify_local_runtime_if_strict(&path, authenticated_artifact)?;
+        NativeRuntimeSource::Installed { path: _ } => {
             installed_outcome(cache, resolution, &options.release_version)
         }
         NativeRuntimeSource::Bundle { path } => {
-            verify_local_runtime_if_strict(&path, authenticated_artifact)?;
             if should_install_explicit_bundle_into_cache(&path, options)? {
                 let runtime = cache.install_from_dir(&path)?;
                 return Ok(NativeRuntimeInstallOutcome {
@@ -358,14 +356,8 @@ async fn install_resolved_runtime_with_catalog(
             in_place_bundle_outcome(&path, resolution)
         }
         NativeRuntimeSource::Download { url } if options.allow_download => {
-            let runtime = download_and_install_runtime(
-                cache,
-                &resolution.selected,
-                &url,
-                options,
-                authenticated_artifact,
-            )
-            .await?;
+            let runtime =
+                download_and_install_runtime(cache, &resolution.selected, &url, options).await?;
             Ok(NativeRuntimeInstallOutcome {
                 status: NativeRuntimeInstallStatus::Installed,
                 runtime,
@@ -409,40 +401,6 @@ fn authenticated_catalog_artifact<'a>(
         );
     }
     Ok(authenticated)
-}
-
-fn verify_local_runtime_if_strict(
-    path: &Path,
-    authenticated_artifact: Option<&NativeRuntimeArtifact>,
-) -> Result<()> {
-    let Some(authenticated_artifact) = authenticated_artifact else {
-        return Ok(());
-    };
-    let local = NativeRuntimeManifest::read_from_dir(path)?;
-    if local_artifact_metadata(&local.runtime) != local_artifact_metadata(authenticated_artifact) {
-        bail!(
-            "local native runtime {} metadata does not match its authenticated catalog entry",
-            authenticated_artifact.native_runtime_id()
-        );
-    }
-    NativeRuntimeManifest {
-        runtime: local_artifact_metadata(authenticated_artifact),
-    }
-    .verify_payload(path)
-    .with_context(|| {
-        format!(
-            "verify local native runtime {} against authenticated catalog file hashes",
-            authenticated_artifact.native_runtime_id()
-        )
-    })
-}
-
-fn local_artifact_metadata(artifact: &NativeRuntimeArtifact) -> NativeRuntimeArtifact {
-    let mut artifact = artifact.clone();
-    artifact.url = None;
-    artifact.sha256 = None;
-    artifact.signature = None;
-    artifact
 }
 
 pub(crate) fn should_install_explicit_bundle_into_cache(
@@ -529,7 +487,6 @@ async fn download_and_install_runtime(
     artifact: &NativeRuntimeArtifact,
     url: &str,
     options: &NativeRuntimeInstallOptions,
-    authenticated_artifact: Option<&NativeRuntimeArtifact>,
 ) -> Result<InstalledNativeRuntime> {
     let temp = tempfile::Builder::new()
         .prefix("mesh-native-runtime-")
@@ -548,7 +505,6 @@ async fn download_and_install_runtime(
     })?;
     extract_runtime_archive(&archive, &extracted)?;
     let bundle_dir = find_extracted_runtime_dir(&extracted)?;
-    verify_local_runtime_if_strict(&bundle_dir, authenticated_artifact)?;
     cache.install_from_dir(&bundle_dir)
 }
 

@@ -164,7 +164,6 @@ export type NativeRuntimeInstallOptions = {
   bundleDirs?: string[]
   cacheDir?: string
   verificationPolicy?: 'require_checksum' | 'require_checksum_and_signature'
-  trustedPublicKey?: string
   allowDownload?: boolean
   onProgress?: (event: NativeRuntimeDownloadProgress) => void
 }

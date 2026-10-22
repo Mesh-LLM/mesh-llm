@@ -68,7 +68,7 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `main_macos.yml` (`Main · macOS`) | push to `main` | Exhaustive main planning plus the same-commit reusable macOS lane |
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
-| `ci-control.yml` (`CI · Manual Full`) | dispatch | Default-branch full plan, or explicitly selected candidate signing-only diagnostic |
+| `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
 | `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
 | `resume-crates-release.yml` (`Release · Resume crates.io`) | dispatch on the default branch | Exact-tag, exact-SHA recovery for a partially published stable crates.io chain; grants `packages: read` to pull its pinned GHCR runner image; workflow-commit controller validates locked historical metadata and the source's literal roster through Rust, then publishes from the immutable release source |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
@@ -403,19 +403,7 @@ does not start a second release pipeline or silently serve rebuilt bytes (for
 example a different glibc floor) under the same version. The publish job
 checks all four supported Node addon archives and checksum sidecars before
 creating the GitHub release, matching the downstream npm assembly matrix. It
-generates the final `native-runtimes.json` and checksum before a step-scoped
-Minisign operation. The publisher uses ordinary repository secrets and compiles
-its signer without hosted executable cache reuse. Only the signing step maps
-`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` and
-`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD`. Missing or partial credentials,
-invalid passwords, and keys not matching the committed production public pin
-fail publication; there is no unsigned fallback. The installer embeds the public
-pin at compile time but retains checksum-default compatibility; strict callers
-opt in. Secret presence alone does not prove successful signing. The secrets are
-not passed to builders, composers, smoke jobs, or ordinary PR workflows. An
-explicitly authorized isolated diagnostic may exercise the signing step, with
-only public artifacts reaching a separate hosted consumer and no publication.
-It then creates only the release-specific tag commit
+creates only the release-specific tag commit
 for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is selected by `cargo xtool release notes-base` from the
 highest stable `vMAJOR.MINOR.PATCH` tag below the target; prerelease tags are
@@ -871,16 +859,9 @@ source commit.
   SHA, projects one bounded lane, and calls its matching same-commit lane as a
   nested reusable workflow. Routine main jobs and logs therefore remain
   attached to five focused main runs.
-- `ci-control.yml` defaults to manual-full. It calls the planner once and dispatches
+- `ci-control.yml` is manual-full only. It calls the planner once and dispatches
   bounded JSON lane projections as native inputs for explicit operator
   diagnostics; it cannot receive a push, PR, or workflow-run event.
-  Its opt-in `runtime_signing_diagnostic` mode skips that plan and calls
-  `runtime-signing-diagnostic.yml` on the candidate revision: a fresh hosted signer
-  consumes the two repository secrets, and a separate hosted consumer downloads
-  public artifacts by immutable artifact ID and verifies/installs/loads with the
-  compiled production pin. It reuses CPU runtime artifact 12180569782 from
-  run 39237670909 (source 8b34702e8f001dde2ff6f4045bf76f0abc1144a3);
-  no releases, tags, required checks, or live mesh instances are changed.
 
 Main/manual profiles enumerate every workspace crate exactly once and all
 supported product/SDK rows. Ready PR profiles select affected or directly owned
