@@ -501,6 +501,8 @@ pub(in crate::runtime) fn spawn_advisory_startup_task(task: impl FnOnce() + Send
     std::mem::drop(tokio::task::spawn_blocking(task));
 }
 
+/// Parses a CLI-style argv into `RuntimeOptions` for tests, mirroring real
+/// flag acceptance (`--discover` takes its name with `=` only).
 #[cfg(test)]
 pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
     let mut options = RuntimeOptions::default();
@@ -512,7 +514,9 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "--auto" => options.auto = true,
             "--publish" => options.publish = true,
             "--local-model-only" => options.local_model_only = true,
-            "--discover" => options.discover = Some(next_test_arg(&mut iter, arg).to_string()),
+            // Bare --discover mirrors clap's default_missing_value: an empty
+            // name means "discover and pick", same as the real CLI.
+            "--discover" => options.discover = Some(String::new()),
             "--split" => options.split = true,
             "--require-release-attestation" => options.require_release_attestation = true,
             "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
@@ -572,7 +576,14 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
                     .parse()
                     .expect("valid --console test value");
             }
-            other => panic!("unsupported runtime_options_for_test arg: {other}"),
+            other => {
+                // Mirrors the real CLI: --discover takes its value with `=`
+                // only, so the space form is unsupported here too.
+                let Some(name) = other.strip_prefix("--discover=") else {
+                    panic!("unsupported runtime_options_for_test arg: {other}");
+                };
+                options.discover = Some(name.to_string());
+            }
         }
     }
     options

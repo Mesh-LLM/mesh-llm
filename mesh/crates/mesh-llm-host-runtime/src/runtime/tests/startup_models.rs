@@ -2141,8 +2141,7 @@ fn shared_mesh_modes_use_concurrency_preserving_resource_planning_profile() {
     assert_eq!(
         runtime_resource_planning_profile(&runtime_options_for_test(&[
             "mesh-llm",
-            "--discover",
-            "lab",
+            "--discover=lab",
         ])),
         RuntimeResourcePlanningProfile::SharedMesh
     );

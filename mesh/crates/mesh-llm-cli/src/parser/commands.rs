@@ -508,6 +508,10 @@ pub struct Cli {
     pub help_advanced: bool,
 
     /// Join a mesh via invite token (can repeat).
+    ///
+    /// The value is a credential: the legacy-surface warning must never
+    /// echo it. `parser::suggestion_redaction` redacts every spelling, and
+    /// its staleness guards turn red on a rename or a new alias.
     #[arg(long, short)]
     pub join: Vec<String>,
 
@@ -519,7 +523,9 @@ pub struct Cli {
     pub join_file: Vec<PathBuf>,
 
     /// Discover a mesh and join it.
-    #[arg(long, default_missing_value = "", num_args = 0..=1)]
+    // require_equals: without it, `--discover status` swallows the `status`
+    // subcommand as the mesh name (optional values grab the next token).
+    #[arg(long, default_missing_value = "", num_args = 0..=1, require_equals = true)]
     pub discover: Option<String>,
 
     /// Auto-join the best mesh found via discovery.
@@ -815,6 +821,11 @@ pub struct Cli {
     ///
     /// Splits on the first `=` only, so tokens may contain `=` (base64
     /// padding, JWTs, etc.).
+    ///
+    /// The value is a credential: the legacy-surface warning must never
+    /// echo the token portion. `parser::suggestion_redaction` keeps the
+    /// URL and redacts the token in every spelling, and its staleness
+    /// guards turn red on a rename or a new alias.
     #[arg(long = "relay-auth", value_parser = parse_relay_auth_pair, hide = true)]
     pub relay_auth: Vec<(String, String)>,
 
