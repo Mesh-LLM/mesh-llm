@@ -35,9 +35,23 @@ impl NativeRuntimeVerificationPolicy {
     }
 
     /// Whether runtimes under explicit `bundle_dirs` skip catalog authentication.
+    /// Packagers building runtimes from source opt every strict host in at
+    /// build time with `MESH_LLM_TRUST_SHIPPED_RUNTIMES=1`; default builds
+    /// stay fully strict and embedding hosts need no changes.
     pub fn trusts_explicit_bundles(self) -> bool {
-        matches!(self, Self::RequireSignatureTrustExplicitBundles)
+        match self {
+            Self::RequireChecksum => false,
+            Self::RequireChecksumAndSignature => shipped_runtimes_trusted_at_build(),
+            Self::RequireSignatureTrustExplicitBundles => true,
+        }
     }
+}
+
+/// Build-time packager switch; see [`NativeRuntimeVerificationPolicy::trusts_explicit_bundles`].
+pub const TRUST_SHIPPED_RUNTIMES_ENV: &str = "MESH_LLM_TRUST_SHIPPED_RUNTIMES";
+
+fn shipped_runtimes_trusted_at_build() -> bool {
+    matches!(option_env!("MESH_LLM_TRUST_SHIPPED_RUNTIMES"), Some("1"))
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

@@ -46,7 +46,8 @@ pub use types::{
     NativeRuntimeBundleInstallPolicy, NativeRuntimeCatalog, NativeRuntimeDownloadProgress,
     NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
     NativeRuntimeInstallOutcome, NativeRuntimeInstallStatus, NativeRuntimeManifestOptions,
-    NativeRuntimeVerificationPolicy, RELEASE_CATALOG_PUBLIC_KEY, publication_catalog,
+    NativeRuntimeVerificationPolicy, RELEASE_CATALOG_PUBLIC_KEY, TRUST_SHIPPED_RUNTIMES_ENV,
+    publication_catalog,
 };
 
 #[cfg(test)]
