@@ -25,6 +25,23 @@ For built-in launcher commands such as `goose`, `claude`, `opencode`, and `pi`:
 - if `--model` is omitted, the launcher picks the strongest tool-capable model available
 - when the harness exits, the auto-started node is cleaned up
 
+## Built-in one-shot agent
+
+`mesh-llm agent` runs a small built-in agent for focused, delegated tasks. It needs no other harness installed. It has two tools, `shell` and `load_skill`, and a short system prompt. The loop is goose's (`goose-agent`).
+
+```bash
+mesh-llm agent -t "Fix calc.py so python3 test_calc.py passes, then run it."
+echo "Summarise what this repo does" | mesh-llm agent -t -
+mesh-llm agent --model <id from /v1/models> --cwd ./project -t "..."
+```
+
+- Like `goose`, it reuses a local mesh on `--port` (default 9337). If no node is running there, it starts a client and stops it on exit.
+- If `--model` is omitted, it uses the `mesh` virtual model, so routing picks a target that can fit the request.
+- Progress goes to stderr. The final answer goes to stdout, and `-q` silences progress.
+- `--max-turns` (default 30) bounds the run.
+- Skills are found in goose's skill locations, and the working directory's `AGENTS.md` is included in the prompt.
+- If a model writes a fenced ```sh block instead of making a tool call, the block is run.
+
 ## Goose
 
 Goose can use either its built-in OpenAI provider or a custom provider JSON.
