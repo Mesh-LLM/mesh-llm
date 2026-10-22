@@ -46,16 +46,20 @@ pub(in crate::repository) fn bundle_check(args: &[String]) -> DynResult<()> {
     check_bundle(Path::new(bundle))?.emit()
 }
 
+/// What `mesh-llm plugins install-defaults` prints for a default this host
+/// pins for its platform but finds no bundled copy of
+/// (`left_alone_line` for `DefaultPluginOutcome::NotBundled` in
+/// `mesh-llm-commands/src/plugin.rs`). The command has no structured outcome,
+/// so the check reads this line; a test keeps the two in step.
+pub(super) const NOT_BUNDLED_LINE: &str = "carries no bundled copy of it";
+
+/// The check runs both ways: every archive in `plugins/` must come out
+/// installed, and the host must report no default it pins for this platform
+/// as missing from the bundle. A bundle with no archive passes only when the
+/// host pins nothing here.
 pub(super) fn check_bundle(bundle: &Path) -> DynResult<CheckReport> {
     let host = bundle.join(format!("{HOST}{}", std::env::consts::EXE_SUFFIX));
-    let plugins = bundle.join(PLUGINS);
-    let archives = placed_archives(&plugins)?;
-    if archives.is_empty() {
-        return Ok(CheckReport::failure(
-            String::new(),
-            format!("{} holds no plugin archive\n", plugins.display()),
-        ));
-    }
+    let archives = placed_archives(&bundle.join(PLUGINS))?;
     let scratch = tempfile::tempdir()?;
     let home = scratch.path().join("home");
     let store = scratch.path().join("store");
@@ -80,6 +84,20 @@ pub(super) fn check_bundle(bundle: &Path) -> DynResult<CheckReport> {
             ),
         ));
     }
+    let unbundled: Vec<&str> = printed
+        .lines()
+        .filter(|line| line.contains(NOT_BUNDLED_LINE))
+        .collect();
+    if !unbundled.is_empty() {
+        return Ok(CheckReport::failure(
+            String::new(),
+            format!(
+                "the release host pins a default for this platform that the bundle does not \
+                 carry:\n{}\n",
+                unbundled.join("\n")
+            ),
+        ));
+    }
     let missing = not_installed(&archives, &installed_defaults(&store)?);
     if !missing.is_empty() {
         return Ok(CheckReport::failure(
@@ -91,6 +109,11 @@ pub(super) fn check_bundle(bundle: &Path) -> DynResult<CheckReport> {
             ),
         ));
     }
+    if archives.is_empty() {
+        return Ok(CheckReport::success(
+            "the release host pins no default plugin for this platform; none is bundled\n".into(),
+        ));
+    }
     Ok(CheckReport::success(format!(
         "the release host installed every bundled plugin at its pin: {}\n",
         archives.join(", ")
@@ -100,7 +123,9 @@ pub(super) fn check_bundle(bundle: &Path) -> DynResult<CheckReport> {
 /// The release host's environment for the check: this process's, without
 /// any `MESH_LLM_*` override (a config file, a plugin store, a bundled
 /// directory or an opt-out would each change what it installs) or home
-/// directory, and with a scratch home, config and store.
+/// directory, and with a scratch home, config and store. It runs as an
+/// internal helper (`MESH_LLM_INTERNAL_HELPER`, as `mesh-llm update` runs a
+/// staged binary), so a packaging run records and sends no analytics.
 pub(super) fn sandbox_env(
     parent: impl Iterator<Item = (OsString, OsString)>,
     home: &Path,
@@ -127,6 +152,7 @@ pub(super) fn sandbox_env(
         ("XDG_STATE_HOME", home.join(".local/state")),
         ("MESH_LLM_CONFIG", home.join(".mesh-llm/config.toml")),
         ("MESH_LLM_PLUGIN_DIR", store.to_path_buf()),
+        ("MESH_LLM_INTERNAL_HELPER", "1".into()),
     ] {
         env.push((key.into(), value.into_os_string()));
     }

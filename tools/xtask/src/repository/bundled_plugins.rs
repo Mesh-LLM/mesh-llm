@@ -17,6 +17,9 @@
 //!   node does, and every archive there must come out installed as a default.
 //!   An archive that does not hash to the host's pin fails the install; one
 //!   the host pins nothing for installs nothing. Either way the check fails.
+//!   It also fails when the host reports a default it pins for this platform
+//!   that the bundle lacks, so a list read here that differs from the one the
+//!   host compiled cannot pass by bundling nothing.
 
 use super::{check_args::Grammar, check_report::CheckReport};
 use crate::command::DynResult;

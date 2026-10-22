@@ -2,7 +2,7 @@
 //! release job bundles exactly what the host pins. Only the fields the
 //! release needs are read: `name`, `version`, `repository` and `sha256`.
 
-use syn::{Expr, Item, Lit, Member};
+use syn::{Attribute, Expr, Item, Lit, Member};
 
 /// One default plugin's pins, as `DEFAULT_PLUGINS` states them.
 #[derive(Debug, PartialEq, Eq)]
@@ -37,16 +37,23 @@ impl PinnedDefault {
 }
 
 /// Every entry of `DEFAULT_PLUGINS` in `source`, checked to be well formed.
+///
+/// The list read here must be the one the host compiles, so anything that
+/// could make the two differ is refused rather than guessed at: more than one
+/// `DEFAULT_PLUGINS`, an attribute such as `#[cfg]` on it or on an entry, and
+/// an entry that takes fields from another (`..BASE`).
 pub(super) fn parse(source: &str) -> Result<Vec<PinnedDefault>, String> {
     let file = syn::parse_file(source).map_err(|error| format!("not Rust source: {error}"))?;
-    let list = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Const(item) if item.ident == "DEFAULT_PLUGINS" => Some(&*item.expr),
-            _ => None,
-        })
-        .ok_or("no `const DEFAULT_PLUGINS`")?;
+    let mut lists = file.items.iter().filter_map(|item| match item {
+        Item::Const(item) if item.ident == "DEFAULT_PLUGINS" => Some((&item.attrs, &*item.expr)),
+        Item::Static(item) if item.ident == "DEFAULT_PLUGINS" => Some((&item.attrs, &*item.expr)),
+        _ => None,
+    });
+    let (attrs, list) = lists.next().ok_or("no `const DEFAULT_PLUGINS`")?;
+    if lists.next().is_some() {
+        return Err("more than one `DEFAULT_PLUGINS`".into());
+    }
+    no_attributes(attrs, "`DEFAULT_PLUGINS`")?;
     let mut defaults = Vec::new();
     for entry in array(list, "DEFAULT_PLUGINS")? {
         let default = entry_pins(entry)?;
@@ -65,6 +72,13 @@ fn entry_pins(entry: &Expr) -> Result<PinnedDefault, String> {
     let Expr::Struct(entry) = entry else {
         return Err("an entry is not a `DefaultPlugin { .. }` literal".into());
     };
+    no_attributes(&entry.attrs, "an entry")?;
+    for field in &entry.fields {
+        no_attributes(&field.attrs, "an entry's field")?;
+    }
+    if entry.rest.is_some() || entry.dot2_token.is_some() {
+        return Err("an entry takes fields from another (`..`); spell every pin out".into());
+    }
     let field = |name: &str| {
         entry
             .fields
@@ -101,6 +115,20 @@ fn entry_pins(entry: &Expr) -> Result<PinnedDefault, String> {
     };
     check(&default).map_err(|error| format!("{}: {error}", default.name))?;
     Ok(default)
+}
+
+/// Refuses any attribute but a doc comment: a `#[cfg]` or `#[cfg_attr]` would
+/// make the list read here differ from the one compiled for some target.
+fn no_attributes(attrs: &[Attribute], what: &str) -> Result<(), String> {
+    match attrs.iter().find(|attr| !attr.path().is_ident("doc")) {
+        Some(attr) => Err(format!(
+            "{what} carries an attribute (#[{}]); the release cannot tell which targets it applies to",
+            attr.path()
+                .get_ident()
+                .map_or_else(|| "..".to_owned(), ToString::to_string)
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The elements of `[..]` or `&[..]`.

@@ -1,6 +1,6 @@
 use super::check::{
-    CHECK_GRAMMAR, INSTALL_RECORD, PLUGINS, check_bundle, installed_defaults, not_installed,
-    placed_archives, sandbox_env,
+    CHECK_GRAMMAR, INSTALL_RECORD, NOT_BUNDLED_LINE, PLUGINS, check_bundle, installed_defaults,
+    not_installed, placed_archives, sandbox_env,
 };
 use super::pins::{PinnedDefault, parse};
 use super::*;
@@ -139,6 +139,40 @@ fn a_malformed_list_fails_and_says_why() {
             fixture("name: NAME, version: \"1.2.0\""),
             "`name` is not a string literal",
         ),
+        (
+            format!(
+                "#[cfg(unix)]\n{}",
+                notes("notes", "example/notes", &linux_pin(DIGEST))
+            ),
+            "`DEFAULT_PLUGINS` carries an attribute (#[cfg])",
+        ),
+        (
+            fixture("#[cfg_attr(test, allow(unused))] name: \"notes\""),
+            "an entry's field carries an attribute (#[cfg_attr])",
+        ),
+        (
+            notes("notes", "example/notes", &linux_pin(DIGEST)).replace(
+                "= &[DefaultPlugin",
+                "= &[#[cfg(target_os = \"linux\")] DefaultPlugin",
+            ),
+            "an entry carries an attribute (#[cfg])",
+        ),
+        (
+            format!(
+                "{}\n{}",
+                notes("notes", "example/notes", &linux_pin(DIGEST)),
+                notes("other", "example/other", &linux_pin(DIGEST))
+            ),
+            "more than one `DEFAULT_PLUGINS`",
+        ),
+        (
+            fixture(&format!(
+                "name: \"notes\", version: \"1.2.0\", repository: \"example/notes\", \
+                 sha256: &[{}], ..BASE",
+                linux_pin(DIGEST)
+            )),
+            "takes fields from another",
+        ),
     ];
     for (source, says) in cases {
         let report = list_report(&source, Path::new("defaults.rs"), LINUX);
@@ -200,61 +234,115 @@ fn only_an_enabled_default_counts_as_installed() {
     );
 }
 
-/// A stand-in release host: `install-defaults` records an install for every
-/// archive it is given (`installs`), records none (`ignores`), or refuses
-/// (`refuses`), as a host whose pin matches, pins nothing, or pins another
-/// digest would.
+/// A stand-in release host for `install-defaults`, as a host would answer:
+/// - `installs`: its pins match, so it records an install for every archive
+///   in `plugins/`;
+/// - `ignores`: it pins nothing by those names and records none;
+/// - `unsupported`: it pins nothing for this platform and says so;
+/// - `unbundled`: it pins a default for this platform that the bundle lacks;
+/// - `refuses`: it pins another digest and fails.
+///
+/// Every behaviour first insists on the sandbox: no bundled-directory
+/// override, and the internal-helper marker that keeps analytics off.
 #[cfg(unix)]
 fn stand_in_host(dir: &Path, behaviour: &str) {
     use std::os::unix::fs::PermissionsExt as _;
     let script = match behaviour {
         "installs" => {
-            r#"[ -z "$MESH_LLM_BUNDLED_PLUGINS_DIR" ] || exit 8
-for a in "$(dirname "$0")"/plugins/*.tar.gz; do
+            r#"for a in "$(dirname "$0")"/plugins/*.tar.gz; do
+  [ -f "$a" ] || continue
   n=$(basename "$a"); mkdir -p "$MESH_LLM_PLUGIN_DIR/${n%%-*}"
   printf '{"downloaded_asset_name":"%s","enabled":true,"default_managed":true}' "$n" \
     > "$MESH_LLM_PLUGIN_DIR/${n%%-*}/plugin-install.json"
 done"#
         }
         "ignores" => "exit 0",
+        "unsupported" => {
+            "echo 'ℹ️  No reviewed notes release for this platform; not installed' >&2"
+        }
+        "unbundled" => {
+            "echo 'ℹ️  Default notes not installed: this install carries no bundled copy of it, \
+             and a default plugin is never downloaded' >&2"
+        }
         _ => "echo 'the bundled archive is not the reviewed one' >&2; exit 1",
     };
     let host = dir.join("mesh-llm");
     fs::write(
         &host,
         format!(
-            "#!/bin/sh\n[ \"$*\" = '--log-format json plugins install-defaults' ] || exit 9\n{script}\n"
+            "#!/bin/sh\n[ \"$*\" = '--log-format json plugins install-defaults' ] || exit 9\n\
+             [ -z \"$MESH_LLM_BUNDLED_PLUGINS_DIR\" ] || exit 8\n\
+             [ \"$MESH_LLM_INTERNAL_HELPER\" = 1 ] || exit 7\n{script}\n"
         ),
     )
     .unwrap();
     fs::set_permissions(&host, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+fn check(dir: &Path, behaviour: &str) -> CheckReport {
+    stand_in_host(dir, behaviour);
+    check_bundle(dir).unwrap()
+}
+
+fn says(report: &CheckReport, text: &str) -> bool {
+    report.stdout.contains(text) || report.stderr.contains(text)
+}
+
+/// With no archive placed, the bundle passes only when the host pins nothing
+/// for this platform; a default it pins but the bundle lacks fails.
 #[cfg(unix)]
 #[test]
-fn the_bundle_check_passes_only_when_the_host_installs_every_archive() {
+fn a_bundle_with_no_archive_passes_only_when_the_host_pins_nothing_here() {
     let dir = tempfile::tempdir().unwrap();
-    stand_in_host(dir.path(), "installs");
-    let absent = check_bundle(dir.path()).unwrap();
-    assert_eq!(absent.code, 1, "a bundle with no plugins/ bundles nothing");
+    for plugins_dir in [false, true] {
+        if plugins_dir {
+            fs::create_dir(dir.path().join(PLUGINS)).unwrap();
+        }
+        for (behaviour, code, text) in [
+            ("ignores", 0, "pins no default plugin for this platform"),
+            ("unsupported", 0, "pins no default plugin for this platform"),
+            ("installs", 0, "pins no default plugin for this platform"),
+            ("unbundled", 1, "that the bundle does not carry"),
+        ] {
+            let report = check(dir.path(), behaviour);
+            assert_eq!(report.code, code, "{behaviour}: {report:?}");
+            assert!(says(&report, text), "{behaviour}: {report:?}");
+        }
+    }
+}
+
+/// With an archive placed, the host must install it, and must report no
+/// other pinned default missing.
+#[cfg(unix)]
+#[test]
+fn a_placed_archive_passes_only_when_the_host_installs_it() {
+    let dir = tempfile::tempdir().unwrap();
     let plugins = dir.path().join(PLUGINS);
     fs::create_dir(&plugins).unwrap();
-    let empty = check_bundle(dir.path()).unwrap();
-    assert_eq!(empty.code, 1, "an empty plugins/ bundles nothing");
     fs::write(plugins.join(ARCHIVE), b"archive").unwrap();
-    for (behaviour, code, says) in [
+    for (behaviour, code, text) in [
         ("installs", 0, "installed every bundled plugin"),
         ("ignores", 1, "pins no archive by that name and digest"),
+        ("unsupported", 1, "pins no archive by that name and digest"),
+        ("unbundled", 1, "that the bundle does not carry"),
         ("refuses", 1, "not the reviewed one"),
     ] {
-        stand_in_host(dir.path(), behaviour);
-        let report = check_bundle(dir.path()).unwrap();
+        let report = check(dir.path(), behaviour);
         assert_eq!(report.code, code, "{behaviour}: {report:?}");
-        assert!(
-            report.stdout.contains(says) || report.stderr.contains(says),
-            "{behaviour}: {report:?}"
-        );
+        assert!(says(&report, text), "{behaviour}: {report:?}");
     }
+}
+
+/// The check recognises a missing bundled copy by the line the host prints
+/// for it; this fails if that line changes in `mesh-llm-commands`.
+#[test]
+fn the_not_bundled_line_is_the_one_install_defaults_prints() {
+    let source = include_str!("../../../../../mesh/crates/mesh-llm-commands/src/plugin.rs");
+    let arm = source
+        .find("DefaultPluginOutcome::NotBundled => Some(format!(")
+        .expect("install-defaults reports NotBundled with its own line");
+    let line = &source[arm..source.len().min(arm + 200)];
+    assert!(line.contains(NOT_BUNDLED_LINE), "{line}");
 }
 
 /// The host sees no `MESH_LLM_*` setting of the machine running the check:
@@ -269,6 +357,8 @@ fn the_host_runs_with_scratch_settings_only() {
         ("MESH_LLM_NO_DEFAULT_PLUGINS", "1"),
         ("MESH_LLM_PLUGIN_DIR", "/home/operator/plugins"),
         ("MESH_LLM_BUNDLED_PLUGINS_DIR", "/elsewhere"),
+        ("MESH_LLM_INTERNAL_HELPER", "0"),
+        ("MESH_LLM_ANALYTICS", "1"),
     ]
     .map(|(k, v)| (OsString::from(k), OsString::from(v)));
     let env = sandbox_env(
@@ -297,4 +387,6 @@ fn the_host_runs_with_scratch_settings_only() {
     );
     assert_eq!(get("MESH_LLM_BUNDLED_PLUGINS_DIR"), None);
     assert_eq!(get("MESH_LLM_NO_DEFAULT_PLUGINS"), None);
+    assert_eq!(get("MESH_LLM_INTERNAL_HELPER").as_deref(), Some("1"));
+    assert_eq!(get("MESH_LLM_ANALYTICS"), None);
 }
