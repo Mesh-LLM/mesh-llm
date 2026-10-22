@@ -139,8 +139,20 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
             output_msat_per_million,
             cache_discount_percent,
             free,
+            deposit_sats,
+            default_deposit,
         } => {
-            if let (Some(model), Some(percent), None, None) = (
+            if let Some(model) = model
+                .as_ref()
+                .filter(|_| deposit_sats.is_some() || *default_deposit)
+            {
+                ControlCommand::SetModelAdmissionDeposit {
+                    model: model.clone(),
+                    value_msat: deposit_sats
+                        .map(|sats| sats.checked_mul(1000).context("deposit overflow"))
+                        .transpose()?,
+                }
+            } else if let (Some(model), Some(percent), None, None) = (
                 model,
                 cache_discount_percent,
                 input_msat_per_million,
@@ -211,6 +223,29 @@ mod tests {
             serde_json::to_value(command)?,
             serde_json::json!({"command": "unpin"})
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_model_deposit_sets_or_clears_only_that_deposit() -> Result<()> {
+        let pricing = |deposit_sats, default_deposit| WalletCommand::Pricing {
+            model: Some("m".into()),
+            input_msat_per_million: None,
+            output_msat_per_million: None,
+            cache_discount_percent: None,
+            free: false,
+            deposit_sats,
+            default_deposit,
+        };
+        assert_eq!(
+            serde_json::to_value(control_command(&pricing(Some(5), false))?)?,
+            serde_json::json!({"command": "set_model_admission_deposit", "model": "m", "value_msat": 5000})
+        );
+        assert_eq!(
+            serde_json::to_value(control_command(&pricing(None, true))?)?,
+            serde_json::json!({"command": "set_model_admission_deposit", "model": "m", "value_msat": null})
+        );
+        assert!(!requires_wallet(&control_command(&pricing(None, true))?));
         Ok(())
     }
 

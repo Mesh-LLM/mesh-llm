@@ -430,6 +430,7 @@ async fn metered_invoice_expiries_are_chosen_by_the_host_not_the_wallet() -> Res
     service.ledger.metered_admit(&MeteredRequest {
         id: "trusted",
         peer: "peer",
+        model: "test-model",
         pricing: &pricing,
         require_deposit: false,
     })?;

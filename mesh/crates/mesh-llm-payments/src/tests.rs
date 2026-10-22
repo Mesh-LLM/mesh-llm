@@ -556,3 +556,56 @@ async fn admission_deposit_control_follows_the_minimum_until_set_and_never_drops
     assert!(service.ledger.admission_deposit_msat().is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn a_model_deposit_overrides_the_node_wide_one_until_cleared() -> Result<()> {
+    use mesh_llm_payments_types::control::ControlCommand;
+    let dir = tempfile::tempdir()?;
+    let service = PaymentService::open(dir.path())?;
+    let set_model = |value_msat| ControlCommand::SetModelAdmissionDeposit {
+        model: "big".into(),
+        value_msat,
+    };
+    assert!(
+        service.control(set_model(Some(5000))).await.is_err(),
+        "an unpriced model has no deposit"
+    );
+    let price = Pricing {
+        input_msat_per_million: 1,
+        output_msat_per_million: 1,
+        cache_discount_percent: 0,
+    };
+    service.ledger.set_pricing("big", Some(&price))?;
+    service.ledger.set_pricing("small", Some(&price))?;
+    service.ledger.set_admission_deposit_msat(2000)?;
+    let status = service.control(set_model(Some(5000))).await?;
+    assert_eq!(
+        status,
+        serde_json::json!({"admission_deposit_msat": 2000, "models": {"big": 5000}})
+    );
+    assert_eq!(service.ledger.model_admission_deposit_msat("big")?, 5000);
+    assert_eq!(service.ledger.model_admission_deposit_msat("small")?, 2000);
+    assert!(service.control(set_model(Some(999))).await.is_err());
+    // A model deposit is never below the minimum payment either.
+    service.ledger.set_min_payment_msat(8000)?;
+    assert_eq!(service.ledger.model_admission_deposit_msat("big")?, 8000);
+    service.ledger.set_min_payment_msat(1000)?;
+    let cleared = service.control(set_model(None)).await?;
+    assert_eq!(cleared["models"], serde_json::json!({}));
+    assert_eq!(service.ledger.model_admission_deposit_msat("big")?, 2000);
+    // Making a model free drops its deposit, so pricing it again starts from
+    // the node-wide one.
+    service.control(set_model(Some(5000))).await?;
+    service.ledger.set_pricing("big", None)?;
+    assert!(service.ledger.model_admission_deposits()?.is_empty());
+    service.ledger.set_pricing("big", Some(&price))?;
+    assert_eq!(service.ledger.model_admission_deposit_msat("big")?, 2000);
+    // A hand-edited deposit above the cap is refused on read, not quoted.
+    service.control(set_model(Some(5000))).await?;
+    rusqlite::Connection::open(dir.path().join("payments.sqlite3"))?.execute(
+        "UPDATE model_deposits SET deposit_msat=1000001 WHERE model='big'",
+        [],
+    )?;
+    assert!(service.ledger.model_admission_deposit_msat("big").is_err());
+    Ok(())
+}

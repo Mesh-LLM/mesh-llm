@@ -142,7 +142,7 @@ request is abandoned.
 
 Before first opening an old ledger, stop its owning payment service and back up
 `payments.sqlite3` together with any `payments.sqlite3-wal` and
-`payments.sqlite3-shm` sidecars. This is a one-way schema upgrade to version 5;
+`payments.sqlite3-shm` sidecars. This is a one-way schema upgrade to version 6;
 older binaries reject the newer version. Rollback requires the pre-upgrade
 backup, not changing `user_version` by hand.
 
@@ -155,7 +155,11 @@ backup, not changing `user_version` by hand.
   admission/payee settings, fail before migration writes. Records and schema
   version are retained; matching SQL shapes cannot identify billing semantics. Use a backup
   and a compatible binary or an explicit migration; never delete financial
-  records just to make startup pass. Fresh schema-5 ledgers use the current metered billing rules.
+  records just to make startup pass. Fresh schema-6 ledgers use the current metered billing rules.
+- Version 5: metered records gain the model each request was admitted for,
+  which binds a reused request ID to its model, and per-model deposits get
+  their own table. Rows admitted before the upgrade get an empty model; a
+  request still admitted then is abandoned at startup, as after any restart.
 - Corrupt/non-SQLite files and future schema versions fail to open; they are
   not replaced with an empty ledger.
 
@@ -471,15 +475,19 @@ The admission deposit, what a peer outside the trust cache pays the inferencer
 before it serves, is a separate setting: `mesh-llm wallet admission-deposit
 --sats N` (1..=1000, ledger setting). Unset, it equals the minimum payment;
 `--default` unsets it again.
-It is not gossiped: a buyer learns the amount at admission. The deposit is
-never below the minimum payment, because the deposit is itself a
+A priced model can ask its own deposit with `mesh-llm wallet pricing MODEL
+--deposit-sats N`; `--default-deposit` returns it to the node-wide one, and
+pricing the model free drops it. Model deposits are keyed by the priced name,
+like rates, and are not gossiped: a buyer learns the amount at admission. No
+deposit is ever below the minimum payment, because the deposit is itself a
 Lightning payment; raising the minimum above a configured deposit raises the
 deposit with it. The seller reads the deposit once at admission and the
 request keeps that amount, so a change affects only new admissions. The
 amount travels as
 `AdmissionTerms.deposit_msat`, which has always been on the wire. A buyer
-refuses admission when the seller's deposit is above its own admission
-deposit, the same opt-in as the minimum; a deposit larger than the bill is
+refuses admission when the seller's deposit is above its own node-wide
+admission deposit (its model deposits play no part as a buyer), the same
+opt-in as the minimum; a deposit larger than the bill is
 kept, so a larger deposit is what a buyer risks per unserved or tiny request.
 Releases before this setting require the deposit to equal the minimum, so a
 seller whose deposit differs from its minimum cannot admit them. The deprecated
@@ -686,6 +694,8 @@ mesh-llm wallet min-payment --sats 2
 mesh-llm wallet admission-deposit
 mesh-llm wallet admission-deposit --sats 10
 mesh-llm wallet admission-deposit --default
+mesh-llm wallet pricing MODEL --deposit-sats 50
+mesh-llm wallet pricing MODEL --default-deposit
 ```
 
 `balance`, `transactions`, and `fund` are aliases. `wallet --port PORT` selects
@@ -702,7 +712,8 @@ Applications POST JSON to `/api/wallet` on the local management port:
 Commands are `balance`, `transactions` (`limit`), `fund`, `inspect_invoice`
 (`invoice`), `send` (`invoice`, optional `amount_msat`, `max_fee_msat`), `pending`,
 `blocked`, `unblock` (`peer`), `unpin`, `policy` (optional `value`), `min_payment` and
-`admission_deposit` (optional `value_msat`, or `reset`), `pricing`, and `set_pricing`
+`admission_deposit` (optional `value_msat`, or `reset`), `set_model_admission_deposit`
+(`model`, nullable `value_msat`), `pricing`, and `set_pricing`
 (`model`, nullable `value`). `expected_pid` and `expected_directory` are optional
 local destination checks. The balance response exposes `spendable_msat` and
 `available_for_inference_msat` after policy and recorded settled spending. `pending` returns

@@ -27,12 +27,14 @@ pub const STRIKE_LIMIT: u64 = 3;
 const UNPAID_FINALS: &str =
     "SELECT COUNT(*) FROM metered_invoices WHERE peer=?1 AND kind='final' AND state='unpaid'";
 
-/// Admission inputs. The deposit is the operator's admission deposit when
+/// Admission inputs. The deposit is the operator's deposit for `model` when
 /// `require_deposit`; the provider skips it for peers in its trust cache.
 #[derive(Clone, Copy, Debug)]
 pub struct MeteredRequest<'a> {
     pub id: &'a str,
     pub peer: &'a str,
+    /// The priced model name; selects a per-model deposit.
+    pub model: &'a str,
     pub pricing: &'a Pricing,
     pub require_deposit: bool,
 }
@@ -81,12 +83,13 @@ impl Ledger {
         let MeteredRequest {
             id,
             peer,
+            model,
             pricing,
             require_deposit,
         } = *request;
         // Read before taking the connection: the settings read locks it too.
         let deposit = if require_deposit {
-            self.admission_deposit_msat()?
+            self.model_admission_deposit_msat(model)?
         } else {
             0
         };
@@ -94,18 +97,25 @@ impl Ledger {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Identity is the exact admitted terms, not the rounded msat amounts:
-        // different token terms can round to the same charge at low rates.
-        let existing: Option<(String, String, bool, u64)> = tx
+        // different token terms can round to the same charge at low rates. The
+        // model is part of it because models can ask different deposits.
+        let existing: Option<(String, String, String, bool, u64)> = tx
             .query_row(
-                "SELECT peer,pricing,require_deposit,deposit_msat FROM metered_requests WHERE id=?",
+                "SELECT peer,model,pricing,require_deposit,deposit_msat FROM metered_requests WHERE id=?",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, read_amount(r, 3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, read_amount(r, 4)?)),
             )
             .optional()?;
-        if let Some((row_peer, row_pricing, row_require_deposit, row_deposit)) = existing {
+        if let Some((row_peer, row_model, row_pricing, row_require_deposit, row_deposit)) = existing
+        {
             ensure!(
-                (row_peer, row_pricing, row_require_deposit)
-                    == (peer.to_owned(), pricing_json, require_deposit),
+                (row_peer, row_model, row_pricing, row_require_deposit)
+                    == (
+                        peer.to_owned(),
+                        model.to_owned(),
+                        pricing_json,
+                        require_deposit
+                    ),
                 "request identity reused with different metered terms"
             );
             return Ok(row_deposit);
@@ -116,10 +126,11 @@ impl Ledger {
             "buyer has {unpaid} unpaid final invoices"
         );
         tx.execute(
-            "INSERT INTO metered_requests(id,peer,pricing,require_deposit,deposit_msat,state) VALUES (?1,?2,?3,?4,?5,'admitted')",
+            "INSERT INTO metered_requests(id,peer,model,pricing,require_deposit,deposit_msat,state) VALUES (?1,?2,?3,?4,?5,?6,'admitted')",
             params![
                 id,
                 peer,
+                model,
                 pricing_json,
                 require_deposit,
                 sql_amount(deposit)?

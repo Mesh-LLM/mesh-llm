@@ -8,6 +8,7 @@ pub mod wallet_switch;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
@@ -91,10 +92,11 @@ impl Ledger {
         self.set_setting("min_payment_msat", &floor_msat.to_string())
     }
 
-    /// The operator's admission deposit in msat: what this node asks, as a
-    /// seller, of peers outside its trust cache, and the largest seller
-    /// deposit it will pay as a buyer. Unset, it follows the minimum payment;
-    /// it is never below it, because the deposit is itself a Lightning payment.
+    /// The operator's node-wide admission deposit in msat: what this node
+    /// asks, as a seller, of peers outside its trust cache for a model with no
+    /// deposit of its own, and the largest seller deposit it will pay as a
+    /// buyer. Unset, it follows the minimum payment; it is never below it,
+    /// because the deposit is itself a Lightning payment.
     pub fn admission_deposit_msat(&self) -> Result<u64> {
         let floor_msat = self.min_payment_msat()?;
         let Some(value) = self.get_setting("admission_deposit_msat")? else {
@@ -121,6 +123,65 @@ impl Ledger {
             "DELETE FROM settings WHERE key='admission_deposit_msat'",
             [],
         )?;
+        Ok(())
+    }
+
+    /// The deposit this seller asks for `model`: the model's own deposit when
+    /// one is set, otherwise the node-wide one, never below the minimum payment.
+    pub fn model_admission_deposit_msat(&self, model: &str) -> Result<u64> {
+        let stored: Option<u64> = self
+            .lock()?
+            .query_row(
+                "SELECT deposit_msat FROM model_deposits WHERE model=?",
+                [model],
+                |r| read_amount(r, 0),
+            )
+            .optional()?;
+        let Some(deposit_msat) = stored else {
+            return self.admission_deposit_msat();
+        };
+        mesh_llm_payments_types::metering::validate_deposit(deposit_msat).with_context(|| {
+            format!(
+                "stored deposit for {model} is invalid; set it with `mesh-llm wallet pricing {model} --deposit-sats`"
+            )
+        })?;
+        Ok(deposit_msat.max(self.min_payment_msat()?))
+    }
+
+    /// Per-model admission deposits, as configured (before the minimum
+    /// payment raises any of them).
+    pub fn model_admission_deposits(&self) -> Result<BTreeMap<String, u64>> {
+        let connection = self.lock()?;
+        let mut statement =
+            connection.prepare("SELECT model,deposit_msat FROM model_deposits ORDER BY model")?;
+        let rows = statement.query_map([], |r| Ok((r.get(0)?, read_amount(r, 1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Set, or with `None` clear, the deposit for one priced model. Each is
+    /// one statement, so concurrent changes cannot lose an update, and the
+    /// row is deleted with the model's price (`ON DELETE CASCADE`).
+    pub fn set_model_admission_deposit_msat(
+        &self,
+        model: &str,
+        deposit_msat: Option<u64>,
+    ) -> Result<()> {
+        let Some(deposit_msat) = deposit_msat else {
+            self.lock()?
+                .execute("DELETE FROM model_deposits WHERE model=?", [model])?;
+            return Ok(());
+        };
+        self.validate_admission_deposit(deposit_msat)?;
+        // Only a priced model gets a row; the price check and the write are
+        // the same statement.
+        let written = self.lock()?.execute(
+            "INSERT INTO model_deposits(model,deposit_msat) SELECT model,?2 FROM pricing WHERE model=?1 ON CONFLICT(model) DO UPDATE SET deposit_msat=excluded.deposit_msat",
+            params![model, sql_amount(deposit_msat)?],
+        )?;
+        ensure!(
+            written == 1,
+            "set model input/output rates before a deposit"
+        );
         Ok(())
     }
 
@@ -162,13 +223,15 @@ impl Ledger {
             );
             self.lock()?.execute("INSERT INTO pricing VALUES (?1,?2) ON CONFLICT(model) DO UPDATE SET value=excluded.value", params![model, serde_json::to_string(pricing)?])?;
         } else {
+            // A free model asks no deposit: its deposit row goes with the price
+            // in the same statement, so repricing it starts from the node-wide one.
             self.lock()?
                 .execute("DELETE FROM pricing WHERE model=?", [model])?;
         }
         Ok(())
     }
 
-    pub fn pricing(&self) -> Result<std::collections::BTreeMap<String, Pricing>> {
+    pub fn pricing(&self) -> Result<BTreeMap<String, Pricing>> {
         let connection = self.lock()?;
         let mut statement = connection.prepare("SELECT model,value FROM pricing ORDER BY model")?;
         let rows =
