@@ -119,7 +119,7 @@ pub(super) fn exchange_usage_from_outcome(
 /// describe. A 503/`Failed`/`Dropped` outcome served nothing, so attaching
 /// provenance there would be exactly the fabrication the envelope promises
 /// never to do.
-pub(super) fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
+fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
     matches!(
         outcome,
         proxy::RouteDispatchOutcome::Responded(200..=299)
