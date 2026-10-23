@@ -1,0 +1,13 @@
+# Rust boundary (docs/ENFORCEMENT.md §5): the bridge is the exception barrier.
+# Generated cxx headers (target/cxxbridge, rust/cxx.h) are outside this filter
+# and are never diagnosed.
+InheritParentConfig: true
+Checks: >
+  skippy-bridge-barrier,
+  skippy-no-alloc-in-oom-handler,
+  skippy-rust-string-lossy,
+  skippy-explicit-narrowing
+HeaderFilterRegex: 'skippy-sys/cpp/.*'
+
+CheckOptions:
+  skippy-bridge-barrier.FileRegex: 'bridge\.cpp$'
