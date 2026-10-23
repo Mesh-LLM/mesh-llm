@@ -707,15 +707,20 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn config_validate_file_still_rejects_invalid_lifecycle_log_parser_env_override() {
-        let (_dir, path) = write_fixture_file(VALID_FIXTURE);
-
-        let result = mesh_llm_config::with_env_override_for_test(
+        if !mesh_llm_config::env_override_in_child_for_test(
+            concat!(
+                module_path!(),
+                "::config_validate_file_still_rejects_invalid_lifecycle_log_parser_env_override"
+            ),
             "MESH_LLM_LIFECYCLE_LOG_PARSER",
             "not-a-real-mode",
-            || validate_config_file(Some(path.as_path())),
-        );
+        ) {
+            return;
+        }
+        let (_dir, path) = write_fixture_file(VALID_FIXTURE);
+
+        let result = validate_config_file(Some(path.as_path()));
 
         let err = result.expect_err(
             "an invalid MESH_LLM_LIFECYCLE_LOG_PARSER value must still fail \
