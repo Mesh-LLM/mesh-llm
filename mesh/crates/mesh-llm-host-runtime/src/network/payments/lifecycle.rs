@@ -10,6 +10,63 @@ use crate::{mesh::Node, plugin::PluginManager, plugin::openai_exchange::request_
 
 const CHANNEL: &str = "payment.lifecycle.v1";
 
+/// Refusals have no admitted terms or financial amounts to report.
+#[derive(Serialize)]
+struct RefusedEvent<'a> {
+    exchange_id: &'a str,
+    event_ref: String,
+    role: Role,
+    phase: &'static str,
+    source: &'static str,
+    reason: super::refusal::Refusal,
+}
+
+pub(crate) async fn refused(
+    node: &Node,
+    exchange_id: Option<&str>,
+    reason: super::refusal::Refusal,
+) {
+    let Some(exchange_id) = exchange_id else {
+        return;
+    };
+    let Ok(Some(manager)) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        let manager = node.plugin_manager().await?;
+        manager
+            .any_plugin_declares_mesh_channel(CHANNEL)
+            .await
+            .then_some(manager)
+    })
+    .await
+    else {
+        return;
+    };
+    let Some(body) = refusal_body(exchange_id, reason) else {
+        return;
+    };
+    let exchange_id = exchange_id.to_owned();
+    // One bounded delivery per refusal; subscriber latency never delays retry.
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            manager.broadcast_channel_message(CHANNEL, "application/json", body, &exchange_id),
+        )
+        .await;
+    });
+}
+
+fn refusal_body(exchange_id: &str, reason: super::refusal::Refusal) -> Option<Vec<u8>> {
+    let mut event = RefusedEvent {
+        exchange_id,
+        event_ref: String::new(),
+        role: Role::Payer,
+        phase: "refused",
+        source: Role::Payer.asserted(),
+        reason,
+    };
+    event.event_ref = request_body_digest(&serde_json::to_value(&event).ok()?, None)?;
+    serde_json::to_vec(&event).ok()
+}
+
 /// Which side of a paid exchange observed an event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -556,5 +613,20 @@ mod tests {
     async fn provider_without_a_subscriber_never_starts_observing() {
         let observations = ProviderLifecycle::default().observe(&terms());
         assert!(observations.sender.is_none());
+    }
+
+    #[tokio::test]
+    async fn refusal_without_a_subscriber_needs_no_payment_state() -> anyhow::Result<()> {
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        refused(
+            &node,
+            Some("exchange"),
+            super::super::refusal::Refusal::DebtBlocked,
+        )
+        .await;
+        assert!(node.plugin_manager().await.is_none());
+        assert!(node.payments.get().is_none());
+        node.endpoint.close().await;
+        Ok(())
     }
 }
