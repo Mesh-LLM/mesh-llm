@@ -101,29 +101,24 @@ means a footer was present, but signature verification failed.
 
 ## Native Runtime Catalog Signing Key
 
-The release publisher signs the final `native-runtimes.json` with a dedicated
-Minisign key held in two repository Actions secrets (no environment gate):
-
-- `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY` — the encrypted secret-key file
-- `MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD` — its password
-
-Generate the key once (never with `-W`), back up `.key`, password and `.pub` in
-the vault, then upload:
+The release publisher signs the final `native-runtimes.json` with the stock
+`minisign` CLI (`scripts/sign-native-runtime-catalog.sh`) using a dedicated,
+unencrypted Minisign key held in one repository Actions secret,
+`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY`. Generate it once without a
+password, back up `.key` and `.pub` in the vault, then upload:
 
 ```bash
 umask 077
 KEYDIR=$(mktemp -d "$HOME/native-runtime-key.XXXXXX")
-minisign -G -p "$KEYDIR/native-runtime-catalog.pub" -s "$KEYDIR/native-runtime-catalog.key"
+minisign -G -W -p "$KEYDIR/native-runtime-catalog.pub" -s "$KEYDIR/native-runtime-catalog.key"
 gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY --repo Mesh-LLM/mesh-llm < "$KEYDIR/native-runtime-catalog.key"
-gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD --repo Mesh-LLM/mesh-llm
 ```
 
 The public key is committed at
 `skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub` and
-compiled into the installer. Only the signing step receives the secrets. Missing
-or mismatched credentials fail publication; there is no unsigned fallback. The
-signer checks its output against the committed key before writing
-`native-runtimes.json.minisig`. Verify a published catalog with:
+compiled into the installer. Only the signing step receives the secret. A missing
+or mismatched key fails publication; there is no unsigned fallback. The
+script verifies its output against the committed key. Verify a published catalog with:
 
 ```bash
 minisign -Vm native-runtimes.json -x native-runtimes.json.minisig \

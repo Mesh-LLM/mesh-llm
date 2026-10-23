@@ -27,7 +27,6 @@ mod pure_path;
 mod rc_ok;
 mod release_manifest;
 mod release_manifest_order;
-mod runtime_catalog_signing;
 mod runtime_version;
 mod skippy_cli_input;
 
@@ -45,7 +44,6 @@ pub(crate) enum ProductCommand {
     AttestationStatus,
     RcOk,
     SkippyCliInput,
-    RuntimeCatalogSign,
 }
 
 impl ProductCommand {
@@ -60,7 +58,6 @@ impl ProductCommand {
             "attestation-status" => Some(Self::AttestationStatus),
             "rc-ok" => Some(Self::RcOk),
             "skippy-cli-input" => Some(Self::SkippyCliInput),
-            "runtime-catalog-sign" => Some(Self::RuntimeCatalogSign),
             _ => None,
         }
     }
@@ -77,7 +74,6 @@ pub(crate) fn run(command: ProductCommand, args: &[String]) -> DynResult<()> {
         ProductCommand::AttestationStatus => attestation_status::run(args),
         ProductCommand::RcOk => rc_ok::run(args),
         ProductCommand::SkippyCliInput => skippy_cli_input::run(args),
-        ProductCommand::RuntimeCatalogSign => runtime_catalog_signing::run(args),
     };
     report.emit()
 }

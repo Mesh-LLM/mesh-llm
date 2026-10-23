@@ -2002,12 +2002,10 @@ jobs:
       - name: Sign native runtime release catalog
         env:
           MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY: ${{ secrets.MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY }}
-          MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD: ${{ secrets.MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_PASSWORD }}
         run: |
-          "${MESH_LLM_AUTOMATION_BIN:?}" product runtime-catalog-sign \
+          scripts/sign-native-runtime-catalog.sh \
             release-artifacts/native-runtimes.json \
-            release-artifacts/native-runtimes.json.minisig \
-            skippy/crates/skippy-runtime-install/trust/native-runtime-catalog.pub
+            release-artifacts/native-runtimes.json.minisig
 
       - name: Download generated SwiftPM manifest
         if: github.event_name == 'workflow_dispatch'

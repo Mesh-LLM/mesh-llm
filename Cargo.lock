@@ -11850,7 +11850,6 @@ dependencies = [
  "hyper-util",
  "libc",
  "mesh-llm-release-footer",
- "minisign",
  "num-bigint 0.4.8",
  "plist",
  "proc-macro2",
