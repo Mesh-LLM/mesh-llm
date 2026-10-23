@@ -11,8 +11,9 @@
 //! The per-token figures only use requests whose whole run was measured: each
 //! busy interval's energy is shared among the requests that ran in it, and a
 //! request's tokens count together with its share, or not at all when part of
-//! its run fell in a sampling gap or after the sampler went quiet. Tokens and
-//! energy therefore always describe the same work.
+//! its run fell in a sampling gap or after the sampler went quiet. A request
+//! that ends without output tokens, failed or cancelled, is left out too.
+//! Tokens and energy therefore always describe the same work.
 //!
 //! Board power covers the GPU only, not the CPU, memory or power supply, so the
 //! figures are estimates and are labelled with their source.

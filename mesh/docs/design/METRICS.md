@@ -153,9 +153,10 @@ its own board power sensor (`nvidia-smi`, once a second) and attributed with the
 inference lifecycle
 (#2320). An interval between two readings counts as busy when a local request
 ran during any part of it, and as idle otherwise; concurrent requests share the
-busy energy. The per-token figures only use requests whose whole run was
-measured: a request that ran through a gap between readings, or after the
-sampler stopped, leaves both its energy and its tokens out of them. Board power
+busy energy. The per-token figures only use requests that produced output
+tokens and whose whole run was measured: a request that ran through a gap
+between readings, or after the sampler stopped, leaves both its energy and its
+tokens out of them. Board power
 covers the GPU only, not the CPU, memory or power supply, so the figures are
 estimates. The field is absent until a power reading
 exists, so nodes without an NVIDIA GPU never report it. Stages of a split model
