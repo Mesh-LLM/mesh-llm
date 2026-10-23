@@ -31,8 +31,8 @@ use crate::network::openai::automatic;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use crate::network::openai::workload_routing::{
-    self, is_audio_upload_path, model_satisfies_request, request_workload_class,
-    required_request_workload, unsupported_workload_message,
+    self, is_audio_upload_path, is_document_ocr_path, model_satisfies_request,
+    request_workload_class, required_request_workload, unsupported_workload_message,
 };
 use crate::network::router;
 use crate::plugin::openai_exchange::{
@@ -758,7 +758,8 @@ async fn resolve_auto_routed_model(
             category: router::Category::Chat,
             complexity: router::Complexity::Quick,
             needs_tools: false,
-            has_media_inputs: is_audio_upload_path(&request.client_path),
+            has_media_inputs: is_audio_upload_path(&request.client_path)
+                || is_document_ocr_path(&request.client_path),
         },
         router::classify,
     );
@@ -1280,7 +1281,7 @@ async fn route_self_targeted_model(
     let self_id = ctx.node.id();
     if let Some(plugin_manager) = ctx.plugin_manager {
         match plugin_manager
-            .inference_endpoint_for_model(model_name)
+            .inference_endpoint_for_request(model_name, &request.client_path)
             .await
         {
             Err(error) => {
@@ -1570,7 +1571,7 @@ async fn try_route_plugin_model(
         .plugin_manager
         .expect("plugin route called without plugin manager");
     match plugin_manager
-        .inference_endpoint_for_model(model_name)
+        .inference_endpoint_for_request(model_name, &request.client_path)
         .await
     {
         Ok(Some(endpoint)) => {

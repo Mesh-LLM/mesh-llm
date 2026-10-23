@@ -4,8 +4,9 @@
 //! selection are owned by `mesh_llm_membership::announcements`.
 
 use super::{
-    ModelDemand, ModelRuntimeDescriptor, Node, NodeRole, PeerAnnouncement, ServedModelDescriptor,
-    SignedNodeOwnership, infer_remote_served_descriptors,
+    ModelDemand, ModelRuntimeDescriptor, ModelWorkloadClass, Node, NodeRole, PeerAnnouncement,
+    ServedModelDescriptor, ServedModelIdentity, ServedModelMetadata, SignedNodeOwnership,
+    infer_remote_served_descriptors,
 };
 use crate::mesh::requirements::current_time_unix_ms;
 use crate::models::append_external_inference_models;
@@ -140,7 +141,7 @@ impl Node {
             direct_admission_proof,
             available_model_metadata: Vec::new(),
             available_model_sizes: HashMap::new(),
-            served_model_descriptors: self.served_model_descriptors.lock().await.clone(),
+            served_model_descriptors: self.local_descriptors_with_plugins().await,
             served_model_runtime: self.model_runtime_descriptors.lock().await.clone(),
             owner_attestation: self.owner_attestation.lock().await.clone(),
             artifact_transfer_supported:
@@ -177,6 +178,38 @@ impl Node {
                 tracing::debug!(%error, "failed to collect plugin inference models for gossip");
                 Vec::new()
             })
+    }
+
+    pub(crate) async fn plugin_ocr_descriptors(&self) -> Vec<ServedModelDescriptor> {
+        let plugin_manager = self.plugin_manager.lock().await.clone();
+        let Some(plugin_manager) = plugin_manager else {
+            return Vec::new();
+        };
+        let Ok(endpoints) = plugin_manager.inference_endpoints().await else {
+            return Vec::new();
+        };
+        endpoints
+            .into_iter()
+            .filter(|endpoint| endpoint.protocol.as_deref() == Some("document_ocr_v1"))
+            .flat_map(|endpoint| endpoint.models)
+            .map(|model_name| ServedModelDescriptor {
+                identity: ServedModelIdentity {
+                    model_name,
+                    ..Default::default()
+                },
+                metadata: Some(ServedModelMetadata {
+                    workload_class: Some(ModelWorkloadClass::DocumentOcr),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    pub(crate) async fn local_descriptors_with_plugins(&self) -> Vec<ServedModelDescriptor> {
+        let mut descriptors = self.served_model_descriptors.lock().await.clone();
+        descriptors.extend(self.plugin_ocr_descriptors().await);
+        descriptors
     }
 
     pub(crate) async fn format_optional_locked_f32_list(
@@ -251,5 +284,45 @@ impl Node {
             // advertises its own until a companion process is plumbed in.
             claimed_log_head: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod ocr_tests {
+    use super::*;
+    use crate::plugin::{InferenceEndpointRoute, PluginManager};
+
+    #[tokio::test]
+    async fn healthy_ocr_plugin_is_advertised_with_workload_metadata() {
+        let node = Node::new_for_tests(NodeRole::Worker).await.expect("node");
+        let manager = PluginManager::for_test_summaries(Vec::new());
+        manager
+            .set_test_inference_endpoints(vec![InferenceEndpointRoute {
+                plugin_name: "onnx-ocr".into(),
+                endpoint_id: "indra".into(),
+                protocol: Some("document_ocr_v1".into()),
+                address: "http://127.0.0.1:1".into(),
+                models: vec!["datalab/indra-ocr".into()],
+            }])
+            .await;
+        node.set_plugin_manager(manager).await;
+        let descriptors = node.local_descriptors_with_plugins().await;
+        assert!(descriptors.iter().any(|descriptor| {
+            descriptor.identity.model_name == "datalab/indra-ocr"
+                && descriptor
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.workload_class)
+                    == Some(ModelWorkloadClass::DocumentOcr)
+        }));
+        let data = node.snapshot_local_announcement_data().await;
+        assert!(data.served_model_descriptors.iter().any(|descriptor| {
+            descriptor.identity.model_name == "datalab/indra-ocr"
+                && descriptor
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.workload_class)
+                    == Some(ModelWorkloadClass::DocumentOcr)
+        }));
     }
 }

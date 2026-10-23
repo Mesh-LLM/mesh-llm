@@ -61,7 +61,12 @@ pub(super) async fn local_model_unavailable(
 ) -> proxy::RouteDispatchOutcome {
     if !has_local_unavailable_candidates(ctx.targets, model)
         && let Some(manager) = ctx.plugin_manager
-        && !matches!(manager.inference_endpoint_for_model(model).await, Ok(None))
+        && !matches!(
+            manager
+                .inference_endpoint_for_request(model, &request.client_path)
+                .await,
+            Ok(None)
+        )
     {
         return try_route_plugin_model(ctx, stream, request, model, observer).await;
     }

@@ -257,6 +257,7 @@ pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u3
     if request.is_tokenize_request()
         || request.is_anthropic_count_tokens_request()
         || request.is_audio_upload_request()
+        || request.is_document_ocr_request()
         || request.is_system_one_request()
     {
         None
@@ -1284,7 +1285,9 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
         return AutoModelResolution::Model(None);
     }
     request.ensure_body_json();
-    if request.body_json.is_none() && !workload_routing::is_audio_upload_path(&request.client_path)
+    if request.body_json.is_none()
+        && !workload_routing::is_audio_upload_path(&request.client_path)
+        && !workload_routing::is_document_ocr_path(&request.client_path)
     {
         return AutoModelResolution::Model(None);
     }

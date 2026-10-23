@@ -11,6 +11,7 @@ mod health;
 mod identity_registration;
 mod identity_registry;
 mod identity_transport;
+mod inference_routing;
 pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
 pub(crate) mod identity_services;
 mod in_process;
@@ -1041,31 +1042,6 @@ impl PluginManager {
             .await?
             .into_iter()
             .find(|route| route.model_id == model_id))
-    }
-
-    pub async fn inference_models(&self) -> Result<Vec<String>> {
-        let mut models = Vec::new();
-        for endpoint in self.inference_endpoints().await? {
-            models.extend(endpoint.models);
-        }
-        models.sort();
-        models.dedup();
-        Ok(models)
-    }
-
-    pub async fn inference_endpoint_for_model(
-        &self,
-        model: &str,
-    ) -> Result<Option<InferenceEndpointRoute>> {
-        let mut endpoints = self.inference_endpoints().await?;
-        endpoints.sort_by(|a, b| {
-            a.plugin_name
-                .cmp(&b.plugin_name)
-                .then_with(|| a.endpoint_id.cmp(&b.endpoint_id))
-        });
-        Ok(endpoints
-            .into_iter()
-            .find(|endpoint| endpoint.models.iter().any(|candidate| candidate == model)))
     }
 
     pub async fn capability_providers(&self) -> Result<Vec<PluginCapabilityProvider>> {
