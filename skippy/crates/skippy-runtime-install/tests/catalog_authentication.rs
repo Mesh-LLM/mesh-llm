@@ -573,22 +573,45 @@ fn trusted_bundles_still_fall_back_when_the_remote_catalog_is_unreachable() {
 fn trusted_bundles_include_packager_discovered_bundle_dirs() {
     // Distro packages point MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR at their
     // runtime; the host passes no bundle_dirs. Every other test here uses
-    // the explicit-only install path, which ignores this variable.
-    let fixture = SignedFixture::new();
-    sign_catalog_without_bundle(&fixture);
-    let mut options = fixture.options();
-    options.bundle_dirs.clear();
-    options.verification_policy =
-        NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
-    // SAFETY: no other test in this binary reads this variable.
-    unsafe { std::env::set_var("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", &fixture.bundle_path) };
-    let result = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(install_native_runtime(options));
-    unsafe { std::env::remove_var("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR") };
-    assert_bundle_source(&result.unwrap(), &fixture);
+    // the explicit-only install path, which ignores this variable. The
+    // variable is set on a re-executed child so this process never mutates
+    // its own environment.
+    const CHILD: &str = "SKIPPY_CATALOG_AUTH_PACKAGER_BUNDLE_CHILD";
+    const TEST: &str = "trusted_bundles_include_packager_discovered_bundle_dirs";
+    if std::env::var_os(CHILD).is_some() {
+        let bundle = PathBuf::from(std::env::var_os("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR").unwrap());
+        let mut fixture = SignedFixture::new();
+        write_bundle(&bundle, b"authenticated runtime");
+        fixture.bundle_path = bundle;
+        sign_catalog_without_bundle(&fixture);
+        let mut options = fixture.options();
+        options.bundle_dirs.clear();
+        options.verification_policy =
+            NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(install_native_runtime(options));
+        assert_bundle_source(&result.unwrap(), &fixture);
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([TEST, "--exact"])
+        .env(CHILD, "1")
+        .env(
+            "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+            root.path().join("bundle"),
+        )
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
