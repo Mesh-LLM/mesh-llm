@@ -51,6 +51,23 @@ pub(crate) use exact_state_recording::CaptureTaskOutstandingGuard;
 pub(crate) mod capture_trace;
 mod kv_restore;
 
+/// A `NaN` logprob marks a token whose raw logits row was unavailable when it
+/// was sampled. OpenAI clients expect numbers, so the request fails instead of
+/// answering with a value that is not one.
+pub(super) fn ensure_readable_logprobs(
+    entries: &[skippy_runtime::TokenLogprobs],
+) -> InferenceResult<()> {
+    let unreadable = entries.iter().any(|entry| {
+        !entry.logprob.is_finite() || entry.top.iter().any(|(_, logprob)| !logprob.is_finite())
+    });
+    if unreadable {
+        return Err(InferenceError::backend(
+            "a sampled token's raw logits were unavailable, so its logprobs cannot be reported",
+        ));
+    }
+    Ok(())
+}
+
 pub(in crate::frontend) fn resident_capacity_admission_error(
     capacity: &crate::kv_integration::ResidentCapacityDecision,
 ) -> InferenceError {
@@ -473,14 +490,16 @@ impl StageOpenAiBackend {
                 return Ok(());
             }
             let logprobs_session_id = session_id.clone();
-            cache_stats.token_logprobs = Some(self.iteration_scheduler.execute_runtime(
+            let token_logprobs = self.iteration_scheduler.execute_runtime(
                 "take-token-logprobs",
                 move |runtime| {
                     runtime
                         .take_token_logprobs(&logprobs_session_id)
                         .map_err(openai_backend_error)
                 },
-            )?);
+            )?;
+            ensure_readable_logprobs(&token_logprobs)?;
+            cache_stats.token_logprobs = Some(token_logprobs);
             Ok(())
         });
         let generation_succeeded = result.is_ok();

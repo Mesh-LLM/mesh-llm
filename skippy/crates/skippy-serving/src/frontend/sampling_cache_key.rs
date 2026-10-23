@@ -21,6 +21,10 @@ const REPLAY_SAFE_SAMPLER_CHAIN: [&str; 9] = [
 /// its own RNG-backed selection step, and a custom sampler chain may omit the
 /// temperature sampler that makes a non-positive temperature greedy.
 pub(super) fn sampling_replay_safe(sampling: &SamplingConfig) -> bool {
+    // A replayed token is never sampled, so it would have no logprobs entry.
+    if sampling.top_logprobs.is_some() {
+        return false;
+    }
     if !sampling.enabled {
         return true;
     }
