@@ -294,6 +294,7 @@ pub fn router_for_with_config(
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/rerank", post(rerank))
         .route("/v1/audio/speech", post(audio_speech))
+        .route("/v1/realtime", get(crate::realtime::realtime))
         .route(
             "/v1/audio/transcriptions",
             post(audio_transcriptions).layer(DefaultBodyLimit::max(MAX_AUDIO_MULTIPART_BODY_BYTES)),
@@ -1363,6 +1364,7 @@ fn lifecycle_route(uri: &Uri) -> InferenceFrontendRoute {
         "/v1/messages/count_tokens" => InferenceFrontendRoute::MessagesCountTokens,
         "/v1/messages" => InferenceFrontendRoute::Messages,
         "/systemone" => InferenceFrontendRoute::SystemOne,
+        "/v1/realtime" => InferenceFrontendRoute::Realtime,
         _ => InferenceFrontendRoute::Unknown,
     }
 }

@@ -39,6 +39,7 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/embeddings" => Some(ModelWorkloadClass::Embedding),
         "/v1/rerank" => Some(ModelWorkloadClass::Rerank),
         "/v1/audio/speech" => Some(ModelWorkloadClass::SpeechSynthesis),
+        "/v1/realtime" => Some(ModelWorkloadClass::SpeechRecognition),
         _ => None,
     }
 }

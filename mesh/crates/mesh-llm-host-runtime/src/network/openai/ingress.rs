@@ -18,6 +18,7 @@ mod lifecycle_prepared_dispatch_live_tests;
 #[cfg(test)]
 #[path = "ingress/typed_frontend_live_tests.rs"]
 mod lifecycle_typed_frontend_live_tests;
+mod realtime_relay;
 use buffered_exchange::handle_buffered_api_request;
 
 use crate::inference::{election, pipeline};
@@ -2306,6 +2307,17 @@ async fn handle_api_proxy_connection(
     )
     .await
     {
+        Ok(request) if realtime_relay::is_realtime_upgrade(&request) => {
+            realtime_relay::relay(
+                &node,
+                tcp_stream,
+                &request,
+                &targets,
+                ingress_type,
+                requested_by,
+            )
+            .await;
+        }
         Ok(request) => {
             let route = IngressRouteContext {
                 node: &node,
