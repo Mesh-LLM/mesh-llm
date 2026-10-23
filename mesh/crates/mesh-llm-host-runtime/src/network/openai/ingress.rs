@@ -677,6 +677,8 @@ async fn collect_available_models_for_auto_route(
 }
 
 /// Admit explicit workloads or select a compatible automatic route, preserving committee mode.
+// Keep this payment fix localized; the new rejection branch puts this existing flow at 21/20.
+#[allow(clippy::cognitive_complexity)]
 #[allow(clippy::too_many_arguments)]
 async fn resolve_auto_routed_model(
     node: &mesh::Node,
@@ -697,7 +699,15 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
-        return resolve_explicit_model_workload(model, request, descriptors);
+        if let Some(workload) = required_request_workload(&request.client_path)
+            && !model_satisfies_request(model, &request.client_path, descriptors)
+        {
+            return AutoRouteResolution::WorkloadUnsupported(workload);
+        }
+        return AutoRouteResolution::Continue {
+            effective_model: request.model_name.clone(),
+            classification: None,
+        };
     }
 
     request.ensure_body_json();
@@ -778,7 +788,15 @@ async fn resolve_auto_routed_model(
     };
     let available = auto_route::pool_for_ready_models(&available, &ready_models);
 
-    let classification = classify_auto_request(request);
+    let classification = body_json.map_or_else(
+        || router::Classification {
+            category: router::Category::Chat,
+            complexity: router::Complexity::Quick,
+            needs_tools: false,
+            has_media_inputs: is_audio_upload_path(&request.client_path),
+        },
+        router::classify,
+    );
 
     let effective_model = router::pick_model_classified(&classification, &available).map(|name| {
         tracing::info!(
@@ -794,34 +812,6 @@ async fn resolve_auto_routed_model(
         effective_model,
         classification: Some(classification),
     }
-}
-
-fn resolve_explicit_model_workload(
-    model: &str,
-    request: &proxy::BufferedHttpRequest,
-    descriptors: &[crate::mesh::ServedModelDescriptor],
-) -> AutoRouteResolution {
-    if let Some(workload) = required_request_workload(&request.client_path)
-        && !model_satisfies_request(model, &request.client_path, descriptors)
-    {
-        return AutoRouteResolution::WorkloadUnsupported(workload);
-    }
-    AutoRouteResolution::Continue {
-        effective_model: request.model_name.clone(),
-        classification: None,
-    }
-}
-
-fn classify_auto_request(request: &proxy::BufferedHttpRequest) -> router::Classification {
-    request.body_json.as_ref().map_or_else(
-        || router::Classification {
-            category: router::Category::Chat,
-            complexity: router::Complexity::Quick,
-            needs_tools: false,
-            has_media_inputs: is_audio_upload_path(&request.client_path),
-        },
-        router::classify,
-    )
 }
 
 /// Check workload-aware ingress readiness, including remote and local-startup fallbacks.

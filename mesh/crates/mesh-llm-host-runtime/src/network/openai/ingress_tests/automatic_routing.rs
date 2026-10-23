@@ -1050,7 +1050,3 @@ async fn a_non_chat_endpoint_resolves_to_a_single_model() {
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
     }
 }
-
-#[cfg(feature = "payments")]
-#[path = "automatic_routing/payment_admission.rs"]
-mod payment_admission;
