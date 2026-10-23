@@ -286,6 +286,9 @@ async fn audio_upload_routes_only_to_an_advertised_audio_workload() {
                 AutoRouteResolution::WorkloadUnsupported(workload) => {
                     panic!("advertised audio-to-text model was rejected for {workload:?}")
                 }
+                AutoRouteResolution::PaymentRequired(reason) => {
+                    panic!("unexpected payment denial: {reason}")
+                }
                 AutoRouteResolution::MediaUnsupported => {
                     panic!("advertised audio-to-text model was rejected for media")
                 }
@@ -384,6 +387,9 @@ async fn legacy_chat_audio_remains_routable() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("legacy chat-audio was rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("legacy model advertises audio input"),
     }
 }
@@ -417,6 +423,9 @@ async fn embedding_auto_route_selects_only_an_embedding_model() {
         } => assert_eq!(effective_model.as_deref(), Some("embed-model")),
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("embedding model was advertised but {workload:?} was rejected")
+        }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
         }
         AutoRouteResolution::MediaUnsupported => panic!("embedding request has no media"),
     }
@@ -502,6 +511,9 @@ async fn plain_text_directive_stays_on_the_committee() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("text request is not a media failure"),
     }
 }
@@ -536,6 +548,9 @@ async fn image_request_resolves_to_a_vision_capable_model() {
         ),
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
+        }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
         }
         AutoRouteResolution::MediaUnsupported => {
             panic!("a vision-capable model is served, so this must not fail")
@@ -593,6 +608,9 @@ async fn deprecated_alias_behaves_exactly_like_the_directive() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("text request is not a media failure"),
     }
 }
@@ -636,6 +654,9 @@ async fn streaming_directive_resolves_to_a_single_model() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
     }
 }
@@ -664,6 +685,9 @@ async fn model_less_request_resolves_to_a_single_model() {
         }
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
+        }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
         }
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
     }
@@ -796,6 +820,9 @@ async fn image_request_selects_a_vision_model_served_only_by_a_peer() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => {
             panic!("a peer serves a vision model, so this must not be refused")
         }
@@ -828,6 +855,9 @@ async fn text_request_still_convenes_a_committee_across_two_nodes() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("text request is not a media failure"),
     }
 }
@@ -855,6 +885,9 @@ async fn an_explicitly_named_model_is_never_reinterpreted() {
         } => assert_eq!(effective_model.as_deref(), Some("text-model")),
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
+        }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
         }
         AutoRouteResolution::MediaUnsupported => panic!("explicit routing is untouched"),
     }
@@ -1011,6 +1044,13 @@ async fn a_non_chat_endpoint_resolves_to_a_single_model() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
     }
 }
+
+#[cfg(feature = "payments")]
+#[path = "automatic_routing/payment_admission.rs"]
+mod payment_admission;

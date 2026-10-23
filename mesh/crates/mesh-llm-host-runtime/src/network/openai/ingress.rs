@@ -481,6 +481,7 @@ async fn publish_local_route_terminal(
 }
 
 enum AutoRouteResolution {
+    PaymentRequired(&'static str),
     Continue {
         effective_model: Option<String>,
         classification: Option<router::Classification>,
@@ -491,6 +492,7 @@ enum AutoRouteResolution {
 
 #[derive(Debug)]
 enum AutoRouteRejection {
+    PaymentRequired(&'static str),
     MediaUnsupported,
     WorkloadUnsupported(mesh::ModelWorkloadClass),
 }
@@ -695,15 +697,7 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
-        if let Some(workload) = required_request_workload(&request.client_path)
-            && !model_satisfies_request(model, &request.client_path, descriptors)
-        {
-            return AutoRouteResolution::WorkloadUnsupported(workload);
-        }
-        return AutoRouteResolution::Continue {
-            effective_model: request.model_name.clone(),
-            classification: None,
-        };
+        return resolve_explicit_model_workload(model, request, descriptors);
     }
 
     request.ensure_body_json();
@@ -752,15 +746,6 @@ async fn resolve_auto_routed_model(
         ),
     }
 
-    let classification = body_json.map_or_else(
-        || router::Classification {
-            category: router::Category::Chat,
-            complexity: router::Complexity::Quick,
-            needs_tools: false,
-            has_media_inputs: is_audio_upload_path(&request.client_path),
-        },
-        router::classify,
-    );
     let media = workload_routing::request_media(&request.client_path, body_json);
     let available_models =
         collect_available_models_for_auto_route(node, targets, plugin_manager).await;
@@ -778,15 +763,22 @@ async fn resolve_auto_routed_model(
     let Some(available) = router::filter_media_compatible_candidates(&available, &media) else {
         return AutoRouteResolution::MediaUnsupported;
     };
-    let available = auto_route_pool_for_ready_models(
+    let (available, ready_models) = match auto_route::payment_admission::admitted_models(
         node,
-        targets,
-        required_tokens,
-        &request.client_path,
+        Some(targets),
+        request,
         &available,
+        required_tokens,
         affinity,
     )
-    .await;
+    .await
+    {
+        Ok(pool) => pool,
+        Err(reason) => return AutoRouteResolution::PaymentRequired(reason),
+    };
+    let available = auto_route::pool_for_ready_models(&available, &ready_models);
+
+    let classification = classify_auto_request(request);
 
     let effective_model = router::pick_model_classified(&classification, &available).map(|name| {
         tracing::info!(
@@ -804,34 +796,36 @@ async fn resolve_auto_routed_model(
     }
 }
 
-/// Prefer ready ingress models, retaining the admitted pool if none is ready yet.
-async fn auto_route_pool_for_ready_models<'a>(
-    node: &mesh::Node,
-    targets: &election::ModelTargets,
-    required_tokens: Option<u32>,
-    request_path: &str,
-    available: &[router::RoutingCandidate<'a>],
-    affinity: &affinity::AffinityRouter,
-) -> Vec<router::RoutingCandidate<'a>> {
-    let mut ready_models = Vec::new();
-    for candidate in available {
-        if auto_route_model_has_ready_ingress_target(
-            node,
-            targets,
-            candidate.name,
-            required_tokens,
-            request_path,
-            affinity,
-        )
-        .await
-        {
-            ready_models.push(candidate.name);
-        }
+fn resolve_explicit_model_workload(
+    model: &str,
+    request: &proxy::BufferedHttpRequest,
+    descriptors: &[crate::mesh::ServedModelDescriptor],
+) -> AutoRouteResolution {
+    if let Some(workload) = required_request_workload(&request.client_path)
+        && !model_satisfies_request(model, &request.client_path, descriptors)
+    {
+        return AutoRouteResolution::WorkloadUnsupported(workload);
     }
-    auto_route::pool_for_ready_models(available, &ready_models)
+    AutoRouteResolution::Continue {
+        effective_model: request.model_name.clone(),
+        classification: None,
+    }
+}
+
+fn classify_auto_request(request: &proxy::BufferedHttpRequest) -> router::Classification {
+    request.body_json.as_ref().map_or_else(
+        || router::Classification {
+            category: router::Category::Chat,
+            complexity: router::Complexity::Quick,
+            needs_tools: false,
+            has_media_inputs: is_audio_upload_path(&request.client_path),
+        },
+        router::classify,
+    )
 }
 
 /// Check workload-aware ingress readiness, including remote and local-startup fallbacks.
+#[cfg(test)]
 async fn auto_route_model_has_ready_ingress_target(
     node: &mesh::Node,
     targets: &election::ModelTargets,
@@ -1953,6 +1947,9 @@ async fn prepare_auto_route_decision(
                 required_tokens,
             })
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            Err(AutoRouteRejection::PaymentRequired(reason))
+        }
         AutoRouteResolution::MediaUnsupported => Err(AutoRouteRejection::MediaUnsupported),
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             Err(AutoRouteRejection::WorkloadUnsupported(workload))
@@ -2005,6 +2002,10 @@ async fn send_auto_route_rejection(
 ) -> proxy::RouteDispatchOutcome {
     proxy::release_request_objects(node, request_object_request_ids).await;
     match rejection {
+        AutoRouteRejection::PaymentRequired(reason) => response_outcome(
+            402,
+            proxy::send_error_observed(tcp_stream, 402, reason, route_observer).await,
+        ),
         AutoRouteRejection::MediaUnsupported => {
             send_media_unsupported(tcp_stream, route_observer).await
         }
