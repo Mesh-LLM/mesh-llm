@@ -94,4 +94,6 @@ async fn transcribe(node: &MeshNode, microphone: tokio::sync::mpsc::Receiver<Vec
 Deltas are confirmed words and never change. They trail speech by about one to
 two seconds; each turn's `Completed` transcript arrives as soon as the turn ends.
 `LiveTranscription::stop` finishes the current turn, waits for its transcript,
-and closes the session.
+and closes the session. Dropping the session, or its audio half after `split`,
+closes it too. A lost connection arrives as a final `Error` event. Sessions
+started from an `OpenAiClient` send its API key as a bearer token.

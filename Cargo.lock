@@ -5239,11 +5239,13 @@ dependencies = [
  "mesh-llm-payments",
  "mesh-llm-plugin-manager",
  "reqwest 0.13.5",
+ "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "skippy-runtime-install",
  "tokio",
- "tokio-tungstenite 0.28.0",
+ "tokio-tungstenite 0.29.0",
 ]
 
 [[package]]
@@ -9946,7 +9948,11 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite 0.29.0",
 ]
 
@@ -10399,6 +10405,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
+ "rustls",
+ "rustls-pki-types",
  "sha1 0.10.7",
  "thiserror 2.0.21",
 ]
