@@ -191,7 +191,7 @@ fn decode_reference(text: &str) -> Result<Option<(char, usize)>, String> {
         "plus" => '+',
         "semi" => ';',
         "lowbar" => '_',
-        "hyphen" => '-',
+        "hyphen" => '\u{2010}',
         body if body.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
             && body.bytes().all(|byte| byte.is_ascii_alphanumeric()) =>
         {
@@ -325,6 +325,25 @@ mod tests {
             ["assets/app.js?x=1&y=2"]
         );
         assert!(module_sources("<script type=module src></script>").is_err());
+    }
+
+    #[test]
+    fn decodes_named_hyphens_in_asset_and_module_paths() {
+        let html = "<script type=module src='assets/app&hyphen;main.js'></script>\
+                    <link href=assets/app&hyphen;main.css>\
+                    <img src='assets/app-main.png'>";
+        assert_eq!(
+            module_sources(html).expect("decode module path hyphen"),
+            ["assets/app\u{2010}main.js"]
+        );
+        assert_eq!(
+            asset_references(html).expect("decode asset path hyphens"),
+            [
+                "assets/app\u{2010}main.js",
+                "assets/app\u{2010}main.css",
+                "assets/app-main.png"
+            ]
+        );
     }
 
     #[test]
