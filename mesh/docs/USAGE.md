@@ -60,13 +60,18 @@ mesh-llm setup
 mesh-llm serve --auto
 mesh-llm serve --model Qwen2.5-32B
 mesh-llm serve --join <token>
-mesh-llm serve --discover "my-mesh"
+mesh-llm serve --discover=my-mesh
 mesh-llm serve --model MiniMax-M2.5-Q4_K_M --mesh-guardrails metrics
 mesh-llm client --auto
 mesh-llm gpus
 mesh-llm discover
 mesh-llm discover --name "my-mesh"
 ```
+
+To pin an inference request to a specific mesh provider, use the HTTP API's
+`x-mesh-target` header alongside the exact model ID. See
+[provider selection](PROVIDER_SELECTION.md) for discovery, curl and SDK examples,
+fail-closed behavior, and paid-provider requirements.
 
 Mesh workflow details live in [MESHES.md](MESHES.md). Big-model split serving
 lives in [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md).

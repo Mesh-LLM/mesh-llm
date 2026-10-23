@@ -1,0 +1,28 @@
+From 864c7f48bb1fa38edcea73cb8b1330fcc2c909f0 Mon Sep 17 00:00:00 2001
+From: Ethan Zhang <github@yzhang.io>
+Date: Wed, 21 Oct 2026 00:19:51 -0500
+Subject: [PATCH] models: include <algorithm> in clef.cpp
+
+clef_get_spans() calls std::find, but clef.cpp includes only <cmath>. The
+other toolchains this tree is built with reach <algorithm> through other
+headers; MinGW's g++, used for the Windows Vulkan runtime, does not, and
+fails with "'find' is not a member of 'std'". Include what the file uses.
+---
+ src/models/clef.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/models/clef.cpp b/src/models/clef.cpp
+index cd2889b22..6f8720913 100644
+--- a/src/models/clef.cpp
++++ b/src/models/clef.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "llama-ext.h"
+ 
++#include <algorithm>
+ #include <cmath>
+ 
+ void llama_model_clef::load_arch_hparams(llama_model_loader & ml) {
+-- 
+2.54.0 (Apple Git-157)
+
