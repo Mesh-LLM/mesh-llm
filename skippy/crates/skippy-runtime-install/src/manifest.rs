@@ -204,6 +204,12 @@ async fn merge_release_manifest_sources(
                 artifacts.extend(manifest.artifacts);
                 manifest_loaded = true;
             }
+            // A catalog that arrived but failed authentication is never a
+            // reason to fall back to bundles: that is tampering, not an
+            // outage. Only a failed fetch may fall back.
+            Err(err) if strict && err.downcast_ref::<CatalogAuthenticationFailed>().is_some() => {
+                return Err(err);
+            }
             Err(err) if (!strict && !options.bundle_dirs.is_empty()) || trusted_bundles => {
                 sources.remote_error = Some(format!("{err:#}"));
             }
@@ -345,7 +351,19 @@ pub(crate) async fn download_release_manifest(
             format!("read detached native runtime catalog signature {diagnostic_signature_url}")
         })?;
     parse_authenticated_manifest(&bytes, &checksum, &signature, options)
+        .context(CatalogAuthenticationFailed)
         .with_context(|| format!("authenticate native runtime release manifest {diagnostic_url}"))
+}
+
+/// Marks a catalog that was fetched but failed authentication, so the
+/// caller can tell tampering apart from a fetch failure.
+#[derive(Debug)]
+struct CatalogAuthenticationFailed;
+
+impl std::fmt::Display for CatalogAuthenticationFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("native runtime catalog failed authentication")
+    }
 }
 
 fn parse_authenticated_manifest(

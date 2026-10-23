@@ -130,3 +130,10 @@ ABI mismatches produce preservation warnings; imports do not override resolver
 eligibility. Callers must return failure when the report's `has_failures()` is
 true. Generation-marked manifests are not accepted by the legacy reader.
 Normal discovery reads valid legacy entries directly and does not call this API.
+
+Packagers that build runtimes from source and ship them beside the binary
+(`MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`, `lib/mesh-llm/native-runtimes`) can
+build with `MESH_LLM_TRUST_SHIPPED_RUNTIMES=1`. Strict hosts then trust any
+runtime in the discovered bundle directories without host changes; downloads
+and the cache stay strict. A catalog that is fetched but fails authentication
+is always a hard error; only an unreachable catalog falls back to bundles.

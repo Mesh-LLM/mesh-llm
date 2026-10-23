@@ -117,7 +117,11 @@ async fn install_with_source_policy(
             return Err(err.context(explanation));
         }
     };
-    let trusted_bundle = trusted_explicit_bundle(&resolution, &options)?;
+    // Match against every bundle directory the catalog merged, not only the
+    // caller's `bundle_dirs`: distro packages ship runtimes in discovered
+    // locations (`MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`, next to the binary)
+    // and the embedding host never passes them in.
+    let trusted_bundle = trusted_shipped_bundle(&resolution, &options, &sources.bundle_dirs)?;
     let authenticated_artifact = authenticated_artifacts
         .as_deref()
         .filter(|_| !trusted_bundle)
@@ -386,18 +390,19 @@ async fn install_resolved_runtime_with_catalog(
     }
 }
 
-/// A runtime the host shipped in one of its explicit `bundle_dirs`, under a
-/// policy that trusts those like the host binary itself.
-fn trusted_explicit_bundle(
+/// A runtime shipped in one of the merged bundle directories, under a policy
+/// that trusts those like the binary that ships them.
+fn trusted_shipped_bundle(
     resolution: &skippy_native_runtime::NativeRuntimeResolution,
     options: &NativeRuntimeInstallOptions,
+    bundle_dirs: &[PathBuf],
 ) -> Result<bool> {
     if !options.verification_policy.trusts_explicit_bundles() {
         return Ok(false);
     }
     match &resolution.source {
         NativeRuntimeSource::Bundle { path } => {
-            bundle_path_matches_explicit_root(path, &options.bundle_dirs)
+            bundle_path_matches_explicit_root(path, bundle_dirs)
         }
         _ => Ok(false),
     }

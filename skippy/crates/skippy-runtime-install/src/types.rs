@@ -21,8 +21,9 @@ pub enum NativeRuntimeVerificationPolicy {
     #[default]
     RequireChecksum,
     RequireChecksumAndSignature,
-    /// Strict for downloads, the cache, and discovered bundles, but trusts
-    /// runtimes found under the host's explicit `bundle_dirs`. For packagers
+    /// Strict for downloads and the cache, but trusts runtimes found in the
+    /// merged bundle directories (the host's `bundle_dirs`,
+    /// `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR`, next to the binary). For packagers
     /// (e.g. distro builds) that ship runtimes they built themselves beside
     /// the binary; those are trusted like the binary that ships them.
     RequireSignatureTrustExplicitBundles,
@@ -34,10 +35,12 @@ impl NativeRuntimeVerificationPolicy {
         !matches!(self, Self::RequireChecksum)
     }
 
-    /// Whether runtimes under explicit `bundle_dirs` skip catalog authentication.
+    /// Whether shipped bundle runtimes skip catalog authentication.
     /// Packagers building runtimes from source opt every strict host in at
-    /// build time with `MESH_LLM_TRUST_SHIPPED_RUNTIMES=1`; default builds
-    /// stay fully strict and embedding hosts need no changes.
+    /// build time with `MESH_LLM_TRUST_SHIPPED_RUNTIMES=1` (a compile-time
+    /// switch so it cannot be flipped at run time; `build.rs` makes Cargo
+    /// rebuild when it changes). Default builds stay fully strict and
+    /// embedding hosts need no changes.
     pub fn trusts_explicit_bundles(self) -> bool {
         match self {
             Self::RequireChecksum => false,

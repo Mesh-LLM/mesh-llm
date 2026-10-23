@@ -5,7 +5,7 @@ use skippy_runtime_install::{
     NativeRuntimeArtifact, NativeRuntimeCatalog, NativeRuntimeInstallOptions,
     NativeRuntimeManifest, NativeRuntimeReleaseManifest, NativeRuntimeSource,
     NativeRuntimeVerificationPolicy, RuntimeSelection, host_runtime_profile,
-    install_native_runtime_explicit,
+    install_native_runtime, install_native_runtime_explicit,
 };
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -481,4 +481,112 @@ fn trusted_explicit_bundles_still_reject_a_tampered_catalog() {
         NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
 
     assert!(install(options).is_err());
+}
+
+/// Serves `files` (path -> bytes) for `requests` connections; unknown paths 404.
+fn serve_files(
+    files: Vec<(&'static str, Vec<u8>)>,
+    requests: usize,
+) -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let worker = std::thread::spawn(move || {
+        for _ in 0..requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let read = stream.read(&mut request).unwrap();
+            let line = String::from_utf8_lossy(&request[..read]);
+            let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+            match files.iter().find(|(name, _)| *name == path) {
+                Some((_, body)) => {
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .unwrap();
+                    stream.write_all(body).unwrap();
+                }
+                None => write!(
+                    stream,
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap(),
+            }
+        }
+    });
+    (base, worker)
+}
+
+#[test]
+fn trusted_bundles_do_not_fall_back_when_a_remote_catalog_fails_authentication() {
+    let fixture = SignedFixture::new();
+    let mut catalog = std::fs::read(&fixture.catalog_path).unwrap();
+    catalog.extend_from_slice(b" ");
+    let checksum = format!(
+        "{}  native-runtimes.json\n",
+        hex::encode(Sha256::digest(&catalog))
+    );
+    let signature = std::fs::read(sidecar(&fixture.catalog_path, ".minisig")).unwrap();
+    let (base, worker) = serve_files(
+        vec![
+            ("/native-runtimes.json", catalog),
+            ("/native-runtimes.json.sha256", checksum.into_bytes()),
+            ("/native-runtimes.json.minisig", signature),
+        ],
+        3,
+    );
+    let mut options = fixture.options();
+    options.manifest_path = None;
+    options.manifest_url = Some(format!("{base}/native-runtimes.json"));
+    options.verification_policy =
+        NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
+
+    let error = install(options).unwrap_err();
+    worker.join().unwrap();
+    assert!(
+        format!("{error:#}").contains("failed authentication"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn trusted_bundles_still_fall_back_when_the_remote_catalog_is_unreachable() {
+    let fixture = SignedFixture::new();
+    let (base, worker) = serve_files(Vec::new(), 1);
+    let mut options = fixture.options();
+    options.manifest_path = None;
+    options.manifest_url = Some(format!("{base}/native-runtimes.json"));
+    options.verification_policy =
+        NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
+
+    let outcome = install(options).unwrap();
+    worker.join().unwrap();
+    assert_bundle_source(&outcome, &fixture);
+}
+
+#[test]
+fn trusted_bundles_include_packager_discovered_bundle_dirs() {
+    // Distro packages point MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR at their
+    // runtime; the host passes no bundle_dirs. Every other test here uses
+    // the explicit-only install path, which ignores this variable.
+    let fixture = SignedFixture::new();
+    sign_catalog_without_bundle(&fixture);
+    let mut options = fixture.options();
+    options.bundle_dirs.clear();
+    options.verification_policy =
+        NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
+    // SAFETY: no other test in this binary reads this variable.
+    unsafe { std::env::set_var("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", &fixture.bundle_path) };
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(install_native_runtime(options));
+    unsafe { std::env::remove_var("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR") };
+    assert_bundle_source(&result.unwrap(), &fixture);
 }
