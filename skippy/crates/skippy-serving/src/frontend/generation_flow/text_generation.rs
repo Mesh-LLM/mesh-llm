@@ -344,7 +344,9 @@ impl StageOpenAiBackend {
             generation_timer,
             summary_attrs,
         );
-        self.record_speculation_outcome(&output, speculating);
+        // A logprobs request ran with speculation stood down above: its decode
+        // rate must not count toward the speculative window.
+        self.record_speculation_outcome(&output, speculating && sampling.top_logprobs.is_none());
         Ok(output)
     }
 }

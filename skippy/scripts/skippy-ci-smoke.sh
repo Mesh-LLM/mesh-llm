@@ -566,7 +566,7 @@ if [[ "$openai_logprobs_status" != "200" ]]; then
   exit 1
 fi
 assert_json "$openai_logprobs_response" \
-  '.choices[0].logprobs.content as $c | ($c | length) > 0 and ($c | length) == .usage.completion_tokens and all($c[]; .logprob <= 0 and (.top_logprobs | length) == 2)'
+  '.choices[0].logprobs.content as $c | ($c | length) > 0 and ($c | length) == .usage.completion_tokens and all($c[]; (.logprob | type) == "number" and .logprob <= 0 and (.top_logprobs | length) == 2)'
 
 openai_completion_logprobs_request="$(jq -cn --arg model "$DENSE_MODEL_ID" '{
   model: $model,
@@ -589,7 +589,7 @@ if [[ "$openai_completion_logprobs_status" != "200" ]]; then
   exit 1
 fi
 assert_json "$openai_completion_logprobs_response" \
-  '.choices[0].logprobs as $l | ($l.tokens | length) > 0 and ($l.tokens | length) == .usage.completion_tokens and ($l.token_logprobs | length) == ($l.tokens | length) and all($l.top_logprobs[]; length <= 2)'
+  '.choices[0].logprobs as $l | ($l.tokens | length) > 0 and ($l.tokens | length) == .usage.completion_tokens and ($l.token_logprobs | length) == ($l.tokens | length) and all($l.token_logprobs[]; type == "number" and . <= 0) and all($l.top_logprobs[]; length <= 2)'
 
 openai_stream_logprobs_request="$(jq -c '. + {stream: true}' <<<"$openai_logprobs_request")"
 openai_stream_logprobs_response="$WORK_DIR/openai-stream-logprobs.json"

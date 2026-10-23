@@ -645,6 +645,19 @@ impl StageOpenAiBackend {
         session_id: &str,
         cache_stats: &mut GenerationCacheStats,
     ) -> InferenceResult<PromptPrefillResult> {
+        // A logprobs request reads the raw logits row of every sampled token,
+        // the prefill's included. A backend (in-graph) sampler an earlier
+        // request left attached would hide that row, and only reconfiguring
+        // chat sampling detaches it, so a request without chat metadata gets
+        // plain chat sampling before its prefill decode.
+        if request.sampling.top_logprobs.is_some() && request.chat_sampling_metadata.is_none() {
+            self.configure_chat_sampling(
+                session_id,
+                r#"{"grammar":""}"#,
+                request.prompt_token_ids.len(),
+                request.sampling.enabled.then_some(request.sampling),
+            )?;
+        }
         if self.can_sample_whole_prompt_in_prefill(request, session_id)? {
             let chat_sampling_configured = if let Some(metadata) = request.chat_sampling_metadata {
                 self.configure_chat_sampling(

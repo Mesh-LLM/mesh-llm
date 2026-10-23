@@ -116,7 +116,7 @@ pub(super) fn sampling_semantic_fingerprint(
     update_u32(
         &mut digest,
         b"top_logprobs",
-        top_logprobs.map_or(u32::MAX, |count| count),
+        top_logprobs.unwrap_or(u32::MAX),
     );
     update_f32(&mut digest, b"temperature", *temperature);
     update_f32(&mut digest, b"top_p", *top_p);
@@ -297,6 +297,9 @@ mod tests {
             .swap(0, 1));
         mutation!("reasoning_budget", |sampling: &mut SamplingConfig| {
             sampling.reasoning_budget = skippy_runtime::ReasoningBudget::Resolved(1024)
+        });
+        mutation!("top_logprobs", |sampling: &mut SamplingConfig| {
+            sampling.top_logprobs = Some(2)
         });
 
         for (field, sampling) in mutations {
