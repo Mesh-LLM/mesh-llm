@@ -166,6 +166,16 @@ explicit environment overrides for CI/release testing, including
 `MESH_LLM_CUDA_DRIVER_MAX_MAJOR`, `MESH_LLM_CUDA_GPU_ARCHES`,
 `MESH_LLM_ROCM_GPU_ARCHES`, and `MESH_LLM_VULKAN_AVAILABLE`.
 
+### ROCm GPU architectures
+
+ROCm runtimes carry kernels for a fixed list of GPU architectures and have no
+portable fallback, so a ROCm runtime is only selected when every detected AMD
+GPU architecture is in its list. Linux reads them from the KFD topology; Windows
+asks the HIP runtime that ships with AMD's driver, in a child process. When no
+architecture is detected, the ROCm runtime is not selected;
+`MESH_LLM_ROCM_GPU_ARCHES` (comma-separated, for example `gfx1100`) supplies
+them by hand.
+
 ### CUDA toolkit vs driver
 
 `toolkit_majors` and `driver_max_major` are deliberately separate:
