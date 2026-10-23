@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # No sccache on this plain runner; build the signer directly.
+  RUSTC_WRAPPER: ""
+
 concurrency:
   group: verify-runtime-signing-${{ github.ref }}
   cancel-in-progress: true
