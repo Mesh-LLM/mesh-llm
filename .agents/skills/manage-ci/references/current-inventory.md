@@ -386,7 +386,9 @@ failure starts a new bounded session on the next attempt after restoring the
 exact prior candidate as uncommitted changes on the frozen base. Every edit
 invalidates all prior family results. Candidates are local, uncertified commits
 until both full family passes are green. The separate GitHub-hosted publisher
-alone receives `CANARY_REPAIR_TOKEN`; it publishes no failed/incomplete state.
+alone receives `CANARY_REPAIR_TOKEN` for branch push and PR creation. Its
+read-only `GITHUB_TOKEN` checks whether the exact certified head already merged
+before using that credential. It publishes no failed/incomplete state.
 No Actions-write credential or dispatch controller is needed. Feature-ref
 manual dispatch is rejected before persistent-runner work. The workflow-level
 non-cancelling concurrency group serializes canary runs, not individual families.

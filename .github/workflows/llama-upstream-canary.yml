@@ -450,6 +450,7 @@ jobs:
           CANARY_UPSTREAM_SHA: ${{ needs.resolve.outputs.upstream }}
           CANARY_BUNDLE: ${{ runner.temp }}/certified-canary/candidate.bundle
           CANARY_PR_BODY: ${{ runner.temp }}/certified-canary/pr-body.md
+          CANARY_READ_TOKEN: ${{ github.token }}
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
         run: scripts/llama-canary-publish.sh
 
