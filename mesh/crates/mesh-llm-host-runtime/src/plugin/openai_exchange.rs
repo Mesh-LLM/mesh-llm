@@ -625,7 +625,7 @@ impl OpenAiExchangeEnvelope {
     /// `serving_provenance`/`usage`/`request_digest`/the output digests are
     /// not set by this constructor. The routing node attaches, through the
     /// builders, only what it observed itself
-    /// (`network/openai/ingress.rs::remote_delivered_terminal`): the peer it
+    /// (`network/openai/ingress/exchange_events.rs::remote_delivered_terminal`): the peer it
     /// saw deliver as `serving_provenance.served_by_node_id` (every hardware
     /// and model field stays absent, since this node never touched them), the
     /// digest of the request body it forwarded, and the digests over the
