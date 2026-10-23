@@ -1511,8 +1511,12 @@ impl StageOpenAiBackend {
             emit_token_debug: self.telemetry.is_debug_enabled(),
             native_mtp_options: NativeMtpDecodeOptions::from_config(request.speculative),
             native_mtp: NativeMtpVerifier::default(),
+            // A native MTP span samples every verified row, past a rejected
+            // draft too; text generation already stands MTP down for logprobs
+            // requests, and this keeps the span gate correct on its own.
             native_mtp_span_admitted: request.native_mtp_enabled
                 && !generation_hooks_active
+                && request.sampling.top_logprobs.is_none()
                 && greedy_linear_proposal_admitted(
                     request.sampling,
                     request.chat_sampling_metadata,
