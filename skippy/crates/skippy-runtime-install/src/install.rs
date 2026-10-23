@@ -352,12 +352,11 @@ async fn install_resolved_runtime_with_catalog(
             "strict native runtime verification requires the selected runtime to be listed by the authenticated catalog"
         );
     }
-    if let (Some(artifact), false) = (authenticated_artifact, trusted_bundle) {
-        if let NativeRuntimeSource::Installed { path } | NativeRuntimeSource::Bundle { path } =
+    if let (Some(artifact), false) = (authenticated_artifact, trusted_bundle)
+        && let NativeRuntimeSource::Installed { path } | NativeRuntimeSource::Bundle { path } =
             &resolution.source
-        {
-            verify_local_runtime_against_catalog(path, artifact)?;
-        }
+    {
+        verify_local_runtime_against_catalog(path, artifact)?;
     }
     match resolution.source.clone() {
         NativeRuntimeSource::Installed { path: _ } => {
