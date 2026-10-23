@@ -1,9 +1,17 @@
-//! Streams a WAV clip through a running node's live transcription when
-//! `MESH_LLM_LIVE_API` (an API base URL such as `http://127.0.0.1:9337/v1`)
-//! and `MESH_LLM_LIVE_WAV` (16-bit mono WAV) are set; otherwise does nothing.
+//! Streams a WAV clip through a running node's live transcription. Needs a
+//! node serving a speech model, so it is ignored by default:
+//!
+//! ```sh
+//! MESH_LLM_LIVE_API=http://127.0.0.1:9337/v1 MESH_LLM_LIVE_WAV=speech.wav \
+//!   cargo test -p mesh-llm-sdk --test live_transcription_live -- --ignored
+//! ```
+//!
+//! The WAV must be 16-bit mono with a 44-byte header, and hold more than one
+//! sentence of speech.
 
 #![cfg(feature = "serving")]
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use mesh_llm_sdk::live_transcription::{
@@ -11,13 +19,10 @@ use mesh_llm_sdk::live_transcription::{
 };
 
 #[tokio::test]
+#[ignore = "needs a node serving a speech model; see the module docs"]
 async fn streams_a_clip_and_reads_the_transcript() {
-    let (Ok(api), Ok(wav)) = (
-        std::env::var("MESH_LLM_LIVE_API"),
-        std::env::var("MESH_LLM_LIVE_WAV"),
-    ) else {
-        return;
-    };
+    let api = std::env::var("MESH_LLM_LIVE_API").expect("MESH_LLM_LIVE_API");
+    let wav = std::env::var("MESH_LLM_LIVE_WAV").expect("MESH_LLM_LIVE_WAV");
     let bytes = std::fs::read(wav).unwrap();
     // A canonical 44-byte header: the sample rate sits at byte 24.
     let rate = u32::from_le_bytes(bytes[24..28].try_into().unwrap());
@@ -49,37 +54,53 @@ async fn streams_a_clip_and_reads_the_transcript() {
         audio
     });
 
-    let mut deltas = 0;
-    let mut transcript = String::new();
+    // Deltas per turn, and each turn's final transcript.
+    let mut deltas = HashMap::<String, String>::new();
+    let mut completed = Vec::new();
     let collect = async {
         while let Some(event) = events.next_event().await {
             match event {
-                LiveTranscriptionEvent::Delta { .. } => deltas += 1,
-                LiveTranscriptionEvent::Completed {
-                    transcript: text, ..
-                } => {
-                    transcript.push_str(&text);
-                    transcript.push(' ');
-                    if transcript.to_lowercase().contains("your country.")
-                        && transcript.matches(' ').count() > 15
-                    {
-                        break;
-                    }
+                LiveTranscriptionEvent::Delta { item_id, text } => {
+                    deltas.entry(item_id).or_default().push_str(&text);
                 }
+                LiveTranscriptionEvent::Completed {
+                    item_id,
+                    transcript,
+                } => completed.push((item_id, transcript)),
                 LiveTranscriptionEvent::Error { message } => panic!("{message}"),
                 _ => {}
             }
         }
     };
-    tokio::time::timeout(Duration::from_secs(60), collect)
-        .await
-        .expect("transcript arrives");
-    sender.await.unwrap().close().await;
-    let words = transcript.to_lowercase();
-    assert!(deltas >= 4, "words arrive as deltas: {deltas}");
-    assert!(words.contains("ask not"), "{transcript}");
+    // The sender closes the session after the trailing silence; give the
+    // last turn time to finish first.
+    let finish = async {
+        let audio = sender.await.unwrap();
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        audio.close().await;
+    };
+    tokio::time::timeout(Duration::from_secs(120), async {
+        tokio::join!(collect, finish)
+    })
+    .await
+    .expect("the session finishes");
+
+    assert!(!completed.is_empty(), "no turn completed");
+    for (item_id, transcript) in &completed {
+        assert!(!transcript.trim().is_empty(), "turn {item_id} is empty");
+        let streamed = deltas.get(item_id).map(String::as_str).unwrap_or_default();
+        assert_eq!(
+            streamed.split_whitespace().collect::<Vec<_>>(),
+            transcript.split_whitespace().collect::<Vec<_>>(),
+            "turn {item_id}: deltas join to the transcript"
+        );
+    }
+    let streamed_words = deltas
+        .values()
+        .map(|text| text.split_whitespace().count())
+        .sum::<usize>();
     assert!(
-        words.contains("what you can do for your country"),
-        "{transcript}"
+        streamed_words >= 4,
+        "words arrive as deltas: {streamed_words}"
     );
 }

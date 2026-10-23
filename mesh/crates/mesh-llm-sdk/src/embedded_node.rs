@@ -426,7 +426,12 @@ impl OpenAiClient {
         &self,
         options: crate::live_transcription::LiveTranscriptionOptions,
     ) -> anyhow::Result<crate::live_transcription::LiveTranscription> {
-        crate::live_transcription::LiveTranscription::start(&self.base_url, options).await
+        crate::live_transcription::LiveTranscription::start_with_api_key(
+            &self.base_url,
+            Some(&self.api_key),
+            options,
+        )
+        .await
     }
 
     pub async fn models(&self) -> anyhow::Result<serde_json::Value> {
