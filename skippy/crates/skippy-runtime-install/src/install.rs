@@ -352,6 +352,13 @@ async fn install_resolved_runtime_with_catalog(
             "strict native runtime verification requires the selected runtime to be listed by the authenticated catalog"
         );
     }
+    if let (Some(artifact), false) = (authenticated_artifact, trusted_bundle) {
+        if let NativeRuntimeSource::Installed { path } | NativeRuntimeSource::Bundle { path } =
+            &resolution.source
+        {
+            verify_local_runtime_against_catalog(path, artifact)?;
+        }
+    }
     match resolution.source.clone() {
         NativeRuntimeSource::Installed { path: _ } => {
             installed_outcome(cache, resolution, &options.release_version)
@@ -388,6 +395,74 @@ async fn install_resolved_runtime_with_catalog(
             )
         }
     }
+}
+
+/// Strict check for a runtime already on disk (cache or bundle): its manifest
+/// must match the signed catalog entry, every signed file and tool must hash
+/// to the signed value, and the directory must hold nothing else that could
+/// be loaded. Only `manifest.json` and documentation may be unlisted.
+fn verify_local_runtime_against_catalog(
+    path: &Path,
+    authenticated: &NativeRuntimeArtifact,
+) -> Result<()> {
+    let id = authenticated.native_runtime_id();
+    let local = NativeRuntimeManifest::read_from_dir(path)?;
+    if local_metadata(&local.runtime) != local_metadata(authenticated) {
+        bail!("local native runtime {id} metadata does not match its authenticated catalog entry");
+    }
+    NativeRuntimeManifest {
+        runtime: local_metadata(authenticated),
+    }
+    .verify_payload(path)
+    .with_context(|| format!("verify local native runtime {id} against signed file hashes"))?;
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            if entry.file_type()?.is_dir() {
+                pending.push(entry_path);
+                continue;
+            }
+            let relative = entry_path
+                .strip_prefix(path)
+                .context("runtime file outside its root")?
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            let declared = authenticated.files.contains_key(&relative)
+                || authenticated.tools.contains_key(&relative);
+            if !declared && !is_unlisted_metadata(&relative) {
+                bail!(
+                    "local native runtime {id} contains {relative}, which the signed catalog does not list"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Files a runtime directory may carry without a signed hash: its own
+/// manifest (checked against the catalog above) and top-level docs.
+fn is_unlisted_metadata(relative: &str) -> bool {
+    if relative.contains('/') {
+        return false;
+    }
+    let lower = relative.to_ascii_lowercase();
+    lower == skippy_native_runtime::NATIVE_RUNTIME_MANIFEST_FILE
+        || lower.ends_with(".md")
+        || lower.ends_with(".txt")
+        || lower.starts_with("license")
+        || lower.starts_with("notice")
+}
+
+fn local_metadata(artifact: &NativeRuntimeArtifact) -> NativeRuntimeArtifact {
+    let mut artifact = artifact.clone();
+    artifact.url = None;
+    artifact.sha256 = None;
+    artifact.signature = None;
+    artifact
 }
 
 /// A runtime shipped in one of the merged bundle directories, under a policy

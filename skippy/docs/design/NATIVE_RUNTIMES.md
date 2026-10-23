@@ -301,8 +301,10 @@ Downloaded native runtime artifacts are fail-closed:
   catalog bytes before UTF-8 or JSON parsing, rejects a catalog or artifact for
   another release, and requires signed archive and per-file hashes.
 - strict resolution requires the selected runtime to match its signed catalog
-  entry and never falls back to an unsigned bundle-only catalog. Re-hashing
-  bundle and cache payloads against signed `files`/`tools` is a follow-up.
+  entry and never falls back to an unsigned bundle-only catalog. Bundle and
+  cache payloads are re-hashed against signed `files`/`tools` and the runtime
+  directory is closed: unlisted files other than `manifest.json` and top-level
+  docs are rejected.
 
 The public key is trust configuration, not catalog data. Callers set
 `trusted_public_key` to reviewed Minisign public-key file contents; they must

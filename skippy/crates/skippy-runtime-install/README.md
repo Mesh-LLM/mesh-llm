@@ -67,8 +67,10 @@ default for compatibility with existing unsigned releases. A local catalog requi
 `.sha256` and `.minisig` sidecars; a remote catalog fetches those sidecars from
 the same asset basename. The exact bytes are authenticated before parsing.
 Strict mode rejects unsigned bundle-only fallback and requires the selected
-runtime to match its signed catalog entry. Re-hashing bundle and cache payloads
-against the signed file hashes is a follow-up.
+runtime to match its signed catalog entry. Bundled and cached runtimes are
+re-hashed against the signed `files`/`tools` on every install, and any other
+file in the runtime directory (except `manifest.json` and top-level docs) is
+rejected, so an injected library can never be loaded.
 
 ## Migrating callers
 

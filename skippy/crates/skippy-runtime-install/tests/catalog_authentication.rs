@@ -590,3 +590,73 @@ fn trusted_bundles_include_packager_discovered_bundle_dirs() {
     unsafe { std::env::remove_var("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR") };
     assert_bundle_source(&result.unwrap(), &fixture);
 }
+
+#[test]
+fn strict_mode_rejects_an_unlisted_file_in_a_bundle() {
+    let fixture = SignedFixture::new();
+    std::fs::write(fixture.bundle_path.join("lib/injected.dll"), b"evil").unwrap();
+
+    let error = install(fixture.options()).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("lib/injected.dll, which the signed catalog does not list"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn strict_mode_allows_top_level_docs_in_a_bundle() {
+    let fixture = SignedFixture::new();
+    std::fs::write(fixture.bundle_path.join("README.md"), b"docs").unwrap();
+
+    let outcome = install(fixture.options()).unwrap();
+    assert_bundle_source(&outcome, &fixture);
+}
+
+#[test]
+fn strict_mode_rejects_a_modified_library_in_a_bundle() {
+    let fixture = SignedFixture::new();
+    std::fs::write(fixture.bundle_path.join("lib/runtime.bin"), b"tampered").unwrap();
+
+    assert!(install(fixture.options()).is_err());
+}
+
+#[test]
+fn strict_mode_rehashes_the_cache_on_every_install() {
+    let mut fixture = SignedFixture::new();
+    let bytes = bundle_archive(&fixture.bundle_path);
+    fixture.artifact.sha256 = Some(hex::encode(Sha256::digest(&bytes)));
+    let (url, worker) = serve_archive(bytes);
+    fixture.artifact.url = Some(url);
+    write_signed_catalog(
+        &fixture.catalog_path,
+        RELEASE,
+        &fixture.artifact,
+        &fixture.key_pair,
+    );
+    let mut options = fixture.options();
+    options.bundle_dirs.clear();
+    options.allow_download = true;
+    let result = install(options.clone());
+    worker.join().unwrap();
+    let installed = result.unwrap();
+    std::fs::write(installed.runtime.path.join("lib/extra.so"), b"evil").unwrap();
+
+    options.allow_download = false;
+    let error = install(options).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("lib/extra.so, which the signed catalog does not list"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn trusted_bundles_skip_the_closed_directory_check() {
+    let fixture = SignedFixture::new();
+    std::fs::write(fixture.bundle_path.join("lib/distro-extra.so"), b"packager").unwrap();
+    let mut options = fixture.options();
+    options.verification_policy =
+        NativeRuntimeVerificationPolicy::RequireSignatureTrustExplicitBundles;
+
+    let outcome = install(options).unwrap();
+    assert_bundle_source(&outcome, &fixture);
+}
