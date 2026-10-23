@@ -1,4 +1,4 @@
-From 1ea2912e2499df0f91b17b4024c265e09eb919f2 Mon Sep 17 00:00:00 2001
+From 60d9d4e5ab28d7e9178fa23bdbf52af058f8c3eb Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 20 Oct 2026 22:32:01 +1100
 Subject: [PATCH] feat: add bounded Turbo4 KV support to Skippy CPU and Metal
@@ -23,15 +23,19 @@ Assisted-by: Codex
  ggml/src/ggml-metal/ggml-metal-device.cpp     |  41 +-
  ggml/src/ggml-metal/ggml-metal-device.h       |   7 +-
  ggml/src/ggml-metal/ggml-metal-device.m       |  61 +++
+ ggml/src/ggml-metal/ggml-metal-fusion.cpp     |  10 +
+ ggml/src/ggml-metal/ggml-metal-fusion.h       |   1 +
  ggml/src/ggml-metal/ggml-metal-impl.h         |   5 +
- ggml/src/ggml-metal/ggml-metal-ops.cpp        | 166 ++++--
+ ggml/src/ggml-metal/ggml-metal-ops.cpp        | 181 +++++--
  ggml/src/ggml-metal/ggml-metal-ops.h          |   1 +
+ .../src/ggml-metal/ggml-metal-turbo4-fusion.h |  25 +
+ .../src/ggml-metal/ggml-metal-turbo4-reduce.h |  35 ++
  ggml/src/ggml-metal/kernels/fa_aux.metal      |   2 +
  ggml/src/ggml-metal/kernels/fa_turbo4.metal   |  16 +
  .../ggml-metal/kernels/fa_vec_common.metal    |   8 +-
- .../ggml-metal/kernels/fa_vec_turbo4.metal    | 494 ++++++++++++++++++
+ .../ggml-metal/kernels/fa_vec_turbo4.metal    | 508 ++++++++++++++++++
  ggml/src/ggml-metal/kernels/turbo4.h          | 113 ++++
- ggml/src/ggml-metal/kernels/turbo4.metal      | 315 +++++++++++
+ ggml/src/ggml-metal/kernels/turbo4.metal      | 350 ++++++++++++
  ggml/src/ggml-quants.c                        |  10 +
  ggml/src/ggml-quants.h                        |   4 +
  ggml/src/ggml-rpc/ggml-rpc.cpp                |  10 +-
@@ -40,15 +44,18 @@ Assisted-by: Codex
  src/llama-graph.cpp                           |  11 +
  src/llama-kv-cache.cpp                        |  39 +-
  tests/test-backend-ops-skippy-turbo4.h        | 192 +++++++
- tests/test-backend-ops-turbo4-centroids.h     | 209 ++++++++
+ tests/test-backend-ops-turbo4-centroids.h     | 209 +++++++
+ .../test-backend-ops-turbo4-decode-inverse.h  |  76 +++
  tests/test-backend-ops-turbo4-gqa.h           | 174 ++++++
  tests/test-backend-ops-turbo4-write-bytes.h   | 197 +++++++
  tests/test-backend-ops-wht-decode.h           | 103 ++++
- tests/test-backend-ops.cpp                    |  24 +
+ tests/test-backend-ops.cpp                    |  26 +
  tests/test-quantize-fns.cpp                   |   8 +
  tests/test-turbo4-codec.h                     |  81 +++
- 38 files changed, 2584 insertions(+), 68 deletions(-)
+ 43 files changed, 2797 insertions(+), 68 deletions(-)
  create mode 100644 ggml/src/ggml-cpu/turbo4.cpp
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-turbo4-fusion.h
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-turbo4-reduce.h
  create mode 100644 ggml/src/ggml-metal/kernels/fa_turbo4.metal
  create mode 100644 ggml/src/ggml-metal/kernels/fa_vec_turbo4.metal
  create mode 100644 ggml/src/ggml-metal/kernels/turbo4.h
@@ -56,6 +63,7 @@ Assisted-by: Codex
  create mode 100644 ggml/src/ggml-turbo4.c
  create mode 100644 tests/test-backend-ops-skippy-turbo4.h
  create mode 100644 tests/test-backend-ops-turbo4-centroids.h
+ create mode 100644 tests/test-backend-ops-turbo4-decode-inverse.h
  create mode 100644 tests/test-backend-ops-turbo4-gqa.h
  create mode 100644 tests/test-backend-ops-turbo4-write-bytes.h
  create mode 100644 tests/test-backend-ops-wht-decode.h
@@ -641,6 +649,53 @@ index 5b23ddf7f..f736e1e45 100644
                  if (op->src[0]->type == GGML_TYPE_F16) {
                      return op->type == GGML_TYPE_F16;
                  }
+diff --git a/ggml/src/ggml-metal/ggml-metal-fusion.cpp b/ggml/src/ggml-metal/ggml-metal-fusion.cpp
+index d78ca7c4b..d641d089f 100644
+--- a/ggml/src/ggml-metal/ggml-metal-fusion.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-fusion.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "ggml-metal-common.h"
+ #include "ggml-metal-device.h"
++#include "ggml-metal-turbo4-fusion.h"
+ 
+ #include "ggml-backend-impl.h"
+ 
+@@ -757,6 +758,14 @@ static const std::vector<ggml_op> ops_moe_reduce_8 = {
+ 
+ static const std::vector<ggml_op> ops_mul_mat_add = { GGML_OP_MUL_MAT, GGML_OP_ADD };
+ 
++static bool ggml_metal_fusion_check_turbo4_decode_inverse(
++        const ggml_metal_fusion *, const ggml_tensor * const * nodes,
++        const ggml_cgraph *, const int *, int, ggml_metal_fusion_mode) {
++    return ggml_metal_turbo4_decode_inverse_compatible(nodes[0], nodes[1]);
++}
++
++static const std::vector<ggml_op> ops_turbo4_decode_inverse = { GGML_OP_FLASH_ATTN_EXT, GGML_OP_TURBO_WHT };
++
+ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
+     { GGML_METAL_FUSION_NORM_MUL,       ops_norm_mul,               {},     false, ggml_metal_fusion_check_norm },
+     { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_norm_mul_add,           {},     false, ggml_metal_fusion_check_norm },
+@@ -785,6 +794,7 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
+     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_8,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+     { GGML_METAL_FUSION_SSM_CONV_SILU,  ops_ssm_conv_silu,          {},     false, ggml_metal_fusion_check_ssm_conv_silu },
+     { GGML_METAL_FUSION_MUL_MAT_ADD,    ops_mul_mat_add,            {},     false, ggml_metal_fusion_check_mul_mat_add },
++    { GGML_METAL_FUSION_TURBO4_DECODE_INVERSE, ops_turbo4_decode_inverse, {}, false, ggml_metal_fusion_check_turbo4_decode_inverse },
+ };
+ 
+ // ---- alloc deps -----------------------------------------------------------
+diff --git a/ggml/src/ggml-metal/ggml-metal-fusion.h b/ggml/src/ggml-metal/ggml-metal-fusion.h
+index 5d994c249..9dcf1ca36 100644
+--- a/ggml/src/ggml-metal/ggml-metal-fusion.h
++++ b/ggml/src/ggml-metal/ggml-metal-fusion.h
+@@ -43,6 +43,7 @@ typedef enum ggml_metal_fusion_id {
+     GGML_METAL_FUSION_MOE_REDUCE,   // MUL + expert VIEWs + ADD chain (MoE output reduction)
+     GGML_METAL_FUSION_SSM_CONV_SILU, // SSM_CONV + UNARY (silu)
+     GGML_METAL_FUSION_MUL_MAT_ADD,  // MUL_MAT + ADD (residual added in the few-row MMA store)
++    GGML_METAL_FUSION_TURBO4_DECODE_INVERSE, // FLASH_ATTN_EXT + inverse TURBO_WHT
+ } ggml_metal_fusion_id;
+ 
+ struct ggml_metal_fusion; // defined in ggml-metal-fusion.cpp
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
 index d151a600d..e7e80952c 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
@@ -658,10 +713,18 @@ index d151a600d..e7e80952c 100644
      int32_t  ne00;
      int32_t  ne01;
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 53c981618..1dfb1fd7b 100644
+index 53c981618..7abf156a0 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-@@ -392,6 +392,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
+@@ -9,6 +9,7 @@
+ #include "ggml-metal-device.h"
+ #include "ggml-metal-fusion.h"
+ #include "ggml-metal-tuning.h"
++#include "ggml-metal-turbo4-reduce.h"
+ 
+ #include <cassert>
+ #include <algorithm>
+@@ -392,6 +393,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
              {
                  n_fuse = ggml_metal_op_set_rows(ctx, idx);
              } break;
@@ -672,7 +735,7 @@ index 53c981618..1dfb1fd7b 100644
          case GGML_OP_DIAG:
              {
                  n_fuse = ggml_metal_op_diag(ctx, idx);
-@@ -1268,7 +1272,14 @@ int ggml_metal_op_set_rows(ggml_metal_op_t ctx, int idx) {
+@@ -1268,7 +1273,14 @@ int ggml_metal_op_set_rows(ggml_metal_op_t ctx, int idx) {
      GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
      GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
  
@@ -688,7 +751,7 @@ index 53c981618..1dfb1fd7b 100644
  
      const int32_t nk0 = ne0/ggml_blck_size(op->type);
  
-@@ -1312,11 +1323,46 @@ int ggml_metal_op_set_rows(ggml_metal_op_t ctx, int idx) {
+@@ -1312,11 +1324,46 @@ int ggml_metal_op_set_rows(ggml_metal_op_t ctx, int idx) {
      ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
      ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
  
@@ -736,7 +799,7 @@ index 53c981618..1dfb1fd7b 100644
  int ggml_metal_op_diag(ggml_metal_op_t ctx, int idx) {
      ggml_tensor * op = ctx->node(idx);
  
-@@ -3105,6 +3151,11 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
+@@ -3105,6 +3152,11 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
  // dequantize the quantized KV cache to F16 before running the F16 flash attention kernels
  static bool ggml_metal_op_flash_attn_ext_use_kv_f16(const ggml_tensor * op) {
      assert(op->op == GGML_OP_FLASH_ATTN_EXT);
@@ -748,7 +811,7 @@ index 53c981618..1dfb1fd7b 100644
  
      // depending on compute/bandwidth ratio, dequant to f16 kv is not always beneficial
      // ref: https://github.com/ggml-org/llama.cpp/pull/27390#issuecomment-5355152767
-@@ -3129,6 +3180,9 @@ static bool ggml_metal_op_flash_attn_ext_use_kv_f16(const ggml_tensor * op) {
+@@ -3129,6 +3181,9 @@ static bool ggml_metal_op_flash_attn_ext_use_kv_f16(const ggml_tensor * op) {
  
  static bool ggml_metal_op_flash_attn_ext_use_tensor(const ggml_tensor * op, bool has_tensor) {
      assert(op->op == GGML_OP_FLASH_ATTN_EXT);
@@ -758,7 +821,7 @@ index 53c981618..1dfb1fd7b 100644
  
      if (!has_tensor || ggml_metal_op_flash_attn_ext_use_vec(op)) {
          return false;
-@@ -3173,6 +3227,10 @@ static bool ggml_metal_op_flash_attn_ext_use_tensor(const ggml_tensor * op, bool
+@@ -3173,6 +3228,10 @@ static bool ggml_metal_op_flash_attn_ext_use_tensor(const ggml_tensor * op, bool
  // n_kv_max is only an upper bound on their number per mask row, used to size the index lists
  static int ggml_metal_op_flash_attn_ext_n_kv_max_sparse(const ggml_tensor * op) {
      assert(op->op == GGML_OP_FLASH_ATTN_EXT);
@@ -769,7 +832,7 @@ index 53c981618..1dfb1fd7b 100644
  
      int32_t n_kv_max = 0;
      memcpy(&n_kv_max, ((const int32_t *) op->op_params) + 4, sizeof(n_kv_max));
-@@ -3238,7 +3296,8 @@ static bool ggml_metal_op_flash_attn_ext_v_is_view_of_k(const ggml_tensor * op)
+@@ -3238,7 +3297,8 @@ static bool ggml_metal_op_flash_attn_ext_v_is_view_of_k(const ggml_tensor * op)
      const ggml_tensor * K = op->src[1];
      const ggml_tensor * V = op->src[2];
  
@@ -779,7 +842,7 @@ index 53c981618..1dfb1fd7b 100644
  }
  
  // size of the F16 dequantized K tensor; the dequantized V tensor follows it in the same scratch buffer
-@@ -3274,7 +3333,9 @@ size_t ggml_metal_op_flash_attn_ext_extra_pad(const ggml_tensor * op) {
+@@ -3274,7 +3334,9 @@ size_t ggml_metal_op_flash_attn_ext_extra_pad(const ggml_tensor * op) {
      uint64_t nb21_pad = nb21;
  
      if (use_kv_f16) {
@@ -790,7 +853,7 @@ index 53c981618..1dfb1fd7b 100644
          nb21_pad = sizeof(ggml_fp16_t)*(v_is_view_of_k ? ne10 : ne20);
      }
  
-@@ -3439,7 +3500,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -3439,7 +3501,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
      GGML_ASSERT(ne00 % 4 == 0);
  
      GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
@@ -801,7 +864,7 @@ index 53c981618..1dfb1fd7b 100644
  
      //GGML_ASSERT(ggml_are_same_shape (src1, src2));
      GGML_ASSERT(ne11 == ne21);
-@@ -3522,38 +3585,40 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -3522,38 +3586,40 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
  
          const bool v_is_view_of_k = ggml_metal_op_flash_attn_ext_v_is_view_of_k(op);
  
@@ -865,7 +928,7 @@ index 53c981618..1dfb1fd7b 100644
              const int64_t nblocks2_64 = (ne20/ggml_blck_size(op->src[2]->type))*(int64_t) ne21*ne22*ne23;
              GGML_ASSERT(nblocks2_64 <= INT32_MAX);
              const int32_t nblocks2 = nblocks2_64;
-@@ -3581,14 +3646,15 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -3581,14 +3647,15 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
          // the pad and attention kernels read the dequantized KV
          ggml_metal_op_concurrency_reset(ctx);
  
@@ -888,7 +951,7 @@ index 53c981618..1dfb1fd7b 100644
  
          // if V is a view of K, the dequantized V is read from the dequantized K with K's strides
          if (v_is_view_of_k) {
-@@ -3783,7 +3849,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -3783,7 +3850,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
              ggml_metal_op_concurrency_reset(ctx);
          }
  
@@ -898,7 +961,7 @@ index 53c981618..1dfb1fd7b 100644
  
          // shared memory layout (halfs unless noted):
          //   queries/attn/result: Q*(DK + 2*PAD2(DV,64) + 4*C)
-@@ -3867,10 +3934,19 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -3867,10 +3935,19 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                            (int) ne00, (int) ne20,   // dk, dv (ne00 == dk for FA)
                            ne11, ne01);
  
@@ -919,7 +982,7 @@ index 53c981618..1dfb1fd7b 100644
  
          GGML_ASSERT(nqptg <= 32);
          GGML_ASSERT(nqptg == 1 || nqptg == 2 || nqptg == 4);  // only instantiated Q values
-@@ -3966,6 +4042,11 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -3966,6 +4043,11 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
          const int64_t dv_pad = GGML_PAD(ne20, 128);
  
          auto fa_vec_smem = [&](int64_t nsg, int32_t nqptg) -> size_t {
@@ -931,7 +994,7 @@ index 53c981618..1dfb1fd7b 100644
              const size_t smem_half = (size_t) (dk_pad + 4*ncpsg + 2*dv_pad)*nqptg*nsg;
              return GGML_PAD(smem_half*sizeof(ggml_fp16_t) + (use_sparse ? (size_t) nsg*ncpsg*sizeof(int) : 0), 16);
          };
-@@ -4003,6 +4084,11 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -4003,6 +4085,11 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
              }
          }
  
@@ -943,7 +1006,7 @@ index 53c981618..1dfb1fd7b 100644
          // fall back to baseline (Q=1) if the tuned config exceeds threadgroup memory
          if (fa_vec_smem(nsg, nqptg) > props_dev->max_theadgroup_memory_size) {
              cfg   = ggml_metal_tuning::fa_vec_baseline_cfg((int) ne00, (int) ne20);
-@@ -4048,7 +4134,11 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -4048,7 +4135,11 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
              /*.n_kv_max_padded =*/ n_kv_max_padded,
          };
  
@@ -956,6 +1019,27 @@ index 53c981618..1dfb1fd7b 100644
  
          GGML_ASSERT(nsg*32 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
  
+@@ -4094,6 +4185,20 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+             {
+                 const int32_t nrows = ne1*ne2*ne3;
+ 
++                if (!use_sparse && nwg == 32 && ctx->use_fusion()) {
++                    int n_fuse = 1;
++                    const auto * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n_fuse);
++                    if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_TURBO4_DECODE_INVERSE) {
++                        const auto * inverse = ctx->node(idx + n_fuse - 1);
++                        if (ggml_metal_turbo4_reduce_inverse(lib, enc, bid_tmp,
++                                ggml_metal_op_flash_attn_ext_extra_tmp(op),
++                                ggml_metal_get_buffer_id(inverse), ggml_nbytes(inverse), nrows)) {
++                            ctx->count_fusions(fusion);
++                            return n_fuse;
++                        }
++                    }
++                }
++
+                 ggml_metal_kargs_flash_attn_ext_vec_reduce args0 = {
+                     nrows,
+                 };
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.h b/ggml/src/ggml-metal/ggml-metal-ops.h
 index 583d1156b..f084e60af 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.h
@@ -968,6 +1052,78 @@ index 583d1156b..f084e60af 100644
  int ggml_metal_op_diag              (ggml_metal_op_t ctx, int idx);
  int ggml_metal_op_lightning_indexer (ggml_metal_op_t ctx, int idx);
  int ggml_metal_op_dsv4_hc           (ggml_metal_op_t ctx, int idx);
+diff --git a/ggml/src/ggml-metal/ggml-metal-turbo4-fusion.h b/ggml/src/ggml-metal/ggml-metal-turbo4-fusion.h
+new file mode 100644
+index 000000000..9b92391dc
+--- /dev/null
++++ b/ggml/src/ggml-metal/ggml-metal-turbo4-fusion.h
+@@ -0,0 +1,25 @@
++#pragma once
++
++#include "ggml-impl.h"
++
++// This fusion only covers the dense single-query, 128-value decode reduction.
++static inline bool ggml_metal_turbo4_decode_inverse_compatible(
++        const ggml_tensor * attention, const ggml_tensor * inverse) {
++    if (!attention || !inverse || attention->op != GGML_OP_FLASH_ATTN_EXT ||
++        inverse->op != GGML_OP_TURBO_WHT || inverse->src[0] != attention || inverse->src[1] ||
++        inverse->op_params[0] != 1 || inverse->op_params[1] != 128 ||
++        attention->type != GGML_TYPE_F32 || inverse->type != GGML_TYPE_F32 ||
++        attention->view_src || inverse->view_src ||
++        !ggml_is_contiguous(attention) || !ggml_is_contiguous(inverse)) {
++        return false;
++    }
++
++    const ggml_tensor * q = attention->src[0];
++    const ggml_tensor * k = attention->src[1];
++    const ggml_tensor * v = attention->src[2];
++    return q && k && v && q->type == GGML_TYPE_F32 &&
++        k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_TURBO4_0 &&
++        q->ne[0] == 128 && k->ne[0] == 128 && v->ne[0] == 128 &&
++        q->ne[1] == 1 && q->ne[3] == 1 && k->ne[3] == 1 && v->ne[3] == 1 &&
++        q->ne[2] > 0 && q->ne[2] <= 64 && ggml_are_same_shape(attention, inverse);
++}
+diff --git a/ggml/src/ggml-metal/ggml-metal-turbo4-reduce.h b/ggml/src/ggml-metal/ggml-metal-turbo4-reduce.h
+new file mode 100644
+index 000000000..39f03a1d7
+--- /dev/null
++++ b/ggml/src/ggml-metal/ggml-metal-turbo4-reduce.h
+@@ -0,0 +1,35 @@
++#pragma once
++
++#include "ggml-metal-common.h"
++#include "ggml-metal-device.h"
++
++static inline bool ggml_metal_turbo4_reduce_inverse(
++        ggml_metal_library_t lib, ggml_metal_encoder_t enc,
++        ggml_metal_buffer_id temporary, size_t temporary_size,
++        ggml_metal_buffer_id destination, size_t destination_size, int32_t rows) {
++    if (temporary.metal == destination.metal) {
++        const bool overlaps = temporary.offs <= destination.offs
++            ? destination.offs - temporary.offs < temporary_size
++            : temporary.offs - destination.offs < destination_size;
++        if (overlaps) {
++            return false;
++        }
++    }
++
++    const char * name = "kernel_flash_attn_ext_vec_reduce_turbo4_wht";
++    auto pipeline = ggml_metal_library_get_pipeline(lib, name);
++    if (!pipeline.pipeline) {
++        pipeline = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
++    }
++    if (!pipeline.pipeline || ggml_metal_pipeline_max_theads_per_threadgroup(pipeline) < 256) {
++        return false;
++    }
++
++    ggml_metal_kargs_flash_attn_ext_vec_reduce args = { rows };
++    ggml_metal_encoder_set_pipeline(enc, pipeline);
++    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
++    ggml_metal_encoder_set_buffer(enc, temporary, 1);
++    ggml_metal_encoder_set_buffer(enc, destination, 2);
++    ggml_metal_encoder_dispatch_threadgroups(enc, rows, 1, 1, 256, 1, 1);
++    return true;
++}
 diff --git a/ggml/src/ggml-metal/kernels/fa_aux.metal b/ggml/src/ggml-metal/kernels/fa_aux.metal
 index ebee1becd..51dc04702 100644
 --- a/ggml/src/ggml-metal/kernels/fa_aux.metal
@@ -1030,10 +1186,10 @@ index 46270ba4b..cbc208fa0 100644
  
 diff --git a/ggml/src/ggml-metal/kernels/fa_vec_turbo4.metal b/ggml/src/ggml-metal/kernels/fa_vec_turbo4.metal
 new file mode 100644
-index 000000000..3025069f4
+index 000000000..b75e3d7a6
 --- /dev/null
 +++ b/ggml/src/ggml-metal/kernels/fa_vec_turbo4.metal
-@@ -0,0 +1,494 @@
+@@ -0,0 +1,508 @@
 +#include "common.h"
 +#include "dequantize.h"
 +#include "turbo4.h"
@@ -1247,6 +1403,20 @@ index 000000000..3025069f4
 +template [[host_name("kernel_flash_attn_ext_vec_pair_kq8_0_vturbo4_dk128_dv128")]] kernel flash_attn_turbo4_pair_t kernel_flash_attn_ext_vec_pair_turbo4<block_q8_0, 8, dequantize_q8_0_t4, true>;
 +template [[host_name("kernel_flash_attn_ext_vec_pair_kf16_vturbo4_dk128_dv128")]] kernel flash_attn_turbo4_pair_t kernel_flash_attn_ext_vec_pair_turbo4<half4, 1, dequantize_f16_t4, false>;
 +
++static half4 dequantize_turbo4_quartet_shuffle(
++        device const block_turbo4_0 * xb, ushort lane, float centroid) {
++    const float norm = float(xb->norm);
++    const device uint8_t * qs = xb->qs + lane * 2;
++    const uint8_t qb0 = qs[0];
++    const uint8_t qb1 = qs[1];
++    return half4(float4(
++        simd_shuffle(centroid, ushort((qb0     ) & 0xF)) * norm,
++        simd_shuffle(centroid, ushort((qb0 >> 4) & 0xF)) * norm,
++        simd_shuffle(centroid, ushort((qb1     ) & 0xF)) * norm,
++        simd_shuffle(centroid, ushort((qb1 >> 4) & 0xF)) * norm
++    ));
++}
++
 +kernel void kernel_flash_attn_ext_vec_quartet_kf16_vturbo4_dk128_dv128(
 +        constant ggml_metal_kargs_flash_attn_ext_vec & args,
 +        device const char * q,
@@ -1270,6 +1440,7 @@ index 000000000..3025069f4
 +    const uint ikv2 = head0/4;
 +    const short tx = tiisg%8;
 +    const short ty = tiisg/8;
++    const float centroid = turbo_centroids_4bit[tiisg & 15];
 +
 +    // Four independent head regions; global partial-output slots remain per head.
 +    const int head_stride = 128 + 320*NSG; // half elements
@@ -1419,7 +1590,7 @@ index 000000000..3025069f4
 +        so3[tiisg] *= ms3;
 +        simdgroup_barrier(mem_flags::mem_threadgroup);
 +
-+        // Each lane decodes one float4 per row and reuses it for all four heads.
++        // All lanes reach the lookup; lanes 0..15 hold the complete centroid table.
 +        float4 lo0 = float4(0.0f);
 +        float4 lo1 = float4(0.0f);
 +        float4 lo2 = float4(0.0f);
@@ -1430,8 +1601,7 @@ index 000000000..3025069f4
 +            const float weight2 = ss2[cc];
 +            const float weight3 = ss3[cc];
 +            device const block_turbo4_0 * pv = (device const block_turbo4_0 *) (pv_base + (ic + cc)*args.nb21);
-+            half4 mv;
-+            dequantize_turbo4_0_t4(pv, tiisg, mv);
++            const half4 mv = dequantize_turbo4_quartet_shuffle(pv, tiisg, centroid);
 +            lo0 += float4(mv)*weight0;
 +            lo1 += float4(mv)*weight1;
 +            lo2 += float4(mv)*weight2;
@@ -1649,10 +1819,10 @@ index 000000000..2c6a62921
 +}
 diff --git a/ggml/src/ggml-metal/kernels/turbo4.metal b/ggml/src/ggml-metal/kernels/turbo4.metal
 new file mode 100644
-index 000000000..77d82e229
+index 000000000..0914934af
 --- /dev/null
 +++ b/ggml/src/ggml-metal/kernels/turbo4.metal
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,350 @@
 +#include "common.h"
 +#include "dequantize.h"
 +#include "turbo4.h"
@@ -1784,17 +1954,8 @@ index 000000000..77d82e229
 +    }
 +}
 +
-+kernel void kernel_turbo_wht_inverse_simd_f32(
-+        constant ggml_metal_kargs_turbo_wht & args,
-+        device const float * src [[buffer(1)]],
-+        device       float * dst [[buffer(2)]],
-+        uint group [[threadgroup_position_in_grid]],
-+        ushort lane [[thread_index_in_simdgroup]]) {
-+    if (group >= args.n_elements/128) {
-+        return;
-+    }
-+    const uint64_t offset = uint64_t(group)*128 + uint64_t(lane)*4;
-+    float4 x = float4(src[offset], src[offset + 1], src[offset + 2], src[offset + 3]) * float4(turbo_wht_signs2_h4[lane]);
++static float4 turbo_wht_inverse_simd_f32(float4 x, ushort lane) {
++    x *= float4(turbo_wht_signs2_h4[lane]);
 +    x = float4(x.x + x.y, x.x - x.y, x.z + x.w, x.z - x.w);
 +    x = float4(x.x + x.z, x.y + x.w, x.x - x.z, x.y - x.w);
 +    for (ushort step = 1; step < 32; step *= 2) {
@@ -1805,11 +1966,55 @@ index 000000000..77d82e229
 +            simd_shuffle_xor(x.w, step));
 +        x = (lane & step) == 0 ? x + partner : partner - x;
 +    }
-+    const float4 out = x * 0.08838834764831845f * float4(turbo_wht_signs1_h4[lane]);
++    return x * 0.08838834764831845f * float4(turbo_wht_signs1_h4[lane]);
++}
++
++kernel void kernel_turbo_wht_inverse_simd_f32(
++        constant ggml_metal_kargs_turbo_wht & args,
++        device const float * src [[buffer(1)]],
++        device       float * dst [[buffer(2)]],
++        uint group [[threadgroup_position_in_grid]],
++        ushort lane [[thread_index_in_simdgroup]]) {
++    if (group >= args.n_elements/128) {
++        return;
++    }
++    const uint64_t offset = uint64_t(group)*128 + uint64_t(lane)*4;
++    const float4 out = turbo_wht_inverse_simd_f32(
++        float4(src[offset], src[offset + 1], src[offset + 2], src[offset + 3]), lane);
 +    dst[offset] = out.x;
 +    dst[offset + 1] = out.y;
 +    dst[offset + 2] = out.z;
 +    dst[offset + 3] = out.w;
++}
++
++kernel void kernel_flash_attn_ext_vec_reduce_turbo4_wht(
++        constant ggml_metal_kargs_flash_attn_ext_vec_reduce & args,
++        device const char * temporary [[buffer(1)]],
++        device       char * destination [[buffer(2)]],
++        uint row [[threadgroup_position_in_grid]],
++        ushort lane [[thread_index_in_simdgroup]],
++        ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
++    // Same 32-workgroup reduction as fa_aux; eight SIMD groups cover 32 float4s.
++    device const float * sums = (device const float *) temporary + uint64_t(args.nrows)*128*32;
++    float sum = sums[uint64_t(row)*64 + 2*lane];
++    const float maximum = sums[uint64_t(row)*64 + 2*lane + 1];
++    const float scale = exp(maximum - simd_max(maximum));
++    sum = simd_sum(sum*scale);
++    sum = sum == 0.0f ? 0.0f : 1.0f/sum;
++
++    device const float4 * partials = (device const float4 *) temporary + uint64_t(row)*32*32;
++    threadgroup float4 reduced[32];
++    for (ushort component = simdgroup; component < 32; component += 8) {
++        const float4 value = simd_sum(partials[component*32 + lane]*scale);
++        if (lane == 0) {
++            reduced[component] = value*sum;
++        }
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    if (simdgroup == 0) {
++        device float4 * output = (device float4 *) destination + uint64_t(row)*32;
++        output[lane] = turbo_wht_inverse_simd_f32(reduced[lane], lane);
++    }
 +}
 +
 +template<typename TI>
@@ -2796,6 +3001,88 @@ index 000000000..e47d22a85
 +        }
 +    }
 +}
+diff --git a/tests/test-backend-ops-turbo4-decode-inverse.h b/tests/test-backend-ops-turbo4-decode-inverse.h
+new file mode 100644
+index 000000000..0d944b3c5
+--- /dev/null
++++ b/tests/test-backend-ops-turbo4-decode-inverse.h
+@@ -0,0 +1,76 @@
++#pragma once
++
++struct test_turbo4_decode_inverse : public test_skippy_turbo4_attention {
++    // 0: inverse, 1: live attention output, 2: forward transform, 3: fused/unfused parity.
++    const int mode;
++
++    test_turbo4_decode_inverse(int64_t gqa, int64_t extent, int64_t queries,
++            std::array<int32_t, 4> permutation, bool masked, int mode)
++        : test_skippy_turbo4_attention(128, 128, 8, {gqa, 1}, extent, queries,
++              masked, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_F16,
++              GGML_TYPE_TURBO4_0, permutation), mode(mode) {}
++
++    std::string vars() override {
++        return "turbo4_decode_inverse_mode=" + std::to_string(mode) + "," + test_flash_attn_ext::vars();
++    }
++
++    std::string op_desc(ggml_tensor *) override { return "TURBO_WHT"; }
++    bool run_whole_graph() override { return true; }
++
++    double max_nmse_err() override {
++        return mode == 3 ? 1e-6 : test_skippy_turbo4_attention::max_nmse_err();
++    }
++
++    double err(const float * a, const float * b, size_t count) override {
++        if (mode != 3) {
++            return test_skippy_turbo4_attention::err(a, b, count);
++        }
++        if (!support_ok) {
++            return INFINITY;
++        }
++        double maximum = 0.0;
++        for (size_t i = 0; i < count; ++i) {
++            if (!std::isfinite(a[i]) || !std::isfinite(b[i])) {
++                return INFINITY;
++            }
++            maximum = std::max(maximum, std::abs(double(a[i]) - double(b[i])));
++        }
++        return maximum;
++    }
++
++    ggml_tensor * build_graph(ggml_context * ctx) override {
++        auto * attention = test_flash_attn_ext::build_graph(ctx);
++        ggml_set_name(attention, "attention");
++        auto * inverse = ggml_turbo_wht(ctx, attention, mode == 2 ? 0 : 1, 128, nullptr);
++        if (mode == 1) {
++            return ggml_add(ctx, inverse, attention);
++        }
++        if (mode != 3) {
++            return inverse;
++        }
++
++        // A real copy prevents the second attention from matching the fusion chain.
++        auto * separate = ggml_flash_attn_ext(ctx, attention->src[0], attention->src[1],
++            attention->src[2], attention->src[3], 1.0f/sqrtf(hsk), 0.0f, 0.0f);
++        ggml_prec_set_acc(separate, GGML_PREC_F32);
++        ggml_set_output(separate);
++        auto * copied = ggml_dup(ctx, separate);
++        auto * reference = ggml_turbo_wht(ctx, copied, 1, 128, nullptr);
++        return ggml_sub(ctx, inverse, reference);
++    }
++};
++
++static void add_turbo4_decode_inverse_tests(std::vector<std::unique_ptr<test_case>> & cases) {
++    for (int64_t gqa : {2, 4}) {
++        for (int64_t extent : {113, 512, 5632}) {
++            for (auto permutation : {std::array<int32_t, 4>{0, 1, 2, 3}, std::array<int32_t, 4>{0, 2, 1, 3}}) {
++                for (bool masked : {false, true}) {
++                    for (int mode : {0, 1, 2, 3}) {
++                        cases.emplace_back(new test_turbo4_decode_inverse(gqa, extent, 1, permutation, masked, mode));
++                    }
++                    cases.emplace_back(new test_turbo4_decode_inverse(gqa, extent, 2, permutation, masked, 0));
++                }
++            }
++        }
++    }
++}
 diff --git a/tests/test-backend-ops-turbo4-gqa.h b/tests/test-backend-ops-turbo4-gqa.h
 new file mode 100644
 index 000000000..1155e38af
@@ -3289,15 +3576,16 @@ index 000000000..a67920e1c
 +    }
 +}
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index ba7f7eb4e..6b2963796 100644
+index ba7f7eb4e..679476ffa 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -8513,6 +8513,12 @@ struct test_flash_attn_ext : public test_case {
+@@ -8513,6 +8513,13 @@ struct test_flash_attn_ext : public test_case {
      }
  };
  
 +#include "test-backend-ops-turbo4-gqa.h"
 +#include "test-backend-ops-skippy-turbo4.h"
++#include "test-backend-ops-turbo4-decode-inverse.h"
 +#include "test-backend-ops-turbo4-centroids.h"
 +#include "test-backend-ops-wht-decode.h"
 +#include "test-backend-ops-turbo4-write-bytes.h"
@@ -3305,7 +3593,7 @@ index ba7f7eb4e..6b2963796 100644
  // large Q values, so the online softmax has to rescale the partial results
  struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
      static constexpr int q_range = 20;
-@@ -9635,6 +9641,24 @@ static const ggml_type other_types[] = {
+@@ -9635,6 +9642,25 @@ static const ggml_type other_types[] = {
  // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
  static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      std::vector<std::unique_ptr<test_case>> test_cases;
@@ -3326,6 +3614,7 @@ index ba7f7eb4e..6b2963796 100644
 +        }
 +    }
 +    add_skippy_f16_turbo4_attention_tests(test_cases);
++    add_turbo4_decode_inverse_tests(test_cases);
 +    add_turbo4_centroid_tests(test_cases);
      std::default_random_engine rng(0);
  
