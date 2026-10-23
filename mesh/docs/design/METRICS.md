@@ -153,8 +153,11 @@ its own board power sensor (`nvidia-smi`, once a second) and attributed with the
 inference lifecycle
 (#2320). An interval between two readings counts as busy when a local request
 ran during any part of it, and as idle otherwise; concurrent requests share the
-busy energy. Board power covers the GPU only, not the CPU, memory or power
-supply, so the figures are estimates. The field is absent until a power reading
+busy energy. The per-token figures only use requests whose whole run was
+measured: a request that ran through a gap between readings, or after the
+sampler stopped, leaves both its energy and its tokens out of them. Board power
+covers the GPU only, not the CPU, memory or power supply, so the figures are
+estimates. The field is absent until a power reading
 exists, so nodes without an NVIDIA GPU never report it. Stages of a split model
 that have no front end of their own count their work as idle, and models served
 through a plugin endpoint are not counted.
@@ -165,7 +168,8 @@ through a plugin endpoint are not counted.
 | `idle_watts` | Mean board power while no request ran; null until 5 s of idle time is measured |
 | `wh_per_1k_output_tokens` | Energy per 1,000 output tokens on top of the idle draw: what serving adds |
 | `wh_per_1k_output_tokens_total` | Energy per 1,000 output tokens including the idle draw while requests ran |
-| `output_tokens`, `busy_seconds`, `idle_seconds` | What the figures are computed from |
+| `output_tokens` | Output tokens of the fully measured requests, which the per-token figures divide by |
+| `busy_seconds`, `idle_seconds` | All measured busy and idle time |
 
 ### `/api/models[]` `routing_metrics`
 
