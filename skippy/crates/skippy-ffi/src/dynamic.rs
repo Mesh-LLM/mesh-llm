@@ -17,8 +17,8 @@ use crate::{
     Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
     SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
     StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
-    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
-    WorkloadInfoV1, runtime_abi_supported,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenLogprobs,
+    TokenSignal, WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -243,6 +243,7 @@ dynamic_symbols! {
     skippy_verify_tokens_frame_sampled(session: *mut Session, token_ids: *const i32, token_count: usize, sampling: *const SamplingConfig, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, max_draft_tokens: usize, out_mtp_draft: *mut NativeMtpDraft, out_error: *mut *mut Error) -> Status;
     skippy_session_copy_output_activation_frame(session: *mut Session, token_count: usize, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_session_last_token_signal(session: *mut Session, out_signal: *mut TokenSignal, out_error: *mut *mut Error) -> Status;
+    skippy_session_take_token_logprobs(session: *mut Session, out_entries: *mut TokenLogprobs, capacity: usize, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_session_signal_window(session: *mut Session, window_tokens: u32, out_window: *mut GenerationSignalWindow, out_error: *mut *mut Error) -> Status;
     skippy_trim_session(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_retire_verify_checkpoint(session: *mut Session, token_start: u64, token_count: u64, out_error: *mut *mut Error) -> Status;

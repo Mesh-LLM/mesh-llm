@@ -467,6 +467,22 @@ impl StageOpenAiBackend {
         let receipt_observation = receipt_observation
             .as_ref()
             .and_then(|observation| observation.borrow_mut().take());
+        // A request that asked for logprobs fails rather than answering without them.
+        let result = result.and_then(|()| {
+            if request.sampling.top_logprobs.is_none() {
+                return Ok(());
+            }
+            let logprobs_session_id = session_id.clone();
+            cache_stats.token_logprobs = Some(self.iteration_scheduler.execute_runtime(
+                "take-token-logprobs",
+                move |runtime| {
+                    runtime
+                        .take_token_logprobs(&logprobs_session_id)
+                        .map_err(openai_backend_error)
+                },
+            )?);
+            Ok(())
+        });
         let generation_succeeded = result.is_ok();
         if receipt_cancelled {
             lifecycle.mark_cancelled();
@@ -509,7 +525,10 @@ impl StageOpenAiBackend {
             request.native_mtp_enabled,
             &request.speculative.effective_strategy,
             hooks_enabled,
-        );
+        )
+            // The built-in driver drops (and resets) the session as the sequence
+            // ends, before the recorded logprobs can be taken.
+            && request.sampling.top_logprobs.is_none();
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert("skippy.scheduler.eligible".to_string(), json!(eligible));
         attrs.insert(
@@ -1410,9 +1429,12 @@ impl StageOpenAiBackend {
         let hook_runtime = request.hook_runtime.take();
         let generation_hooks_active =
             self.generation_hooks_active(&hook_request, hook_runtime.as_ref());
+        // Verified proposal rows past a rejected token are sampled too, so their
+        // recorded logprobs would not line up with the emitted tokens.
         let linear_proposal_enabled = self.linear_proposal_ingress.is_some()
             && !request.native_mtp_enabled
             && !generation_hooks_active
+            && request.sampling.top_logprobs.is_none()
             && greedy_linear_proposal_admitted(request.sampling, request.chat_sampling_metadata);
         let linear_proposal_max_tokens = if linear_proposal_enabled {
             let scheduler_session_id = session_id.to_string();

@@ -99,6 +99,7 @@ pub(super) fn sampling_semantic_fingerprint(
         mirostat_learning_rate,
         samplers,
         reasoning_budget,
+        top_logprobs,
     } = sampling;
 
     let mut digest = Sha256::new();
@@ -111,6 +112,12 @@ pub(super) fn sampling_semantic_fingerprint(
         &format!("{reasoning_budget:?}"),
     );
     update_u32(&mut digest, b"seed", *seed);
+    // A logprobs request records per-token data a replayed prefix would skip.
+    update_u32(
+        &mut digest,
+        b"top_logprobs",
+        top_logprobs.map_or(u32::MAX, |count| count),
+    );
     update_f32(&mut digest, b"temperature", *temperature);
     update_f32(&mut digest, b"top_p", *top_p);
     update_i32(&mut digest, b"top_k", *top_k);

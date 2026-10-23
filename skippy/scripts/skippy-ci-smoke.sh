@@ -560,12 +560,53 @@ openai_logprobs_status="$(
     -H 'content-type: application/json' \
     -d "$openai_logprobs_request"
 )"
-if [[ "$openai_logprobs_status" != "400" ]]; then
-  echo "expected logprobs request to return HTTP 400 until backend support lands, got ${openai_logprobs_status}" >&2
+if [[ "$openai_logprobs_status" != "200" ]]; then
+  echo "expected logprobs request to return HTTP 200, got ${openai_logprobs_status}" >&2
   cat "$openai_logprobs_response" >&2 || true
   exit 1
 fi
-assert_json "$openai_logprobs_response" '.error.code == "unsupported_model_feature"'
+assert_json "$openai_logprobs_response" \
+  '.choices[0].logprobs.content as $c | ($c | length) > 0 and ($c | length) == .usage.completion_tokens and all($c[]; .logprob <= 0 and (.top_logprobs | length) == 2)'
+
+openai_completion_logprobs_request="$(jq -cn --arg model "$DENSE_MODEL_ID" '{
+  model: $model,
+  prompt: "Say hi",
+  logprobs: 2,
+  max_tokens: 2
+}')"
+openai_completion_logprobs_response="$WORK_DIR/openai-completion-logprobs.json"
+openai_completion_logprobs_status="$(
+  curl -sS --max-time 10 \
+    -o "$openai_completion_logprobs_response" \
+    -w '%{http_code}' \
+    "${OPENAI_BASE_URL}/completions" \
+    -H 'content-type: application/json' \
+    -d "$openai_completion_logprobs_request"
+)"
+if [[ "$openai_completion_logprobs_status" != "200" ]]; then
+  echo "expected completion logprobs request to return HTTP 200, got ${openai_completion_logprobs_status}" >&2
+  cat "$openai_completion_logprobs_response" >&2 || true
+  exit 1
+fi
+assert_json "$openai_completion_logprobs_response" \
+  '.choices[0].logprobs as $l | ($l.tokens | length) > 0 and ($l.tokens | length) == .usage.completion_tokens and ($l.token_logprobs | length) == ($l.tokens | length) and all($l.top_logprobs[]; length <= 2)'
+
+openai_stream_logprobs_request="$(jq -c '. + {stream: true}' <<<"$openai_logprobs_request")"
+openai_stream_logprobs_response="$WORK_DIR/openai-stream-logprobs.json"
+openai_stream_logprobs_status="$(
+  curl -sS --max-time 10 \
+    -o "$openai_stream_logprobs_response" \
+    -w '%{http_code}' \
+    "${OPENAI_BASE_URL}/chat/completions" \
+    -H 'content-type: application/json' \
+    -d "$openai_stream_logprobs_request"
+)"
+if [[ "$openai_stream_logprobs_status" != "400" ]]; then
+  echo "expected streamed logprobs request to return HTTP 400 until streaming support lands, got ${openai_stream_logprobs_status}" >&2
+  cat "$openai_stream_logprobs_response" >&2 || true
+  exit 1
+fi
+assert_json "$openai_stream_logprobs_response" '.error.code == "unsupported_model_feature"'
 
 openai_structured_response="$WORK_DIR/openai-structured-output.json"
 openai_structured_request="$(jq -cn --arg model "$DENSE_MODEL_ID" '{
