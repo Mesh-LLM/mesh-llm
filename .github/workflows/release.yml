@@ -1844,6 +1844,9 @@ jobs:
 
   publish:
     name: Publish GitHub release
+    # The catalog signing key lives only in this protected environment, which
+    # admits main, release/*, hotfix/* and v* tags; PR workflows never see it.
+    environment: native-runtime-signing
     needs:
       - metadata
       - release_ui

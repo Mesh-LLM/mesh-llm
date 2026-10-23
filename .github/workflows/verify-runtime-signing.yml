@@ -3,16 +3,10 @@ name: Verify runtime catalog signing
 # Proves the repository minisign secrets can sign a native-runtime catalog
 # that verifies against the committed trusted public key. Signs a throwaway
 # dummy catalog only: nothing is uploaded, released, or kept.
-# Secrets are unavailable to fork PRs, so this only runs for same-repo branches.
 
+# Manual only: the key lives in the protected native-runtime-signing
+# environment and is never exposed to pull_request workflows.
 on:
-  pull_request:
-    paths:
-      - .github/workflows/verify-runtime-signing.yml
-      - .github/workflows/release.yml
-      - scripts/sign-native-runtime-catalog.sh
-      - skippy/crates/skippy-runtime-install/trust/**
-      - skippy/crates/skippy-runtime-install/src/catalog_authentication.rs
   workflow_dispatch:
 
 permissions:
@@ -25,7 +19,7 @@ concurrency:
 jobs:
   verify:
     name: Sign and verify dummy catalog
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    environment: native-runtime-signing
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -40,7 +34,7 @@ jobs:
           printf '{"dummy":true,"run":"%s","sha":"%s"}\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" \
             > "$RUNNER_TEMP/signcheck/native-runtimes.json"
 
-      - name: Sign and verify with repository secret (same script as release.yml)
+      - name: Sign and verify with the environment secret (same script as release.yml)
         env:
           MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY: ${{ secrets.MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY }}
         run: |

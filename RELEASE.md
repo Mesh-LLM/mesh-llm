@@ -103,15 +103,19 @@ means a footer was present, but signature verification failed.
 
 The release publisher signs the final `native-runtimes.json` with the stock
 `minisign` CLI (`scripts/sign-native-runtime-catalog.sh`) using a dedicated,
-unencrypted Minisign key held in one repository Actions secret,
-`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY`. Generate it once without a
-password, back up `.key` and `.pub` in the vault, then upload:
+unencrypted Minisign key held in one secret,
+`MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY`, in the protected
+`native-runtime-signing` environment (Settings → Environments; deployment
+branches `main`, `release/*`, `hotfix/*` and tags `v*`). Only the release
+`publish` job and the manual `verify-runtime-signing.yml` check use that
+environment; no pull_request workflow can read the key. Generate it once
+without a password, back up `.key` and `.pub` in the vault, then upload:
 
 ```bash
 umask 077
 KEYDIR=$(mktemp -d "$HOME/native-runtime-key.XXXXXX")
 minisign -G -W -p "$KEYDIR/native-runtime-catalog.pub" -s "$KEYDIR/native-runtime-catalog.key"
-gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY --repo Mesh-LLM/mesh-llm < "$KEYDIR/native-runtime-catalog.key"
+gh secret set MESH_NATIVE_RUNTIME_CATALOG_MINISIGN_SECRET_KEY --repo Mesh-LLM/mesh-llm --env native-runtime-signing < "$KEYDIR/native-runtime-catalog.key"
 ```
 
 The public key is committed at
