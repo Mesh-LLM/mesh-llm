@@ -1999,6 +1999,7 @@ async fn route_self_targeted_model_attempts_a_registered_plugin_instead_of_faili
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "acme".to_string(),
             endpoint_id: "ep1".to_string(),
+            protocol: None,
             address: format!("http://{refusing_addr}"),
             models: vec![model.to_string()],
         }])
@@ -2080,6 +2081,7 @@ async fn route_missing_local_model_excluding_self_blocks_local_plugin_fallback()
             plugin_name: "acme".to_string(),
             endpoint_id: "ep1".to_string(),
             // Never dialed if the exclude check runs first, as it must.
+            protocol: None,
             address: "http://127.0.0.1:1".to_string(),
             models: vec![model.to_string()],
         }])

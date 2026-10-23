@@ -237,6 +237,7 @@ async fn external_inference_endpoint_models_are_advertised_in_gossip() -> anyhow
         .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
             plugin_name: "endpoint-plugin".into(),
             endpoint_id: "endpoint-plugin".into(),
+            protocol: None,
             address: "http://127.0.0.1:8000/v1".into(),
             models: vec!["lemonade-small".into()],
         }])

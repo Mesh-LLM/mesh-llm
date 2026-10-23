@@ -20,6 +20,11 @@ pub(super) fn is_audio_upload_path(path: &str) -> bool {
     )
 }
 
+/// Recognize document OCR uploads independently of query parameters.
+pub(super) fn is_document_ocr_path(path: &str) -> bool {
+    path.split('?').next().unwrap_or(path) == "/v1/documents/ocr"
+}
+
 /// Recognize the typed System One endpoint independently of query parameters.
 pub(super) fn is_system_one_path(path: &str) -> bool {
     matches!(
@@ -40,6 +45,7 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/rerank" => Some(ModelWorkloadClass::Rerank),
         "/v1/audio/speech" => Some(ModelWorkloadClass::SpeechSynthesis),
         "/v1/realtime" => Some(ModelWorkloadClass::SpeechRecognition),
+        "/v1/documents/ocr" => Some(ModelWorkloadClass::DocumentOcr),
         _ => None,
     }
 }
@@ -237,6 +243,12 @@ pub(super) fn request_media(
             needs_audio: true,
             needs_vision: false,
         }
+    } else if is_document_ocr_path(path) {
+        crate::network::router::MediaRequirements {
+            has_media: true,
+            needs_audio: false,
+            needs_vision: false,
+        }
     } else {
         body.map_or_else(Default::default, crate::network::router::media_requirements)
     }
@@ -287,6 +299,8 @@ pub(super) async fn eligible_targets(
     if request_workload_class(path).is_none() && !is_system_one_path(path) {
         return candidates.to_vec();
     }
+    // Local inference targets are native serving ports. Plugin descriptors are
+    // advertised separately for peer discovery and dispatched by the plugin path.
     let local = node.served_model_descriptors().await;
     let state = node.state.lock().await;
     candidates

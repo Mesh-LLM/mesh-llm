@@ -748,6 +748,7 @@ async fn test_builtin_moa_uses_plugin_inference_model_as_its_only_candidate() {
         .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
             plugin_name: "endpoint-plugin".into(),
             endpoint_id: "endpoint-plugin".into(),
+            protocol: None,
             address: format!("http://127.0.0.1:{worker_port}/api/v1"),
             models: vec!["plugin-worker".into()],
         }])
