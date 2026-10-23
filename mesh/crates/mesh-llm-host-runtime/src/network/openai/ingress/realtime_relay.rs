@@ -98,7 +98,7 @@ async fn run_session(
     model: &str,
     target: InferenceTarget,
 ) {
-    let opening = upgrade_request(raw);
+    let opening = upgrade_request(raw, model);
     let started = Instant::now();
     tracing::info!(model, target = ?target, "realtime transcription session started");
     let result = match target {
@@ -187,7 +187,8 @@ async fn choose_host(
 }
 
 /// Maps a public model id to the internal one and drops a `#profile` suffix.
-/// A peer-assigned session already carries the internal name.
+/// A peer-assigned session carries the internal name, because the relay
+/// forwards the resolved model in place of the client's.
 async fn resolve_model(
     node: &mesh::Node,
     targets: &election::ModelTargets,
@@ -384,18 +385,19 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The bytes to send the host: the request head with `Connection: Upgrade`
-/// restored (ingress parsing normalizes it for request/response forwarding),
-/// then any websocket frames the client sent together with its handshake.
-/// Ingress rebuilds every head with CRLF line ends.
-fn upgrade_request(raw: &[u8]) -> Vec<u8> {
+/// The bytes to send the host: the request head with the resolved `model`
+/// in its query and `Connection: Upgrade` restored (ingress parsing
+/// normalizes it for request/response forwarding), then any websocket frames
+/// the client sent together with its handshake. Ingress rebuilds every head
+/// with CRLF line ends.
+fn upgrade_request(raw: &[u8], model: &str) -> Vec<u8> {
     let head_end = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
         .unwrap_or(raw.len());
     let text = String::from_utf8_lossy(&raw[..head_end]);
     let mut lines = text.split("\r\n");
-    let mut head = lines.next().unwrap_or_default().to_string();
+    let mut head = with_model_query(lines.next().unwrap_or_default(), model);
     head.push_str("\r\nConnection: Upgrade");
     for line in lines.filter(|line| {
         !line
@@ -409,6 +411,35 @@ fn upgrade_request(raw: &[u8]) -> Vec<u8> {
     let mut bytes = head.into_bytes();
     bytes.extend_from_slice(raw.get(head_end + 4..).unwrap_or_default());
     bytes
+}
+
+/// Sets the request line's `model` query value, keeping the other parameters.
+fn with_model_query(line: &str, model: &str) -> String {
+    let mut parts = line.splitn(3, ' ');
+    let (Some(method), Some(target), Some(version)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return line.to_string();
+    };
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let mut pairs = query
+        .split('&')
+        .filter(|pair| !pair.is_empty() && pair.split('=').next() != Some("model"))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    pairs.push(format!("model={}", percent_encode(model)));
+    format!("{method} {path}?{} {version}", pairs.join("&"))
+}
+
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                char::from(byte).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -437,8 +468,22 @@ mod tests {
     fn forwarded_heads_name_the_upgrade_once_and_keep_early_frames() {
         let raw = b"GET /v1/realtime HTTP/1.1\r\nHost: x\r\nconnection: close\r\nUpgrade: websocket\r\n\r\n\x81\x05early";
         assert_eq!(
-            upgrade_request(raw),
-            b"GET /v1/realtime HTTP/1.1\r\nConnection: Upgrade\r\nHost: x\r\nUpgrade: websocket\r\n\r\n\x81\x05early"
+            upgrade_request(raw, "m"),
+            b"GET /v1/realtime?model=m HTTP/1.1\r\nConnection: Upgrade\r\nHost: x\r\nUpgrade: websocket\r\n\r\n\x81\x05early"
+        );
+    }
+
+    #[test]
+    fn forwarded_heads_carry_the_resolved_model() {
+        let line = "GET /v1/realtime?intent=transcription&model=public%23fast&x=1 HTTP/1.1";
+        let forwarded = with_model_query(line, "ggerganov/whisper.cpp:ggml-base.en.bin");
+        assert_eq!(
+            forwarded,
+            "GET /v1/realtime?intent=transcription&x=1&model=ggerganov%2Fwhisper.cpp%3Aggml-base.en.bin HTTP/1.1"
+        );
+        assert_eq!(
+            query_model(forwarded.split(' ').nth(1).unwrap()).as_deref(),
+            Some("ggerganov/whisper.cpp:ggml-base.en.bin")
         );
     }
 

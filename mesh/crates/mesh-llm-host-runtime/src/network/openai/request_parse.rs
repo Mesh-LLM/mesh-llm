@@ -103,9 +103,10 @@ struct ParsedHeaders {
     content_type: Option<String>,
     is_chunked: bool,
     expects_continue: bool,
-    /// A protocol upgrade (websocket handshake): bytes after the head are the
-    /// new protocol's first frames, not a body, and must be kept.
-    is_upgrade: bool,
+    /// A live transcription handshake (`GET /v1/realtime` with an upgrade):
+    /// bytes after the head are its first websocket frames, not a body, and
+    /// are kept for the relay. Every other request drops them.
+    is_realtime_upgrade: bool,
     correlation_id: Option<String>,
 }
 
@@ -548,7 +549,7 @@ where
     }
     // A client may send its first websocket frames together with the
     // handshake; they stay in `raw` behind the head for the relay.
-    if !parsed.is_upgrade {
+    if !parsed.is_realtime_upgrade {
         raw.truncate(header_end);
     }
     Ok(Vec::new())
@@ -854,6 +855,10 @@ where
                     content_length = None;
                 }
 
+                let is_realtime_upgrade = upgrade_requested
+                    && connection_upgrade
+                    && method.eq_ignore_ascii_case("GET")
+                    && path.split('?').next() == Some("/v1/realtime");
                 return Ok(ParsedHeaders {
                     header_end,
                     method,
@@ -863,7 +868,7 @@ where
                     content_type,
                     is_chunked,
                     expects_continue,
-                    is_upgrade: upgrade_requested && connection_upgrade,
+                    is_realtime_upgrade,
                     correlation_id,
                 });
             }
