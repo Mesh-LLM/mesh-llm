@@ -197,6 +197,11 @@ impl MeshNodeBuilder {
         self
     }
 
+    pub fn disable_iroh_relays(mut self, disabled: bool) -> Self {
+        self.inner = self.inner.disable_iroh_relays(disabled);
+        self
+    }
+
     pub fn nostr_relay(mut self, url: impl Into<String>) -> Self {
         self.inner = self.inner.nostr_relay(url);
         self
@@ -594,6 +599,18 @@ mod tests {
         assert!(serve_only.mode.allows_serving());
         assert!(combined.mode.allows_client_inference());
         assert!(combined.mode.allows_serving());
+    }
+
+    #[test]
+    fn builder_disables_iroh_relays() {
+        let default = MeshNode::builder().client().build();
+        let disabled = MeshNode::builder()
+            .client()
+            .disable_iroh_relays(true)
+            .build();
+
+        assert!(!default.network.disable_iroh_relays);
+        assert!(disabled.network.disable_iroh_relays);
     }
 
     #[test]
