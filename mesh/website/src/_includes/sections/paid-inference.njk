@@ -1,0 +1,143 @@
+<section class="sec py-14 sm:py-20 paid-inference-section" id="paid-inference">
+  <div class="shell">
+    <div class="sec-head paid-inference-head">
+      <div>
+        <p class="kicker">Paid inference</p>
+        <h2 class="title"><span class="title-line">Earn on the mesh.</span><br><span class="title-line">Spend on the mesh.</span></h2>
+      </div>
+      <div class="paid-inference-copy">
+        <p>Earn micropayments for serving models on your hardware. Peers settle automatically over bitcoin’s decentralized Lightning Network. Payments work both ways—pay for inference using the same wallet you earn with.</p>
+        <a class="btn primary paid-inference-cta" href="https://github.com/Mesh-LLM/mesh-llm#paid-inference-over-lightning">
+          Enable payments on your mesh node <span class="arr" aria-hidden="true">→</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="paid-inference" data-paid-inference data-payment-mode="earn" data-payment-state="complete">
+      <div class="paid-inference-bar">
+        <div class="paid-inference-protocol">
+          <span class="paid-inference-protocol__dot" aria-hidden="true"></span>
+          <span>Wallet plugin</span>
+          <code>wallet.v1 · /mesh/payment/v3</code>
+          <button class="paid-inference-motion-control" type="button" data-payment-motion aria-pressed="false" hidden>
+            <span data-payment-motion-label>Pause animation</span>
+          </button>
+        </div>
+        <div class="paid-inference-tabs" role="tablist" aria-label="Paid inference direction">
+          <button class="paid-inference-tab is-active" type="button" role="tab" id="paid-inference-tab-earn" aria-selected="true" aria-controls="paid-inference-panel-earn" tabindex="0" data-payment-tab="earn">
+            <span>Earn</span>
+            <small>serve paid inference</small>
+          </button>
+          <button class="paid-inference-tab" type="button" role="tab" id="paid-inference-tab-spend" aria-selected="false" aria-controls="paid-inference-panel-spend" tabindex="-1" data-payment-tab="spend">
+            <span>Spend</span>
+            <small>buy mesh capacity</small>
+          </button>
+        </div>
+      </div>
+
+      <div class="paid-inference-body">
+        <div class="paid-inference-panel is-active" role="tabpanel" id="paid-inference-panel-earn" aria-labelledby="paid-inference-tab-earn" data-payment-panel="earn">
+          <div class="paid-inference-panel__lead">
+            <p class="paid-inference-panel__kicker">Provider flow</p>
+            <h3>Turn idle compute into an earning node.</h3>
+          </div>
+          <ol class="paid-inference-steps">
+            <li data-payment-step="pricing"><span>01</span><div><strong>Set prices</strong><small>Publish input and output rates per model.</small></div></li>
+            <li data-payment-step="deposit"><span>02</span><div><strong>Verify the buyer</strong><small>A first-request deposit arrives before inference starts.</small></div></li>
+            <li data-payment-step="settle"><span>03</span><div><strong>Stream and settle</strong><small>Report usage, apply the deposit, and collect any remainder.</small></div></li>
+          </ol>
+        </div>
+
+        <div class="paid-inference-panel" role="tabpanel" id="paid-inference-panel-spend" aria-labelledby="paid-inference-tab-spend" data-payment-panel="spend">
+          <div class="paid-inference-panel__lead">
+            <p class="paid-inference-panel__kicker">Buyer flow</p>
+            <h3>Put those earnings back to work.</h3>
+          </div>
+          <ol class="paid-inference-steps">
+            <li data-payment-step="pricing"><span>01</span><div><strong>Set a budget</strong><small>Authorize automatic payments with a daily limit.</small></div></li>
+            <li data-payment-step="deposit"><span>02</span><div><strong>Request capacity</strong><small>A new provider may require a first-request deposit.</small></div></li>
+            <li data-payment-step="settle"><span>03</span><div><strong>Receive and settle</strong><small>Stream the response, then pay any remaining balance.</small></div></li>
+          </ol>
+        </div>
+
+        <div class="paid-inference-visual" aria-hidden="true">
+          <div class="paid-inference-map is-active" data-payment-map="earn">
+            <div class="paid-inference-endpoint paid-inference-endpoint--peer">
+              <span class="paid-inference-endpoint__eyebrow">Remote peer</span>
+              <strong>Buyer</strong>
+              <small>routes a paid request</small>
+              <div class="paid-inference-wallet"><i data-lucide="wallet-cards"></i><span><small>Lightning</small>buyer wallet</span></div>
+            </div>
+
+            <div class="paid-inference-routes">
+              <div class="paid-inference-route" data-payment-route="request">
+                <div class="paid-inference-route__meta"><span>Mesh QUIC</span><strong>inference request</strong></div>
+                <div class="paid-inference-track"><i class="paid-inference-packet paid-inference-packet--mesh" data-payment-packet data-payment-direction="forward"></i></div>
+              </div>
+              <div class="paid-inference-route paid-inference-route--deposit" data-payment-route="deposit">
+                <div class="paid-inference-route__meta"><span>Lightning</span><strong>first-request deposit</strong></div>
+                <div class="paid-inference-track"><i class="paid-inference-packet paid-inference-packet--payment" data-payment-packet data-payment-direction="forward"></i></div>
+              </div>
+              <div class="paid-inference-route" data-payment-route="stream">
+                <div class="paid-inference-route__meta"><span>Mesh QUIC</span><strong>streaming response</strong></div>
+                <div class="paid-inference-track"><i class="paid-inference-packet paid-inference-packet--mesh" data-payment-packet data-payment-direction="reverse"></i></div>
+              </div>
+              <div class="paid-inference-route paid-inference-route--settlement" data-payment-route="settlement">
+                <div class="paid-inference-route__meta"><span>Lightning</span><strong>remaining balance · if due</strong></div>
+                <div class="paid-inference-track"><i class="paid-inference-packet paid-inference-packet--settlement" data-payment-packet data-payment-direction="forward"></i></div>
+              </div>
+            </div>
+
+            <div class="paid-inference-endpoint paid-inference-endpoint--local">
+              <span class="paid-inference-endpoint__eyebrow">This machine</span>
+              <strong>Your node</strong>
+              <small>prices and serves a model</small>
+              <div class="paid-inference-wallet paid-inference-wallet--local"><i data-lucide="wallet-cards"></i><span><small>Lightning</small>your wallet</span><b>settled</b></div>
+            </div>
+          </div>
+
+          <div class="paid-inference-map" data-payment-map="spend" hidden>
+            <div class="paid-inference-endpoint paid-inference-endpoint--peer">
+              <span class="paid-inference-endpoint__eyebrow">Remote peer</span>
+              <strong>Paid provider</strong>
+              <small>advertises available capacity</small>
+              <div class="paid-inference-wallet"><i data-lucide="wallet-cards"></i><span><small>Lightning</small>provider wallet</span></div>
+            </div>
+
+            <div class="paid-inference-routes">
+              <div class="paid-inference-route" data-payment-route="request">
+                <div class="paid-inference-route__meta"><span>Mesh QUIC</span><strong>inference request</strong></div>
+                <div class="paid-inference-track"><i class="paid-inference-packet paid-inference-packet--mesh" data-payment-packet data-payment-direction="reverse"></i></div>
+              </div>
+              <div class="paid-inference-route paid-inference-route--deposit" data-payment-route="deposit">
+                <div class="paid-inference-route__meta"><span>Lightning</span><strong>first-request deposit</strong></div>
+                <div class="paid-inference-track"><i class="paid-inference-packet paid-inference-packet--payment" data-payment-packet data-payment-direction="reverse"></i></div>
+              </div>
+              <div class="paid-inference-route" data-payment-route="stream">
+                <div class="paid-inference-route__meta"><span>Mesh QUIC</span><strong>streaming response</strong></div>
+                <div class="paid-inference-track"><i class="paid-inference-packet paid-inference-packet--mesh" data-payment-packet data-payment-direction="forward"></i></div>
+              </div>
+              <div class="paid-inference-route paid-inference-route--settlement" data-payment-route="settlement">
+                <div class="paid-inference-route__meta"><span>Lightning</span><strong>remaining balance · if due</strong></div>
+                <div class="paid-inference-track"><i class="paid-inference-packet paid-inference-packet--settlement" data-payment-packet data-payment-direction="reverse"></i></div>
+              </div>
+            </div>
+
+            <div class="paid-inference-endpoint paid-inference-endpoint--local">
+              <span class="paid-inference-endpoint__eyebrow">This machine</span>
+              <strong>Your workload</strong>
+              <small>routes to available capacity</small>
+              <div class="paid-inference-wallet paid-inference-wallet--local"><i data-lucide="wallet-cards"></i><span><small>Lightning</small>your wallet</span><b>ready</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="paid-inference-legend">
+        <span><i class="paid-inference-legend__mesh"></i>inference over Mesh QUIC</span>
+        <span><i class="paid-inference-legend__lightning"></i>settlement over Lightning</span>
+        <span class="paid-inference-legend__status" data-payment-status>earn flow complete</span>
+      </div>
+    </div>
+  </div>
+</section>

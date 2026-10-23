@@ -72,6 +72,10 @@ jobs:
         working-directory: mesh/website
         run: npm run test:cli-explorer
 
+      - name: Validate paid inference in desktop and mobile browsers
+        working-directory: mesh/website
+        run: npm run test:paid-inference
+
       - name: Stage Pages artifact
         # shell: bash is required: this job's container: resolves the
         # default run: shell to sh -e {0}, and dash has no -o pipefail.
