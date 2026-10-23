@@ -12,6 +12,7 @@ use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceResult;
 use skippy_inference_api::MessageContent;
 use skippy_inference_api::MessageContentPart;
+use skippy_inference_api::chat_skippy_hooks_enabled;
 use skippy_package_format::{
     GenerationProfile, GenerationReasoningBudget, GenerationReasoningBudgetLevel,
     GenerationReasoningEnabled, GenerationReasoningFormat,
@@ -1470,6 +1471,13 @@ pub(super) fn ensure_chat_runtime_features_supported(
         if request.stream {
             return Err(InferenceError::unsupported(
                 "streamed chat logprobs are not implemented yet; request them without stream",
+            ));
+        }
+        // A hook that injects text discards a sample whose entry was already
+        // recorded, so the entries would no longer line up with the tokens.
+        if chat_skippy_hooks_enabled(request) {
+            return Err(InferenceError::unsupported(
+                "logprobs are not implemented yet for requests with skippy_hooks",
             ));
         }
         if request

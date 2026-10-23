@@ -47,6 +47,10 @@ fn chat_runtime_feature_guard_rejects_logprobs_it_cannot_serve() {
             "unsupported_model_feature",
         ),
         (
+            json!({"logprobs": true, "skippy_hooks": true}),
+            "unsupported_model_feature",
+        ),
+        (
             json!({"logprobs": true, "top_logprobs": too_many}),
             "invalid_value",
         ),

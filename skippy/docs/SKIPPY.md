@@ -783,8 +783,8 @@ Current branch status:
 - local single-stage generation returns logprobs for non-streamed chat
   completions (`top_logprobs` up to 20) and legacy completions (`logprobs` up
   to 5): the native sampler records each drawn token's raw log-probability and
-  its most likely alternatives. Streamed requests and split serving still
-  return unsupported-feature errors.
+  its most likely alternatives. Streamed requests, split serving, and chat
+  requests with `skippy_hooks` still return unsupported-feature errors.
 
 ### 5. Add `inference/skippy`
 
