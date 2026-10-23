@@ -53,18 +53,44 @@ mod frame_kind {
     pub const SEGMENT: u8 = 4;
     pub const LIST_MANIFESTS: u8 = 5;
     pub const MANIFEST_LIST: u8 = 6;
+    /// Reserved: an in-band failure, sent before the server closes a stream it
+    /// cannot continue. Allocated while kinds were free.
+    pub const ERROR: u8 = 7;
+    /// Manifest container bytes in the frame payload.
+    pub const MANIFEST_BINARY: u8 = 8;
+}
+
+/// How a manifest crosses the wire.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestEncoding {
+    /// JSON header carrying the decoded manifest. What every older peer
+    /// understands, and what they receive when they ignore the field.
+    #[default]
+    Json,
+    /// Protobuf container bytes in the frame payload.
+    Binary,
 }
 
 #[derive(Serialize, Deserialize)]
 struct GetManifestHeader {
-    /// Manifest key (payload digest); `None` asks for the newest.
+    /// Manifest key — in this store's namespace, a wire digest or a composition
+    /// root. `None` asks for the newest entry the requester can decode.
     key: Option<String>,
+    /// Absent from older clients, which yields JSON.
+    #[serde(default)]
+    encoding: ManifestEncoding,
 }
 
 #[derive(Serialize, Deserialize)]
 struct ManifestHeader {
     found: bool,
     manifest: Option<HandoffManifest>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ErrorHeader {
+    message: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -114,20 +140,45 @@ fn serve_connection_with_timeout(
             frame_kind::GET_MANIFEST => {
                 let request: GetManifestHeader =
                     serde_json::from_value(header).context("malformed manifest request")?;
+                let json_requester = request.encoding == ManifestEncoding::Json;
                 let key = match request.key {
                     Some(key) => Some(key),
-                    None => store.list_manifests()?.into_iter().next(),
+                    None => store.newest_manifest(json_requester)?,
                 };
-                let manifest = key.and_then(|key| store.load_manifest(&key).ok());
-                write_frame(
-                    &mut writer,
-                    frame_kind::MANIFEST,
-                    &ManifestHeader {
-                        found: manifest.is_some(),
-                        manifest,
-                    },
-                    &[],
-                )?;
+                let manifest = key
+                    .and_then(|key| store.load_manifest(&key).ok())
+                    // A JSON requester can only verify a wire-digest key; a
+                    // composition-root entry is a clean miss for it rather
+                    // than a transcode its admission would reject.
+                    .filter(|manifest| {
+                        !json_requester || manifest.key_kind == crate::KeyKind::WireBlake3
+                    });
+                match request.encoding {
+                    ManifestEncoding::Json => write_frame(
+                        &mut writer,
+                        frame_kind::MANIFEST,
+                        &ManifestHeader {
+                            found: manifest.is_some(),
+                            manifest,
+                        },
+                        &[],
+                    )?,
+                    ManifestEncoding::Binary => {
+                        let payload = match manifest.as_ref() {
+                            Some(manifest) => crate::encode_manifest_container(manifest)?,
+                            None => Vec::new(),
+                        };
+                        write_frame(
+                            &mut writer,
+                            frame_kind::MANIFEST_BINARY,
+                            &ManifestHeader {
+                                found: manifest.is_some(),
+                                manifest: None,
+                            },
+                            &payload,
+                        )?
+                    }
+                }
             }
             frame_kind::GET_SEGMENT => {
                 let request: GetSegmentHeader =
@@ -163,7 +214,18 @@ fn serve_connection_with_timeout(
                     &[],
                 )?;
             }
-            other => bail!("unexpected skippy-kv frame kind {other}"),
+            other => {
+                let _ = write_frame(
+                    &mut writer,
+                    frame_kind::ERROR,
+                    &ErrorHeader {
+                        message: format!("unexpected skippy-kv frame kind {other}"),
+                    },
+                    &[],
+                );
+                let _ = writer.flush();
+                bail!("unexpected skippy-kv frame kind {other}");
+            }
         }
         writer.flush().context("failed to flush skippy-kv reply")?;
     }
@@ -238,18 +300,51 @@ impl KvFetchClient {
     }
 
     pub fn fetch_manifest(&mut self, key: Option<&str>) -> Result<HandoffManifest> {
+        self.fetch_manifest_with(key, ManifestEncoding::Binary)
+    }
+
+    /// Fetch a manifest, asking for a specific encoding.
+    ///
+    /// A peer that predates the `encoding` field ignores it and answers with
+    /// JSON; both replies are accepted, so the fallback needs no negotiation
+    /// state.
+    pub fn fetch_manifest_with(
+        &mut self,
+        key: Option<&str>,
+        encoding: ManifestEncoding,
+    ) -> Result<HandoffManifest> {
         write_frame(
             &mut self.writer,
             frame_kind::GET_MANIFEST,
             &GetManifestHeader {
                 key: key.map(str::to_string),
+                encoding,
             },
             &[],
         )?;
         self.writer.flush()?;
-        let (header, _) =
-            read_frame_expect::<ManifestHeader>(&mut self.reader, frame_kind::MANIFEST)?;
-        header.manifest.context("peer has no matching manifest")
+        let (kind, header, payload) = read_frame(&mut self.reader)?;
+        match kind {
+            frame_kind::MANIFEST => {
+                let header: ManifestHeader =
+                    serde_json::from_value(header).context("malformed manifest header")?;
+                header.manifest.context("peer has no matching manifest")
+            }
+            frame_kind::MANIFEST_BINARY => {
+                let header: ManifestHeader =
+                    serde_json::from_value(header).context("malformed manifest header")?;
+                if !header.found {
+                    bail!("peer has no matching manifest");
+                }
+                crate::decode_manifest_container(&payload).context("malformed manifest container")
+            }
+            frame_kind::ERROR => {
+                let header: ErrorHeader =
+                    serde_json::from_value(header).context("malformed error header")?;
+                bail!("peer refused the request: {}", header.message)
+            }
+            other => bail!("expected a manifest reply, got frame kind {other}"),
+        }
     }
 
     pub fn fetch_segment(&mut self, digest: &str) -> Result<Vec<u8>> {
@@ -431,6 +526,67 @@ mod tests {
         assert_eq!(stats.segments_skipped, manifest.segments.len());
         drop(client);
         server.join().expect("server thread");
+    }
+
+    #[test]
+    fn manifest_encodings_agree_over_the_wire() {
+        let payload: Vec<u8> = (0..4096u32).map(|value| (value % 251) as u8).collect();
+        let server_root = temp_root("encodings-server");
+        let (server_store, manifest) = seeded_store(&server_root, &payload);
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("addr").to_string();
+        let server = std::thread::spawn(move || {
+            serve_store(&server_store, &listener, 2).expect("serve");
+        });
+
+        let mut client = KvFetchClient::connect(&address).expect("connect");
+        let binary = client
+            .fetch_manifest_with(None, ManifestEncoding::Binary)
+            .expect("binary fetch");
+        assert_eq!(binary.payload_digest, manifest.payload_digest);
+        assert_eq!(binary.segments.len(), manifest.segments.len());
+        drop(client);
+
+        // A peer that cannot decode the container asks for JSON and gets the
+        // same manifest, decoded.
+        let mut client = KvFetchClient::connect(&address).expect("reconnect");
+        let json = client
+            .fetch_manifest_with(Some(&manifest.payload_digest), ManifestEncoding::Json)
+            .expect("json fetch");
+        assert_eq!(json.payload_digest, manifest.payload_digest);
+        assert_eq!(json.segments, manifest.segments);
+        drop(client);
+        let _ = server.join();
+    }
+
+    #[test]
+    fn a_worst_case_manifest_fits_the_frame_payload_bound() {
+        // A manifest rides in the frame payload, so the bound it must satisfy
+        // is MAX_SEGMENT_BYTES, not MAX_STAGE_FRAME_BYTES (which caps stage
+        // messages on a different stream). Pin the real bound against a
+        // full-size entry so a future field addition cannot silently exceed it.
+        let mut manifest = HandoffManifest::new("blake3:identity".to_string(), "full-state".into());
+        manifest.key_kind = crate::KeyKind::CompositionRoot;
+        manifest.segmentation_id = Some("blake3:segmentation".to_string());
+        manifest.total_bytes = 2 * 1024 * 1024 * 1024;
+        for index in 0..16_384u32 {
+            manifest.segments.push(HandoffSegmentRef {
+                index,
+                offset: u64::from(index) * 131_072,
+                bytes: 131_072,
+                digest: segment_digest(format!("segment-{index}").as_bytes()),
+                codec_identity: Some(SegmentCodecIdentity::raw(131_072)),
+                meta_json: Some("k:31:0:0".to_string()),
+            });
+        }
+        let encoded = crate::encode_manifest_container(&manifest).expect("encode");
+        assert!(
+            (encoded.len() as u64) < MAX_SEGMENT_BYTES,
+            "manifest is {} bytes, over the {MAX_SEGMENT_BYTES}-byte payload bound",
+            encoded.len()
+        );
+        assert!(crate::is_manifest_container(&encoded));
     }
 
     #[test]

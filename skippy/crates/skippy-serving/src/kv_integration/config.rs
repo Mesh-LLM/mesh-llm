@@ -419,6 +419,14 @@ const L3_SEGMENT_BYTES: usize = 8 * 1024 * 1024;
 /// no margin; 64 rows gives 1.07x (worst turn 1.17x). The cost of the smaller
 /// window is segment count, which is why it is capped rather than shrunk
 /// further.
+///
+/// **This constant is part of the cache key.** L3 entries are keyed by a
+/// composition root over their segment list bound to a `segmentation_id`
+/// derived from this window (see `geometry_segmentation_id`), so changing it
+/// forks the key space: existing entries become unreachable, and two nodes
+/// running different values silently stop deduping against each other. Treat a
+/// retune as a format change — version the derivation, and roll the mesh
+/// together or accept a cold cache.
 const L3_MAX_WINDOW_ROWS: u64 = 64;
 
 fn l3_manager_from_env(config: &StageConfig) -> Result<Option<L3CacheManager>> {
@@ -693,7 +701,7 @@ fn store_exact_radix_record_with_codec(
         token_ids,
         l3_fill_claim: _,
         write_through_l3,
-        l2_promotion_digest,
+        l2_promotion,
         l3_cost,
         admission_credit: _admission_credit,
     } = pending;
@@ -773,8 +781,8 @@ fn store_exact_radix_record_with_codec(
     #[cfg(test)]
     crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
 
-    if let (Some(l2), Some(payload_digest)) = (l2, l2_promotion_digest.as_deref()) {
-        let _ = l2.promote(&namespace, &token_ids, payload_digest, &payload, &extra);
+    if let (Some(l2), Some(source)) = (l2, l2_promotion.as_deref()) {
+        let _ = l2.promote(&namespace, &token_ids, source, &payload, &extra);
     }
     // Durable write-through is best-effort after L1 publication: a slow, full,
     // or failing disk must not delay or invalidate the in-memory record. The
@@ -1017,7 +1025,7 @@ mod tests {
             token_ids: tokens.to_vec(),
             l3_fill_claim: None,
             write_through_l3: true,
-            l2_promotion_digest: None,
+            l2_promotion: None,
             l3_cost: None,
             admission_credit: budget.credit(),
         }
@@ -1069,7 +1077,7 @@ mod tests {
             token_ids: tokens.to_vec(),
             l3_fill_claim: None,
             write_through_l3: true,
-            l2_promotion_digest: None,
+            l2_promotion: None,
             l3_cost: None,
             admission_credit: budget.credit(),
         }
@@ -1262,7 +1270,11 @@ mod tests {
         let budget = StorageBudget::new();
         let mut record = pending("filled", &[1, 2], bytes, &budget);
         record.write_through_l3 = false;
-        record.l2_promotion_digest = Some(skippy_cache::segment_digest(bytes));
+        let mut source =
+            skippy_cache::HandoffManifest::new(String::new(), "full-state".to_string());
+        source.payload_digest = skippy_cache::segment_digest(bytes);
+        source.total_bytes = bytes.len() as u64;
+        record.l2_promotion = Some(std::sync::Arc::new(source));
 
         store_exact_radix_record(&radix, &blobs, 1, limits(0, 0), Some(&l2), None, record).unwrap();
 
@@ -1916,7 +1928,7 @@ mod reserved_admission_harness {
             token_ids,
             l3_fill_claim: None,
             write_through_l3: true,
-            l2_promotion_digest: None,
+            l2_promotion: None,
             l3_cost: None,
             admission_credit,
         }

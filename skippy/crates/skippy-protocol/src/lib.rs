@@ -12,6 +12,9 @@ pub mod proto {
     pub mod stage {
         include!(concat!(env!("OUT_DIR"), "/skippy.stage.v1.rs"));
     }
+    pub mod kv {
+        include!(concat!(env!("OUT_DIR"), "/skippy.kv.v1.rs"));
+    }
 }
 
 mod admission;

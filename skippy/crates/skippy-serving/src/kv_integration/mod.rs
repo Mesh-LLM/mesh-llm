@@ -275,7 +275,9 @@ pub(crate) struct PendingExactStateRecord {
     pub(crate) write_through_l3: bool,
     /// Durable manifest digest to mirror into L2 on this worker job. `None`
     /// leaves the payload out of L2.
-    pub(crate) l2_promotion_digest: Option<String>,
+    /// Source manifest for an L2 promotion. L2 verifies against its segments
+    /// instead of re-hashing the payload.
+    pub(crate) l2_promotion: Option<std::sync::Arc<skippy_cache::HandoffManifest>>,
     /// Measured cold-versus-restore cost for L3 benefit admission. Missing
     /// telemetry preserves the established LRU write-through behavior.
     pub(crate) l3_cost: Option<skippy_cache::policy::CostSample>,
@@ -1429,7 +1431,7 @@ mod exact_state_record_queue_tests {
             token_ids: vec![1],
             l3_fill_claim: None,
             write_through_l3: true,
-            l2_promotion_digest: None,
+            l2_promotion: None,
             l3_cost: None,
             admission_credit,
         }

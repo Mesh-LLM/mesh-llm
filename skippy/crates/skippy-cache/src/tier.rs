@@ -14,8 +14,9 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::l3::{
-    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadCodec,
-    PayloadGeometry, SegmentCodecIdentity, StoreLimits, StoreUsage, segment_digest,
+    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, KeyKind, MANIFEST_VERSION,
+    PayloadCodec, PayloadGeometry, SegmentCodecIdentity, StoreLimits, StoreUsage, composition_root,
+    fixed_segmentation_id, geometry_segmentation_id, segment_digest,
 };
 use crate::manager::{
     BenefitRestoreObservation, L3ActivitySnapshot, L3CacheManager, L3EffectiveStatus,
@@ -96,6 +97,9 @@ pub struct L3Location {
 
 /// A successful fill from the tier.
 pub struct L3Fill {
+    /// The manifest this payload was assembled from. L2 promotion verifies
+    /// slices against it instead of re-hashing the payload.
+    pub manifest: std::sync::Arc<HandoffManifest>,
     pub payload: ExactStatePayload,
     /// How many of the query's leading tokens the filled state covers — the
     /// length the entry was recorded at, which may be shorter than the
@@ -499,15 +503,12 @@ impl L3Tier {
             wire.extend_from_slice(&recurrent);
             wire
         };
-        let payload_digest = segment_digest(&wire);
-
         let mut manifest = HandoffManifest::new_for_model(
             self.model_identity.clone(),
             self.state_identity.clone(),
             payload.kind().as_str().to_string(),
         );
         manifest.total_bytes = wire.len() as u64;
-        manifest.payload_digest = payload_digest.clone();
         manifest.kv_bytes = kv_bytes;
         manifest.kv_decoded_bytes = kv_decoded_bytes;
         manifest.recurrent_bytes = recurrent_bytes;
@@ -629,7 +630,22 @@ impl L3Tier {
                 meta_json: (!cut.label.is_empty()).then(|| cut.label.clone()),
             })
             .collect();
-        let exclusive_bytes = serde_json::to_vec(&manifest)
+        // The key is a composition root over the segments, not a hash of the
+        // payload: every byte is bound by its segment digest, and the ordered
+        // list is bound here. This is what keeps the spill path from hashing
+        // the whole prefix again on every capture.
+        let segmentation = match geometry {
+            Some(geometry) => geometry_segmentation_id(geometry),
+            None => fixed_segmentation_id(self.segment_bytes as u64),
+        };
+        manifest.key_kind = KeyKind::CompositionRoot;
+        manifest.payload_digest = composition_root(&segmentation, &manifest.segments)?;
+        manifest.segmentation_id = Some(segmentation);
+        let payload_digest = manifest.payload_digest.clone();
+        // Charge the bytes the commit will actually write. Serializing the
+        // segment table to JSON here would both overstate the cost and redo
+        // work the binary container exists to avoid.
+        let exclusive_bytes = crate::encode_manifest_container(&manifest)
             .map(|bytes| bytes.len() as u64)
             .unwrap_or_default();
         let benefit_key = benefit_entry_key(namespace, token_ids);
@@ -862,13 +878,15 @@ impl L3Tier {
             other => bail!("L3 manifest holds unknown payload kind {other}"),
         };
         let cachegen_kv = manifest.uses_cachegen_kv();
+        let manifest = std::sync::Arc::new(manifest);
         Ok(L3Fill {
             payload,
             token_count: manifest.token_count,
-            kv_desc_json: manifest.kv_desc_json,
+            kv_desc_json: manifest.kv_desc_json.clone(),
             payload_bytes,
             cachegen_kv,
             kv_decoded_bytes: manifest.kv_decoded_bytes,
+            manifest,
         })
     }
 
@@ -1429,6 +1447,45 @@ mod tests {
     }
 
     #[test]
+    fn legacy_json_entries_stay_locatable_and_clearable() {
+        let root = temp_root("legacy-json-tier");
+        let tier = L3Tier::open(&root, 0, "blake3:legacy".to_string(), 4096).unwrap();
+        let bytes: Vec<u8> = (0..8192u32).map(|value| (value % 251) as u8).collect();
+        let payload = ExactStatePayload::full_state(bytes);
+        tier.spill("ns", &[1, 2, 3], &payload, None, None).unwrap();
+
+        // An upgrade leaves the entry under its legacy name. Prefix links still
+        // point at the digest, so lookup and clear must resolve that name.
+        let mut renamed = 0;
+        for entry in std::fs::read_dir(root.join("manifests")).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "manifest")
+            {
+                std::fs::rename(&path, path.with_extension("json")).unwrap();
+                renamed += 1;
+            }
+        }
+        assert_eq!(renamed, 1, "spill must write exactly one manifest");
+
+        let location = tier
+            .locate_longest("ns", &[1, 2, 3], 8)
+            .unwrap()
+            .expect("a legacy entry must stay locatable");
+        let fill = tier.load(&location).unwrap();
+        assert_eq!(fill.payload.byte_len(), payload.byte_len());
+
+        assert!(tier.store().clear().unwrap() > 0);
+        assert_eq!(tier.store().list_manifests().unwrap().len(), 0);
+        assert_eq!(
+            std::fs::read_dir(root.join("manifests")).unwrap().count(),
+            0,
+            "clear must remove the legacy entry, not leave it on disk"
+        );
+    }
+
+    #[test]
     fn spill_and_fill_roundtrip_all_payload_kinds() {
         let tier = tier("roundtrip", "blake3:identity-a");
         let cases = vec![
@@ -1756,10 +1813,10 @@ mod tests {
         let path = store
             .root()
             .join("manifests")
-            .join(format!("{digest}.json"));
+            .join(format!("{digest}.manifest"));
         let mut value: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).expect("read manifest"))
-                .expect("parse manifest");
+            serde_json::to_value(store.load_manifest(digest).expect("load manifest"))
+                .expect("serialize manifest");
         value["codec"] = serde_json::json!({ "name": name, "version": version });
         std::fs::write(&path, serde_json::to_vec(&value).expect("serialize"))
             .expect("write manifest");

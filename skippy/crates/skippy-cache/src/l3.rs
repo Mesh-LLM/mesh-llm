@@ -30,11 +30,21 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::fsinfo;
 
+use footprint::ManifestFootprint;
+pub use types::*;
+use validation::{decode_manifest, validate_manifest_compatibility, verify_segments_at_offsets};
+
+mod footprint;
+mod geometry;
+mod identity;
+mod manifest_codec;
 mod packed;
+mod types;
+mod validation;
 use packed::{PACK_DIR, PACK_INDEX_DIR, PackedReadRequest, PackedSegmentStore};
 
 const SEGMENT_DIR: &str = "segments";
@@ -52,505 +62,6 @@ const ROOT_LOCK_FILE: &str = ".owner.lock";
 /// every commit; leaving headroom amortises it over the writes that fill the
 /// headroom back up.
 const EVICTION_LOW_WATER_PERCENT: u64 = 85;
-/// On-disk format version stamped into every manifest. A released change to
-/// the layout bumps this and makes older entries misses, never migrations.
-///
-/// Version 4 requires explicit per-segment codec identity; a manifest at this
-/// version whose segment lacks it is rejected rather than reinterpreted.
-pub const MANIFEST_VERSION: u32 = 4;
-
-/// The pre-codec-identity manifest format. These entries predate codec
-/// identity, are always raw by construction, and are decoded as raw through
-/// the explicit legacy path in [`decode_manifest`]. New manifests are never
-/// written at this version.
-pub const LEGACY_MANIFEST_VERSION: u32 = 2;
-
-/// The payload-level-codec manifest format (#1750): codec identity is carried
-/// once on the payload and every segment is implicitly that codec. Read for
-/// compatibility, never written. New manifests stamp identity per segment.
-pub const LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION: u32 = 3;
-
-/// Identity of the payload envelope: raw, uncompressed exact state. Its bytes
-/// are the segments verbatim, including segments whose representation is the
-/// runtime's native KV page layout.
-pub const CODEC_RAW: &str = "raw";
-/// Version of the raw codec's on-disk representation. Bumped only if the raw
-/// byte layout itself changes; an unknown version is rejected, never migrated.
-pub const CODEC_RAW_VERSION: u32 = 1;
-
-/// Exact KV bytes exported by the active native runtime and restored directly
-/// into that runtime without a storage transcode.
-pub const CODEC_NATIVE_KV_PAGE: &str = "native-kv-page";
-/// Version of the native KV segment contract. The concrete runtime ABI,
-/// tensor types, geometry, and platform are bound by the exact-state identity
-/// and the serialized runtime page descriptor carried by the manifest.
-pub const CODEC_NATIVE_KV_PAGE_VERSION: u32 = 1;
-/// CacheGen archive followed by an exact recurrent-state tail.
-pub const CODEC_CACHEGEN_KV_ENVELOPE: &str = "cachegen-kv-envelope";
-pub const CODEC_CACHEGEN_KV_ENVELOPE_VERSION: u32 = 1;
-
-/// The codec used to encode a payload's segment bytes, stamped into the
-/// manifest so representations are explicit and negotiable.
-///
-/// Only [`CODEC_RAW`] is implemented today. The identity is recorded so future
-/// lossless or compressed codecs are namespaced rather than guessed, and so an
-/// older build refuses a payload it cannot decode instead of returning corrupt
-/// state. Backward compatibility is handled by the manifest version, not a
-/// serde default: a current-version manifest must stamp its codec explicitly
-/// (so the field cannot be stripped to force a raw reinterpretation), while a
-/// [`LEGACY_MANIFEST_VERSION`] manifest predates codec identity and is
-/// normalized to raw on decode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PayloadCodec {
-    /// Codec name, e.g. `raw`.
-    pub name: String,
-    /// On-disk representation version within `name`.
-    pub version: u32,
-}
-
-impl PayloadCodec {
-    /// The raw, uncompressed codec every current payload uses.
-    pub fn raw() -> Self {
-        Self {
-            name: CODEC_RAW.to_string(),
-            version: CODEC_RAW_VERSION,
-        }
-    }
-
-    pub fn cachegen_kv_envelope() -> Self {
-        Self {
-            name: CODEC_CACHEGEN_KV_ENVELOPE.to_string(),
-            version: CODEC_CACHEGEN_KV_ENVELOPE_VERSION,
-        }
-    }
-
-    /// Whether this build can assemble a payload encoded with this codec.
-    /// Only the exact raw name and version are supported; any other name or a
-    /// future raw version is unknown and must be refused before assembly.
-    pub fn is_supported(&self) -> bool {
-        (self.name == CODEC_RAW && self.version == CODEC_RAW_VERSION)
-            || (self.name == CODEC_CACHEGEN_KV_ENVELOPE
-                && self.version == CODEC_CACHEGEN_KV_ENVELOPE_VERSION)
-    }
-}
-
-impl Default for PayloadCodec {
-    fn default() -> Self {
-        Self::raw()
-    }
-}
-
-/// What a codec's output promises at assembly time. The class is contract,
-/// not documentation: an exact entry can satisfy an exact lookup; a lossy
-/// entry can only satisfy a lookup that accepts its codec family and
-/// calibration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CodecClass {
-    /// Decodes to the exact segment bytes the writer held. Payload digest
-    /// verification applies at assembly.
-    Exact,
-    /// Decodes to a calibrated approximation of the segment bytes. Never
-    /// verified against a payload digest; must never satisfy an exact
-    /// lookup.
-    Lossy,
-}
-
-impl CodecClass {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Exact => "exact",
-            Self::Lossy => "lossy",
-        }
-    }
-}
-
-/// Per-segment codec identity: which codec, which representation version,
-/// what it promises, and (for lossy codecs) which calibration produced it.
-/// Required on every segment of a current-version manifest.
-///
-/// The identity is namespaced per segment rather than per payload so one
-/// payload can mix raw and compressed segments (e.g. a grown prefix whose
-/// leading windows are compressed and whose new tail is raw), and so a v4
-/// manifest with the identity stripped from a segment is detectable and
-/// rejected instead of silently inheriting the payload codec or raw.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SegmentCodecIdentity {
-    /// Segment codec name, e.g. `raw`. Distinct namespace from the payload
-    /// codec so entry formats version independently.
-    pub name: String,
-    /// On-disk representation version within `name`.
-    pub version: u32,
-    /// What decoding promises: [`CodecClass::Exact`] entries verify against
-    /// the payload digest; [`CodecClass::Lossy`] entries never do.
-    pub class: CodecClass,
-    /// Byte length the codec decodes to. Must equal the assembled payload
-    /// region this segment covers; a mismatch is corruption, not a hint.
-    pub decoded_len: u64,
-    /// Calibration namespace for lossy codecs (e.g. the CacheGen CDF
-    /// calibration digest). Must be empty for exact codecs; lossy lookups
-    /// only ever match a payload calibrated with the same digest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub calibration_digest: Option<String>,
-}
-
-impl SegmentCodecIdentity {
-    /// Identity for a segment stored verbatim: the exact raw codec at the
-    /// store's raw version, decoding to `segment.bytes`.
-    pub fn raw(encoded_len: u64) -> Self {
-        Self {
-            name: CODEC_RAW.to_string(),
-            version: CODEC_RAW_VERSION,
-            class: CodecClass::Exact,
-            decoded_len: encoded_len,
-            calibration_digest: None,
-        }
-    }
-
-    /// Identity for a runtime-native KV page segment stored verbatim. The
-    /// store performs no encode/decode step; restore imports these same bytes
-    /// through the runtime page descriptor associated with the manifest.
-    pub fn native_kv_page(encoded_len: u64) -> Self {
-        Self {
-            name: CODEC_NATIVE_KV_PAGE.to_string(),
-            version: CODEC_NATIVE_KV_PAGE_VERSION,
-            class: CodecClass::Exact,
-            decoded_len: encoded_len,
-            calibration_digest: None,
-        }
-    }
-
-    pub fn cachegen_archive(decoded_len: u64, calibration_digest: String) -> Self {
-        crate::cachegen::lmcache::segment_identity(decoded_len, calibration_digest)
-    }
-
-    /// Whether this identity names the supported native KV passthrough
-    /// representation. This is stricter than a name check: an identity with
-    /// the wrong version, class, or calibration is not native passthrough.
-    pub fn is_native_kv_page(&self) -> bool {
-        self.name == CODEC_NATIVE_KV_PAGE
-            && self.version == CODEC_NATIVE_KV_PAGE_VERSION
-            && self.class == CodecClass::Exact
-            && self.calibration_digest.is_none()
-    }
-
-    pub fn is_cachegen_archive(&self) -> bool {
-        self.name == crate::cachegen::lmcache::CACHEGEN_CODEC_NAME
-            && self.version == crate::cachegen::lmcache::CACHEGEN_CODEC_VERSION
-            && self.class == CodecClass::Lossy
-            && self
-                .calibration_digest
-                .as_deref()
-                .is_some_and(|digest| !digest.is_empty())
-    }
-
-    /// Whether this build can assemble a segment encoded with this identity.
-    /// Exact raw and native KV passthrough are implemented. Both assemble
-    /// verbatim; anything else is unknown and must be refused before assembly.
-    pub fn is_supported(&self) -> bool {
-        let supported_representation = (self.name == CODEC_RAW
-            && self.version == CODEC_RAW_VERSION)
-            || self.is_native_kv_page()
-            || self.is_cachegen_archive();
-        supported_representation
-            && (self.is_cachegen_archive()
-                || (self.class == CodecClass::Exact && self.calibration_digest.is_none()))
-    }
-
-    /// Internal consistency the capability negotiation relies on: an exact
-    /// identity must be raw-shaped (decoded length equals the stored bytes,
-    /// no calibration), and every identity must agree that decoding yields
-    /// what the manifest says it yields.
-    pub fn is_self_consistent(&self, encoded_len: u64) -> bool {
-        match self.class {
-            CodecClass::Exact => {
-                self.decoded_len == encoded_len && self.calibration_digest.is_none()
-            }
-            // A lossy identity must declare a calibration to decode against;
-            // its decoded length is checked against the payload layout at
-            // negotiation, not against the stored bytes.
-            CodecClass::Lossy => self.calibration_digest.is_some(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HandoffSegmentRef {
-    pub index: u32,
-    pub offset: u64,
-    pub bytes: u64,
-    pub digest: String,
-    /// Per-segment codec identity: what the stored bytes are, what decoding
-    /// them promises, and (for lossy codecs) which calibration applies.
-    /// Required on a current-version manifest; the `Option` exists only so a
-    /// v4 manifest with the identity stripped is *detectable* and rejected —
-    /// it never falls back to the payload codec or to raw.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codec_identity: Option<SegmentCodecIdentity>,
-    /// Per-segment metadata for page-stream payloads (serialized
-    /// `RuntimeKvPageDesc` plus token range), opaque to the store.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub meta_json: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HandoffManifest {
-    pub version: u32,
-    /// Numerical model identity used by exact model-scoped lifecycle
-    /// operations. This intentionally spans every split stage of one model.
-    pub model_identity: String,
-    /// `exact_state_identity` of the producing runtime — the numerical
-    /// identity a loader must match before importing this state.
-    pub state_identity: String,
-    pub payload_kind: String,
-    /// Codec identity of the segment payload bytes. Always present on a decoded
-    /// manifest: a current-version manifest must carry it explicitly, and a
-    /// [`LEGACY_MANIFEST_VERSION`] manifest is normalized to raw on decode. The
-    /// field is optional only so a version-3 manifest with the codec stripped
-    /// is detectable and rejected rather than silently defaulted to raw.
-    #[serde(default)]
-    pub codec: Option<PayloadCodec>,
-    pub total_bytes: u64,
-    /// BLAKE3 of the assembled payload; also the manifest's key.
-    pub payload_digest: String,
-    pub segments: Vec<HandoffSegmentRef>,
-    pub kv_bytes: u64,
-    /// Decoded native KV length. Equal to `kv_bytes` for native pages; for a
-    /// CacheGen envelope `kv_bytes` is the archive boundary.
-    #[serde(default)]
-    pub kv_decoded_bytes: u64,
-    pub recurrent_bytes: u64,
-    /// Serialized `RuntimeKvPageDesc` for kv-recurrent payloads; opaque to
-    /// this crate so the store does not depend on the runtime.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kv_desc_json: Option<String>,
-    pub token_count: u64,
-    pub continuation_token: i32,
-    /// Greedy continuation produced by the exporting session, when known —
-    /// lets an offline restore self-verify determinism.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub expected_tokens: Vec<i32>,
-}
-
-impl HandoffManifest {
-    pub fn new(state_identity: String, payload_kind: String) -> Self {
-        Self::new_for_model(state_identity.clone(), state_identity, payload_kind)
-    }
-
-    pub fn new_for_model(
-        model_identity: String,
-        state_identity: String,
-        payload_kind: String,
-    ) -> Self {
-        Self {
-            version: MANIFEST_VERSION,
-            model_identity,
-            state_identity,
-            payload_kind,
-            codec: Some(PayloadCodec::raw()),
-            total_bytes: 0,
-            payload_digest: String::new(),
-            segments: Vec::new(),
-            kv_bytes: 0,
-            kv_decoded_bytes: 0,
-            recurrent_bytes: 0,
-            kv_desc_json: None,
-            token_count: 0,
-            continuation_token: 0,
-            expected_tokens: Vec::new(),
-        }
-    }
-
-    /// Whether this manifest contains runtime-native KV page segments.
-    pub fn uses_native_kv_passthrough(&self) -> bool {
-        self.segments.iter().any(|segment| {
-            segment
-                .codec_identity
-                .as_ref()
-                .is_some_and(SegmentCodecIdentity::is_native_kv_page)
-        })
-    }
-
-    pub fn uses_cachegen_kv(&self) -> bool {
-        self.segments.iter().any(|segment| {
-            segment
-                .codec_identity
-                .as_ref()
-                .is_some_and(SegmentCodecIdentity::is_cachegen_archive)
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SegmentPut {
-    pub new: bool,
-    pub bytes: u64,
-}
-
-/// How a payload is laid out, so segments can be cut where a growing prefix
-/// keeps its bytes still.
-///
-/// The runtime exports exact state as a sequence of runs, each holding one
-/// token-row per token in token order: every layer's K, then every layer's V,
-/// then the indexer rows. Adding tokens extends every run, so a cut at a fixed
-/// byte offset lands in a different place each turn and nothing dedupes — the
-/// measured cost was 8x the newly committed bytes at 8 MiB segments.
-///
-/// Cutting each run into fixed windows of token-rows instead means turn N+1's
-/// segments are byte-identical to turn N's up to the last partial window, and
-/// only genuinely new state is written.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PayloadGeometry {
-    /// Runs in wire order.
-    pub blocks: Vec<GeometryBlock>,
-    /// Token-rows in every run.
-    pub rows: u64,
-    /// Rows per segment. Must depend only on the model's own shape, never on
-    /// how many tokens this particular entry holds, or the boundaries move
-    /// between turns and the dedupe is lost.
-    pub window_rows: u64,
-    /// Trailing bytes with no row structure (a recurrent snapshot), cut at the
-    /// store's default segment size.
-    pub tail_bytes: u64,
-}
-
-/// One run of token-rows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GeometryBlock {
-    /// Bytes per token-row.
-    pub stride: u64,
-    /// What this run holds, for the segment metadata: `k`, `v` or `kidx`.
-    pub kind: GeometryKind,
-    /// Which layer, relative to the exported range.
-    pub layer: u32,
-    /// Sub-run within the layer. Always 0 except for transposed V, where each
-    /// embedding column is its own token-contiguous run.
-    pub column: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GeometryKind {
-    Key,
-    Value,
-    KeyIndex,
-}
-
-impl GeometryKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Key => "k",
-            Self::Value => "v",
-            Self::KeyIndex => "kidx",
-        }
-    }
-}
-
-impl PayloadGeometry {
-    /// Bytes the geometry claims, for checking it against the payload it is
-    /// meant to describe.
-    pub fn total_bytes(&self) -> u64 {
-        self.blocks
-            .iter()
-            .map(|block| block.stride.saturating_mul(self.rows))
-            .fold(0u64, u64::saturating_add)
-            .saturating_add(self.tail_bytes)
-    }
-
-    /// A geometry that does not describe this payload exactly is not usable:
-    /// cutting to it would produce segments that reassemble to different
-    /// bytes. Callers fall back to fixed-size cutting.
-    pub fn matches(&self, payload_bytes: u64) -> bool {
-        self.rows > 0
-            && self.window_rows > 0
-            && !self.blocks.is_empty()
-            && self.blocks.iter().all(|block| block.stride > 0)
-            && self.total_bytes() == payload_bytes
-    }
-
-    /// The cuts, as `(offset, len, label)` in wire order.
-    pub fn plan(&self, tail_segment_bytes: u64) -> Vec<(u64, u64, String)> {
-        let mut cuts = Vec::new();
-        let mut offset = 0u64;
-        for block in &self.blocks {
-            let mut row = 0u64;
-            while row < self.rows {
-                let rows = self.window_rows.min(self.rows - row);
-                let len = rows.saturating_mul(block.stride);
-                cuts.push((
-                    offset,
-                    len,
-                    format!(
-                        "{}:{}:{}:{row}",
-                        block.kind.as_str(),
-                        block.layer,
-                        block.column
-                    ),
-                ));
-                offset = offset.saturating_add(len);
-                row += rows;
-            }
-        }
-        let tail_cut = tail_segment_bytes.max(1);
-        let mut remaining = self.tail_bytes;
-        while remaining > 0 {
-            let len = tail_cut.min(remaining);
-            cuts.push((offset, len, "tail".to_string()));
-            offset = offset.saturating_add(len);
-            remaining -= len;
-        }
-        cuts
-    }
-}
-
-/// What the store is allowed to occupy. Both bounds are hard: the budget caps
-/// what the cache manages, the reserve caps what it may take from everything
-/// else on the filesystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StoreLimits {
-    /// Whole-root cap over segments, manifests, indexes and in-flight bytes.
-    /// Zero disables the cap; the public configuration surface rejects zero
-    /// rather than treating it as unlimited, so only internal callers and
-    /// tests can reach that state.
-    pub budget_bytes: u64,
-    /// Free space the store preserves for everything else on the filesystem.
-    pub minimum_free_bytes: u64,
-}
-
-impl StoreLimits {
-    pub fn new(budget_bytes: u64, minimum_free_bytes: u64) -> Self {
-        Self {
-            budget_bytes,
-            minimum_free_bytes,
-        }
-    }
-}
-
-/// Why a write was not admitted. Every refusal is a miss with a stable reason,
-/// never a partial or best-effort write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteRefusal {
-    /// The entry alone is larger than the whole budget. Storing it could only
-    /// succeed by evicting everything else and still overflowing.
-    SkippedOversize,
-    /// The budget is full and eviction cannot free enough (everything else is
-    /// pinned or the entry needs more than the whole cap).
-    InsufficientSpace,
-    /// The filesystem is at the minimum-free reserve. Reads still serve; the
-    /// tier stops writing until space comes back.
-    ReadOnlyLowSpace,
-}
-
-impl WriteRefusal {
-    /// Stable reason code for the status surface.
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::SkippedOversize => "skipped_oversize",
-            Self::InsufficientSpace => "insufficient_space",
-            Self::ReadOnlyLowSpace => "read_only_low_space",
-        }
-    }
-}
-
 /// Capacity held for bytes that are being written but not yet committed.
 /// Counted against the budget for as long as it lives, so two concurrent
 /// writers cannot each pass an admission check and together overflow the cap.
@@ -693,12 +204,39 @@ pub struct HandoffSegmentStore {
     /// them. Left unprotected this fails as "manifest references missing
     /// segment" under exactly the pressure the cache is for.
     inflight_segments: Mutex<std::collections::BTreeMap<String, usize>>,
+    /// Per-manifest object footprint, recorded at commit.
+    ///
+    /// Budget enforcement needs to know which pack each segment lives in to
+    /// learn what becomes free when a manifest is evicted. Rebuilding that
+    /// from every manifest and packed index costs O(manifests x segments) per
+    /// pass; recording it once at commit makes the same decision O(1) per
+    /// evicted manifest.
+    footprints: Mutex<std::collections::HashMap<String, ManifestFootprint>>,
     packed: PackedSegmentStore,
 }
 
 pub fn segment_digest(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
+
+/// Encode a manifest in the on-disk container. Public so the peer protocol can
+/// ship the same bytes it stores.
+pub fn encode_manifest_container(manifest: &HandoffManifest) -> Result<Vec<u8>> {
+    manifest_codec::encode_manifest(manifest)
+}
+
+/// Decode a manifest container produced by [`encode_manifest_container`].
+pub fn decode_manifest_container(bytes: &[u8]) -> Result<HandoffManifest> {
+    manifest_codec::decode_manifest(bytes)
+}
+
+/// Whether these bytes are a manifest container rather than legacy JSON.
+pub fn is_manifest_container(bytes: &[u8]) -> bool {
+    manifest_codec::looks_binary(bytes)
+}
+
+pub use geometry::{GeometryBlock, GeometryKind, PayloadGeometry};
+pub use identity::{composition_root, fixed_segmentation_id, geometry_segmentation_id};
 
 fn acquire_root_lock(root: &Path) -> Result<fs::File> {
     let path = root.join(ROOT_LOCK_FILE);
@@ -796,6 +334,7 @@ impl HandoffSegmentStore {
             evicted_manifests: AtomicU64::new(0),
             quarantined_objects: AtomicU64::new(0),
             inflight_segments: Mutex::new(std::collections::BTreeMap::new()),
+            footprints: Mutex::new(std::collections::HashMap::new()),
             packed,
         })
     }
@@ -849,12 +388,15 @@ impl HandoffSegmentStore {
                 .saturating_add(remove_temporary_files(&self.root.join(directory))?);
         }
 
+        let mut quarantined = Vec::new();
         for key in self.list_manifests()? {
             if self.validate_committed_manifest(&key).is_err() {
-                self.quarantine(&self.manifest_path(&key))?;
+                self.quarantine(&self.existing_manifest_path(&key))?;
+                quarantined.push(key);
                 report.quarantined_manifests += 1;
             }
         }
+        self.forget_footprints(&quarantined);
         self.rebuild_packed_index()?;
         report.removed_prefix_links = self.remove_dangling_prefix_links()?;
         report.removed_orphan_bytes = self.collect_unreferenced_segments()?;
@@ -900,7 +442,7 @@ impl HandoffSegmentStore {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error.into()),
             };
-            if digest.is_empty() || !self.manifest_path(&digest).is_file() {
+            if digest.is_empty() || !self.existing_manifest_path(&digest).is_file() {
                 match fs::remove_file(&path) {
                     Ok(()) => removed += 1,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -950,7 +492,21 @@ impl HandoffSegmentStore {
     fn manifest_path(&self, payload_digest: &str) -> PathBuf {
         self.root
             .join(MANIFEST_DIR)
-            .join(format!("{payload_digest}.json"))
+            .join(format!("{payload_digest}.manifest"))
+    }
+
+    /// Where this key is actually stored: the current container, or the legacy
+    /// JSON file when only that exists. Writers always use [`Self::manifest_path`].
+    fn existing_manifest_path(&self, payload_digest: &str) -> PathBuf {
+        let current = self.manifest_path(payload_digest);
+        if current.is_file() {
+            return current;
+        }
+        let legacy = self
+            .root
+            .join(MANIFEST_DIR)
+            .join(format!("{payload_digest}.json"));
+        if legacy.is_file() { legacy } else { current }
     }
 
     fn namespace_dir(&self, namespace_key: &str) -> PathBuf {
@@ -1052,13 +608,16 @@ impl HandoffSegmentStore {
             Err(error) => return Err(error.into()),
         };
         let payload_digest = String::from_utf8(bytes).context("malformed prefix link")?;
-        let manifest_path = self.manifest_path(&payload_digest);
+        // Legacy entries live at `<digest>.json`; the resolver keeps them
+        // readable instead of turning a live prefix into a permanent miss.
+        let manifest_path = self.existing_manifest_path(&payload_digest);
         match fs::read(&manifest_path) {
             Ok(bytes) => {
                 let manifest = match decode_manifest(&payload_digest, &bytes) {
                     Ok(manifest) => manifest,
                     Err(_) => {
                         self.quarantine(&manifest_path)?;
+                        self.forget_footprints(std::slice::from_ref(&payload_digest));
                         let _ = fs::remove_file(&path);
                         self.invalidate_usage();
                         return Ok(None);
@@ -1204,7 +763,11 @@ impl HandoffSegmentStore {
             }];
             let len = usize::try_from(location.bytes).context("segment exceeds usize")?;
             let mut bytes = Vec::with_capacity(len);
-            return match self.packed.append_many(&requests, &mut bytes, None) {
+            let mut accounting = packed::ReadAccounting::default();
+            return match self
+                .packed
+                .append_many(&requests, &mut bytes, None, &mut accounting)
+            {
                 Ok(()) => Ok(bytes),
                 Err(failure) => {
                     let path = self.packed.pack_path(&failure.pack_digest);
@@ -1314,6 +877,22 @@ impl HandoffSegmentStore {
                 manifest.total_bytes
             );
         }
+        if manifest.key_kind == KeyKind::Alias {
+            bail!("an alias key cannot be committed as an L3 manifest");
+        }
+        if manifest.key_kind == KeyKind::CompositionRoot {
+            let segmentation_id = manifest
+                .segmentation_id
+                .as_deref()
+                .context("composition-root manifest has no segmentation identity")?;
+            let root = composition_root(segmentation_id, &manifest.segments)?;
+            if root != manifest.payload_digest {
+                bail!(
+                    "manifest key {} is not the composition root of its segments ({root})",
+                    manifest.payload_digest
+                );
+            }
+        }
         let limits = self.limits();
         if limits.budget_bytes > 0 && manifest.total_bytes > limits.budget_bytes {
             return Ok(Err(WriteRefusal::SkippedOversize));
@@ -1322,7 +901,8 @@ impl HandoffSegmentStore {
         // thousands of segment refs, and eviction parses every manifest to
         // build its reference map. Indentation is pure cost on a file nobody
         // reads by hand.
-        let serialized = serde_json::to_vec(manifest).context("failed to serialize manifest")?;
+        let serialized =
+            manifest_codec::encode_manifest(manifest).context("failed to encode manifest")?;
         let segment_digests = manifest
             .segments
             .iter()
@@ -1365,6 +945,7 @@ impl HandoffSegmentStore {
                 }
                 write_atomically(&manifest_path, &serialized)?;
                 fsinfo::restrict_to_owner(&manifest_path, 0o600)?;
+                self.record_footprint(manifest, &locations, serialized.len() as u64);
             }
             Err(refusal) => return Ok(Err(refusal)),
         }
@@ -1377,13 +958,34 @@ impl HandoffSegmentStore {
     /// failing a restore because recency could not be recorded would trade a
     /// working cache for a bookkeeping detail.
     pub fn touch_manifest(&self, payload_digest: &str) {
-        let _ = fsinfo::touch(&self.manifest_path(payload_digest));
+        let _ = fsinfo::touch(&self.existing_manifest_path(payload_digest));
     }
 
     pub fn load_manifest(&self, payload_digest: &str) -> Result<HandoffManifest> {
-        let bytes = fs::read(self.manifest_path(payload_digest))
+        let bytes = fs::read(self.existing_manifest_path(payload_digest))
             .with_context(|| format!("failed to read manifest {payload_digest}"))?;
         decode_manifest(payload_digest, &bytes)
+    }
+
+    /// Newest manifest key, optionally restricted to wire-digest entries.
+    ///
+    /// A peer that asked for JSON can only verify a wire-digest key: handing
+    /// it a composition-root entry would transcode a key its own admission
+    /// re-hash rejects. The filter is on `key_kind`, not the file extension,
+    /// because a legacy-shaped file is not the property that matters.
+    pub fn newest_manifest(&self, wire_key_only: bool) -> Result<Option<String>> {
+        for key in self.list_manifests()? {
+            if !wire_key_only {
+                return Ok(Some(key));
+            }
+            if self
+                .load_manifest(&key)
+                .is_ok_and(|manifest| manifest.key_kind == KeyKind::WireBlake3)
+            {
+                return Ok(Some(key));
+            }
+        }
+        Ok(None)
     }
 
     /// Manifest keys, newest first by modification time.
@@ -1392,7 +994,12 @@ impl HandoffSegmentStore {
         for entry in fs::read_dir(self.root.join(MANIFEST_DIR))? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().is_none_or(|extension| extension != "json") {
+            // `.manifest` is the current container; `.json` entries are legacy
+            // v2-v4 manifests kept readable for one release.
+            if path
+                .extension()
+                .is_none_or(|extension| extension != "manifest" && extension != "json")
+            {
                 continue;
             }
             let Some(stem) = path
@@ -1411,10 +1018,24 @@ impl HandoffSegmentStore {
     /// Assemble the full payload for a manifest, verifying every segment
     /// digest, the tiling, and the whole-payload digest.
     pub fn assemble(&self, manifest: &HandoffManifest) -> Result<Vec<u8>> {
+        self.assemble_traced(manifest).map(|(payload, _)| payload)
+    }
+
+    /// As [`Self::assemble`], returning what the restore cost.
+    ///
+    /// Restore latency tracks physical reads and packs touched, not bytes, so
+    /// these counters are the mechanism behind a TTFT number: a payload
+    /// assembled from many small spill packs shows up here as a high
+    /// `physical_reads` with a low `max_read_nanos`.
+    pub fn assemble_traced(&self, manifest: &HandoffManifest) -> Result<(Vec<u8>, AssembleStats)> {
+        let started = std::time::Instant::now();
         validate_manifest_compatibility(manifest)?;
         let total = usize::try_from(manifest.total_bytes).context("payload exceeds usize")?;
         let mut payload = Vec::with_capacity(total);
-        let mut payload_hasher = blake3::Hasher::new();
+        // A composition-root manifest is verified from segment metadata, not
+        // by re-hashing the payload. Wire-digest manifests keep the old path.
+        let mut payload_hasher =
+            (manifest.key_kind == KeyKind::WireBlake3).then(blake3::Hasher::new);
         let locations = self
             .packed
             .load_manifest_index(&manifest.payload_digest, manifest.segments.len())?;
@@ -1437,6 +1058,16 @@ impl HandoffSegmentStore {
                 manifest.total_bytes
             );
         }
+        let mut stats = AssembleStats {
+            segments: manifest.segments.len() as u64,
+            bytes: manifest.total_bytes,
+            ..AssembleStats::default()
+        };
+        let mut packs = std::collections::HashSet::new();
+        for location in locations.iter().flatten() {
+            packs.insert(location.pack_digest.as_str());
+        }
+        stats.packs = packs.len() as u64;
         let mut packed_requests = Vec::new();
         for (segment, location) in manifest.segments.iter().zip(&locations) {
             if let Some(location) = location.as_ref() {
@@ -1447,36 +1078,89 @@ impl HandoffSegmentStore {
                     output_offset: segment.offset,
                 });
             } else {
-                self.append_packed(&packed_requests, &mut payload, &mut payload_hasher)?;
+                self.append_packed(
+                    &packed_requests,
+                    &mut payload,
+                    &mut payload_hasher.as_mut(),
+                    &mut stats,
+                )?;
                 packed_requests.clear();
                 let bytes = self.read_segment(&segment.digest)?;
-                payload_hasher.update(&bytes);
+                if let Some(hasher) = payload_hasher.as_mut() {
+                    hasher.update(&bytes);
+                }
                 payload.extend_from_slice(&bytes);
+                stats.loose_segment_reads = stats.loose_segment_reads.saturating_add(1);
             }
         }
-        self.append_packed(&packed_requests, &mut payload, &mut payload_hasher)?;
+        self.append_packed(
+            &packed_requests,
+            &mut payload,
+            &mut payload_hasher.as_mut(),
+            &mut stats,
+        )?;
         if payload.len() != total {
             bail!(
                 "assembled {} bytes but manifest records {total}",
                 payload.len()
             );
         }
-        if payload_hasher.finalize().to_hex().as_str() != manifest.payload_digest {
-            bail!("assembled payload failed manifest digest verification");
+        match payload_hasher {
+            Some(hasher) => {
+                if hasher.finalize().to_hex().as_str() != manifest.payload_digest {
+                    bail!("assembled payload failed manifest digest verification");
+                }
+            }
+            None if manifest.key_kind == KeyKind::Alias => {
+                bail!("an alias manifest cannot be assembled from this store");
+            }
+            None => {
+                let segmentation_id = manifest
+                    .segmentation_id
+                    .as_deref()
+                    .context("composition-root manifest has no segmentation identity")?;
+                let root = composition_root(segmentation_id, &manifest.segments)?;
+                if root != manifest.payload_digest {
+                    bail!("assembled payload failed composition-root verification");
+                }
+            }
         }
-        Ok(payload)
+        if std::env::var("SKIPPY_L3_VERIFY_WIRE").is_ok_and(|value| value != "0" && value != "off")
+        {
+            verify_segments_at_offsets(&payload, &manifest.segments)?;
+        }
+        stats.total_nanos = started.elapsed().as_nanos() as u64;
+        Ok((payload, stats))
     }
 
     fn append_packed(
         &self,
         requests: &[PackedReadRequest<'_>],
         payload: &mut Vec<u8>,
-        payload_hasher: &mut blake3::Hasher,
+        payload_hasher: &mut Option<&mut blake3::Hasher>,
+        stats: &mut AssembleStats,
     ) -> Result<()> {
-        match self
-            .packed
-            .append_many(requests, payload, Some(payload_hasher))
-        {
+        if requests.is_empty() {
+            return Ok(());
+        }
+        let mut accounting = packed::ReadAccounting::default();
+        let result = self.packed.append_many(
+            requests,
+            payload,
+            payload_hasher.as_deref_mut(),
+            &mut accounting,
+        );
+        stats.packs_opened = stats.packs_opened.saturating_add(accounting.packs_opened);
+        stats.physical_reads = stats
+            .physical_reads
+            .saturating_add(accounting.physical_reads);
+        stats.bytes_read = stats.bytes_read.saturating_add(accounting.bytes_read);
+        stats.read_nanos = stats.read_nanos.saturating_add(accounting.read_nanos);
+        stats.max_read_nanos = stats.max_read_nanos.max(accounting.max_read_nanos);
+        stats.verify_nanos = stats.verify_nanos.saturating_add(accounting.verify_nanos);
+        stats.hash_nanos = stats.hash_nanos.saturating_add(accounting.hash_nanos);
+        stats.hashed_bytes = stats.hashed_bytes.saturating_add(accounting.hashed_bytes);
+        match result {
             Ok(()) => Ok(()),
             Err(failure) => {
                 let path = self.packed.pack_path(&failure.pack_digest);
@@ -1634,7 +1318,7 @@ impl HandoffSegmentStore {
             if self.is_pinned(key) {
                 continue;
             }
-            let path = self.manifest_path(key);
+            let path = self.existing_manifest_path(key);
             match fs::remove_file(&path) {
                 Ok(()) => {
                     self.packed.remove_manifest_index(key)?;
@@ -1649,6 +1333,7 @@ impl HandoffSegmentStore {
             }
         }
         if !removed.is_empty() {
+            self.forget_footprints(&removed);
             self.remove_dangling_prefix_links()?;
             self.collect_unreferenced_segments()?;
         }
@@ -1747,72 +1432,66 @@ impl HandoffSegmentStore {
         }
         // Least-recently-used last, so eviction pops from the back.
         let keys = self.list_manifests()?;
-        let mut manifests = Vec::with_capacity(keys.len());
+        let mut entries = Vec::with_capacity(keys.len());
         let mut reference_counts: std::collections::HashMap<String, (usize, u64)> =
             std::collections::HashMap::new();
         for key in &keys {
-            let manifest = self.load_manifest(key).with_context(|| {
-                format!("failed to build eviction reference map from manifest {key}")
-            })?;
-            let locations = self
-                .packed
-                .load_manifest_index(key, manifest.segments.len())?;
-            for (segment, location) in manifest.segments.iter().zip(&locations) {
-                let (object, bytes) = location.as_ref().map_or_else(
-                    || (segment.digest.clone(), segment.bytes),
-                    |location| {
-                        (
-                            format!("pack:{}", location.pack_digest),
-                            fs::metadata(self.packed.pack_path(&location.pack_digest))
-                                .map(|metadata| metadata.len())
-                                .unwrap_or(0),
-                        )
-                    },
-                );
-                let entry = reference_counts.entry(object).or_insert((0, bytes));
-                entry.0 += 1;
+            let footprint = self.manifest_footprint(key)?;
+            for (pack, (count, bytes)) in &footprint.packs {
+                let entry = reference_counts
+                    .entry(format!("pack:{pack}"))
+                    .or_insert((0, *bytes));
+                entry.0 += count;
             }
-            manifests.push((manifest, locations));
+            for (digest, (count, bytes)) in &footprint.loose {
+                let entry = reference_counts
+                    .entry(digest.clone())
+                    .or_insert((0, *bytes));
+                entry.0 += count;
+            }
+            entries.push((key.clone(), footprint));
         }
         let mut freeable = usage_before;
-        let mut evicted_any = false;
+        let mut evicted_keys = Vec::new();
         while freeable > target_bytes {
-            let Some(position) = manifests.iter().rposition(|(manifest, _)| {
-                !self.is_pinned(&manifest.payload_digest)
-                    && model_identity.is_none_or(|identity| manifest.model_identity == identity)
+            let Some(position) = entries.iter().rposition(|(key, footprint)| {
+                !self.is_pinned(key)
+                    && model_identity.is_none_or(|identity| footprint.model_identity == identity)
             }) else {
                 // Everything left is in use. Refusing the write is correct;
                 // tearing state out from under a live operation is not.
                 break;
             };
-            let (evicted, locations) = manifests.remove(position);
-            let manifest_path = self.manifest_path(&evicted.payload_digest);
-            let manifest_bytes = fs::metadata(&manifest_path)
-                .map(|metadata| metadata.len())
-                .unwrap_or(0);
+            let (key, footprint) = entries.remove(position);
             self.invalidate_usage();
-            fs::remove_file(&manifest_path)
-                .with_context(|| format!("failed to evict manifest {}", evicted.payload_digest))?;
-            let index_bytes = self.packed.remove_manifest_index(&evicted.payload_digest)?;
+            fs::remove_file(self.existing_manifest_path(&key))
+                .with_context(|| format!("failed to evict manifest {key}"))?;
+            let index_bytes = self.packed.remove_manifest_index(&key)?;
             self.evicted_manifests.fetch_add(1, Ordering::Relaxed);
             freeable = freeable
-                .saturating_sub(manifest_bytes)
+                .saturating_sub(footprint.manifest_bytes)
                 .saturating_sub(index_bytes);
-            for (segment, location) in evicted.segments.iter().zip(locations) {
-                let object = location.map_or_else(
-                    || segment.digest.clone(),
-                    |location| format!("pack:{}", location.pack_digest),
-                );
+            for (pack, (count, bytes)) in &footprint.packs {
+                let object = format!("pack:{pack}");
                 if let Some(entry) = reference_counts.get_mut(&object) {
-                    entry.0 = entry.0.saturating_sub(1);
+                    entry.0 = entry.0.saturating_sub(*count);
                     if entry.0 == 0 {
-                        freeable = freeable.saturating_sub(entry.1);
+                        freeable = freeable.saturating_sub(*bytes);
                     }
                 }
             }
-            evicted_any = true;
+            for (digest, (count, bytes)) in &footprint.loose {
+                if let Some(entry) = reference_counts.get_mut(digest) {
+                    entry.0 = entry.0.saturating_sub(*count);
+                    if entry.0 == 0 {
+                        freeable = freeable.saturating_sub(*bytes);
+                    }
+                }
+            }
+            evicted_keys.push(key);
         }
-        if !evicted_any {
+        self.forget_footprints(&evicted_keys);
+        if evicted_keys.is_empty() {
             return Ok(0);
         }
         self.remove_dangling_prefix_links()?;
@@ -1850,6 +1529,7 @@ impl HandoffSegmentStore {
         // Files are about to be removed or rewritten in bulk.
         self.invalidate_usage();
         let before = self.managed_usage_bytes()?;
+        let mut removed = Vec::new();
         for key in self.list_manifests()? {
             if self.is_pinned(&key) {
                 continue;
@@ -1862,9 +1542,11 @@ impl HandoffSegmentStore {
                     continue;
                 }
             }
-            let path = self.manifest_path(&key);
+            // Legacy entries live at `<digest>.json`; clearing must reach them
+            // too, or `clear` would report a freed store that still holds them.
+            let path = self.existing_manifest_path(&key);
             match fs::remove_file(&path) {
-                Ok(()) => {}
+                Ok(()) => removed.push(key.clone()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => {
                     return Err(error).with_context(|| format!("failed to clear manifest {key}"));
@@ -1872,6 +1554,7 @@ impl HandoffSegmentStore {
             }
             self.packed.remove_manifest_index(&key)?;
         }
+        self.forget_footprints(&removed);
         self.remove_dangling_prefix_links()?;
         self.collect_unreferenced_segments()?;
         let after = self.managed_usage_bytes()?;
@@ -1894,14 +1577,18 @@ impl HandoffSegmentStore {
     pub fn collect_unreferenced_segments(&self) -> Result<u64> {
         // Files are about to be removed or rewritten in bulk.
         self.invalidate_usage();
-        let mut referenced = std::collections::HashSet::new();
+        // Reference sets come from the footprints recorded at commit, so GC no
+        // longer reparses every manifest's segment list to find them.
+        let mut referenced_segments = std::collections::HashSet::new();
+        let mut referenced_packs = std::collections::HashSet::new();
         let manifest_keys = self.list_manifests()?;
         for key in &manifest_keys {
-            let manifest = self
-                .load_manifest(key)
-                .with_context(|| format!("failed to build GC reference map from manifest {key}"))?;
-            for segment in manifest.segments {
-                referenced.insert(segment.digest);
+            let footprint = self.manifest_footprint(key)?;
+            for digest in footprint.loose.keys() {
+                referenced_segments.insert(digest.clone());
+            }
+            for pack in footprint.packs.keys() {
+                referenced_packs.insert(pack.clone());
             }
         }
         let mut freed = 0u64;
@@ -1924,7 +1611,7 @@ impl HandoffSegmentStore {
             else {
                 continue;
             };
-            if !referenced.contains(&stem) && !held.contains(&stem) {
+            if !referenced_segments.contains(&stem) && !held.contains(&stem) {
                 freed = freed.saturating_add(entry.metadata()?.len());
                 fs::remove_file(&path)
                     .with_context(|| format!("failed to collect segment {stem}"))?;
@@ -1934,7 +1621,7 @@ impl HandoffSegmentStore {
             .into_iter()
             .collect::<std::collections::HashSet<_>>();
         freed = freed.saturating_add(self.packed.remove_orphan_indexes(&manifests)?);
-        freed = freed.saturating_add(self.packed.remove_orphan_packs(&referenced, || {
+        freed = freed.saturating_add(self.packed.remove_orphan_packs(&referenced_packs, || {
             self.inflight_segments
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1944,284 +1631,6 @@ impl HandoffSegmentStore {
         })?);
         Ok(freed)
     }
-}
-
-/// Refuse a manifest whose payload codec this build cannot decode, before any
-/// segment is read or reassembled. Keeps unknown codecs from being committed
-/// (nothing unassemblable is ever persisted) and from being assembled (an
-/// unknown codec is a miss, never a silent misinterpretation of the bytes). A
-/// missing identity is treated as unsupported, not defaulted to raw.
-fn reject_unsupported_codec(manifest: &HandoffManifest) -> Result<()> {
-    match manifest.codec.as_ref() {
-        Some(codec) if codec.is_supported() => Ok(()),
-        Some(codec) => bail!(
-            "manifest {} uses unsupported codec {}/{}",
-            manifest.payload_digest,
-            codec.name,
-            codec.version
-        ),
-        None => bail!(
-            "manifest {} has no codec identity; this build requires an explicit codec",
-            manifest.payload_digest
-        ),
-    }
-}
-
-/// Versions this build can read and write: the current per-segment format
-/// and the two legacy formats (pre-codec and payload-level-codec).
-fn manifest_version_is_supported(version: u32) -> bool {
-    version == MANIFEST_VERSION
-        || version == LEGACY_MANIFEST_VERSION
-        || version == LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION
-}
-
-/// Reject a manifest whose segment codec identities this build cannot decode,
-/// before any segment is read or reassembled. Also enforces the per-segment
-/// negotiation contract: every identity must be internally consistent with
-/// the stored bytes it covers, and a mixed manifest must name the payload
-/// codec that describes the assembled whole. Positional errors name the
-/// segment index so the offending ref is identifiable in the message.
-fn reject_unsupported_segment_codecs(manifest: &HandoffManifest) -> Result<()> {
-    let has_native_kv = manifest.uses_native_kv_passthrough();
-    let has_cachegen_kv = manifest.uses_cachegen_kv();
-    let kv_representation = if has_cachegen_kv {
-        "CacheGen KV"
-    } else {
-        "native KV"
-    };
-    if has_native_kv && has_cachegen_kv {
-        bail!(
-            "manifest {} mixes native and CacheGen KV representations",
-            manifest.payload_digest
-        );
-    }
-    let envelope_is_cachegen =
-        manifest.codec.as_ref() == Some(&PayloadCodec::cachegen_kv_envelope());
-    if envelope_is_cachegen != has_cachegen_kv {
-        bail!(
-            "manifest {} payload codec disagrees with its CacheGen segments",
-            manifest.payload_digest
-        );
-    }
-    let has_runtime_descriptor = manifest
-        .kv_desc_json
-        .as_deref()
-        .is_some_and(|descriptor| serde_json::from_str::<serde_json::Value>(descriptor).is_ok());
-    if has_native_kv
-        && (manifest.version != MANIFEST_VERSION
-            || manifest.payload_kind != "kv-recurrent"
-            || manifest.kv_bytes == 0
-            || !has_runtime_descriptor
-            || manifest.kv_bytes.checked_add(manifest.recurrent_bytes)
-                != Some(manifest.total_bytes))
-    {
-        bail!(
-            "manifest {} names native KV segments without a current, complete kv-recurrent payload and runtime page descriptor",
-            manifest.payload_digest
-        );
-    }
-    if has_cachegen_kv
-        && (manifest.version != MANIFEST_VERSION
-            || manifest.payload_kind != "kv-recurrent"
-            || manifest.kv_bytes == 0
-            || manifest.kv_decoded_bytes == 0
-            || !has_runtime_descriptor
-            || manifest.kv_bytes.checked_add(manifest.recurrent_bytes)
-                != Some(manifest.total_bytes)
-            || manifest.codec.as_ref() != Some(&PayloadCodec::cachegen_kv_envelope()))
-    {
-        bail!(
-            "manifest {} names CacheGen KV without a current, complete kv-recurrent envelope and runtime page descriptor",
-            manifest.payload_digest
-        );
-    }
-    if has_cachegen_kv {
-        let mut cachegen_segments = manifest.segments.iter().filter(|segment| {
-            segment
-                .codec_identity
-                .as_ref()
-                .is_some_and(SegmentCodecIdentity::is_cachegen_archive)
-        });
-        let cachegen_segment = cachegen_segments
-            .next()
-            .context("CacheGen manifest has no archive segment")?;
-        let cachegen_identity = cachegen_segment
-            .codec_identity
-            .as_ref()
-            .context("CacheGen archive segment has no codec identity")?;
-        if cachegen_segments.next().is_some()
-            || cachegen_segment.offset != 0
-            || cachegen_segment.bytes != manifest.kv_bytes
-            || cachegen_identity.decoded_len != manifest.kv_decoded_bytes
-        {
-            bail!(
-                "manifest {} CacheGen archive must be one complete KV segment with matching encoded and decoded lengths",
-                manifest.payload_digest
-            );
-        }
-    }
-    for segment in &manifest.segments {
-        let Some(identity) = segment.codec_identity.as_ref() else {
-            // Legacy formats carry no per-segment identity by construction;
-            // the payload gate covers what their segments decode as.
-            continue;
-        };
-        if !identity.is_supported() {
-            bail!(
-                "manifest {} segment {} uses unsupported codec {}/{}",
-                manifest.payload_digest,
-                segment.index,
-                identity.name,
-                identity.version
-            );
-        }
-        if !identity.is_self_consistent(segment.bytes) {
-            bail!(
-                "manifest {} segment {} codec identity is inconsistent with its stored bytes ({}/{} class, decoded_len {}, encoded_len {})",
-                manifest.payload_digest,
-                segment.index,
-                identity.name,
-                identity.version,
-                identity.decoded_len,
-                segment.bytes
-            );
-        }
-        if has_native_kv || has_cachegen_kv {
-            let end = segment
-                .offset
-                .checked_add(segment.bytes)
-                .context("segment range overflows")?;
-            let covers_kv = segment.offset < manifest.kv_bytes;
-            if covers_kv && end > manifest.kv_bytes {
-                bail!(
-                    "manifest {} segment {} crosses the {kv_representation} boundary at byte {}",
-                    manifest.payload_digest,
-                    segment.index,
-                    manifest.kv_bytes
-                );
-            }
-            let expected_kv = if has_cachegen_kv {
-                identity.is_cachegen_archive()
-            } else {
-                identity.is_native_kv_page()
-            };
-            if covers_kv != expected_kv {
-                bail!(
-                    "manifest {} segment {} representation disagrees with the {kv_representation} boundary at byte {}",
-                    manifest.payload_digest,
-                    segment.index,
-                    manifest.kv_bytes
-                );
-            }
-        }
-        // The payload codec describes the assembled envelope. Exact native KV
-        // segments remain byte-for-byte members of the raw envelope; a future
-        // codec that transforms stored bytes must upgrade that envelope rather
-        // than leave it claiming raw.
-    }
-    Ok(())
-}
-
-/// The current format requires explicit per-segment codec identity. Shared
-/// by `decode_manifest` (on-disk reads) and
-/// `validate_manifest_compatibility` (commit and assembly), so neither path
-/// can persist or partially read a v4 manifest whose segment identity was
-/// stripped — there is no fallback to the payload codec or to raw.
-fn require_v4_segment_identities(manifest: &HandoffManifest) -> Result<()> {
-    for segment in &manifest.segments {
-        if segment.codec_identity.is_none() {
-            bail!(
-                "manifest {digest} at version {MANIFEST_VERSION} is missing per-segment codec identity on segment {index}",
-                digest = manifest.payload_digest,
-                index = segment.index
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Validate that an in-memory manifest is one this build can both persist and
-/// assemble: a supported format version *and* supported codecs at both the
-/// payload and every segment. `try_commit` and `assemble` call this before
-/// writing or reading any segment, so a manifest that `decode_manifest` would
-/// later reject — an unknown version (e.g. a future version carrying a raw
-/// codec) or an unsupported codec at either level — cannot be committed to
-/// disk or partially assembled from segments.
-fn validate_manifest_compatibility(manifest: &HandoffManifest) -> Result<()> {
-    if !manifest_version_is_supported(manifest.version) {
-        bail!(
-            "manifest {} has version {} but this build reads {MANIFEST_VERSION} or legacy {LEGACY_MANIFEST_VERSION}/{LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION}",
-            manifest.payload_digest,
-            manifest.version
-        );
-    }
-    if manifest.version == MANIFEST_VERSION {
-        require_v4_segment_identities(manifest)?;
-    }
-    reject_unsupported_codec(manifest)?;
-    reject_unsupported_segment_codecs(manifest)
-}
-
-fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest> {
-    let mut manifest: HandoffManifest =
-        serde_json::from_slice(bytes).context("malformed manifest")?;
-    match manifest.version {
-        MANIFEST_VERSION => {
-            // The current format must stamp both the payload codec and every
-            // per-segment codec identity explicitly. A missing field means it
-            // was stripped to force a reinterpretation of bytes this build
-            // may not decode — reject, never default to raw or to the payload
-            // codec.
-            if manifest.codec.is_none() {
-                bail!(
-                    "manifest {payload_digest} at version {MANIFEST_VERSION} is missing its required codec identity"
-                );
-            }
-            require_v4_segment_identities(&manifest)?;
-        }
-        LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION => {
-            // #1750 format: codec identity is carried once at the payload
-            // level and every segment implicitly is that codec. The payload
-            // codec is required there (a stripped one is rejected, same as
-            // current), and no per-segment identity exists to normalize —
-            // the payload gate below covers what the segments decode as.
-            if manifest.codec.is_none() {
-                bail!(
-                    "manifest {payload_digest} at version {LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION} is missing its required codec identity"
-                );
-            }
-        }
-        LEGACY_MANIFEST_VERSION => {
-            // Pre-codec-identity manifests are raw by construction. Accept an
-            // absent codec (normalize to raw) or an explicit raw codec; a
-            // legacy manifest cannot legitimately name a non-raw codec.
-            match manifest.codec {
-                None => manifest.codec = Some(PayloadCodec::raw()),
-                Some(ref codec) if *codec == PayloadCodec::raw() => {}
-                Some(ref codec) => bail!(
-                    "legacy manifest {payload_digest} declares non-raw codec {}/{}",
-                    codec.name,
-                    codec.version
-                ),
-            }
-        }
-        other => bail!(
-            "manifest {payload_digest} has version {other} but this build reads {MANIFEST_VERSION} or legacy {LEGACY_MANIFEST_VERSION}/{LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION}"
-        ),
-    }
-    // Central capability gate: no load entry point returns a manifest whose
-    // codecs this build cannot decode. Startup reconciliation quarantines it,
-    // manifest_for_prefix prunes the link and falls back to a shorter prefix,
-    // and a direct load fails.
-    reject_unsupported_codec(&manifest)?;
-    reject_unsupported_segment_codecs(&manifest)?;
-    if manifest.payload_digest != payload_digest {
-        bail!(
-            "manifest key {payload_digest} disagrees with payload digest {}",
-            manifest.payload_digest
-        );
-    }
-    Ok(manifest)
 }
 
 fn files_recursive(directory: &Path) -> Result<Vec<PathBuf>> {

@@ -40,6 +40,6 @@ fn compile_proto() {
         "#[allow(clippy::large_enum_variant)]",
     );
     config
-        .compile_protos(&["proto/stage.proto"], &["proto"])
-        .expect("compile skippy stage proto");
+        .compile_protos(&["proto/stage.proto", "proto/kv_cache.proto"], &["proto"])
+        .expect("compile skippy protos");
 }

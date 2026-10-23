@@ -612,6 +612,47 @@ fn payload_wire(payload: &ExactStatePayload) -> Result<(Vec<u8>, u64, u64), L2In
     }
 }
 
+/// Verify a payload against the manifest it was assembled from.
+///
+/// A composition-root manifest is verified from its segments plus a cheap root
+/// recomputation; a wire-digest manifest falls back to hashing the payload.
+/// Returns the observed value on failure, for the refusal record.
+fn verify_source_payload(wire: &[u8], source: &HandoffManifest) -> Result<(), String> {
+    match source.key_kind {
+        crate::l3::KeyKind::CompositionRoot => {
+            for segment in &source.segments {
+                let start = usize::try_from(segment.offset)
+                    .map_err(|_| format!("segment {} offset exceeds usize", segment.index))?;
+                let len = usize::try_from(segment.bytes)
+                    .map_err(|_| format!("segment {} length exceeds usize", segment.index))?;
+                let end = start
+                    .checked_add(len)
+                    .ok_or_else(|| format!("segment {} range overflows", segment.index))?;
+                let slice = wire
+                    .get(start..end)
+                    .ok_or_else(|| format!("segment {} exceeds payload", segment.index))?;
+                if segment_digest(slice) != segment.digest {
+                    return Err(format!("segment {} digest mismatch", segment.index));
+                }
+            }
+            let segmentation = source.segmentation_id.as_deref().unwrap_or_default();
+            let root = crate::l3::composition_root(segmentation, &source.segments)
+                .map_err(|error| error.to_string())?;
+            if root != source.payload_digest {
+                return Err(root);
+            }
+            Ok(())
+        }
+        _ => {
+            let digest = segment_digest(wire);
+            if digest != source.payload_digest {
+                return Err(digest);
+            }
+            Ok(())
+        }
+    }
+}
+
 impl L2Tier {
     pub fn new(budget_bytes: u64) -> Self {
         Self {
@@ -634,23 +675,26 @@ impl L2Tier {
         &self,
         cache_key: String,
         token_count: u64,
-        expected_payload_digest: &str,
+        source: &HandoffManifest,
         payload: &ExactStatePayload,
         kv_desc_json: Option<String>,
         origin: L2Origin,
     ) -> Result<Vec<L2Eviction>, L2InsertRefusal> {
         let (wire, kv_bytes, recurrent_bytes) = payload_wire(payload)?;
-        let payload_digest = segment_digest(&wire);
-        if payload_digest != expected_payload_digest {
+        if let Err(actual) = verify_source_payload(&wire, source) {
             self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
             return Err(L2InsertRefusal::DigestMismatch {
-                expected: expected_payload_digest.to_string(),
-                actual: payload_digest,
+                expected: source.payload_digest.clone(),
+                actual,
             });
         }
+        let expected_payload_digest = source.payload_digest.as_str();
         let mut manifest = HandoffManifest::new(String::new(), payload.kind().to_string());
         manifest.version = MANIFEST_VERSION;
         manifest.total_bytes = wire.len() as u64;
+        // The mirror's key names the L3 entry it was admitted from; it is not
+        // derived from this tier's own chunking, so it is explicitly an alias.
+        manifest.key_kind = crate::l3::KeyKind::Alias;
         manifest.payload_digest = expected_payload_digest.to_string();
         manifest.kv_bytes = kv_bytes;
         manifest.recurrent_bytes = recurrent_bytes;
@@ -673,13 +717,14 @@ impl L2Tier {
             })
             .collect();
         let mirror = ExactStatePayloadMirror::from_manifest(&manifest)?;
-        self.admit(
+        self.admit_with_key(
             cache_key,
             token_count,
             expected_payload_digest.to_string(),
             &wire,
             mirror,
             origin,
+            source.key_kind == crate::l3::KeyKind::WireBlake3,
         )
     }
 
@@ -712,19 +757,48 @@ impl L2Tier {
         mirror: ExactStatePayloadMirror,
         origin: L2Origin,
     ) -> Result<Vec<L2Eviction>, L2InsertRefusal> {
+        self.admit_with_key(
+            cache_key,
+            token_count,
+            payload_digest,
+            wire,
+            mirror,
+            origin,
+            true,
+        )
+    }
+
+    /// Admission for a payload whose key has already been verified by the
+    /// caller — a composition-root fill checked slice-by-slice and against its
+    /// root. `wire_digest_is_key` is false for those, because their key is a
+    /// root over segments, not BLAKE3 over the payload.
+    #[allow(clippy::too_many_arguments)]
+    fn admit_with_key(
+        &self,
+        cache_key: String,
+        token_count: u64,
+        payload_digest: String,
+        wire: &[u8],
+        mirror: ExactStatePayloadMirror,
+        origin: L2Origin,
+        wire_digest_is_key: bool,
+    ) -> Result<Vec<L2Eviction>, L2InsertRefusal> {
         if !is_valid_digest(&payload_digest) {
             self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
             return Err(L2InsertRefusal::MalformedDigest);
         }
-        // The one integrity check on the whole wire: it must hash to the
-        // claimed manifest-key digest.
-        let actual = segment_digest(wire);
-        if actual != payload_digest {
-            self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
-            return Err(L2InsertRefusal::DigestMismatch {
-                expected: payload_digest,
-                actual,
-            });
+        // The integrity check on the whole wire for a wire-digest key: it must
+        // hash to the claimed key. Composition-root keys were verified from
+        // their segments and root before this call.
+        if wire_digest_is_key {
+            let actual = segment_digest(wire);
+            if actual != payload_digest {
+                self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
+                return Err(L2InsertRefusal::DigestMismatch {
+                    expected: payload_digest,
+                    actual,
+                });
+            }
         }
         let payload_bytes = mirror.byte_len();
         if payload_bytes == 0 {
@@ -1344,6 +1418,46 @@ mod tests {
     }
 
     /// Build a synthetic wire of `len` bytes and its true BLAKE3 digest.
+    /// A source manifest for the legacy wire-digest path: the key is BLAKE3 of
+    /// the assembled payload, so no segment metadata is needed to verify it.
+    fn wire_source(wire: &[u8]) -> crate::l3::HandoffManifest {
+        let mut manifest = crate::l3::HandoffManifest::new(String::new(), "full-state".to_string());
+        manifest.payload_digest = segment_digest(wire);
+        manifest.total_bytes = wire.len() as u64;
+        manifest
+    }
+
+    /// A composition-root source manifest: the key is a root over the ordered
+    /// segment list, not BLAKE3 over the payload.
+    fn root_source(wire: &[u8]) -> crate::l3::HandoffManifest {
+        let mut manifest = crate::l3::HandoffManifest::new(String::new(), "full-state".to_string());
+        manifest.key_kind = crate::l3::KeyKind::CompositionRoot;
+        manifest.segmentation_id = Some("blake3:l2-test-segmentation".to_string());
+        manifest.total_bytes = wire.len() as u64;
+        manifest.segments = wire
+            .chunks(64)
+            .enumerate()
+            .scan(0u64, |offset, (index, chunk)| {
+                let start = *offset;
+                *offset = offset.saturating_add(chunk.len() as u64);
+                Some(crate::l3::HandoffSegmentRef {
+                    index: index as u32,
+                    offset: start,
+                    bytes: chunk.len() as u64,
+                    digest: segment_digest(chunk),
+                    codec_identity: Some(crate::l3::SegmentCodecIdentity::raw(chunk.len() as u64)),
+                    meta_json: None,
+                })
+            })
+            .collect();
+        manifest.payload_digest = crate::l3::composition_root(
+            manifest.segmentation_id.as_deref().expect("segmentation"),
+            &manifest.segments,
+        )
+        .expect("root");
+        manifest
+    }
+
     fn wire(len: usize, fill: u8) -> (Vec<u8>, String) {
         // Position-dependent bytes so equal-length slices are never equal
         // content: segment digests stay distinct across the wire.
@@ -1441,12 +1555,10 @@ mod tests {
         let kv = vec![1, 2, 3, 4];
         let recurrent = vec![5, 6, 7];
         let descriptor = r#"{"token_start":0,"token_count":3}"#.to_string();
-        let expected_digest = segment_digest(&[kv.as_slice(), recurrent.as_slice()].concat());
-
         tier.admit_payload(
             k.clone(),
             3,
-            &expected_digest,
+            &wire_source(&[kv.as_slice(), recurrent.as_slice()].concat()),
             &ExactStatePayload::kv_recurrent(kv.clone(), recurrent.clone()),
             Some(descriptor.clone()),
             L2Origin::Direct,
@@ -1474,16 +1586,38 @@ mod tests {
     }
 
     #[test]
+    fn composition_root_payloads_are_admitted_not_rejected() {
+        // The key is a root over segments, so it can never equal BLAKE3(wire).
+        // Admission must trust the verified segments + root instead of
+        // re-hashing the payload, or L2 silently never fills from L3.
+        let tier = L2Tier::new(1 << 20);
+        let key = key("ns", &[42]);
+        let (bytes, _) = wire(512, 9);
+        let source = root_source(&bytes);
+        tier.admit_payload(
+            key.clone(),
+            4,
+            &source,
+            &ExactStatePayload::full_state(bytes.clone()),
+            None,
+            L2Origin::FromL3,
+        )
+        .expect("composition-root admission must be accepted");
+        assert_eq!(tier.stats().entries, 1);
+        assert_eq!(tier.stats().admission_rejects, 0);
+        let hit = tier.get(&key).expect("admitted entry must be readable");
+        assert_eq!(hit.payload_digest, source.payload_digest);
+    }
+
+    #[test]
     fn admit_payload_round_trips_full_state() {
         let tier = L2Tier::new(1 << 20);
         let k = key("ns", &[9]);
         let bytes = vec![7; 128];
-        let expected_digest = segment_digest(&bytes);
-
         tier.admit_payload(
             k.clone(),
             1,
-            &expected_digest,
+            &wire_source(&bytes),
             &ExactStatePayload::full_state(bytes.clone()),
             None,
             L2Origin::Direct,
@@ -1512,7 +1646,12 @@ mod tests {
             .admit_payload(
                 key("ns", &[9]),
                 1,
-                &segment_digest(b"different"),
+                &{
+                    let mut manifest =
+                        crate::l3::HandoffManifest::new(String::new(), "full-state".to_string());
+                    manifest.payload_digest = segment_digest(b"different");
+                    manifest
+                },
                 &payload,
                 None,
                 L2Origin::FromL3,
@@ -1938,6 +2077,8 @@ mod tests {
             model_identity: "blake3:model".to_string(),
             state_identity: "blake3:state".to_string(),
             payload_kind: "kv-recurrent".to_string(),
+            key_kind: crate::l3::KeyKind::WireBlake3,
+            segmentation_id: None,
             total_bytes: wire_bytes.len() as u64,
             payload_digest: digest.clone(),
             segments: vec![
@@ -1998,6 +2139,8 @@ mod tests {
             model_identity: "m".to_string(),
             state_identity: "s".to_string(),
             payload_kind: "blob".to_string(),
+            key_kind: crate::l3::KeyKind::WireBlake3,
+            segmentation_id: None,
             total_bytes: 10,
             payload_digest: "blake3:aa".to_string(),
             segments: Vec::new(),
@@ -2723,6 +2866,8 @@ mod tests {
             model_identity: "m".to_string(),
             state_identity: "s".to_string(),
             payload_kind: "full-state".to_string(),
+            key_kind: crate::l3::KeyKind::WireBlake3,
+            segmentation_id: None,
             total_bytes: 32,
             payload_digest: digest.clone(),
             segments: vec![HandoffSegmentRef {

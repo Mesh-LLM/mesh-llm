@@ -8732,6 +8732,7 @@ dependencies = [
  "cubecl",
  "fs2",
  "libc",
+ "prost",
  "serde",
  "serde_json",
  "skippy-protocol",
