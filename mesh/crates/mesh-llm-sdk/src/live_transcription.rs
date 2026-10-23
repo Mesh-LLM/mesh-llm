@@ -114,6 +114,11 @@ pub enum LiveTranscriptionEvent {
         item_id: String,
         text: String,
     },
+    /// The turn's audio is complete, ended by a pause or by a commit; its
+    /// [`Completed`](Self::Completed) transcript follows.
+    Committed {
+        item_id: String,
+    },
     /// The turn's whole transcript; no more deltas follow for it.
     Completed {
         item_id: String,
@@ -149,6 +154,9 @@ pub struct LiveTranscriptionAudio {
 /// The receiving half of a session.
 pub struct LiveTranscriptionEvents {
     inbound: mpsc::Receiver<LiveTranscriptionEvent>,
+    /// The last turn a pause ended. The node reports such a turn as stopped
+    /// and then committed, and a turn ended by a commit as committed alone.
+    paused_turn: Option<String>,
 }
 
 impl LiveTranscription {
@@ -235,7 +243,10 @@ impl LiveTranscription {
         });
         Ok(Self {
             audio: LiveTranscriptionAudio { outbound },
-            events: LiveTranscriptionEvents { inbound },
+            events: LiveTranscriptionEvents {
+                inbound,
+                paused_turn: None,
+            },
         })
     }
 
@@ -262,27 +273,44 @@ impl LiveTranscription {
     }
 
     /// Finishes the current turn, waits for its transcript, and closes the
-    /// session. Returns the events that arrived meanwhile, ending with the
-    /// turn's [`LiveTranscriptionEvent::Completed`] when there was audio left
-    /// to transcribe. Fails if the transcript does not arrive in time.
+    /// session. Returns the events that arrived meanwhile, including earlier
+    /// turns still finishing, and ending with the last turn's
+    /// [`LiveTranscriptionEvent::Completed`] when there was audio left to
+    /// transcribe. Fails if the transcript does not arrive in time.
     pub async fn stop(self) -> Result<Vec<LiveTranscriptionEvent>> {
         let Self { audio, mut events } = self;
         audio.commit().await?;
         let mut remaining = Vec::new();
         let finished = tokio::time::timeout(STOP_TIMEOUT, async {
+            // The turn our commit ended: the first committed turn that a
+            // pause did not end. Earlier turns may still complete first.
+            let mut last_turn = None;
             while let Some(event) = events.next_event().await {
                 match &event {
+                    LiveTranscriptionEvent::Committed { item_id }
+                        if last_turn.is_none() && events.paused_turn.as_ref() != Some(item_id) =>
+                    {
+                        last_turn = Some(item_id.clone());
+                    }
                     // Nothing was left to transcribe.
-                    LiveTranscriptionEvent::Error { message } if is_commit_empty(message) => {
+                    LiveTranscriptionEvent::Error { message }
+                        if last_turn.is_none() && is_commit_empty(message) =>
+                    {
                         return;
                     }
-                    LiveTranscriptionEvent::Completed { .. }
-                    | LiveTranscriptionEvent::Error { .. } => {
+                    LiveTranscriptionEvent::Completed { item_id, .. }
+                        if last_turn.as_ref() == Some(item_id) =>
+                    {
                         remaining.push(event);
                         return;
                     }
-                    _ => remaining.push(event),
+                    LiveTranscriptionEvent::Error { .. } => {
+                        remaining.push(event);
+                        return;
+                    }
+                    _ => {}
                 }
+                remaining.push(event);
             }
         })
         .await;
@@ -341,7 +369,11 @@ impl LiveTranscriptionAudio {
 impl LiveTranscriptionEvents {
     /// The next event, or `None` once the session has closed.
     pub async fn next_event(&mut self) -> Option<LiveTranscriptionEvent> {
-        self.inbound.recv().await
+        let event = self.inbound.recv().await;
+        if let Some(LiveTranscriptionEvent::SpeechStopped { item_id, .. }) = &event {
+            self.paused_turn = Some(item_id.clone());
+        }
+        event
     }
 }
 
@@ -439,13 +471,13 @@ fn session_update(options: &LiveTranscriptionOptions) -> Value {
             "silence_duration_ms": detection.silence_duration_ms,
         })
     });
-    let mut transcription = json!({
+    // The model is chosen by the handshake's query, where the node resolves
+    // public ids and profiles; naming it here again would replace the
+    // resolved model with the client's name for it.
+    let transcription = json!({
         "language": options.language,
         "prompt": options.prompt,
     });
-    if let Some(model) = &options.model {
-        transcription["model"] = json!(model);
-    }
     json!({
         "type": "session.update",
         "session": {
@@ -471,6 +503,7 @@ fn parse_event(event: &Value) -> Option<LiveTranscriptionEvent> {
             item_id: item_id(),
             audio_end_ms: millis("audio_end_ms"),
         },
+        "input_audio_buffer.committed" => LiveTranscriptionEvent::Committed { item_id: item_id() },
         "conversation.item.input_audio_transcription.delta" => LiveTranscriptionEvent::Delta {
             item_id: item_id(),
             text: event["delta"].as_str().unwrap_or_default().to_string(),
@@ -674,6 +707,88 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Sends `events` as server events, in order.
+    async fn send_events(socket: &mut ServerSocket, events: &[Value]) {
+        for event in events {
+            socket
+                .send(Message::Text(event.to_string().into()))
+                .await
+                .unwrap();
+        }
+    }
+
+    fn turn_event(kind: &str, item_id: &str) -> Value {
+        match kind {
+            "stopped" => json!({"type": "input_audio_buffer.speech_stopped", "item_id": item_id}),
+            "committed" => json!({"type": "input_audio_buffer.committed", "item_id": item_id}),
+            _ => json!({
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item_id": item_id,
+                "transcript": item_id,
+            }),
+        }
+    }
+
+    /// The node answers a commit after a pause ended `item_1`: that turn
+    /// completes first, then the turn the commit ended.
+    async fn finish_two_turns(mut socket: ServerSocket, pause_before_commit: bool) -> Vec<Vec<u8>> {
+        if pause_before_commit {
+            send_events(&mut socket, &[turn_event("stopped", "item_1")]).await;
+        }
+        let Some(Ok(Message::Text(commit))) = socket.next().await else {
+            panic!("expected a commit");
+        };
+        assert!(commit.contains("input_audio_buffer.commit"));
+        let mut events = Vec::new();
+        if !pause_before_commit {
+            events.push(turn_event("stopped", "item_1"));
+        }
+        events.extend([
+            turn_event("committed", "item_1"),
+            turn_event("committed", "item_2"),
+            turn_event("completed", "item_1"),
+            turn_event("completed", "item_2"),
+        ]);
+        send_events(&mut socket, &events).await;
+        read_until_close(socket).await
+    }
+
+    fn completed_turns(events: &[LiveTranscriptionEvent]) -> Vec<&str> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                LiveTranscriptionEvent::Completed { item_id, .. } => Some(item_id.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn stop_waits_for_the_turn_it_ended_not_an_earlier_one() {
+        let (base, server) = fake_node(None, |socket, _| finish_two_turns(socket, false)).await;
+        let live = LiveTranscription::start(&base, LiveTranscriptionOptions::default())
+            .await
+            .unwrap();
+        let remaining = live.stop().await.unwrap();
+        assert_eq!(completed_turns(&remaining), ["item_1", "item_2"]);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_knows_a_paused_turn_the_caller_already_saw_stop() {
+        let (base, server) = fake_node(None, |socket, _| finish_two_turns(socket, true)).await;
+        let mut live = LiveTranscription::start(&base, LiveTranscriptionOptions::default())
+            .await
+            .unwrap();
+        assert!(matches!(
+            live.next_event().await,
+            Some(LiveTranscriptionEvent::SpeechStopped { .. })
+        ));
+        let remaining = live.stop().await.unwrap();
+        assert_eq!(completed_turns(&remaining), ["item_1", "item_2"]);
+        server.await.unwrap();
+    }
+
     #[tokio::test]
     async fn a_zero_sample_rate_is_refused() {
         let options = LiveTranscriptionOptions {
@@ -720,8 +835,9 @@ mod tests {
     }
 
     #[test]
-    fn session_updates_carry_rate_language_and_push_to_talk() {
+    fn session_updates_carry_rate_language_and_push_to_talk_but_not_the_model() {
         let update = session_update(&LiveTranscriptionOptions {
+            model: Some("public-whisper#fast".into()),
             language: Some("de".into()),
             sample_rate: 48_000,
             turn_detection: None,
@@ -752,7 +868,13 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_event(&json!({"type": "input_audio_buffer.committed"})),
+            parse_event(&json!({"type": "input_audio_buffer.committed", "item_id": "item_2"})),
+            Some(LiveTranscriptionEvent::Committed {
+                item_id: "item_2".into()
+            })
+        );
+        assert_eq!(
+            parse_event(&json!({"type": "input_audio_buffer.cleared"})),
             None
         );
     }
