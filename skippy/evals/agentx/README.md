@@ -157,6 +157,23 @@ llama-versus-Skippy ABBAAB qualification.
 
 ## Duration-bounded smoke and full profiles
 
+The `contention` profile is a separate 180-second **diagnostic** sweep at
+c=4/8/16. It selects the 16 complete context-compatible traces with the lowest
+total requested output from the pinned corpus, breaking ties by trace ID. Every
+cell uses the same 16 source traces, starts its initial lanes together, and
+preserves recorded think times after those starts. Both engines receive the
+same 128K per-request ceiling; llama reserves 128K per explicit slot while
+Skippy retains its automatic four-lane plan unless an explicitly labelled
+`AGENTX_SKIPPY_GENERATION_CONCURRENCY` variant is run. Compare actual completed
+requests, output tokens, active HTTP overlap, TTFT, inter-token latency,
+errors and memory at each level. The duration cutoff means completed work can
+differ by engine and concurrency, so these points diagnose saturation and
+queueing; they do not qualify a fixed-work llama-versus-Skippy win. Record the
+serving lane count and any override with each result. Skippy's debug telemetry
+is enabled for this profile; `scheduler-profile.json` retains only aggregate
+batch size, token count, queue wait, and runtime-lock wait/hold measurements.
+The debug run is for bottleneck diagnosis, not a production-speed claim.
+
 Smoke version 8 uses a 60-second dispatch window and drains outstanding requests.
 Upstream `--burst-phase-starts` makes every lane's first profiling request
 eligible immediately; subsequent recorded inter-turn delays remain intact.

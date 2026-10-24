@@ -71,7 +71,7 @@ fn selected_concurrencies(profile: super::Profile, only: Option<u32>) -> DynResu
         Some(concurrency) if profile.concurrencies().contains(&concurrency) => {
             Ok(vec![concurrency])
         }
-        Some(_) => Err("only-concurrency must be 1, 2 or 4".into()),
+        Some(_) => Err("only-concurrency must be one of the selected profile's levels".into()),
         None => Ok(profile.concurrencies().to_vec()),
     }
 }
@@ -188,8 +188,14 @@ mod tests {
             super::super::Profile::Smoke,
             super::super::Profile::Benchmark,
             super::super::Profile::Comparison,
+            super::super::Profile::Contention,
         ] {
-            assert_eq!(profile.concurrencies(), &[1, 2, 4]);
+            let expected: &[u32] = if profile == super::super::Profile::Contention {
+                &[4, 8, 16]
+            } else {
+                &[1, 2, 4]
+            };
+            assert_eq!(profile.concurrencies(), expected);
         }
     }
     #[test]
@@ -203,6 +209,10 @@ mod tests {
             [2]
         );
         assert!(selected_concurrencies(super::super::Profile::Comparison, Some(8)).is_err());
+        assert_eq!(
+            selected_concurrencies(super::super::Profile::Contention, Some(16)).unwrap(),
+            [16]
+        );
     }
     #[test]
     fn memory_failure_requires_explicit_evidence() {

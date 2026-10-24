@@ -107,8 +107,9 @@ pub(super) fn validate(export: &Value, profile: Profile) -> DynResult<()> {
     if errors != 0.0 || overflow != 0.0 {
         return Err("AgentX cell contains failed or context-overflow requests".into());
     }
-    if profile == Profile::Smoke && export["warmup_metrics"].is_null() {
-        return Err("smoke warmup evidence missing".into());
+    if matches!(profile, Profile::Smoke | Profile::Contention) && export["warmup_metrics"].is_null()
+    {
+        return Err("duration-bounded warmup evidence missing".into());
     }
     Ok(())
 }
@@ -145,6 +146,8 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
         "usage_prompt_tokens":export["usage_prompt_tokens"],"usage_completion_tokens":export["usage_completion_tokens"],
         "cache_read_tokens":export["usage_prompt_cache_read_tokens"],
         "memory":memory,"observed_concurrency":super::overlap::read(&input.output),
+        "scheduler_profile":std::fs::read(input.output.join("scheduler-profile.json")).ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()),
         "upstream_metadata":export["metadata"],
         "export_sha256":crate::product::digest::file_sha256(&path).map_err(|failure|failure.error)?
     });

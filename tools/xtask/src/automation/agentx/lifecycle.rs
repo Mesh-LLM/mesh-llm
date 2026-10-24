@@ -1,5 +1,6 @@
 use super::{
-    Prepared, Profile, cache_decisions::CacheDecisions, command, inputs, trace_context, write,
+    Prepared, Profile, cache_decisions::CacheDecisions, command, inputs,
+    scheduler_profile::SchedulerProfile, trace_context, write,
 };
 use crate::{
     command::DynResult,
@@ -206,7 +207,7 @@ fn server(
             ]),
         )
     };
-    if engine == "llama" && input.profile == Profile::Comparison {
+    if engine == "llama" && matches!(input.profile, Profile::Comparison | Profile::Contention) {
         args.extend(llama_comparison_arguments(
             concurrency,
             llama_cache_ram_mib()?,
@@ -220,7 +221,9 @@ fn server(
             process::Value::Public("--runtime-bundle".into()),
             process::Value::Public(input.root.join("dist/native-runtimes").into_os_string()),
         ]);
-        if std::env::var("AGENTX_SKIPPY_DEBUG_TELEMETRY").as_deref() == Ok("1") {
+        if input.profile == Profile::Contention
+            || std::env::var("AGENTX_SKIPPY_DEBUG_TELEMETRY").as_deref() == Ok("1")
+        {
             spec.arguments.extend([
                 process::Value::Public("--telemetry-level".into()),
                 process::Value::Public("debug".into()),
@@ -295,7 +298,7 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
             &concurrency.to_string(),
         ]),
     )?;
-    let seconds = if input.profile == Profile::Smoke {
+    let seconds = if matches!(input.profile, Profile::Smoke | Profile::Contention) {
         4800
     } else {
         10200
@@ -304,8 +307,11 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
     let mut owner = Owner {
         memory_pid: std::sync::Arc::clone(&memory.pid),
         cache_decisions: (engine == "skippy"
-            && std::env::var("AGENTX_SKIPPY_DEBUG_TELEMETRY").as_deref() == Ok("1"))
+            && (input.profile == Profile::Contention
+                || std::env::var("AGENTX_SKIPPY_DEBUG_TELEMETRY").as_deref() == Ok("1")))
         .then(CacheDecisions::new),
+        scheduler_profile: (engine == "skippy" && input.profile == Profile::Contention)
+            .then(SchedulerProfile::new),
         server: Some(launch(input, server, MemberId::Seed, "server", seconds)),
         worker: Some(launch(
             input,
@@ -321,6 +327,9 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
     let report = super::super::retained_session::run(&mut owner, &command::limits(seconds));
     if let Some(decisions) = owner.cache_decisions.as_ref() {
         write(&input.output.join("cache-decisions.json"), decisions)?;
+    }
+    if let Some(profile) = owner.scheduler_profile.as_ref() {
+        write(&input.output.join("scheduler-profile.json"), profile)?;
     }
     let report = report?;
     write(
@@ -358,7 +367,9 @@ fn launch_identity(
     engine: &str,
     concurrency: u32,
 ) -> DynResult<serde_json::Value> {
-    let matched_llama_context = if engine == "llama" && input.profile == Profile::Comparison {
+    let matched_llama_context = if engine == "llama"
+        && matches!(input.profile, Profile::Comparison | Profile::Contention)
+    {
         Some(llama_comparison_context(concurrency)?)
     } else {
         None
@@ -377,6 +388,10 @@ fn launch_identity(
         })
         .collect();
     let microbatch_tokens = launch_microbatch_tokens(&arguments, engine)?;
+    let requested_generation_concurrency = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--generation-concurrency")
+        .and_then(|pair| pair[1].parse::<usize>().ok());
     Ok(json!({
         "engine":engine,"command":arguments,
         "container_image":std::env::var("AGENTX_CONTAINER_IMAGE").ok(),
@@ -389,6 +404,10 @@ fn launch_identity(
         "context_tokens":matched_llama_context.map(|_| trace_context::LIMIT),
         "total_context_tokens":matched_llama_context,
         "generation_slots":null,"offered_sessions":concurrency,
+        "requested_generation_concurrency":requested_generation_concurrency,
+        "generation_concurrency_policy":if engine == "llama" { "explicit_parallel" }
+            else if requested_generation_concurrency.is_some() { "explicit_override" }
+            else { "automatic" },
         "native_kv_span_debug":engine == "skippy" && std::env::var("AGENTX_SKIPPY_KV_SPAN_DEBUG").as_deref() == Ok("1"),
         "batch_tokens":BATCH_TOKENS,"microbatch_tokens":microbatch_tokens,
         "speculation":false,"dataset_sha256":inputs::DATA_SHA,
@@ -415,6 +434,7 @@ fn launch(
 struct Owner {
     memory_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
     cache_decisions: Option<CacheDecisions>,
+    scheduler_profile: Option<SchedulerProfile>,
     server: Option<Launch>,
     worker: Option<Launch>,
     stop: bool,
@@ -428,6 +448,9 @@ impl Coordinator for Owner {
         member: MemberId,
         line: process::ObservedLine<'_>,
     ) -> process::ProbeDecision<String> {
+        if let Some(profile) = self.scheduler_profile.as_mut() {
+            profile.observe(member, &line);
+        }
         if let Some(decisions) = self.cache_decisions.as_mut() {
             decisions.observe(member, line);
         }
@@ -562,12 +585,12 @@ mod tests {
     }
 
     #[test]
-    fn comparison_matches_llama_slot_context_to_common_trace_budget() {
+    fn diagnostic_profiles_match_llama_slot_context_to_common_trace_budget() {
         let models: Vec<super::super::Model> = serde_json::from_str(include_str!(
             "../../../../../skippy/evals/agentx/models.json"
         ))
         .unwrap();
-        let input = Prepared {
+        let mut input = Prepared {
             root: "/repo".into(),
             output: "/output".into(),
             weights: "/cache/model.gguf".into(),
@@ -575,30 +598,38 @@ mod tests {
             model: models[0].clone(),
             profile: Profile::Comparison,
         };
-        for concurrency in [1, 2, 4] {
-            let llama = server(&input, "llama", 8080, concurrency).unwrap();
-            let arguments: Vec<_> = llama
-                .arguments
-                .iter()
-                .map(|value| match value {
-                    process::Value::Public(value) => value.to_string_lossy().into_owned(),
-                    process::Value::Secret(_) => panic!("unexpected secret in server arguments"),
-                })
-                .collect();
-            let expected_context = (trace_context::LIMIT * u64::from(concurrency)).to_string();
-            assert!(
-                arguments
-                    .windows(2)
-                    .any(|args| args == ["--ctx-size", &expected_context])
-            );
-            assert!(
-                arguments
-                    .windows(2)
-                    .any(|args| args == ["--parallel", &concurrency.to_string()])
-            );
-            let skippy = server(&input, "skippy", 8080, concurrency).unwrap();
-            assert!(!skippy.arguments.iter().any(|value| matches!(value,
+        for (profile, concurrencies) in [
+            (Profile::Comparison, &[1, 2, 4][..]),
+            (Profile::Contention, &[4, 8, 16][..]),
+        ] {
+            input.profile = profile;
+            for &concurrency in concurrencies {
+                let llama = server(&input, "llama", 8080, concurrency).unwrap();
+                let arguments: Vec<_> = llama
+                    .arguments
+                    .iter()
+                    .map(|value| match value {
+                        process::Value::Public(value) => value.to_string_lossy().into_owned(),
+                        process::Value::Secret(_) => {
+                            panic!("unexpected secret in server arguments")
+                        }
+                    })
+                    .collect();
+                let expected_context = (trace_context::LIMIT * u64::from(concurrency)).to_string();
+                assert!(
+                    arguments
+                        .windows(2)
+                        .any(|args| args == ["--ctx-size", &expected_context])
+                );
+                assert!(
+                    arguments
+                        .windows(2)
+                        .any(|args| args == ["--parallel", &concurrency.to_string()])
+                );
+                let skippy = server(&input, "skippy", 8080, concurrency).unwrap();
+                assert!(!skippy.arguments.iter().any(|value| matches!(value,
                 process::Value::Public(argument) if argument == "--ctx-size")));
+            }
         }
     }
 

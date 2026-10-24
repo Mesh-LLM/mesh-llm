@@ -7,7 +7,7 @@ use std::path::Path;
 pub(super) fn policy(engine: &str, profile: Profile) -> &'static str {
     if engine == "skippy" {
         "engine_default"
-    } else if profile == Profile::Comparison {
+    } else if matches!(profile, Profile::Comparison | Profile::Contention) {
         "common_128k_per_slot_explicit_parallel"
     } else {
         "auto_context_explicit_parallel"
@@ -67,7 +67,7 @@ pub(super) fn read_verified(
     concurrency: u32,
 ) -> DynResult<Value> {
     let evidence = read(output);
-    if engine == "llama" && profile == Profile::Comparison {
+    if engine == "llama" && matches!(profile, Profile::Comparison | Profile::Contention) {
         let observations = evidence["observations"]
             .as_array()
             .ok_or("missing native context observations")?;

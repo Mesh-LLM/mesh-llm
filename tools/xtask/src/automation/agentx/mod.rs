@@ -6,6 +6,7 @@ mod command;
 mod comparison_cohort;
 mod completed_work;
 mod container;
+mod contention_cohort;
 mod context_support;
 mod hardware;
 mod inputs;
@@ -14,6 +15,7 @@ mod memory;
 mod overlap;
 mod phase_outcome;
 mod results;
+mod scheduler_profile;
 mod trace_context;
 mod workload;
 use crate::{command::DynResult, repository::check_args::Grammar};
@@ -26,6 +28,7 @@ pub(super) enum Profile {
     Smoke,
     Benchmark,
     Comparison,
+    Contention,
 }
 impl Profile {
     fn harness_version(self) -> &'static str {
@@ -33,6 +36,7 @@ impl Profile {
             Self::Smoke => "agentx-1.0.12.post2-local-smoke-9",
             Self::Benchmark => "agentx-1.0.12.post2-local-benchmark-8",
             Self::Comparison => "agentx-1.0.12.post2-local-comparison-3",
+            Self::Contention => "agentx-1.0.12.post2-local-contention-1",
         }
     }
     fn label(self) -> &'static str {
@@ -40,6 +44,7 @@ impl Profile {
             Self::Smoke => "smoke",
             Self::Benchmark => "benchmark",
             Self::Comparison => "comparison",
+            Self::Contention => "contention",
         }
     }
     fn parse(value: &str) -> DynResult<Self> {
@@ -47,12 +52,16 @@ impl Profile {
             "smoke" => Ok(Self::Smoke),
             "benchmark" => Ok(Self::Benchmark),
             "comparison" => Ok(Self::Comparison),
-            _ => Err("profile must be smoke, benchmark or comparison".into()),
+            "contention" => Ok(Self::Contention),
+            _ => Err("profile must be smoke, benchmark, comparison or contention".into()),
         }
     }
     fn concurrencies(self) -> &'static [u32] {
         // Offered load is independent of engine-planned serving capacity.
-        &[1, 2, 4]
+        match self {
+            Self::Contention => &[4, 8, 16],
+            _ => &[1, 2, 4],
+        }
     }
 }
 #[derive(Clone, Copy)]
@@ -108,7 +117,7 @@ struct Prepared {
 }
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     const GRAMMAR: Grammar = Grammar {
-        usage: "cargo xtool automation agentx {container|run} --engine {llama|skippy} --model KEY --profile {smoke|benchmark|comparison} --output PATH [--only-concurrency {1|2|4}] | worker --input PATH --port PORT --concurrency N",
+        usage: "cargo xtool automation agentx {container|run} --engine {llama|skippy} --model KEY --profile {smoke|benchmark|comparison|contention} --output PATH [--only-concurrency N] | worker --input PATH --port PORT --concurrency N",
         values: &[
             "--model",
             "--engine",

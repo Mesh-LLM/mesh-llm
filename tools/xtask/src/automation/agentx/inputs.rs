@@ -135,6 +135,9 @@ fn materialize(source: &Path, destination: &Path, profile: Profile) -> DynResult
     if profile == Profile::Comparison {
         return super::comparison_cohort::materialize(source, destination);
     }
+    if profile == Profile::Contention {
+        return super::contention_cohort::materialize(source, destination);
+    }
     let limit = if profile == Profile::Smoke { 128 } else { 393 };
     let mut ids = Vec::new();
     let mut trace_context = Vec::new();

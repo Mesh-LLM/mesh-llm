@@ -73,12 +73,20 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
         "--output-artifact-dir",
     ]));
     args.push(input.output.join("upstream").to_string_lossy().into());
-    if input.profile == Profile::Smoke {
+    if matches!(input.profile, Profile::Smoke | Profile::Contention) {
+        let (entries, window) = if input.profile == Profile::Contention {
+            (
+                super::contention_cohort::SESSIONS as u32,
+                super::contention_cohort::WINDOW_SECS,
+            )
+        } else {
+            (concurrency.max(4), 60)
+        };
         args.extend(command::strings(&[
             "--num-dataset-entries",
-            &concurrency.max(4).to_string(),
+            &entries.to_string(),
             "--benchmark-duration",
-            "60",
+            &window.to_string(),
             "--warmup-requests-per-lane",
             "1",
             // Recorded first-request spacing can exceed the entire smoke
@@ -90,6 +98,9 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
             "--trajectory-start-max-ratio",
             "0",
         ]));
+        if input.profile == Profile::Contention {
+            args.push("--no-allow-dataset-wrap".into());
+        }
     }
     args
 }
@@ -124,7 +135,7 @@ pub(super) fn run(input: &Prepared, port: u16, concurrency: u32) -> DynResult<()
     );
     command::run(
         &spec,
-        if input.profile == Profile::Smoke {
+        if matches!(input.profile, Profile::Smoke | Profile::Contention) {
             3600
         } else {
             9000
@@ -235,5 +246,27 @@ mod tests {
             full.windows(2)
                 .any(|args| args == ["--max-context-length", "131072"])
         );
+        input.profile = Profile::Contention;
+        for concurrency in [4, 8, 16] {
+            let diagnostic = arguments(&input, 8080, concurrency);
+            for pair in [
+                ["--num-dataset-entries", "16"],
+                ["--benchmark-duration", "180"],
+                ["--max-context-length", "131072"],
+            ] {
+                assert!(diagnostic.windows(2).any(|args| args == pair));
+            }
+            assert!(
+                diagnostic
+                    .windows(2)
+                    .any(|args| args == ["--concurrency", &concurrency.to_string()])
+            );
+            assert!(diagnostic.iter().any(|arg| arg == "--burst-phase-starts"));
+            assert!(
+                diagnostic
+                    .iter()
+                    .any(|arg| arg == "--no-allow-dataset-wrap")
+            );
+        }
     }
 }

@@ -68,10 +68,10 @@ fn selection(traces: &[Value], profile: Profile, concurrency: u32) -> DynResult<
         .iter()
         .filter(|trace| trace["status"] == "eligible")
         .collect();
-    let limit = if profile == Profile::Smoke {
-        concurrency.max(4) as usize
-    } else {
-        eligible.len()
+    let limit = match profile {
+        Profile::Smoke => concurrency.max(4) as usize,
+        Profile::Contention => super::contention_cohort::SESSIONS,
+        _ => eligible.len(),
     };
     if limit == 0 || eligible.len() < limit {
         return Err("not enough complete context-compatible traces for offered concurrency".into());
