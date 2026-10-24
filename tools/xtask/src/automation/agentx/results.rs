@@ -81,7 +81,7 @@ fn metric_point(export: &Value, concurrency: u32) -> DynResult<Value> {
 }
 pub(super) fn validate(export: &Value, profile: Profile) -> DynResult<()> {
     let submission = &export["metadata"]["submission_valid"];
-    let local = if profile == Profile::Comparison {
+    let local = if matches!(profile, Profile::Comparison | Profile::Contention) {
         submission.is_null()
     } else {
         submission == false
@@ -107,8 +107,7 @@ pub(super) fn validate(export: &Value, profile: Profile) -> DynResult<()> {
     if errors != 0.0 || overflow != 0.0 {
         return Err("AgentX cell contains failed or context-overflow requests".into());
     }
-    if matches!(profile, Profile::Smoke | Profile::Contention) && export["warmup_metrics"].is_null()
-    {
+    if profile == Profile::Smoke && export["warmup_metrics"].is_null() {
         return Err("duration-bounded warmup evidence missing".into());
     }
     Ok(())
@@ -123,7 +122,7 @@ pub(super) fn read(input: &Prepared, engine: &str, concurrency: u32) -> DynResul
     )?;
     let memory: Value =
         serde_json::from_slice(&std::fs::read(input.output.join("memory-summary.json"))?)?;
-    let completed_work = if input.profile == Profile::Comparison {
+    let completed_work = if matches!(input.profile, Profile::Comparison | Profile::Contention) {
         let completed_work = super::completed_work::validate(input)?;
         validate_output_numerator(&export, &completed_work)?;
         Some(completed_work)
@@ -201,8 +200,11 @@ mod tests {
     fn explicit_comparison_is_local_and_requires_its_own_work_audit() {
         let mut local = export();
         assert!(validate(&local, Profile::Comparison).is_err());
+        assert!(validate(&local, Profile::Contention).is_err());
         local["metadata"] = Value::Null;
         assert!(validate(&local, Profile::Comparison).is_ok());
+        local["warmup_metrics"] = Value::Null;
+        assert!(validate(&local, Profile::Contention).is_ok());
         assert!(validate(&local, Profile::Smoke).is_err());
         local["metadata"] = json!({"submission_valid":true});
         assert!(validate(&local, Profile::Comparison).is_err());

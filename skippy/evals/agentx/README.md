@@ -155,21 +155,27 @@ with a default Skippy c=4 cell from the same source and machine, with identical
 traces and model weights. These diagnostic variants do not replace the default
 llama-versus-Skippy ABBAAB qualification.
 
-## Duration-bounded smoke and full profiles
+## Contention diagnostic, smoke, and full profiles
 
-The `contention` profile is a separate 180-second **diagnostic** sweep at
-c=4/8/16. It selects the 16 complete context-compatible traces with the lowest
-total requested output from the pinned corpus, breaking ties by trace ID. Every
-cell uses the same 16 source traces, starts its initial lanes together, and
-preserves recorded think times after those starts. Both engines receive the
-same 128K per-request ceiling; llama reserves 128K per explicit slot while
-Skippy retains its automatic four-lane plan unless an explicitly labelled
+The `contention` profile is a separate **diagnostic** sweep at c=4/8/16. It
+selects 16 context-compatible source traces with the lowest total requested
+output, breaking ties by trace ID. Each must begin with two ordinary turns no
+more than 60 seconds apart. The diagnostic retains those two recorded turns,
+caps each input at 8K tokens and each requested output at 128 tokens, and runs
+exactly 16 sessions per cell without dataset wrapping. The cohort manifest records
+both source and transformed trace digests and output totals. Every cell starts
+its initial lanes together and preserves the first follow-up's recorded delay.
+An explicit AgentX config runs the 16 sessions once without the scenario's
+ten-request-per-lane warmup or a duration cutoff. Weka prompt reconstruction
+uses one worker so it finishes before the serving measurement without competing
+with the server. Both engines receive the same 128K per-request ceiling; llama
+reserves 128K per explicit slot while Skippy retains its automatic four-lane plan
+unless an explicitly labelled
 `AGENTX_SKIPPY_GENERATION_CONCURRENCY` variant is run. Compare actual completed
 requests, output tokens, active HTTP overlap, TTFT, inter-token latency,
-errors and memory at each level. The duration cutoff means completed work can
-differ by engine and concurrency, so these points diagnose saturation and
-queueing; they do not qualify a fixed-work llama-versus-Skippy win. Record the
-serving lane count and any override with each result. Skippy's debug telemetry
+errors and memory at each level. These scaled two-turn sessions diagnose
+saturation and queueing; they do not qualify a full-trace llama-versus-Skippy
+win. Record the serving lane count and any override with each result. Skippy's debug telemetry
 is enabled for this profile; `scheduler-profile.json` retains only aggregate
 batch size, token count, queue wait, and runtime-lock wait/hold measurements.
 The debug run is for bottleneck diagnosis, not a production-speed claim.

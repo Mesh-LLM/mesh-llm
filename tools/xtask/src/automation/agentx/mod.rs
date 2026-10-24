@@ -1,4 +1,5 @@
 //! AgentX owns its workload, provenance and lifecycle independently of replay-matrix.
+mod agentic_config;
 mod cache_decisions;
 mod campaign;
 mod capacity;
@@ -36,7 +37,7 @@ impl Profile {
             Self::Smoke => "agentx-1.0.12.post2-local-smoke-9",
             Self::Benchmark => "agentx-1.0.12.post2-local-benchmark-8",
             Self::Comparison => "agentx-1.0.12.post2-local-comparison-3",
-            Self::Contention => "agentx-1.0.12.post2-local-contention-1",
+            Self::Contention => "agentx-1.0.12.post2-local-contention-2",
         }
     }
     fn label(self) -> &'static str {

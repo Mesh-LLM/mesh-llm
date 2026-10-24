@@ -6,15 +6,16 @@ use std::{
 };
 
 pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<String> {
-    if input.profile == Profile::Comparison {
+    if matches!(input.profile, Profile::Comparison | Profile::Contention) {
+        let name = if input.profile == Profile::Comparison {
+            "comparison-config.json"
+        } else {
+            "contention-config.json"
+        };
         return vec![
             "profile".into(),
             "--config".into(),
-            input
-                .output
-                .join("comparison-config.json")
-                .to_string_lossy()
-                .into_owned(),
+            input.output.join(name).to_string_lossy().into_owned(),
         ];
     }
     let mut args = command::strings(&[
@@ -65,28 +66,19 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
         "--concurrency",
         &concurrency.to_string(),
         "--unsafe-override",
-        "--benchmark-grace-period",
-        "inf",
         "--export-level",
         "records",
         "--export-http-trace",
         "--output-artifact-dir",
     ]));
     args.push(input.output.join("upstream").to_string_lossy().into());
-    if matches!(input.profile, Profile::Smoke | Profile::Contention) {
-        let (entries, window) = if input.profile == Profile::Contention {
-            (
-                super::contention_cohort::SESSIONS as u32,
-                super::contention_cohort::WINDOW_SECS,
-            )
-        } else {
-            (concurrency.max(4), 60)
-        };
+    args.extend(command::strings(&["--benchmark-grace-period", "inf"]));
+    if input.profile == Profile::Smoke {
         args.extend(command::strings(&[
             "--num-dataset-entries",
-            &entries.to_string(),
+            &concurrency.max(4).to_string(),
             "--benchmark-duration",
-            &window.to_string(),
+            "60",
             "--warmup-requests-per-lane",
             "1",
             // Recorded first-request spacing can exceed the entire smoke
@@ -98,19 +90,21 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
             "--trajectory-start-max-ratio",
             "0",
         ]));
-        if input.profile == Profile::Contention {
-            args.push("--no-allow-dataset-wrap".into());
-        }
     }
     args
 }
 pub(super) fn run(input: &Prepared, port: u16, concurrency: u32) -> DynResult<()> {
     ready(&input.root, port, &input.output)?;
-    if input.profile == Profile::Comparison {
-        super::write(
+    match input.profile {
+        Profile::Comparison => super::write(
             &input.output.join("comparison-config.json"),
             &super::comparison_cohort::configuration(input, port, concurrency)?,
-        )?;
+        )?,
+        Profile::Contention => super::write(
+            &input.output.join("contention-config.json"),
+            &super::contention_cohort::configuration(input, port, concurrency)?,
+        )?,
+        _ => {}
     }
     // JY's macOS work directory exceeds sockaddr_un's 103-byte path limit
     // after AgentX appends its temporary directory and ZMQ socket names.
@@ -129,6 +123,15 @@ pub(super) fn run(input: &Prepared, port: u16, concurrency: u32) -> DynResult<()
         "AIPERF_DATASET_MMAP_CACHE_ENABLED".into(),
         crate::process::Value::Public("false".into()),
     );
+    if input.profile == Profile::Contention {
+        // The 16-process Weka reconstruction path spent minutes before
+        // dispatch on Apple Silicon. Serial reconstruction completed in
+        // seconds for this capped cohort and avoids competing with serving.
+        spec.environment.insert(
+            "AIPERF_DATASET_WEKA_PARALLEL_WORKERS".into(),
+            crate::process::Value::Public("1".into()),
+        );
+    }
     spec.environment.insert(
         "TMPDIR".into(),
         crate::process::Value::Public(ipc.path().as_os_str().to_owned()),
@@ -249,23 +252,9 @@ mod tests {
         input.profile = Profile::Contention;
         for concurrency in [4, 8, 16] {
             let diagnostic = arguments(&input, 8080, concurrency);
-            for pair in [
-                ["--num-dataset-entries", "16"],
-                ["--benchmark-duration", "180"],
-                ["--max-context-length", "131072"],
-            ] {
-                assert!(diagnostic.windows(2).any(|args| args == pair));
-            }
-            assert!(
-                diagnostic
-                    .windows(2)
-                    .any(|args| args == ["--concurrency", &concurrency.to_string()])
-            );
-            assert!(diagnostic.iter().any(|arg| arg == "--burst-phase-starts"));
-            assert!(
-                diagnostic
-                    .iter()
-                    .any(|arg| arg == "--no-allow-dataset-wrap")
+            assert_eq!(
+                diagnostic,
+                ["profile", "--config", "/results/contention-config.json"]
             );
         }
     }

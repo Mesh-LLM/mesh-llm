@@ -99,50 +99,13 @@ pub(super) fn configuration(input: &Prepared, port: u16, concurrency: u32) -> Dy
     if ![1, 2, 4].contains(&concurrency) {
         return Err("comparison supports c=1/2/4".into());
     }
-    let cache = std::env::var_os("HF_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| input.root.join(".cache/huggingface"));
-    let tokenizer = cache
-        .join("hub")
-        .join(format!(
-            "models--{}",
-            input.model.tokenizer.replace('/', "--")
-        ))
-        .join("snapshots")
-        .join(&input.model.tokenizer_revision);
-    let cohort = input
-        .dataset
-        .parent()
-        .ok_or("comparison cohort parent")?
-        .join("cohort.json");
-    let cohort_digest =
-        crate::product::digest::file_sha256(&cohort).map_err(|failure| failure.error)?;
-    let marker_namespace = format!(
-        "mesh-agentx-comparison-v2:{}:{cohort_digest}",
-        input.model.key
-    );
-    // Explicit local config avoids AgentX scenario defaults reinstating a
-    // duration or advancing traces during one-token cache-pressure warmup.
-    Ok(json!({"schema_version":"2.0","random_seed":42,"benchmark":{
-        "model":input.model.key,
-        "endpoint":{"url":format!("http://127.0.0.1:{port}/v1/chat/completions"),
-            "type":"chat","streaming":true,"timeout":1800,
-            "use_server_token_count":true,"session_header":"X-Session-ID","extra":{"ignore_eos":true}},
-        "tokenizer":{"name":tokenizer,"revision":input.model.tokenizer_revision},
-        "dataset":{"type":"file","path":input.dataset,"format":"weka_trace",
-            "sampling":"sequential","entries":4,"max_context_length":trace_context::LIMIT,
-            "ignore_trace_delays":false,"use_think_time_only":true,
-            "cache_bust":{"target":"first_turn_prefix","namespace":marker_namespace}},
-        "phases":[{"name":"profiling","type":"concurrency","timing_mode":"agentic_replay",
-            "concurrency":concurrency,"sessions":4,"trajectory_start_min_ratio":0,
-            "trajectory_start_max_ratio":0,"burst_phase_starts":true}],
-        // An explicit processor is a required startup service. Auto-scaling
-        // can register it after the one-shot dataset notification and strand
-        // every metric record, even with dataset mmap caching disabled.
-        "runtime":{"record_processors":1},
-        "artifacts":{"dir":input.output.join("upstream"),"summary":["json"],
-            "records":["jsonl"],"trace":true},"gpu_telemetry":{"enabled":false}
-    }}))
+    super::agentic_config::configuration(
+        input,
+        port,
+        concurrency,
+        IDS.len(),
+        "mesh-agentx-comparison-v2",
+    )
 }
 
 #[cfg(test)]
