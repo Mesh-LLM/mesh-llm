@@ -896,6 +896,41 @@ No raw invoice, preimage, wallet transaction ID, prompt or response text is
 published. Payment hashes are linkable metadata, and fee amounts can hint at
 which wallet a node uses.
 
+### Pre-admission refusal observations
+
+Before accepting terms, a payer with an exchange ID and a local subscriber can
+publish `phase: refused`, `role: payer`, `source: payer_asserted`, and a bounded
+`reason`: `protocol_version`, `debt_blocked`, or `admission_refused`. The event
+contains only those four fields, `exchange_id`, and `event_ref`. Its reference
+uses the same canonical digest with a blank `event_ref` and covers the reason.
+Unavailable terms, settlement, payment hash, segment, and amounts are omitted.
+Accepted and settled event shapes are unchanged.
+
+Sellers encode `payment_refused:protocol_version` or
+`payment_refused:debt_blocked` in the existing Error frame's message, optionally
+followed by a semicolon and explanation. No frame variants or members are added;
+v1/v2 rejection still uses the legacy Error writer. Buyers also recognize the
+explicit older token-metered protocol requirement messages. Other Error frames,
+including unknown codes, become `admission_refused`; debt is never inferred from
+provider prose. Plain HTTP, malformed frames, EOF, timeout, and connection errors
+remain transport failures without refusal evidence.
+
+Refusals describe individual pre-payment attempts. They preserve transport retry
+behavior: another target may succeed under the same exchange ID, while a lone
+refused target retains the existing HTTP failure behavior. Observation creates no
+payment authorization, invoice, or backend dispatch. Subscriber discovery and
+delivery are best effort, each bounded to one second; delivery runs independently
+of inference retries. Absent correlation or
+subscribers skips publication and hashing. Provider prose, recovery IDs, peer
+IDs, invoices, and request content are excluded. Refusal evidence is neither a
+financial ledger entry nor proof of settlement. Older binaries gain no new
+observation behavior, and unstructured old responses cannot establish protocol
+incompatibility. Routing continues to filter incompatible advertisements.
+
+This is partial scope for issue #2335 (Refs #2335): automatic expiry-based strike
+clearing remains deferred pending a debt-forgiveness policy. Issued unpaid finals
+continue to count and can still settle late.
+
 ## Provider-side evidence hooks
 
 The serving host emits the same `payment.lifecycle.v1` events, with `role:

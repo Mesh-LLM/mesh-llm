@@ -19,7 +19,9 @@ use super::{
     common::{ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult},
     routing::route_local_attempt_after_forward,
 };
-use crate::network::payments::{client::Payments, request::PaidRequest};
+use crate::network::payments::{
+    client::Payments, lifecycle, refusal::Refusal, request::PaidRequest,
+};
 use crate::{mesh::Node, network::openai::client_stream::ClientStream};
 
 pub(crate) use exchange::settle;
@@ -204,7 +206,16 @@ pub(crate) async fn start(
     // Nothing that can pay exists before the admission is validated.
     let initial = tokio::time::timeout(ADMISSION_TIMEOUT, read_admission(&mut recv))
         .await
-        .map_err(|_| PrePaymentTransportFailure)??;
+        .map_err(|_| PrePaymentTransportFailure)?;
+    let initial = match initial {
+        Ok(frame) => frame,
+        Err(error) => {
+            if let Some(reason) = error.downcast_ref::<Refusal>() {
+                lifecycle::refused(node, exchange_id, *reason).await;
+            }
+            return Err(PrePaymentTransportFailure.into());
+        }
+    };
     let (terms, deposit) = match validate_admission(initial, &request, &price, &id) {
         Ok(admission) => admission,
         Err(error) => {
@@ -306,8 +317,9 @@ async fn read_admission(recv: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
     // A seller-side refusal or failure here cannot have charged this buyer:
     // no admission has been accepted and no payment task has been spawned.
     if let Frame::Error { message } = &frame {
-        tracing::warn!(seller_message = %message, "seller refused paid admission; trying another target");
-        return Err(PrePaymentTransportFailure.into());
+        let reason = Refusal::classify(message);
+        tracing::warn!(%reason, "seller refused paid admission; trying another target");
+        return Err(reason.into());
     }
     Ok(frame)
 }

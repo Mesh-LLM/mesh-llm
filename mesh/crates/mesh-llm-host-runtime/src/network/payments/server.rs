@@ -92,11 +92,11 @@ async fn serve_inner(
     };
     let mut session = match admission {
         Admission::Admitted(session) => session,
-        Admission::Refused => {
+        Admission::Refused(reason) => {
             return wire::write(
                 writer,
                 &Frame::Error {
-                    message: "admission refused".into(),
+                    message: reason.message().into(),
                 },
             )
             .await;
@@ -134,7 +134,7 @@ fn priced_model<'a>(
 
 enum Admission {
     Admitted(Box<Session>),
-    Refused,
+    Refused(super::refusal::Refusal),
     Replayed(String),
 }
 
@@ -182,7 +182,7 @@ async fn admit(
     let (deposit, deposit_msat, min_payment_msat) = match admitted {
         ServeAdmitResponse::Blocked { reason } => {
             tracing::warn!(buyer = %peer, model = %priced, %reason, "refused paid admission");
-            return Ok(Admission::Refused);
+            return Ok(Admission::Refused(super::refusal::Refusal::DebtBlocked));
         }
         ServeAdmitResponse::Replayed { request_id } => {
             return Ok(Admission::Replayed(request_id));
