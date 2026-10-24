@@ -22,9 +22,10 @@ pub struct MeshMembershipConfig {
     /// Names the membership on this node, and the mesh: every node of one
     /// mesh uses the same name. Letters, digits, `.`, `_` and `-`.
     pub name: String,
-    /// Invite tokens of the mesh's nodes, joined now and re-dialled while the
-    /// membership lasts. With none, this node waits to be joined by its own
-    /// invite token.
+    /// Unsigned invite tokens of the mesh's nodes, joined now and re-dialled
+    /// while the membership lasts. This node's own token is skipped, so a
+    /// list of every member's token can be passed as is. With none, this node
+    /// waits to be joined by its own invite token.
     pub join_tokens: Vec<String>,
     /// The owner IDs whose nodes the membership admits. Nobody else is
     /// admitted, so an empty list admits no one.
@@ -58,7 +59,8 @@ pub(super) struct MembershipContext<'a> {
     pub(super) targets: tokio::sync::watch::Receiver<election::ModelTargets>,
 }
 
-/// Starts a membership, replacing one of the same name.
+/// Starts a membership, replacing one of the same name. The membership being
+/// replaced stops first, so if the new one cannot start, neither runs.
 pub(super) async fn add_membership(
     ctx: MembershipContext<'_>,
     config: MeshMembershipConfig,
@@ -110,8 +112,7 @@ pub(super) async fn add_membership(
             channels.http,
             ctx.targets.clone(),
             affinity.clone(),
-        ))
-        .abort_handle(),
+        )),
         tokio::spawn(super::proxy::api_proxy(
             node.clone(),
             config.api_port,
@@ -119,14 +120,12 @@ pub(super) async fn add_membership(
             Some(IngressListener::from(listener)),
             false,
             affinity,
-        ))
-        .abort_handle(),
+        )),
         tokio::spawn(maintain_membership(
             node.clone(),
             config.name.clone(),
             config.join_tokens.clone(),
-        ))
-        .abort_handle(),
+        )),
     ];
     let status = membership_status(&config.name, &node, config.api_port).await;
     tracing::info!(
@@ -247,7 +246,7 @@ async fn maintain_membership(node: mesh::Node, name: String, join_tokens: Vec<St
 async fn join_all(node: &mesh::Node, join_tokens: &[String]) -> Option<String> {
     let mut failure = None;
     for token in join_tokens {
-        if let Err(error) = node.join(token).await {
+        if let Err(error) = node.join_membership(token).await {
             failure = Some(format!("{error:#}"));
         }
     }
@@ -280,6 +279,66 @@ mod tests {
         for bad in ["", ".hidden", "a/b", "..", "with space", long.as_str()] {
             assert!(!valid_name(bad), "{bad:?}");
         }
+    }
+
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .map(|addr| addr.port())
+            .expect("free loopback port")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_membership_is_replaced_on_its_own_port_and_removed() -> Result<()> {
+        let mut node = mesh::Node::new_for_tests(mesh::NodeRole::Worker).await?;
+        node.owner_keypair = Some(crate::crypto::OwnerKeypair::generate());
+        node.quic_bind.ip = Some(std::net::Ipv4Addr::LOCALHOST.into());
+        let options = RuntimeOptions {
+            disable_iroh_relays: true,
+            ..RuntimeOptions::default()
+        };
+        let keys = tempfile::tempdir()?;
+        let port = free_port();
+        let (_targets_tx, targets) = tokio::sync::watch::channel(election::ModelTargets::default());
+        let ctx = || MembershipContext {
+            options: &options,
+            node: &node,
+            targets: targets.clone(),
+        };
+        let config = MeshMembershipConfig {
+            name: "team".into(),
+            join_tokens: Vec::new(),
+            trusted_owners: Vec::new(),
+            api_port: port,
+            node_key_path: Some(keys.path().join("team.key")),
+            enumerate_host: false,
+        };
+
+        let first = add_membership(ctx(), config.clone()).await?;
+        // The replacement takes the same port the first one held, and keeps
+        // its key; its own token among the join tokens is skipped.
+        let replaced = add_membership(
+            ctx(),
+            MeshMembershipConfig {
+                join_tokens: vec![first.invite_token.clone()],
+                ..config.clone()
+            },
+        )
+        .await?;
+        assert_eq!(replaced.endpoint_id, first.endpoint_id);
+        assert_eq!(membership_statuses(&node).await, vec![replaced]);
+        tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+
+        assert!(remove_membership(&node, "team").await);
+        assert!(!remove_membership(&node, "team").await);
+        assert!(membership_statuses(&node).await.is_empty());
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err()
+        );
+        node.close_endpoint().await;
+        Ok(())
     }
 
     #[test]

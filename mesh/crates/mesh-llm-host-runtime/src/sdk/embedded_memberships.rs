@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 impl EmbeddedServeHandle {
     /// Serves this node's models into a further mesh, with its own identity,
     /// owner allowlist, peers and local API port, replacing a membership of
-    /// the same name. Returns once the membership accepts connections; its
-    /// join tokens are dialled in the background.
+    /// the same name, which stops first: if the new one cannot start, neither
+    /// runs. Returns once the membership accepts connections; its join tokens
+    /// are dialled in the background.
     pub async fn add_membership(
         &self,
         config: MeshMembershipConfig,
