@@ -423,11 +423,12 @@ impl InferenceLifecycleObserver for CompositeOpenAiLifecycleObserver {
 pub(crate) fn compose_lifecycle_observer(
     base: Option<Arc<dyn InferenceLifecycleObserver>>,
 ) -> Option<Arc<dyn InferenceLifecycleObserver>> {
-    let mut sinks: Vec<Arc<dyn InferenceLifecycleObserver>> = Vec::with_capacity(2);
+    let mut sinks: Vec<Arc<dyn InferenceLifecycleObserver>> = Vec::with_capacity(3);
     if let Some(base) = base {
         sinks.push(base);
     }
     sinks.push(Arc::new(OpenAiRuntimeEventObserver::new()));
+    sinks.push(crate::runtime::energy::energy_lifecycle_observer());
     Some(Arc::new(CompositeOpenAiLifecycleObserver { sinks }))
 }
 

@@ -299,6 +299,7 @@ pub(crate) fn start_laya_http_on(
         Arc::new(skippy_serving::LayaSystemOneBackend::new(model_id, model)),
         lifecycle_observer,
     );
+    crate::runtime::energy_sampler::start_energy_sampler();
     SkippyHttpHandle {
         port: bind_addr.port(),
         server,
@@ -395,6 +396,7 @@ impl SkippyModelHandle {
             tokenizer,
             lifecycle_observer,
         );
+        crate::runtime::energy_sampler::start_energy_sampler();
         Ok(SkippyHttpHandle { port, server })
     }
 

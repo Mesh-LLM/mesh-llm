@@ -163,6 +163,19 @@ fn test_parse_nvidia_gpu_memory_and_reserved() {
     );
 }
 
+#[test]
+fn test_parse_nvidia_power_draw_line() {
+    assert_eq!(
+        parse_nvidia_power_draw_line("0, 45.67"),
+        Some((0, Some(45.67)))
+    );
+    assert_eq!(parse_nvidia_power_draw_line("1, [N/A]"), Some((1, None)));
+    assert_eq!(parse_nvidia_power_draw_line("2, -3.0"), Some((2, None)));
+    for line in ["", "45.67", "index, power.draw", "x, 45.67"] {
+        assert_eq!(parse_nvidia_power_draw_line(line), None, "{line}");
+    }
+}
+
 /// `sanitize_macos_gpu_name` passes through real GPU names untouched (modulo
 /// trimming), for both Apple Silicon and AMD/Intel discrete/integrated parts.
 #[test]
