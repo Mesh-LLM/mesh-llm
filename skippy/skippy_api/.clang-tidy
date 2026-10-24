@@ -1,0 +1,47 @@
+# Core config: built-in checks + the migration checks from docs/ENFORCEMENT.md §5.
+# The boundary checks (skippy-preceded-by, skippy-single-call-site, ...) live in
+# src/llama/.clang-tidy, tools/.clang-tidy and skippy-api-rs/skippy-sys/cpp/.clang-tidy;
+# they must not be enabled here — checks live at the boundaries and nowhere else.
+#
+# Migration checks and their sunsets (docs/ENFORCEMENT.md §5):
+#   skippy-no-expected-void, skippy-optional-error-polarity
+#   skippy-no-failure-optional     with no-expected-void's flip (one failure spelling)
+#   skippy-no-throwing-accessor    never — .value() has no place here
+#   skippy-no-raw-pointer          never — views are the vocabulary; allow-list is the ABI
+#   skippy-no-void-silencing        never — cheaper than the review comment
+#   skippy-no-process-wide-state    the memo moves into LlamaBackend; keep for the allowlist
+#   skippy-no-raw-loops             never — house style
+#   skippy-no-mutex                 never — CAS and atomics are the design
+# Isolation is tree-wide and immediate (ENFORCEMENT.md §0).
+#
+# Disabled by judgment, not by accident:
+#   braces-around-statements            single-statement guards stay one line
+#   performance-enum-size               vocabulary types mirror native widths
+#   convert-member-functions-to-static  backend members keep instance shape
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  readability-*,
+  cppcoreguidelines-narrowing-conversions,
+  skippy-no-expected-void,
+  skippy-optional-error-polarity,
+  skippy-no-void-silencing,
+  skippy-no-process-wide-state,
+  skippy-no-raw-loops,
+  skippy-no-mutex,
+  skippy-boundary-isolation,
+  -modernize-use-trailing-return-type,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -readability-braces-around-statements,
+  -performance-enum-size,
+  -readability-convert-member-functions-to-static
+HeaderFilterRegex: '.*/skippy_api/(include|src)/.*'
+WarningsAsErrors: ''
+
+CheckOptions:
+  bugprone-easily-swappable-parameters.MinimumLength: 2
+  readability-redundant-member-init.IgnoreBaseInCopyConstructors: true
+  skippy-no-process-wide-state.AllowedInFunctions: 'skippy::detail::next_generation'
