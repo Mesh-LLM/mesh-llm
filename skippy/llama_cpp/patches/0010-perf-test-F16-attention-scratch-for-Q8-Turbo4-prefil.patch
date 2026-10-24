@@ -1,19 +1,21 @@
-From 2557de272c77e70915316f67c605f451bad9b434 Mon Sep 17 00:00:00 2001
+From df20eaf102668d35d516e115ee535548823da6ec Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Sat, 24 Oct 2026 21:47:12 +1100
-Subject: [PATCH] perf: test F16 attention scratch for Q8 Turbo4 prefill
+Subject: [PATCH] perf: use tensor attention for materialized Q8 Turbo4 prefill
 
-Enable the existing bounded F16 scratch path for Q8 keys at query batches of at least 32. Keep the vector decode path unchanged. Add 120 deterministic attention cases covering decode, the prefill threshold, longer prefill, GQA, cache layouts, padding and attention features. Remote native correctness and serving qualification remain pending through JY.
+Expand Q8 keys and Turbo4 values into the existing bounded F16 scratch path for query batches of at least 32. Permit the existing tensor attention policy on capable hardware when those dense buffers are available. Preserve its geometry and alignment checks and leave vector decode unchanged. Keep a diagnostic disable flag for the previous tiled path.
+
+Retain the 120 deterministic prefill reference cases for query thresholds, long prefills, GQA, cache layouts, padding and attention features. Local CPU and Metal candidate/control checks passed without changing reference tolerances. Full-model performance and quality qualification remain separate.
 
 Assisted-by: Codex
 ---
- ggml/src/ggml-metal/ggml-metal-ops.cpp |  2 +-
+ ggml/src/ggml-metal/ggml-metal-ops.cpp |  6 ++++--
  tests/test-backend-ops-skippy-turbo4.h | 22 ++++++++++++++++++++++
  tests/test-backend-ops.cpp             |  1 +
- 3 files changed, 24 insertions(+), 1 deletion(-)
+ 3 files changed, 27 insertions(+), 2 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 7abf156a0..559603d1b 100644
+index 7abf156a0..332cb6add 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -3153,7 +3153,7 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
@@ -25,6 +27,17 @@ index 7abf156a0..559603d1b 100644
              op->src[0]->ne[0] == 128 && op->src[1]->ne[0] == 128 && op->src[2]->ne[0] == 128 &&
              op->src[0]->ne[1] >= 32;
      }
+@@ -3181,7 +3181,9 @@ static bool ggml_metal_op_flash_attn_ext_use_kv_f16(const ggml_tensor * op) {
+ 
+ static bool ggml_metal_op_flash_attn_ext_use_tensor(const ggml_tensor * op, bool has_tensor) {
+     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
+-    if (op->src[2]->type == GGML_TYPE_TURBO4_0) {
++    if (op->src[2]->type == GGML_TYPE_TURBO4_0 &&
++        (op->src[1]->type != GGML_TYPE_Q8_0 || !ggml_metal_op_flash_attn_ext_use_kv_f16(op) ||
++         getenv("GGML_METAL_TURBO4_Q8_TENSOR_DISABLE"))) {
+         return false;
+     }
+ 
 diff --git a/tests/test-backend-ops-skippy-turbo4.h b/tests/test-backend-ops-skippy-turbo4.h
 index 744741101..3b03a4e3a 100644
 --- a/tests/test-backend-ops-skippy-turbo4.h
