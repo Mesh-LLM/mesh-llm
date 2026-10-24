@@ -164,6 +164,10 @@ pub struct Node {
     pub(crate) plugin_manager: Arc<Mutex<Option<crate::plugin::PluginManager>>>,
     pub(crate) display_name: Arc<Mutex<Option<String>>>,
     pub(crate) owner_attestation: Arc<Mutex<Option<SignedNodeOwnership>>>,
+    /// Where a renewed ownership certificate is saved for `mesh-llm auth`.
+    /// `None` for a node whose certificate is not kept on disk: a mesh
+    /// membership's, since the file is the main node's, and a test node's.
+    pub(crate) owner_attestation_path: Option<std::path::PathBuf>,
     pub(crate) release_attestation: Arc<Mutex<Option<crate::ReleaseBuildAttestation>>>,
     pub(crate) release_attestation_summary: Arc<Mutex<crate::ReleaseAttestationSummary>>,
     pub(crate) owner_summary: Arc<Mutex<OwnershipSummary>>,
@@ -919,6 +923,7 @@ impl Node {
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
+            owner_attestation_path: default_node_ownership_path().ok(),
         };
 
         node.maybe_start_control_listener(
@@ -1106,6 +1111,7 @@ impl Node {
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
+            owner_attestation_path: None,
         }
     }
 

@@ -175,3 +175,51 @@ async fn a_membership_skips_its_own_token_and_refuses_signed_ones() -> Result<()
     assert!(peer_ids(&membership).await.is_empty());
     Ok(())
 }
+
+/// A membership renews its own certificate as it heartbeats and leaves the
+/// node's ownership file alone; the node's own renewal still saves it there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_membership_renews_its_certificate_without_saving_the_nodes_file() -> Result<()> {
+    const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+    let me = test_owner_keypair(0x51, 0x52);
+    let dir = tempfile::tempdir()?;
+    let ownership_file = dir.path().join("node-ownership.json");
+    let mut node = owned_node(&me, &[&me]).await?;
+    node.owner_attestation_path = Some(ownership_file.clone());
+    let membership = membership_of(&node, &[&me]).await?;
+    // A day from expiry: inside the renewal window.
+    let due = |id: EndpointId| {
+        sign_node_ownership(
+            &me,
+            id.as_bytes(),
+            current_time_unix_ms() + DAY_MS,
+            None,
+            None,
+        )
+    };
+
+    *membership.owner_attestation.lock().await = Some(due(membership.id())?);
+    membership.run_heartbeat_cycle(&mut HashMap::new()).await;
+    let renewed = membership
+        .owner_attestation
+        .lock()
+        .await
+        .clone()
+        .expect("the membership keeps a certificate");
+    assert!(renewed.claim.expires_at_unix_ms > current_time_unix_ms() + 6 * DAY_MS);
+    assert!(
+        !ownership_file.exists(),
+        "a membership's renewal must not write the node's ownership file"
+    );
+
+    *node.owner_attestation.lock().await = Some(due(node.id())?);
+    node.run_heartbeat_cycle(&mut HashMap::new()).await;
+    let saved: SignedNodeOwnership =
+        serde_json::from_str(&std::fs::read_to_string(&ownership_file)?)?;
+    assert_eq!(
+        Some(&saved),
+        node.owner_attestation.lock().await.as_ref(),
+        "the node's own renewal is what the file holds"
+    );
+    Ok(())
+}

@@ -168,8 +168,8 @@ impl Node {
             .await
             .as_ref()
             .and_then(|ownership| ownership.claim.node_label.clone());
-        // Signed for this endpoint, and not saved: the node-ownership file is
-        // the main node's.
+        // Signed for this endpoint, and never saved, here or on renewal: the
+        // node-ownership file is the main node's.
         let owner_attestation = sign_node_ownership(
             &owner_keypair,
             endpoint.id().as_bytes(),
@@ -247,6 +247,9 @@ impl Node {
             memberships: MeshMemberships::default(),
             // This membership's admission: its own allowlist, always enforced.
             owner_attestation: Arc::new(Mutex::new(Some(owner_attestation))),
+            // Renewed in memory, never saved: the ownership file is the main
+            // node's.
+            owner_attestation_path: None,
             owner_summary: Arc::new(Mutex::new(owner_summary)),
             trust_store: Arc::new(Mutex::new(trust_store)),
             trust_policy: TrustPolicy::Allowlist,

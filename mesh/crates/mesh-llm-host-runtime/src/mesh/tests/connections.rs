@@ -478,6 +478,7 @@ async fn make_test_node_with_requirements(
         owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
         model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
         memberships: super::node::MeshMemberships::default(),
+        owner_attestation_path: None,
     };
 
     let accept_node = node.clone();
