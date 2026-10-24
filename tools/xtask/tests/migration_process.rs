@@ -8,6 +8,9 @@ mod driver_expectations;
 mod driver_tests;
 #[path = "migration_process/fixture.rs"]
 mod fixture;
+#[path = "../src/fixture_paths.rs"]
+mod fixture_paths;
+
 #[path = "migration_process/lifecycle.rs"]
 mod lifecycle;
 #[cfg(unix)]

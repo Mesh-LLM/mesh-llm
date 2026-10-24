@@ -86,7 +86,10 @@ and working Git/xcrun. The toolchain uses the canonical shared HF cache at
 `/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
 `HF_HUB_OFFLINE=0` so missing pinned models and trajectories can be downloaded.
 Pinned input verification uses the installed `hf download --format quiet` CLI
-for path-only stdout; it does not require Hugging Face in system Python. Model
+for path-only stdout; it does not require Hugging Face in system Python.
+The replay toolchain gate requires the installed `hf` CLI without separate
+`python3` or `uv` command checks; runner provisioning owns the CLI and its runtime.
+Model
 and trajectory downloads retain revision and SHA-256 checks. The native `trajectory-reader` supplies the compressed Parquet reader. The
 history existence probe uses the typed native HTTP owner and permits bootstrap
 only on 404.
@@ -509,7 +512,7 @@ runner-contract update is active.
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
-| `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, Windows log-store privacy ACL checks, and the Windows CPU native Skippy probes (`windows-skippy-probes`: selected by `native-abi` changes and on every main run; builds the static CPU ABI with tests, logs memory headroom, then runs every `^skippy_` test serially with the 64-bit ctest, each bounded at 15 minutes, within the row's 150-minute timeout) |
+| `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, Windows log-store privacy ACL checks, and the Windows CPU native Skippy probes (`windows-skippy-probes`: selected by `native-abi` changes and on every main run; builds the static CPU ABI with tests, logs memory headroom, then runs every `^skippy_` test serially with the 64-bit ctest, each bounded at 15 minutes, within the row's 150-minute timeout, followed by the `skippy-runtime` and `skippy-serving` lib tests linked against that static ABI) |
 | `ci-{linux,macos,windows}-product-smoke-slice.yml` | Platform-local core, scripted, model-download, and Laya smokes. The pinned Laya Multilingual F16 GGUF runs startup plus the complete upstream golden `/systemone` battery on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm, macOS Metal, and Windows CPU; each row selects the exact native device name, so an unavailable backend fails at model load. Core CPU/CUDA/Metal restores the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once and runs both through standalone inference, OpenAI client compatibility, and constrained-Tokio restart. The CPU two-node split row uses the same pair for dense KV and strict recurrent `KvRecurrent` validation, persists strict-whitelist seed/worker identity and stage/model snapshots, reconciles two-observer topology and exact two-stage contiguous-cut agreement, then compares each loaded stage's Auto payload, reason, fallback, loaded state, and native capability against model-manifest-pinned expectations. A wrong second stage fails even when the first is correct. The row uploads evidence on every outcome. The Linux CPU row additionally preserves node cache roots across restart and requires an observable durable-L3 fill before status and clear verification. Product restore verifies the manifest backend and forces discovery through the bundled runtime. CUDA verifies the packaged dependency closure with `LD_LIBRARY_PATH` unset, runs inherited and strict device probes, installs no cudart or cuBLAS packages, and leaves the NVIDIA driver host-owned. Windows accelerator product targets remain build-only because CI has no Windows accelerator runners. There is no separate product-integration or Qwen migration lane. |
 | `.github/actions/run-laya-product-smoke` | Shared product restore plus Laya startup/read harness. Inputs are bounded to the supported backend/device/cadence combinations, and the fixture is resolved through `product-smoke.json`. The explicit Vulkan row enables the Vulkan profile for runners without `vulkaninfo`; model startup and reads still verify the device. Windows product restore emits LF-delimited manifest fields for Git Bash. |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
@@ -1548,6 +1551,23 @@ controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
 Historical source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
+
+The canary build and generated-patch checks share the locked external Jinja
+project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
+selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
+state directory and uses the prepared SDK interpreter when available, otherwise
+the installed `python3`. Interpreter downloads are disabled. Both upstream
+Jinja tests remain selected by the complete native suite. The optional developer
+llama-benchy wrapper defaults to a full upstream source commit; explicit caller
+overrides remain available. Neither dependency adds repository Python code.
+
+The native Python-tooling census runs through `just ci-crate-lists` in normal
+Quality validation. `ci/python-tooling-policy.json` records exact retained
+external dependency inputs, source pins and invocation exceptions. It rejects
+repository Python source and shebangs, undeclared package inputs and direct
+interpreter invocations in maintained automation. Historical receipts remain
+data. Mutation tests cover added hidden files, suffixless scripts and inline
+process execution; static checks do not replace review of semantic emulation.
 
 ### Self-hosted job disk cleanup
 

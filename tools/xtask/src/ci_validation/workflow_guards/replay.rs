@@ -14,9 +14,35 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let Some(Node::Seq(steps)) = job.get("steps") else {
         return Err("missing replay steps".into());
     };
+    toolchain_preflight(steps)?;
     model_bindings(steps)?;
     history_admission(steps)?;
     evidence_publication(steps)
+}
+fn toolchain_preflight(steps: &[Node]) -> DynResult<()> {
+    let step = steps
+        .iter()
+        .find(|step| field(step, "name") == Some("Verify runner toolchain"))
+        .ok_or("missing replay toolchain preflight")?;
+    let command_list = field(step, "run")
+        .and_then(|run| {
+            run.lines()
+                .map(str::trim)
+                .find_map(|line| line.strip_prefix("for cmd in "))
+        })
+        .and_then(|commands| commands.split_once(';').map(|(commands, _)| commands))
+        .ok_or("missing replay command prerequisite gate")?;
+    let commands: Vec<_> = command_list.split_whitespace().collect();
+    if !commands.contains(&"hf") {
+        return Err("replay toolchain preflight must require the installed hf CLI".into());
+    }
+    if commands
+        .iter()
+        .any(|command| matches!(*command, "python3" | "uv"))
+    {
+        return Err("replay toolchain preflight must not require python3 or uv".into());
+    }
+    Ok(())
 }
 fn by_id<'a>(steps: &'a [Node], id: &str) -> DynResult<(usize, &'a Node)> {
     steps
@@ -159,6 +185,21 @@ mod tests {
     #[test]
     fn current_replay_handoffs_are_admitted() {
         validate(WORKFLOW).unwrap();
+    }
+    #[test]
+    fn replay_toolchain_requires_hf_without_python_bootstrap() {
+        let without_hf = WORKFLOW.replace("git-lfs hf curl;", "git-lfs curl;");
+        assert_ne!(WORKFLOW, without_hf);
+        assert!(validate(&without_hf).is_err());
+
+        for command in ["python3", "uv"] {
+            let changed = WORKFLOW.replace(
+                "for cmd in cargo just sccache jq cmake",
+                &format!("for cmd in cargo just sccache jq {command} cmake"),
+            );
+            assert_ne!(WORKFLOW, changed);
+            assert!(validate(&changed).is_err(), "{command}");
+        }
     }
     #[test]
     fn model_swap_and_missing_input_identity_are_rejected() {

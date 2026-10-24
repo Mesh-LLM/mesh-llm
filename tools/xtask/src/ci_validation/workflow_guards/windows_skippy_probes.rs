@@ -1,6 +1,8 @@
 //! The Windows Skippy probe row runs every `^skippy_` probe under the image's
 //! 64-bit ctest (msvc-dev-cmd's 32-bit one dies on the graph-contract output),
 //! logs the runner's commit headroom first, and gets the row's time budget.
+//! It then runs the `skippy-runtime` and `skippy-serving` lib tests linked
+//! against the static ABI that build produced (#2137).
 use super::{Node, field, workflow_yaml};
 use crate::command::DynResult;
 use serde_json::Value;
@@ -14,6 +16,10 @@ const DEFAULT_TIMEOUT: u64 = 75;
 const CTEST_X64: &str = r"C:\Program Files\CMake\bin\ctest.exe";
 const BUILD: &str = r#"PATH="/c/Program Files/CMake/bin:$PATH" scripts/build-llama.sh"#;
 const PARALLEL: &str = "${{ matrix.check.ctest_parallel }}";
+const LIB_TESTS: [&str; 2] = [
+    "cargo test --locked -p skippy-runtime --lib",
+    "cargo test --locked -p skippy-serving --lib",
+];
 
 pub(super) fn check(root: &Path) -> DynResult<()> {
     let workflow = workflow_yaml::parse(&fs::read_to_string(root.join(WORKFLOW))?)?;
@@ -50,6 +56,19 @@ fn probe_job(job: &Node) -> DynResult<()> {
     if check > build || headroom > build {
         return Err("the ctest check and headroom log must precede the Skippy probes".into());
     }
+    // Whole active lines: a commented-out command must not count as run.
+    let lib_tests = probes
+        .iter()
+        .position(|step| {
+            LIB_TESTS
+                .iter()
+                .all(|command| run(step).lines().any(|line| line.trim() == *command))
+        })
+        .ok_or("the Skippy probe row must run the skippy-runtime and skippy-serving lib tests")?;
+    if lib_tests < build {
+        return Err("the Skippy lib tests must follow the probe build".into());
+    }
+    let lib_tests = probes[lib_tests];
     let build = probes[build];
     if !run(build).contains(BUILD) {
         return Err("Skippy probes must put the 64-bit CMake first on PATH".into());
@@ -60,6 +79,14 @@ fn probe_job(job: &Node) -> DynResult<()> {
     }
     if env("CTEST_PARALLEL_LEVEL") != Some(PARALLEL) {
         return Err("Skippy probe parallelism must come from the matrix row".into());
+    }
+    let lib_env = |name| lib_tests.get("env").and_then(|env| field(env, name));
+    let build_dir = env("LLAMA_STAGE_BUILD_DIR");
+    if build_dir.is_none()
+        || lib_env("LLAMA_STAGE_BUILD_DIR") != build_dir
+        || lib_env("LLAMA_STAGE_LINK_MODE") != Some("static")
+    {
+        return Err("the Skippy lib tests must link the probe build's static ABI".into());
     }
     Ok(())
 }

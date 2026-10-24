@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use super::super::process;
 use crate::command::DynResult;
 use std::{
@@ -16,15 +17,22 @@ pub(super) fn acquire(deadline: Instant) -> DynResult<(File, bool, Duration)> {
 fn acquire_at(root: &Path, uid: u32, deadline: Instant) -> DynResult<(File, bool, Duration)> {
     let started = Instant::now();
     let file = open(root, uid)?;
-    let mut contended = false;
-    loop {
-        process::check()?;
-        if Instant::now() >= deadline {
-            return Err("family host lock wait exhausted certification budget".into());
-        }
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
+    // Unix only: `open` already refuses elsewhere. Keeping the refusal inside
+    // the loop made it a loop that never loops on Windows (Clippy never_loop).
+    #[cfg(not(unix))]
+    {
+        let _ = (file, started, deadline);
+        Err("family host lock requires Unix".into())
+    }
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let mut contended = false;
+        loop {
+            process::check()?;
+            if Instant::now() >= deadline {
+                return Err("family host lock wait exhausted certification budget".into());
+            }
             // SAFETY: descriptor is an open validated regular lock file.
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
                 return Ok((file, contended, started.elapsed()));
@@ -33,13 +41,9 @@ fn acquire_at(root: &Path, uid: u32, deadline: Instant) -> DynResult<(File, bool
             if error.kind() != std::io::ErrorKind::WouldBlock {
                 return Err(error.into());
             }
+            contended = true;
+            std::thread::sleep(Duration::from_millis(100));
         }
-        #[cfg(not(unix))]
-        {
-            return Err("family host lock requires Unix".into());
-        }
-        contended = true;
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 #[cfg(unix)]

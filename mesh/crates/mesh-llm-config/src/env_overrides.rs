@@ -214,10 +214,65 @@ impl Drop for EnvOverrideGuard {
 /// [`apply_env_overrides`] end to end in its own tests without writing
 /// `unsafe` itself. Callers MUST annotate the enclosing test with
 /// `#[serial_test::serial]` -- mutating the process environment races any
-/// other test in the same binary otherwise.
+/// other test in the same binary otherwise. For an override that
+/// [`apply_env_overrides`] reads, use [`env_override_in_child_for_test`]
+/// instead: `serial` does not hold back the tests that read the config.
 pub fn with_env_override_for_test<T>(name: &str, value: &str, f: impl FnOnce() -> T) -> T {
     let _guard = EnvOverrideGuard::set(name, value);
     f()
+}
+
+/// Marks the child process [`env_override_in_child_for_test`] starts, with the
+/// path of the one test it runs.
+const ENV_OVERRIDE_TEST_CHILD_ENV: &str = "MESH_LLM_ENV_OVERRIDE_TEST_CHILD";
+
+/// Test-only helper for overrides that [`apply_env_overrides`] reads: runs the
+/// calling test again in a child process with `name` set to `value` there
+/// only, and returns `true` in that child. The test runs its body only then:
+///
+/// ```ignore
+/// #[test]
+/// fn rejects_an_invalid_override() {
+///     if !env_override_in_child_for_test(
+///         concat!(module_path!(), "::rejects_an_invalid_override"),
+///         MESH_LLM_LIFECYCLE_LOG_PARSER_ENV,
+///         "not-a-real-mode",
+///     ) {
+///         return;
+///     }
+///     // The override is set here, and only in this process.
+/// }
+/// ```
+///
+/// [`with_env_override_for_test`] changes the environment of the process every
+/// other test of the binary runs in, and `#[serial_test::serial]` only orders
+/// the tests that carry a `serial_test` attribute, so a test reading the config
+/// meanwhile could see an invalid override and fail (#2076). Here the process
+/// the other tests run in never changes. `test` is the test's path with its
+/// crate, as `module_path!()` gives it.
+///
+/// # Panics
+///
+/// In the parent, when the child does not start, fails, or does not run
+/// exactly that one test.
+pub fn env_override_in_child_for_test(test: &str, name: &str, value: &str) -> bool {
+    let test = test.split_once("::").map_or(test, |(_, path)| path);
+    if std::env::var_os(ENV_OVERRIDE_TEST_CHILD_ENV).is_some_and(|child| child == test) {
+        return true;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary path"))
+        .args([test, "--exact", "--nocapture", "--test-threads", "1"])
+        .env(ENV_OVERRIDE_TEST_CHILD_ENV, test)
+        .env(name, value)
+        .output()
+        .expect("start the test's child process");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "`{test}` with {name}={value} failed in its child process:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
 }
 
 /// Pure resolver behind [`benchmark_tune_trial_enabled`], mirroring

@@ -85,6 +85,8 @@ pub enum InferenceFrontendRoute {
     Messages,
     MessagesCountTokens,
     SystemOne,
+    /// Live transcription over a websocket (`GET /v1/realtime`).
+    Realtime,
     Unknown,
 }
 

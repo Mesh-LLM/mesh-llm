@@ -210,6 +210,7 @@ const fn openai_route_label(route: InferenceFrontendRoute) -> Option<&'static st
         InferenceFrontendRoute::Messages => Some("messages"),
         InferenceFrontendRoute::MessagesCountTokens => Some("messages_count_tokens"),
         InferenceFrontendRoute::SystemOne => Some("system_one"),
+        InferenceFrontendRoute::Realtime => Some("realtime"),
         InferenceFrontendRoute::Unknown => None,
     }
 }

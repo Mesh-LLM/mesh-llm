@@ -194,12 +194,52 @@ fn write_goose_mcp_config_to_path(path: &std::path::Path, mcp_url: &str) -> Resu
 }
 
 fn write_goose_mcp_config(mcp_url: &str) -> Result<()> {
-    let config_path = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".config")
+    write_goose_mcp_config_to_path(&goose_config_dir().join("config.yaml"), mcp_url)
+}
+
+/// The directory goose reads its config and custom providers from.
+fn goose_config_dir() -> std::path::PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let windows_appdata = cfg!(windows).then(|| {
+        std::env::var_os("APPDATA")
+            .filter(|appdata| !appdata.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(dirs::config_dir)
+            .unwrap_or_else(|| home.join("AppData").join("Roaming"))
+    });
+    goose_config_dir_for(
+        std::env::var_os("GOOSE_PATH_ROOT"),
+        windows_appdata,
+        std::env::var_os("XDG_CONFIG_HOME"),
+        &home,
+    )
+}
+
+/// Resolves the directory as goose's `Paths::config_dir` does: an absolute
+/// `GOOSE_PATH_ROOT` holds `config/`; otherwise etcetera's app strategy for
+/// goose, which is `%APPDATA%\Block\goose\config` on Windows and
+/// `$XDG_CONFIG_HOME/goose` elsewhere, with `~/.config` when
+/// `XDG_CONFIG_HOME` isn't an absolute path.
+fn goose_config_dir_for(
+    path_root: Option<std::ffi::OsString>,
+    windows_appdata: Option<std::path::PathBuf>,
+    xdg_config_home: Option<std::ffi::OsString>,
+    home: &std::path::Path,
+) -> std::path::PathBuf {
+    if let Some(root) = path_root
+        .map(std::path::PathBuf::from)
+        .filter(|root| root.is_absolute())
+    {
+        return root.join("config");
+    }
+    if let Some(appdata) = windows_appdata {
+        return appdata.join("Block").join("goose").join("config");
+    }
+    xdg_config_home
+        .map(std::path::PathBuf::from)
+        .filter(|config| config.is_absolute())
+        .unwrap_or_else(|| home.join(".config"))
         .join("goose")
-        .join("config.yaml");
-    write_goose_mcp_config_to_path(&config_path, mcp_url)
 }
 
 fn is_loopback_or_localhost(host: &str) -> bool {
@@ -574,12 +614,8 @@ pub async fn run_goose(model: Option<String>, port: u16, console_port: u16) -> R
     let (models, chosen, mut mesh_child) =
         check_mesh(&client, port, Some(console_port), &model).await?;
 
-    let goose_config_dir = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".config")
-        .join("goose")
-        .join("custom_providers");
-    std::fs::create_dir_all(&goose_config_dir)?;
+    let providers_dir = goose_config_dir().join("custom_providers");
+    std::fs::create_dir_all(&providers_dir)?;
 
     let provider_models = models.goose_models();
 
@@ -597,7 +633,7 @@ pub async fn run_goose(model: Option<String>, port: u16, console_port: u16) -> R
         "nonce_header": "x-capsule-client-nonce"
     });
 
-    let provider_path = goose_config_dir.join("mesh.json");
+    let provider_path = providers_dir.join("mesh.json");
     std::fs::write(&provider_path, serde_json::to_string_pretty(&provider)?)?;
     let mut err = mesh_llm_events::console_err();
     writeln!(err, "✅ Wrote {}", provider_path.display())?;

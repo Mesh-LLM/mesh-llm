@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod http_exchange;
 pub mod lifecycle;
 pub mod models;
+pub mod realtime;
 mod request_lifecycle;
 pub mod rerank;
 pub mod responses;
@@ -26,7 +27,7 @@ pub mod wire_bytes;
 
 pub use audio::{
     AudioFormat, AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest,
-    AudioTranscriptionResponse,
+    AudioTranscriptionResponse, AudioTranscriptionSegment, AudioTranscriptionTiming,
 };
 pub use backend::{
     CancellationToken, ChatCompletionStream, CompletionStream, InferenceBackend,

@@ -464,6 +464,8 @@ fn shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_o
             let harness = format!(
                 r#"
 set -euo pipefail
+TRUSTED_ROOT="$PWD"
+JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 run_full_build() {{
 {body}
 BUILD_LOG="$FIXTURE_ROOT/build.log"

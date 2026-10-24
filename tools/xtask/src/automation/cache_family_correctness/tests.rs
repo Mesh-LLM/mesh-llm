@@ -1,6 +1,9 @@
 use super::*;
 fn input() -> Input {
-    serde_json::from_value(json!({"schema_version":1,"case_key":"llama","model_id":"fixture","correctness":"/fixture","correctness_sha256":"a".repeat(64),"stage_server":"/fixture","stage_server_sha256":"a".repeat(64),"model":"/fixture","model_sha256":"a".repeat(64),"native_build":"/fixture","native_build_sha256":"a".repeat(64),"ctx_size":512,"prefix_tokens":8,"cache_hit_repeats":2,"runtime_lane_count":1,"source_port":19061,"restore_port":19062,"n_gpu_layers":-1,"prompt":null,"topologies":["one-stage"],"borrow_resident_hits":false,"cache_decoded_result_hits":false,"execution_seconds":30,"cell_seconds":8,"settings":{}})).unwrap()
+    // Absolute on every platform: "/fixture" has no drive on Windows, and
+    // temp_dir() is relative when TMPDIR is.
+    let fixture = std::path::absolute(std::env::temp_dir().join("fixture")).unwrap();
+    serde_json::from_value(json!({"schema_version":1,"case_key":"llama","model_id":"fixture","correctness":fixture,"correctness_sha256":"a".repeat(64),"stage_server":fixture,"stage_server_sha256":"a".repeat(64),"model":fixture,"model_sha256":"a".repeat(64),"native_build":fixture,"native_build_sha256":"a".repeat(64),"ctx_size":512,"prefix_tokens":8,"cache_hit_repeats":2,"runtime_lane_count":1,"source_port":19061,"restore_port":19062,"n_gpu_layers":-1,"prompt":null,"topologies":["one-stage"],"borrow_resident_hits":false,"cache_decoded_result_hits":false,"execution_seconds":30,"cell_seconds":8,"settings":{}})).unwrap()
 }
 #[test]
 fn cache_topology_covers_actual_layer_ranges_and_recurrent_payload() {
