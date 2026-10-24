@@ -148,7 +148,7 @@ fn migration_prepared_inputs_ui_requires_a_local_module_reference() -> TestResul
 }
 
 #[test]
-fn migration_prepared_inputs_ui_parses_module_tags_like_html_parser() -> TestResult {
+fn migration_prepared_inputs_ui_extracts_external_module_sources() -> TestResult {
     let scratch = Scratch::new("ui-html")?;
     let dist = raw_dist(&scratch)?;
     let index = "<!doctype html><SCRIPT>var a = '<script type=\"module\">';</SCRIPT>\
@@ -163,10 +163,8 @@ fn migration_prepared_inputs_ui_parses_module_tags_like_html_parser() -> TestRes
     Ok(())
 }
 
-/// Python raises `AttributeError` (a traceback, status 1) on a valueless
-/// `src`; the port reports it as a rejection with the same status.
 #[test]
-fn migration_prepared_inputs_ui_rejects_valueless_module_src() -> TestResult {
+fn migration_prepared_inputs_ui_rejects_module_src_without_a_value() -> TestResult {
     let scratch = Scratch::new("ui-bare-src")?;
     let dist = raw_dist(&scratch)?;
     fs::write(

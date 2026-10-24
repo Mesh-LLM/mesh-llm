@@ -64,7 +64,7 @@ jobs:
           missing=0
           export PATH="/Users/lab/.local/bin:$PATH"
           echo "/Users/lab/.local/bin" >> "$GITHUB_PATH"
-          for cmd in cargo just sccache jq python3 uv cmake ninja git-lfs hf curl; do
+          for cmd in cargo just sccache jq cmake ninja git-lfs hf curl; do
             if ! command -v "$cmd" >/dev/null 2>&1; then
               echo "missing on micstudio image: $cmd" >&2
               missing=1

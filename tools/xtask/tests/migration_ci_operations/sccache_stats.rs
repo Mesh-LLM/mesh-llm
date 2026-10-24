@@ -1,11 +1,9 @@
-//! `ci-ops sccache-stats` against
-//! `.github/actions/capture-sccache-stats/capture.py`. Each case runs in a
+//! `ci-ops sccache-stats` output and file contracts. Each case runs in a
 //! temporary directory whose `bin/` (the whole `PATH`) holds a stub
 //! `sccache` printing `payload.json`, or failing with a secret on stderr when
 //! `error` exists. Exit status, both streams, the written evidence file and
 //! the `--github-output` file are compared with a golden in
-//! `fixtures/ci_operations/sccache/` (`{root}` is the temp dir) and, when
-//! configured, a side-by-side legacy run. `GITHUB_OUTPUT` and
+//! `fixtures/ci_operations/sccache/` (`{root}` is the temp dir). `GITHUB_OUTPUT` and
 //! `GITHUB_STEP_SUMMARY` point at temp files the tool must never touch.
 
 use crate::support::{Stage, TestResult, fixture_dir};
@@ -98,7 +96,6 @@ impl Sandbox {
             .env("PATH", self.stage.path().join("bin"))
             .env("GITHUB_OUTPUT", self.stage.path().join("env-output"))
             .env("GITHUB_STEP_SUMMARY", self.stage.path().join("env-summary"))
-            .env("PYTHONDONTWRITEBYTECODE", "1")
             .env_remove("COLUMNS")
             .stdin(Stdio::null())
             .output()?;
@@ -128,8 +125,7 @@ fn text(value: &Value) -> Option<String> {
     value.as_str().map(str::to_owned)
 }
 
-/// Runs the port, then (if configured) the legacy script on a reset copy;
-/// both must match each other and the captured golden.
+/// Runs the CLI against a reset sandbox and compares it with the captured contract.
 fn case(name: &str, sandbox: &Sandbox, args: &[&str]) -> Result<Observed, Box<dyn Error>> {
     sandbox.reset();
     let prefix = ["ci-ops", "sccache-stats"].map(PathBuf::from);
@@ -216,7 +212,7 @@ fn edited(edit: impl FnOnce(&mut Value)) -> Vec<u8> {
 }
 
 #[test]
-fn sanitized_evidence_and_outputs_match_legacy_for_each_expectation() -> TestResult {
+fn sanitized_evidence_and_outputs_match_captured_contract_for_each_expectation() -> TestResult {
     let valid = bytes(&valid_payload());
     let cases: [(&str, &[&str]); 6] = [
         ("opportunistic", &[]),
@@ -415,18 +411,16 @@ fn sccache_failures_and_absence_fail_closed() -> TestResult {
         "{root}/evidence/sccache-stats.json",
     ];
     case("artifact_escape", &escape, &args)?;
-    for (name, rate) in [
-        ("rate_above_one", "1.5"),
-        ("rate_nan", "nan"),
-        ("rate_underscore", "0_5"),
-    ] {
-        payload_case(name, &valid, &["--minimum-hit-rate", rate])?;
+    for (name, rate) in [("rate_above_one", "1.5"), ("rate_nan", "nan")] {
+        let outcome = payload_case(name, &valid, &["--minimum-hit-rate", rate])?;
+        assert_eq!(outcome.code, 1, "{name}");
+        assert!(outcome.stats.is_none(), "{name}: evidence written");
     }
     Ok(())
 }
 
 #[test]
-fn relative_output_without_github_output_matches_legacy() -> TestResult {
+fn relative_output_without_github_output_matches_captured_contract() -> TestResult {
     let valid = bytes(&valid_payload());
     let sandbox = Sandbox::new("relative", Some(&valid), false)?;
     let outcome = case(
@@ -445,57 +439,44 @@ fn relative_output_without_github_output_matches_legacy() -> TestResult {
 }
 
 #[test]
-fn argparse_surface_matches_legacy() -> TestResult {
+fn native_cli_help_and_typed_validation() -> TestResult {
     let valid = bytes(&valid_payload());
     let sandbox = Sandbox::new("argv", Some(&valid), false)?;
-    let cases: [(&str, &[&str]); 16] = [
-        ("argv_help", &["-h"]),
-        ("argv_help_bundled", &["--artifact-name", "a", "--help"]),
-        ("argv_help_explicit", &["--help=x"]),
-        (
-            "argv_help_after_unknown",
-            &["-x", "--artifact-name", "a", "-h"],
-        ),
-        ("argv_empty", &[]),
-        ("argv_missing_output", &["--artifact-name", "a"]),
-        (
-            "argv_unrecognized",
-            &["x", "--artifact-name", "a", "--output", "o", "--x=1", "y"],
-        ),
-        (
-            "argv_double_dash",
-            &["--artifact-name", "a", "--output", "o", "--", "x"],
-        ),
-        ("argv_only_double_dash", &["--", "--artifact-name", "a"]),
-        ("argv_invalid_choice", &["--cache-expectation", "x"]),
-        (
-            "argv_invalid_float",
-            &["--minimum-hit-rate", "x", "--artifact-name", "a"],
-        ),
-        ("argv_float_attached_empty", &["--minimum-hit-rate="]),
-        ("argv_expected_value", &["--artifact-name"]),
-        (
-            "argv_value_is_option",
-            &["--output", "--", "--artifact-name", "a"],
-        ),
-        (
-            "argv_negative_exponent",
-            &["--artifact-name", "a", "--output", "o", "--m", "-1e3"],
-        ),
-        (
-            "argv_negative_value",
-            &[
-                "--minimum-hit-rate",
-                "-0.5",
-                "--artifact-name",
-                "../a",
-                "--output",
-                "o",
-            ],
-        ),
-    ];
-    for (name, args) in cases {
-        let outcome = case(name, &sandbox, args)?;
+    let prefix = ["ci-ops", "sccache-stats"].map(PathBuf::from);
+    let help = sandbox.run(Path::new(env!("CARGO_BIN_EXE_xtask")), &prefix, &["--help"])?;
+    assert_eq!(help.code, 0);
+    assert!(help.stdout.contains("--cache-expectation"));
+    assert!(help.stdout.contains("--minimum-hit-rate"));
+    assert!(help.stderr.is_empty());
+
+    for (args, code) in [
+        (vec!["--artifact", "a", "--output", "o"], 2),
+        (vec!["--minimum-hit-rate", "not-a-number"], 2),
+        (vec!["--minimum-hit-rate", "0_5"], 2),
+        (vec!["--artifact-name"], 2),
+        (vec!["--help=x"], 2),
+    ] {
+        sandbox.reset();
+        let outcome = sandbox.run(Path::new(env!("CARGO_BIN_EXE_xtask")), &prefix, &args)?;
+        assert_eq!(outcome.code, code, "{args:?}");
+        assert!(outcome.stdout.is_empty(), "{args:?}");
+        assert!(outcome.stats.is_none(), "{args:?}: evidence written");
+    }
+
+    for (name, rate) in [
+        ("infinite", "inf"),
+        ("negative", "-0.5"),
+        ("above_one", "1.5"),
+    ] {
+        let sample = Sandbox::new(name, Some(&valid), false)?;
+        let args = full_args(&["--minimum-hit-rate", rate]);
+        let outcome = sample.run(Path::new(env!("CARGO_BIN_EXE_xtask")), &prefix, &args)?;
+        assert_eq!(outcome.code, 1, "{name}");
+        assert!(
+            outcome
+                .stderr
+                .contains("minimum hit rate must be between 0 and 1")
+        );
         assert!(outcome.stats.is_none(), "{name}: evidence written");
     }
     Ok(())

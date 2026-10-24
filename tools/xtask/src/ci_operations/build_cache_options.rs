@@ -1,11 +1,9 @@
-//! argparse's `_parse_optional` for `ci-ops build-cache`: exact options,
-//! `--name=value`, unique long prefixes (ambiguity reported), bundled
-//! single-dash values, and the negative-number/space positional rules.
+//! Shared token classification for xtask command-line parsers.
 
 use crate::repository::check_report::CheckReport;
 use crate::repository::text::repr;
 
-/// One argument as argparse classifies it.
+/// How a token relates to the exact option names accepted by a command.
 pub(crate) enum Kind<'o> {
     Positional,
     Unknown,
@@ -30,48 +28,6 @@ pub(crate) fn classify<'o>(arg: &str, options: &[&'o str]) -> Kind<'o> {
     } else {
         Kind::Unknown
     }
-}
-
-/// `classify` plus argparse's `allow_abbrev`: a unique `--` prefix resolves
-/// to its option. Callers reject ambiguity first with `first_ambiguity`.
-pub(crate) fn classify_abbreviated<'o>(arg: &str, options: &[&'o str]) -> Kind<'o> {
-    match classify(arg, options) {
-        Kind::Known(option, explicit, attached) => Kind::Known(option, explicit, attached),
-        other => match prefix_matches(arg, options).as_slice() {
-            [only] => {
-                let explicit = arg.split_once('=').map(|(_, value)| value.to_owned());
-                let attached = explicit.is_some();
-                Kind::Known(only, explicit, attached)
-            }
-            _ => other,
-        },
-    }
-}
-
-/// argparse's `_get_option_tuples` for `--` arguments.
-fn prefix_matches<'o>(arg: &str, options: &[&'o str]) -> Vec<&'o str> {
-    if !arg.starts_with("--") {
-        return Vec::new();
-    }
-    let prefix = arg.split_once('=').map_or(arg, |(prefix, _)| prefix);
-    options
-        .iter()
-        .copied()
-        .filter(|option| option.starts_with(prefix))
-        .collect()
-}
-
-/// argparse reports an ambiguous prefix while classifying every argument
-/// before `--`, ahead of any value or choice error.
-pub(crate) fn first_ambiguity(args: &[String], options: &[&str]) -> Option<String> {
-    args.iter()
-        .take_while(|arg| *arg != "--")
-        .filter(|arg| matches!(classify(arg, options), Kind::Positional | Kind::Unknown))
-        .find_map(|arg| {
-            let matches = prefix_matches(arg, options);
-            (matches.len() > 1)
-                .then(|| format!("ambiguous option: {arg} could match {}", matches.join(", ")))
-        })
 }
 
 fn is_negative_number(arg: &str) -> bool {
@@ -108,42 +64,26 @@ pub(crate) fn help_flag(
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, classify, classify_abbreviated, first_ambiguity};
+    use super::{Kind, classify};
 
     const OPTIONS: [&str; 5] = ["-h", "--help", "--max-size", "--max-age", "--execute"];
 
     #[test]
-    fn unique_long_prefix_resolves_with_attached_value() {
+    fn exact_options_and_attached_values_are_classified() {
         assert!(matches!(
-            classify_abbreviated("--exec", &OPTIONS),
+            classify("--execute", &OPTIONS),
             Kind::Known("--execute", None, false)
         ));
         assert!(matches!(
-            classify_abbreviated("--max-s=1", &OPTIONS),
+            classify("--max-size=1", &OPTIONS),
             Kind::Known("--max-size", Some(value), true) if value == "1"
         ));
         assert!(matches!(classify("--exec", &OPTIONS), Kind::Unknown));
     }
 
     #[test]
-    fn shared_long_prefix_is_ambiguous() {
-        let args = ["--max-size", "x", "--ma=1", "--", "--max"].map(String::from);
-        assert_eq!(
-            first_ambiguity(&args, &OPTIONS).as_deref(),
-            Some("ambiguous option: --ma=1 could match --max-size, --max-age")
-        );
-        assert!(matches!(
-            classify_abbreviated("--max", &OPTIONS),
-            Kind::Unknown
-        ));
-    }
-
-    #[test]
-    fn unmatched_long_option_stays_unknown() {
-        assert!(matches!(
-            classify_abbreviated("--json", &OPTIONS),
-            Kind::Unknown
-        ));
-        assert!(first_ambiguity(&["--json".to_owned()], &OPTIONS).is_none());
+    fn unmatched_prefix_and_unknown_long_options_stay_unknown() {
+        assert!(matches!(classify("--max", &OPTIONS), Kind::Unknown));
+        assert!(matches!(classify("--json", &OPTIONS), Kind::Unknown));
     }
 }

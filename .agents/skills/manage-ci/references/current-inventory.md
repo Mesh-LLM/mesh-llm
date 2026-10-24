@@ -86,7 +86,10 @@ and working Git/xcrun. The toolchain uses the canonical shared HF cache at
 `/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
 `HF_HUB_OFFLINE=0` so missing pinned models and trajectories can be downloaded.
 Pinned input verification uses the installed `hf download --format quiet` CLI
-for path-only stdout; it does not require Hugging Face in system Python. Model
+for path-only stdout; it does not require Hugging Face in system Python.
+The replay toolchain gate requires the installed `hf` CLI without separate
+`python3` or `uv` command checks; runner provisioning owns the CLI and its runtime.
+Model
 and trajectory downloads retain revision and SHA-256 checks. The native `trajectory-reader` supplies the compressed Parquet reader. The
 history existence probe uses the typed native HTTP owner and permits bootstrap
 only on 404.
@@ -1548,6 +1551,23 @@ controller-owned virtual environment and exports `SKIPPY_WORKLOAD_SDK_PYTHON`.
 Historical source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
+
+The canary build and generated-patch checks share the locked external Jinja
+project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
+selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
+state directory and uses the prepared SDK interpreter when available, otherwise
+the installed `python3`. Interpreter downloads are disabled. Both upstream
+Jinja tests remain selected by the complete native suite. The optional developer
+llama-benchy wrapper defaults to a full upstream source commit; explicit caller
+overrides remain available. Neither dependency adds repository Python code.
+
+The native Python-tooling census runs through `just ci-crate-lists` in normal
+Quality validation. `ci/python-tooling-policy.json` records exact retained
+external dependency inputs, source pins and invocation exceptions. It rejects
+repository Python source and shebangs, undeclared package inputs and direct
+interpreter invocations in maintained automation. Historical receipts remain
+data. Mutation tests cover added hidden files, suffixless scripts and inline
+process execution; static checks do not replace review of semantic emulation.
 
 ### Self-hosted job disk cleanup
 
