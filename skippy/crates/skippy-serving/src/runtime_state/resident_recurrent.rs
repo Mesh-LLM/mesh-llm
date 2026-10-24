@@ -6,7 +6,8 @@
 use super::*;
 use crate::kv_integration::exact_state_diagnostics::emit_exact_state_diagnostic;
 use crate::kv_integration::{
-    ExactStateRestore, KvStageIntegration, PrefillKvIdentity, ResidentRecurrentPolicy,
+    ExactStateRecordAdmission, ExactStateRestore, KvStageIntegration, PrefillKvIdentity,
+    ResidentRecurrentPolicy,
 };
 
 use super::recurrent_checkpoints::ResidentRecurrentCheckpoint;
@@ -219,8 +220,14 @@ impl RuntimeState {
     }
 
     pub(super) fn demote_recurrent_lane(lane: &mut RuntimeLaneSession, start: u32, end: u32) {
-        for entry in lane.recurrent_prefixes.take_for_demotion() {
-            Self::demote_recurrent_checkpoint(lane, entry, start, end);
+        let mut candidates = lane.recurrent_prefixes.take_for_demotion().into_iter();
+        if let Some(latest) = candidates.next() {
+            Self::demote_recurrent_checkpoint(lane, latest, start, end);
+        }
+        for shared in candidates {
+            if Self::demote_recurrent_checkpoint(lane, shared, start, end) {
+                break;
+            }
         }
     }
 
@@ -229,7 +236,7 @@ impl RuntimeState {
         entry: ResidentRecurrentCheckpoint,
         start: u32,
         end: u32,
-    ) {
+    ) -> bool {
         // Only owned bytes go to the recorder, so native cells can safely be
         // released afterward. Optional cache admission may discard the entry.
         if !lane
@@ -240,9 +247,9 @@ impl RuntimeState {
                 "demotion_no_native_prefix",
                 &[("position", entry.identity.token_ids.len() as u64)],
             );
-            return;
+            return false;
         }
-        if let Err(error) = entry.cache.demote_resident_recurrent(
+        match entry.cache.demote_resident_recurrent(
             &mut lane.session,
             start,
             end,
@@ -250,13 +257,20 @@ impl RuntimeState {
             entry.recurrent,
             entry.policy,
         ) {
-            entry.cache.notify_demotion_error();
-            emit_exact_state_diagnostic(
-                "demotion_error",
-                &[("position", entry.identity.token_ids.len() as u64)],
-            );
-            // Errors affect optional cache retention, never generation output.
-            tracing::debug!(error = %error, "resident recurrent checkpoint demotion failed");
+            Ok(ExactStateRecordAdmission::Queued) => true,
+            Ok(
+                ExactStateRecordAdmission::DroppedFull | ExactStateRecordAdmission::WorkerStopped,
+            ) => false,
+            Err(error) => {
+                entry.cache.notify_demotion_error();
+                emit_exact_state_diagnostic(
+                    "demotion_error",
+                    &[("position", entry.identity.token_ids.len() as u64)],
+                );
+                // Errors affect optional cache retention, never generation output.
+                tracing::debug!(error = %error, "resident recurrent checkpoint demotion failed");
+                false
+            }
         }
     }
 }

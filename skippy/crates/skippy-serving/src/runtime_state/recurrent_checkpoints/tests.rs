@@ -121,12 +121,34 @@ fn restore_drops_invalid_suffixes_and_demotion_prioritizes_latest() {
     assert_eq!(set.restore(2).identity.token_ids, [1, 2, 3]);
     assert_eq!(lengths(&set), [1, 2, 3]);
     let demoted = set.take_for_demotion();
-    assert_eq!(demoted.len(), 2);
+    assert_eq!(demoted.len(), 3);
     assert_eq!(demoted[0].identity.token_ids, [1, 2, 3]);
-    assert_eq!(demoted[1].identity.token_ids, [1]);
+    assert_eq!(demoted[1].identity.token_ids, [1, 2]);
+    assert_eq!(demoted[2].identity.token_ids, [1]);
     assert!(set.is_empty());
     assert_eq!(set.retained_bytes(), 0);
     assert!(set.take_for_demotion().is_empty());
     set.insert(checkpoint("a", &[1], false), 4, 0);
     assert_eq!(set.take_for_demotion().len(), 1);
+}
+
+#[test]
+fn demotion_offers_nearest_shared_boundary_before_older_fallbacks() {
+    let mut set = RecurrentCheckpoints::default();
+    let prompt = (1..=192).collect::<Vec<_>>();
+    for (count, durable) in [(100, true), (128, true), (188, true), (192, false)] {
+        set.insert(checkpoint("a", &prompt[..count], durable), 4, 32);
+    }
+    let mut generated = prompt;
+    generated.extend(193..=199);
+    set.insert(checkpoint("a", &generated, false), 4, 32);
+    assert_eq!(lengths(&set), [100, 128, 188, 199]);
+
+    let offered = set.take_for_demotion();
+    let positions: Vec<_> = offered
+        .iter()
+        .map(|entry| entry.identity.token_ids.len())
+        .collect();
+    assert_eq!(positions, [199, 188, 128, 100]);
+    assert!(set.is_empty());
 }
