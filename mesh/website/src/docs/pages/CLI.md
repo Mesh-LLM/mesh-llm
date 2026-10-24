@@ -591,6 +591,12 @@ next to the Windows binary) no longer hides the downloadable GPU runtimes of
 the release catalog. `--installed` is the explicit compatibility spelling for
 the default local-discovery behavior.
 
+At startup `mesh-llm` also fetches the release catalog and installs a missing
+runtime. Set `runtime.native_runtime.download = false` in `config.toml` (or
+`MESH_LLM_NO_RUNTIME_DOWNLOAD=1` for one process) to use only bundled and
+installed runtimes, for example when a package manager ships them.
+`mesh-llm runtime install` is not affected.
+
 Use `--json` for machine-readable output. Runtime selection is constrained by
 the running Mesh version, platform, backend, and Skippy ABI.
 
