@@ -29,6 +29,7 @@ use durable_spill::{
     DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
 use exact_state_limits::exact_state_byte_limits;
+use exact_state_limits::exact_state_record_queue_limit;
 use exact_state_retention::evict_exact_entries_over;
 
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
@@ -193,6 +194,8 @@ impl KvStageIntegration {
             cache_config.exact_max_bytes,
             std::env::var(EXACT_STATE_MAX_BYTES_ENV).ok().as_deref(),
         );
+        let exact_state_record_queue_limit =
+            exact_state_record_queue_limit(exact_byte_limits.soft_bytes);
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
         let (exact_state_record_tx, exact_state_record_rx) =
@@ -376,6 +379,7 @@ impl KvStageIntegration {
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             kv_lifecycle_observer: observer,
             exact_state_record_queue_bytes,
+            exact_state_record_queue_limit,
             l2,
             l3,
             cachegen_serving_enabled: worker_cachegen,

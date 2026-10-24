@@ -58,7 +58,7 @@ impl KvStageIntegration {
         if !admission_credit.reserve_bytes(
             &self.exact_state_record_queue_bytes,
             kv_bytes.saturating_add(recurrent_bytes as u64),
-            EXACT_STATE_RECORD_QUEUE_BYTES,
+            self.exact_state_record_queue_limit,
         ) {
             emit_exact_state_diagnostic(
                 "demotion_byte_full",

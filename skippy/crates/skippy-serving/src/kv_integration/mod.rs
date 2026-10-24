@@ -225,6 +225,7 @@ pub struct KvStageIntegration {
     /// lets one multi-GiB export sit next to another and doubles the RAM the
     /// cache can pin behind a request.
     pub(crate) exact_state_record_queue_bytes: Arc<AtomicU64>,
+    pub(crate) exact_state_record_queue_limit: u64,
     /// Optional bounded host-RAM tier. Qualified L3 fills enter L2; an L2 hit
     /// promotes back into L1 through the existing worker.
     pub(crate) l2: Option<l2_serving::StageL2>,
@@ -253,11 +254,11 @@ pub enum StagePrefixCachePayload {
     FullState,
 }
 
-/// Entry backstop on the record queue. The binding limit is
-/// [`EXACT_STATE_RECORD_QUEUE_BYTES`]; this only caps bookkeeping.
+/// Entry backstop on the record queue. Byte admission is stage-specific;
+/// this only caps bookkeeping.
 pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 8;
 
-/// Payload bytes the record queue may hold. A record that does not fit is
+/// Minimum payload bytes the record queue may hold. A record that does not fit is
 /// dropped, never delayed: recording is optional and inference is not. One
 /// record larger than the whole bound is still admitted when the queue is
 /// empty, or large models could never record at all.
@@ -938,7 +939,7 @@ impl KvStageIntegration {
                 &self.exact_state_records_dropped,
                 &self.exact_state_records_pending,
                 &self.exact_state_record_queue_bytes,
-                EXACT_STATE_RECORD_QUEUE_BYTES,
+                self.exact_state_record_queue_limit,
                 &self.exact_state_record_worker_healthy,
                 pending,
             )
