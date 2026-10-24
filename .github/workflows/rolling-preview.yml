@@ -1,0 +1,49 @@
+name: Release · Rolling preview
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 2,5'
+
+concurrency:
+  group: rolling-preview-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
+      - name: Select unique preview version
+        id: version
+        env:
+          PREVIEW_RUN_ID: ${{ github.run_id }}
+          PREVIEW_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          "${MESH_LLM_AUTOMATION_BIN:?}" release preview-version \
+            "$PREVIEW_RUN_ID" "$PREVIEW_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Dispatch canonical release producers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --ref main \
+            -f version="$VERSION" -f preview=true \
+            -f skip_gpu_bundles=false -f force_hosted_runners=true -f use_depot=false

@@ -321,3 +321,33 @@ self-hosting path.
 Forks build without the secret and therefore never report. See
 `website/src/docs/pages/analytics.md` for the collected surface and the
 opt-out, and `crates/mesh-llm-analytics/README.md` for the design.
+
+## Rolling downloadable previews
+
+`rolling-preview.yml` dispatches the canonical Release workflow Tuesday and
+Friday at 03:23 UTC, or manually. Unique versions use
+`v<workspace-core>-preview.<run-id>.<attempt>`. It builds the full existing release
+matrix including bundled native runtimes, without publishing npm, crates.io,
+containers or downstream installers. Preview mode leaves main unchanged.
+All producers check out the release run's frozen source SHA and prepare the
+version locally. The publisher prepares an immutable tag, uploads to a draft,
+then exposes the complete prerelease without marking it latest.
+
+After merging, start the first run with:
+
+```bash
+gh workflow run rolling-preview.yml --ref main
+```
+
+Completed previews appear on the repository Releases page with a **Rolling
+preview** title. Choose the MeshLLM archive for your OS, architecture and backend,
+verify the adjacent SHA-256 checksum and extract the entire archive. Keep
+`native-runtimes` beside the executable. Model weights and GPU drivers remain
+separate prerequisites. Existing release smoke gates apply; publication is not
+proof of hardware inference on every GPU backend. The first live run and a real
+download-to-inference check remain required activation evidence.
+
+Failed uploads leave an unpublished draft for diagnosis; use a fresh version
+rather than overwriting tags. Previous previews remain available for rollback.
+This initial implementation neither deletes old releases nor skips unchanged
+source; there is no moving tag or automatic stable-user upgrade.
