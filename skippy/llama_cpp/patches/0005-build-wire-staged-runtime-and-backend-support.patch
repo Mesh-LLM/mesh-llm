@@ -1,4 +1,4 @@
-From 1080cfb4f1b265efa4a6347c5903c56e64fb0d88 Mon Sep 17 00:00:00 2001
+From 2f431fbe811c5af5e74b8573424b6e5a7334798d Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
@@ -21,21 +21,22 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  ggml/cmake/common.cmake                    |   9 +-
  ggml/include/ggml-backend.h                |  27 +
  ggml/src/ggml-backend.cpp                  |  25 +-
- ggml/src/ggml-cuda/cachegen.cu             | 223 ++++++++
+ ggml/src/ggml-cuda/cachegen.cu             | 255 +++++++++
  ggml/src/ggml-cuda/cachegen.cuh            |  27 +
- ggml/src/ggml-cuda/ggml-cuda.cu            | 344 ++++++++++-
+ ggml/src/ggml-cuda/ggml-cuda.cu            | 355 +++++++++++-
  ggml/src/ggml-cuda/vendors/hip.h           |   1 +
  ggml/src/ggml-metal/CMakeLists.txt         |   1 +
  ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
- ggml/src/ggml-metal/ggml-metal-device.m    | 452 ++++++++++++++-
+ ggml/src/ggml-metal/ggml-metal-device.m    | 464 ++++++++++++++-
  ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
- ggml/src/ggml-metal/kernels/cachegen.metal | 195 +++++++
+ ggml/src/ggml-metal/kernels/cachegen.metal | 227 ++++++++
  src/CMakeLists.txt                         | 629 ++++++++++++++++++++-
+ src/llama-kv-cache.cpp                     |  31 +
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3133 insertions(+), 127 deletions(-)
+ 32 files changed, 3251 insertions(+), 127 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -1850,10 +1851,10 @@ index ffbcba366..2afd1b8ec 100644
      sched->splits = (ggml_backend_sched_split *) calloc(initial_splits_capacity, sizeof(sched->splits[0]));
 diff --git a/ggml/src/ggml-cuda/cachegen.cu b/ggml/src/ggml-cuda/cachegen.cu
 new file mode 100644
-index 000000000..394c1d45e
+index 000000000..0c986511e
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/cachegen.cu
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,255 @@
 +#include "cachegen.cuh"
 +
 +#if !defined(GGML_USE_MUSA)
@@ -1924,6 +1925,38 @@ index 000000000..394c1d45e
 +
 +    const ggml_cuda_cachegen_tile tile = tiles[tile_index];
 +    const uint8_t * segment            = payload + tile.payload_offset;
++    if (segment[0] == 'C' && segment[1] == 'G' && segment[2] == 'P' && segment[3] == '1') {
++        const float * row_maxes = reinterpret_cast<const float *>(segment + 16);
++        const uint8_t * symbols = segment + 16 + tile.rows * sizeof(float);
++        float anchor = 0.0f;
++        for (uint32_t row = 0; row < tile.rows; ++row) {
++            const uint32_t position = row % 10;
++            const uint32_t width = position == 0 ? 8 : 12;
++            const uint32_t preceding = position == 0 ? 0 : 8 + (position - 1) * 12;
++            const uint64_t symbol_bit =
++                (uint64_t(row / 10) * 116 + preceding) * channels + uint64_t(channel) * width;
++            const uint64_t byte_index = symbol_bit >> 3;
++            const uint32_t shift = symbol_bit & 7;
++            uint32_t word = uint32_t(symbols[byte_index]);
++            if (shift + width > 8) {
++                word |= uint32_t(symbols[byte_index + 1]) << 8;
++            }
++            if (shift + width > 16) {
++                word |= uint32_t(symbols[byte_index + 2]) << 16;
++            }
++            const uint32_t symbol = (word >> shift) & ((1u << width) - 1);
++            const float center = position == 0 ? 127.0f : 2047.0f;
++            const float decoded = (float(symbol) - center) / center * row_maxes[row];
++            if (position == 0) {
++                anchor = decoded;
++            }
++            const float value = position == 0 ? decoded : anchor + decoded;
++            const uint64_t destination = uint64_t(cells[tile.token_offset + row]) * token_stride +
++                uint64_t(channel) * channel_stride;
++            *reinterpret_cast<float *>(dst + destination) = value;
++        }
++        return;
++    }
 +    const uint32_t bins                = segment[4];
 +    const bool packed                  = segment[3] == '2';
 +    const float * maxes                = reinterpret_cast<const float *>(segment + 16);
@@ -2111,7 +2144,7 @@ index 000000000..7118c9aa9
 +
 +#endif // !defined(GGML_USE_MUSA)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 7c45d0d1f..f860e8035 100644
+index 7c45d0d1f..78e19ff18 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -10,6 +10,7 @@
@@ -2158,7 +2191,7 @@ index 7c45d0d1f..f860e8035 100644
      #endif
  
      {
-@@ -6042,6 +6054,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6042,6 +6054,340 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      GGML_UNUSED(reg);
  }
  
@@ -2329,16 +2362,22 @@ index 7c45d0d1f..f860e8035 100644
 +                        error, error_capacity, "CUDA/HIP CacheGen payload offsets overflow");
 +                }
 +                const uint8_t * payload = static_cast<const uint8_t *>(tile->payload);
-+                const bool packed = memcmp(payload, "LCG2", 4) == 0;
++                const bool paper = memcmp(payload, "CGP1", 4) == 0;
++                const bool packed = paper || memcmp(payload, "LCG2", 4) == 0;
 +                const uint32_t bins = payload[4];
 +                const uint32_t expected_bits = bins == 16 ? 4 : 5;
-+                const uint32_t header_rows = static_cast<uint32_t>(payload[6]) |
-+                    static_cast<uint32_t>(payload[7]) << 8;
-+                const uint32_t header_channels = static_cast<uint32_t>(payload[8]) |
-+                    static_cast<uint32_t>(payload[9]) << 8 | static_cast<uint32_t>(payload[10]) << 16 |
-+                    static_cast<uint32_t>(payload[11]) << 24;
-+                if ((!packed && memcmp(payload, "LCG1", 4) != 0) || (bins != 16 && bins != 32) ||
-+                        (packed ? payload[5] != expected_bits : payload[5] != 0) ||
++                const uint32_t header_rows = paper ?
++                    (static_cast<uint32_t>(payload[4]) | static_cast<uint32_t>(payload[5]) << 8) :
++                    (static_cast<uint32_t>(payload[6]) | static_cast<uint32_t>(payload[7]) << 8);
++                const uint32_t header_channels = paper ?
++                    (static_cast<uint32_t>(payload[6]) | static_cast<uint32_t>(payload[7]) << 8) :
++                    (static_cast<uint32_t>(payload[8]) | static_cast<uint32_t>(payload[9]) << 8 |
++                     static_cast<uint32_t>(payload[10]) << 16 | static_cast<uint32_t>(payload[11]) << 24);
++                if ((paper ?
++                        (job->dst->type != GGML_TYPE_F32 || payload[12] != 10 || payload[13] != 12 ||
++                         payload[14] != 0 || payload[15] != 0) :
++                        ((!packed && memcmp(payload, "LCG1", 4) != 0) || (bins != 16 && bins != 32) ||
++                         (packed ? payload[5] != expected_bits : payload[5] != 0))) ||
 +                        header_rows != tile->token_count || header_channels != job->channels) {
 +                    return ggml_cuda_cachegen_error(
 +                        error, error_capacity, "CUDA/HIP CacheGen tile header is inconsistent");
@@ -2349,13 +2388,18 @@ index 7c45d0d1f..f860e8035 100644
 +                    tile->token_offset,
 +                    tile->token_count,
 +                };
-+                const uint32_t declared_stream_bytes = static_cast<uint32_t>(payload[12]) |
-+                    static_cast<uint32_t>(payload[13]) << 8 | static_cast<uint32_t>(payload[14]) << 16 |
-+                    static_cast<uint32_t>(payload[15]) << 24;
++                const uint32_t declared_stream_bytes = paper ?
++                    (static_cast<uint32_t>(payload[8]) | static_cast<uint32_t>(payload[9]) << 8 |
++                     static_cast<uint32_t>(payload[10]) << 16 | static_cast<uint32_t>(payload[11]) << 24) :
++                    (static_cast<uint32_t>(payload[12]) | static_cast<uint32_t>(payload[13]) << 8 |
++                     static_cast<uint32_t>(payload[14]) << 16 | static_cast<uint32_t>(payload[15]) << 24);
 +                staged.prefixes.push_back(0);
 +                if (packed) {
 +                    const uint64_t values = static_cast<uint64_t>(tile->token_count) * job->channels;
-+                    const uint64_t expected_stream_bytes = (values * expected_bits + 7) / 8;
++                    const uint64_t anchors = (static_cast<uint64_t>(tile->token_count) + 9) / 10;
++                    const uint64_t expected_stream_bytes = paper ?
++                        ((anchors * 8 + (tile->token_count - anchors) * 12) * job->channels + 7) / 8 :
++                        (values * expected_bits + 7) / 8;
 +                    const size_t streams_offset = 16 + static_cast<size_t>(tile->token_count) * sizeof(float);
 +                    if (expected_stream_bytes > UINT32_MAX || streams_offset > tile->payload_bytes ||
 +                            declared_stream_bytes != expected_stream_bytes ||
@@ -2488,7 +2532,7 @@ index 7c45d0d1f..f860e8035 100644
  static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
      GGML_UNUSED(reg);
      if (strcmp(name, "ggml_backend_comm_init") == 0) {
-@@ -6062,6 +6397,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -6062,6 +6408,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
@@ -2550,7 +2594,7 @@ index 4012b9d5f..e51558652 100644
  }
  #endif
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index d1bce8bad..5b23ddf7f 100644
+index d1bce8bad..c25433b0d 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,8 @@
@@ -2570,7 +2614,7 @@ index d1bce8bad..5b23ddf7f 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -180,6 +183,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -2864,7 +2908,7 @@ index d1bce8bad..5b23ddf7f 100644
              switch (op->src[1]->type) {
                  case GGML_TYPE_F32:
                  case GGML_TYPE_F16:
-@@ -2515,3 +2700,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -2515,3 +2700,274 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  
      return res;
  }
@@ -2970,24 +3014,36 @@ index d1bce8bad..5b23ddf7f 100644
 +                    return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen payload offsets overflow");
 +                }
 +                const uint8_t * payload = (const uint8_t *) tile->payload;
-+                const bool packed = memcmp(payload, "LCG2", 4) == 0;
++                const bool paper = memcmp(payload, "CGP1", 4) == 0;
++                const bool packed = paper || memcmp(payload, "LCG2", 4) == 0;
 +                const uint32_t bins = payload[4];
 +                const uint32_t expected_bits = bins == 16 ? 4 : 5;
-+                const uint32_t header_rows = (uint32_t) payload[6] | (uint32_t) payload[7] << 8;
-+                const uint32_t header_channels = (uint32_t) payload[8] | (uint32_t) payload[9] << 8 |
-+                    (uint32_t) payload[10] << 16 | (uint32_t) payload[11] << 24;
-+                if ((!packed && memcmp(payload, "LCG1", 4) != 0) || (bins != 16 && bins != 32) ||
-+                        (packed ? payload[5] != expected_bits : payload[5] != 0) ||
++                const uint32_t header_rows = paper ? ((uint32_t) payload[4] | (uint32_t) payload[5] << 8) :
++                    ((uint32_t) payload[6] | (uint32_t) payload[7] << 8);
++                const uint32_t header_channels = paper ? ((uint32_t) payload[6] | (uint32_t) payload[7] << 8) :
++                    ((uint32_t) payload[8] | (uint32_t) payload[9] << 8 |
++                     (uint32_t) payload[10] << 16 | (uint32_t) payload[11] << 24);
++                if ((paper ?
++                        (job->dst->type != GGML_TYPE_F32 || payload[12] != 10 || payload[13] != 12 ||
++                         payload[14] != 0 || payload[15] != 0) :
++                        ((!packed && memcmp(payload, "LCG1", 4) != 0) || (bins != 16 && bins != 32) ||
++                         (packed ? payload[5] != expected_bits : payload[5] != 0))) ||
 +                        header_rows != tile->token_count || header_channels != job->channels) {
 +                    [encoder endEncoding];
 +                    [temporary_buffers release];
 +                    return ggml_metal_cachegen_error(error, error_capacity, "Metal CacheGen tile header is inconsistent");
 +                }
-+                const uint32_t declared_stream_bytes = (uint32_t) payload[12] |
-+                    (uint32_t) payload[13] << 8 | (uint32_t) payload[14] << 16 | (uint32_t) payload[15] << 24;
++                const uint32_t declared_stream_bytes = paper ?
++                    ((uint32_t) payload[8] | (uint32_t) payload[9] << 8 |
++                     (uint32_t) payload[10] << 16 | (uint32_t) payload[11] << 24) :
++                    ((uint32_t) payload[12] | (uint32_t) payload[13] << 8 |
++                     (uint32_t) payload[14] << 16 | (uint32_t) payload[15] << 24);
 +                if (packed) {
 +                    const uint64_t values = (uint64_t) tile->token_count * job->channels;
-+                    const uint64_t expected_stream_bytes = (values * expected_bits + 7) / 8;
++                    const uint64_t anchors = ((uint64_t) tile->token_count + 9) / 10;
++                    const uint64_t expected_stream_bytes = paper ?
++                        ((anchors * 8 + (tile->token_count - anchors) * 12) * job->channels + 7) / 8 :
++                        (values * expected_bits + 7) / 8;
 +                    const size_t streams_offset = 16 + (size_t) tile->token_count * sizeof(float);
 +                    if (expected_stream_bytes > UINT32_MAX || streams_offset > tile->payload_bytes ||
 +                            declared_stream_bytes != expected_stream_bytes ||
@@ -3063,7 +3119,7 @@ index d1bce8bad..5b23ddf7f 100644
 +                const uint8_t * payload = (const uint8_t *) tile->payload;
 +                uint32_t prefix = 0;
 +                prefix_contents[prefix_offset++] = prefix;
-+                if (memcmp(payload, "LCG2", 4) != 0) {
++                if (memcmp(payload, "LCG2", 4) != 0 && memcmp(payload, "CGP1", 4) != 0) {
 +                    const size_t lengths_offset = 16 + (size_t) tile->token_count * sizeof(float) +
 +                        (size_t) job->channels * 33 * sizeof(uint16_t);
 +                    for (uint32_t channel = 0; channel < job->channels; ++channel) {
@@ -3195,10 +3251,10 @@ index 344882e04..f8732fbca 100644
      }
 diff --git a/ggml/src/ggml-metal/kernels/cachegen.metal b/ggml/src/ggml-metal/kernels/cachegen.metal
 new file mode 100644
-index 000000000..728899e4b
+index 000000000..24efe39c4
 --- /dev/null
 +++ b/ggml/src/ggml-metal/kernels/cachegen.metal
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,227 @@
 +#include "common.h"
 +
 +struct cachegen_tile {
@@ -3271,6 +3327,38 @@ index 000000000..728899e4b
 +
 +    const cachegen_tile   tile    = tiles[tile_index];
 +    const device uchar *  segment = payload + tile.payload_offset;
++    if (segment[0] == 'C' && segment[1] == 'G' && segment[2] == 'P' && segment[3] == '1') {
++        const device float * row_maxes = reinterpret_cast<const device float *>(segment + 16);
++        const device uchar * symbols = segment + 16 + tile.rows * sizeof(float);
++        float anchor = 0.0f;
++        for (uint row = 0; row < tile.rows; ++row) {
++            const uint position = row % 10;
++            const uint width = position == 0 ? 8 : 12;
++            const uint preceding = position == 0 ? 0 : 8 + (position - 1) * 12;
++            const ulong symbol_bit =
++                (ulong(row / 10) * 116ul + ulong(preceding)) * params.channels + ulong(channel) * width;
++            const ulong byte_index = symbol_bit >> 3;
++            const uint shift = symbol_bit & 7;
++            uint word = uint(symbols[byte_index]);
++            if (shift + width > 8) {
++                word |= uint(symbols[byte_index + 1]) << 8;
++            }
++            if (shift + width > 16) {
++                word |= uint(symbols[byte_index + 2]) << 16;
++            }
++            const uint symbol = (word >> shift) & ((1u << width) - 1);
++            const float center = position == 0 ? 127.0f : 2047.0f;
++            const float decoded = (float(symbol) - center) / center * row_maxes[row];
++            if (position == 0) {
++                anchor = decoded;
++            }
++            const float value = position == 0 ? decoded : anchor + decoded;
++            const ulong destination = ulong(cells[tile.token_offset + row]) * params.token_stride +
++                ulong(channel) * params.channel_stride;
++            *reinterpret_cast<device float *>(dst + destination) = value;
++        }
++        return;
++    }
 +    const uint            bins    = segment[4];
 +    const bool            packed  = segment[3] == '2';
 +    const device float *  maxes   = reinterpret_cast<const device float *>(segment + 16);
@@ -4052,6 +4140,48 @@ index 97250c2e8..528edfa99 100644
 +    find_library(SKIPPY_ACCELERATE_FRAMEWORK Accelerate REQUIRED)
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index b7f87404c..774e9ad8b 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -2099,6 +2099,37 @@ static bool skippy_cachegen_validate_segment(const skippy_cachegen_record_v1 & r
+         error = "invalid CacheGen record descriptor";
+         return false;
+     }
++    if (std::memcmp(payload, "CGP1", 4) == 0) {
++        const size_t anchors = (expected_rows + 9) / 10;
++        const size_t bits_per_channel = anchors * 8 + (expected_rows - anchors) * 12;
++        const size_t max_bytes = expected_rows * sizeof(float);
++        if (output_element_bytes != sizeof(float) || expected_rows > 250 ||
++            expected_channels > std::numeric_limits<uint16_t>::max() ||
++            skippy_cachegen_read_u16(payload + 4) != expected_rows ||
++            skippy_cachegen_read_u16(payload + 6) != expected_channels ||
++            payload[12] != 10 || payload[13] != 12 || payload[14] != 0 || payload[15] != 0 ||
++            expected_channels > (std::numeric_limits<size_t>::max() - 7) / bits_per_channel ||
++            header_bytes + max_bytes > record.payload_bytes) {
++            error = "CacheGen anchor-delta segment header is invalid";
++            return false;
++        }
++        const size_t stream_bytes = (expected_channels * bits_per_channel + 7) / 8;
++        if (skippy_cachegen_read_u32(payload + 8) != stream_bytes ||
++            stream_bytes != record.payload_bytes - header_bytes - max_bytes) {
++            error = "CacheGen anchor-delta stream length is inconsistent";
++            return false;
++        }
++        for (size_t row = 0; row < expected_rows; ++row) {
++            const uint32_t bits = skippy_cachegen_read_u32(payload + header_bytes + row * sizeof(float));
++            float value;
++            std::memcpy(&value, &bits, sizeof(value));
++            if (!std::isfinite(value) || value < 0.0f) {
++                error = "CacheGen anchor-delta maximum is invalid";
++                return false;
++            }
++        }
++        return true;
++    }
+     const bool packed = std::memcmp(payload, "LCG2", 4) == 0;
+     const uint8_t expected_bits = payload[4] == 16 ? 4 : 5;
+     if ((!packed && std::memcmp(payload, "LCG1", 4) != 0) ||
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
 index 1b4ea60bf..2eebb90bd 100644
 --- a/tools/mtmd/mtmd-audio.cpp
@@ -4160,5 +4290,5 @@ index 7436230f0..f9fe048ff 100644
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 
