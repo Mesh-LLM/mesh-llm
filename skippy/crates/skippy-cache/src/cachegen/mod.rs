@@ -9,5 +9,6 @@ pub mod anchor_delta;
 pub mod archive;
 pub mod container;
 pub mod lmcache;
+pub mod paper;
 pub mod rans;
 pub mod reference;
