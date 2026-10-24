@@ -2,6 +2,7 @@ mod authoring;
 mod diagnostic;
 mod env_overrides;
 mod hardware_validation;
+mod local_model_path;
 mod model;
 mod model_validation;
 mod openai_exchange;
@@ -28,10 +29,14 @@ pub use env_overrides::{
     LifecycleLogParserSelection, MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV, MESH_LLM_CONFIG_ENV,
     MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV, MESH_LLM_LIFECYCLE_LOG_PARSER_ENV,
     MESH_LLM_NO_UPDATE_CHECK_ENV, apply_env_overrides, benchmark_tune_trial_enabled,
-    event_system_off, event_system_progress_diagnostic_bypass_enabled, event_system_trial_mode,
+    env_override_in_child_for_test, event_system_off,
+    event_system_progress_diagnostic_bypass_enabled, event_system_trial_mode,
     resolve_benchmark_tune_trial_gate, resolve_event_system_trial_mode,
     resolve_lifecycle_log_parser_override, resolve_no_update_check_override,
     with_env_override_for_test,
+};
+pub use local_model_path::{
+    LocalModelPathError, check_local_model_path, local_model_path_diagnostics,
 };
 pub use model::*;
 pub use openai_exchange::{
@@ -74,7 +79,7 @@ mod tests {
         ConfigApplyMode, ConfigRestartScope, ConfigStore, ConfigValueSource, GpuAssignment,
         KvDiskTierMode, LifecycleLogParserMode, LocalServingNodeConfig, MeshConfig,
         SpeculativeConfig, built_in_config_schema, canonicalize_built_in_config_identifier,
-        parse_config_toml, resolve_lifecycle_log_parser_override, validate_config,
+        config_to_toml, parse_config_toml, resolve_lifecycle_log_parser_override, validate_config,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
@@ -120,6 +125,24 @@ mod tests {
 
         assert_eq!(selection.mode, LifecycleLogParserMode::Enabled);
         assert_eq!(selection.source, ConfigValueSource::Env);
+    }
+
+    #[test]
+    fn lifecycle_log_parser_override_wins_but_is_never_saved() {
+        let mut config = parse_config_toml("[runtime]\nlifecycle_log_parser = \"disabled\"\n")
+            .expect("closed enum should parse");
+        config.runtime.lifecycle_log_parser_override = Some(LifecycleLogParserMode::Enabled);
+
+        let selection = config.runtime.lifecycle_log_parser_selection();
+        assert_eq!(selection.mode, LifecycleLogParserMode::Enabled);
+        assert_eq!(selection.source, ConfigValueSource::Env);
+
+        let reloaded = parse_config_toml(&config_to_toml(&config).unwrap()).unwrap();
+        assert_eq!(
+            reloaded.runtime.lifecycle_log_parser,
+            LifecycleLogParserMode::Disabled
+        );
+        assert_eq!(reloaded.runtime.lifecycle_log_parser_override, None);
     }
 
     #[test]
@@ -1089,6 +1112,7 @@ gpu_id = "pci:0000:65:00.0"
             "extra",
             "gpu_id_from_legacy_shim",
             "lifecycle_log_parser_source",
+            "lifecycle_log_parser_override",
             "models",
             "plugins",
             "settings",

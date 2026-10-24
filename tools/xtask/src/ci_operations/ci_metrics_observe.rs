@@ -3,7 +3,7 @@
 
 use crate::ci_operations::ci_metrics_normalize::{Job, Run};
 use crate::ci_operations::ci_metrics_runner::{Dimensions, runner_dimensions};
-use crate::ci_operations::ci_metrics_stats::{Summary, float_sum, round};
+use crate::ci_operations::ci_metrics_stats::{Summary, compensated_sum, round_decimal};
 use crate::ci_operations::ci_metrics_time::{elapsed, isoformat};
 use crate::ci_operations::ci_metrics_value::{Value, object};
 
@@ -128,8 +128,8 @@ type PeakKey<'s> = [Option<&'s str>; 3];
 type Point = (i64, i8);
 
 pub(crate) fn capacity_metrics(observations: &[Observation<'_>]) -> Value {
-    let runner = float_sum(observations.iter().filter_map(|sample| sample.duration));
-    let cancelled = float_sum(observations.iter().filter_map(|sample| {
+    let runner = compensated_sum(observations.iter().filter_map(|sample| sample.duration));
+    let cancelled = compensated_sum(observations.iter().filter_map(|sample| {
         let stopped = is_cancelled(&sample.run.conclusion) || is_cancelled(&sample.job.conclusion);
         sample.duration.filter(|_| stopped)
     }));
@@ -170,10 +170,13 @@ pub(crate) fn capacity_metrics(observations: &[Observation<'_>]) -> Value {
         Value::count(peak(all_points.clone()))
     };
     object([
-        ("runner_minutes", Value::Float(round(runner / 60.0, 3))),
+        (
+            "runner_minutes",
+            Value::Float(round_decimal(runner / 60.0, 3)),
+        ),
         (
             "cancelled_runner_minutes",
-            Value::Float(round(cancelled / 60.0, 3)),
+            Value::Float(round_decimal(cancelled / 60.0, 3)),
         ),
         ("timestamped_job_count", Value::count(all_points.len() / 2)),
         (

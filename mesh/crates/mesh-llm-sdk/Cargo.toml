@@ -22,6 +22,10 @@ serving = [
     "dep:serde",
     "dep:serde_json",
     "dep:tokio",
+    "dep:tokio-tungstenite",
+    "dep:futures-util",
+    "dep:rustls",
+    "dep:rustls-native-certs",
     "dep:mesh-llm-host-runtime",
 ]
 # Opt-in paid inference on top of the serving path: ledger, gates and the
@@ -51,4 +55,11 @@ skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install
 reqwest = { version = "0.13", features = ["json"], optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-tokio = { version = "1", optional = true, features = ["time"] }
+tokio = { version = "1", optional = true, features = ["rt", "sync", "time"] }
+tokio-tungstenite = { workspace = true, optional = true, features = ["rustls-tls-native-roots"] }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = { version = "0.8", optional = true }
+futures-util = { version = "0.3", optional = true, default-features = false, features = ["sink"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }

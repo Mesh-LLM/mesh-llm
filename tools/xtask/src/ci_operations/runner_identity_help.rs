@@ -1,14 +1,11 @@
-//! argparse usage and help text of `scripts/runner-image-identity.py` at the
-//! default 80-column width, keyed by the legacy program name.
+//! Native usage and help text for `ci-ops runner-identity`.
 
-pub(crate) const PROG: &str = "runner-image-identity.py";
+pub(crate) const PROG: &str = "cargo xtool ci-ops runner-identity";
 
-pub(crate) const TOP_USAGE: &str =
-    "usage: runner-image-identity.py [-h] [--root ROOT] [--catalog CATALOG]
-                                {validate,check,diagnose,lookup,seed-key,bind} ...
-";
+pub(crate) const TOP_USAGE: &str = "usage: cargo xtool ci-ops runner-identity [--root <path>] [--catalog <path>] \
+     <validate|check|diagnose|lookup|seed-key|bind> [options]\n";
 
-const DESCRIPTION: &str = "Inspect checked-in runner identities without changing CI execution.
+const DESCRIPTION: &str = "Inspect checked-in runner identities using local repository files.
 
 Examples:
   cargo xtool ci-ops runner-identity check
@@ -20,69 +17,44 @@ Historical images have no verified tool observations or provenance. A null
 receipt means unknown, not verified or compatible. Compiler workload coverage
 is independent of image compatibility; this catalog never authorizes a restore.
 
-Workflow inspection covers .yml and .yaml files and deliberately supports only
-the existing block-style job, container and CUDA matrix declarations. Runner
-references in unsupported declarations fail closed. This is not a general YAML
-parser or a workflow generator. Planner
-rows are checked through the repository's typed native planner;
-no Cargo metadata, builds, network access, or cache operations are performed.
-Consequently --root must be a trusted executable checkout, not an untrusted PR
-manifest directory. This tool is not wired into the protected planner workflow.
+Workflow inspection covers .yml and .yaml files and supports the existing
+block-style job, container and CUDA matrix declarations. Unsupported runner
+references fail closed. This is not a general YAML parser or workflow generator.
+Planner rows are checked through the repository's typed native planner. No Cargo
+metadata, builds, network access or cache operations are performed. The root
+must be a trusted executable checkout, not an untrusted PR manifest directory.
+This tool is not wired into the protected planner workflow.
 ";
 
 pub(crate) fn top_help() -> String {
     format!(
-        "{TOP_USAGE}\n{DESCRIPTION}\npositional arguments:\n  {{validate,check,diagnose,lookup,seed-key,bind}}\n\noptions:\n  -h, --help            show this help message and exit\n  --root ROOT\n  --catalog CATALOG\n"
+        "{TOP_USAGE}\n{DESCRIPTION}\nCommands:\n  validate\n  check\n  diagnose\n  lookup\n  seed-key\n  bind\n\nOptions:\n  -h, --help\n  --root <path>\n  --catalog <path>\n"
     )
 }
 
 pub(crate) fn sub_usage(command: &str) -> String {
     match command {
-        "lookup" => "usage: runner-image-identity.py lookup [-h]
-                                       [--field {reference,native_toolchain_epoch,receipt,provenance}]
-                                       role
-"
-        .to_owned(),
-        "seed-key" => "usage: runner-image-identity.py seed-key [-h] --recipe-hash RECIPE_HASH\n".to_owned(),
-        "bind" => "usage: runner-image-identity.py bind [-h] --image-id IMAGE_ID --cohort COHORT
-                                     --anchor ANCHOR --output OUTPUT
-"
-        .to_owned(),
-        other => format!("usage: runner-image-identity.py {other} [-h]\n"),
+        "lookup" => format!(
+            "usage: {PROG} lookup <role> [--field <reference|native_toolchain_epoch|receipt|provenance>]\n"
+        ),
+        "seed-key" => format!("usage: {PROG} seed-key --recipe-hash <sha256>\n"),
+        "bind" => format!(
+            "usage: {PROG} bind --image-id <id> --cohort <path> --anchor <path> --output <path>\n"
+        ),
+        other => format!("usage: {PROG} {other}\n"),
     }
 }
 
 pub(crate) fn sub_help(command: &str) -> String {
     let body = match command {
         "lookup" => {
-            "positional arguments:
-  role
-
-options:
-  -h, --help            show this help message and exit
-  --field {reference,native_toolchain_epoch,receipt,provenance}
-"
+            "\nOptions:\n  -h, --help\n  --field <reference|native_toolchain_epoch|receipt|provenance>\n"
         }
-        "seed-key" => {
-            "options:
-  -h, --help            show this help message and exit
-  --recipe-hash RECIPE_HASH
-"
-        }
+        "seed-key" => "\nOptions:\n  -h, --help\n  --recipe-hash <sha256>\n",
         "bind" => {
-            "options:
-  -h, --help           show this help message and exit
-  --image-id IMAGE_ID
-  --cohort COHORT
-  --anchor ANCHOR
-  --output OUTPUT
-"
+            "\nOptions:\n  -h, --help\n  --image-id <id>\n  --cohort <path>\n  --anchor <path>\n  --output <path>\n"
         }
-        _ => {
-            "options:
-  -h, --help  show this help message and exit
-"
-        }
+        _ => "\nOptions:\n  -h, --help\n",
     };
-    format!("{}\n{body}", sub_usage(command))
+    format!("{}{body}", sub_usage(command))
 }

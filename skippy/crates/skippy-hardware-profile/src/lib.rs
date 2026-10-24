@@ -69,7 +69,7 @@ pub fn detected_native_runtime_flavors(
 
 fn detect_rocm_profile(gpus: &[HostGpuProfile]) -> Option<HostRocmProfile> {
     let mut gpu_arches = env_string_set("MESH_LLM_ROCM_GPU_ARCHES");
-    gpu_arches.extend(rocm::gpu_arches());
+    gpu_arches.extend(rocm::gpu_arches(gpus));
     detect_rocm_profile_with_arches(
         gpus,
         gpu_arches,
@@ -83,16 +83,19 @@ fn detect_rocm_profile_with_arches(
     version: Option<String>,
 ) -> Option<HostRocmProfile> {
     gpu_arches.extend(gpus.iter().filter_map(|gpu| gpu.rocm_gfx.clone()));
-    let has_rocm_label = gpus.iter().any(|gpu| {
-        let label = gpu.display_name.to_ascii_lowercase();
-        label.contains("amd") || label.contains("radeon") || label.contains("rocm")
-    });
-    if gpu_arches.is_empty() && version.is_none() && !has_rocm_label {
+    if gpu_arches.is_empty() && version.is_none() && !has_rocm_label(gpus) {
         return None;
     }
     Some(HostRocmProfile {
         version,
         gpu_arches,
+    })
+}
+
+fn has_rocm_label(gpus: &[HostGpuProfile]) -> bool {
+    gpus.iter().any(|gpu| {
+        let label = gpu.display_name.to_ascii_lowercase();
+        label.contains("amd") || label.contains("radeon") || label.contains("rocm")
     })
 }
 

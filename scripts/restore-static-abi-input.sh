@@ -97,6 +97,11 @@ required_archives=(
 test -s "$manifest"
 test -s "$build_stamp"
 test -f "$cmake_cache"
+# Speech recognition is optional: its archive is required only when the build
+# stamp records the whisper.cpp pin it was built from.
+if grep -Eq '^whisper-sha=.+' "$build_stamp"; then
+    required_archives+=("$restored_dir/whisper/src/libwhisper.a")
+fi
 for archive in "${required_archives[@]}"; do
     if [[ ! -s "$archive" ]]; then
         echo "static ABI is missing required archive: $archive" >&2

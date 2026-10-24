@@ -1,0 +1,8 @@
+[project]
+name = "mesh-llama-canary-jinja-tests"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["jinja2==3.1.6"]
+
+[tool.uv]
+package = false

@@ -161,7 +161,10 @@ and working Git/xcrun. The toolchain uses the canonical shared HF cache at
 `/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
 `HF_HUB_OFFLINE=0` so missing pinned models and trajectories can be downloaded.
 Pinned input verification uses the installed `hf download --format quiet` CLI
-for path-only stdout; it does not require Hugging Face in system Python. Model
+for path-only stdout; it does not require Hugging Face in system Python.
+The replay toolchain gate requires the installed `hf` CLI without separate
+`python3` or `uv` command checks; runner provisioning owns the CLI and its runtime.
+Model
 and trajectory downloads retain revision and SHA-256 checks. The native `trajectory-reader` supplies the compressed Parquet reader. The
 history existence probe uses the typed native HTTP owner and permits bootstrap
 only on 404.
@@ -940,7 +943,9 @@ model cadence, device gates and protected action references remain unchanged.
   by `native-abi` changes (the patch queue and the llama build scripts) and on
   every main run. It replays the pinned patch queue, builds the static CPU ABI
   with `LLAMA_STAGE_BUILD_TESTS=ON`, and lets `build-llama.sh` run every
-  `^skippy_` test; nothing is skipped. It runs them with the image's 64-bit
+  `^skippy_` test; nothing is skipped. The same row then runs the
+  `skippy-runtime` and `skippy-serving` lib tests linked against that static
+  ABI (#2137), so Windows covers both crates without a runtime bundle. It runs them with the image's 64-bit
   CMake (`C:\Program Files\CMake`) rather than the 32-bit ctest that
   `msvc-dev-cmd` puts first on `PATH`, which dies on the graph-contract
   probes' output. The row's `ctest_parallel` is sized by memory, not cores:
@@ -1418,8 +1423,8 @@ graph, and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix;
 its `Justfile` and `just/**` inputs are part of the exact seed key.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
-without changing execution. The existing Python test discovery verifies the
-catalog against workflow bindings and real planner rows. Historical tool
+without changing execution. The native `migration_ci_operations` contracts
+verify the catalog against workflow bindings and real planner rows. Historical tool
 receipts and source provenance remain unknown until qualified image receipts
 exist. Other consumer workload coverage remains unknown. The measured CPU
 runtime workload had zero seed hits in all three warm samples; the separate
@@ -1829,6 +1834,23 @@ The producer build uses it for the early embedding battery, and historical
 source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
+
+The canary build and generated-patch checks share the locked external Jinja
+project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
+selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
+state directory and uses the prepared SDK interpreter when available, otherwise
+the installed `python3`. Interpreter downloads are disabled. Both upstream
+Jinja tests remain selected by the complete native suite. The optional developer
+llama-benchy wrapper defaults to a full upstream source commit; explicit caller
+overrides remain available. Neither dependency adds repository Python code.
+
+The native Python-tooling census runs through `just ci-crate-lists` in normal
+Quality validation. `ci/python-tooling-policy.json` records exact retained
+external dependency inputs, source pins and invocation exceptions. It rejects
+repository Python source and shebangs, undeclared package inputs and direct
+interpreter invocations in maintained automation. Historical receipts remain
+data. Mutation tests cover added hidden files, suffixless scripts and inline
+process execution; static checks do not replace review of semantic emulation.
 
 ### Self-hosted job disk cleanup
 

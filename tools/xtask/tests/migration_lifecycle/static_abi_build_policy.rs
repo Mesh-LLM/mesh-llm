@@ -114,6 +114,9 @@ impl Fixture {
                 "finite-runner-epoch".to_owned(),
             ),
             ("CMAKE_BUILD_PARALLEL_LEVEL", "1".to_owned()),
+            // The fixture copies only the scripts under test, not the
+            // whisper.cpp pin or its fetch.
+            ("SKIPPY_SPEECH_RECOGNITION", "OFF".to_owned()),
         ]
         .into_iter()
         .map(|(k, v)| (k.into(), Value::Public(v.into())))

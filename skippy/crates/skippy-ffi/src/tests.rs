@@ -1,15 +1,17 @@
 use std::mem::{align_of, offset_of, size_of};
 
 use crate::{
-    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
-    ActivationPartDesc, CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16, CACHEGEN_RECORD_F16_TRANSPOSED,
-    CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED, CACHEGEN_RECORD_Q4_0,
-    CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
-    LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1, LayaMemoryV1, LayaSequence,
-    LlamaPerfContextData, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1,
-    StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1,
-    StagePlannerProfileV1, StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1,
-    WorkloadKind, WorkloadPooling, runtime_abi_supported,
+    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, ASR_SEGMENT_V1_ABI_VERSION,
+    AbiVersion, ActivationBoundaryDesc, ActivationPartDesc, AsrInfoV1, AsrSegmentV1,
+    AsrTranscribeParamsV1, CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16,
+    CACHEGEN_RECORD_F16_TRANSPOSED, CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED,
+    CACHEGEN_RECORD_Q4_0, CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
+    FEATURE_SPEECH_RECOGNITION, LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1,
+    LayaMemoryV1, LayaSequence, LlamaPerfContextData, StagePlanDescV1, StagePlanProfileDescV1,
+    StagePlanStateDescV1, StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1,
+    StagePlannerConfigV1, StagePlannerProfileV1, StagePlannerTensorV1,
+    WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
+    runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -312,6 +314,37 @@ fn native_mtmd_defaults_cross_the_ffi_boundary() {
     assert_eq!(params.batch_max_tokens, 1024);
     assert!(params.progress_callback.is_none());
     assert!(params.progress_callback_user_data.is_null());
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn asr_types_match_native_layout() {
+    assert_eq!(FEATURE_SPEECH_RECOGNITION, 1 << 41);
+    assert_eq!(size_of::<AsrInfoV1>(), 48);
+    assert_eq!(offset_of!(AsrInfoV1, multilingual), 8);
+    assert_eq!(offset_of!(AsrInfoV1, n_vocab), 12);
+    assert_eq!(offset_of!(AsrInfoV1, n_mels), 24);
+    assert_eq!(offset_of!(AsrInfoV1, weights_bytes), 32);
+    assert_eq!(offset_of!(AsrInfoV1, on_accelerator), 40);
+    assert_eq!(AsrInfoV1::default().struct_size, 48);
+
+    assert_eq!(size_of::<AsrTranscribeParamsV1>(), 40);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, language), 8);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, translate), 16);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, prompt), 24);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, temperature), 32);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, n_threads), 36);
+    assert_eq!(AsrTranscribeParamsV1::default().struct_size, 40);
+
+    assert_eq!(size_of::<AsrSegmentV1>(), 40);
+    assert_eq!(offset_of!(AsrSegmentV1, start_ms), 8);
+    assert_eq!(offset_of!(AsrSegmentV1, end_ms), 16);
+    assert_eq!(offset_of!(AsrSegmentV1, text), 24);
+    assert_eq!(offset_of!(AsrSegmentV1, no_speech_prob), 32);
+    assert_eq!(
+        AsrSegmentV1::default().abi_version,
+        ASR_SEGMENT_V1_ABI_VERSION
+    );
 }
 
 #[test]

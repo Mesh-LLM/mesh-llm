@@ -1,23 +1,14 @@
-//! argparse emulation for `scripts/manage-build-cache.py`: one required
-//! `{status,prune,build}` subcommand, unique-prefix long options, attached
-//! `=value`, `-h` bundling, `--` handling and the `build` remainder, with
-//! Python 3.13's sequential error order and exit status 2.
+//! Typed arguments for `ci-ops build-cache`.
 
 use crate::ci_operations::build_cache_help::{
     BUILD_USAGE, PROG, PRUNE_USAGE, STATUS_USAGE, TOP_USAGE, build_help, status_help, top_help,
 };
-use crate::ci_operations::build_cache_options::{
-    Kind, classify_abbreviated, first_ambiguity, help_flag, is_option_like,
-};
-use crate::ci_operations::build_cache_values::{Age, parse_age, parse_size};
-use crate::ci_operations::runner_identity_argv::error;
+use crate::ci_operations::build_cache_values::{Age, parse_size};
 use crate::repository::check_report::CheckReport;
-use crate::repository::text::repr;
 
 pub(crate) const DEFAULT_MAX_BYTES: i128 = 80 * 1024 * 1024 * 1024;
-const COMMANDS: [&str; 3] = ["status", "prune", "build"];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
     Status,
     Prune,
@@ -35,107 +26,80 @@ pub(crate) struct Args {
     pub(crate) build_command: Vec<String>,
 }
 
-struct Sub {
-    usage: &'static str,
-    prog: String,
-    options: Vec<&'static str>,
-}
-
-impl Sub {
-    fn fail(&self, message: &str) -> CheckReport {
-        error(self.usage, &self.prog, message)
-    }
-}
-
 pub(crate) enum Parsed {
     Run(Box<Args>),
     Report(CheckReport),
 }
 
-pub(crate) fn parse(args: &[String]) -> Parsed {
-    match parse_top(args) {
-        Ok(parsed) => Parsed::Run(Box::new(parsed)),
-        Err(report) => Parsed::Report(report),
-    }
-}
-
 fn top_error(message: &str) -> CheckReport {
-    error(TOP_USAGE, PROG, message)
+    cli_error(TOP_USAGE, PROG, message)
 }
 
-fn parse_top(args: &[String]) -> Result<Args, CheckReport> {
-    let options = ["-h", "--help"];
-    let mut extras: Vec<String> = Vec::new();
-    let mut positional_only = false;
-    for (index, arg) in args.iter().enumerate() {
-        if !positional_only && arg == "--" {
-            positional_only = true;
-            continue;
-        }
-        let kind = if positional_only {
-            Kind::Positional
-        } else {
-            classify_abbreviated(arg, &options)
-        };
-        match kind {
-            Kind::Positional => {
-                let mode = match arg.as_str() {
-                    "status" => Mode::Status,
-                    "prune" => Mode::Prune,
-                    "build" => Mode::Build,
-                    _ => {
-                        let choices: Vec<String> = COMMANDS.iter().map(|name| repr(name)).collect();
-                        return Err(top_error(&format!(
-                            "argument command: invalid choice: {} (choose from {})",
-                            repr(arg),
-                            choices.join(", ")
-                        )));
-                    }
-                };
-                let parsed = parse_sub(mode, &args[index + 1..], &mut extras)?;
-                if extras.is_empty() {
-                    return Ok(parsed);
-                }
-                return Err(top_error(&format!(
-                    "unrecognized arguments: {}",
-                    extras.join(" ")
-                )));
-            }
-            Kind::Unknown => extras.push(arg.clone()),
-            Kind::Known(_, explicit, sep) => {
-                help_flag(explicit, sep, "-h/--help", &top_error)?;
-                return Err(CheckReport::success(top_help()));
-            }
-        }
-    }
-    Err(top_error("the following arguments are required: command"))
-}
-
-fn sub_spec(mode: Mode) -> Sub {
+fn sub_error(mode: Mode, message: &str) -> CheckReport {
     let (usage, name) = match mode {
         Mode::Status => (STATUS_USAGE, "status"),
         Mode::Prune => (PRUNE_USAGE, "prune"),
         Mode::Build => (BUILD_USAGE, "build"),
     };
-    let mut options = vec!["-h", "--help", "--workspace", "--target-dir"];
-    if mode != Mode::Build {
-        options.extend(["--max-size", "--max-age", "--json"]);
-    }
-    if mode == Mode::Prune {
-        options.push("--execute");
-    }
-    Sub {
-        usage,
-        prog: format!("{PROG} {name}"),
-        options,
+    cli_error(usage, &format!("{PROG} {name}"), message)
+}
+
+fn cli_error(usage: &str, prog: &str, message: &str) -> CheckReport {
+    CheckReport {
+        stdout: String::new(),
+        stderr: format!("{usage}{prog}: error: {message}\n"),
+        code: 2,
     }
 }
 
-fn parse_sub(mode: Mode, args: &[String], extras: &mut Vec<String>) -> Result<Args, CheckReport> {
-    let sub = sub_spec(mode);
-    if let Some(message) = first_ambiguity(args, &sub.options) {
-        return Err(sub.fail(&message));
+pub(crate) fn parse(args: &[String]) -> Parsed {
+    match parse_inner(args) {
+        Ok(parsed) => Parsed::Run(Box::new(parsed)),
+        Err(report) => Parsed::Report(report),
     }
+}
+
+fn parse_inner(args: &[String]) -> Result<Args, CheckReport> {
+    let (command_index, mode) = locate_command(args)?;
+    parse_options(args, command_index, mode)
+}
+
+fn locate_command(args: &[String]) -> Result<(usize, Mode), CheckReport> {
+    let Some(command_index) = args
+        .iter()
+        .position(|arg| !arg.starts_with('-') || arg == "-")
+    else {
+        if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+            return Err(CheckReport::success(top_help()));
+        }
+        return Err(top_error("expected a command: status, prune, or build"));
+    };
+
+    let command = &args[command_index];
+    let mode = match command.as_str() {
+        "status" => Mode::Status,
+        "prune" => Mode::Prune,
+        "build" => Mode::Build,
+        "-h" | "--help" => return Err(CheckReport::success(top_help())),
+        _ => return Err(top_error("expected a command: status, prune, or build")),
+    };
+
+    if args[..command_index]
+        .iter()
+        .any(|arg| arg != "--" && arg != "-h" && arg != "--help")
+    {
+        return Err(top_error("options must follow the build-cache command"));
+    }
+    if args[..command_index]
+        .iter()
+        .any(|arg| arg == "-h" || arg == "--help")
+    {
+        return Err(CheckReport::success(top_help()));
+    }
+    Ok((command_index, mode))
+}
+
+fn parse_options(args: &[String], command_index: usize, mode: Mode) -> Result<Args, CheckReport> {
     let mut parsed = Args {
         mode,
         workspace: None,
@@ -146,86 +110,162 @@ fn parse_sub(mode: Mode, args: &[String], extras: &mut Vec<String>) -> Result<Ar
         execute: false,
         build_command: Vec::new(),
     };
-    let mut index = 0;
+    let mut index = command_index + 1;
     while let Some(arg) = args.get(index) {
         index += 1;
-        let kind = if arg == "--" {
-            Kind::Positional
-        } else {
-            classify_abbreviated(arg, &sub.options)
-        };
-        match kind {
-            Kind::Positional if mode == Mode::Build => {
-                parsed.build_command = args[index - 1..].to_vec();
-                return Ok(parsed);
-            }
-            Kind::Positional if arg == "--" => {
-                extras.extend(args[index - 1..].iter().cloned());
-                return Ok(parsed);
-            }
-            Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
-            Kind::Known(option, explicit, sep) => {
-                let value = match option {
-                    "-h" | "--help" | "--json" | "--execute" => {
-                        let name = if matches!(option, "-h" | "--help") {
-                            "-h/--help"
-                        } else {
-                            option
-                        };
-                        help_flag(explicit, sep, name, &|m| sub.fail(m))?;
-                        None
-                    }
-                    _ => Some(take_value(explicit, args, &mut index, &sub, option)?),
-                };
-                apply(&mut parsed, option, value, &sub)?;
-            }
-        }
-    }
-    Ok(parsed)
-}
-
-fn take_value(
-    explicit: Option<String>,
-    args: &[String],
-    index: &mut usize,
-    sub: &Sub,
-    option: &str,
-) -> Result<String, CheckReport> {
-    if let Some(value) = explicit {
-        return Ok(value);
-    }
-    match args.get(*index) {
-        Some(next) if !is_option_like(next, &sub.options) => {
-            *index += 1;
-            Ok(next.clone())
-        }
-        _ => Err(sub.fail(&format!("argument {option}: expected one argument"))),
-    }
-}
-
-fn apply(
-    parsed: &mut Args,
-    option: &str,
-    value: Option<String>,
-    sub: &Sub,
-) -> Result<(), CheckReport> {
-    let value = value.unwrap_or_default();
-    let invalid = |message: String| sub.fail(&format!("argument {option}: {message}"));
-    match option {
-        "-h" | "--help" => {
-            let help = match parsed.mode {
+        if arg == "-h" || arg == "--help" {
+            let help = match mode {
                 Mode::Status => status_help(false),
                 Mode::Prune => status_help(true),
                 Mode::Build => build_help(),
             };
             return Err(CheckReport::success(help));
         }
-        "--json" => parsed.json = true,
-        "--execute" => parsed.execute = true,
-        "--workspace" => parsed.workspace = Some(value),
-        "--target-dir" => parsed.target_dir = Some(value),
-        "--max-size" => parsed.max_size = parse_size(&value).map_err(invalid)?,
-        _ => parsed.max_age = parse_age(&value).map_err(invalid)?,
+        if mode == Mode::Build && arg == "--" {
+            parsed.build_command = args[index..].to_vec();
+            return Ok(parsed);
+        }
+        if mode == Mode::Build && !arg.starts_with('-') {
+            parsed.build_command = args[index - 1..].to_vec();
+            return Ok(parsed);
+        }
+
+        let (option, attached) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(name, value)| {
+                (name, Some(value.to_owned()))
+            });
+        match option {
+            "--workspace" => {
+                parsed.workspace =
+                    Some(take_value(mode, option, attached, args, &mut index, false)?);
+            }
+            "--target-dir" => {
+                parsed.target_dir =
+                    Some(take_value(mode, option, attached, args, &mut index, false)?);
+            }
+            "--max-size" if mode != Mode::Build => {
+                let value = take_value(mode, option, attached, args, &mut index, true)?;
+                parsed.max_size = parse_size(&value).map_err(|message| {
+                    sub_error(mode, &format!("invalid --max-size: {message}"))
+                })?;
+            }
+            "--max-age" if mode != Mode::Build => {
+                let value = take_value(mode, option, attached, args, &mut index, true)?;
+                parsed.max_age = value
+                    .parse::<i128>()
+                    .map(Age)
+                    .map_err(|_| sub_error(mode, "--max-age must be a whole number of days"))?;
+            }
+            "--json" if mode != Mode::Build => {
+                reject_attached(mode, option, attached)?;
+                parsed.json = true;
+            }
+            "--execute" if mode == Mode::Prune => {
+                reject_attached(mode, option, attached)?;
+                parsed.execute = true;
+            }
+            _ => return Err(sub_error(mode, &format!("unknown argument: {arg}"))),
+        }
+    }
+    Ok(parsed)
+}
+
+fn take_value(
+    mode: Mode,
+    option: &str,
+    attached: Option<String>,
+    args: &[String],
+    index: &mut usize,
+    allow_negative: bool,
+) -> Result<String, CheckReport> {
+    if let Some(value) = attached {
+        return Ok(value);
+    }
+    let Some(value) = args.get(*index) else {
+        return Err(sub_error(mode, &format!("{option} requires a value")));
+    };
+    if value == "--" || (value.starts_with('-') && !allow_negative) {
+        return Err(sub_error(mode, &format!("{option} requires a value")));
+    }
+    *index += 1;
+    Ok(value.clone())
+}
+
+fn reject_attached(mode: Mode, option: &str, attached: Option<String>) -> Result<(), CheckReport> {
+    if attached.is_some() {
+        return Err(sub_error(mode, &format!("{option} does not take a value")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Mode, Parsed, parse};
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn parses_status_and_prune_options_with_typed_values() {
+        let Parsed::Run(status) = parse(&args(&[
+            "status",
+            "--workspace=/tmp/workspace",
+            "--target-dir",
+            "/tmp/target",
+            "--max-size",
+            "10 KiB",
+            "--max-age",
+            "3",
+            "--json",
+        ])) else {
+            panic!("valid status arguments should parse");
+        };
+        assert_eq!(status.mode, Mode::Status);
+        assert_eq!(status.workspace.as_deref(), Some("/tmp/workspace"));
+        assert_eq!(status.target_dir.as_deref(), Some("/tmp/target"));
+        assert_eq!(status.max_size, 10 * 1024);
+        assert_eq!(status.max_age.0, 3);
+        assert!(status.json);
+
+        let Parsed::Run(prune) = parse(&args(&["prune", "--execute", "--max-age", "-1"])) else {
+            panic!("negative age is validated by the operation");
+        };
+        assert!(prune.execute);
+        assert_eq!(prune.max_age.0, -1);
+    }
+
+    #[test]
+    fn build_preserves_the_command_and_its_arguments() {
+        let Parsed::Run(build) = parse(&args(&["build", "--", "env", "A=B", "just", "build"]))
+        else {
+            panic!("valid build arguments should parse");
+        };
+        assert_eq!(build.mode, Mode::Build);
+        assert_eq!(build.build_command, ["env", "A=B", "just", "build"]);
+
+        let Parsed::Run(direct) = parse(&args(&["build", "sh", "-c", "printf 'a b'; exit 4"]))
+        else {
+            panic!("build command without a delimiter should parse");
+        };
+        assert_eq!(direct.build_command, ["sh", "-c", "printf 'a b'; exit 4"]);
+    }
+
+    #[test]
+    fn rejects_abbreviated_options_and_malformed_values() {
+        for input in [
+            args(&["status", "--max", "10"]),
+            args(&["status", "--max-age", "1.5"]),
+            args(&["prune", "--execute=yes"]),
+            args(&["build", "--json"]),
+        ] {
+            let Parsed::Report(error) = parse(&input) else {
+                panic!("invalid arguments should be rejected");
+            };
+            assert_eq!(error.code, 2);
+            assert!(error.stdout.is_empty());
+            assert!(!error.stderr.is_empty());
+        }
+    }
 }

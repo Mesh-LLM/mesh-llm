@@ -191,6 +191,32 @@ describe('ChatPage', () => {
     expect(attachmentPreprocessingMock.describeScannedPdf).toHaveBeenCalledWith(pdf, expect.any(Function))
   })
 
+  it('routes a picker image with an empty MIME type through the image pipeline', async () => {
+    const user = userEvent.setup()
+    const pngMagicBytes = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+
+    renderChatPage({ mode: 'live' })
+
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement
+    const image = new File([new Uint8Array(pngMagicBytes)], 'clipboard-shot', { type: '' })
+
+    await user.upload(picker, image)
+    expect(await screen.findByText('clipboard-shot')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Prompt'), 'Describe this')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => {
+      expect(chatMock.sendCalls).toHaveLength(1)
+    })
+    const content = chatMock.sendCalls[0]?.content
+    expect(typeof content).not.toBe('string')
+    expect((content as MultimodalContent).content).toEqual([
+      { type: 'text', content: 'Describe this' },
+      { type: 'text', content: '[Image description: A tabby cat]' }
+    ])
+  })
+
   it('removes a pending attachment from the composer chips before sending', async () => {
     const user = userEvent.setup()
 

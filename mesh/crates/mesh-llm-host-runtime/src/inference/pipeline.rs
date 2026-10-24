@@ -22,21 +22,6 @@ pub struct PlanResult {
     pub elapsed_ms: u64,
 }
 
-/// Ask a small model to create a plan/analysis for a task.
-///
-/// The planner gets the user's message and produces a brief plan:
-/// what files to look at, what approach to take, potential pitfalls.
-/// This plan gets injected as a system message for the strong model.
-pub async fn pre_plan(
-    client: &Client,
-    planner_url: &str,
-    planner_model: &str,
-    user_messages: &[Value],
-) -> Result<PlanResult, String> {
-    let plan_request = prepare_plan_request(planner_model, user_messages)?;
-    pre_plan_prepared(client, planner_url, planner_model, &plan_request).await
-}
-
 pub(crate) fn prepare_plan_request(
     planner_model: &str,
     user_messages: &[Value],
@@ -198,51 +183,9 @@ pub fn should_pipeline(classification: &crate::network::router::Classification) 
     }
 }
 
-/// Full pipeline: classify → optionally pre-plan → return augmented body + target model.
-///
-/// Returns (body, model_name, pipeline_used).
-/// If pipeline is skipped, body is returned unmodified.
-#[allow(dead_code)]
-pub async fn route_with_pipeline(
-    client: &Client,
-    planner_url: &str,
-    planner_model: &str,
-    strong_model: &str,
-    mut body: Value,
-    classification: &crate::network::router::Classification,
-) -> (Value, String, Option<PlanResult>) {
-    if !should_pipeline(classification) {
-        return (body, strong_model.to_string(), None);
-    }
-
-    let messages = body
-        .get("messages")
-        .and_then(|m| m.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    match pre_plan(client, planner_url, planner_model, &messages).await {
-        Ok(plan) => {
-            tracing::info!(
-                "pipeline: pre-plan by {} in {}ms ({} chars)",
-                plan.model_used,
-                plan.elapsed_ms,
-                plan.plan_text.len()
-            );
-            inject_plan(&mut body, &plan);
-            (body, strong_model.to_string(), Some(plan))
-        }
-        Err(e) => {
-            tracing::warn!("pipeline: pre-plan failed: {e}, falling back to direct routing");
-            (body, strong_model.to_string(), None)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::Client;
     use serde_json::json;
 
     #[test]
@@ -360,37 +303,5 @@ mod tests {
             has_media_inputs: true,
         };
         assert!(!should_pipeline(&cl));
-    }
-
-    #[tokio::test]
-    async fn test_route_with_pipeline_preplan_failure_falls_back_unmodified() {
-        use crate::network::router::{Category, Classification, Complexity};
-
-        let client = Client::new();
-        let body = json!({
-            "messages": [
-                {"role": "user", "content": "Inspect the codebase and call tools to fix the bug"}
-            ]
-        });
-        let classification = Classification {
-            category: Category::Code,
-            complexity: Complexity::Deep,
-            needs_tools: true,
-            has_media_inputs: false,
-        };
-
-        let (out_body, model, plan) = route_with_pipeline(
-            &client,
-            "http://127.0.0.1:9",
-            "planner",
-            "strong",
-            body.clone(),
-            &classification,
-        )
-        .await;
-
-        assert_eq!(out_body, body);
-        assert_eq!(model, "strong");
-        assert!(plan.is_none());
     }
 }

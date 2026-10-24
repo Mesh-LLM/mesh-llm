@@ -8,7 +8,7 @@ use skippy_ffi::{
 };
 
 use crate::error::ensure_ok;
-use crate::{GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenSignal};
+use crate::{GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenLogprobs, TokenSignal};
 
 const EMPTY_CHAT_GRAMMAR_METADATA: &str = r#"{"grammar":""}"#;
 
@@ -487,6 +487,41 @@ impl StageSession {
         };
         ensure_ok(status, error)?;
         Ok(signal.into())
+    }
+
+    /// Moves out the log-probabilities recorded for every token sampled with a
+    /// config that set `top_logprobs`, oldest first.
+    pub fn take_token_logprobs(&mut self) -> Result<Vec<TokenLogprobs>> {
+        let mut pending = 0_usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_take_token_logprobs(
+                self.raw,
+                ptr::null_mut(),
+                0,
+                &mut pending,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        if pending == 0 {
+            return Ok(Vec::new());
+        }
+        let mut raw = vec![skippy_ffi::TokenLogprobs::default(); pending];
+        let mut taken = 0_usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_take_token_logprobs(
+                self.raw,
+                raw.as_mut_ptr(),
+                raw.len(),
+                &mut taken,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        raw.truncate(taken);
+        Ok(raw.iter().map(TokenLogprobs::from).collect())
     }
 
     pub fn signal_window(&mut self, window_tokens: u32) -> Result<GenerationSignalWindow> {

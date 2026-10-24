@@ -7,14 +7,7 @@ fn request(root: &Path, mode: &str) -> Request {
     std::fs::write(&file, &bytes).unwrap();
     let source = root.join("source.txt");
     std::fs::write(&source, b"fixture source").unwrap();
-    let debug = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let helper = debug.join("examples/l7_daemon_fixture");
+    let helper = crate::fixture_paths::examples_dir().join("l7_daemon_fixture");
     assert!(helper.is_file());
     let pin = |path: &Path| super::super::admission::Artifact {
         path: path.into(),
