@@ -59,28 +59,31 @@ pub(super) struct MembershipContext<'a> {
     pub(super) targets: tokio::sync::watch::Receiver<election::ModelTargets>,
 }
 
-/// Starts a membership, replacing one of the same name. The membership being
-/// replaced stops first, so if the new one cannot start, neither runs.
+/// Starts a membership, replacing one of the same name. A replacement that
+/// fails its port or key checks leaves the old one running; past those, the
+/// old one stops first, so if the new one cannot start, neither runs.
 pub(super) async fn add_membership(
     ctx: MembershipContext<'_>,
     config: MeshMembershipConfig,
 ) -> Result<MeshMembershipStatus> {
     validate(ctx.options, &config)?;
-    if let Some(previous) = ctx.node.memberships.remove(&config.name).await {
-        previous.close().await;
-    }
-    let other_ports = ctx.node.memberships.list().await;
+    // Checks that need no port or endpoint run before the membership being
+    // replaced stops, so failing them leaves it running.
+    let memberships = ctx.node.memberships.list().await;
     anyhow::ensure!(
-        other_ports
+        memberships
             .iter()
-            .all(|(_, _, port)| *port != config.api_port),
+            .all(|(name, _, port)| *name == config.name || *port != config.api_port),
         "membership API port {} is already another membership's",
         config.api_port
     );
+    let secret_key = membership_key(&config)?;
+    if let Some(previous) = ctx.node.memberships.remove(&config.name).await {
+        previous.close().await;
+    }
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", config.api_port))
         .await
         .with_context(|| format!("bind membership API port {}", config.api_port))?;
-    let secret_key = membership_key(&config)?;
     let relay_auths: std::collections::HashMap<String, String> =
         ctx.options.relay_auth.iter().cloned().collect();
     let (node, channels) = ctx
@@ -328,6 +331,27 @@ mod tests {
         assert_eq!(replaced.endpoint_id, first.endpoint_id);
         assert_eq!(membership_statuses(&node).await, vec![replaced]);
         tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+
+        // A replacement that takes another membership's port is refused,
+        // and the membership it would have replaced keeps running.
+        let other_port = free_port();
+        add_membership(
+            ctx(),
+            MeshMembershipConfig {
+                name: "other".into(),
+                api_port: other_port,
+                node_key_path: Some(keys.path().join("other.key")),
+                ..config.clone()
+            },
+        )
+        .await?;
+        let clash = MeshMembershipConfig {
+            api_port: other_port,
+            ..config.clone()
+        };
+        assert!(add_membership(ctx(), clash).await.is_err());
+        tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+        assert!(remove_membership(&node, "other").await);
 
         assert!(remove_membership(&node, "team").await);
         assert!(!remove_membership(&node, "team").await);
