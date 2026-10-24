@@ -179,22 +179,24 @@ fn row_symbols(
             .iter()
             .map(|value| value.abs())
             .fold(0.0f32, f32::max);
-        let step = if is_anchor {
-            maximum / 127.0
-        } else {
-            maximum / 7.0 * multiplier
-        };
+        // The released PyTorch CPU scalar path scales an F32 reciprocal; the
+        // vectorized delta path divides directly and offsets before rounding.
+        let scale = if is_anchor { 127.0 } else { 7.0 / multiplier };
         let factor = if maximum == 0.0 {
             0.0
         } else if is_anchor {
-            127.0 / maximum
+            (1.0 / maximum) * scale
         } else {
-            1.0 / step
+            scale / maximum
         };
-        let limit = if is_anchor { 127 } else { center } as i32;
         for value in differences {
-            let signed = (value * factor).round_ties_even() as i32;
-            symbols.push((signed.clamp(-limit, limit) + limit) as u8);
+            let symbol = if is_anchor {
+                ((value * factor).round_ties_even() as i32).clamp(-127, 127) + 127
+            } else {
+                ((value * factor + center as f32).round_ties_even() as i32)
+                    .clamp(0, (center * 2) as i32)
+            };
+            symbols.push(symbol as u8);
         }
         maxima.push(maximum);
     }
@@ -532,6 +534,21 @@ mod tests {
             include_bytes!("fixtures/paper_layer20_decoded.bin"),
         ),
     ];
+
+    #[test]
+    fn matches_released_quantizer_rounding_order() {
+        let mut rows = vec![0.0f32; 11 * 2];
+        rows[2] = 1.366_129_5;
+        rows[3] = 0.097_580_66;
+        rows[4] = 2.620_091;
+        rows[5] = -0.935_746_67;
+        rows[20] = 87.252_525;
+        rows[21] = -0.343_513_9;
+        let (symbols, _) = row_symbols(&rows, 2, 10, 28).expect("symbols");
+        assert_eq!(&symbols[2..4], &[14, 8]);
+        assert_eq!(&symbols[4..6], &[14, 4]);
+        assert_eq!(&symbols[20..22], &[254, 127]);
+    }
 
     #[test]
     fn matches_disjoint_python_reference_fixtures() {
