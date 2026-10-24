@@ -195,7 +195,7 @@ impl KvStageIntegration {
             std::env::var(EXACT_STATE_MAX_BYTES_ENV).ok().as_deref(),
         );
         let exact_state_record_queue_limit =
-            exact_state_record_queue_limit(exact_byte_limits.soft_bytes);
+            exact_state_record_queue_limit(exact_byte_limits.soft_bytes, payload);
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
         let (exact_state_record_tx, exact_state_record_rx) =
