@@ -1931,10 +1931,10 @@ index 000000000..0c986511e
 +        float anchor = 0.0f;
 +        for (uint32_t row = 0; row < tile.rows; ++row) {
 +            const uint32_t position = row % 10;
-+            const uint32_t width = position == 0 ? 8 : 12;
-+            const uint32_t preceding = position == 0 ? 0 : 8 + (position - 1) * 12;
++            const uint32_t width = segment[13] == 16 ? 16 : (position == 0 ? 8 : 12);
++            const uint32_t preceding = segment[13] == 16 ? position * 16 : (position == 0 ? 0 : 8 + (position - 1) * 12);
 +            const uint64_t symbol_bit =
-+                (uint64_t(row / 10) * 116 + preceding) * channels + uint64_t(channel) * width;
++                (uint64_t(row / 10) * (segment[13] == 16 ? 160 : 116) + preceding) * channels + uint64_t(channel) * width;
 +            const uint64_t byte_index = symbol_bit >> 3;
 +            const uint32_t shift = symbol_bit & 7;
 +            uint32_t word = uint32_t(symbols[byte_index]);
@@ -1945,7 +1945,7 @@ index 000000000..0c986511e
 +                word |= uint32_t(symbols[byte_index + 2]) << 16;
 +            }
 +            const uint32_t symbol = (word >> shift) & ((1u << width) - 1);
-+            const float center = position == 0 ? 127.0f : 2047.0f;
++            const float center = width == 16 ? 32767.0f : (position == 0 ? 127.0f : 2047.0f);
 +            const float decoded = (float(symbol) - center) / center * row_maxes[row];
 +            if (position == 0) {
 +                anchor = decoded;
@@ -2374,7 +2374,7 @@ index 7c45d0d1f..78e19ff18 100644
 +                    (static_cast<uint32_t>(payload[8]) | static_cast<uint32_t>(payload[9]) << 8 |
 +                     static_cast<uint32_t>(payload[10]) << 16 | static_cast<uint32_t>(payload[11]) << 24);
 +                if ((paper ?
-+                        (job->dst->type != GGML_TYPE_F32 || payload[12] != 10 || payload[13] != 12 ||
++                        (job->dst->type != GGML_TYPE_F32 || payload[12] != 10 || (payload[13] != 12 && payload[13] != 16) ||
 +                         payload[14] != 0 || payload[15] != 0) :
 +                        ((!packed && memcmp(payload, "LCG1", 4) != 0) || (bins != 16 && bins != 32) ||
 +                         (packed ? payload[5] != expected_bits : payload[5] != 0))) ||
@@ -2398,7 +2398,7 @@ index 7c45d0d1f..78e19ff18 100644
 +                    const uint64_t values = static_cast<uint64_t>(tile->token_count) * job->channels;
 +                    const uint64_t anchors = (static_cast<uint64_t>(tile->token_count) + 9) / 10;
 +                    const uint64_t expected_stream_bytes = paper ?
-+                        ((anchors * 8 + (tile->token_count - anchors) * 12) * job->channels + 7) / 8 :
++                        ((anchors * (payload[13] == 16 ? 16 : 8) + (tile->token_count - anchors) * payload[13]) * job->channels + 7) / 8 :
 +                        (values * expected_bits + 7) / 8;
 +                    const size_t streams_offset = 16 + static_cast<size_t>(tile->token_count) * sizeof(float);
 +                    if (expected_stream_bytes > UINT32_MAX || streams_offset > tile->payload_bytes ||
@@ -3024,7 +3024,7 @@ index d1bce8bad..c25433b0d 100644
 +                    ((uint32_t) payload[8] | (uint32_t) payload[9] << 8 |
 +                     (uint32_t) payload[10] << 16 | (uint32_t) payload[11] << 24);
 +                if ((paper ?
-+                        (job->dst->type != GGML_TYPE_F32 || payload[12] != 10 || payload[13] != 12 ||
++                        (job->dst->type != GGML_TYPE_F32 || payload[12] != 10 || (payload[13] != 12 && payload[13] != 16) ||
 +                         payload[14] != 0 || payload[15] != 0) :
 +                        ((!packed && memcmp(payload, "LCG1", 4) != 0) || (bins != 16 && bins != 32) ||
 +                         (packed ? payload[5] != expected_bits : payload[5] != 0))) ||
@@ -3042,7 +3042,7 @@ index d1bce8bad..c25433b0d 100644
 +                    const uint64_t values = (uint64_t) tile->token_count * job->channels;
 +                    const uint64_t anchors = ((uint64_t) tile->token_count + 9) / 10;
 +                    const uint64_t expected_stream_bytes = paper ?
-+                        ((anchors * 8 + (tile->token_count - anchors) * 12) * job->channels + 7) / 8 :
++                        ((anchors * (payload[13] == 16 ? 16 : 8) + (tile->token_count - anchors) * payload[13]) * job->channels + 7) / 8 :
 +                        (values * expected_bits + 7) / 8;
 +                    const size_t streams_offset = 16 + (size_t) tile->token_count * sizeof(float);
 +                    if (expected_stream_bytes > UINT32_MAX || streams_offset > tile->payload_bytes ||
@@ -3333,10 +3333,10 @@ index 000000000..24efe39c4
 +        float anchor = 0.0f;
 +        for (uint row = 0; row < tile.rows; ++row) {
 +            const uint position = row % 10;
-+            const uint width = position == 0 ? 8 : 12;
-+            const uint preceding = position == 0 ? 0 : 8 + (position - 1) * 12;
++            const uint width = segment[13] == 16 ? 16 : (position == 0 ? 8 : 12);
++            const uint preceding = segment[13] == 16 ? position * 16 : (position == 0 ? 0 : 8 + (position - 1) * 12);
 +            const ulong symbol_bit =
-+                (ulong(row / 10) * 116ul + ulong(preceding)) * params.channels + ulong(channel) * width;
++                (ulong(row / 10) * (segment[13] == 16 ? 160ul : 116ul) + ulong(preceding)) * params.channels + ulong(channel) * width;
 +            const ulong byte_index = symbol_bit >> 3;
 +            const uint shift = symbol_bit & 7;
 +            uint word = uint(symbols[byte_index]);
@@ -3347,7 +3347,7 @@ index 000000000..24efe39c4
 +                word |= uint(symbols[byte_index + 2]) << 16;
 +            }
 +            const uint symbol = (word >> shift) & ((1u << width) - 1);
-+            const float center = position == 0 ? 127.0f : 2047.0f;
++            const float center = width == 16 ? 32767.0f : (position == 0 ? 127.0f : 2047.0f);
 +            const float decoded = (float(symbol) - center) / center * row_maxes[row];
 +            if (position == 0) {
 +                anchor = decoded;
@@ -4150,13 +4150,13 @@ index b7f87404c..774e9ad8b 100644
      }
 +    if (std::memcmp(payload, "CGP1", 4) == 0) {
 +        const size_t anchors = (expected_rows + 9) / 10;
-+        const size_t bits_per_channel = anchors * 8 + (expected_rows - anchors) * 12;
++        const size_t bits_per_channel = anchors * (payload[13] == 16 ? 16 : 8) + (expected_rows - anchors) * payload[13];
 +        const size_t max_bytes = expected_rows * sizeof(float);
 +        if (output_element_bytes != sizeof(float) || expected_rows > 250 ||
 +            expected_channels > std::numeric_limits<uint16_t>::max() ||
 +            skippy_cachegen_read_u16(payload + 4) != expected_rows ||
 +            skippy_cachegen_read_u16(payload + 6) != expected_channels ||
-+            payload[12] != 10 || payload[13] != 12 || payload[14] != 0 || payload[15] != 0 ||
++            payload[12] != 10 || (payload[13] != 12 && payload[13] != 16) || payload[14] != 0 || payload[15] != 0 ||
 +            expected_channels > (std::numeric_limits<size_t>::max() - 7) / bits_per_channel ||
 +            header_bytes + max_bytes > record.payload_bytes) {
 +            error = "CacheGen anchor-delta segment header is invalid";

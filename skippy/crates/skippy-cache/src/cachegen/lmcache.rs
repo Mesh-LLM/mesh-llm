@@ -31,7 +31,7 @@ use skippy_protocol::binary::{f16_bits_to_f32, f32_to_f16_bits};
 use crate::l3::{CodecClass, SegmentCodecIdentity};
 
 pub const CACHEGEN_CODEC_NAME: &str = "skippy-cachegen-archive";
-pub const CACHEGEN_CODEC_VERSION: u32 = 3;
+pub const CACHEGEN_CODEC_VERSION: u32 = 4;
 pub const MAX_TOKENS_PER_CHUNK: usize = 256;
 
 const MAGIC_V1: [u8; 4] = *b"LCG1";
