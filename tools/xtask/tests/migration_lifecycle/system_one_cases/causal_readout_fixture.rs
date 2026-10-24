@@ -1,6 +1,7 @@
 //! Inert response corruption fixture; it supplies no native-model proof.
 use serde_json::{Value, json};
 
+/// Build valid causal evidence for smoke-validator regression tests.
 pub(super) fn response(request: &Value) -> Value {
     let mut body = super::answer(request, 0, "");
     let mut readouts = serde_json::Map::new();
@@ -20,6 +21,7 @@ pub(super) fn response(request: &Value) -> Value {
     body
 }
 
+/// Inject one malformed evidence case without changing unrelated fixture fields.
 pub(super) fn mutate(body: &mut Value, mutation: &str) -> u16 {
     match mutation {
         "causal-refusal" => return 502,

@@ -4,6 +4,44 @@ use super::*;
 use crate::frontend::iteration_scheduler::readout::ReadoutIteration;
 use skippy_inference_api::CancellationToken;
 
+/// Planning with a retained vocabulary reader does not acquire the runtime lock.
+#[test]
+#[ignore = "requires SKIPPY_DECISION_MODEL: a real causal GGUF"]
+fn causal_decision_reader_plans_while_inference_context_is_locked() -> Result<()> {
+    use skippy_runtime::decision::causal::DecisionPlan;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let backend = backend()?;
+    let reader = backend
+        .iteration_scheduler
+        .execute_runtime("decision-plan", |runtime| Ok(runtime.model.reader()))?;
+    let request = serde_json::from_value(request())?;
+    let decision = crate::frontend::system_one::decision_request(&request)?;
+    let (send, receive) = mpsc::channel();
+    let runtime = backend.runtime.lock().unwrap();
+    let planning = std::thread::spawn(move || {
+        let result = DecisionPlan::for_reader(&reader, &decision);
+        let _ = send.send(result);
+    });
+    let completed = receive.recv_timeout(Duration::from_secs(10));
+    // Release before joining even on failure, so a lock regression cannot hang.
+    drop(runtime);
+    planning.join().expect("decision planner panicked");
+    let plan = completed.context("tokenization waited for the runtime lock")??;
+    assert_eq!(plan.questions.len(), 2);
+    assert_eq!(
+        backend
+            .iteration_scheduler
+            .execute_runtime("decision-plan-probe", |runtime| {
+                Ok(runtime.session_stats().active_sessions)
+            })?,
+        0
+    );
+    Ok(())
+}
+
+/// Scheduler waves batch readouts and drain admitted work before reporting cancellation.
 #[test]
 #[ignore = "requires SKIPPY_DECISION_MODEL: a real causal GGUF"]
 fn causal_decisions_scheduler_batches_and_drains_cancelled_waves() -> Result<()> {

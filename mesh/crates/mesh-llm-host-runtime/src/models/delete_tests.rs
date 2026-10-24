@@ -88,6 +88,7 @@ async fn resolve_model_identifier_rejects_direct_urls() {
     assert!(err.to_string().contains("does not support direct URLs"));
 }
 
+/// Split selectors resolve every shard belonging to the selected quantization.
 #[tokio::test]
 #[serial]
 async fn resolve_model_identifier_returns_all_split_shards_from_selector_ref() {
@@ -141,6 +142,7 @@ async fn resolve_model_identifier_returns_all_split_shards_from_selector_ref() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Deleting a selected split model preserves shards belonging to other models.
 #[tokio::test]
 #[serial]
 async fn delete_model_by_identifier_removes_only_the_resolved_split_shards() {
@@ -200,6 +202,7 @@ async fn delete_model_by_identifier_removes_only_the_resolved_split_shards() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Dotted quantization selectors retain their full model identity during deletion.
 #[tokio::test]
 #[serial]
 async fn delete_model_by_identifier_supports_dotted_quant_selector_refs() {
@@ -253,6 +256,7 @@ async fn delete_model_by_identifier_supports_dotted_quant_selector_refs() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Repository references follow the same selection rules as the shared resolver.
 #[tokio::test]
 #[serial]
 async fn resolve_model_identifier_repo_ref_matches_shared_resolver_semantics() {
@@ -331,6 +335,7 @@ async fn resolve_model_identifier_repo_ref_matches_shared_resolver_semantics() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Layer-package resolution includes every file belonging to the selected package.
 #[tokio::test]
 #[serial]
 async fn resolve_model_identifier_repo_ref_returns_all_layered_package_files() {
@@ -414,6 +419,7 @@ async fn resolve_model_identifier_repo_ref_returns_all_layered_package_files() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// A layers repository without packaged GGUFs must not resolve as a runnable model.
 #[tokio::test]
 #[serial]
 async fn resolve_model_identifier_rejects_layers_repo_without_package_ggufs() {
@@ -462,6 +468,7 @@ async fn resolve_model_identifier_rejects_layers_repo_without_package_ggufs() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Deleting a layer package removes all of its resolved files.
 #[tokio::test]
 #[serial]
 async fn delete_model_by_identifier_removes_all_layered_package_files() {

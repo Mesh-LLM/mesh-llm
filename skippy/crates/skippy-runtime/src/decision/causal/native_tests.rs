@@ -10,10 +10,12 @@ use crate::{
 };
 use anyhow::Context;
 
+/// Open the real-model fixture with full-precision KV state.
 fn open_model() -> Result<StageModel> {
     open_model_with_cache(crate::config::GGML_TYPE_F32)
 }
 
+/// Open a CPU causal model with explicit cache precision and batching parameters.
 fn open_model_with_cache(cache_type: u32) -> Result<StageModel> {
     crate::test_support::require_native_runtime();
     let path = std::env::var_os("SKIPPY_DECISION_MODEL")
@@ -49,6 +51,7 @@ fn open_model_with_cache(cache_type: u32) -> Result<StageModel> {
     )
 }
 
+/// Construct independent single-token and multi-token questions over shared state.
 fn request() -> DecisionRequest {
     DecisionRequest { state: DecisionValue::String("The customer requested a refund for an item delivered yesterday. Their question concerns billing, not shipping.".repeat(4)), seed: [0; 32], questions: vec![
         DecisionQuestion { key: "department".into(), instructions: Some(DecisionValue::String("Choose a department.".into())), kind: DecisionQuestionKind::Choice { options: vec![("B".into(), DecisionValue::String("billing".into())), ("S".into(), DecisionValue::String("shipping".into()))] } },
@@ -56,6 +59,27 @@ fn request() -> DecisionRequest {
     ] }
 }
 
+/// Reader planning preserves model admission, tokenizer limits and model lifetime.
+#[test]
+#[ignore = "requires SKIPPY_DECISION_MODEL: a real, pinned causal GGUF"]
+fn causal_decision_reader_preserves_plan_and_outlives_model_handle() -> Result<()> {
+    let model = open_model()?;
+    let expected = DecisionPlan::for_model(&model, &request())?;
+    let reader = model.reader();
+    assert_eq!(
+        reader.supports_causal_readout(),
+        model.supports_causal_readout()
+    );
+    drop(model);
+    assert_eq!(DecisionPlan::for_reader(&reader, &request())?, expected);
+    let mut oversized = request();
+    oversized.state = DecisionValue::String(" word".repeat(MAX_PROMPT_TOKENS + 1));
+    let error = DecisionPlan::for_reader(&reader, &oversized).unwrap_err();
+    assert!(error.to_string().contains("token limit"), "{error}");
+    Ok(())
+}
+
+/// Score a candidate with constrained sampled-token logprobs as an independent oracle.
 fn reference_score(model: &StageModel, prompt: &[i32], candidate: &[i32]) -> Result<f64> {
     let mut session = model.create_session()?;
     let mut score = 0.0;
@@ -96,6 +120,7 @@ fn reference_score(model: &StageModel, prompt: &[i32], candidate: &[i32]) -> Res
     Ok(score)
 }
 
+/// Read selected first-token scores without sampling or advancing a generated token.
 fn read(model: &StageModel, prompt: &[i32], candidates: &[Vec<i32>]) -> Result<Vec<f32>> {
     let mut session = model.create_session()?;
     let selected = candidates
@@ -125,6 +150,7 @@ fn read(model: &StageModel, prompt: &[i32], candidates: &[Vec<i32>]) -> Result<V
     Ok(scores[0].clone())
 }
 
+/// Native readouts match the independent oracle across batching and prefix reuse.
 #[test]
 #[ignore = "requires SKIPPY_DECISION_MODEL: a real, pinned causal GGUF"]
 fn causal_readout_matches_constrained_reference_and_warm_batched_prefixes() -> Result<()> {
@@ -148,6 +174,7 @@ fn causal_readout_matches_constrained_reference_and_warm_batched_prefixes() -> R
     Ok(())
 }
 
+/// Prior sampled generation must not contaminate a later unsampled readout.
 fn verify_readout_after_sampling(model: &StageModel, question: &QuestionPlan) -> Result<()> {
     let mut session = model.create_session()?;
     let sampling = SamplingConfig {
@@ -214,6 +241,7 @@ fn verify_readout_after_sampling(model: &StageModel, question: &QuestionPlan) ->
     Ok(())
 }
 
+/// Teacher-forced candidate scores equal the sum of independent conditional logprobs.
 fn verify_teacher_forcing(model: &StageModel, question: &QuestionPlan) -> Result<()> {
     for candidate in &question.candidates {
         let mut session = model.create_session()?;
@@ -249,6 +277,7 @@ fn verify_teacher_forcing(model: &StageModel, question: &QuestionPlan) -> Result
     Ok(())
 }
 
+/// Warm shared prefixes preserve each batched question's independent scores.
 fn verify_batched_prefix(model: &StageModel, plan: &DecisionPlan) -> Result<()> {
     // Native execution and verification lanes occupy the first 2 * lane_count IDs.
     const PREFIX_SEQUENCE: i32 = 16;
@@ -326,6 +355,7 @@ fn verify_batched_prefix(model: &StageModel, plan: &DecisionPlan) -> Result<()> 
     Ok(())
 }
 
+/// Prefill a session without sampling a token for subsequent score comparisons.
 fn prefill(session: &mut StageSession, tokens: &[i32]) -> Result<()> {
     let output = StageSession::iteration_batch_sampled(&mut [IterationBatchRequest {
         session,
@@ -340,6 +370,7 @@ fn prefill(session: &mut StageSession, tokens: &[i32]) -> Result<()> {
     Ok(())
 }
 
+/// Readout scores track the native oracle across prefill chunk shapes.
 #[test]
 #[ignore = "requires SKIPPY_DECISION_MODEL: compares native arithmetic across chunk shapes"]
 fn causal_readout_tracks_native_reference_across_prefill_shapes() -> Result<()> {

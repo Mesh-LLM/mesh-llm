@@ -723,6 +723,7 @@ impl IterationScheduler {
         )
     }
 
+    /// Submit one direct iteration with its admission, cancellation and runtime metadata.
     #[allow(clippy::too_many_arguments)]
     fn execute_direct_iteration(
         &self,

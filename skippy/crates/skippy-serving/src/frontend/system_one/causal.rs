@@ -35,12 +35,14 @@ struct ReadoutResult {
 
 struct CancelOnDrop(CancellationToken);
 impl Drop for CancelOnDrop {
+    /// Cancel outstanding readout work when its frontend owner is dropped.
     fn drop(&mut self) {
         self.0.cancel();
     }
 }
 
 impl StageOpenAiBackend {
+    /// Plan and serve independent decisions without tokenizing on the scheduler worker.
     pub(in crate::frontend) async fn serve_system_one(
         &self,
         request: SystemOneRequest,
@@ -49,14 +51,20 @@ impl StageOpenAiBackend {
         let decision = super::decision_request(&request)?;
         let scheduler = self.iteration_scheduler.clone();
         let plan = tokio::task::spawn_blocking(move || {
-            scheduler.execute_runtime("decision-plan", move |runtime| {
-                if !runtime.model.supports_causal_readout() {
-                    return Ok(None);
-                }
-                DecisionPlan::for_model(&runtime.model, &decision)
-                    .map(Some)
-                    .map_err(|error| InferenceError::invalid_request(error.to_string()))
-            })
+            let reader = scheduler.execute_runtime("decision-plan", |runtime| {
+                Ok(runtime
+                    .model
+                    .supports_causal_readout()
+                    .then(|| runtime.model.reader()))
+            })?;
+            let Some(reader) = reader else {
+                return Ok(None);
+            };
+            // Vocabulary reads must not occupy the scheduler worker or runtime
+            // lock: a request may tokenize up to 64 prompts and 1,664 labels.
+            DecisionPlan::for_reader(&reader, &decision)
+                .map(Some)
+                .map_err(|error| InferenceError::invalid_request(error.to_string()))
         })
         .await
         .map_err(|error| openai_backend_error(error.into()))??;
@@ -74,6 +82,7 @@ impl StageOpenAiBackend {
         decision_response(request, &plan, results, preparation)
     }
 
+    /// Run a bounded set of readout jobs and drain admitted work after cancellation.
     async fn run_readout_jobs(
         &self,
         jobs: Vec<ReadoutJob>,
@@ -99,6 +108,7 @@ impl StageOpenAiBackend {
         failure.map_or(Ok(completed), Err)
     }
 
+    /// Acquire normal generation admission before executing one independent readout job.
     async fn run_readout_job(
         &self,
         job: ReadoutJob,
@@ -131,6 +141,7 @@ impl StageOpenAiBackend {
         .map_err(|error| openai_backend_error(error.into()))?
     }
 
+    /// Warm reusable state and question prefixes while accounting for preparation work.
     async fn warm_decision_prefixes(
         &self,
         plan: &DecisionPlan,
@@ -167,6 +178,7 @@ impl StageOpenAiBackend {
     }
 }
 
+/// Construct a prefill-only job that records a reusable prefix without scoring.
 fn warmup_job(tokens: Vec<i32>) -> ReadoutJob {
     ReadoutJob {
         question: 0,
@@ -176,6 +188,7 @@ fn warmup_job(tokens: Vec<i32>) -> ReadoutJob {
     }
 }
 
+/// Reject questions whose prompt and teacher-forced continuation exceed context.
 fn validate_context(plan: &DecisionPlan, context: usize) -> InferenceResult<()> {
     for question in &plan.questions {
         let continuation = question.candidates.iter().map(Vec::len).max().unwrap_or(0);
@@ -189,6 +202,7 @@ fn validate_context(plan: &DecisionPlan, context: usize) -> InferenceResult<()> 
     Ok(())
 }
 
+/// Expand question plans into independent selected-token or candidate-likelihood jobs.
 fn decision_jobs(plan: &DecisionPlan) -> Vec<ReadoutJob> {
     plan.questions
         .iter()
@@ -218,6 +232,7 @@ fn decision_jobs(plan: &DecisionPlan) -> Vec<ReadoutJob> {
         .collect()
 }
 
+/// Reassemble unordered job completions into ordered answers and execution evidence.
 fn decision_response(
     request: SystemOneRequest,
     plan: &DecisionPlan,
@@ -271,6 +286,7 @@ fn decision_response(
     Ok(response)
 }
 
+/// Validate and record one job result without accepting duplicate candidate evidence.
 fn record_result(
     evidence: &mut [DecisionReadout],
     job: &ReadoutJob,

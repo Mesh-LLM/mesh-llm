@@ -4,6 +4,7 @@ use crate::frontend::local_generation::CaptureTaskOutstandingGuard;
 /// A direct iteration on this session panics inside the worker's batch run.
 pub(super) const PANICKING_DIRECT_SESSION: &str = "panicking-direct-iteration";
 
+/// Construct a direct-iteration request for scheduler unit tests.
 fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
     let (reply, _result) = std_mpsc::sync_channel(1);
     DirectIteration {

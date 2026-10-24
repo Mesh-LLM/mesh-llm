@@ -29,6 +29,7 @@ pub fn send_reply_ack(mut writer: impl Write) -> io::Result<()> {
     send_reply_ack_with_stats(&mut writer, StageReplyStats::default())
 }
 
+/// Write an acknowledgement carrying accumulated stage execution statistics.
 pub fn send_reply_ack_with_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
     send_reply_message(
         &mut writer,
@@ -132,6 +133,7 @@ pub fn send_reply_predicted_tokens_with_window_and_stats(
     write_reply_stats(&mut writer, stats)
 }
 
+/// Serialize a typed stage reply, including its bounded optional readout scores.
 pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Result<()> {
     if reply.predicted_tokens.len() > MAX_STAGE_PREDICTED_TOKENS {
         return Err(invalid_input("too many predicted tokens"));
@@ -163,6 +165,7 @@ pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Res
     Ok(())
 }
 
+/// Decode and validate a typed reply before exposing its payload to the caller.
 pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
     let kind = WireReplyKind::try_from(read_i32(&mut reader)?)?;
     let predicted = read_i32(&mut reader)?;
@@ -266,6 +269,7 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNative
     }
 }
 
+/// Serialize a validated current-generation stage message and its sidebands.
 pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -> io::Result<()> {
     if message.kind == WireMessageKind::PrefillReadout {
         if message.sampling.is_some()
@@ -403,6 +407,7 @@ pub fn read_stage_message_for_codec_policy(
     read_stage_message_inner(reader, Some((configured_codec, policy)))
 }
 
+/// Decode a stage message with bounded payloads and kind-specific validation.
 fn read_stage_message_inner(
     mut reader: impl Read,
     expected_codec: Option<(StageActivationCodec, StageActivationCodecPolicy)>,

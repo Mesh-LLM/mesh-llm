@@ -184,6 +184,7 @@ pub(super) async fn load_split_runtime_generation(
     result
 }
 
+/// Load and register an elected split generation with its serving capabilities.
 pub(super) async fn load_split_runtime_generation_inner(
     spec: &SplitGenerationLoadSpec<'_>,
     cleanup_on_error: &mut bool,

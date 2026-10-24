@@ -365,6 +365,7 @@ impl RuntimeState {
         result
     }
 
+    /// Execute an ordinary runtime iteration batch with sampled-token outputs.
     pub fn iteration_batch_sampled(
         &mut self,
         requests: &[RuntimeIterationBatchRequest<'_>],
@@ -373,6 +374,7 @@ impl RuntimeState {
             .map(|(outputs, _)| outputs)
     }
 
+    /// Execute a runtime iteration batch with selected-token scores instead of sampling.
     pub fn iteration_batch_scored(
         &mut self,
         requests: &[RuntimeIterationBatchRequest<'_>],
@@ -385,6 +387,7 @@ impl RuntimeState {
         self.iteration_batch_with_readouts(requests, Some(selections))
     }
 
+    /// Align runtime sessions, execute the batch and account for completed readouts.
     fn iteration_batch_with_readouts(
         &mut self,
         requests: &[RuntimeIterationBatchRequest<'_>],

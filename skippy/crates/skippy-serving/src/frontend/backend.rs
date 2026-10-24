@@ -934,6 +934,7 @@ impl InferenceBackend for StageOpenAiBackend {
         ])
     }
 
+    /// Serve System One requests through the backend's selected execution path.
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         self.serve_system_one(request).await
     }
@@ -1565,6 +1566,7 @@ impl InferenceBackend for StageOpenAiBackend {
 }
 
 impl StageOpenAiBackend {
+    /// Admit generation work subject to concurrency, queue, token-budget and cancellation gates.
     pub(in crate::frontend) async fn acquire_generation_admission(
         &self,
         ids: &InferenceGenerationIds,

@@ -280,6 +280,7 @@ mod tests {
         validate_stage_transport_open,
     };
 
+    /// The advertised stage capability names the exact current protocol generation.
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(

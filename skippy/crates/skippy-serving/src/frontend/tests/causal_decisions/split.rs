@@ -4,10 +4,12 @@ use super::*;
 use crate::embedded::{EmbeddedServerHandle, EmbeddedState};
 use crate::frontend::generation::PersistentStageLanePool;
 
+/// Reserve a loopback address for one split-stage test server.
 fn address() -> Result<SocketAddr> {
     Ok(std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?)
 }
 
+/// Construct the two-stage partition used for causal split comparisons.
 pub(super) fn partition(config: &StageConfig) -> Result<[StageConfig; 2]> {
     let split = config.layer_end / 2;
     anyhow::ensure!(split > 0, "model must have at least two layers");
@@ -47,6 +49,7 @@ pub(super) fn partition(config: &StageConfig) -> Result<[StageConfig; 2]> {
     Ok(stages)
 }
 
+/// Start the terminal stage and return its address and owned shutdown handle.
 pub(super) async fn terminal(config: StageConfig) -> Result<EmbeddedServerHandle> {
     let handle = crate::embedded::start_binary_stage(crate::binary_transport::BinaryStageOptions {
         tuning: Default::default(),
@@ -86,6 +89,7 @@ pub(super) async fn terminal(config: StageConfig) -> Result<EmbeddedServerHandle
     }
 }
 
+/// Build the source-stage backend connected to the test terminal stage.
 pub(super) fn source(config: StageConfig) -> Result<Arc<StageOpenAiBackend>> {
     let mut backend = backend_with_config(config.clone())?;
     let width = backend
@@ -113,6 +117,7 @@ pub(super) fn source(config: StageConfig) -> Result<Arc<StageOpenAiBackend>> {
     Ok(Arc::new(backend))
 }
 
+/// Split readouts match local scores and reuse their distributed prefixes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires SKIPPY_DECISION_MODEL: a real split-capable causal GGUF"]
 async fn causal_decisions_split_matches_local_and_reuses_prefixes() -> Result<()> {
@@ -154,6 +159,7 @@ async fn causal_decisions_split_matches_local_and_reuses_prefixes() -> Result<()
     Ok(())
 }
 
+/// A source-only cache hit recomputes state missing on the downstream stage.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires SKIPPY_DECISION_MODEL: a real split-capable causal GGUF"]
 async fn causal_decisions_split_recomputes_when_only_the_source_has_cached_state() -> Result<()> {

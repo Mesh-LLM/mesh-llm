@@ -636,6 +636,7 @@ mod tests {
         );
     }
 
+    /// Wait for a direct reply while retaining the bounded downstream fallback path.
     fn receive_direct_reply_one_of(
         reply_kind: WireReplyKind,
         expected_replies: &[WireReplyKind],
@@ -785,6 +786,7 @@ mod tests {
         assert!(started.elapsed() >= Duration::from_millis(100));
     }
 
+    /// A completed direct reply wakes its consumer without waiting for the fallback poll.
     #[test]
     fn direct_return_reply_wakes_the_wait_immediately() {
         // Far wider than the production 10ms fallback poll so an event-driven
@@ -897,6 +899,7 @@ mod tests {
         assert_eq!(downstream.read_timeout().unwrap(), None);
     }
 
+    /// Fallback reply handling accepts a fragmented downstream message.
     #[test]
     fn direct_return_fallback_accepts_fragmented_downstream_reply() {
         use std::io::Write;

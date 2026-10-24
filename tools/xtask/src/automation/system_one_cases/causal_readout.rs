@@ -4,6 +4,7 @@
 use super::{Failure, Result, requests, validation};
 use serde_json::{Value, json};
 
+/// Construct a smoke request exercising both causal scoring methods.
 pub(super) fn request(model: &str) -> Value {
     requests::request(
         model,
@@ -24,6 +25,7 @@ pub(super) fn request(model: &str) -> Value {
     )
 }
 
+/// Validate ordered causal evidence, finite scores and zero generated tokens.
 pub(super) fn validate(status: u16, body: &Value, request: &Value) -> Result<()> {
     validation::read(status, body, request)?;
     let readouts = body["readouts"]
@@ -56,12 +58,14 @@ pub(super) fn validate(status: u16, body: &Value, request: &Value) -> Result<()>
     Ok(())
 }
 
+/// Read a required nonnegative integer from the smoke response.
 fn count(value: &Value) -> Result<u64> {
     value.as_u64().ok_or(Failure::Case(
         "causal token count must be an unsigned integer",
     ))
 }
 
+/// Validate one question's candidates, score semantics and token counts.
 fn validate_question(
     readout: &Value,
     answer: &Value,

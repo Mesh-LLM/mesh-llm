@@ -26,6 +26,7 @@ pub(super) struct DecisionSequence<'a> {
     closed: bool,
 }
 
+/// Execute one readout sequence and release its local and downstream sessions.
 pub(super) fn execute(
     backend: &StageOpenAiBackend,
     job: &ReadoutJob,
@@ -48,6 +49,7 @@ pub(super) fn execute(
 }
 
 impl<'a> DecisionSequence<'a> {
+    /// Create an independent sequence and acquire its downstream lane when split.
     fn new(
         backend: &'a StageOpenAiBackend,
         ids: &'a InferenceGenerationIds,
@@ -78,6 +80,7 @@ impl<'a> DecisionSequence<'a> {
         })
     }
 
+    /// Score selected tokens or teacher-force a candidate without sampling an answer.
     fn score(&mut self, job: &ReadoutJob) -> InferenceResult<Vec<f64>> {
         if job.prompt.is_empty() {
             return Err(InferenceError::invalid_request("empty decision prompt"));
@@ -112,6 +115,7 @@ impl<'a> DecisionSequence<'a> {
         Ok(scores)
     }
 
+    /// Run one bounded prefill/readout step and account for evaluated tokens.
     fn step(&mut self, tokens: &[i32], selected: &[i32]) -> InferenceResult<Vec<f64>> {
         if self.cancellation.is_cancelled() {
             return Err(InferenceError::cancelled("decision request cancelled"));
@@ -147,6 +151,7 @@ impl<'a> DecisionSequence<'a> {
         Ok(scores.into_iter().map(f64::from).collect())
     }
 
+    /// Forward a readout step and validate the terminal stage's selected-token scores.
     fn forward(
         &mut self,
         tokens: &[i32],
@@ -194,6 +199,7 @@ impl<'a> DecisionSequence<'a> {
         Ok(reply.log_probabilities)
     }
 
+    /// Close the sequence's downstream connection and remove local session state.
     fn close(&mut self) -> InferenceResult<()> {
         if let Some((pool, mut lane)) = self.lane.take() {
             let stop =
@@ -211,6 +217,7 @@ impl<'a> DecisionSequence<'a> {
         Ok(())
     }
 
+    /// Remove the local sequence session through the runtime scheduler.
     fn drop_local(&self) -> InferenceResult<()> {
         let session = self.session.clone();
         self.backend
@@ -225,6 +232,7 @@ impl<'a> DecisionSequence<'a> {
 }
 
 impl Drop for DecisionSequence<'_> {
+    /// Best-effort cleanup releases a sequence abandoned before explicit close.
     fn drop(&mut self) {
         if self.closed {
             return;

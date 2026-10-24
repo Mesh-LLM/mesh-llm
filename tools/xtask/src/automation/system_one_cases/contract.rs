@@ -1,5 +1,6 @@
 use super::{Failure, Result, requests as r, transport::Client};
 use serde_json::{Value, json};
+/// Run the System One refusal and supported-causal contract matrix.
 pub(super) async fn run(client: &Client<'_>, cases: &mut Vec<Value>) -> Result<()> {
     let model = &client.options.model;
     let base = r::request(model, r::billing(), r::DEFAULT_STATE);

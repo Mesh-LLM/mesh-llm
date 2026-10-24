@@ -334,6 +334,7 @@ pub(crate) fn stage_output_activation_capacity(
         .unwrap_or(0);
     usize::try_from(bytes).context("output activation capacity exceeds usize")
 }
+/// Estimate reply framing and payload bytes for transport accounting.
 pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     reply_kind: WireReplyKind,
     predicted_token_count: usize,
@@ -572,6 +573,7 @@ impl BinaryStageExecutionOptions {
     }
 }
 
+/// Dispatch a validated stage request to its owning execution path.
 pub(crate) fn run_binary_stage_message(
     runtime: &mut RuntimeState,
     session_id: &str,
@@ -942,6 +944,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
     }
 }
 
+/// Construct a first-decode fixture carrying the full prompt sideband.
 #[cfg(test)]
 pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideband()
 -> StageWireMessage {
@@ -1183,6 +1186,7 @@ mod tests {
         assert_eq!(token_sideband_or_fill(&message).unwrap(), vec![201]);
     }
 
+    /// Construct a stage execution fixture with explicit identity and position.
     fn test_message(kind: WireMessageKind, token_count: i32) -> StageWireMessage {
         StageWireMessage {
             kind,

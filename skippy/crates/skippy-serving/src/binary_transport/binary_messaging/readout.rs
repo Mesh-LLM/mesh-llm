@@ -32,6 +32,7 @@ pub(super) struct ReadoutStage<'a> {
 }
 
 impl ReadoutStage<'_> {
+    /// Execute or forward an unsampled readout and validate terminal score evidence.
     pub fn execute(
         &mut self,
         message: &mut StageWireMessage,
@@ -94,6 +95,7 @@ impl ReadoutStage<'_> {
         Ok(reply)
     }
 
+    /// Record a complete question prefix without caching teacher-forced continuations.
     fn record_prefix(&self, message: &StageWireMessage, session: &str) -> Result<()> {
         let Some(kv) = self.kv else {
             return Ok(());
@@ -143,6 +145,7 @@ impl ReadoutStage<'_> {
     }
 }
 
+/// Reject sampled tokens, incorrect score counts and invalid log probabilities.
 pub(in crate::binary_transport) fn validate_readout_reply(
     reply: &StageReply,
     count: usize,
@@ -175,6 +178,7 @@ pub(in crate::binary_transport) fn validate_readout_reply(
 mod tests {
     use super::*;
 
+    /// Construct a valid terminal score reply for evidence-validation tests.
     fn reply() -> StageReply {
         StageReply {
             kind: WireReplyKind::TokenScores,
@@ -187,6 +191,7 @@ mod tests {
         }
     }
 
+    /// Terminal readout validation rejects sampling and malformed score evidence.
     #[test]
     fn terminal_evidence_rejects_sampling_wrong_cardinality_and_invalid_scores() {
         assert!(validate_readout_reply(&reply(), 2).is_ok());

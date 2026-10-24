@@ -12,6 +12,7 @@ struct BatchTiming {
 }
 
 impl SchedulerWorker {
+    /// Align and execute a direct batch, then deliver each request's own result.
     pub(super) fn run_direct_iteration_batch(&mut self) {
         let batch = take_direct_iteration_batch(
             &mut self.direct_iterations,
@@ -76,6 +77,7 @@ impl SchedulerWorker {
         }
     }
 
+    /// Record execution and timing evidence for one native direct batch.
     fn record_direct_batch(&self, requests: &[Runnable], timing: &BatchTiming) {
         let decode_steps = requests
             .iter()
@@ -117,6 +119,7 @@ impl SchedulerWorker {
     }
 }
 
+/// Remove cancelled requests before a direct batch enters native execution.
 fn retain_active(batch: Vec<DirectIteration>) -> Vec<DirectIteration> {
     batch
         .into_iter()
@@ -130,6 +133,7 @@ fn retain_active(batch: Vec<DirectIteration>) -> Vec<DirectIteration> {
         .collect()
 }
 
+/// Align every retained request with its session's current token position.
 fn align_requests(runtime: &mut RuntimeState, batch: Vec<DirectIteration>) -> Vec<Runnable> {
     batch
         .into_iter()
@@ -152,6 +156,7 @@ fn align_requests(runtime: &mut RuntimeState, batch: Vec<DirectIteration>) -> Ve
         .collect()
 }
 
+/// Align one request or report its error without corrupting the remaining batch.
 fn align_request(
     runtime: &mut RuntimeState,
     request: &DirectIteration,
@@ -178,12 +183,14 @@ fn align_request(
     Ok(alignment)
 }
 
+/// Deliver the same terminal failure to every affected request.
 fn fail_requests(requests: Vec<Runnable>, error: InferenceError) {
     for (request, _) in requests {
         request.reply.send(Err(error.clone()));
     }
 }
 
+/// Map sparse native predictions back to their original request slots.
 fn prediction_slots(
     output: &IterationBatchOutput,
     count: usize,
@@ -213,6 +220,7 @@ fn prediction_slots(
     Ok(predicted)
 }
 
+/// Deliver frames, predictions, scores and timing to their matching request owners.
 fn send_outputs(
     requests: Vec<Runnable>,
     output: IterationBatchOutput,

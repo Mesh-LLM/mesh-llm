@@ -975,6 +975,7 @@ mod tests {
     use crate::binary_transport::stage_execution::prefix_cache_test_config;
     use crate::kv_integration::KvStageIntegration;
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
+    /// Build a prefill message for binary prefix-cache tests.
     fn prefill_message() -> StageWireMessage {
         StageWireMessage {
             kind: WireMessageKind::PrefillEmbd,

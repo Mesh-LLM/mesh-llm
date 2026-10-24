@@ -55,6 +55,7 @@ fn restore_prefill_decode_route(
     }
 }
 
+/// Restore a cached prefix and execute its remaining prefill or decode work.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_binary_restore_prefill_decode_control(
     config: &StageConfig,
@@ -385,6 +386,7 @@ fn restore_decode_sideband(message: &StageWireMessage) -> Result<(&[i32], i32)> 
     Ok((prefix_tokens, current))
 }
 
+/// Project a fused restore request into a decode request without losing its identity.
 pub(super) fn restore_prefill_decode_as_decode_message(
     message: &StageWireMessage,
     current_token: i32,
@@ -439,6 +441,7 @@ mod tests {
         );
     }
 
+    /// Fused-restore decode projection preserves chat sampling metadata.
     #[test]
     fn restore_prefill_decode_as_decode_preserves_chat_metadata() {
         let metadata = r#"{"grammar":"chat"}"#;

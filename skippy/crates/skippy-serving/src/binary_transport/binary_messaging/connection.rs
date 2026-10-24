@@ -131,6 +131,7 @@ pub(super) fn handle_binary_connection(
     combine_connection_and_cleanup_results(result, cleanup_result)
 }
 
+/// Process one stage connection's control and execution messages with session cleanup.
 #[allow(clippy::too_many_arguments)]
 fn handle_binary_connection_messages(
     config: &StageConfig,

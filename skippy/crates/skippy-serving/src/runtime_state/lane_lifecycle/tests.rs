@@ -57,6 +57,7 @@ fn dropping_an_absent_session_notifies_nothing() {
     );
 }
 
+/// Canvas execution is advertised only for a single unsplit runtime lane.
 #[test]
 fn canvas_advertisement_requires_a_single_unsplit_runtime_lane() {
     assert!(system_one_endpoint_is_runnable(
@@ -76,6 +77,7 @@ fn canvas_advertisement_requires_a_single_unsplit_runtime_lane() {
     ));
 }
 
+/// Causal decisions require a live input-owning stage before advertisement.
 #[test]
 fn causal_advertisement_requires_a_live_ingress_stage() {
     for lanes in [1, 4] {

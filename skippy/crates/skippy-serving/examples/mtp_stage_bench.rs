@@ -50,6 +50,7 @@ fn parse_args() -> Result<Args> {
     })
 }
 
+/// Build a stage request for the native MTP benchmark.
 fn message(
     kind: WireMessageKind,
     request_id: u64,

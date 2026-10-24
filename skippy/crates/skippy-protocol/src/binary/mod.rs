@@ -146,6 +146,7 @@ mod tests {
         assert_eq!(reply.native_mtp_draft, None);
     }
 
+    /// Native MTP drafts retain their typed payload across reply serialization.
     #[test]
     fn reply_round_trips_typed_native_mtp_draft() {
         let reply = StageReply {
@@ -167,6 +168,7 @@ mod tests {
         assert_eq!(recv_reply(Cursor::new(bytes)).unwrap(), reply);
     }
 
+    /// Corrected native MTP drafts retain their proposal sequence across serialization.
     #[test]
     fn reply_round_trips_native_mtp_draft_after_correction() {
         let reply = StageReply {
@@ -350,6 +352,7 @@ mod tests {
         }
     }
 
+    /// Construct an activation-bearing stage message for wire-format tests.
     fn activation_message(
         frame: &StageActivationFrame,
         codec: crate::StageActivationCodec,
@@ -543,6 +546,7 @@ mod tests {
         );
     }
 
+    /// Verification-window requests preserve their coordinator-owned metadata.
     #[test]
     fn verify_window_message_round_trips_window_metadata() {
         let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
@@ -579,6 +583,7 @@ mod tests {
         assert_eq!(decoded.state.decode_step, 7);
     }
 
+    /// Only decode requests advertise an authoritative live session position.
     #[test]
     fn only_decode_messages_carry_authoritative_session_positions() {
         let mut decode = StageWireMessage {
@@ -632,6 +637,7 @@ mod tests {
         );
     }
 
+    /// Wire-size estimates include headers and every transmitted sideband.
     #[test]
     fn stage_message_estimates_full_wire_transfer_bytes() {
         let frame = multipart_activation_frame(2);
@@ -788,6 +794,7 @@ mod tests {
         );
     }
 
+    /// Driver-origin messages round-trip without an activation payload.
     #[test]
     fn driver_origin_message_round_trips_without_activation() {
         let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
@@ -821,6 +828,7 @@ mod tests {
         assert!(decoded.sampling.is_none());
     }
 
+    /// Stage-origin stop messages do not require activation data.
     #[test]
     fn stop_message_round_trips_without_activation_from_a_stage() {
         let mut state = StageStateHeader::new(WireMessageKind::Stop);
@@ -885,6 +893,7 @@ mod tests {
         );
     }
 
+    /// Stage messages bulk-write sidebands while preserving the encoded wire bytes.
     #[test]
     fn stage_message_bulk_writes_sidebands() {
         let value_count = 4_096;
@@ -955,6 +964,7 @@ mod tests {
         );
     }
 
+    /// Prefill framing overhead remains bounded independently of prompt length.
     #[test]
     fn prefill_wire_overhead_is_fixed_and_bounded() {
         let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
@@ -990,6 +1000,7 @@ mod tests {
         const { assert!(STAGE_WIRE_FIXED_HEADER_BYTES <= 80) };
     }
 
+    /// Verification retirement preserves the exact run, topology, stage and session.
     #[test]
     fn verify_retirement_round_trips_exact_identity() {
         let kind = WireMessageKind::RetireVerifyWindow;
@@ -1018,6 +1029,7 @@ mod tests {
         assert!(decoded.state.matches_kind(kind));
     }
 
+    /// Session-control messages carry only their fixed header.
     #[test]
     fn session_control_messages_are_fixed_header_only() {
         let kind = WireMessageKind::TrimSession;
@@ -1047,6 +1059,7 @@ mod tests {
         assert!(decoded.activation.is_empty());
     }
 
+    /// State imports preserve the exact exported byte payload.
     #[test]
     fn state_import_message_round_trips_raw_bytes() {
         let state = StageStateHeader::new(WireMessageKind::StateImport);
@@ -1091,6 +1104,7 @@ mod tests {
         );
     }
 
+    /// State imports reject mismatched declared and actual payload sizes.
     #[test]
     fn state_import_writer_rejects_raw_byte_count_mismatch() {
         let state = StageStateHeader::new(WireMessageKind::StateImport);
@@ -1116,6 +1130,7 @@ mod tests {
         assert_eq!(error.to_string(), "state import raw byte count mismatch");
     }
 
+    /// State exports request a snapshot without carrying imported bytes.
     #[test]
     fn state_export_message_round_trips_without_payload() {
         let state = StageStateHeader::new(WireMessageKind::StateExport);

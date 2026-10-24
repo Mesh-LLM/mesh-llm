@@ -15,6 +15,7 @@ pub(crate) struct ReadoutIteration<'a> {
 }
 
 impl IterationScheduler {
+    /// Return the prefill chunk bound used by readout scheduling.
     pub(crate) fn readout_chunk_limit(&self) -> usize {
         self.shared.max_direct_iteration_tokens.max(1)
     }

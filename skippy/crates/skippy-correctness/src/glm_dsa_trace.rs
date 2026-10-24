@@ -750,6 +750,7 @@ fn start_stage0(
     ChildGuard::spawn(command)
 }
 
+/// Run a traced prompt through the configured stages and collect generated tokens.
 fn run_prompt(args: &GlmDsaStage0TraceArgs, prompt_log_path: &Path) -> Result<TraceDriverOutput> {
     let mut stream = try_connect_ready(args.stage0_bind_addr).context("connect stage0 driver")?;
     let timeout = Duration::from_secs(args.server.startup_timeout_secs.max(1));

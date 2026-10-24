@@ -845,6 +845,7 @@ mod tests {
         ActivationPartDesc, GGML_TYPE_F32,
     };
 
+    /// Construct an activation descriptor for frame-validation fixtures.
     pub(super) fn activation_desc(payload_bytes: u64) -> ActivationDesc {
         let mut parts = [ActivationPartDesc::default(); ACTIVATION_MAX_PARTS];
         parts[0] = ActivationPartDesc {
@@ -885,6 +886,7 @@ mod tests {
         );
     }
 
+    /// Raw activation frames accept a payload matching their declared geometry.
     #[test]
     fn raw_input_frame_accepts_matching_payload_len() -> anyhow::Result<()> {
         let frame = ActivationFrame {

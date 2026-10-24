@@ -119,6 +119,7 @@ mod tests {
     use super::*;
     use skippy_protocol::binary::StageStateHeader;
 
+    /// Construct a stage request for native MTP reply tests.
     fn test_message(kind: WireMessageKind, token_count: i32) -> StageWireMessage {
         StageWireMessage {
             kind,

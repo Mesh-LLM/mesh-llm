@@ -121,6 +121,7 @@ impl WireMessageKind {
 impl TryFrom<i32> for WireMessageKind {
     type Error = io::Error;
 
+    /// Decode a wire-message tag and reject unknown request kinds.
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::PrefillEmbd),
@@ -161,6 +162,7 @@ pub enum WireReplyKind {
 impl TryFrom<i32> for WireReplyKind {
     type Error = io::Error;
 
+    /// Decode a wire-reply tag and reject unknown reply kinds.
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Ack),
@@ -531,6 +533,7 @@ impl StageWireMessage {
         (self.kind == WireMessageKind::VerifyWindow).then_some(self.token_count)
     }
 
+    /// Estimate the serialized message size including all sideband payloads.
     pub fn estimated_wire_bytes(&self) -> usize {
         let sampling_bytes = self.sampling.as_ref().map_or(0, |sampling| {
             STAGE_SAMPLING_CONFIG_BASE_BYTES
@@ -585,6 +588,7 @@ impl StageWireMessage {
         Self::stop_with_identity(0, 0)
     }
 
+    /// Construct a stop request bound to the specified stage and session identity.
     pub fn stop_with_identity(request_id: u64, session_id: u64) -> Self {
         Self {
             kind: WireMessageKind::Stop,
@@ -603,6 +607,7 @@ impl StageWireMessage {
         }
     }
 
+    /// Construct a generation-configuration control message for a stage session.
     pub fn configure_generation(
         request_id: u64,
         session_id: u64,
@@ -852,6 +857,7 @@ fn better_prefill_calibration_sample(
         > i128::from(current_us) * i128::from(candidate_tokens)
 }
 
+/// Return the execution phase implied by this message kind.
 fn expected_phase(kind: WireMessageKind) -> WireStagePhase {
     if kind.is_prefill()
         || kind == WireMessageKind::PrefillReadout

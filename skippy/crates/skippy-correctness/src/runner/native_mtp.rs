@@ -288,6 +288,7 @@ mod tests {
     use super::*;
     use skippy_protocol::binary::{StageNativeMtpDraft, StageReplyStats, WireReplyKind};
 
+    /// Construct a terminal prediction reply for native MTP transport tests.
     fn predicted_reply(
         predicted: i32,
         predicted_tokens: Vec<i32>,

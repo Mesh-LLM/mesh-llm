@@ -428,6 +428,7 @@ impl InferenceBackend for FakeBackend {
         Ok(vec![ModelObject::new("org/repo:Q4_K_M")])
     }
 
+    /// Return deterministic System One fixtures for HTTP adapter contract tests.
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         if request.questions.contains_key("question_0") {
             let answers = request

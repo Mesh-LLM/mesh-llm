@@ -8,7 +8,7 @@ use anyhow::{Result, ensure};
 use serde_json::json;
 
 use super::{DecisionQuestion, DecisionQuestionKind, DecisionRequest};
-use crate::StageModel;
+use crate::{StageModel, StageModelReader};
 
 pub const MAX_QUESTIONS: usize = 64;
 pub const MAX_CANDIDATE_TOKENS: usize = 64;
@@ -24,6 +24,7 @@ pub enum ReadoutMethod {
 }
 
 impl ReadoutMethod {
+    /// Return the stable API identifier for this scoring method.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::SelectedTokenLogits => "selected_token_logits",
@@ -48,13 +49,22 @@ pub struct DecisionPlan {
 }
 
 impl DecisionPlan {
+    /// Plan independent questions using the loaded model's immutable vocabulary.
     pub fn for_model(model: &StageModel, request: &DecisionRequest) -> Result<Self> {
+        Self::for_reader(&model.reader(), request)
+    }
+
+    /// Tokenize independent questions without holding a runtime or session lock.
+    ///
+    /// The reader retains the loaded model while planning. Capability admission,
+    /// token limits, label boundaries, and candidate ordering match `for_model`.
+    pub fn for_reader(reader: &StageModelReader, request: &DecisionRequest) -> Result<Self> {
         ensure!(
-            model.supports_causal_readout(),
+            reader.supports_causal_readout(),
             "loaded model does not support causal decision reads"
         );
         Self::tokenize(request, |text| {
-            model
+            reader
                 .tokenize_bounded(text, true, MAX_PROMPT_TOKENS)?
                 .ok_or_else(|| anyhow::anyhow!("decision prompt exceeds the token limit"))
         })
@@ -141,6 +151,7 @@ impl DecisionPlan {
     }
 }
 
+/// Validate and expand question kinds into ordered label-description pairs.
 fn options(question: &DecisionQuestion) -> Result<Vec<(String, serde_json::Value)>> {
     let options = match &question.kind {
         DecisionQuestionKind::Noul {

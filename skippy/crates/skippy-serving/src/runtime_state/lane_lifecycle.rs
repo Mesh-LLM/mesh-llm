@@ -550,6 +550,7 @@ impl RuntimeState {
     }
 }
 
+/// Check whether loaded capabilities and stage placement can serve System One.
 fn system_one_endpoint_is_runnable(
     has_canvas: bool,
     has_causal_readout: bool,

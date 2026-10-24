@@ -721,6 +721,7 @@ fn strip_tcp_prefix(endpoint: &str) -> &str {
     endpoint.strip_prefix("tcp://").unwrap_or(endpoint)
 }
 
+/// Construct the opening request for a direct prediction-return connection.
 fn prediction_return_open_message(request_id: u64, session_id: u64) -> StageWireMessage {
     StageWireMessage {
         kind: WireMessageKind::PredictionReturnOpen,
@@ -959,6 +960,7 @@ mod tests {
         handle.join().unwrap().unwrap();
     }
 
+    /// Direct-return transport preserves typed native MTP draft evidence.
     #[test]
     fn direct_prediction_return_preserves_typed_native_mtp_draft() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

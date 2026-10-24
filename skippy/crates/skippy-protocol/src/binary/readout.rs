@@ -5,6 +5,7 @@ use std::io::{self, Read, Write};
 
 const MAX_SELECTED_TOKENS: usize = 256;
 
+/// Write a bounded, ordered list of selected token IDs.
 pub(super) fn write_tokens(mut writer: impl Write, tokens: &[i32]) -> io::Result<()> {
     if tokens.len() > MAX_SELECTED_TOKENS || tokens.iter().any(|token| *token < 0) {
         return Err(invalid_input("invalid selected-token readout"));
@@ -16,6 +17,7 @@ pub(super) fn write_tokens(mut writer: impl Write, tokens: &[i32]) -> io::Result
     Ok(())
 }
 
+/// Read a bounded element count before allocating or consuming its payload.
 fn read_count(mut reader: impl Read) -> io::Result<usize> {
     let mut bytes = [0; 4];
     reader.read_exact(&mut bytes)?;
@@ -26,6 +28,7 @@ fn read_count(mut reader: impl Read) -> io::Result<usize> {
     Ok(count)
 }
 
+/// Decode selected token IDs while preserving caller order.
 pub(super) fn read_tokens(mut reader: impl Read) -> io::Result<Vec<i32>> {
     let count = read_count(&mut reader)?;
     let mut tokens = Vec::with_capacity(count);
@@ -41,6 +44,7 @@ pub(super) fn read_tokens(mut reader: impl Read) -> io::Result<Vec<i32>> {
     Ok(tokens)
 }
 
+/// Serialize a bounded vector of valid conditional log probabilities.
 pub(super) fn write_scores(mut writer: impl Write, scores: &[f32]) -> io::Result<()> {
     if scores.len() > MAX_SELECTED_TOKENS
         || scores
@@ -56,6 +60,7 @@ pub(super) fn write_scores(mut writer: impl Write, scores: &[f32]) -> io::Result
     Ok(())
 }
 
+/// Decode bounded scores and reject invalid probability evidence.
 pub(super) fn read_scores(mut reader: impl Read) -> io::Result<Vec<f32>> {
     let count = read_count(&mut reader)?;
     let mut scores = Vec::with_capacity(count);
@@ -79,6 +84,7 @@ mod tests {
         WireReplyKind, read_stage_message, recv_reply, send_reply_message, write_stage_message,
     };
 
+    /// Build a current-generation readout request for transport tests.
     fn message(selected: Vec<i32>) -> StageWireMessage {
         let mut message = StageWireMessage::stop_with_identity(7, 11);
         message.kind = WireMessageKind::PrefillReadout;
@@ -90,6 +96,7 @@ mod tests {
         message
     }
 
+    /// Readouts preserve identity and selection order, including empty prefill selections.
     #[test]
     fn readout_roundtrip_preserves_identity_and_selected_order_including_prefill_only() {
         for selected in [vec![], vec![42, 8, 1]] {
@@ -107,6 +114,7 @@ mod tests {
         }
     }
 
+    /// Score replies remain distinguishable from sampled-token replies.
     #[test]
     fn readout_replies_cannot_be_mistaken_for_sampled_tokens() {
         for scores in [vec![], vec![-1.0, -2.0]] {
@@ -130,6 +138,7 @@ mod tests {
         }
     }
 
+    /// Reject obsolete stage generations and selections on incompatible message kinds.
     #[test]
     fn rejects_previous_stage_version_and_misplaced_selection() {
         let mut request = message(vec![1]);
@@ -148,6 +157,7 @@ mod tests {
         assert!(write_stage_message(Vec::new(), &request).is_err());
     }
 
+    /// Readout scores retain selection order and reject invalid numeric evidence.
     #[test]
     fn preserves_selected_order_and_rejects_invalid_evidence() {
         let mut bytes = Vec::new();
@@ -163,6 +173,7 @@ mod tests {
         }
     }
 
+    /// Oversized counts fail before payload allocation or reads.
     #[test]
     fn rejects_oversized_counts_before_reading_or_allocating_payload() {
         for count in [257u32, u32::MAX] {

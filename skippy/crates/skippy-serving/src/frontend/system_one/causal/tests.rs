@@ -1,6 +1,7 @@
 use super::*;
 use skippy_runtime::decision::causal::QuestionPlan;
 
+/// Construct a mixed-method plan for causal response-assembly tests.
 fn fixture() -> (SystemOneRequest, DecisionPlan) {
     let request = serde_json::from_value(serde_json::json!({
         "model": "test", "state": "shared evidence", "questions": {
@@ -32,6 +33,7 @@ fn fixture() -> (SystemOneRequest, DecisionPlan) {
     )
 }
 
+/// Construct one completed readout result with explicit token accounting.
 fn result(scores: &[f64]) -> ReadoutResult {
     ReadoutResult {
         scores: scores.to_vec(),
@@ -40,6 +42,7 @@ fn result(scores: &[f64]) -> ReadoutResult {
     }
 }
 
+/// Jobs share only their own question prompt and preserve candidate boundaries.
 #[test]
 fn independent_jobs_preserve_candidates_and_share_only_their_question_prompt() {
     let (_, plan) = fixture();
@@ -53,6 +56,7 @@ fn independent_jobs_preserve_candidates_and_share_only_their_question_prompt() {
     assert_ne!(jobs[0].prompt, jobs[1].prompt);
 }
 
+/// Unordered completions preserve answer order and include prefix-preparation costs.
 #[test]
 fn out_of_order_completions_keep_answer_order_and_account_for_cache_preparation() {
     let (request, plan) = fixture();
@@ -97,6 +101,7 @@ fn out_of_order_completions_keep_answer_order_and_account_for_cache_preparation(
     assert_eq!(answers["second"]["choice"], "C");
 }
 
+/// Malformed or duplicate backend results fail response assembly.
 #[test]
 fn malformed_or_duplicate_backend_results_fail_closed() {
     for defect in 0..6 {
@@ -124,6 +129,7 @@ fn malformed_or_duplicate_backend_results_fail_closed() {
     }
 }
 
+/// Dropping frontend ownership cancels its admitted readout work.
 #[test]
 fn abandoned_frontend_cancels_admitted_readouts() {
     let cancellation = CancellationToken::new();
@@ -133,6 +139,7 @@ fn abandoned_frontend_cancels_admitted_readouts() {
     assert!(cancellation.is_cancelled());
 }
 
+/// Context admission includes teacher-forced inputs but no generated answer token.
 #[test]
 fn context_admission_includes_teacher_forced_inputs_but_no_generated_token() {
     let (_, mut plan) = fixture();

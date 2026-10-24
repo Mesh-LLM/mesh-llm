@@ -281,6 +281,7 @@ impl DecisionsRequest {
         })
     }
 
+    /// Map internal decision results and evidence back to the caller's question order.
     pub(crate) fn response(
         &self,
         result: SystemOneResponse,
@@ -420,6 +421,7 @@ mod readout_tests {
     use super::*;
     use crate::system_one::{DecisionReadout, DecisionReadoutUsage};
 
+    /// Answers and readout evidence retain question order even beyond ten questions.
     #[test]
     fn restores_original_question_order_for_answers_and_evidence() {
         let request: DecisionsRequest = serde_json::from_value(serde_json::json!({
@@ -451,6 +453,7 @@ mod readout_tests {
         assert_eq!(json["usage"]["output_tokens"], 0);
     }
 
+    /// Legacy decision responses omit evidence that only causal execution can produce.
     #[test]
     fn legacy_adapter_responses_do_not_gain_causal_evidence() {
         let request: DecisionsRequest = serde_json::from_value(serde_json::json!({

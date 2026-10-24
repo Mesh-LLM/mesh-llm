@@ -23,6 +23,7 @@ pub(crate) struct ForwardedStageMessage {
     pub activation_encode_ms: f64,
 }
 
+/// Forward stage execution metadata while substituting the produced activation frame.
 pub(crate) fn forwarded_stage_message_timed(
     config: &StageConfig,
     incoming: &StageWireMessage,
@@ -190,6 +191,7 @@ mod tests {
         }
     }
 
+    /// Construct an incoming stage request for forwarding regression tests.
     fn incoming_message() -> StageWireMessage {
         StageWireMessage {
             kind: WireMessageKind::DecodeEmbd,
@@ -235,6 +237,7 @@ mod tests {
         )
     }
 
+    /// Fused restore requests retain sampling metadata across downstream hops.
     #[test]
     fn fused_restore_preserves_sampling_metadata_across_stage_hops() {
         let mut incoming = incoming_message();

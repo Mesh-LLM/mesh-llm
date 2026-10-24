@@ -9,6 +9,7 @@ use crate::frontend::wire_messages::embedded_prefix_cache_message;
 use skippy_protocol::binary::{WireMessageKind, WireReplyKind, recv_reply};
 
 impl DecisionSequence<'_> {
+    /// Restore the longest usable exact prefix for a local or split readout sequence.
     pub(super) fn restore_prefix(&mut self, tokens: &[i32]) -> InferenceResult<()> {
         let Some(kv) = self.backend.kv.as_ref().filter(|kv| kv.should_lookup()) else {
             return Ok(());
@@ -63,6 +64,7 @@ impl DecisionSequence<'_> {
         Ok(())
     }
 
+    /// Restore matching downstream prefix state or fall back to recomputing the prompt.
     fn restore_downstream(&mut self, tokens: &[i32]) -> InferenceResult<bool> {
         let Some((_, lane)) = self.lane.as_mut() else {
             return Ok(true);

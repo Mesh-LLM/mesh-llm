@@ -207,6 +207,7 @@ fn decision_error(error: DecisionError) -> InferenceError {
     }
 }
 
+/// Build a legacy System One response without claiming causal readout evidence.
 fn response(
     request: SystemOneRequest,
     output: DecisionOutput,

@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 mod served_descriptors;
 
+/// Build the stage advertisement from this node's supported capabilities.
 fn skippy_stage_subprotocols(
     artifact_transfer_supported: bool,
     stage_protocol_generation_supported: bool,
@@ -80,6 +81,7 @@ fn supports_decode_batch_policy(subprotocols: &[crate::proto::node::MeshSubproto
     )
 }
 
+/// Accept a stage generation only when one descriptor contains its entire bundle.
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     let required_features = [
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,

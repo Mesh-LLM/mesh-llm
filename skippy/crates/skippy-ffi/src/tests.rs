@@ -31,6 +31,7 @@ const fn version(major: u32, minor: u32, patch: u32) -> AbiVersion {
     }
 }
 
+/// The selected-token ABI matches the C request's size and field offsets.
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn selected_token_readout_matches_c_iteration_layout() {

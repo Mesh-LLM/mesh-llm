@@ -557,6 +557,7 @@ mod tests {
         assert_eq!(summary.verify_window_session_auto_align_ms, 0.75);
         assert_eq!(summary.verify_window_session_auto_align_trimmed_tokens, 1);
     }
+    /// Construct a stage message for diagnostic-summary tests.
     fn test_message(kind: WireMessageKind, token_count: i32) -> StageWireMessage {
         StageWireMessage {
             kind,

@@ -153,6 +153,7 @@ fn request(stream: &mut TcpStream) -> Option<(String, Value)> {
         serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap_or(Value::Null),
     ))
 }
+/// Return deterministic refusal or success fixtures for the contract server.
 fn refusal(method: &str, request: &Value) -> (u16, Value) {
     let (status, kind, code, message) =
         if method == "GET" {
@@ -288,6 +289,7 @@ fn answer(request: &Value, index: usize, mutation: &str) -> Value {
     body
 }
 
+/// Inject a selected response defect for contract-validation tests.
 fn mutate_contract(status: u16, response: &mut Value, request: &Value, mutation: &str) -> u16 {
     if mutation == "wrong-code" {
         response["error"]["code"] = json!("wrong");

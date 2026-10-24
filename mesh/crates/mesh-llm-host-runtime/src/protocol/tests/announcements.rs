@@ -454,6 +454,7 @@ fn proto_announcement_without_current_stage_generation_is_not_stage_compatible()
     assert!(ann.stage_status_list_supported);
 }
 
+/// Missing current-generation capabilities prevent stage compatibility.
 #[test]
 fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD0; 32]).public());
@@ -492,6 +493,7 @@ fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible
     }
 }
 
+/// Partial duplicate descriptors cannot combine into a valid capability bundle.
 #[test]
 fn partial_duplicate_stage_records_do_not_form_a_generation_bundle() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD1; 32]).public());

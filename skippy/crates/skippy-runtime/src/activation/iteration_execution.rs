@@ -2,6 +2,7 @@
 
 use super::*;
 
+/// Collect valid sampled tokens while retaining their original batch request indexes.
 pub(super) fn collect_iteration_samples(
     request_count: usize,
     sampled_output_count: usize,
@@ -132,6 +133,7 @@ impl StageSession {
         Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()], selections)
     }
 
+    /// Execute a native batch and validate its sampled or selected-token outputs.
     fn iteration_batch_sampled_raw(
         requests: &mut [IterationBatchRequest<'_>],
         output_capacities: &[usize],
@@ -226,6 +228,7 @@ impl StageSession {
         ))
     }
 
+    /// Execute requests serially when the native stage cannot export a shared batch.
     fn iteration_batch_sampled_one_at_a_time(
         requests: &mut [IterationBatchRequest<'_>],
     ) -> Result<IterationBatchOutput> {
@@ -300,6 +303,7 @@ impl StageSession {
 }
 
 // Every pointer borrows storage owned by the caller for the entire native call.
+/// Borrow request buffers into the C ABI layout for one native iteration.
 fn raw_iteration_requests(
     requests: &[IterationBatchRequest<'_>],
     sampling: &[Option<RawSamplingConfig>],
@@ -337,6 +341,7 @@ fn raw_iteration_requests(
         .collect()
 }
 
+/// Advance session token counts only for requests that actually completed.
 fn advance_iteration_counts(requests: &mut [IterationBatchRequest<'_>]) -> Result<()> {
     // Native already advanced all sessions. Do not update only a subset of the
     // Rust counts if overflow is detected; the caller invalidates the batch.
@@ -358,6 +363,7 @@ fn advance_iteration_counts(requests: &mut [IterationBatchRequest<'_>]) -> Resul
     Ok(())
 }
 
+/// Reject score outputs with incorrect cardinality or invalid log probabilities.
 fn validate_score_outputs(
     requests: &[IterationBatchRequest<'_>],
     outputs: &mut [Vec<f32>],
@@ -377,6 +383,7 @@ fn validate_score_outputs(
     Ok(())
 }
 
+/// Read each completed request's activation frame from the native iteration result.
 fn iteration_frames(
     payloads: Vec<Vec<u8>>,
     descriptors: Vec<RawActivationDesc>,
@@ -400,10 +407,12 @@ fn iteration_frames(
         .collect()
 }
 
+/// Decide whether an output-bearing request should emit a sampled token.
 pub(super) fn iteration_request_should_emit_sample(request: &IterationBatchRequest<'_>) -> bool {
     request.sample_last && request.session.terminal_stage
 }
 
+/// Reject unsupported serial-decode shapes before invoking native execution.
 pub(super) fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result<()> {
     let framed_origin = request.session.token_count() == 0
         && request.input.is_some()
@@ -462,6 +471,7 @@ pub(super) fn iteration_request_requires_one_at_a_time(
     frame_has_optional_parts(request.input) || exporting_stage_requires_one_request(request.session)
 }
 
+/// Identify exporting stages whose capabilities require serial request execution.
 pub(super) fn exporting_stage_requires_one_request(session: &StageSession) -> bool {
     !session.terminal_stage && !session.batched_activation_exports
 }

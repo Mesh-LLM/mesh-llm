@@ -1,6 +1,7 @@
 //! Execute the portable gate with inert tools to verify ordering and failures.
 use super::*;
 
+/// The portable gate serializes Cargo owners and retains every stage failure.
 #[test]
 fn portable_gate_serializes_cargo_owners_and_retains_failed_checks() {
     for failed_stage in ["none", "sdk", "ui", "website"] {

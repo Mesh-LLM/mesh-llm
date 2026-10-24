@@ -1,6 +1,7 @@
 use super::*;
 use crate::decision::DecisionValue;
 
+/// Construct a decision request with caller-ordered candidate labels.
 fn request(labels: &[&str]) -> DecisionRequest {
     DecisionRequest {
         state: DecisionValue::String("shared evidence".into()),
@@ -23,10 +24,12 @@ fn request(labels: &[&str]) -> DecisionRequest {
     }
 }
 
+/// Use character IDs as a controlled tokenizer for boundary-validation tests.
 fn characters(text: &str) -> Result<Vec<i32>> {
     Ok(text.chars().map(|value| value as i32).collect())
 }
 
+/// Each question selects its own scoring method without consuming another answer.
 #[test]
 fn mixed_questions_select_their_own_methods_without_answer_leakage() {
     let mut request = request(&["A", "B"]);
@@ -58,6 +61,7 @@ fn mixed_questions_select_their_own_methods_without_answer_leakage() {
     );
 }
 
+/// Candidate token sequences retain the caller's order.
 #[test]
 fn candidate_order_is_request_order() {
     for labels in [["Z", "A", "M"], ["M", "Z", "A"]] {
@@ -72,6 +76,7 @@ fn candidate_order_is_request_order() {
     }
 }
 
+/// Reject labels that merge across the prompt boundary or alias another label.
 #[test]
 fn rejects_context_boundary_merges_and_tokenizer_aliases() {
     let mut calls = 0;
@@ -96,6 +101,7 @@ fn rejects_context_boundary_merges_and_tokenizer_aliases() {
     );
 }
 
+/// Reject requests whose question or label counts violate the bounded contract.
 #[test]
 fn rejects_ambiguous_and_unbounded_requests() {
     for labels in [&[""][..], &["A", "A"][..], &["A", "\nB"][..]] {
@@ -106,6 +112,7 @@ fn rejects_ambiguous_and_unbounded_requests() {
     assert!(DecisionPlan::tokenize(&request, characters).is_err());
 }
 
+/// Relative candidate probabilities remain stable under score offsets and permutations.
 #[test]
 fn scores_are_stable_under_offset_and_permutation() {
     let scores = normalize_candidate_scores(&[-1000.0, -1001.0, -1002.0]).unwrap();

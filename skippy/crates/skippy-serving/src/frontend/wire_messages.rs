@@ -55,6 +55,7 @@ pub(super) struct ReusableDecodeMessage {
 }
 
 impl ReusableDecodeMessage {
+    /// Bind wire-message construction to one topology, stage and inference session.
     pub(super) fn new(args: ReusableDecodeMessageArgs) -> InferenceResult<Self> {
         let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
         state.seq_id = 0;
@@ -138,6 +139,7 @@ pub(super) struct VerifyWindowMessageArgs<'a> {
     pub(super) native_mtp_draft_tokens: usize,
 }
 
+/// Construct a verification-window request with coordinator-owned identity.
 pub(super) fn embedded_verify_window_message(
     args: VerifyWindowMessageArgs<'_>,
 ) -> InferenceResult<StageWireMessage> {
@@ -210,6 +212,7 @@ pub(super) fn discard_stale_windows_message(
     })
 }
 
+/// Construct retirement of one exact speculative verification window.
 pub(super) fn retire_verify_window_message(
     request_id: u64,
     session_id: u64,
@@ -263,6 +266,7 @@ pub(super) struct OpenAiPrefillChunk<'a> {
     pub(super) session_id: u64,
 }
 
+/// Construct a prefill request with its prompt, activation and sampling metadata.
 pub(super) fn embedded_prefill_message(
     chunk: OpenAiPrefillChunk<'_>,
 ) -> InferenceResult<StageWireMessage> {
@@ -295,6 +299,7 @@ pub(super) fn embedded_prefill_message(
     })
 }
 
+/// Construct a prefix-cache control message for this inference session.
 pub(super) fn embedded_prefix_cache_message(
     kind: WireMessageKind,
     tokens: &[i32],
@@ -337,6 +342,7 @@ pub(super) struct RestorePrefillDecodeMessageArgs<'a> {
     pub(super) native_mtp_draft_tokens: usize,
 }
 
+/// Construct a fused restore/prefill/decode request preserving generation metadata.
 pub(super) fn embedded_restore_prefill_decode_message(
     args: RestorePrefillDecodeMessageArgs<'_>,
 ) -> InferenceResult<StageWireMessage> {
@@ -390,6 +396,7 @@ pub(super) struct MultimodalPrefillArgs {
     pub(super) final_chunk: bool,
 }
 
+/// Construct a prefill request carrying multimodal positions and activation data.
 pub(super) fn multimodal_prefill_message(
     args: MultimodalPrefillArgs,
 ) -> InferenceResult<StageWireMessage> {

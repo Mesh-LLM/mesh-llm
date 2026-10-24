@@ -10,6 +10,7 @@ mod benchmark;
 mod scheduling;
 mod split;
 
+/// Configure a real causal GGUF with bounded CPU lanes and prefix caching.
 fn model_config() -> Result<StageConfig> {
     skippy_runtime::test_support::require_native_runtime();
     let path = env::var("SKIPPY_DECISION_MODEL").context("SKIPPY_DECISION_MODEL is required")?;
@@ -54,10 +55,12 @@ fn model_config() -> Result<StageConfig> {
     })
 }
 
+/// Open the real-model decision backend used by HTTP and scheduling tests.
 fn backend() -> Result<Arc<StageOpenAiBackend>> {
     Ok(Arc::new(backend_with_config(model_config()?)?))
 }
 
+/// Fix arithmetic and batching shape for local-versus-split score comparisons.
 fn reference_config() -> Result<StageConfig> {
     Ok(StageConfig {
         // Hold native matrix shape fixed across cache hits and stage splits.
@@ -70,6 +73,7 @@ fn reference_config() -> Result<StageConfig> {
     })
 }
 
+/// Build a serving backend with explicit admission limits, scheduler and cache state.
 fn backend_with_config(config: StageConfig) -> Result<StageOpenAiBackend> {
     let mut backend = support::local_openai_backend(config.clone(), config.model_id.clone())?;
     backend.generation_limit = Arc::new(GenerationConcurrencyController::fixed(
@@ -103,6 +107,7 @@ fn backend_with_config(config: StageConfig) -> Result<StageOpenAiBackend> {
     Ok(backend)
 }
 
+/// Construct shared-state questions exercising both causal scoring methods.
 fn request() -> Value {
     json!({
         "model": "decision-model",
@@ -114,10 +119,12 @@ fn request() -> Value {
     })
 }
 
+/// Submit a System One request through the real HTTP router.
 async fn post(backend: Arc<StageOpenAiBackend>, body: Value) -> Result<(StatusCode, Value)> {
     post_route(backend, "/systemone", body).await
 }
 
+/// Submit JSON to a selected route and decode its status and response body.
 async fn post_route(
     backend: Arc<StageOpenAiBackend>,
     route: &str,
@@ -137,6 +144,7 @@ async fn post_route(
     Ok((status, json))
 }
 
+/// Compare per-candidate scores within the native arithmetic tolerance.
 fn assert_same_scores(left: &Value, right: &Value) {
     for key in ["department", "action"] {
         let left = left["readouts"][key]["candidate_log_probabilities"]
@@ -155,6 +163,7 @@ fn assert_same_scores(left: &Value, right: &Value) {
     }
 }
 
+/// HTTP readouts reuse prefixes and release all sessions, including invalid requests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires SKIPPY_DECISION_MODEL: a real causal GGUF"]
 async fn causal_decisions_http_reuses_prefixes_and_releases_all_lanes() -> Result<()> {
@@ -217,6 +226,7 @@ async fn causal_decisions_http_reuses_prefixes_and_releases_all_lanes() -> Resul
     Ok(())
 }
 
+/// The public Decisions API preserves question and candidate ordering.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires SKIPPY_DECISION_MODEL: a real causal GGUF"]
 async fn causal_decisions_openai_answers_keep_question_and_candidate_order() -> Result<()> {

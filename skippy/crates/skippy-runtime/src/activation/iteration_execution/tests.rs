@@ -1,6 +1,7 @@
 use super::super::tests::activation_desc;
 use super::*;
 
+/// Serial decode accepts an explicit decode phase with a matching live position.
 #[test]
 fn serial_decode_accepts_explicit_phase_and_matching_position() {
     let mut session = StageSession {
@@ -22,6 +23,7 @@ fn serial_decode_accepts_explicit_phase_and_matching_position() {
     validate_serial_decode_request(&request).unwrap();
 }
 
+/// Recurrent downstream decode accepts matching framed-origin metadata.
 #[test]
 fn serial_decode_accepts_framed_origin_for_recurrent_downstream_stage() {
     for positions in [&[][..], &[0][..]] {
@@ -49,6 +51,7 @@ fn serial_decode_accepts_framed_origin_for_recurrent_downstream_stage() {
     }
 }
 
+/// Serial decode rejects invalid token counts, phases and positions.
 #[test]
 fn serial_decode_rejects_invalid_decode_shapes() {
     for (session_tokens, token_ids, positions, sample_last) in [
@@ -77,6 +80,7 @@ fn serial_decode_rejects_invalid_decode_shapes() {
     }
 }
 
+/// A single-token prefill tail retains prefill semantics.
 #[test]
 fn one_token_prefill_tail_is_explicitly_not_decode() {
     let mut session = StageSession {
@@ -97,6 +101,7 @@ fn one_token_prefill_tail_is_explicitly_not_decode() {
     assert_eq!(request.phase, IterationBatchPhase::Prefill);
 }
 
+/// Intermediate stages do not fabricate sampled-token outputs.
 #[test]
 fn serial_iteration_omits_samples_for_intermediate_stages() {
     let mut session = StageSession {
@@ -118,6 +123,7 @@ fn serial_iteration_omits_samples_for_intermediate_stages() {
     assert!(!iteration_request_should_emit_sample(&request));
 }
 
+/// Sparse samples retain their explicit indexes within the original request batch.
 #[test]
 fn sparse_iteration_samples_preserve_explicit_request_indexes() -> anyhow::Result<()> {
     let samples = collect_iteration_samples(3, 2, &[0, 2, 0], &[41, 99, 0])?;
@@ -129,6 +135,7 @@ fn sparse_iteration_samples_preserve_explicit_request_indexes() -> anyhow::Resul
     Ok(())
 }
 
+/// Duplicate or out-of-range native sample indexes fail validation.
 #[test]
 fn iteration_samples_reject_duplicate_or_out_of_range_indexes() {
     assert!(collect_iteration_samples(3, 2, &[1, 1], &[41, 99]).is_err());
@@ -136,6 +143,7 @@ fn iteration_samples_reject_duplicate_or_out_of_range_indexes() {
     assert!(collect_iteration_samples(3, 4, &[0, 1, 2, 0], &[1, 2, 3, 4]).is_err());
 }
 
+/// Open a small native session for iteration-batch regression fixtures.
 fn batch_session(terminal_stage: bool, batched_activation_exports: bool) -> StageSession {
     StageSession {
         raw: ptr::null_mut(),
@@ -145,6 +153,7 @@ fn batch_session(terminal_stage: bool, batched_activation_exports: bool) -> Stag
     }
 }
 
+/// Construct one decode request with explicit sampling and phase metadata.
 fn decode_request<'a>(
     session: &'a mut StageSession,
     input: Option<&'a ActivationFrame>,
@@ -160,6 +169,7 @@ fn decode_request<'a>(
     }
 }
 
+/// Native invalid-argument errors propagate without retrying through serial fallback.
 #[test]
 fn native_invalid_argument_is_returned_without_serial_fallback() {
     crate::test_support::require_native_runtime();
@@ -178,6 +188,7 @@ fn native_invalid_argument_is_returned_without_serial_fallback() {
     assert_eq!(second.token_count, 0);
 }
 
+/// Exporting stages lacking batch-export support execute one request at a time.
 #[test]
 fn exporting_stages_that_cannot_batch_exports_run_one_at_a_time() {
     let mut dense = batch_session(false, true);
@@ -193,6 +204,7 @@ fn exporting_stages_that_cannot_batch_exports_run_one_at_a_time() {
     );
 }
 
+/// Terminal stages can batch independently of memory-split export restrictions.
 #[test]
 fn terminal_stages_batch_regardless_of_memory_splits() {
     let mut terminal = batch_session(true, false);
@@ -203,6 +215,7 @@ fn terminal_stages_batch_regardless_of_memory_splits() {
     );
 }
 
+/// Optional activation parts force serial request execution.
 #[test]
 fn optional_activation_parts_always_run_one_at_a_time() {
     let mut dense = batch_session(false, true);
@@ -219,6 +232,7 @@ fn optional_activation_parts_always_run_one_at_a_time() {
     )));
 }
 
+/// Partial native execution reports exactly which requests completed.
 #[test]
 fn partial_batch_execution_reports_the_requests_that_already_ran() {
     let error = anyhow::Error::new(PartialBatchExecution::new(2, anyhow!("native failed")));

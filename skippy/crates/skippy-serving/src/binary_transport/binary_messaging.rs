@@ -955,6 +955,7 @@ mod downstream_error_telemetry_tests {
     use crate::telemetry::{Telemetry, TelemetryLevel};
     use skippy_protocol::binary::{StageStateHeader, WireMessageKind};
 
+    /// Create the opening stage request for binary-connection tests.
     fn first_message() -> StageWireMessage {
         StageWireMessage {
             kind: WireMessageKind::VerifyWindow,

@@ -9,6 +9,7 @@ use skippy_runtime::{ChatTemplateMessage, ChatTemplateOptions};
 const BASELINE_TEMPLATE: &str = "{{ messages[0].content }}";
 const BASELINE_GRAMMAR: &str = "root ::= \"B\" | \"S\"";
 
+/// Construct the requested number of independent benchmark questions.
 fn questions(count: usize) -> Value {
     let mut body = request();
     body["questions"] = Value::Object((0..count).map(|index| {
@@ -20,6 +21,7 @@ fn questions(count: usize) -> Value {
     body
 }
 
+/// Build one constrained-generation baseline request for each question.
 fn generation_requests(backend: &StageOpenAiBackend, body: &Value) -> Result<Vec<Value>> {
     let request = serde_json::from_value(body.clone())?;
     let decision = crate::frontend::system_one::decision_request(&request)?;
@@ -62,6 +64,7 @@ fn generation_requests(backend: &StageOpenAiBackend, body: &Value) -> Result<Vec
         .collect()
 }
 
+/// Measure the constrained-generation baseline and retain its usage evidence.
 async fn sample_generation(backend: Arc<StageOpenAiBackend>, requests: &[Value]) -> Result<Value> {
     let started = std::time::Instant::now();
     let mut running = stream::iter(requests.iter().cloned().map(|request| {
@@ -94,6 +97,7 @@ async fn sample_generation(backend: Arc<StageOpenAiBackend>, requests: &[Value])
         "questions_per_second": requests.len() as f64 / seconds, "usage": usage}))
 }
 
+/// Measure an unsampled decision request and retain its scoring evidence.
 async fn sample_readout(backend: Arc<StageOpenAiBackend>, body: &Value) -> Result<Value> {
     let count = body["questions"].as_object().unwrap().len();
     let started = std::time::Instant::now();
@@ -107,6 +111,7 @@ async fn sample_readout(backend: Arc<StageOpenAiBackend>, body: &Value) -> Resul
         "usage": response["usage"], "readout_usage": response["readout_usage"]}))
 }
 
+/// Collect comparable baseline/readout measurements for a configured serving topology.
 async fn measure(
     config: StageConfig,
     split: bool,
@@ -171,6 +176,7 @@ async fn measure(
     )
 }
 
+/// Benchmark local and split execution with one and many independent questions.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires SKIPPY_DECISION_MODEL and SKIPPY_DECISION_BENCHMARK_REPORT"]
 async fn causal_decisions_benchmark_local_and_split_one_and_many() -> Result<()> {
