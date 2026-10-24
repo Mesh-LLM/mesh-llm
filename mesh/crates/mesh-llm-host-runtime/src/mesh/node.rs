@@ -4,8 +4,11 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 use serde_json::json;
 use std::net::SocketAddr;
 
+mod membership;
 mod routing_telemetry;
 mod startup;
+
+pub(crate) use membership::{MembershipEntry, MembershipNodeConfig, MeshMemberships};
 
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
@@ -209,6 +212,8 @@ pub struct Node {
     /// Set during runtime initialization; None when running outside the control loop.
     pub(crate) model_intent_tx:
         Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<crate::runtime::ModelIntent>>>>,
+    /// Further meshes this node serves its models into (`node::membership`).
+    pub(crate) memberships: MeshMemberships,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -913,6 +918,7 @@ impl Node {
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            memberships: MeshMemberships::default(),
         };
 
         node.maybe_start_control_listener(
@@ -1099,6 +1105,7 @@ impl Node {
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            memberships: MeshMemberships::default(),
         }
     }
 
@@ -1753,9 +1760,14 @@ impl Node {
         }
     }
 
-    /// Re-gossip our state to all connected peers.
+    /// Re-gossip our state to all connected peers, in this mesh and in every
+    /// mesh this node is a member of.
     /// Call after changing assigned/hosted state, role, or configured models.
     pub async fn regossip(&self) {
+        self.regossip_with_memberships().await;
+    }
+
+    async fn regossip_connections(&self) {
         let conns: Vec<(EndpointId, Connection)> = {
             let state = self.state.lock().await;
             state

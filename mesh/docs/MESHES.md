@@ -369,6 +369,17 @@ mesh-llm auth trust list
 mesh-llm auth trust remove <owner-id>
 ```
 
+## Serve one model into several meshes
+
+An embedded node can be a member of further meshes while it serves, without
+loading its models again: the Rust SDK's `MeshNode::add_membership`, described
+in the [SDK README](../crates/mesh-llm-sdk/README.md#serve-into-further-meshes).
+Each membership is a separate node identity with its own owner allowlist
+(always enforced), peers, gossip and loopback API port, sharing the serving
+node's models and hardware. Its peers do not see the serving node's own mesh or
+its other memberships, and requests from them run on the local model only.
+Memberships do not carry split-stage transport, plugins or owner control.
+
 ## Networking notes
 
 - Discovery uses Nostr relays by default.
