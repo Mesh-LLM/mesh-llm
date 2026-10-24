@@ -65,7 +65,7 @@ impl MeshNode {
 
     /// Serves this node's models into a further mesh, with its own identity,
     /// owner allowlist, peers and local API port, replacing a membership of
-    /// the same name. The models are not loaded again.
+    /// the same name, which stops first. The models are not loaded again.
     pub async fn add_membership(
         &self,
         config: MeshMembershipConfig,

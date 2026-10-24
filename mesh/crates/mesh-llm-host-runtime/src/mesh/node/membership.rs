@@ -31,15 +31,19 @@ pub(crate) struct MembershipNodeConfig<'a> {
 pub(crate) struct MembershipEntry {
     pub(crate) node: Node,
     pub(crate) api_port: u16,
-    pub(crate) tasks: Vec<tokio::task::AbortHandle>,
+    pub(crate) tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl MembershipEntry {
     /// Stops the membership's tasks, tells its peers it is leaving, and
-    /// closes its endpoint. The node it belongs to keeps serving.
+    /// closes its endpoint. The node it belongs to keeps serving. Returns once
+    /// the tasks are gone, so the membership's API port is free again.
     pub(crate) async fn close(self) {
         for task in &self.tasks {
             task.abort();
+        }
+        for task in self.tasks {
+            let _ = task.await;
         }
         self.node.broadcast_leaving().await;
         self.node.close_endpoint().await;
@@ -99,6 +103,23 @@ impl Node {
         self.regossip_connections().await;
         for node in self.memberships.nodes().await {
             node.regossip_connections().await;
+        }
+    }
+
+    /// Joins a membership's mesh by another member's invite token. Returns
+    /// `false`, without dialling, for this node's own token, which a list of
+    /// the mesh's members naturally includes. Signed tokens carry mesh
+    /// requirements, which a membership's mesh does not have, so they are
+    /// refused.
+    pub(crate) async fn join_membership(&self, invite_token: &str) -> Result<bool> {
+        match parse_invite_token(invite_token)
+            .map_err(|reason| anyhow::anyhow!("join rejected: {}", reason.code()))?
+        {
+            InviteTokenMaterial::Legacy(addr) if addr.id == self.endpoint.id() => Ok(false),
+            InviteTokenMaterial::Legacy(_) => self.join(invite_token).await.map(|()| true),
+            InviteTokenMaterial::Signed(_) => anyhow::bail!(
+                "join rejected: a membership joins by unsigned invite tokens; signed tokens carry mesh requirements"
+            ),
         }
     }
 

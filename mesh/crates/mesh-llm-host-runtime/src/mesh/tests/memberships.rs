@@ -152,3 +152,26 @@ async fn a_membership_needs_an_owner() -> Result<()> {
     assert!(format!("{error:#}").contains("owner key"), "{error:#}");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_membership_skips_its_own_token_and_refuses_signed_ones() -> Result<()> {
+    let me = test_owner_keypair(0x51, 0x52);
+    let node = owned_node(&me, &[&me]).await?;
+    let membership = membership_of(&node, &[&me]).await?;
+    assert!(
+        !membership
+            .join_membership(&membership.invite_token().await)
+            .await?
+    );
+
+    let host = owned_node(&me, &[&me]).await?;
+    install_requirement_policy(&host, &requirement_policy("trusted-signer")).await?;
+    let error = membership
+        .join_membership(&host.invite_token().await)
+        .await
+        .expect_err("a signed token carries requirements a membership lacks");
+    assert!(format!("{error:#}").contains("unsigned"), "{error:#}");
+    assert!(membership.requirement_mesh_state.lock().await.is_none());
+    assert!(peer_ids(&membership).await.is_empty());
+    Ok(())
+}
