@@ -217,11 +217,19 @@ impl Node {
         remote: EndpointId,
         protocol: ControlProtocol,
         stream_type: u8,
-        send: iroh::endpoint::SendStream,
-        recv: iroh::endpoint::RecvStream,
+        mut send: iroh::endpoint::SendStream,
+        mut recv: iroh::endpoint::RecvStream,
     ) -> Option<MeshBiStream> {
         let capture_streams = self.swarm_capture_enabled();
-        if stream_allowed_before_admission(stream_type, self.trust_policy) {
+        if self.full_model_only && !super::full_model_attachment_stream(stream_type) {
+            self.capture_stream_rejected(remote, stream_type, protocol, "full_model_only");
+            let _ = recv.stop(0u32.into());
+            let _ = send.reset(0u32.into());
+            return None;
+        }
+        if stream_allowed_before_admission(stream_type, self.trust_policy)
+            && (!self.full_model_only || stream_type == STREAM_GOSSIP)
+        {
             if capture_streams {
                 self.capture_stream_observation(remote, stream_type, protocol, true);
             }
@@ -243,6 +251,10 @@ impl Node {
                 stream_type,
                 remote.fmt_short()
             );
+            if self.full_model_only {
+                let _ = recv.stop(0u32.into());
+                let _ = send.reset(0u32.into());
+            }
             drop((send, recv));
             None
         }

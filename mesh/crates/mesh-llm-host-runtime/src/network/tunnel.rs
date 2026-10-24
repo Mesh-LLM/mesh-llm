@@ -13,6 +13,8 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 
 mod inbound_http;
+mod serving_attachment;
+pub(crate) use serving_attachment::start_serving_attachment;
 
 fn quic_response_first_byte_timeout() -> Duration {
     Duration::from_secs(5 * 60)

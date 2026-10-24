@@ -15,7 +15,7 @@ impl StageOpenAiBackend {
         ensure_chat_runtime_features_supported(&request)?;
         let options = chat_template_options(&request, &self.request_defaults)?;
         let prompt = self
-            .prepare_chat_prompt_offloaded(&request, options)
+            .prepare_chat_prompt_offloaded(&request, options, Default::default())
             .await?;
         if !prompt.media.is_empty() {
             return Err(InferenceError::unsupported(

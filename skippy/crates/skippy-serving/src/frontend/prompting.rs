@@ -6,6 +6,7 @@ use crate::frontend::generation::hook_injected_text;
 use crate::frontend::generation::mid_generation_window_should_fire;
 use crate::frontend::generation::parsed_chat_message_from_json;
 use crate::frontend::generation::request_allowed_tool_names;
+use crate::frontend::generation::run_blocking_generation_worker;
 use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::tool_emulation;
 use crate::frontend::util::openai_backend_error;
@@ -15,6 +16,7 @@ use serde_json::Value;
 use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::GenerationHookSignals;
 use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceRequestContext;
 use skippy_inference_api::InferenceResult;
 use skippy_inference_api::PrefillHookSignals;
 use skippy_inference_api::apply_chat_hook_outcome;
@@ -24,7 +26,6 @@ use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
 use skippy_runtime::MediaInput;
 use skippy_runtime::TokenSignal;
-use tokio::task;
 
 /// Output of a single chat-template application, before it is folded into a
 /// [`PreparedGenerationPrompt`].
@@ -48,14 +49,17 @@ impl StageOpenAiBackend {
         &self,
         request: &ChatCompletionRequest,
         options: ChatTemplateOptions,
+        context: InferenceRequestContext,
     ) -> InferenceResult<PreparedGenerationPrompt> {
         let backend = self.clone();
         let request = request.clone();
-        task::spawn_blocking(move || backend.prepare_chat_prompt(&request, options))
-            .await
-            .map_err(|error| {
-                InferenceError::backend(format!("chat prompt preparation task failed: {error}"))
-            })?
+        run_blocking_generation_worker((), context, move |_| {
+            backend.prepare_chat_prompt(&request, options)
+        })
+        .await
+        .map_err(|error| {
+            InferenceError::backend(format!("chat prompt preparation task failed: {error}"))
+        })?
     }
 
     pub(super) fn prepare_chat_prompt(

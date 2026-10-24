@@ -374,6 +374,8 @@ async fn make_test_node_with_requirements(
 
     let node = Node {
         adopted_membership_file: None,
+        identity_state_dir: None,
+        full_model_only: false,
         endpoint,
         endpoint_secret_key,
         public_addr: None,

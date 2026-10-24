@@ -9,6 +9,7 @@ pub mod composite_hooks;
 mod decisions;
 pub mod embeddings;
 pub mod errors;
+mod execution_scope;
 mod guardrails;
 pub mod hooks;
 pub mod http_exchange;
@@ -55,6 +56,7 @@ pub use embeddings::{
 pub use errors::{
     InferenceError, InferenceErrorKind, already_openai_error, map_upstream_error_body,
 };
+pub use execution_scope::{InferenceExecutionLease, InferenceExecutionScope};
 pub use guardrails::{
     CompactingInferenceBackend, CompactionConfig, CompactionDecision, CompactionOverride,
     CompactionReport, GuardedInferenceBackend, GuardrailMode, GuardrailPolicy,

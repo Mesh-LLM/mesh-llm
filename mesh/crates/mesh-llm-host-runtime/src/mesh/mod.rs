@@ -110,6 +110,7 @@ mod stage_transport_bridge;
 mod stun;
 mod weights_digest;
 
+pub(crate) use connections::parse_invite_token;
 use connections::*;
 pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use mesh_llm_membership::connection_reservation::*;
@@ -169,6 +170,7 @@ pub(crate) use mesh_llm_membership::{is_global_ipv4_candidate, is_public_ipv4_ca
 pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_local_fit_bytes,
 };
+pub(crate) use node::{NodeStartupSpec, ScopedNodeIdentity};
 pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
 pub(crate) use peer_state::{
     ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, http_routable_models,

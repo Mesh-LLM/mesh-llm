@@ -7,6 +7,7 @@ mod models;
 mod plugin_cli;
 mod runtime;
 mod setup;
+mod shared_serving;
 
 use anyhow::Result;
 use mesh_llm_cli::{Cli, Command};
@@ -76,6 +77,7 @@ fn apply_config_host_ram_offload(config_path: Option<&std::path::Path>) -> Resul
 
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
+        Command::ServeShared(args) => shared_serving::run(args).await,
         Command::Serve | Command::Client => Ok(()),
         Command::Wallet { port, command } => {
             mesh_llm_commands::wallet::run(command, *port, cli.config.as_deref()).await

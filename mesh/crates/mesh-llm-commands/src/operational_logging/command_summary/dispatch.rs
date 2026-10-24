@@ -23,6 +23,7 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             assembly.redact("--context-length", args.context_length.is_some());
         }
         Command::Serve => assembly.command.push_str(" serve"),
+        Command::ServeShared(_) => assembly.command.push_str(" serve-shared"),
         Command::Client => assembly.command.push_str(" client"),
         Command::Models { command } => models::format_models(command, assembly),
         Command::Runtime { command } => runtime::format_runtime(command.as_ref(), assembly),

@@ -923,6 +923,8 @@ pub enum Command {
     },
     /// Serve local models and join or publish a mesh.
     Serve,
+    /// Serve one loaded model to independent meshes with shared bounded capacity.
+    ServeShared(crate::shared_serving::SharedServingArgs),
     /// Run as a client-only mesh node with no local model required.
     Client,
     /// Manage model storage, migration, and update checks.

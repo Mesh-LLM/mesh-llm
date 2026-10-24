@@ -74,6 +74,9 @@ pub(crate) fn preflight_pushed_config_for_current_node_with_gpus(
 
 impl Node {
     fn membership_file(&self) -> Result<Option<std::path::PathBuf>> {
+        if let Some(path) = &self.adopted_membership_file {
+            return Ok(Some(path.clone()));
+        }
         #[cfg(test)]
         {
             Ok(self.adopted_membership_file.clone())
@@ -189,7 +192,10 @@ impl Node {
                 "requirement-aware meshes require an owner identity so the genesis policy and bootstrap token can be signed"
             )
         })?;
-        let path = mesh_genesis_policy_path()?;
+        let path = match &self.identity_state_dir {
+            Some(directory) => directory.join("mesh_genesis_policy.json"),
+            None => mesh_genesis_policy_path()?,
+        };
         match std::fs::read(&path) {
             Ok(serialized) => {
                 let existing =

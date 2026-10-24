@@ -75,6 +75,8 @@ pub struct InferenceRequestContext {
     exchange_id: Arc<OnceLock<String>>,
     stream_usage_observation: bool,
     trusted_agent_session: bool,
+    execution_scope: Option<crate::InferenceExecutionScope>,
+    execution_lease: Option<Arc<dyn crate::InferenceExecutionLease>>,
 }
 
 impl InferenceRequestContext {
@@ -116,6 +118,22 @@ impl InferenceRequestContext {
         self.trusted_agent_session
     }
 
+    /// Bind execution to a trusted backend owner's isolation and admission domain.
+    /// The HTTP adapters never populate these fields from client-supplied data.
+    pub fn with_execution_scope(
+        mut self,
+        scope: crate::InferenceExecutionScope,
+        lease: Arc<dyn crate::InferenceExecutionLease>,
+    ) -> Self {
+        self.execution_scope = Some(scope);
+        self.execution_lease = Some(lease);
+        self
+    }
+
+    pub fn execution_scope(&self) -> Option<crate::InferenceExecutionScope> {
+        self.execution_scope
+    }
+
     /// Return the frontend request identifier when the caller supplied one.
     pub fn request_id(&self) -> Option<RequestId> {
         self.request_id
@@ -152,6 +170,8 @@ impl Default for InferenceRequestContext {
             exchange_id: Arc::new(OnceLock::new()),
             stream_usage_observation: false,
             trusted_agent_session: false,
+            execution_scope: None,
+            execution_lease: None,
         }
     }
 }

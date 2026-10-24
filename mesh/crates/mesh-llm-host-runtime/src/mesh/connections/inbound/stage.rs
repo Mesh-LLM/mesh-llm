@@ -10,6 +10,10 @@ impl Node {
         if alpn != skippy_protocol::STAGE_ALPN_V2 {
             return false;
         }
+        if self.full_model_only {
+            conn.close(0u32.into(), b"full-model-only attachment");
+            return true;
+        }
         tracing::info!(
             "Inbound skippy stage connection from {}",
             remote.fmt_short()

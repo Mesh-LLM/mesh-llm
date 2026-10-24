@@ -228,6 +228,7 @@ pub(super) fn init_owner_runtime(
     owner_config: Option<&OwnerRuntimeConfig>,
     endpoint_id: EndpointId,
     hostname: Option<String>,
+    identity_directory: Option<&std::path::Path>,
 ) -> Result<OwnerRuntimeInit> {
     let trust_store = owner_config
         .map(|config| config.trust_store.clone())
@@ -236,12 +237,25 @@ pub(super) fn init_owner_runtime(
         .map(|config| config.trust_policy)
         .unwrap_or_default();
     let owner_attestation = match owner_config.and_then(|config| config.keypair.as_ref()) {
-        Some(keypair) => Some(load_or_refresh_owner_attestation(
-            keypair,
-            endpoint_id,
-            owner_config.and_then(|config| config.node_label.clone()),
-            hostname,
-        )?),
+        Some(keypair) => Some(match identity_directory {
+            Some(directory) => {
+                let attestation = sign_node_ownership(
+                    keypair,
+                    endpoint_id.as_bytes(),
+                    current_time_unix_ms() + DEFAULT_NODE_CERT_LIFETIME_SECS * 1000,
+                    owner_config.and_then(|config| config.node_label.clone()),
+                    hostname,
+                )?;
+                save_node_ownership(&directory.join("node-ownership.json"), &attestation)?;
+                attestation
+            }
+            None => load_or_refresh_owner_attestation(
+                keypair,
+                endpoint_id,
+                owner_config.and_then(|config| config.node_label.clone()),
+                hostname,
+            )?,
+        }),
         None => None,
     };
 

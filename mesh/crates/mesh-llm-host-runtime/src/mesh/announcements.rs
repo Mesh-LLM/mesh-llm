@@ -231,13 +231,13 @@ impl Node {
             genesis_policy: data.signed_genesis_policy,
             release_attestation: data.release_attestation,
             direct_admission_proof: data.direct_admission_proof,
-            artifact_transfer_supported: data.artifact_transfer_supported,
-            stage_protocol_generation_supported: true,
-            stage_status_list_supported: true,
-            local_gguf_content_id_supported: true,
-            // Advertised unconditionally: there is no build-time variability
-            // behind it, unlike artifact transfer.
-            decode_batch_policy_supported: true,
+            artifact_transfer_supported: !self.full_model_only && data.artifact_transfer_supported,
+            stage_protocol_generation_supported: !self.full_model_only,
+            stage_status_list_supported: !self.full_model_only,
+            local_gguf_content_id_supported: !self.full_model_only,
+            // Full-model attachments cannot participate in stage scheduling.
+            // Ordinary nodes support this independently of build features.
+            decode_batch_policy_supported: !self.full_model_only,
             advertised_model_throughput: data.advertised_model_throughput,
             #[cfg(feature = "payments")]
             lightning_offers: data.lightning_offers.into(),
