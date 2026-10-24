@@ -750,3 +750,13 @@ Also run what applies:
 Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
+
+## Rolling previews
+
+The main-only rolling-preview dispatcher reuses the canonical release pipeline,
+never a parallel packaging implementation. Preview versions must contain
+`-preview.` and leave main unchanged; all producer checkouts use metadata's
+frozen source SHA. Publish verified assets as a draft before exposing the
+complete prerelease, without marking it latest or invoking stable registries.
+Keep immutable preview tags and previous downloads; no automated deletion is
+part of the initial rollout. The schedule is Tuesday/Friday 03:23 UTC.

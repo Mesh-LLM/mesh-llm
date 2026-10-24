@@ -26,6 +26,8 @@ mod permissions;
 mod pr_canary;
 mod quality_contracts;
 mod registry_canary;
+mod rolling_preview;
+
 mod replay;
 mod replay_admission;
 mod replay_environment;

@@ -148,7 +148,7 @@ fn graph_release_metadata_trust_and_canonical_version_precede_runner_selection()
             "git merge-base --is-ancestor \"$GITHUB_SHA\" refs/remotes/origin/main",
             "Manual release tag already exists and is immutable",
             "git ls-remote --tags origin",
-            "Canary release: leaving main unchanged",
+            "Canary/preview release: leaving main unchanged",
             "does not contain its complete version update",
         ],
     );
