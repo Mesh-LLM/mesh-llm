@@ -8,6 +8,7 @@ pub mod wallet_switch;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
@@ -20,6 +21,8 @@ use crate::pricing::Pricing;
 use crate::wallet::{PaymentStatus, Transaction};
 
 const DAY_MS: u64 = 86_400_000;
+/// Settings key holding the per-model admission deposits as a JSON map.
+const MODEL_ADMISSION_DEPOSITS: &str = "model_admission_deposits_msat";
 
 pub use mesh_llm_payments_types::RequestTerms;
 pub use mesh_llm_payments_types::control::{ApprovalMode, Policy};
@@ -77,8 +80,8 @@ impl Ledger {
     }
 
     /// The operator's minimum payment in msat (default 1 sat): the seller's
-    /// deposit and sub-minimum final round-up, and the largest seller minimum
-    /// this node will pay as a buyer.
+    /// sub-minimum final round-up, and the largest seller minimum this node
+    /// will pay as a buyer.
     pub fn min_payment_msat(&self) -> Result<u64> {
         Ok(match self.get_setting("min_payment_msat")? {
             Some(value) => value.parse()?,
@@ -89,6 +92,73 @@ impl Ledger {
     pub fn set_min_payment_msat(&self, floor_msat: u64) -> Result<()> {
         mesh_llm_payments_types::metering::validate_payment_floor(floor_msat)?;
         self.set_setting("min_payment_msat", &floor_msat.to_string())
+    }
+
+    /// The operator's node-wide admission deposit in msat: what this node
+    /// asks, as a seller, of peers outside its trust cache for a model with no
+    /// deposit of its own, and the largest seller deposit it will pay as a
+    /// buyer. Unset, it follows the minimum payment; it is never below it,
+    /// because the deposit is itself a Lightning payment.
+    pub fn admission_deposit_msat(&self) -> Result<u64> {
+        let floor_msat = self.min_payment_msat()?;
+        Ok(match self.get_setting("admission_deposit_msat")? {
+            Some(value) => value.parse::<u64>()?.max(floor_msat),
+            None => floor_msat,
+        })
+    }
+
+    pub fn set_admission_deposit_msat(&self, deposit_msat: u64) -> Result<()> {
+        self.validate_admission_deposit(deposit_msat)?;
+        self.set_setting("admission_deposit_msat", &deposit_msat.to_string())
+    }
+
+    /// The deposit this seller asks for `model`: the model's own deposit when
+    /// one is set, otherwise the node-wide one, never below the minimum payment.
+    pub fn model_admission_deposit_msat(&self, model: &str) -> Result<u64> {
+        match self.model_admission_deposits()?.get(model) {
+            Some(&deposit_msat) => Ok(deposit_msat.max(self.min_payment_msat()?)),
+            None => self.admission_deposit_msat(),
+        }
+    }
+
+    /// Per-model admission deposits, as configured (before the minimum
+    /// payment raises any of them).
+    pub fn model_admission_deposits(&self) -> Result<BTreeMap<String, u64>> {
+        self.get_setting(MODEL_ADMISSION_DEPOSITS)?
+            .map_or_else(|| Ok(BTreeMap::new()), |v| Ok(serde_json::from_str(&v)?))
+    }
+
+    /// Set, or with `None` clear, the deposit for one priced model.
+    pub fn set_model_admission_deposit_msat(
+        &self,
+        model: &str,
+        deposit_msat: Option<u64>,
+    ) -> Result<()> {
+        let mut deposits = self.model_admission_deposits()?;
+        match deposit_msat {
+            Some(deposit_msat) => {
+                ensure!(
+                    self.pricing()?.contains_key(model),
+                    "set model input/output rates before a deposit"
+                );
+                self.validate_admission_deposit(deposit_msat)?;
+                deposits.insert(model.to_owned(), deposit_msat);
+            }
+            None => {
+                deposits.remove(model);
+            }
+        }
+        self.set_setting(MODEL_ADMISSION_DEPOSITS, &serde_json::to_string(&deposits)?)
+    }
+
+    fn validate_admission_deposit(&self, deposit_msat: u64) -> Result<()> {
+        mesh_llm_payments_types::metering::validate_deposit(deposit_msat)?;
+        let floor_msat = self.min_payment_msat()?;
+        ensure!(
+            deposit_msat >= floor_msat,
+            "deposit must be at least the minimum payment ({floor_msat} msat)"
+        );
+        Ok(())
     }
 
     pub(crate) fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -121,11 +191,16 @@ impl Ledger {
         } else {
             self.lock()?
                 .execute("DELETE FROM pricing WHERE model=?", [model])?;
+            // A free model asks no deposit; repricing it later starts from
+            // the node-wide one.
+            if self.model_admission_deposits()?.contains_key(model) {
+                self.set_model_admission_deposit_msat(model, None)?;
+            }
         }
         Ok(())
     }
 
-    pub fn pricing(&self) -> Result<std::collections::BTreeMap<String, Pricing>> {
+    pub fn pricing(&self) -> Result<BTreeMap<String, Pricing>> {
         let connection = self.lock()?;
         let mut statement = connection.prepare("SELECT model,value FROM pricing ORDER BY model")?;
         let rows =

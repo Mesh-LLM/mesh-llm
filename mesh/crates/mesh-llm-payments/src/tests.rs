@@ -482,3 +482,90 @@ async fn min_payment_control_reads_defaults_sets_and_validates_offline() -> Resu
     assert_eq!(service.ledger.min_payment_msat()?, 5000);
     Ok(())
 }
+
+#[tokio::test]
+async fn admission_deposit_control_follows_the_minimum_until_set_and_never_drops_below_it()
+-> Result<()> {
+    use mesh_llm_payments_types::control::ControlCommand;
+    let dir = tempfile::tempdir()?;
+    let service = PaymentService::open(dir.path())?;
+    let read = service
+        .control(ControlCommand::AdmissionDeposit { value_msat: None })
+        .await?;
+    assert_eq!(read["admission_deposit_msat"], 1000);
+    service.ledger.set_min_payment_msat(2000)?;
+    assert_eq!(
+        service.ledger.admission_deposit_msat()?,
+        2000,
+        "unset follows the minimum"
+    );
+    let set = service
+        .control(ControlCommand::AdmissionDeposit {
+            value_msat: Some(10_000),
+        })
+        .await?;
+    assert_eq!(set["admission_deposit_msat"], 10_000);
+    assert_eq!(
+        service.ledger.min_payment_msat()?,
+        2000,
+        "minimum unchanged"
+    );
+    for invalid in [0, 1999, 1_000_001] {
+        assert!(
+            service
+                .control(ControlCommand::AdmissionDeposit {
+                    value_msat: Some(invalid),
+                })
+                .await
+                .is_err(),
+            "{invalid}"
+        );
+    }
+    // A minimum raised above a configured deposit raises the deposit with it.
+    service.ledger.set_min_payment_msat(20_000)?;
+    assert_eq!(service.ledger.admission_deposit_msat()?, 20_000);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_model_deposit_overrides_the_node_wide_one_until_cleared() -> Result<()> {
+    use mesh_llm_payments_types::control::ControlCommand;
+    let dir = tempfile::tempdir()?;
+    let service = PaymentService::open(dir.path())?;
+    let set_model = |value_msat| ControlCommand::SetModelAdmissionDeposit {
+        model: "big".into(),
+        value_msat,
+    };
+    assert!(
+        service.control(set_model(Some(5000))).await.is_err(),
+        "an unpriced model has no deposit"
+    );
+    let price = Pricing {
+        input_msat_per_million: 1,
+        output_msat_per_million: 1,
+        cache_discount_percent: 0,
+    };
+    service.ledger.set_pricing("big", Some(&price))?;
+    service.ledger.set_pricing("small", Some(&price))?;
+    service.ledger.set_admission_deposit_msat(2000)?;
+    let status = service.control(set_model(Some(5000))).await?;
+    assert_eq!(
+        status,
+        serde_json::json!({"admission_deposit_msat": 2000, "models": {"big": 5000}})
+    );
+    assert_eq!(service.ledger.model_admission_deposit_msat("big")?, 5000);
+    assert_eq!(service.ledger.model_admission_deposit_msat("small")?, 2000);
+    assert!(service.control(set_model(Some(999))).await.is_err());
+    // A model deposit is never below the minimum payment either.
+    service.ledger.set_min_payment_msat(8000)?;
+    assert_eq!(service.ledger.model_admission_deposit_msat("big")?, 8000);
+    service.ledger.set_min_payment_msat(1000)?;
+    let cleared = service.control(set_model(None)).await?;
+    assert_eq!(cleared["models"], serde_json::json!({}));
+    assert_eq!(service.ledger.model_admission_deposit_msat("big")?, 2000);
+    // Making a model free drops its deposit.
+    service.control(set_model(Some(5000))).await?;
+    service.ledger.set_pricing("big", None)?;
+    assert!(service.ledger.model_admission_deposits()?.is_empty());
+    Ok(())
+}
