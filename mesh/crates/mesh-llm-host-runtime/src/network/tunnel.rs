@@ -107,6 +107,35 @@ impl Manager {
     }
 }
 
+/// Serves a mesh membership's inbound HTTP tunnel streams through the same
+/// in-process ingress as the node it belongs to, until the channel closes or
+/// the task is aborted. A membership carries no stage transport, so it has no
+/// [`Manager`].
+pub(crate) async fn serve_membership_http_ingress(
+    node: Node,
+    mut tunnel_http_rx: tokio::sync::mpsc::Receiver<(
+        EndpointId,
+        iroh::endpoint::SendStream,
+        iroh::endpoint::RecvStream,
+    )>,
+    targets: tokio::sync::watch::Receiver<crate::inference::election::ModelTargets>,
+    affinity: crate::network::affinity::AffinityRouter,
+) {
+    let ingress = HttpIngress { targets, affinity };
+    while let Some((remote, send, recv)) = tunnel_http_rx.recv().await {
+        let node = node.clone();
+        let ingress = ingress.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                inbound_http::handle_inbound_http_stream(node, remote, send, recv, Some(ingress))
+                    .await
+            {
+                tracing::warn!("Inbound membership HTTP tunnel stream error: {e}");
+            }
+        });
+    }
+}
+
 async fn handle_inbound_stage_transport(
     node: Node,
     remote: EndpointId,

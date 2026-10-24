@@ -51,6 +51,44 @@ startup. Embedded node startup only loads a compatible cached
 runtime; it never downloads one. Install before starting a serving node when
 the cache has no matching runtime.
 
+## Serve into further meshes
+
+A serving node can serve the models it has loaded into further meshes without
+loading them again. Each membership gets its own node identity, owner
+allowlist, peers and loopback OpenAI API port, and its peers never learn about
+the node's other meshes. Requests from a membership's peers run on this node's
+model only; requests to a membership's API port route among this node and that
+mesh's peers only.
+
+```rust,no_run
+use mesh_llm_sdk::{MeshMembershipConfig, MeshNode};
+
+async fn share(node: &MeshNode, team_owner_ids: Vec<String>, team_tokens: Vec<String>)
+    -> anyhow::Result<()> {
+    let team = node
+        .add_membership(MeshMembershipConfig {
+            name: "team".into(),
+            join_tokens: team_tokens,
+            trusted_owners: team_owner_ids,
+            api_port: 9338,
+            node_key_path: None,
+            enumerate_host: false,
+        })
+        .await?;
+    // Other members join this node by `team.invite_token`; requests to
+    // `team.api_base_url` may run on any of them.
+    println!("{} {}", team.api_base_url, team.invite_token);
+    node.remove_membership("team").await?;
+    Ok(())
+}
+```
+
+A membership needs an owner key (`owner_key`), since its peers admit it by
+owner. Adding a membership with a name already in use replaces it, which is how
+to change its allowlist or tokens. To keep the node's own API port to the local
+models only, start the node without join tokens and with an `Allowlist` trust
+policy that lists no other owners.
+
 ## Live transcription
 
 A node serving a speech-recognition model (Whisper) transcribes live audio.

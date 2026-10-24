@@ -8,7 +8,8 @@ pub use mesh_llm_host_runtime::sdk::{
     EmbeddedMeshNodeStatus, EmbeddedMeshRequirementsConfig, EmbeddedMeshServingConfig,
     EmbeddedMeshStorageConfig, EmbeddedOpenAiResponse, EmbeddedOpenAiStream, EmbeddedServeConfig,
     EmbeddedServeHandle, EmbeddedServeMode, EmbeddedServeStatus, EmbeddedServingController,
-    EmbeddedSseEvent, EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
+    EmbeddedSseEvent, EmbeddedTrustPolicy, MeshMembershipConfig, MeshMembershipStatus,
+    SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
 };
 #[cfg(not(feature = "payments"))]
 pub use mesh_llm_host_runtime::sdk::{start_embedded_node, start_embedded_serve};
