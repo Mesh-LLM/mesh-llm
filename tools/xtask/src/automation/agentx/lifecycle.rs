@@ -43,19 +43,33 @@ fn llama_cache_ram_mib() -> DynResult<Option<u32>> {
     }
 }
 
-fn llama_kv_layout_arguments(value: Option<&str>) -> DynResult<Vec<String>> {
+fn llama_kv_layout_arguments(
+    value: Option<&str>,
+    matched_slot_context: bool,
+) -> DynResult<Vec<String>> {
     match value {
         None => Ok(Vec::new()),
-        Some("1" | "true") => Ok(vec!["--kv-unified".into()]),
+        Some("1" | "true") => {
+            let mut arguments = vec!["--kv-unified".into()];
+            if matched_slot_context {
+                arguments.extend([
+                    "--kv-unified-per-slot".into(),
+                    trace_context::LIMIT.to_string(),
+                ]);
+            }
+            Ok(arguments)
+        }
         Some("0" | "false") => Ok(vec!["--no-kv-unified".into()]),
         Some(_) => Err(format!("{LLAMA_KV_UNIFIED_ENV} must be 0, 1, false, or true").into()),
     }
 }
 
-fn llama_kv_layout_override() -> DynResult<Vec<String>> {
+fn llama_kv_layout_override(matched_slot_context: bool) -> DynResult<Vec<String>> {
     match std::env::var(LLAMA_KV_UNIFIED_ENV) {
-        Ok(value) => llama_kv_layout_arguments(Some(&value)),
-        Err(std::env::VarError::NotPresent) => llama_kv_layout_arguments(None),
+        Ok(value) => llama_kv_layout_arguments(Some(&value), matched_slot_context),
+        Err(std::env::VarError::NotPresent) => {
+            llama_kv_layout_arguments(None, matched_slot_context)
+        }
         Err(error) => Err(format!("{LLAMA_KV_UNIFIED_ENV}: {error}").into()),
     }
 }
@@ -152,6 +166,14 @@ fn launch_microbatch_tokens(arguments: &[String], engine: &str) -> DynResult<usi
     pair[1]
         .parse::<usize>()
         .map_err(|error| format!("invalid {flag} argument: {error}").into())
+}
+
+fn agentx_limits(seconds: u64) -> process::Limits {
+    let mut limits = command::limits(seconds);
+    // A model with a large KV allocation can need more than the generic 15 s
+    // grace period to unload after the worker has completed its trace.
+    limits.graceful_shutdown = Duration::from_secs(90);
+    limits
 }
 
 fn server(
@@ -253,7 +275,10 @@ fn server(
         args.extend(skippy_overrides()?);
     }
     if engine == "llama" {
-        args.extend(llama_kv_layout_override()?);
+        args.extend(llama_kv_layout_override(matches!(
+            input.profile,
+            Profile::Comparison | Profile::Contention
+        ))?);
     }
     let mut spec = command::spec(&input.root, binary.to_str().ok_or("server path")?, &args)?;
     if engine == "skippy" {
@@ -364,7 +389,7 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
         policy: ExpectedExit::new(&[0], Duration::from_secs(seconds))?,
     };
     drop(listener);
-    let report = super::super::retained_session::run(&mut owner, &command::limits(seconds));
+    let report = super::super::retained_session::run(&mut owner, &agentx_limits(seconds));
     if let Some(decisions) = owner.cache_decisions.as_ref() {
         write(&input.output.join("cache-decisions.json"), decisions)?;
     }
@@ -394,7 +419,22 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
         });
     write(
         &input.output.join("lifecycle.json"),
-        &json!({"clean":clean,"cleanup_complete":report.members.iter().all(|m| m.process.cleanup.complete),"outcome":format!("{:?}",report.outcome)}),
+        &json!({
+            "clean":clean,
+            "cleanup_complete":report.members.iter().all(|m| m.process.cleanup.complete),
+            "outcome":format!("{:?}",report.outcome),
+            "failure":report.failure.as_ref().map(ToString::to_string),
+            "members":report.members.iter().map(|member| json!({
+                "member":format!("{:?}",member.member),
+                "disposition":member.disposition.label(),
+                "status":member.process.status.and_then(|status| status.code()),
+                "cleanup_complete":member.process.cleanup.complete,
+                "cleanup_forced":member.process.cleanup.forced,
+                "graceful_signal_failed":member.process.cleanup.graceful_signal_failed,
+                "cleanup_failure":member.process.cleanup.failure.as_ref().map(ToString::to_string),
+                "process_failure":member.process.failure.as_ref().map(ToString::to_string),
+            })).collect::<Vec<_>>(),
+        }),
     )?;
     if !clean {
         return Err(format!("{engine} c{concurrency} failed; partial artifacts retained").into());
@@ -451,8 +491,9 @@ fn launch_identity(
         "runtime_tree_sha256":crate::product::digest::tree_sha256(&runtime).map_err(|error|error.error)?,
         "harness_lock_sha256":crate::product::digest::file_sha256(&input.root.join("skippy/evals/agentx/uv.lock")).map_err(|error|error.error)?,
         "capacity_policy":if llama_unified_kv { "diagnostic_unified_kv_common_128k_trace_limit" } else if skippy_kv_unified == Some(false) { "auto_capacity_explicit_separate_kv" } else { super::capacity::policy(engine, input.profile) },
-        "context_tokens":matched_llama_context.map(|total| if llama_unified_kv { u64::from(total) } else { trace_context::LIMIT }),
+        "context_tokens":matched_llama_context.map(|_| trace_context::LIMIT),
         "total_context_tokens":matched_llama_context,
+        "kv_unified_per_slot_context_tokens":if llama_unified_kv && matched_llama_context.is_some() { Some(trace_context::LIMIT) } else { None },
         "llama_kv_unified":if engine == "llama" { Some(llama_unified_kv) } else { None },
         "skippy_kv_unified":skippy_kv_unified,
         "generation_slots":null,"offered_sessions":concurrency,
@@ -703,21 +744,28 @@ mod tests {
 
     #[test]
     fn llama_kv_layout_control_is_explicit_and_rejects_invalid_values() {
-        assert!(llama_kv_layout_arguments(None).unwrap().is_empty());
+        assert!(llama_kv_layout_arguments(None, true).unwrap().is_empty());
         for value in ["1", "true"] {
             assert_eq!(
-                llama_kv_layout_arguments(Some(value)).unwrap(),
+                llama_kv_layout_arguments(Some(value), true).unwrap(),
+                ["--kv-unified", "--kv-unified-per-slot", "131072"]
+            );
+            assert_eq!(
+                llama_kv_layout_arguments(Some(value), false).unwrap(),
                 ["--kv-unified"]
             );
         }
         for value in ["0", "false"] {
             assert_eq!(
-                llama_kv_layout_arguments(Some(value)).unwrap(),
+                llama_kv_layout_arguments(Some(value), true).unwrap(),
                 ["--no-kv-unified"]
             );
         }
         for value in ["", "on", "off", "2"] {
-            assert!(llama_kv_layout_arguments(Some(value)).is_err(), "{value}");
+            assert!(
+                llama_kv_layout_arguments(Some(value), true).is_err(),
+                "{value}"
+            );
         }
     }
 

@@ -84,12 +84,17 @@ and recorded think times remain intact.
 
 For this profile only, llama starts with `--ctx-size = 131072 * --parallel`,
 giving each non-unified slot the same 128K ceiling as the selected workload.
+An explicit llama unified-KV control also sets `--kv-unified-per-slot 131072`:
+the shared pool keeps the same total size while the advertised slot limit
+matches the cohort.
 Skippy keeps its automatic planner and 128K cap. This avoids charging llama
 for an unused 262K native slot on Qwen3 models; the server's observed slot
 capacity and each engine's memory footprint remain reportable evidence.
 The runner rejects a llama comparison cell unless its server log confirms
 the expected slot count and 131,072-token context per slot; rejected cells
 publish no throughput point.
+AgentX retains a per-member process receipt in `lifecycle.json`; a completed
+trace still fails qualification if its server requires forced shutdown.
 
 | Trace ID | Source requests | Requested output tokens | Peak input tokens |
 |---|---:|---:|---:|
@@ -158,8 +163,10 @@ llama-versus-Skippy ABBAAB qualification.
 To isolate hybrid-model KV layout, set `AGENTX_SKIPPY_KV_UNIFIED=false` on the
 native AgentX runner. The runner passes `--kv-cache-unified=false` only to the
 Skippy server and records the explicit layout in `launch.json`; unset keeps the
-normal automatic layout. Compare against a same-source, same-host default-layout
-run before treating the change as a throughput improvement.
+normal automatic layout. Separate KV permits independent lane prefills to
+interleave; unified KV keeps the serialized prefill turn. Compare against a
+same-source, same-host default-layout run before treating the change as a
+throughput improvement.
 
 ## Contention diagnostic, smoke, and full profiles
 

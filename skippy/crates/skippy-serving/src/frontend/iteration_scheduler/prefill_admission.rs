@@ -12,6 +12,20 @@ pub(super) struct PrefillAdmission {
 }
 
 impl PrefillAdmission {
+    pub(super) fn acquire_for_layout(
+        &self,
+        kv_unified: Option<bool>,
+        deadline: Instant,
+        cancellation: Option<&CancellationToken>,
+    ) -> InferenceResult<Option<PrefillTurn<'_>>> {
+        // Separate KV streams isolate each lane's allocator. Only a shared
+        // unified allocator needs a turn held across the entire suffix.
+        if kv_unified == Some(false) {
+            return Ok(None);
+        }
+        self.acquire(deadline, cancellation).map(Some)
+    }
+
     pub(super) fn acquire(
         &self,
         deadline: Instant,
@@ -162,5 +176,26 @@ mod tests {
         });
         assert!(admission.waiting.lock().unwrap().is_empty());
         assert!(admission.acquire(deadline(), None).is_ok());
+    }
+
+    #[test]
+    fn separate_kv_prefill_can_enter_while_a_unified_turn_is_held() {
+        let admission = PrefillAdmission::default();
+        let first = admission
+            .acquire_for_layout(Some(true), deadline(), None)
+            .unwrap();
+        assert!(first.is_some());
+        let separate = admission
+            .acquire_for_layout(Some(false), Instant::now(), None)
+            .unwrap();
+        assert!(separate.is_none());
+        assert_eq!(admission.waiting.lock().unwrap().len(), 1);
+        drop(first);
+        assert!(
+            admission
+                .acquire_for_layout(None, deadline(), None)
+                .unwrap()
+                .is_some()
+        );
     }
 }
