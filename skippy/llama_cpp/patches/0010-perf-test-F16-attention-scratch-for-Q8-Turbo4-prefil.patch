@@ -4,13 +4,6 @@ Date: Sat, 24 Oct 2026 21:47:12 +1100
 Subject: [PATCH] perf: test precise tensor probabilities for Q8 Turbo4 prefill
 
 ---
- ggml/src/ggml-metal/ggml-metal-device.cpp   | 19 +++++++-
- ggml/src/ggml-metal/ggml-metal-ops.cpp      | 15 ++++--
- ggml/src/ggml-metal/kernels/fa_tensor.metal | 53 +++++++++++++++++----
- tests/test-backend-ops-skippy-turbo4.h      | 22 +++++++++
- tests/test-backend-ops.cpp                  |  1 +
- 5 files changed, 95 insertions(+), 15 deletions(-)
-
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
 index e2025d377..ec9747dbc 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.cpp
@@ -51,7 +44,7 @@ index e2025d377..ec9747dbc 100644
  
          ggml_metal_cv_free(cv);
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 7abf156a0..183cc3112 100644
+index 7abf156a0..8bd501704 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -3153,7 +3153,7 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
@@ -63,18 +56,22 @@ index 7abf156a0..183cc3112 100644
              op->src[0]->ne[0] == 128 && op->src[1]->ne[0] == 128 && op->src[2]->ne[0] == 128 &&
              op->src[0]->ne[1] >= 32;
      }
-@@ -3181,7 +3181,9 @@ static bool ggml_metal_op_flash_attn_ext_use_kv_f16(const ggml_tensor * op) {
+@@ -3181,7 +3181,13 @@ static bool ggml_metal_op_flash_attn_ext_use_kv_f16(const ggml_tensor * op) {
  
  static bool ggml_metal_op_flash_attn_ext_use_tensor(const ggml_tensor * op, bool has_tensor) {
      assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 -    if (op->src[2]->type == GGML_TYPE_TURBO4_0) {
++    // Keep weight matmul routing unchanged when testing attention arithmetic.
++    if (getenv("GGML_METAL_FLASH_ATTN_TENSOR_DISABLE")) {
++        return false;
++    }
 +    if (op->src[2]->type == GGML_TYPE_TURBO4_0 &&
 +        (op->src[1]->type != GGML_TYPE_Q8_0 || !ggml_metal_op_flash_attn_ext_use_kv_f16(op) ||
 +         getenv("GGML_METAL_TURBO4_Q8_TENSOR_DISABLE"))) {
          return false;
      }
  
-@@ -3674,9 +3676,12 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -3674,9 +3680,12 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
  
      if (!use_sparse && ggml_metal_op_flash_attn_ext_use_tensor(op, props_dev->has_tensor)) {
          // tensor API kernel
@@ -88,7 +85,7 @@ index 7abf156a0..183cc3112 100644
  
          if (has_mask) {
              assert(ggml_metal_op_flash_attn_ext_extra_blk(op) != 0);
-@@ -3745,8 +3750,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+@@ -3745,8 +3754,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
              /*.logit_softcap =*/ logit_softcap,
          };
  
@@ -274,6 +271,3 @@ index 679476ffa..df9f73352 100644
      add_turbo_wht_decode_tests(test_cases);
      add_turbo4_write_byte_tests(test_cases);
      for (int gqa : {2, 4}) {
--- 
-2.56.0
-
