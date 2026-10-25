@@ -9,66 +9,6 @@ Validation: source review and git diff --check only; native build and runtime qu
 
 Assisted-by: Codex
 ---
- ggml/include/ggml-rpc.h                       |   4 +-
- ggml/include/ggml.h                           |  10 +-
- ggml/src/CMakeLists.txt                       |   1 +
- ggml/src/ggml-common.h                        |   8 +
- ggml/src/ggml-cpu/CMakeLists.txt              |   1 +
- ggml/src/ggml-cpu/ggml-cpu.c                  |  32 ++
- ggml/src/ggml-cpu/ggml-cpu.cpp                |  13 +
- ggml/src/ggml-cpu/ops.cpp                     |   1 +
- ggml/src/ggml-cpu/ops.h                       |   2 +
- ggml/src/ggml-cpu/turbo4.cpp                  |  67 +++
- ggml/src/ggml-metal/CMakeLists.txt            |  13 +-
- ggml/src/ggml-metal/ggml-metal-device.cpp     |  41 +-
- ggml/src/ggml-metal/ggml-metal-device.h       |   7 +-
- ggml/src/ggml-metal/ggml-metal-device.m       |  61 +++
- ggml/src/ggml-metal/ggml-metal-fusion.cpp     |  10 +
- ggml/src/ggml-metal/ggml-metal-fusion.h       |   1 +
- ggml/src/ggml-metal/ggml-metal-impl.h         |   5 +
- ggml/src/ggml-metal/ggml-metal-ops.cpp        | 181 +++++--
- ggml/src/ggml-metal/ggml-metal-ops.h          |   1 +
- .../src/ggml-metal/ggml-metal-turbo4-fusion.h |  25 +
- .../src/ggml-metal/ggml-metal-turbo4-reduce.h |  35 ++
- ggml/src/ggml-metal/kernels/fa_aux.metal      |   2 +
- ggml/src/ggml-metal/kernels/fa_turbo4.metal   |  16 +
- .../ggml-metal/kernels/fa_vec_common.metal    |   8 +-
- .../ggml-metal/kernels/fa_vec_turbo4.metal    | 508 ++++++++++++++++++
- ggml/src/ggml-metal/kernels/turbo4.h          | 113 ++++
- ggml/src/ggml-metal/kernels/turbo4.metal      | 350 ++++++++++++
- ggml/src/ggml-quants.c                        |  10 +
- ggml/src/ggml-quants.h                        |   4 +
- ggml/src/ggml-rpc/ggml-rpc.cpp                |  10 +-
- ggml/src/ggml-turbo4.c                        | 164 ++++++
- ggml/src/ggml.c                               |  45 +-
- src/llama-graph.cpp                           |  11 +
- src/llama-kv-cache.cpp                        |  39 +-
- tests/test-backend-ops-skippy-turbo4.h        | 192 +++++++
- tests/test-backend-ops-turbo4-centroids.h     | 209 +++++++
- .../test-backend-ops-turbo4-decode-inverse.h  |  76 +++
- tests/test-backend-ops-turbo4-gqa.h           | 174 ++++++
- tests/test-backend-ops-turbo4-write-bytes.h   | 197 +++++++
- tests/test-backend-ops-wht-decode.h           | 103 ++++
- tests/test-backend-ops.cpp                    |  26 +
- tests/test-quantize-fns.cpp                   |   8 +
- tests/test-turbo4-codec.h                     |  81 +++
- 43 files changed, 2797 insertions(+), 68 deletions(-)
- create mode 100644 ggml/src/ggml-cpu/turbo4.cpp
- create mode 100644 ggml/src/ggml-metal/ggml-metal-turbo4-fusion.h
- create mode 100644 ggml/src/ggml-metal/ggml-metal-turbo4-reduce.h
- create mode 100644 ggml/src/ggml-metal/kernels/fa_turbo4.metal
- create mode 100644 ggml/src/ggml-metal/kernels/fa_vec_turbo4.metal
- create mode 100644 ggml/src/ggml-metal/kernels/turbo4.h
- create mode 100644 ggml/src/ggml-metal/kernels/turbo4.metal
- create mode 100644 ggml/src/ggml-turbo4.c
- create mode 100644 tests/test-backend-ops-skippy-turbo4.h
- create mode 100644 tests/test-backend-ops-turbo4-centroids.h
- create mode 100644 tests/test-backend-ops-turbo4-decode-inverse.h
- create mode 100644 tests/test-backend-ops-turbo4-gqa.h
- create mode 100644 tests/test-backend-ops-turbo4-write-bytes.h
- create mode 100644 tests/test-backend-ops-wht-decode.h
- create mode 100644 tests/test-turbo4-codec.h
-
 diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
 index 482bd3666..ecf0a3a6d 100644
 --- a/ggml/include/ggml-rpc.h
@@ -421,7 +361,7 @@ index a6d145e69..89c16edb0 100644
              VERBATIM
          )
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
-index 2c7972b0a..e2025d377 100644
+index 2c7972b0a..4d00f9861 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
 @@ -162,7 +162,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_get_rows(ggml_me
@@ -433,16 +373,36 @@ index 2c7972b0a..e2025d377 100644
      char base[256];
      char name[256];
  
-@@ -170,7 +170,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_set_rows(ggml_me
+@@ -170,12 +170,25 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_set_rows(ggml_me
      const auto tidx = op->src[1]->type;
      const auto tdst = op->type;
  
 -    snprintf(base, 256, "kernel_set_rows_%s_%s_%s", ggml_type_name(tsrc), ggml_type_name(tidx), ggml_type_name(tdst));
+-    snprintf(name, 256, "%s", base);
 +    snprintf(base, 256, "kernel_set_rows_%s_%s_%s%s", ggml_type_name(tsrc), ggml_type_name(tidx), ggml_type_name(tdst), cooperative ? "_simd" : "");
-     snprintf(name, 256, "%s", base);
++    const bool turbo4 = tdst == GGML_TYPE_TURBO4_0;
++    const bool original_norm = turbo4 && getenv("GGML_TURBO4_ORIGINAL_NORM") != nullptr;
++    if (turbo4) {
++        snprintf(name, 256, "%s_original_norm=%d", base, original_norm ? 1 : 0);
++    } else {
++        snprintf(name, 256, "%s", base);
++    }
  
      ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
-@@ -1793,12 +1793,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_p
+     if (!res.pipeline) {
+-        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
++        ggml_metal_cv_t cv = turbo4 ? ggml_metal_cv_init() : nullptr;
++        if (cv) {
++            ggml_metal_cv_set_bool(cv, original_norm, FC_TURBO4_SET_ROWS + 0);
++        }
++        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
++        if (cv) {
++            ggml_metal_cv_free(cv);
++        }
+     }
+ 
+     return res;
+@@ -1793,12 +1806,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_p
  
  ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_kv_f16(
          ggml_metal_library_t lib,
@@ -457,7 +417,7 @@ index 2c7972b0a..e2025d377 100644
  
      ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, base);
      if (!res.pipeline) {
-@@ -1918,6 +1916,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
+@@ -1918,6 +1929,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
              type,
              dk,
              dv);
@@ -467,7 +427,7 @@ index 2c7972b0a..e2025d377 100644
  
      snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d",
              base,
-@@ -1990,8 +1991,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
+@@ -1990,8 +2004,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
          int32_t nwg,
          bool    use_kv_f16,
          int32_t ns10,
@@ -479,7 +439,7 @@ index 2c7972b0a..e2025d377 100644
  
      char base[256];
      char name[256];
-@@ -2012,6 +2015,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
+@@ -2012,6 +2028,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
              dk,
              dv,
              qne_suffix);
@@ -493,7 +453,7 @@ index 2c7972b0a..e2025d377 100644
  
      snprintf(name, 256, "%s_mask=%d_sink=%d_bias=%d_scap=%d_kvpad=%d_sparse=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
              base,
-@@ -2030,14 +2040,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
+@@ -2030,14 +2053,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
          ggml_metal_cv_t cv = ggml_metal_cv_init();
  
          ggml_metal_cv_set_bool(cv, has_mask,  FC_FLASH_ATTN_EXT_VEC + 0);
@@ -697,10 +657,18 @@ index 5d994c249..9dcf1ca36 100644
  
  struct ggml_metal_fusion; // defined in ggml-metal-fusion.cpp
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index d151a600d..e7e80952c 100644
+index d151a600d..e879a11ab 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
-@@ -1084,6 +1084,11 @@ typedef struct {
+@@ -124,6 +124,7 @@
+ #define FC_FLASH_ATTN_EXT_TENSOR       2200
+ #define FC_LIGHTNING_INDEXER           2200
+ #define FC_MUL_MV_MMA                  2300
++#define FC_TURBO4_SET_ROWS             2400
+ 
+ // op-specific constants
+ #define OP_FLASH_ATTN_EXT_NQPSG 8
+@@ -1084,6 +1085,11 @@ typedef struct {
      uint64_t nb3;
  } ggml_metal_kargs_set_rows;
  
@@ -1819,13 +1787,15 @@ index 000000000..2c6a62921
 +}
 diff --git a/ggml/src/ggml-metal/kernels/turbo4.metal b/ggml/src/ggml-metal/kernels/turbo4.metal
 new file mode 100644
-index 000000000..0914934af
+index 000000000..e331716ee
 --- /dev/null
 +++ b/ggml/src/ggml-metal/kernels/turbo4.metal
-@@ -0,0 +1,350 @@
+@@ -0,0 +1,352 @@
 +#include "common.h"
 +#include "dequantize.h"
 +#include "turbo4.h"
++
++constant bool FC_turbo4_original_norm [[function_constant(FC_TURBO4_SET_ROWS + 0)]];
 +
 +kernel void kernel_turbo_wht(
 +        constant ggml_metal_kargs_turbo_wht & args,
@@ -2089,7 +2059,7 @@ index 000000000..0914934af
 +        }
 +
 +        float recon_norm = sqrt(recon_norm_sq);
-+        blk.norm = half((recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm);
++        blk.norm = half(FC_turbo4_original_norm ? grp_norm : ((recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm));
 +    }
 +}
 +
@@ -2162,7 +2132,7 @@ index 000000000..0914934af
 +            recon_norm_sq += c * c;
 +        }
 +        float recon_norm = sqrt(recon_norm_sq);
-+        blk.norm = half((recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm);
++        blk.norm = half(FC_turbo4_original_norm ? grp_norm : ((recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm));
 +    }
 +}
 +
@@ -2232,10 +2202,10 @@ index 49f11073e..95eaeaff1 100644
  }
 diff --git a/ggml/src/ggml-turbo4.c b/ggml/src/ggml-turbo4.c
 new file mode 100644
-index 000000000..cb33d5198
+index 000000000..b3167492c
 --- /dev/null
 +++ b/ggml/src/ggml-turbo4.c
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,165 @@
 +#include "ggml-quants.h"
 +#include "ggml-impl.h"
 +
@@ -2308,6 +2278,7 @@ index 000000000..cb33d5198
 +    assert(k % QK_TURBO4 == 0);
 +    const int nb = k / QK_TURBO4;
 +    const int d  = QK_TURBO4;
++    const bool original_norm = getenv("GGML_TURBO4_ORIGINAL_NORM") != NULL;
 +
 +    for (int block = 0; block < nb; block++) {
 +        const float * src = x + block * d;
@@ -2349,7 +2320,7 @@ index 000000000..cb33d5198
 +            recon_norm_sq += CENTROIDS_4BIT[indices[i]] * CENTROIDS_4BIT[indices[i]];
 +        }
 +        float recon_norm = sqrtf(recon_norm_sq);
-+        float corrected_norm = (recon_norm > 1e-10f) ? norm / recon_norm : norm;
++        float corrected_norm = original_norm ? norm : ((recon_norm > 1e-10f) ? norm / recon_norm : norm);
 +        y[block].norm = GGML_FP32_TO_FP16(corrected_norm);
 +
 +        /* Pack */
@@ -3739,6 +3710,3 @@ index 000000000..b4df0b0a0
 +    printf("Turbo4 rotated codec: %s (%d failures)\n", failures ? "FAIL" : "OK", failures);
 +    return failures;
 +}
--- 
-2.56.0
-
