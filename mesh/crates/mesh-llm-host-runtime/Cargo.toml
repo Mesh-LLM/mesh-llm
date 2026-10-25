@@ -130,6 +130,10 @@ toml = "1.1"
 hf_hub = { package = "skippy-hf-hub", path = "../../../skippy/crates/skippy-hf-hub", version = "0.78.0", default-features = false, features = ["blocking"] }
 tempfile = "3"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Apple Silicon GPU power for the energy meter: the library alone, without its TUI.
+macmon = { version = "0.10", default-features = false }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

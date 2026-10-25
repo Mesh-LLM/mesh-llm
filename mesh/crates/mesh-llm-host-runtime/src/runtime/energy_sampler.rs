@@ -1,4 +1,6 @@
-//! Feeds [`super::energy`] with GPU board power read from `nvidia-smi` (#2320).
+//! Feeds [`super::energy`] with GPU power (#2320): from `nvidia-smi` on any
+//! host, and on Apple Silicon from IOReport through macmon, which reads the
+//! whole GPU once a second.
 //!
 //! One `nvidia-smi` process streams a reading per GPU every second, and the
 //! sampler sums each round into one reading for the node. A round only counts
@@ -94,11 +96,14 @@ async fn read_rounds<R: AsyncBufRead + Unpin>(
 
 /// Starts the sampler the first time this node serves a local model, so the
 /// idle draw it measures is the node's with a model loaded. Later calls do
-/// nothing. The sampler ends quietly when `nvidia-smi` is missing or stops,
-/// and with one log line when a GPU reports no power.
+/// nothing. `nvidia-smi` is tried on every host and ends quietly when it is
+/// missing or stops, and with one log line when a GPU reports no power. A Mac
+/// also starts the Apple Silicon sampler.
 pub(crate) fn start_energy_sampler() {
     static STARTED: Once = Once::new();
     STARTED.call_once(|| {
+        #[cfg(target_os = "macos")]
+        apple::start();
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
@@ -164,6 +169,42 @@ mod nvidia {
             super::super::energy::record_power(SOURCE, total);
         })
         .await
+    }
+}
+
+/// Apple Silicon's GPU power from IOReport, read through macmon without sudo.
+#[cfg(target_os = "macos")]
+mod apple {
+    const SOURCE: &str = "macmon";
+
+    /// macmon blocks for each one-second reading, so it gets its own thread.
+    /// It ends quietly where macmon can't read the SoC, as on an Intel Mac.
+    pub(super) fn start() {
+        let spawned = std::thread::Builder::new()
+            .name("gpu-energy-sampler".into())
+            .spawn(|| {
+                let mut sampler = match macmon::Sampler::new() {
+                    Ok(sampler) => sampler,
+                    Err(error) => {
+                        tracing::debug!("Apple GPU energy sampling unavailable: {error}");
+                        return;
+                    }
+                };
+                loop {
+                    match sampler.get_metrics(1000) {
+                        Ok(metrics) => {
+                            super::super::energy::record_power(SOURCE, f64::from(metrics.gpu_power))
+                        }
+                        Err(error) => {
+                            tracing::debug!("Apple GPU energy sampling stopped: {error}");
+                            return;
+                        }
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::debug!("Apple GPU energy sampler not started: {error}");
+        }
     }
 }
 

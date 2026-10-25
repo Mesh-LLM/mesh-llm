@@ -148,22 +148,24 @@ The counter and its throttle state live outside the mesh-wide state lock.
 
 Layer: **Information** | Scope: **local-only**
 
-GPU energy this node has spent since it first served a local model, read from
-its own board power sensor (`nvidia-smi`, once a second) and attributed with the
-inference lifecycle
+GPU energy this node has spent since it first served a local model, read once
+a second from its own power sensor (`nvidia-smi` for NVIDIA GPUs, IOReport
+through macmon for Apple Silicon) and attributed with the inference lifecycle
 (#2320). An interval between two readings counts as busy when a local request
 ran during any part of it, and as idle otherwise; concurrent requests share the
 busy energy. The per-token figures only use requests that produced output
 tokens and whose whole run was measured: a request that ran through a gap
 between readings, or after the sampler stopped, leaves both its energy and its
-tokens out of them. Board power
-covers the GPU only, not the CPU, memory or power supply, so the figures are
-estimates. A reading is the sum over every GPU of the node, so a round where
+tokens out of them. The reading
+covers the GPU only, not the CPU, memory or power supply (on Apple Silicon, the
+GPU's share of the SoC), so the figures are estimates. A reading is the sum
+over every GPU of the node, so a round where
 a GPU misses its reading is skipped rather than read as a smaller value: the
 interval around it is integrated from the readings on each side, and only
 readings more than 10 s apart leave the requests between them out. The field is
-absent until a power reading exists, so nodes without an NVIDIA GPU never
-report it, and neither do nodes with a GPU that reports no board power, such as
+absent until a power reading exists, so nodes with neither an NVIDIA GPU nor
+Apple Silicon never report it, and neither do nodes with a GPU that reports
+no board power, such as
 a Jetson's integrated GPU: the sampler stops after its first round if a GPU
 missed its reading, and logs why. Stages of a split model
 that have no front end of their own count their work as idle, and models served
@@ -171,8 +173,8 @@ through a plugin endpoint are not counted.
 
 | Field(s) | Meaning |
 | --- | --- |
-| `source` | Where the readings come from (`nvidia-smi`) |
-| `idle_watts` | Mean board power while no request ran; null until 5 s of idle time is measured |
+| `source` | Where the readings come from (`nvidia-smi` or `macmon`) |
+| `idle_watts` | Mean GPU power while no request ran; null until 5 s of idle time is measured |
 | `wh_per_1k_output_tokens` | Energy per 1,000 output tokens on top of the idle draw: what serving adds |
 | `wh_per_1k_output_tokens_total` | Energy per 1,000 output tokens including the idle draw while requests ran |
 | `output_tokens` | Output tokens of the fully measured requests, which the per-token figures divide by |
