@@ -35,6 +35,7 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: true,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
@@ -575,6 +576,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: false,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
@@ -949,6 +951,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: true,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
@@ -988,6 +991,77 @@ fn transitive_peer_update_refreshes_metadata_fields() {
     );
     assert!(existing.available_model_metadata.is_empty());
     assert!(existing.available_model_sizes.is_empty());
+}
+
+/// Proves a transitive announcement cannot clear or inject application
+/// protocol descriptors for a peer admitted by direct gossip — an older
+/// relay strips application descriptors when re-encoding, and SDK consumers
+/// must not see capabilities flap on and off with each rebroadcast.
+#[test]
+fn transitive_update_cannot_overwrite_admitted_peer_application_protocols() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x12; 32]).public());
+    let direct_protocols = vec![crate::proto::node::MeshSubprotocol {
+        name: "echo".into(),
+        major: 1,
+        features: vec![],
+    }];
+    let relay_protocols = vec![crate::proto::node::MeshSubprotocol {
+        name: "injected".into(),
+        major: 1,
+        features: vec![],
+    }];
+    let addr = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+
+    let mut existing = make_test_peer_info(peer_id);
+    existing.application_protocols = direct_protocols.clone();
+    let mut ann = peer_state_test_announcement(addr.clone());
+    ann.application_protocols = Vec::new();
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    assert_eq!(
+        existing.application_protocols, direct_protocols,
+        "a relay that strips application descriptors must not clear an admitted peer's set"
+    );
+
+    let mut ann = peer_state_test_announcement(addr.clone());
+    ann.application_protocols = relay_protocols;
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    assert_eq!(
+        existing.application_protocols, direct_protocols,
+        "a transitive announcer must not inject descriptors for an admitted peer"
+    );
+
+    let mut transitive_only = make_test_peer_info(peer_id);
+    transitive_only.admitted = false;
+    let mut ann = peer_state_test_announcement(addr.clone());
+    ann.application_protocols = vec![crate::proto::node::MeshSubprotocol {
+        name: "echo".into(),
+        major: 1,
+        features: vec![],
+    }];
+    apply_transitive_ann(&mut transitive_only, &addr, &ann, make_test_endpoint_id(0xee));
+    assert_eq!(
+        transitive_only.application_protocols, ann.application_protocols,
+        "a peer known only transitively still learns descriptors from its relay"
+    );
+}
+
+/// Proves an application-descriptor-only change counts as a meaningful peer
+/// change, so direct peer updates emit their `PeerUpdated` event.
+#[test]
+fn application_protocol_change_is_peer_meaningfully_changed() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x13; 32]).public());
+    let original = make_test_peer_info(peer_id);
+    assert!(!peer_meaningfully_changed(&original, &original.clone()));
+    let mut updated = make_test_peer_info(peer_id);
+    updated.application_protocols = vec![crate::proto::node::MeshSubprotocol {
+        name: "echo".into(),
+        major: 1,
+        features: vec![],
+    }];
+    assert!(peer_meaningfully_changed(&original, &updated));
 }
 
 /// Proves merging a transitively gossiped peer update never discards a
@@ -1049,6 +1123,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: true,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
@@ -1121,6 +1196,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         release_attestation: None,
         direct_admission_proof: None,
         artifact_transfer_supported: true,
+        application_protocols: Vec::new(),
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,

@@ -77,6 +77,12 @@ pub struct MeshNodeBuilder {
 }
 
 impl MeshNodeBuilder {
+    #[must_use]
+    pub fn protocol(mut self, handler: std::sync::Arc<dyn crate::protocol::MeshProtocol>) -> Self {
+        self.inner = self.inner.protocol(handler);
+        self
+    }
+
     pub fn mode(mut self, mode: EmbeddedMeshNodeMode) -> Self {
         self.inner = self.inner.mode(mode);
         self
@@ -577,6 +583,35 @@ fn parse_sse_frame(raw: Vec<u8>) -> anyhow::Result<Option<SseFrame>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct TestProtocol;
+
+    #[crate::protocol::async_trait]
+    impl crate::protocol::MeshProtocol for TestProtocol {
+        fn descriptor(&self) -> crate::protocol::ProtocolDescriptor {
+            crate::protocol::ProtocolDescriptor::new("echo", 1)
+        }
+        async fn accept(
+            &self,
+            _: crate::protocol::ProtocolContext,
+            _: crate::protocol::IncomingProtocolStream,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn builder_preserves_protocol_handlers_in_runtime_configuration() {
+        let handler: std::sync::Arc<dyn crate::protocol::MeshProtocol> =
+            std::sync::Arc::new(TestProtocol);
+        let config = MeshNode::builder()
+            .client()
+            .protocol(handler.clone())
+            .build();
+        assert_eq!(config.protocols.len(), 1);
+        assert!(std::sync::Arc::ptr_eq(&config.protocols[0], &handler));
+    }
 
     #[test]
     fn builder_shapes_public_auto_join_serve_node() {

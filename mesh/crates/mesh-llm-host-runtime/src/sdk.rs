@@ -29,6 +29,7 @@ mod embedded_startup;
 
 pub use embedded_config::*;
 pub use embedded_openai::{EmbeddedOpenAiResponse, EmbeddedOpenAiStream, EmbeddedSseEvent};
+pub use mesh_llm_transport::protocol;
 
 pub mod config {
     pub use mesh_llm_config::{
@@ -139,6 +140,7 @@ impl Drop for EmbeddedServeHandle {
 pub async fn start_embedded_node(
     mut config: EmbeddedMeshNodeConfig,
 ) -> Result<EmbeddedServeHandle> {
+    protocol::validate_protocols(&config.protocols)?;
     let isolated_config = prepare_isolated_config(&mut config)?;
     let config_snapshot =
         embedded_logging::snapshot_validated_config(config.storage.config_path.as_deref())?;
@@ -234,6 +236,7 @@ fn embedded_runtime_options(
     control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::api::RuntimeControlRequest>>,
 ) -> crate::runtime::EmbeddedRuntimeOptions {
     crate::runtime::EmbeddedRuntimeOptions {
+        protocols: config.protocols.clone(),
         mode: match config.mode {
             EmbeddedMeshNodeMode::Serve | EmbeddedMeshNodeMode::ServeOnly => {
                 crate::runtime::EmbeddedRuntimeMode::Serve

@@ -140,8 +140,37 @@ pub(crate) async fn write_gossip_payload(
     attach_own_plugin_keys(&mut frame, own_plugin_keys);
     frame.signed_records = outbound.signed_records.clone();
     frame.signed_cache_affinity = outbound.signed_cache_affinity.clone();
-    write_len_prefixed(send, &frame.encode_to_vec()).await?;
+    let mut encoded = frame.encode_to_vec();
+    if encoded.len() > MAX_CONTROL_FRAME_BYTES {
+        // The per-announcement descriptor cap does not bound the aggregate
+        // frame: enough peers advertising large descriptor sets can push the
+        // encoded gossip frame over the control-frame ceiling and take down
+        // the whole exchange. Application descriptors are advisory, so prune
+        // them from relayed entries (the sender's own entry stays, since it
+        // is how SDK consumers discover the local node's protocols).
+        // Built-in subprotocols such as `skippy-stage` stay everywhere:
+        // capability flags derive from them.
+        encoded = prune_relayed_application_subprotocols(&mut frame).encode_to_vec();
+    }
+    write_len_prefixed(send, &encoded).await?;
     Ok(())
+}
+
+/// Removes application (non-built-in) subprotocol descriptors from every
+/// relayed peer entry in the frame, keeping the sender's own entry intact.
+/// Returns the frame for re-encoding.
+fn prune_relayed_application_subprotocols(
+    frame: &mut crate::proto::node::GossipFrame,
+) -> &mut crate::proto::node::GossipFrame {
+    for peer in &mut frame.peers {
+        if peer.endpoint_id != frame.sender_id {
+            peer.subprotocols.retain(|subprotocol| {
+                mesh_llm_transport::protocol::BUILT_IN_PROTOCOL_NAMES
+                    .contains(&subprotocol.name.as_str())
+            });
+        }
+    }
+    frame
 }
 
 /// This node's own plugin keys go on its own entry only (the one whose

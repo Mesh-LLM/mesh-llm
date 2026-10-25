@@ -45,6 +45,28 @@ fn skippy_stage_subprotocols(
     }]
 }
 
+fn application_subprotocols(
+    protocols: &[crate::proto::node::MeshSubprotocol],
+) -> Vec<crate::proto::node::MeshSubprotocol> {
+    let mut keys = HashSet::new();
+    protocols
+        .iter()
+        .filter(|protocol| {
+            !mesh_llm_transport::protocol::BUILT_IN_PROTOCOL_NAMES.contains(&protocol.name.as_str())
+                && mesh_llm_transport::protocol::ProtocolDescriptor {
+                    name: protocol.name.clone(),
+                    major: protocol.major,
+                    features: protocol.features.clone(),
+                }
+                .validate()
+                .is_ok()
+                && keys.insert((protocol.name.clone(), protocol.major))
+        })
+        .take(16)
+        .cloned()
+        .collect()
+}
+
 fn supports_skippy_artifact_transfer(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     supports_skippy_stage_feature(
         subprotocols,
@@ -925,7 +947,10 @@ pub(crate) fn local_ann_to_proto_ann(
             ann.stage_protocol_generation_supported,
             ann.stage_status_list_supported,
             ann.local_gguf_content_id_supported,
-        ),
+        )
+        .into_iter()
+        .chain(application_subprotocols(&ann.application_protocols))
+        .collect(),
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
         lightning_offers: {
             #[cfg(feature = "payments")]
@@ -1189,6 +1214,7 @@ pub(crate) fn proto_ann_to_local(
             .as_ref()
             .and_then(|proof| crate::DirectNodeAdmissionProof::from_proto(proof).ok()),
         artifact_transfer_supported: supports_skippy_artifact_transfer(&pa.subprotocols),
+        application_protocols: application_subprotocols(&pa.subprotocols),
         stage_protocol_generation_supported: supports_skippy_stage_generation(&pa.subprotocols),
         stage_status_list_supported: supports_skippy_status_list(&pa.subprotocols),
         local_gguf_content_id_supported: supports_local_gguf_content_id(&pa.subprotocols),

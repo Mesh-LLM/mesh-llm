@@ -553,6 +553,7 @@ pub(crate) mod tests {
             owner_attestation: None,
             release_attestation_summary: ReleaseAttestationSummary::default(),
             artifact_transfer_supported: false,
+            application_protocols: Vec::new(),
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
@@ -694,6 +695,7 @@ pub(crate) mod tests {
                 ..ReleaseAttestationSummary::default()
             },
             artifact_transfer_supported: false,
+            application_protocols: Vec::new(),
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
@@ -839,6 +841,7 @@ pub(crate) mod tests {
             owner_attestation: None,
             release_attestation_summary: ReleaseAttestationSummary::default(),
             artifact_transfer_supported: false,
+            application_protocols: Vec::new(),
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,

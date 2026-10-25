@@ -97,3 +97,74 @@ two seconds; each turn's `Completed` transcript arrives as soon as the turn ends
 and closes the session. Dropping the session, or its audio half after `split`,
 closes it too. A lost connection arrives as a final `Error` event. Sessions
 started from an `OpenAiClient` send its API key as a bearer token.
+
+## Application protocols
+
+Register handlers before startup with `MeshNode::builder().protocol(Arc::new(handler))`.
+The SDK advertises the descriptor through the existing mesh subprotocol envelope, and routes
+streams by name and major version. Old nodes ignore unknown descriptors and reject unsupported
+streams. There are no new ALPNs or changes to the built-in stage protocol. A relay that predates
+this change strips application descriptors when rebroadcasting; an admitted peer's capability set
+is learned from its direct announcements and survives such rebroadcasts. If a gossip frame nears
+the control-frame size ceiling, the node prunes application descriptors from relayed entries —
+never its own — instead of failing the whole gossip exchange.
+
+```rust,no_run
+use std::sync::Arc;
+use mesh_llm_sdk::{MeshNode, protocol::{async_trait, IncomingProtocolStream,
+    MeshProtocol, ProtocolContext, ProtocolDescriptor}};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[derive(Debug)]
+struct Echo;
+
+#[async_trait]
+impl MeshProtocol for Echo {
+    fn descriptor(&self) -> ProtocolDescriptor {
+        ProtocolDescriptor::new("echo", 1)
+    }
+
+    async fn accept(&self, _: ProtocolContext, mut incoming: IncomingProtocolStream)
+        -> anyhow::Result<()> {
+        let value = incoming.stream.read_u32().await?;
+        incoming.stream.write_u32(value).await?;
+        incoming.stream.shutdown().await?;
+        Ok(())
+    }
+}
+
+async fn start() -> anyhow::Result<()> {
+    let node = MeshNode::builder().client().protocol(Arc::new(Echo)).start().await?;
+    node.shutdown().await?;
+    Ok(())
+}
+```
+
+Override `run(context)` for background work on the embedded runtime. `context.watch_peers()`
+provides an initial snapshot and updates of admitted peers; filter with `peer.supports()`.
+`context.open(peer.id)` opens this handler's protocol, with a ten-second dial deadline, only to
+admitted peers advertising the same name and major version. Incoming identity comes from the
+authenticated connection in `incoming.peer`. Capabilities are hints, not proof of application
+readiness. Handlers own framing, payload bounds and transaction timeouts.
+
+Registration accepts at most 16 protocols, rejects duplicate name/major pairs and reserves
+`skippy-stage`. Names use lowercase ASCII letters, digits, dots and hyphens (1–64 bytes), major
+versions are positive, and features are at most 32 strings of 1–64 ASCII letters, digits, dots,
+hyphens or underscores. Keep `descriptor()` stable for the lifetime of the handler.
+
+The runtime allows at most 32 concurrent incoming application streams; once the cap is reached,
+additional incoming opens are rejected rather than queued. It cancels incoming
+handlers when the node stops and signals `context.cancelled()` to background work, allowing one
+second for cleanup before aborting remaining tasks. Await work inside `run`/`accept`; detached
+tasks created by a handler are the application's responsibility. Registrations cannot change
+after startup.
+
+```mermaid
+flowchart LR
+    SDK[SDK builder] --> Registry[Host protocol registry]
+    Registry --> Announcements[Mesh capability announcements]
+    Registry --> Handler[Application handler]
+    Iroh[Admitted iroh connection] --> Dispatch[Name / major dispatch]
+    Dispatch --> Handler
+    Handler --> Context[Scoped context and peer watch]
+```
