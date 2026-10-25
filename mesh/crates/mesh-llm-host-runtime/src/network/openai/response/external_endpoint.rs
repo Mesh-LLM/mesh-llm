@@ -6,6 +6,7 @@ use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::probe_http_response;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
+use crate::network::openai::forwarded_request::is_ingress_credential_header;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use anyhow::{Context, Result};
 use mesh_llm_events::logging::identifiers::RequestId;
@@ -283,12 +284,19 @@ fn rewrite_http_request_target(
     let mut rebuilt = format!("{method} {new_path} {version}\r\n");
     let mut saw_host = false;
     for line in lines {
-        if let Some((name, _value)) = line.split_once(':')
-            && name.eq_ignore_ascii_case("host")
-        {
-            rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
-            saw_host = true;
-            continue;
+        if let Some((name, _value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("host") {
+                rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
+                saw_host = true;
+                continue;
+            }
+            // The external endpoint is a nonlocal hop, so it gets the same
+            // credential policy as a peer forward: the caller authenticated to
+            // this node, not to the operator's upstream server, and this hop is
+            // plaintext HTTP (#2210).
+            if is_ingress_credential_header(name) {
+                continue;
+            }
         }
         rebuilt.push_str(line);
         rebuilt.push_str("\r\n");
