@@ -86,6 +86,13 @@ the highest occupied KV cell and the occupied-cell count. This option is
 Skippy-only, appears in `launch.json`, and is intentionally excluded from
 performance qualification because the extra logging changes timing.
 
+For a controlled llama KV-layout diagnostic, set `AGENTX_LLAMA_KV_UNIFIED=1`
+to append `--kv-unified`, or `=0` to append `--no-kv-unified`. Leave it unset
+for the ordinary benchmark policy. The selected flag is recorded in each
+llama `launch.json`; compare only runs with the same model, trace cohort,
+context, and concurrency. Treat these as diagnostic arms, separate from the
+published default-layout comparison.
+
 The host's `HF_HOME`, campaign output and JY artifact directory are mounted.
 The registered Spark template sets `HF_HOME=/mnt/lab/huggingface`, the existing
 NFS-backed Hugging Face cache, and binds it at the identical path inside Docker.

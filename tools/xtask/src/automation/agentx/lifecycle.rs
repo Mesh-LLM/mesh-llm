@@ -14,6 +14,7 @@ use std::time::Duration;
 
 pub(super) const STARTUP_TIMEOUT_SECS: u64 = 900;
 const LLAMA_CACHE_RAM_MIB_ENV: &str = "AGENTX_LLAMA_CACHE_RAM_MIB";
+const LLAMA_KV_UNIFIED_ENV: &str = "AGENTX_LLAMA_KV_UNIFIED";
 const SKIPPY_MICROBATCH_TOKENS_ENV: &str = "AGENTX_SKIPPY_MICROBATCH_TOKENS";
 const SKIPPY_GENERATION_CONCURRENCY_ENV: &str = "AGENTX_SKIPPY_GENERATION_CONCURRENCY";
 const BASELINE_MICROBATCH_TOKENS: usize = 512;
@@ -38,6 +39,23 @@ fn llama_cache_ram_mib() -> DynResult<Option<u32>> {
         Ok(value) => parse_llama_cache_ram_mib(&value).map(Some),
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(error) => Err(format!("{LLAMA_CACHE_RAM_MIB_ENV}: {error}").into()),
+    }
+}
+
+fn llama_kv_layout_arguments(value: Option<&str>) -> DynResult<Vec<String>> {
+    match value {
+        None => Ok(Vec::new()),
+        Some("1" | "true") => Ok(vec!["--kv-unified".into()]),
+        Some("0" | "false") => Ok(vec!["--no-kv-unified".into()]),
+        Some(_) => Err(format!("{LLAMA_KV_UNIFIED_ENV} must be 0, 1, false, or true").into()),
+    }
+}
+
+fn llama_kv_layout_override() -> DynResult<Vec<String>> {
+    match std::env::var(LLAMA_KV_UNIFIED_ENV) {
+        Ok(value) => llama_kv_layout_arguments(Some(&value)),
+        Err(std::env::VarError::NotPresent) => llama_kv_layout_arguments(None),
+        Err(error) => Err(format!("{LLAMA_KV_UNIFIED_ENV}: {error}").into()),
     }
 }
 
@@ -215,6 +233,9 @@ fn server(
     } else if engine == "skippy" {
         args.extend(skippy_overrides()?);
     }
+    if engine == "llama" {
+        args.extend(llama_kv_layout_override()?);
+    }
     let mut spec = command::spec(&input.root, binary.to_str().ok_or("server path")?, &args)?;
     if engine == "skippy" {
         spec.arguments.extend([
@@ -388,6 +409,7 @@ fn launch_identity(
         })
         .collect();
     let microbatch_tokens = launch_microbatch_tokens(&arguments, engine)?;
+    let llama_unified_kv = engine == "llama" && arguments.iter().any(|arg| arg == "--kv-unified");
     let requested_generation_concurrency = arguments
         .windows(2)
         .find(|pair| pair[0] == "--generation-concurrency")
@@ -400,9 +422,10 @@ fn launch_identity(
         "binary_sha256":crate::product::digest::file_sha256(&server.executable).map_err(|error|error.error)?,
         "runtime_tree_sha256":crate::product::digest::tree_sha256(&runtime).map_err(|error|error.error)?,
         "harness_lock_sha256":crate::product::digest::file_sha256(&input.root.join("skippy/evals/agentx/uv.lock")).map_err(|error|error.error)?,
-        "capacity_policy":super::capacity::policy(engine, input.profile),
-        "context_tokens":matched_llama_context.map(|_| trace_context::LIMIT),
+        "capacity_policy":if llama_unified_kv { "diagnostic_unified_kv_common_128k_trace_limit" } else { super::capacity::policy(engine, input.profile) },
+        "context_tokens":matched_llama_context.map(|total| if llama_unified_kv { u64::from(total) } else { trace_context::LIMIT }),
         "total_context_tokens":matched_llama_context,
+        "llama_kv_unified":if engine == "llama" { Some(llama_unified_kv) } else { None },
         "generation_slots":null,"offered_sessions":concurrency,
         "requested_generation_concurrency":requested_generation_concurrency,
         "generation_concurrency_policy":if engine == "llama" { "explicit_parallel" }
@@ -647,5 +670,25 @@ mod tests {
             llama_comparison_arguments(2, None).unwrap(),
             ["--ctx-size", "262144"]
         );
+    }
+
+    #[test]
+    fn llama_kv_layout_control_is_explicit_and_rejects_invalid_values() {
+        assert!(llama_kv_layout_arguments(None).unwrap().is_empty());
+        for value in ["1", "true"] {
+            assert_eq!(
+                llama_kv_layout_arguments(Some(value)).unwrap(),
+                ["--kv-unified"]
+            );
+        }
+        for value in ["0", "false"] {
+            assert_eq!(
+                llama_kv_layout_arguments(Some(value)).unwrap(),
+                ["--no-kv-unified"]
+            );
+        }
+        for value in ["", "on", "off", "2"] {
+            assert!(llama_kv_layout_arguments(Some(value)).is_err(), "{value}");
+        }
     }
 }
