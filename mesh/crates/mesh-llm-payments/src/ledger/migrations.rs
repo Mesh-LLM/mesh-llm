@@ -6,8 +6,9 @@ use rusqlite::Connection;
 /// 3/4: unsupported, unreleased development schemas.
 /// 5: token-metered billing with cached-input discounts and the remainder floor.
 /// Released buyer records are retained; retired seller accounting is dropped.
-/// 6: `metered_requests.model`, so a reused request ID cannot change model,
-/// and per-model admission deposits in `model_deposits`.
+/// 6: `metered_requests.model`, so a reused request ID cannot change model;
+/// `metered_requests.min_payment_msat`, the minimum recorded at admission; and
+/// per-model admission deposits in `model_deposits`.
 const VERSION: u32 = 6;
 
 /// First schema with the metered tables; later versions extend it in place.
@@ -16,7 +17,10 @@ const METERED_VERSION: u32 = 5;
 /// Requests admitted under schema 5 carry no model. An empty model matches no
 /// replay, which is safe: a request still admitted at upgrade is abandoned at
 /// startup, and a replay of a finished request never reaches the identity check.
-const V5_TO_V6: &str = "ALTER TABLE metered_requests ADD COLUMN model TEXT NOT NULL DEFAULT ''";
+/// Their minimum payment is taken as the 1-sat default, which nothing reads
+/// again for a request that is already finalized or abandoned.
+const V5_TO_V6: &str = "ALTER TABLE metered_requests ADD COLUMN model TEXT NOT NULL DEFAULT '';
+     ALTER TABLE metered_requests ADD COLUMN min_payment_msat INTEGER NOT NULL DEFAULT 1000;";
 
 /// Seller-side tables of the retired fixed-allowance protocol. Their debt was
 /// recorded under a protocol no peer can settle any more, so it is dropped

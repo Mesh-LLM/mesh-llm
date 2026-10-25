@@ -89,6 +89,9 @@ impl PaymentService {
             pricing: &pricing,
             require_deposit,
         })?;
+        // The minimum recorded at admission, so a replay restates the same
+        // terms the buyer saved even if the operator has changed it since.
+        let min_payment_msat = self.ledger.metered_min_payment_msat(&request_id)?;
         if deposit == 0 {
             ensure!(
                 self.ledger.metered_claim_dispatch(&request_id, &buyer)?,
@@ -96,7 +99,7 @@ impl PaymentService {
             );
             return Ok(ServeAdmitResponse::Admitted {
                 request_id,
-                min_payment_msat: self.ledger.min_payment_msat()?,
+                min_payment_msat,
             });
         }
         let invoice = self
@@ -106,7 +109,7 @@ impl PaymentService {
         Ok(ServeAdmitResponse::Deposit {
             request_id,
             invoice,
-            min_payment_msat: self.ledger.min_payment_msat()?,
+            min_payment_msat,
         })
     }
 

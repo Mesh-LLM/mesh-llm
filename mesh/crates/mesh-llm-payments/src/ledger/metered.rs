@@ -74,11 +74,11 @@ pub struct MeteredSettlement {
 
 impl Ledger {
     /// Record one metered admission in a single IMMEDIATE txn and return the
-    /// deposit to request. Rates and the deposit are frozen here;
-    /// `metered_finalize` accepts usage only. Replaying the same arguments is
-    /// idempotent and returns the recorded deposit, even if the operator has
-    /// since changed it; reusing the ID with different terms fails. Refuses
-    /// peers at the strike limit.
+    /// deposit to request. Rates, the deposit and the minimum payment are
+    /// frozen here; `metered_finalize` accepts usage only. Replaying the same
+    /// arguments is idempotent and returns the recorded deposit, even if the
+    /// operator has since changed it; reusing the ID with different terms
+    /// fails. Refuses peers at the strike limit.
     pub fn metered_admit(&self, request: &MeteredRequest<'_>) -> Result<u64> {
         let MeteredRequest {
             id,
@@ -88,8 +88,11 @@ impl Ledger {
             require_deposit,
         } = *request;
         // Read before taking the connection: the settings read locks it too.
+        // One floor read for both values, so the deposit is never below the
+        // minimum recorded with it.
+        let floor_msat = self.min_payment_msat()?;
         let deposit = if require_deposit {
-            self.model_admission_deposit_msat(model)?
+            self.model_admission_deposit_msat(model)?.max(floor_msat)
         } else {
             0
         };
@@ -126,33 +129,61 @@ impl Ledger {
             "buyer has {unpaid} unpaid final invoices"
         );
         tx.execute(
-            "INSERT INTO metered_requests(id,peer,model,pricing,require_deposit,deposit_msat,state) VALUES (?1,?2,?3,?4,?5,?6,'admitted')",
+            "INSERT INTO metered_requests(id,peer,model,pricing,require_deposit,deposit_msat,min_payment_msat,state) VALUES (?1,?2,?3,?4,?5,?6,?7,'admitted')",
             params![
                 id,
                 peer,
                 model,
                 pricing_json,
                 require_deposit,
-                sql_amount(deposit)?
+                sql_amount(deposit)?,
+                sql_amount(floor_msat)?
             ],
         )?;
         tx.commit()?;
         Ok(deposit)
     }
 
+    /// The minimum payment recorded when `id` was admitted: the amount its
+    /// final remainder is raised to, whatever the setting is now.
+    pub fn metered_min_payment_msat(&self, id: &str) -> Result<u64> {
+        self.lock()?
+            .query_row(
+                "SELECT min_payment_msat FROM metered_requests WHERE id=?",
+                [id],
+                |r| read_amount(r, 0),
+            )
+            .optional()?
+            .ok_or_else(|| anyhow::anyhow!("unknown metered request"))
+    }
+
     /// Finalize once, atomically: price the reported usage, apply the received
     /// deposit and record what the final invoice must carry. Replaying the same
     /// outcome returns the stored settlement; a different outcome fails.
     pub fn metered_finalize(&self, id: &str, outcome: MeteredOutcome) -> Result<MeteredSettlement> {
-        // Read before taking the connection: the settings read locks it too.
-        let floor_msat = self.min_payment_msat()?;
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (pricing, deposit, state, stored_outcome): (String, u64, String, Option<String>) = tx
+        // The floor is the one recorded at admission, so the buyer's check of
+        // the final invoice holds even if the operator has changed it since.
+        let (pricing, deposit, floor_msat, state, stored_outcome): (
+            String,
+            u64,
+            u64,
+            String,
+            Option<String>,
+        ) = tx
             .query_row(
-                "SELECT pricing,deposit_msat,state,outcome FROM metered_requests WHERE id=?",
+                "SELECT pricing,deposit_msat,min_payment_msat,state,outcome FROM metered_requests WHERE id=?",
                 [id],
-                |r| Ok((r.get(0)?, read_amount(r, 1)?, r.get(2)?, r.get(3)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        read_amount(r, 1)?,
+                        read_amount(r, 2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                    ))
+                },
             )
             .optional()?
             .ok_or_else(|| anyhow::anyhow!("unknown metered request"))?;

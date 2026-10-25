@@ -783,3 +783,31 @@ async fn a_reused_request_id_cannot_switch_to_a_model_with_a_larger_deposit() {
     let replay = service.serve_admit(admit("r", "peer")).await.unwrap();
     assert_eq!(deposit_invoice(&replay), deposit_invoice(&first));
 }
+
+#[tokio::test]
+async fn an_admitted_request_keeps_its_minimum_payment_through_settlement() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    service.serve_admit(admit("r", "peer")).await.unwrap();
+    // The operator raises the minimum while the request is admitted.
+    service.ledger.set_min_payment_msat(5000).unwrap();
+    let replay = service.serve_admit(admit("r", "peer")).await.unwrap();
+    let ServeAdmitResponse::Deposit {
+        invoice,
+        min_payment_msat,
+        ..
+    } = replay
+    else {
+        panic!("expected a deposit, got {replay:?}");
+    };
+    // The replay restates the admitted terms the buyer saved.
+    assert_eq!((invoice.amount_msat, min_payment_msat), (Some(1000), 1000));
+    received(&wallet, &invoice);
+    service.serve_deposit_confirmed("r").await.unwrap();
+    // A 2,500-msat bill leaves 1,500: exact under the admitted 1,000 minimum,
+    // where the new 5,000 would have raised it.
+    let bill = service.serve_settle(settle("r", 150, 100)).await.unwrap();
+    assert_eq!(bill.remaining_msat, 1500);
+    assert_eq!(bill.invoice.unwrap().amount_msat, Some(1500));
+}

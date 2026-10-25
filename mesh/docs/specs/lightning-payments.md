@@ -157,9 +157,10 @@ backup, not changing `user_version` by hand.
   and a compatible binary or an explicit migration; never delete financial
   records just to make startup pass. Fresh schema-6 ledgers use the current metered billing rules.
 - Version 5: metered records gain the model each request was admitted for,
-  which binds a reused request ID to its model, and per-model deposits get
-  their own table. Rows admitted before the upgrade get an empty model; a
-  request still admitted then is abandoned at startup, as after any restart.
+  which binds a reused request ID to its model, and the minimum payment
+  recorded at admission; per-model deposits get their own table. Rows admitted
+  before the upgrade get an empty model and the 1-sat minimum; a request still
+  admitted then is abandoned at startup, as after any restart.
 - Corrupt/non-SQLite files and future schema versions fail to open; they are
   not replaced with an empty ledger.
 
@@ -467,9 +468,9 @@ contract. Operators override the minimum with `mesh-llm wallet min-payment
 `AdmissionTerms.min_payment_msat`, omitted at the 1-sat default so older peers
 still parse the terms. A buyer refuses admission when the seller's minimum is
 above its own configured minimum, so raising it needs buyers to opt in. The
-seller reads its current minimum at admission and again at settlement; changing
-it while a request is in flight can make that request's final invoice fail the
-buyer's check.
+seller records its minimum when it admits a request and uses that value for the
+request's replayed terms and final invoice, so changing it affects only new
+admissions.
 
 The admission deposit, what a peer outside the trust cache pays the inferencer
 before it serves, is a separate setting: `mesh-llm wallet admission-deposit
@@ -478,12 +479,12 @@ before it serves, is a separate setting: `mesh-llm wallet admission-deposit
 A priced model can ask its own deposit with `mesh-llm wallet pricing MODEL
 --deposit-sats N`; `--default-deposit` returns it to the node-wide one, and
 pricing the model free drops it. Model deposits are keyed by the priced name,
-like rates, and are not gossiped: a buyer learns the amount at admission. No
-deposit is ever below the minimum payment, because the deposit is itself a
-Lightning payment; raising the minimum above a configured deposit raises the
-deposit with it. The seller reads the deposit once at admission and the
-request keeps that amount, so a change affects only new admissions. The
-amount travels as
+like rates, and are not gossiped: a buyer learns the amount at admission. A
+deposit is never below the minimum payment in force when the request is
+admitted, because the deposit is itself a Lightning payment; raising the
+minimum above a configured deposit raises the deposit with it. The seller
+records the deposit with the minimum at admission and the request keeps both,
+so a change affects only new admissions. The amount travels as
 `AdmissionTerms.deposit_msat`, which has always been on the wire. A buyer
 refuses admission when the seller's deposit is above its own node-wide
 admission deposit (its model deposits play no part as a buyer), the same
