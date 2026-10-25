@@ -240,6 +240,7 @@ pub(crate) fn check_release_targets_command(repo_root: &Path) -> DynResult<()> {
 pub(crate) fn check_ci_crate_lists_command(repo_root: &Path) -> DynResult<()> {
     ci_validation::check_ci_script_workspace_members(repo_root)?;
     ci_validation::check_ci_crate_test_coverage_files(repo_root)?;
+    ci_validation::check_python_tooling(repo_root)?;
     check_attestation_default_version(repo_root)?;
     check_runtime_event_abi_mirror(repo_root)?;
     product_documentation::check(repo_root)?;

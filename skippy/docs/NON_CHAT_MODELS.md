@@ -152,7 +152,7 @@ curl -sS http://127.0.0.1:9337/v1/audio/transcriptions \
 Whisper models load from whisper.cpp model files rather than GGUF. Serve one
 by path or by its exact Hugging Face file ref; it advertises the
 `speech_recognition` workload class and answers only the two audio-to-text
-endpoints:
+endpoints and live transcription over `GET /v1/realtime` (below):
 
 ```bash
 mesh-llm serve --model ggerganov/whisper.cpp/ggml-large-v3-turbo-q5_0.bin

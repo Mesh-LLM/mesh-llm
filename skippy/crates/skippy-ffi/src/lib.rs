@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 72;
+pub const ABI_VERSION_PATCH: u32 = 73;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -72,8 +72,9 @@ pub use runtime::{
     llama_model_is_recurrent, llama_model_meta_val_str, try_abi_features,
 };
 pub use sampling::{
-    GenerationSignalWindow, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
-    MAX_SAMPLERS, NATIVE_MTP_MAX_DRAFT_TOKENS, NativeMtpDraft, SamplingConfig, TokenSignal,
+    GenerationSignalWindow, LogprobEntry, MAX_DRY_SEQUENCE_BREAKER_BYTES,
+    MAX_DRY_SEQUENCE_BREAKERS, MAX_SAMPLERS, MAX_TOP_LOGPROBS, NATIVE_MTP_MAX_DRAFT_TOKENS,
+    NativeMtpDraft, SAMPLING_FLAG_LOGPROBS, SamplingConfig, TokenLogprobs, TokenSignal,
 };
 pub use stage_plan::{
     STAGE_PLAN_DESC_V1_ABI_VERSION, STAGE_PLAN_MAX_DIMS, STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION,
@@ -152,8 +153,8 @@ pub use dynamic::{
     skippy_session_memory_used_cells, skippy_session_position, skippy_session_rerank,
     skippy_session_reset, skippy_session_restore_prefix, skippy_session_restore_token_history,
     skippy_session_sample_current, skippy_session_save_prefix, skippy_session_sequence_id,
-    skippy_session_set_position, skippy_session_signal_window, skippy_stage_plan_describe_v1,
-    skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
+    skippy_session_set_position, skippy_session_signal_window, skippy_session_take_token_logprobs,
+    skippy_stage_plan_describe_v1, skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
     skippy_stage_plan_resident_tensor_at_v1, skippy_stage_plan_state_at_v1,
     skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,
     skippy_stage_plan_value_at_v1, skippy_stage_planner_create_v1, skippy_stage_planner_free,
@@ -215,8 +216,8 @@ pub use static_bindings::{
     skippy_session_memory_used_cells, skippy_session_position, skippy_session_rerank,
     skippy_session_reset, skippy_session_restore_prefix, skippy_session_restore_token_history,
     skippy_session_sample_current, skippy_session_save_prefix, skippy_session_sequence_id,
-    skippy_session_set_position, skippy_session_signal_window, skippy_stage_plan_describe_v1,
-    skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
+    skippy_session_set_position, skippy_session_signal_window, skippy_session_take_token_logprobs,
+    skippy_stage_plan_describe_v1, skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
     skippy_stage_plan_resident_tensor_at_v1, skippy_stage_plan_state_at_v1,
     skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,
     skippy_stage_plan_value_at_v1, skippy_stage_planner_create_v1, skippy_stage_planner_free,

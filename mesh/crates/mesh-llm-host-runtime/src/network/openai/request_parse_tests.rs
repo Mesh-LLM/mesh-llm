@@ -1274,3 +1274,22 @@ fn mesh_routing_header_values_rejects_non_utf8_x_mesh_exclude() {
     let request = request_with_raw(&raw);
     assert!(request.mesh_routing_header_values().is_err());
 }
+
+#[tokio::test]
+async fn only_realtime_upgrades_keep_bytes_after_the_head() {
+    let realtime = read_request_from_parts(vec![
+        b"GET /v1/realtime?model=m HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n\x81\x05early".to_vec(),
+    ])
+    .await;
+    assert!(realtime.raw.ends_with(b"\r\n\r\n\x81\x05early"));
+
+    let other = read_request_from_parts(vec![
+        b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nUpgrade: x\r\nConnection: upgrade\r\n\r\n{\"model\":\"m\"}".to_vec(),
+    ])
+    .await;
+    assert!(
+        other.raw.ends_with(b"\r\n\r\n"),
+        "{:?}",
+        String::from_utf8_lossy(&other.raw)
+    );
+}

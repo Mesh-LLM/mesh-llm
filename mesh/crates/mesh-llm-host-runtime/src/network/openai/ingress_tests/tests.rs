@@ -1119,7 +1119,7 @@ fn test_endpoint_id(seed: u8) -> iroh::EndpointId {
 /// fake address. `hosts_for_model` returns the peer's `EndpointId` without
 /// any gossip round trip, so `resolve_remote_mesh_route` finds it and
 /// `route_missing_local_model` takes the remote-mesh branch.
-fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
+pub(super) fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
     // Deterministic fake id derived from seed so callers can build multiple
     // non-colliding peers.
     let secret = {
@@ -1376,7 +1376,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
 /// Some(SidecarGeneratedFallback)` on both published envelopes when the
 /// request carries BOTH `x-capsule-client-nonce` AND `x-capsule-nonce-origin`.
 ///
-/// The `remote_mesh_nonce_source` helper (ingress.rs lines 35-46) maps:
+/// The `client_nonce_source` helper in ingress/exchange_events.rs maps:
 /// - nonce=Some, nonce_origin=None  → `ClientSupplied`   (covered by the
 ///   sibling test above)
 /// - nonce=Some, nonce_origin=Some  → `SidecarGeneratedFallback`  ← this test
@@ -2595,6 +2595,7 @@ async fn local_route_terminal_names_the_peer_that_delivered() {
             served_locally: true,
             request_digest: Some(&digest),
             requested_by_node_id: None,
+            client_nonce: None,
         },
     )
     .await;

@@ -4,6 +4,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../src/fixture_paths.rs"]
+mod fixture_paths;
+
 #[cfg(unix)]
 #[path = "migration_cargo_metadata/interruption.rs"]
 mod interruption;
@@ -11,17 +14,10 @@ mod interruption;
 fn fixture() -> PathBuf {
     match std::env::var_os("MIGRATION_TEST_CARGO") {
         Some(path) => PathBuf::from(path),
-        None => std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("examples")
-            .join(format!(
-                "migration_cargo_metadata_fixture{}",
-                std::env::consts::EXE_SUFFIX
-            )),
+        None => crate::fixture_paths::examples_dir().join(format!(
+            "migration_cargo_metadata_fixture{}",
+            std::env::consts::EXE_SUFFIX
+        )),
     }
 }
 

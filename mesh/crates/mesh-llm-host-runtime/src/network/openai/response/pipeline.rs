@@ -77,7 +77,7 @@ pub(crate) async fn pipeline_proxy_local(
         return PipelineProxyResult::FallbackToDirect;
     }
 
-    let http_client = reqwest::Client::new();
+    let http_client = crate::network::local_http::local_http_client();
     let planner_url = format!("http://127.0.0.1:{planner_port}");
     match pipeline_preplan_request(
         &http_client,

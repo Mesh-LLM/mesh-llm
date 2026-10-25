@@ -81,6 +81,9 @@ impl PaidServedExchange {
                 served_locally: true,
                 request_digest,
                 requested_by_node_id: Some(&requested_by_node_id),
+                // `PaidRequest` keeps no request headers, so there is no
+                // client nonce to report.
+                client_nonce: None,
             },
         )
         .await;

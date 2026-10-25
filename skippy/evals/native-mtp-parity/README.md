@@ -1,60 +1,61 @@
-# Native MTP parity
+# Native MTP probes
 
-Checks a runtime's native MTP head against its PyTorch reference, and
-explains greedy-text differences that speculation introduces.
+These developer probes inspect a real checkpoint. They require a compatible
+multi-gigabyte GGUF and a prepared native runtime; they are outside CI.
 
-These are developer evals for a real checkpoint. They are not CI: they need a
-multi-gigabyte GGUF, the trained head, and PyTorch.
+The former Python parity and divergence drivers are retired. No independent
+PyTorch oracle, tokenizer, or automated comparison is provided here. Running a
+probe alone does not establish head parity or validate a model conversion.
 
 ## Build
 
-Prepare the patched checkout and package a local runtime (`just skippy`), then:
+Prepare the patched checkout and package a local runtime with `just skippy`,
+then build the probes with `just skippy-native-mtp-probes-build`. The probes
+link against `target/debug/native-runtimes/*/lib`; set `SKIPPY_RUNTIME_LIB` to
+select another runtime bundle.
+
+## Inputs and outputs
+
+Each probe consumes a `tokens.i32` file containing native-endian signed 32-bit
+token IDs for the loaded model. Obtain these from the actual tokenizer or a
+recorded run. The probes do not apply a chat template or tokenize text.
 
 ```bash
-skippy/evals/native-mtp-parity/build.sh
+mkdir -p /tmp/mtp-probe
+target/debug/native-mtp-probes/mtp_parity_probe \
+  model.gguf tokens.i32 /tmp/mtp-probe
 ```
 
-The probes link against `target/debug/native-runtimes/*/lib`; set
-`SKIPPY_RUNTIME_LIB` to use another runtime bundle.
+`mtp_parity_probe` requires at least three tokens and writes native-endian f32
+rows to the existing output directory. Its final JSON line reports token count
+`T`, embedding width `d`, and vocabulary size `V`.
 
-## Head parity
+| File | Shape | Contents |
+| --- | --- | --- |
+| `h.f32` | `T × d` | Trunk hidden states supplied to the head |
+| `logits1.f32` | `(T - 1) × V` | Teacher-forced depth-one head logits |
+| `z1.f32` | `(T - 1) × d` | Depth-one hidden states used for chaining |
+| `logits2.f32` | `(T - 2) × V` | Chained depth-two head logits |
 
-`mtp_parity.py` runs the trunk over a fixed coding-agent context with tools,
-dumps the hidden state that feeds the MTP head, and decodes the head at depth 1
-and depth 2 (chained on the head's own pre-norm output). It feeds the same
-hidden rows and tokens to `splitcoder.mtp.MTPHead`, using the embedding and
-LM head dequantized from the same GGUF, and compares the logits.
+The other probes accept a prompt length and either a verification window width
+or two candidate token IDs:
 
 ```bash
-PYTHONPATH=<llama.cpp>/gguf-py:<models>/split-coder/src python3 \
-  skippy/evals/native-mtp-parity/mtp_parity.py \
-  --gguf qwen3coder-q4km-mtp.gguf --head <dir with mtp.safetensors> \
-  --tokenizer <HF checkpoint dir> --work /tmp/mtp-parity
+target/debug/native-mtp-probes/batch_invariance_probe \
+  model.gguf tokens.i32 128 4
+target/debug/native-mtp-probes/margin_probe \
+  model.gguf tokens.i32 128 100 200
 ```
 
-It passes when both depths reach `--min-cos` (0.999) and `--min-top1` (0.97),
-and a negative control fails: the same reference with `proj`'s two input halves
-swapped, the conversion bug the check exists to catch.
+Use token files longer than the prompt, valid candidate IDs, and a positive
+window width that fits the remaining tokens. These are low-level developer
+probes; they do not validate arbitrary inputs.
 
-## Greedy divergence
+`batch_invariance_probe` compares serial and batched trunk decode on the same
+tokens. It reports window count, argmax flips, and the largest relative logit
+difference. `margin_probe` decodes the prompt in batches and each subsequent
+token individually, then reports the two candidates' logits and the argmax.
 
-Batched verification is not bit-identical to single-token decode. For
-Qwen3-MoE, small summation-order differences can flip expert routing, so
-greedy text with any speculation can differ from greedy text without it.
-`batch_invariance_probe` measures this on the trunk alone: it compares the
-logits of the same tokens decoded one at a time and as one verify window.
-
-`divergence.py` takes two bench output files for the same shape, with
-speculation off and on. For each prompt whose text differs, it replays the
-shared prefix through single-token decode, as unspeculated generation runs it,
-and reports the trunk's logit gap between the two candidate tokens.
-
-- **Small gap:** the divergence starts at a near-tie of the target, which
-  batched verification can resolve differently.
-- **Large gap:** inspect the verify window's logits and acceptance at that
-  position. It is not proof of a wrong commit, because the replay does not see
-  the batched logits the speculative run committed from.
-
-Rows that carry `token_ids` are compared by the generated IDs. Otherwise the
-returned text is re-tokenized, which can differ from the generated sequence, and
-each result records which source it used.
+A small serial logit gap can explain why batched verification selects another
+token. A large gap calls for inspecting the speculative verification window;
+the serial replay does not observe the logits committed by that window.

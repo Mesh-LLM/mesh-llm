@@ -339,6 +339,7 @@ fn actual_canary_build_qualification_and_verification_relocation_preserve_requir
         r#"set -euo pipefail
 ROOT="$PWD"
 TRUSTED_ROOT="$PWD"
+JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 VERIFY_ROOT="$PWD/verification"
 CERTIFIED_SHA=fixture
 RUN_KEY=finite

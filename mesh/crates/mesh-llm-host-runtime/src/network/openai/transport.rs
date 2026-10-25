@@ -267,6 +267,7 @@ pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u3
 }
 
 enum AutoModelResolution {
+    PaymentRequired(&'static str),
     Model(Option<String>),
     UnsupportedMedia,
     UnsupportedWorkload,
@@ -561,6 +562,9 @@ async fn build_mesh_request_plan(
     .await
     {
         AutoModelResolution::Model(model) => model.or(request.model_name.clone()),
+        AutoModelResolution::PaymentRequired(reason) => {
+            return Err(MeshRequestFailure::PaymentRequired(reason));
+        }
         AutoModelResolution::UnsupportedMedia => {
             return Err(MeshRequestFailure::UnsupportedMedia);
         }
@@ -1302,18 +1306,21 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     {
         return AutoModelResolution::UnsupportedWorkload;
     }
-    let available = router::filter_media_compatible_candidates(&with_caps, &media);
-    let ready_models = if let Some(available) = available.as_ref() {
-        auto_route::ready_remote_models(
-            node,
-            required_tokens,
-            &request.client_path,
-            available,
-            affinity,
-        )
-        .await
-    } else {
-        Vec::new()
+    let Some(available) = router::filter_media_compatible_candidates(&with_caps, &media) else {
+        return AutoModelResolution::UnsupportedMedia;
+    };
+    let (available, ready_models) = match auto_route::payment_admission::admitted_models(
+        node,
+        None,
+        request,
+        &available,
+        required_tokens,
+        affinity,
+    )
+    .await
+    {
+        Ok(pool) => pool,
+        Err(reason) => return AutoModelResolution::PaymentRequired(reason),
     };
     if let Some(model) = lookup_cached_auto_model(
         node,
@@ -1325,7 +1332,7 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     )
     .await
     {
-        if with_caps.iter().any(|candidate| candidate.name == model) {
+        if available.iter().any(|candidate| candidate.name == model) {
             return AutoModelResolution::Model(Some(model));
         }
         if let Some(key) = auto_session_key {
@@ -1333,9 +1340,6 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
         }
     }
 
-    let Some(available) = available else {
-        return AutoModelResolution::UnsupportedMedia;
-    };
     let available = auto_route::pool_for_ready_models(&available, &ready_models);
     let cl = router::classify(body_json);
     let picked = router::pick_model_classified(&cl, &available).map(str::to_string);

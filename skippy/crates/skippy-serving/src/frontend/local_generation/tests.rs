@@ -5,6 +5,7 @@ use std::sync::{
 use std::{thread, time::Duration};
 
 use super::token_generation::capture_trace;
+use super::token_generation::ensure_readable_logprobs;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::{
@@ -916,4 +917,27 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     );
 
     Ok(())
+}
+
+#[test]
+fn unreadable_logprobs_fail_the_request() {
+    let readable = skippy_runtime::TokenLogprobs {
+        token: 7,
+        logprob: -0.25,
+        top: vec![(7, -0.25), (9, -1.5)],
+    };
+    assert!(ensure_readable_logprobs(std::slice::from_ref(&readable)).is_ok());
+
+    let unreadable_token = skippy_runtime::TokenLogprobs {
+        logprob: f32::NAN,
+        top: Vec::new(),
+        ..readable.clone()
+    };
+    assert!(ensure_readable_logprobs(&[readable.clone(), unreadable_token]).is_err());
+
+    let unreadable_alternative = skippy_runtime::TokenLogprobs {
+        top: vec![(7, -0.25), (9, f32::NAN)],
+        ..readable
+    };
+    assert!(ensure_readable_logprobs(&[unreadable_alternative]).is_err());
 }

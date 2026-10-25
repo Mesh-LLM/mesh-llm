@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **19 headers** and **122 exported functions**.
+Current generated surface: **20 headers** and **123 exported functions**.
 
 ## Quick navigation
 
@@ -98,6 +98,12 @@ Current generated surface: **19 headers** and **122 exported functions**.
         <a href="#skippy-fn-skippy-laya-model-memory-v1"><code>skippy_laya_model_memory_v1</code></a>
         <a href="#skippy-fn-skippy-laya-tokenize"><code>skippy_laya_tokenize</code></a>
         <a href="#skippy-fn-skippy-laya-read"><code>skippy_laya_read</code></a>
+      </div>
+    </section>
+    <section class="skippy-api-index__group">
+      <a class="skippy-api-index__group-title" href="#skippy-header-logprobs-h"><code>logprobs.h</code><span>1 function</span></a>
+      <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-session-take-token-logprobs"><code>skippy_session_take_token_logprobs</code></a>
       </div>
     </section>
     <section class="skippy-api-index__group">
@@ -252,6 +258,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
 | `include/skippy/execution.h` | Prefill, decode, verification, activation-frame, and batched execution. |
 | `include/skippy/laya.h` | Full-model Laya decision reads (encoder + typed decision head). Laya is non-autoregressive: one forward pass scores every option of every question. It does not load through `skippy_model_open`; it owns its GGUF, tokenizer, and execution context, which runs on the CPU backend or on a device the caller names, with CPU fallback. Callers build the per-question token sequences (see `skippy_laya_tokenize`) and read raw scorer and action-head logits back; temperature and softmax stay on the caller side. |
+| `include/skippy/logprobs.h` | Per-token log-probabilities recorded while sampling, for OpenAI-style logprobs. A decode call whose sampling config sets SKIPPY_SAMPLING_FLAG_LOGPROBS records, for every token it samples, the token's log-probability and the most likely alternatives. The distribution is the model's raw one: softmax of the logits at temperature 1, before penalties, truncation or temperature, which is what OpenAI-compatible clients and output verifiers compare against. |
 | `include/skippy/model_package.h` | Inspects GGUF tensors and writes metadata and multi-part packages. |
 | `include/skippy/model_source.h` | Callback-backed model construction and load-time quantization. |
 | `include/skippy/runtime.h` | Model loading, session lifecycle, and llama.cpp context access. |
@@ -948,6 +955,25 @@ LLAMA_API enum skippy_status skippy_laya_read(
         size_t logits_capacity,
         float * out_act_logits,
         size_t act_logits_capacity,
+        struct skippy_error ** out_error);
+```
+
+<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
+
+<a id="skippy-header-logprobs-h"></a>
+### `logprobs.h`
+
+<a id="skippy-fn-skippy-session-take-token-logprobs"></a>
+#### `skippy_session_take_token_logprobs`
+
+Moves recorded per-token log-probabilities out of the session, oldest first. Copies up to capacity entries into out_entries and removes them from the session. With out_entries NULL or capacity 0, nothing is removed and out_count receives the number of pending entries. Entries are also dropped when the session resets.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_take_token_logprobs(
+         struct skippy_session * session,
+        struct skippy_token_logprobs * out_entries,
+        size_t capacity,
+        size_t * out_count,
         struct skippy_error ** out_error);
 ```
 
@@ -2043,15 +2069,16 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
 - `asr.h`: `skippy_asr_model`, `skippy_asr_result`, `skippy_asr_info_v1`, `skippy_asr_transcribe_params_v1`, `skippy_asr_segment_v1`, `SKIPPY_ASR_INFO_V1_ABI_VERSION = 1`, `SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SEGMENT_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SAMPLE_RATE = 16000`, `SKIPPY_ASR_MAX_SAMPLES = (SKIPPY_ASR_SAMPLE_RATE * 60 * 30)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 72`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 73`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`
 - `laya.h`: `skippy_laya_model`, `skippy_laya_qtype`, `skippy_laya_info_v1`, `skippy_laya_memory_v1`, `skippy_laya_sequence`, `SKIPPY_LAYA_INFO_V1_ABI_VERSION = 1`, `SKIPPY_LAYA_QTYPE_COUNT = 3`, `SKIPPY_LAYA_MEMORY_V1_ABI_VERSION = 1`, `SKIPPY_LAYA_MAX_SEQUENCE_TOKENS = 4096`
+- `logprobs.h`: `skippy_logprob_entry`, `skippy_token_logprobs`, `SKIPPY_MAX_TOP_LOGPROBS = 20`
 - `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_tensor_info`
 - `model_source.h`: `skippy_model`, `skippy_runtime_config`, `skippy_model_imatrix_entry_v1`, `skippy_model_tensor_source_v1`, `SKIPPY_MODEL_TENSOR_SOURCE_V1_ABI_VERSION = 1`
 - `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_activation_boundary_desc`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`, `SKIPPY_TRISTATE_AUTO = (-1)`, `SKIPPY_TRISTATE_FALSE = (0)`, `SKIPPY_TRISTATE_TRUE = (1)`
-- `sampling.h`: `skippy_sampler_type`, `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`, `SKIPPY_MAX_SAMPLERS = 16`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKERS = 8`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES = 16`, `SKIPPY_SAMPLING_FLAG_ENABLED = (1u << 0)`, `SKIPPY_SAMPLING_FLAG_IGNORE_EOS = (1u << 1)`
+- `sampling.h`: `skippy_sampler_type`, `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`, `SKIPPY_MAX_SAMPLERS = 16`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKERS = 8`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES = 16`, `SKIPPY_SAMPLING_FLAG_ENABLED = (1u << 0)`, `SKIPPY_SAMPLING_FLAG_IGNORE_EOS = (1u << 1)`, `SKIPPY_SAMPLING_FLAG_LOGPROBS = (1u << 2)`
 - `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`
 - `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`
 - `stage_plan.h`: `skippy_stage_planner`, `skippy_stage_plan`, `skippy_stage_plan_string_ref_v1`, `skippy_stage_planner_tensor_v1`, `skippy_stage_planner_profile_v1`, `skippy_stage_planner_config_v1`, `skippy_stage_plan_value_kind`, `skippy_stage_plan_state_kind`, `skippy_stage_plan_state_access`, `skippy_stage_plan_state_residency`, `skippy_stage_plan_desc_v1`, `skippy_stage_plan_profile_desc_v1`, `skippy_stage_plan_value_desc_v1`, `skippy_stage_plan_state_desc_v1`, `SKIPPY_STAGE_PLANNER_CONFIG_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_TENSOR_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_PROFILE_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_MAX_DIMS = 4`

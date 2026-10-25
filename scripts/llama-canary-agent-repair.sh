@@ -19,6 +19,7 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRUSTED_ROOT="$ROOT"
+JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 
 # shellcheck disable=SC1091
 source "$ROOT/scripts/lib/macos-deployment-target.sh"
@@ -712,11 +713,14 @@ run_prepare() {
 }
 
 run_full_build() {
-  local archive arches
+  local archive arches jinja_environment jinja_python
   : > "$BUILD_LOG"
+  jinja_environment="$STATE_DIR/jinja-env"
+  jinja_python="${SKIPPY_WORKLOAD_SDK_PYTHON:-python3}"
   echo "trusted candidate gate: build" | tee -a "$BUILD_LOG"
   run_verification_logged "complete patched llama.cpp build" "$BUILD_LOG" env \
-    LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- \
+    LLAMA_STAGE_UPSTREAM_TESTS=ON UV_PROJECT_ENVIRONMENT="$jinja_environment" \
+    uv run --locked --no-python-downloads --python "$jinja_python" --project "$JINJA_PROJECT" -- \
     arch -arm64 bash scripts/build-llama.sh --build-only -DCMAKE_OSX_ARCHITECTURES=arm64 -DGGML_METAL_EMBED_LIBRARY=ON \
     || return 1
   archive="$LLAMA_STAGE_BUILD_DIR/src/libllama.a"
@@ -726,7 +730,8 @@ run_full_build() {
     return 1
   fi
   run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
-    uv run --no-project --with jinja2==3.1.6 -- \
+    env UV_PROJECT_ENVIRONMENT="$jinja_environment" \
+    uv run --locked --no-python-downloads --python "$jinja_python" --project "$JINJA_PROJECT" -- \
     arch -arm64 bash scripts/check-skippy-generated-family-patch.sh --full-native-suite || return 1
   run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
     cargo build -p skippy-runtime -p skippy-cli -p skippy-package-builder -p skippy-correctness -p skippy-topology --bins \

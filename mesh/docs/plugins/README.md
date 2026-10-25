@@ -541,9 +541,10 @@ the installed archive, extracted files, and local plugin metadata.
 ## Default Plugins
 
 The reviewed default list is `mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`.
-Today it contains `capsules` 0.1.4. Each entry pins a release version and an
-archive SHA-256 per supported platform. Payment and wallet plugins are excluded
-from the default list.
+Today it contains `capsules` 0.1.4. Each entry pins a release version, the
+GitHub repository whose release publishes it, and an archive SHA-256 per
+supported platform. Payment and wallet plugins are excluded from the default
+list.
 
 **A node installs a default only from its release's bundled copy, never from
 a download.** The bundled copy is the plugin archive in a `plugins/` directory
@@ -558,8 +559,12 @@ beside the `mesh-llm` binary; native packages keep it at
   directory at all ("this install bundles no plugins") it is an info line;
   a `plugins/` directory without the archive is a warning. Nothing is
   downloaded instead, and there is no fallback. A digest mismatch is refused.
-  Release archives do not carry a `plugins/` directory yet, so until they do
-  every install reports the info line.
+- **What a release bundles:** macOS and Linux release archives carry each
+  pinned default's release archive in `plugins/`. The release job downloads it
+  from the plugin's own GitHub release, checks it against the pin, and fails
+  unless the bundle's host installs it. `mesh-llm update` installs the new
+  release's `plugins/` with the host. A development build carries none, so it
+  reports the info line.
 - **Windows:** the list pins no Windows build, so the default reports "no
   reviewed release for this platform".
 
