@@ -45,6 +45,12 @@ impl PluginMessageHistory {
         self.seen_plugin_message_order.push_back((now, message_id));
         true
     }
+
+    /// Whether `message_id` is already recorded, without recording it.
+    #[cfg(test)]
+    pub(crate) fn contains(&self, message_id: &str) -> bool {
+        self.seen_plugin_messages.contains_key(message_id)
+    }
 }
 
 #[cfg(test)]

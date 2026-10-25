@@ -349,6 +349,15 @@ impl Node {
         self.plugin_frame_telemetry.source_mismatch_total()
     }
 
+    /// Whether this node already accepted `message_id` for plugin delivery.
+    #[cfg(test)]
+    pub(crate) async fn has_plugin_message(&self, message_id: &str) -> bool {
+        self.plugin_message_history
+            .lock()
+            .await
+            .contains(message_id)
+    }
+
     pub(crate) async fn remember_plugin_message(&self, message_id: String) -> bool {
         let now = std::time::Instant::now();
         self.plugin_message_history
