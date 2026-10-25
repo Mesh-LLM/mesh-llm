@@ -1,7 +1,7 @@
-From 566be2cc0361f37ac6f99bab7e87a5806c089251 Mon Sep 17 00:00:00 2001
+From a115ba549cfcfe35cc94f1be4ce9207677860838 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH 2/2] feat(skippy): realize admitted stages from live graphs
 
 ---
  src/skippy/abi.cpp                      |   59 ++
@@ -22,15 +22,15 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
  src/skippy/glm_dsa.h                    |   14 +
- src/skippy/graph_build_inputs.h         |  109 +++
+ src/skippy/graph_build_inputs.h         |  109 ++
  src/skippy/graph_dependencies.cpp       |   57 ++
  src/skippy/graph_dependencies.h         |   11 +
- src/skippy/graph_identity.cpp           | 1092 +++++++++++++++++++++
+ src/skippy/graph_identity.cpp           | 1092 ++++++++++++++++++++
  src/skippy/graph_identity.h             |   71 ++
  src/skippy/model_lifecycle.cpp          |  155 +++
  src/skippy/model_load_config.cpp        |  213 ++++
  src/skippy/model_load_config_internal.h |   35 +
- src/skippy/model_loading.cpp            | 1191 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1202 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  463 +++++++++
@@ -48,10 +48,10 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_execution_contract.cpp |   72 ++
  src/skippy/stage_execution_contract.h   |   15 +
- src/skippy/stage_plan.cpp               |  709 ++++++++++++++
+ src/skippy/stage_plan.cpp               |  709 +++++++++++++
  src/skippy/stage_realization.cpp        |  293 ++++++
  src/skippy/stage_realization.h          |   21 +
- src/skippy/stage_slice_plan.cpp         |  871 +++++++++++++++++
+ src/skippy/stage_slice_plan.cpp         |  871 ++++++++++++++++
  src/skippy/stage_slice_plan.h           |  119 +++
  src/skippy/state.cpp                    | 1071 ++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
@@ -62,7 +62,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  372 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 58 files changed, 16165 insertions(+)
+ 58 files changed, 16176 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -6310,10 +6310,10 @@ index 000000000..554d2bdd3
 +skippy_context_capabilities skippy_context_capabilities_of(const llama_model * model);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..708f8d392
+index 000000000..fa4cbe395
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,1191 @@
+@@ -0,0 +1,1202 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -7048,11 +7048,19 @@ index 000000000..708f8d392
 +        params.cb_eval_user_data = stage_model;
 +    }
 +    if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
-+        params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
++        // The shared layout remains the automatic policy for hybrid models.
++        // A caller can opt into separate per-lane KV explicitly.
++        params.kv_unified = config == nullptr || config->kv_unified != SKIPPY_TRISTATE_FALSE;
++        // A separate KV cache partitions n_ctx across n_seq_max. Reserve only
++        // the execution lanes in that layout, or each lane would receive half
++        // of its configured context. Unified KV keeps the spare sequence IDs
++        // used by the resident/cache and verification contracts.
++        if (params.kv_unified) {
++            params.n_seq_max = std::max<uint32_t>(2, stage_model->lane_count * 2);
++        }
 +        // Keep the default of zero rolling rollback snapshots. Verification
 +        // captures a checkpoint on demand; ordinary decode needs only the
 +        // current recurrent state, not two extra state copies per token.
-+        params.kv_unified = true;
 +    }
 +    // Multi-lane activation exports rely on the shared KV pool's batch order.
 +    if (activation_export_stage && stage_model->lane_count > 1 && !params.kv_unified) {
@@ -7487,7 +7495,10 @@ index 000000000..708f8d392
 +        skippy_apply_context_hardware_config(config, ctx_params);
 +    }
 +    if (llm_arch_is_recurrent(draft_model->arch) || llm_arch_is_hybrid(draft_model->arch)) {
-+        ctx_params.kv_unified = true;
++        ctx_params.kv_unified = config == nullptr || config->kv_unified != SKIPPY_TRISTATE_FALSE;
++        if (ctx_params.kv_unified) {
++            ctx_params.n_seq_max = std::max<uint32_t>(2, target_model->lane_count * 2);
++        }
 +    }
 +    ctx_params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
 +

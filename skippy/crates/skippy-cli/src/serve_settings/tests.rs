@@ -26,6 +26,38 @@ fn parse_test(args: &[&str]) -> Result<Cli> {
 }
 
 #[test]
+fn explicit_kv_layout_reaches_stage_config() {
+    let cli = parse_test(&[
+        "skippy",
+        "serve",
+        "--model-path",
+        "model.gguf",
+        "--kv-cache-unified=false",
+    ])
+    .unwrap();
+    let Command::Serve(args) = cli.command else {
+        panic!("expected serve")
+    };
+    let mut stage: StageConfig = serde_json::from_value(skippy_config::example_config()).unwrap();
+    args.public.settings.apply_stage(&mut stage).unwrap();
+    assert_eq!(stage.kv_unified, Some(false));
+
+    let cli = parse_with_environment(
+        ["skippy", "serve", "--model-path", "model.gguf"]
+            .into_iter()
+            .map(OsString::from),
+        |name| (name == "SKIPPY_SERVE_KV_CACHE_UNIFIED").then(|| "true".into()),
+    )
+    .unwrap();
+    let Command::Serve(args) = cli.command else {
+        panic!("expected serve")
+    };
+    let mut stage: StageConfig = serde_json::from_value(skippy_config::example_config()).unwrap();
+    args.public.settings.apply_stage(&mut stage).unwrap();
+    assert_eq!(stage.kv_unified, Some(true));
+}
+
+#[test]
 fn complete_help_groups_every_catalog_option() {
     let mut command = command();
     let help = command

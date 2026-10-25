@@ -125,8 +125,9 @@ pub struct RuntimeConfig {
     /// default (offloaded); `Some` forces the value.
     pub kv_offload: Option<bool>,
     /// Whether the KV cache is unified across lanes. `None` derives the value
-    /// from lane count; `Some(true)` and `Some(false)` select it explicitly.
-    /// Recurrent and hybrid models always use unified KV.
+    /// from lane count for dense models and uses unified KV for recurrent and
+    /// hybrid models. `Some(true)` and `Some(false)` select it explicitly;
+    /// multi-lane activation exports require unified KV.
     pub kv_unified: Option<bool>,
     /// Sliding-window-attention full (unshifted) cache window. `None`
     /// preserves llama.cpp's built-in default (full).

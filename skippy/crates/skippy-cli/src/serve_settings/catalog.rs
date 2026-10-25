@@ -176,6 +176,13 @@ pub const OPTIONS: &[OptionSpec] = &[
         "Offload live KV memory to the backend",
     ),
     option(
+        "kv-cache-unified",
+        "kv",
+        "kv_unified",
+        Kind::Bool,
+        "Share KV across lanes; false selects separate KV where supported",
+    ),
+    option(
         "swa-full",
         "kv",
         "swa_full",

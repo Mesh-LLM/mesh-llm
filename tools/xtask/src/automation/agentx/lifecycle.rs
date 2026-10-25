@@ -15,6 +15,7 @@ use std::time::Duration;
 pub(super) const STARTUP_TIMEOUT_SECS: u64 = 900;
 const LLAMA_CACHE_RAM_MIB_ENV: &str = "AGENTX_LLAMA_CACHE_RAM_MIB";
 const LLAMA_KV_UNIFIED_ENV: &str = "AGENTX_LLAMA_KV_UNIFIED";
+const SKIPPY_KV_UNIFIED_ENV: &str = "AGENTX_SKIPPY_KV_UNIFIED";
 const SKIPPY_MICROBATCH_TOKENS_ENV: &str = "AGENTX_SKIPPY_MICROBATCH_TOKENS";
 const SKIPPY_GENERATION_CONCURRENCY_ENV: &str = "AGENTX_SKIPPY_GENERATION_CONCURRENCY";
 const BASELINE_MICROBATCH_TOKENS: usize = 512;
@@ -56,6 +57,23 @@ fn llama_kv_layout_override() -> DynResult<Vec<String>> {
         Ok(value) => llama_kv_layout_arguments(Some(&value)),
         Err(std::env::VarError::NotPresent) => llama_kv_layout_arguments(None),
         Err(error) => Err(format!("{LLAMA_KV_UNIFIED_ENV}: {error}").into()),
+    }
+}
+
+fn skippy_kv_layout_arguments(value: Option<&str>) -> DynResult<Vec<String>> {
+    match value {
+        None => Ok(Vec::new()),
+        Some("1" | "true") => Ok(vec!["--kv-cache-unified=true".into()]),
+        Some("0" | "false") => Ok(vec!["--kv-cache-unified=false".into()]),
+        Some(_) => Err(format!("{SKIPPY_KV_UNIFIED_ENV} must be 0, 1, false, or true").into()),
+    }
+}
+
+fn skippy_kv_layout_override() -> DynResult<Vec<String>> {
+    match std::env::var(SKIPPY_KV_UNIFIED_ENV) {
+        Ok(value) => skippy_kv_layout_arguments(Some(&value)),
+        Err(std::env::VarError::NotPresent) => skippy_kv_layout_arguments(None),
+        Err(error) => Err(format!("{SKIPPY_KV_UNIFIED_ENV}: {error}").into()),
     }
 }
 
@@ -115,9 +133,10 @@ fn skippy_diagnostic_arguments(generation_concurrency: Option<usize>) -> Vec<Str
 }
 
 fn skippy_overrides() -> DynResult<Vec<String>> {
-    Ok(skippy_diagnostic_arguments(positive_env_override(
-        SKIPPY_GENERATION_CONCURRENCY_ENV,
-    )?))
+    let mut arguments =
+        skippy_diagnostic_arguments(positive_env_override(SKIPPY_GENERATION_CONCURRENCY_ENV)?);
+    arguments.extend(skippy_kv_layout_override()?);
+    Ok(arguments)
 }
 
 fn launch_microbatch_tokens(arguments: &[String], engine: &str) -> DynResult<usize> {
@@ -410,6 +429,15 @@ fn launch_identity(
         .collect();
     let microbatch_tokens = launch_microbatch_tokens(&arguments, engine)?;
     let llama_unified_kv = engine == "llama" && arguments.iter().any(|arg| arg == "--kv-unified");
+    let skippy_kv_unified = if engine == "skippy" {
+        arguments.iter().find_map(|arg| match arg.as_str() {
+            "--kv-cache-unified=true" => Some(true),
+            "--kv-cache-unified=false" => Some(false),
+            _ => None,
+        })
+    } else {
+        None
+    };
     let requested_generation_concurrency = arguments
         .windows(2)
         .find(|pair| pair[0] == "--generation-concurrency")
@@ -422,10 +450,11 @@ fn launch_identity(
         "binary_sha256":crate::product::digest::file_sha256(&server.executable).map_err(|error|error.error)?,
         "runtime_tree_sha256":crate::product::digest::tree_sha256(&runtime).map_err(|error|error.error)?,
         "harness_lock_sha256":crate::product::digest::file_sha256(&input.root.join("skippy/evals/agentx/uv.lock")).map_err(|error|error.error)?,
-        "capacity_policy":if llama_unified_kv { "diagnostic_unified_kv_common_128k_trace_limit" } else { super::capacity::policy(engine, input.profile) },
+        "capacity_policy":if llama_unified_kv { "diagnostic_unified_kv_common_128k_trace_limit" } else if skippy_kv_unified == Some(false) { "auto_capacity_explicit_separate_kv" } else { super::capacity::policy(engine, input.profile) },
         "context_tokens":matched_llama_context.map(|total| if llama_unified_kv { u64::from(total) } else { trace_context::LIMIT }),
         "total_context_tokens":matched_llama_context,
         "llama_kv_unified":if engine == "llama" { Some(llama_unified_kv) } else { None },
+        "skippy_kv_unified":skippy_kv_unified,
         "generation_slots":null,"offered_sessions":concurrency,
         "requested_generation_concurrency":requested_generation_concurrency,
         "generation_concurrency_policy":if engine == "llama" { "explicit_parallel" }
@@ -689,6 +718,26 @@ mod tests {
         }
         for value in ["", "on", "off", "2"] {
             assert!(llama_kv_layout_arguments(Some(value)).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn skippy_kv_layout_control_is_explicit_and_rejects_invalid_values() {
+        assert!(skippy_kv_layout_arguments(None).unwrap().is_empty());
+        for value in ["1", "true"] {
+            assert_eq!(
+                skippy_kv_layout_arguments(Some(value)).unwrap(),
+                ["--kv-cache-unified=true"]
+            );
+        }
+        for value in ["0", "false"] {
+            assert_eq!(
+                skippy_kv_layout_arguments(Some(value)).unwrap(),
+                ["--kv-cache-unified=false"]
+            );
+        }
+        for value in ["", "on", "off", "2"] {
+            assert!(skippy_kv_layout_arguments(Some(value)).is_err(), "{value}");
         }
     }
 }

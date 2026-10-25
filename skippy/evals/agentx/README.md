@@ -155,6 +155,12 @@ with a default Skippy c=4 cell from the same source and machine, with identical
 traces and model weights. These diagnostic variants do not replace the default
 llama-versus-Skippy ABBAAB qualification.
 
+To isolate hybrid-model KV layout, set `AGENTX_SKIPPY_KV_UNIFIED=false` on the
+native AgentX runner. The runner passes `--kv-cache-unified=false` only to the
+Skippy server and records the explicit layout in `launch.json`; unset keeps the
+normal automatic layout. Compare against a same-source, same-host default-layout
+run before treating the change as a throughput improvement.
+
 ## Contention diagnostic, smoke, and full profiles
 
 The `contention` profile is a separate **diagnostic** sweep at c=4/8/16. It

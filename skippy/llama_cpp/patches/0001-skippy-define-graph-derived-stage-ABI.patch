@@ -1,7 +1,7 @@
-From 68285b165368bff4fd3f387c6f2151fd7966fb3b Mon Sep 17 00:00:00 2001
+From ef39d3a7c9099a4f60d60b25ce4f5adc9301604d Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH] feat(skippy): define graph-derived native ABI
+Subject: [PATCH 1/2] feat(skippy): define graph-derived native ABI
 
 ---
  include/skippy.h                      |  29 +++
@@ -1055,7 +1055,7 @@ index 000000000..5d77f4804
 +#endif // SKIPPY_MODEL_SOURCE_H
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 new file mode 100644
-index 000000000..2486a85b3
+index 000000000..d6a063366
 --- /dev/null
 +++ b/include/skippy/runtime.h
 @@ -0,0 +1,289 @@
@@ -1169,7 +1169,7 @@ index 000000000..2486a85b3
 +    // Tri-state KV/session controls resolved from `model_fit` config.
 +    /** @brief Whether K/V tensors are offloaded to the compute backend (mirrors upstream `offload_kqv`). */
 +    int32_t kv_offload;
-+    /** @brief Whether the KV cache is unified across sequences/lanes (mirrors upstream `kv_unified`). AUTO derives the setting from lane count; recurrent and hybrid models force it true. */
++    /** @brief Whether KV is unified across lanes (mirrors upstream `kv_unified`). AUTO shares recurrent/hybrid KV; explicit FALSE uses separate KV unless multi-lane activation export requires sharing. */
 +    int32_t kv_unified;
 +    /** @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`). */
 +    int32_t swa_full;

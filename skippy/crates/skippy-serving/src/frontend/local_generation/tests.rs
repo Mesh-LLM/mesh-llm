@@ -275,7 +275,10 @@ fn recurrent_test_backend_with_lanes(
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
         kv_offload: None,
-        kv_unified: None,
+        kv_unified: std::env::var("SKIPPY_RECURRENT_CACHE_TEST_KV_UNIFIED")
+            .ok()
+            .map(|value| value.parse::<bool>())
+            .transpose()?,
         swa_full: None,
         cache_idle_slots,
         resident_tensor_names: Vec::new(),
