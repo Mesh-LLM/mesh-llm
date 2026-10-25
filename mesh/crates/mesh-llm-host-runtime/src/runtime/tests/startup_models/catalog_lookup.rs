@@ -38,3 +38,22 @@ async fn a_model_name_is_looked_up_in_the_catalog() {
 
     assert!(called.load(Ordering::SeqCst));
 }
+
+#[tokio::test]
+async fn a_directory_named_like_a_catalog_model_is_still_looked_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let named_like_a_model = dir.path().join("Qwen3-8B-Q4_K_M");
+    std::fs::create_dir(&named_like_a_model).unwrap();
+    let called = Arc::new(AtomicBool::new(false));
+
+    catalog_model_unless_local_file(
+        named_like_a_model.to_string_lossy().into_owned(),
+        recording_lookup(&called),
+    )
+    .await;
+
+    assert!(
+        called.load(Ordering::SeqCst),
+        "the directory skipped the catalog lookup"
+    );
+}

@@ -1569,7 +1569,7 @@ pub(super) async fn catalog_model_unless_local_file<F>(
 where
     F: FnOnce(&str) -> Option<models::remote_catalog::RemoteCatalogModel> + Send + 'static,
 {
-    if Path::new(&query).exists() {
+    if Path::new(&query).is_file() {
         return None;
     }
     tokio::task::spawn_blocking(move || lookup(&query))
