@@ -107,10 +107,15 @@ impl Manager {
     }
 }
 
+/// Most peer requests one membership serves at once. Further streams wait in
+/// the channel, which pushes back on the connection.
+const MEMBERSHIP_INGRESS_STREAMS: usize = 256;
+
 /// Serves a mesh membership's inbound HTTP tunnel streams through the same
 /// in-process ingress as the node it belongs to, until the channel closes or
-/// the task is aborted. A membership carries no stage transport, so it has no
-/// [`Manager`].
+/// the task is aborted. Aborting it also cancels every stream it is serving,
+/// so none outlives the membership. A membership carries no stage transport,
+/// so it has no [`Manager`].
 pub(crate) async fn serve_membership_http_ingress(
     node: Node,
     mut tunnel_http_rx: tokio::sync::mpsc::Receiver<(
@@ -122,10 +127,19 @@ pub(crate) async fn serve_membership_http_ingress(
     affinity: crate::network::affinity::AffinityRouter,
 ) {
     let ingress = HttpIngress { targets, affinity };
-    while let Some((remote, send, recv)) = tunnel_http_rx.recv().await {
+    let slots = Arc::new(tokio::sync::Semaphore::new(MEMBERSHIP_INGRESS_STREAMS));
+    let mut streams = tokio::task::JoinSet::new();
+    loop {
+        let Ok(slot) = slots.clone().acquire_owned().await else {
+            return;
+        };
+        let Some((remote, send, recv)) = tunnel_http_rx.recv().await else {
+            return;
+        };
         let node = node.clone();
         let ingress = ingress.clone();
-        tokio::spawn(async move {
+        streams.spawn(async move {
+            let _slot = slot;
             if let Err(e) =
                 inbound_http::handle_inbound_http_stream(node, remote, send, recv, Some(ingress))
                     .await
@@ -133,6 +147,7 @@ pub(crate) async fn serve_membership_http_ingress(
                 tracing::warn!("Inbound membership HTTP tunnel stream error: {e}");
             }
         });
+        while streams.try_join_next().is_some() {}
     }
 }
 

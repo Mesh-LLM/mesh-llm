@@ -56,9 +56,11 @@ the cache has no matching runtime.
 A serving node can serve the models it has loaded into further meshes without
 loading them again. Each membership gets its own node identity, owner
 allowlist, peers and loopback OpenAI API port, and its peers never learn about
-the node's other meshes. Requests from a membership's peers run on this node's
-model only; requests to a membership's API port route among this node and that
-mesh's peers only.
+the node's other meshes. A membership never peers with the node or with its
+other memberships, and refuses peers that announce a different mesh. Requests
+from a membership's peers run on this node's model only. Requests to a
+membership's API port run on this node's model when it serves it, and
+otherwise on that mesh's peers, never on the peers of the node's other meshes.
 
 ```rust,no_run
 use mesh_llm_sdk::{MeshMembershipConfig, MeshNode};
@@ -68,15 +70,14 @@ async fn share(node: &MeshNode, team_owner_ids: Vec<String>, team_tokens: Vec<St
     let team = node
         .add_membership(MeshMembershipConfig {
             name: "team".into(),
-            join_tokens: team_tokens,
+            join_tokens: team_tokens, // every member's, this node's own included
             trusted_owners: team_owner_ids,
             api_port: 9338,
             node_key_path: None,
             enumerate_host: false,
         })
         .await?;
-    // Other members join this node by `team.invite_token`; requests to
-    // `team.api_base_url` may run on any of them.
+    // Other members join this node by `team.invite_token`.
     println!("{} {}", team.api_base_url, team.invite_token);
     node.remove_membership("team").await?;
     Ok(())
@@ -84,10 +85,25 @@ async fn share(node: &MeshNode, team_owner_ids: Vec<String>, team_tokens: Vec<St
 ```
 
 A membership needs an owner key (`owner_key`), since its peers admit it by
-owner. Adding a membership with a name already in use replaces it, which is how
-to change its allowlist or tokens. To keep the node's own API port to the local
-models only, start the node without join tokens and with an `Allowlist` trust
-policy that lists no other owners.
+owner. Join tokens must be unsigned invite tokens; `add_membership` checks them
+before it returns, and `memberships()` reports a failing join in `join_error`.
+The invite token carries the node's addresses: the membership keeps its key and
+UDP port across restarts when it can, and when the port is taken the token
+changes and has to be shared again.
+
+Adding a membership with a name already in use replaces it, which is how to
+change its allowlist or tokens. A replacement that fails its checks (name,
+port, tokens, key) leaves the old one running. One that fails while starting
+has already stopped the old one; it starts the old one again, and the error
+says whether that worked.
+
+To keep the node's own API port to the local models only, start the node
+without join tokens and with an `Allowlist` trust policy that lists no other
+owners. A membership advertises what the node serves, not the model files on
+disk or what the node's own mesh asks for. It carries no split-stage
+transport, plugins or owner control, and it shares the node's payment
+settings. Its allowlist is its own, but owner and certificate revocations in
+the node's trust store apply to it too.
 
 ## Live transcription
 

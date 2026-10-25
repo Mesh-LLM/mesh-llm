@@ -29,29 +29,41 @@ async fn owned_node(owner: &OwnerKeypair, trusted: &[&OwnerKeypair]) -> Result<N
 }
 
 async fn membership_of(node: &Node, trusted: &[&OwnerKeypair]) -> Result<Node> {
+    named_membership_of(node, "team", trusted).await
+}
+
+async fn named_membership_of(node: &Node, name: &str, trusted: &[&OwnerKeypair]) -> Result<Node> {
     let owners: Vec<String> = trusted.iter().map(|owner| owner.owner_id()).collect();
     let (membership, _channels) = node
         .start_membership_node(MembershipNodeConfig {
+            mesh_name: name,
             secret_key: SecretKey::generate(),
             relay: RelayConfig {
                 urls: &[],
                 auths: &HashMap::new(),
                 policy: RelayPolicy::ExplicitlyDisabled,
             },
+            quic_port: None,
             trusted_owners: &owners,
             enumerate_host: false,
         })
         .await?;
-    node.memberships
-        .insert(
-            "team".into(),
-            super::super::MembershipEntry {
-                node: membership.clone(),
-                api_port: 0,
-                tasks: Vec::new(),
-            },
-        )
-        .await;
+    let entry = super::super::MembershipEntry {
+        node: membership.clone(),
+        api_port: 0,
+        key_path: std::path::PathBuf::from(format!("{name}.key")),
+        config: crate::runtime::MeshMembershipConfig {
+            name: name.into(),
+            join_tokens: Vec::new(),
+            trusted_owners: owners.clone(),
+            api_port: 0,
+            node_key_path: None,
+            enumerate_host: false,
+        },
+        join_error: Default::default(),
+        tasks: Vec::new(),
+    };
+    assert!(node.memberships.insert(name.into(), entry).await.is_ok());
     Ok(membership)
 }
 
@@ -221,5 +233,48 @@ async fn a_membership_renews_its_certificate_without_saving_the_nodes_file() -> 
         node.owner_attestation.lock().await.as_ref(),
         "the node's own renewal is what the file holds"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_membership_never_peers_with_its_node_or_its_siblings() -> Result<()> {
+    let me = test_owner_keypair(0x51, 0x52);
+    let node = owned_node(&me, &[&me]).await?;
+    let team = named_membership_of(&node, "team", &[&me]).await?;
+    let family = named_membership_of(&node, "family", &[&me]).await?;
+
+    for (from, to) in [(&team, &node), (&team, &family)] {
+        let error = from
+            .join_membership(&to.invite_token().await)
+            .await
+            .expect_err("a membership must not join another mesh its node serves");
+        assert!(format!("{error:#}").contains("another mesh"), "{error:#}");
+    }
+    // The node itself refuses to dial its membership, whatever the token says.
+    assert!(node.join(&team.invite_token().await).await.is_err());
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    for member in [&node, &team, &family] {
+        assert!(peer_ids(member).await.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_membership_refuses_a_peer_announcing_another_mesh() -> Result<()> {
+    let me = test_owner_keypair(0x51, 0x52);
+    let node = owned_node(&me, &[&me]).await?;
+    let membership = membership_of(&node, &[&me]).await?;
+    // Trusted by owner, but already in a different mesh.
+    let elsewhere = owned_node(&me, &[&me]).await?;
+    elsewhere.set_mesh_id_force("another-mesh".into()).await;
+    let _ = elsewhere.join(&membership.invite_token().await).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(!peer_ids(&membership).await.contains(&elsewhere.id()));
+
+    // A node not yet in any mesh is welcome, and adopts this one.
+    let newcomer = owned_node(&me, &[&me]).await?;
+    newcomer.join(&membership.invite_token().await).await?;
+    wait_for_peer(&membership, newcomer.id()).await;
+    assert_eq!(newcomer.mesh_id().await, membership.mesh_id().await);
     Ok(())
 }

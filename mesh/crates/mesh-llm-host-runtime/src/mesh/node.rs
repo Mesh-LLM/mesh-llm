@@ -8,14 +8,17 @@ mod membership;
 mod routing_telemetry;
 mod startup;
 
-pub(crate) use membership::{MembershipEntry, MembershipNodeConfig, MeshMemberships};
+pub(crate) use membership::{
+    LocalEndpoints, MembershipEntry, MembershipNodeConfig, MeshMemberships,
+    membership_token_endpoint,
+};
 
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
 use startup::{
-    advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime, startup_secret_key,
-    wait_for_endpoint_online,
+    advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime,
+    saved_owner_attestation_path, startup_secret_key, wait_for_endpoint_online,
 };
 pub(crate) use startup::{stamp_plugin_event_source, startup_transport_config};
 
@@ -218,6 +221,11 @@ pub struct Node {
         Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<crate::runtime::ModelIntent>>>>,
     /// Further meshes this node serves its models into (`node::membership`).
     pub(crate) memberships: MeshMemberships,
+    /// This node's endpoint and its memberships', shared among them: none may
+    /// peer with another.
+    pub(crate) local_endpoints: LocalEndpoints,
+    /// A membership node: it keeps to the one mesh it was started for.
+    pub(crate) is_membership: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -923,7 +931,9 @@ impl Node {
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
-            owner_attestation_path: default_node_ownership_path().ok(),
+            owner_attestation_path: saved_owner_attestation_path(),
+            local_endpoints: LocalEndpoints::default(),
+            is_membership: false,
         };
 
         node.maybe_start_control_listener(
@@ -1112,6 +1122,8 @@ impl Node {
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
             owner_attestation_path: None,
+            local_endpoints: LocalEndpoints::default(),
+            is_membership: false,
         }
     }
 

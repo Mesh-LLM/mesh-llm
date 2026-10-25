@@ -170,7 +170,8 @@ pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_local_fit_bytes,
 };
 pub(crate) use node::{
-    MembershipEntry, MembershipNodeConfig, PeerDownReport, peer_down_endpoint_id,
+    MembershipEntry, MembershipNodeConfig, PeerDownReport, membership_token_endpoint,
+    peer_down_endpoint_id,
 };
 pub(crate) use peer_state::{
     ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, http_routable_models,

@@ -65,7 +65,8 @@ impl MeshNode {
 
     /// Serves this node's models into a further mesh, with its own identity,
     /// owner allowlist, peers and local API port, replacing a membership of
-    /// the same name, which stops first. The models are not loaded again.
+    /// the same name. The models are not loaded again. See the crate README
+    /// for what a failed replacement leaves running.
     pub async fn add_membership(
         &self,
         config: MeshMembershipConfig,
@@ -78,6 +79,7 @@ impl MeshNode {
         self.handle.remove_membership(name).await
     }
 
+    /// The running memberships, with their peers and any join failure.
     pub async fn memberships(&self) -> anyhow::Result<Vec<MeshMembershipStatus>> {
         self.handle.memberships().await
     }

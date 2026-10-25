@@ -376,9 +376,11 @@ loading its models again: the Rust SDK's `MeshNode::add_membership`, described
 in the [SDK README](../crates/mesh-llm-sdk/README.md#serve-into-further-meshes).
 Each membership is a separate node identity with its own owner allowlist
 (always enforced), peers, gossip and loopback API port, sharing the serving
-node's models and hardware. Its peers do not see the serving node's own mesh or
-its other memberships, and requests from them run on the local model only.
-Memberships do not carry split-stage transport, plugins or owner control.
+node's models and hardware. It never peers with the serving node or its other
+memberships, and refuses peers that announce a different mesh, so its peers do
+not see the serving node's own mesh or its other memberships. Requests from them
+run on the local model only. Memberships do not carry split-stage transport,
+plugins or owner control.
 
 ## Networking notes
 

@@ -465,17 +465,25 @@ pub(super) async fn run_auto_handle_control_request(
             run_auto_handle_model_intent(ctx, intent).await;
             false
         }
+        // Membership changes take seconds (relay, endpoint close) and apply
+        // one at a time among themselves, so they run beside the control loop.
+        // One still under way at shutdown closes itself.
         api::RuntimeControlRequest::AddMembership { config, resp } => {
             let membership = super::memberships::MembershipContext {
-                options: ctx.options,
-                node: ctx.node,
+                options: std::sync::Arc::new(ctx.options.clone()),
+                node: ctx.node.clone(),
                 targets: ctx.target_tx.subscribe(),
             };
-            let _ = resp.send(super::memberships::add_membership(membership, config).await);
+            tokio::spawn(async move {
+                let _ = resp.send(super::memberships::add_membership(&membership, config).await);
+            });
             false
         }
         api::RuntimeControlRequest::RemoveMembership { name, resp } => {
-            let _ = resp.send(super::memberships::remove_membership(ctx.node, &name).await);
+            let node = ctx.node.clone();
+            tokio::spawn(async move {
+                let _ = resp.send(super::memberships::remove_membership(&node, &name).await);
+            });
             false
         }
         api::RuntimeControlRequest::Memberships { resp } => {

@@ -31,12 +31,14 @@ async fn membership_of(
 ) -> (mesh::Node, mesh::TunnelChannels) {
     let owners: Vec<String> = trusted.iter().map(|owner| owner.owner_id()).collect();
     node.start_membership_node(mesh::MembershipNodeConfig {
+        mesh_name: "team",
         secret_key: iroh::SecretKey::generate(),
         relay: mesh::RelayConfig {
             urls: &[],
             auths: &HashMap::new(),
             policy: mesh::RelayPolicy::Disabled,
         },
+        quic_port: None,
         trusted_owners: &owners,
         enumerate_host: false,
     })

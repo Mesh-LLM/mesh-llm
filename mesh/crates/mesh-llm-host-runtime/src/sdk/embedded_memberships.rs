@@ -9,10 +9,10 @@ use anyhow::{Context, Result};
 impl EmbeddedServeHandle {
     /// Serves this node's models into a further mesh, with its own identity,
     /// owner allowlist, peers and local API port, replacing a membership of
-    /// the same name. A replacement refused for its port or key leaves the
-    /// old one running; otherwise the old one stops first, and if the new one
-    /// cannot start, neither runs. Returns once the membership accepts connections; its join tokens
-    /// are dialled in the background.
+    /// the same name. A replacement that fails its checks leaves the old one
+    /// running; one that fails while starting restarts the old one, and the
+    /// error says whether that worked. Returns once the membership accepts
+    /// connections; its join tokens are dialled in the background.
     pub async fn add_membership(
         &self,
         config: MeshMembershipConfig,
@@ -28,6 +28,7 @@ impl EmbeddedServeHandle {
             .await
     }
 
+    /// The running memberships, with their peers and any join failure.
     pub async fn memberships(&self) -> Result<Vec<MeshMembershipStatus>> {
         self.control(|resp| RuntimeControlRequest::Memberships { resp })
             .await
