@@ -209,8 +209,15 @@ FIXTURE_ROWS.forEach((row, index) => {
 //    `data-hardware` must be the bucket the catalog page gives that row's own
 //    displayed size. This is what caught Llama-4-Scout at 22.5 GB in the middle
 //    bucket, and the stale fallback row on the catalog page.
+// Only authored markup carries a bucket a human chose. The catalog page's own
+// renderRows() template also contains data-hardware, and its size is a
+// placeholder rather than a size, so the script block is out of scope here.
+// Of the rows that remain, the homepage section lists every model as static
+// markup and the catalog page carries one fallback row for a failed fetch.
+const authoredMarkup = (source) => source.replace(/<script>[\s\S]*?<\/script>/g, "");
+
 function authoredRows(source, surface) {
-  return source
+  return authoredMarkup(source)
     .split(/(?=<tr\b)/)
     .filter((chunk) => /\bdata-hardware="/.test(chunk))
     .map((chunk) => {
@@ -225,10 +232,9 @@ function authoredRows(source, surface) {
     });
 }
 
-const authored = [
-  ...authoredRows(homeSection, "the homepage catalog section"),
-  ...authoredRows(catalogPage, "the catalog page"),
-];
+const authoredHomeRows = authoredRows(homeSection, "the homepage catalog section");
+const authoredCatalogRows = authoredRows(catalogPage, "the catalog page");
+const authored = [...authoredHomeRows, ...authoredCatalogRows];
 assert.ok(authored.length > 0, "expected hand-authored catalog rows to check");
 
 for (const row of authored) {
@@ -255,14 +261,17 @@ for (const row of authored) {
 // 4. `meshllm/catalog` has no `capabilities` column, so the page must derive the
 //    tag from the row: `mmproj_json` marks the vision models, the model or repo
 //    name marks the code ones.
-const expectedCapabilities = [
-  ["", "Qwen3-14B must carry no capability tag"],
-  ["", "Qwen3-32B must carry no capability tag"],
-  ["", "Llama-4-Scout must carry no capability tag"],
-  ["Code", "Qwen3-Coder-30B must be tagged Code"],
-  ["Vision", "Qwen3.5-9B-Vision must be tagged Vision"],
-  ["", "Kimi-K2-Thinking must carry no capability tag"],
-];
+// Keyed by model name so the expectation cannot drift out of step with the
+// fixture order.
+const expectedCapabilities = {
+  "Qwen2.5-0.5B-Instruct-Q4_K_M": [],
+  "Qwen3-14B-Q4_K_M": [],
+  "Qwen3-32B-Q4_K_M": [],
+  "Llama-4-Scout-Q4_K_M": [],
+  "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M": ["Code"],
+  "Qwen3.5-9B-Vision-Q4_K_M": ["Vision"],
+  "unsloth/Kimi-K2-Thinking-GGUF:UD-Q4_K_XL": [],
+};
 
 const renderedCapabilities = renderedAttributes("data-capability");
 renderedCapabilities.forEach((capability, index) => {
@@ -279,8 +288,13 @@ renderedCapabilities.forEach((capability, index) => {
         `data-capability but no <option> offers it; the options are ${JSON.stringify(catalogCapabilities)}`,
     );
   }
-  const [expected, message] = expectedCapabilities[index];
-  assert.deepEqual(tags, expected === "" ? [] : [expected], message);
+  const name = FIXTURE_ROWS[index].name;
+  assert.ok(
+    Object.hasOwn(expectedCapabilities, name),
+    `the fixture row ${name} has no capability expectation`,
+  );
+  assert.deepEqual(tags, expectedCapabilities[name], `${name} must carry capability ` +
+    `${JSON.stringify(expectedCapabilities[name])}, got ${JSON.stringify(capability)}`);
 });
 
 // The homepage's hand-written capability tags must be selectable too.
@@ -297,5 +311,6 @@ for (const chunk of homeSection.split(/(?=<tr\b)/).filter((c) => /\bdata-capabil
 console.log(
   `Catalog filters: ${catalogHardware.length} hardware buckets selectable and contiguous, ` +
     `${catalogCapabilities.length} capability options derivable, ${authored.length} authored rows ` +
-    `bucketed by their own size.`,
+    `bucketed by their own size (${authoredHomeRows.length} homepage models + ` +
+    `${authoredCatalogRows.length} catalog fallback row).`,
 );
