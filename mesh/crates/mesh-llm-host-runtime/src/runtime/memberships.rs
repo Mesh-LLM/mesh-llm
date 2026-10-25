@@ -242,10 +242,6 @@ async fn start(
     prepared: Prepared,
     quic_port: Option<u16>,
 ) -> Result<MeshMembershipStatus> {
-    let listener = match prepared.listener {
-        Some(listener) => listener,
-        None => bind_api_port(config.api_port).await?,
-    };
     let quic_port = quic_port.or_else(|| read_quic_port(&prepared.key_path));
     let relay_auths: std::collections::HashMap<String, String> =
         ctx.options.relay_auth.iter().cloned().collect();
@@ -264,6 +260,19 @@ async fn start(
             enumerate_host: config.enumerate_host,
         })
         .await?;
+    // Bound once the endpoint is up, so a local client never waits on the
+    // relay; bound earlier only when a replacement moves to a new port.
+    let listener = match prepared.listener {
+        Some(listener) => listener,
+        None => match bind_api_port(config.api_port).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                node.close_endpoint().await;
+                ctx.node.local_endpoints.remove(node.id());
+                return Err(error);
+            }
+        },
+    };
     let join_error = Arc::new(Mutex::new(None));
     let affinity = AffinityRouter::new();
     let tasks = vec![

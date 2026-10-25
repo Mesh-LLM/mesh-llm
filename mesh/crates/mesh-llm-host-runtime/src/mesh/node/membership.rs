@@ -52,7 +52,7 @@ impl LocalEndpoints {
         }
     }
 
-    fn remove(&self, id: EndpointId) {
+    pub(crate) fn remove(&self, id: EndpointId) {
         if let Ok(mut ids) = self.0.write() {
             ids.remove(&id);
         }
