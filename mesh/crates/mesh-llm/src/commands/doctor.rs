@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mesh_llm_cli::{BinaryFlavor, DoctorCommand};
-use mesh_llm_host_runtime::command_support::network::local_http_client_builder;
 use mesh_llm_host_runtime::command_support::plugin::load_config;
 use mesh_llm_host_runtime::command_support::runtime_instances::{
     LocalInstanceSnapshot, runtime_root, scan_local_instances,
 };
+use mesh_llm_system::local_http::local_http_client_builder;
 
 const SKIPPY_NATIVE_LOG_FILE: &str = "skippy-native.log";
 const SKIPPY_DIAGNOSTIC_ENDPOINTS: &[(&str, &str, &str)] = &[

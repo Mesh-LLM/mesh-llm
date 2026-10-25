@@ -6,8 +6,8 @@ use std::path::Path;
 use mesh_llm_cli::runtime::RuntimeCommand;
 use mesh_llm_cli::{BinaryFlavor, MeshGuardrailCliMode};
 use mesh_llm_commands::runtime_native::NativeRuntimeConfigSelection;
-use mesh_llm_host_runtime::command_support::network::local_http_client_builder;
 use mesh_llm_host_runtime::command_support::plugin::{MeshConfig, load_config};
+use mesh_llm_system::local_http::local_http_client_builder;
 
 pub(crate) async fn dispatch_runtime_command(
     command: Option<&RuntimeCommand>,

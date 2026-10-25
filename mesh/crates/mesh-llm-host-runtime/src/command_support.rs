@@ -53,11 +53,6 @@ pub mod models {
     };
     pub use crate::models::{capabilities, catalog};
 }
-
-pub mod network {
-    pub use crate::network::local_http::local_http_client_builder;
-}
-
 pub mod plugin {
     pub use crate::plugin::{
         ExternalPluginSpec, GpuAssignment, GpuConfig, MeshConfig, PluginHostMode, PluginManager,
