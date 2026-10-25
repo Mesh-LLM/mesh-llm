@@ -13,7 +13,10 @@ futures before awaiting them and removing an uncalled private HEAD helper.
 The public finishers remain async methods; their future representation and
 allocation change. This restores the retained future-size tests, which also
 failed against the unchanged pinned source on this toolchain. The relative
-location predicate remains test-only with its classification test.
+location predicate, kept with its classification test, now serves
+`get_file_metadata`: its HEAD follows same-host redirects only, so a Xet- or
+LFS-backed file's metadata is read from the Hub's redirect to its CDN rather
+than from the CDN's answer, which has none of it.
 
 Token-precedence tests use
 child-process environments instead of mutating the parent test environment;

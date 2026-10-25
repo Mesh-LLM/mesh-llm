@@ -75,8 +75,7 @@ pub fn split_id(id: &str) -> (&str, &str) {
 /// Whether a `Location` header value is a relative reference (no scheme, no
 /// host), like `/Snowflake/repo/resolve/main/config.json`. Protocol-relative
 /// URLs (`//host/path`) carry a host and are treated as absolute.
-#[cfg(test)]
-fn is_relative_location(location: &str) -> bool {
+pub(crate) fn is_relative_location(location: &str) -> bool {
     Url::parse(location) == Err(url::ParseError::RelativeUrlWithoutBase)
         && !location.starts_with("//")
 }

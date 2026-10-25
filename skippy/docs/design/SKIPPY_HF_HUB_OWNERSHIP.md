@@ -78,7 +78,8 @@ methods. The retained future-size tests failed against both the unmodified
 pinned source and the initial import on this toolchain; boxing restores their
 original limits. This changes allocation and future representation, not the
 public async signatures. An uncalled private HEAD helper was removed and its
-independent relative-location predicate retained under test configuration.
+independent relative-location predicate retained under test configuration;
+`get_file_metadata` now uses that predicate to follow same-host redirects only.
 
 The imported suite and consumer checks are migration evidence, not a substitute
 for clean-install acquisition, cache reuse/removal, and standalone serving.

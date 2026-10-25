@@ -14,7 +14,7 @@ use reqwest::Url;
 
 use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash};
 use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
-use crate::client::encode_ref;
+use crate::client::{encode_ref, is_relative_location};
 use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
 
@@ -259,12 +259,10 @@ fn head_client(client: &crate::HFClient) -> &reqwest::Client {
 /// resolved against `url`. `None` for any other answer, including a redirect
 /// to another host such as the Xet or LFS CDN.
 fn same_host_redirect(url: &str, response: &reqwest::Response) -> Option<String> {
-    let location = location_header(response)?;
-    // `//host/path` names another host just as `https://host/path` does.
-    if location.starts_with("//") || Url::parse(location).is_ok() {
+    if !is_relative_location(location_header(response)?) {
         return None;
     }
-    Url::parse(url).ok()?.join(location).ok().map(String::from)
+    redirect_target(url, response)
 }
 
 /// Where a redirect answered for `url` points.
