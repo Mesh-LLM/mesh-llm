@@ -472,11 +472,12 @@ impl Node {
 
     /// Handle an inbound plugin-mesh frame carrying channel frames.
     ///
-    /// `remote` is the peer the frame arrived from, which is not necessarily its
-    /// origin: a relayed frame is re-encoded by each hop. The claimed
-    /// `source_peer_id` is unauthenticated until plugin frame origin signing
-    /// lands, so a mismatch with `remote` is recorded (throttled per peer) and
-    /// the frame keeps its current handling.
+    /// `remote` is the peer the frame arrived from. No frame carries an origin
+    /// signature, so `remote` is the only source identity this node can
+    /// authenticate: a frame claiming any other non-empty `source_peer_id` is
+    /// rejected before dispatch or forwarding, and the mismatch is recorded
+    /// (throttled per peer). Honouring a relayed claim would let one admitted
+    /// peer present a forged identity to another peer's plugins.
     pub(crate) async fn handle_plugin_channel_stream(
         &self,
         remote: EndpointId,
@@ -490,30 +491,31 @@ impl Node {
         if frame.plugin_id.is_empty() || frame.message_id.is_empty() {
             return Ok(());
         }
-        if !self.remember_plugin_message(frame.message_id.clone()).await {
-            return Ok(());
-        }
-
         let Some(message) = frame.message.clone() else {
             return Ok(());
         };
         // `source_peer_id` arrives from the wire and no frame carries an origin
-        // signature yet, so a value that is not the sending peer is an
-        // unauthenticated claim. Record it; enforcement lands with plugin frame
-        // origin signing. Warning is throttled per peer and reports how many
-        // claims it folded in, so this cannot be turned into unbounded log I/O.
-        if !message.source_peer_id.is_empty()
-            && message.source_peer_id != endpoint_id_hex(remote)
-            && let Some(suppressed) = self.plugin_frame_source_mismatch(remote)
-        {
-            tracing::warn!(
-                claimed_source = %message.source_peer_id,
-                sending_peer = %remote.fmt_short(),
-                channel = %message.channel,
-                frame_kind = %PLUGIN_FRAME_KIND_CHANNEL,
-                suppressed,
-                "Plugin frame claims a source_peer_id that is not the sending peer"
-            );
+        // signature, so a value that is not the sending peer is an
+        // unauthenticated claim: drop the frame before it reaches a plugin or
+        // another peer. The warning is throttled per peer and reports how many
+        // claims it folded in, so this cannot become unbounded log I/O. A
+        // rejected frame is deliberately left out of the dedup history, so
+        // sending a claim cannot spend a message id before its owner does.
+        if !message.source_peer_id.is_empty() && message.source_peer_id != endpoint_id_hex(remote) {
+            if let Some(suppressed) = self.plugin_frame_source_mismatch(remote) {
+                tracing::warn!(
+                    claimed_source = %message.source_peer_id,
+                    sending_peer = %remote.fmt_short(),
+                    channel = %message.channel,
+                    frame_kind = %PLUGIN_FRAME_KIND_CHANNEL,
+                    suppressed,
+                    "Rejecting plugin frame that claims a source_peer_id other than the sending peer"
+                );
+            }
+            return Ok(());
+        }
+        if !self.remember_plugin_message(frame.message_id.clone()).await {
+            return Ok(());
         }
         let local_peer_id = endpoint_id_hex(self.endpoint.id());
         let deliver_local =
@@ -550,11 +552,9 @@ impl Node {
 
     /// Handle an inbound plugin-mesh frame carrying bulk-transfer frames.
     ///
-    /// `remote` is the peer the frame arrived from, which is not necessarily its
-    /// origin: a relayed frame is re-encoded by each hop. The claimed
-    /// `source_peer_id` is unauthenticated until plugin frame origin signing
-    /// lands, so a mismatch with `remote` is recorded (throttled per peer) and
-    /// the frame keeps its current handling.
+    /// Same sender-identity binding as [`Self::handle_plugin_channel_stream`]:
+    /// a claimed `source_peer_id` that is not `remote` is rejected before the
+    /// bulk transfer reaches a plugin or another peer.
     pub(crate) async fn handle_plugin_bulk_stream(
         &self,
         remote: EndpointId,
@@ -568,30 +568,26 @@ impl Node {
         if frame.plugin_id.is_empty() || frame.message_id.is_empty() {
             return Ok(());
         }
-        if !self.remember_plugin_message(frame.message_id.clone()).await {
-            return Ok(());
-        }
-
         let Some(message) = frame.message.clone() else {
             return Ok(());
         };
-        // `source_peer_id` arrives from the wire and no frame carries an origin
-        // signature yet, so a value that is not the sending peer is an
-        // unauthenticated claim. Record it; enforcement lands with plugin frame
-        // origin signing. Warning is throttled per peer and reports how many
-        // claims it folded in, so this cannot be turned into unbounded log I/O.
-        if !message.source_peer_id.is_empty()
-            && message.source_peer_id != endpoint_id_hex(remote)
-            && let Some(suppressed) = self.plugin_frame_source_mismatch(remote)
-        {
-            tracing::warn!(
-                claimed_source = %message.source_peer_id,
-                sending_peer = %remote.fmt_short(),
-                channel = %message.channel,
-                frame_kind = %PLUGIN_FRAME_KIND_BULK,
-                suppressed,
-                "Plugin frame claims a source_peer_id that is not the sending peer"
-            );
+        // Rejected for the same reason as a channel frame: nothing but the peer
+        // that sent it authenticates the claimed source.
+        if !message.source_peer_id.is_empty() && message.source_peer_id != endpoint_id_hex(remote) {
+            if let Some(suppressed) = self.plugin_frame_source_mismatch(remote) {
+                tracing::warn!(
+                    claimed_source = %message.source_peer_id,
+                    sending_peer = %remote.fmt_short(),
+                    channel = %message.channel,
+                    frame_kind = %PLUGIN_FRAME_KIND_BULK,
+                    suppressed,
+                    "Rejecting plugin bulk frame that claims a source_peer_id other than the sending peer"
+                );
+            }
+            return Ok(());
+        }
+        if !self.remember_plugin_message(frame.message_id.clone()).await {
+            return Ok(());
         }
         let local_peer_id = endpoint_id_hex(self.endpoint.id());
         let deliver_local =
