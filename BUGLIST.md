@@ -46,7 +46,7 @@ Issue bodies were read on the snapshot date. Re-check an issue before starting i
 | 26 | [#2348](https://github.com/Mesh-LLM/mesh-llm/issues/2348) | Named `tool_choice` is passed as `required`; if the model calls a different tool the call is dropped, yielding an empty `stop` reply that still bills the tokens. | 2 d |
 | 27 | [#1951](https://github.com/Mesh-LLM/mesh-llm/issues/1951) | `request_workload_class` ends in `_ => None`, so an unclassified inference path gets no workload admission; the only guard is a hand-written enumeration test. | 2 d |
 | 28 | [#2352](https://github.com/Mesh-LLM/mesh-llm/issues/2352) | Four papercuts: `stop` skips clients, a node retries its own invite token forever, `--discover <name>` leaves the mesh name unset, no `x-request-id` echo. | 2–2.5 d |
-| 29 | [#2508](https://github.com/Mesh-LLM/mesh-llm/issues/2508) | Gemma 4 26B-A4B fails every request with `llama_decode rc=-3` when auto context sizing is uncapped. **Needs M5 Max 128 GB.** | 2–3 d |
+| 29 | [#2508](https://github.com/Mesh-LLM/mesh-llm/issues/2508) | Gemma 4 26B-A4B fails every request with `llama_decode rc=-3` when auto context sizing is uncapped. **Repro on `polars.patio51.com`** (M5 Ultra, 256 GB) — the M5 Max 128 GB in the report is not required, and the larger memory tier should still overshoot. | 2–3 d |
 | 30 | [#2217](https://github.com/Mesh-LLM/mesh-llm/issues/2217) | Stage-control `Claim`/`Load`/`Stop`/`Status`/`Inventory` discard the authenticated QUIC requester, so any admitted peer can forge a coordinator identity, fence the real one, or stop a generation. **High.** | 2–3 d |
 | 31 | [#2218](https://github.com/Mesh-LLM/mesh-llm/issues/2218) | Stage activation/import lengths allocate up to 512 MiB before the 8 MiB frame limit applies, and accepted connections spawn OS threads before a bounded handshake. **High.** | 2–3 d |
 | 32 | [#2206](https://github.com/Mesh-LLM/mesh-llm/issues/2206) | The inference listener spawns work per connection with no global limit, and header/body readers have byte ceilings but no total or idle deadline. | 2–3 d |
@@ -106,7 +106,7 @@ Aggregate: roughly **120–140 engineer-days**, about a third of it in the last 
 | Windows + ROCm (gfx1103 observed) | #2146 | Needs a runtime rebuild and a Windows ROCm install to prove the fix |
 | RTX 5090 + RTX 3080 in one host | #2055 | The failure only appears with `CUDA_VISIBLE_DEVICES=1` on that pair |
 | 4× RTX PRO 6000 96 GB | #2247 | The reported model does not fit on smaller cards |
-| Apple M5 Max 128 GB | #2508 | Auto sizing only overshoots at that memory tier |
+| Apple M5 Ultra 256 GB — `polars.patio51.com` | #2508 | Auto sizing overshoots at that memory tier; the 128 GB M5 Max in the report is not a requirement, and the larger machine should reproduce the same uncapped auto-ctx failure |
 | Public mesh + real invite tokens | #2228, #2135, #2029 | Nondeterministic peers make repro flaky |
 
 If those hosts are already in the lab, each item drops roughly one band. If they are not, the
