@@ -1,0 +1,13 @@
+{
+  "id": 202,
+  "run_attempt": 2,
+  "name": "Main \u00b7 macOS",
+  "path": ".github/workflows/main_macos.yml",
+  "event": "push",
+  "head_branch": "main",
+  "head_sha": "2222222222222222222222222222222222222222",
+  "status": "completed",
+  "conclusion": "success",
+  "repository": {"id": 42, "full_name": "Mesh-LLM/mesh-llm"},
+  "head_repository": {"id": 42, "full_name": "Mesh-LLM/mesh-llm"}
+}

@@ -91,6 +91,14 @@ pub enum PluginSettingConstraint {
 pub(crate) fn validate_plugin_entries(entries: &[PluginConfigEntry]) -> DiagnosticResult {
     for (index, entry) in entries.iter().enumerate() {
         validate_plugin_startup(entry, index)?;
+        if let Some(grant) = &entry.openai_exchange_grant {
+            grant.validate().map_err(|message| {
+                validation_diagnostic(
+                    &format!("plugin[{index}].openai_exchange_grant"),
+                    format!("plugin[{index}].openai_exchange_grant: {message}"),
+                )
+            })?;
+        }
     }
     Ok(())
 }
@@ -507,6 +515,7 @@ fn plugin_misplaced_key_diagnostics(raw_toml: Option<&str>) -> Vec<ConfigDiagnos
         "web_ui_enabled",
         "web_ui_primary_tab",
         "allow_peer_blocks",
+        "openai_exchange_grant",
         "command",
         "args",
         "url",
@@ -847,6 +856,7 @@ url = "udp://127.0.0.1:9000"
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
             url: None,

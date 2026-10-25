@@ -172,6 +172,8 @@ Tensor IDs and native names are distinct. Admission selects strictly sorted, uni
 }
 ```
 
+`prediction_depth` is the number of draft tokens one native MTP proposal should produce. A head with several NextN blocks drafts at most one token per block; a single block trained to chain may declare a larger depth. Consumers draft that many tokens unless configured otherwise.
+
 Generation declarations describe package capabilities, not tensor ownership or stage-selection policy. Named defaults and proposer or strategy references must resolve within the declaration, and their numeric bounds must be valid.
 
 ## Validation and integrity

@@ -1,0 +1,638 @@
+//! Restored Laya product/model inputs and planned hardware-device coverage.
+use super::{Node, handoffs as h};
+use crate::command::DynResult;
+use std::{collections::BTreeMap, path::Path};
+
+pub(super) fn check(root: &Path, workflows: &BTreeMap<String, Node>) -> DynResult<()> {
+    let action = super::workflow_yaml::parse(&std::fs::read_to_string(
+        root.join(".github/actions/run-laya-product-smoke/action.yml"),
+    )?)?;
+    action_handoffs(&action)?;
+    platforms(workflows)
+}
+
+fn action_handoffs(action: &Node) -> DynResult<()> {
+    let inputs = h::member(action, "inputs")?;
+    for key in ["startup_timeout_seconds", "read_timeout_seconds"] {
+        h::binding(h::member(inputs, key)?, "default", "300")?;
+    }
+    let steps = h::steps(h::member(action, "runs")?)?;
+    let (restore_index, restore) = h::step(steps, "id", "restore")?;
+    let (read_index, read) = h::step(steps, "name", "Run Laya startup and golden reads")?;
+    h::before(restore_index, read_index)?;
+    let gate = "${{ inputs.device != 'Vulkan0' || inputs.enable_vulkan_inference == 'true' }}";
+    h::condition(restore, gate)?;
+    h::condition(read, gate)?;
+    h::binding(restore, "uses", "./.github/actions/restore-smoke-inputs")?;
+    let restored = h::member(restore, "with")?;
+    for (key, value) in [
+        ("artifact_name", "${{ inputs.artifact_name }}"),
+        ("artifact_path", "${{ inputs.artifact_path }}"),
+        ("staged_binary_path", "${{ inputs.staged_binary_path }}"),
+        ("expected_backend", "${{ inputs.expected_backend }}"),
+        (
+            "model_manifest",
+            "ci/model-artifacts/manifests/product-smoke.json",
+        ),
+        ("model_artifact_id", "family-laya-multilingual"),
+        ("model_cache_scope", "laya-multilingual-f16"),
+    ] {
+        h::binding(restored, key, value)?;
+    }
+    let env = h::member(read, "env")?;
+    for (key, value) in [
+        ("MESH_BINARY", "${{ inputs.staged_binary_path }}"),
+        ("MODEL_PATH", "${{ steps.restore.outputs.model_path }}"),
+        ("DEVICE", "${{ inputs.device }}"),
+        (
+            "STARTUP_TIMEOUT_SECONDS",
+            "${{ inputs.startup_timeout_seconds }}",
+        ),
+        ("READ_TIMEOUT_SECONDS", "${{ inputs.read_timeout_seconds }}"),
+    ] {
+        h::binding(env, key, value)?;
+    }
+    h::command(
+        read,
+        &["mesh_automation", "automation", "laya", "product"],
+        &[
+            ("--mesh-binary", "\"$MESH_BINARY\""),
+            ("--model", "\"$MODEL_PATH\""),
+            ("--device", "\"$DEVICE\""),
+            ("--startup-timeout", "\"$STARTUP_TIMEOUT_SECONDS\""),
+            ("--read-timeout", "\"$READ_TIMEOUT_SECONDS\""),
+        ],
+    )?;
+    let (_, skip) = h::step(steps, "name", "Report uncertified Vulkan smoke skip")?;
+    h::condition(
+        skip,
+        "${{ inputs.device == 'Vulkan0' && inputs.enable_vulkan_inference != 'true' }}",
+    )?;
+    h::command(skip, &["echo"], &[])
+}
+
+fn platforms(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
+    let linux = workflows
+        .get("ci-linux-product-smoke-slice.yml")
+        .ok_or("missing Linux Laya slice")?;
+    gpu_runner_gate(linux)?;
+    for (name, backend, device, plan, smoke) in [
+        ("laya_cpu", "cpu", "CPU", "linux-cpu", "core"),
+        ("laya_cuda", "cuda", "CUDA0", "linux-cuda", "core-cuda"),
+        ("laya_vulkan", "vulkan", "Vulkan0", "linux-vulkan", "core"),
+        ("laya_rocm", "rocm", "ROCm0", "linux-rocm", "core"),
+    ] {
+        let job = h::job(linux, name)?;
+        row(job, backend, device, plan, smoke)?;
+        if name != "laya_cpu" {
+            cleanup(job)?;
+        }
+        if name == "laya_vulkan" {
+            let inputs = h::member(laya_step(job)?, "with")?;
+            h::binding(
+                inputs,
+                "enable_vulkan_inference",
+                "${{ needs.gpu_runner_gate.outputs.vulkan_enabled }}",
+            )?;
+            h::binding(h::member(job, "env")?, "MESH_LLM_VULKAN_AVAILABLE", "1")?;
+        }
+    }
+    for (workflow, name, backend, device, plan, smoke) in [
+        (
+            "ci-macos-product-smoke-slice.yml",
+            "laya_metal",
+            "metal",
+            "MTL0",
+            "macos-metal",
+            "metal-model-load",
+        ),
+        (
+            "ci-windows-product-smoke-slice.yml",
+            "laya_cpu",
+            "cpu",
+            "CPU",
+            "windows-cpu",
+            "core",
+        ),
+    ] {
+        row(
+            h::job(
+                workflows
+                    .get(workflow)
+                    .ok_or("missing platform Laya slice")?,
+                name,
+            )?,
+            backend,
+            device,
+            plan,
+            smoke,
+        )?;
+    }
+    Ok(())
+}
+fn gpu_runner_gate(workflow: &Node) -> DynResult<()> {
+    let job = h::job(workflow, "gpu_runner_gate")?;
+    h::condition(
+        job,
+        "${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core') && (contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') || contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm')) }}",
+    )?;
+    h::binding(job, "runs-on", "ubuntu-24.04")?;
+    let steps = h::steps(job)?;
+    let (check, step) = h::step(steps, "id", "check")?;
+    // With `if: false` the decision step's outputs are empty, which every
+    // consumer reads as "no qualified runner": both rows skip while enabled.
+    unconditional(step, "GPU runner decision")?;
+    for backend in ["VULKAN", "ROCM"] {
+        h::binding(
+            h::member(step, "env")?,
+            &format!("MESH_{backend}_INFERENCE_RUNNER_ENABLED"),
+            &format!("${{{{ vars.MESH_{backend}_INFERENCE_RUNNER_ENABLED }}}}"),
+        )?;
+    }
+    for key in ["vulkan_enabled", "rocm_enabled"] {
+        h::binding(
+            h::member(job, "outputs")?,
+            key,
+            &format!("${{{{ steps.check.outputs.{key} }}}}"),
+        )?;
+    }
+    gpu_normalization(step)?;
+    let (report, step) = h::step(steps, "name", "Report GPU rows without a qualified runner")?;
+    h::before(check, report)?;
+    gpu_skip_report(step)
+}
+
+/// A condition or a tolerated failure would let a gate step vanish while its
+/// script still matches, as `cache_callers` rejects for its selector step.
+fn unconditional(step: &Node, what: &str) -> DynResult<()> {
+    if step.get("if").is_some() || step.get("continue-on-error").is_some() {
+        return Err(format!("{what} must run unconditionally and fail the gate on error").into());
+    }
+    Ok(())
+}
+
+fn script_lines(step: &Node) -> DynResult<Vec<String>> {
+    let source = super::field(step, "run").ok_or("GPU gate command missing")?;
+    let source = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("\\\n", " ");
+    Ok(source
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect())
+}
+
+fn gpu_normalization(step: &Node) -> DynResult<()> {
+    // A finite loop owns the policy decision. Additional shell commands could
+    // override the admitted value, so token presence alone is insufficient.
+    let actual = script_lines(step)?;
+    let expected = [
+        "set -euo pipefail",
+        "for pair in \"vulkan_enabled:MESH_VULKAN_INFERENCE_RUNNER_ENABLED\" \"rocm_enabled:MESH_ROCM_INFERENCE_RUNNER_ENABLED\"",
+        "do",
+        "output=\"${pair%%:*}\"",
+        "name=\"${pair#*:}\"",
+        "value=\"${!name:-}\"",
+        "enabled=false",
+        "if [[ \"$value\" == \"true\" ]]; then",
+        "enabled=true",
+        "fi",
+        "echo \"$output=$enabled\" >> \"$GITHUB_OUTPUT\"",
+        "done",
+    ];
+    if actual.iter().map(String::as_str).eq(expected) {
+        Ok(())
+    } else {
+        Err("GPU normalization must decide exact lowercase true inside the bounded backend loop without overrides".into())
+    }
+}
+
+fn gpu_skip_report(step: &Node) -> DynResult<()> {
+    // The summary is the only visible trace of a gated row that never ran, so
+    // it reads the normalized decision, never the raw variable, and names every
+    // planned row that stays skipped.
+    unconditional(step, "GPU skip report")?;
+    let env = h::member(step, "env")?;
+    for (backend, plan) in [("VULKAN", "linux-vulkan"), ("ROCM", "linux-rocm")] {
+        h::binding(
+            env,
+            &format!("{backend}_PLANNED"),
+            &format!("${{{{ contains(fromJson(inputs.runtime_matrix).*.id, '{plan}') }}}}"),
+        )?;
+        h::binding(
+            env,
+            &format!("{backend}_ENABLED"),
+            &format!(
+                "${{{{ steps.check.outputs.{}_enabled }}}}",
+                backend.to_lowercase()
+            ),
+        )?;
+    }
+    let expected = [
+        "set -euo pipefail",
+        "{",
+        "echo \"### GPU inference rows\"",
+        "echo",
+        "for row in \"Linux Vulkan:VULKAN:MESH_VULKAN_INFERENCE_RUNNER_ENABLED\" \"Linux ROCm:ROCM:MESH_ROCM_INFERENCE_RUNNER_ENABLED\"",
+        "do",
+        "label=\"${row%%:*}\"",
+        "rest=\"${row#*:}\"",
+        "backend=\"${rest%%:*}\"",
+        "variable=\"${rest#*:}\"",
+        "planned=\"${backend}_PLANNED\"",
+        "enabled=\"${backend}_ENABLED\"",
+        "if [[ \"${!planned}\" != \"true\" ]]; then",
+        "continue",
+        "fi",
+        "if [[ \"${!enabled}\" == \"true\" ]]; then",
+        "echo \"- $label: inference smoke scheduled on its qualified runner; its result is in the row job.\"",
+        "else",
+        "echo \"- $label: inference smoke skipped, no qualified runner (\\`$variable\\` is not \\`true\\`). No inference ran on this backend.\"",
+        "fi",
+        "done",
+        "} >> \"$GITHUB_STEP_SUMMARY\"",
+    ];
+    if script_lines(step)?.iter().map(String::as_str).eq(expected) {
+        Ok(())
+    } else {
+        Err("GPU skip report must name every planned row from the normalized gate decision".into())
+    }
+}
+
+fn laya_step(job: &Node) -> DynResult<&Node> {
+    Ok(h::step(
+        h::steps(job)?,
+        "uses",
+        "./.github/actions/run-laya-product-smoke",
+    )?
+    .1)
+}
+fn row(job: &Node, backend: &str, device: &str, plan: &str, smoke: &str) -> DynResult<()> {
+    let qualification = match device {
+        "Vulkan0" => " && needs.gpu_runner_gate.outputs.vulkan_enabled == 'true'",
+        "ROCm0" => " && needs.gpu_runner_gate.outputs.rocm_enabled == 'true'",
+        _ => "",
+    };
+    let gate = format!(
+        "${{{{ contains(fromJson(inputs.runtime_matrix).*.id, '{plan}') && contains(fromJson(inputs.smoke_matrix).*.id, '{smoke}'){qualification} }}}}"
+    );
+    h::condition(job, &gate)?;
+    if matches!(device, "Vulkan0" | "ROCm0") {
+        h::needs(job, &["gpu_runner_gate"])?;
+    }
+    let timeout = match plan {
+        "linux-cuda" | "linux-vulkan" | "linux-rocm" => {
+            "${{ inputs.timeout_minutes > 100 && inputs.timeout_minutes || 100 }}"
+        }
+        _ => "${{ inputs.timeout_minutes }}",
+    };
+    h::binding(job, "timeout-minutes", timeout)?;
+    let runner = h::member(job, "runs-on")?.list();
+    let required = match device {
+        "CUDA0" | "Vulkan0" => vec!["self-hosted", "gpu-nvidia"],
+        "ROCm0" => vec!["self-hosted", "gpu-amd"],
+        "MTL0" => vec!["macos-15"],
+        _ if plan.starts_with("windows") => vec!["windows-2022"],
+        _ => vec!["ubuntu-24.04"],
+    };
+    if !required.iter().all(|label| runner.contains(label)) {
+        return Err("Laya device lacks its declared hardware runner".into());
+    }
+    let steps = h::steps(job)?;
+    let checkout = h::checkout(steps, "${{ inputs.source_sha }}", None)?;
+    let (invoke, action) = h::step(steps, "uses", "./.github/actions/run-laya-product-smoke")?;
+    h::before(checkout, invoke)?;
+    let inputs = h::member(action, "with")?;
+    h::binding(inputs, "expected_backend", backend)?;
+    h::binding(inputs, "device", device)?;
+    let artifact = if plan == "macos-metal" {
+        "ci-product-macos-${{ inputs.architecture }}-metal".to_owned()
+    } else {
+        format!(
+            "ci-product-{}-amd64-{backend}",
+            if plan.starts_with("windows") {
+                "windows"
+            } else {
+                "linux"
+            }
+        )
+    };
+    h::binding(inputs, "artifact_name", &artifact)
+}
+fn cleanup(job: &Node) -> DynResult<()> {
+    let steps = h::steps(job)?;
+    let (invoke, action) = h::step(steps, "uses", "./.github/actions/run-laya-product-smoke")?;
+    let (index, cleanup) = h::step(steps, "name", "Clean self-hosted Laya smoke outputs")?;
+    h::before(invoke, index)?;
+    h::condition(cleanup, "${{ success() || failure() || cancelled() }}")?;
+    h::binding(cleanup, "timeout-minutes", "5")?;
+    let env = h::member(cleanup, "env")?;
+    let inputs = h::member(action, "with")?;
+    for (environment, input) in [
+        ("CLEANUP_ARTIFACT_PATH", "artifact_path"),
+        ("CLEANUP_BINARY_PATH", "staged_binary_path"),
+    ] {
+        h::binding(
+            env,
+            environment,
+            super::field(inputs, input).ok_or("missing Laya cleanup output binding")?,
+        )?;
+    }
+    h::command(
+        cleanup,
+        &["\"$MESH_LLM_AUTOMATION_BIN\"", "ci-ops", "runner-cleanup"],
+        &[("--job", "smoke"), ("--evidence-uploaded", "false")],
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn action() -> Node {
+        super::super::workflow_yaml::parse(include_str!(
+            "../../../../../.github/actions/run-laya-product-smoke/action.yml"
+        ))
+        .unwrap()
+    }
+    fn mutable_step<'a>(action: &'a mut Node, name: &str) -> &'a mut Node {
+        let Node::Seq(steps) = h::mutable(h::mutable(action, "runs"), "steps") else {
+            unreachable!()
+        };
+        steps
+            .iter_mut()
+            .find(|step| super::super::field(step, "name") == Some(name))
+            .unwrap()
+    }
+    #[test]
+    fn restored_action_handoffs_are_admitted() {
+        action_handoffs(&action()).unwrap();
+    }
+    #[test]
+    fn wrong_model_deadline_and_unqualified_vulkan_are_rejected() {
+        for (path, value) in [
+            (vec!["env", "MODEL_PATH"], "${{ inputs.model }}"),
+            (vec!["env", "MESH_BINARY"], "mesh-llm"),
+            (vec!["env", "READ_TIMEOUT_SECONDS"], "0"),
+            (vec!["if"], "true"),
+        ] {
+            let mut action = action();
+            h::replace(
+                mutable_step(&mut action, "Run Laya startup and golden reads"),
+                &path,
+                Node::Scalar(value.into()),
+            );
+            assert!(action_handoffs(&action).is_err(), "{path:?}");
+        }
+    }
+    #[test]
+    fn read_cannot_precede_restore_or_use_a_comment_as_command() {
+        let mut node = action();
+        let Node::Seq(steps) = h::mutable(h::mutable(&mut node, "runs"), "steps") else {
+            unreachable!()
+        };
+        steps.swap(1, 2);
+        assert!(action_handoffs(&node).is_err());
+        let mut node = action();
+        h::replace(
+            mutable_step(&mut node, "Run Laya startup and golden reads"),
+            &["run"],
+            Node::Scalar(
+                "# mesh_automation automation laya product --model \"$MODEL_PATH\"\necho skipped"
+                    .into(),
+            ),
+        );
+        assert!(action_handoffs(&node).is_err());
+    }
+    fn workflows() -> BTreeMap<String, Node> {
+        [
+            (
+                "ci-linux-product-smoke-slice.yml",
+                include_str!("../../../../../.github/workflows/ci-linux-product-smoke-slice.yml"),
+            ),
+            (
+                "ci-macos-product-smoke-slice.yml",
+                include_str!("../../../../../.github/workflows/ci-macos-product-smoke-slice.yml"),
+            ),
+            (
+                "ci-windows-product-smoke-slice.yml",
+                include_str!("../../../../../.github/workflows/ci-windows-product-smoke-slice.yml"),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, source)| {
+            (
+                name.into(),
+                super::super::workflow_yaml::parse(source).unwrap(),
+            )
+        })
+        .collect()
+    }
+    #[test]
+    fn planned_platform_rows_are_admitted_and_device_gate_swaps_fail() {
+        platforms(&workflows()).unwrap();
+        for path in [
+            vec!["jobs", "laya_vulkan", "if"],
+            vec!["jobs", "laya_rocm", "if"],
+        ] {
+            let mut nodes = workflows();
+            h::replace(
+                nodes.get_mut("ci-linux-product-smoke-slice.yml").unwrap(),
+                &path,
+                Node::Scalar("true".into()),
+            );
+            assert!(platforms(&nodes).is_err());
+        }
+        let mut nodes = workflows();
+        let job = h::mutable(
+            h::mutable(
+                nodes.get_mut("ci-linux-product-smoke-slice.yml").unwrap(),
+                "jobs",
+            ),
+            "laya_cuda",
+        );
+        let Node::Seq(steps) = h::mutable(job, "steps") else {
+            unreachable!()
+        };
+        let step = steps
+            .iter_mut()
+            .find(|step| {
+                super::super::field(step, "uses")
+                    == Some("./.github/actions/run-laya-product-smoke")
+            })
+            .unwrap();
+        h::replace(step, &["with", "device"], Node::Scalar("CPU".into()));
+        assert!(platforms(&nodes).is_err());
+    }
+    #[test]
+    fn gpu_phase_floor_preserves_larger_inputs_and_cannot_leak_to_cpu() {
+        platforms(&workflows()).unwrap();
+        for job in ["laya_cuda", "laya_vulkan", "laya_rocm"] {
+            for timeout in [
+                "${{ inputs.timeout_minutes }}",
+                "100",
+                "${{ inputs.timeout_minutes > 100 && 100 || inputs.timeout_minutes }}",
+                "${{ inputs.timeout_minutes > 90 && inputs.timeout_minutes || 90 }}",
+                "${{ inputs.timeout_minutes > 100 || 100 }}",
+            ] {
+                let mut nodes = workflows();
+                h::replace(
+                    nodes.get_mut("ci-linux-product-smoke-slice.yml").unwrap(),
+                    &["jobs", job, "timeout-minutes"],
+                    Node::Scalar(timeout.into()),
+                );
+                assert!(platforms(&nodes).is_err(), "{job}: {timeout}");
+            }
+        }
+        let mut nodes = workflows();
+        h::replace(
+            nodes.get_mut("ci-linux-product-smoke-slice.yml").unwrap(),
+            &["jobs", "laya_cpu", "timeout-minutes"],
+            Node::Scalar(
+                "${{ inputs.timeout_minutes > 100 && inputs.timeout_minutes || 100 }}".into(),
+            ),
+        );
+        assert!(
+            platforms(&nodes).is_err(),
+            "GPU floor cannot replace CPU caller budget"
+        );
+    }
+    #[test]
+    fn gpu_normalization_cannot_admit_case_insensitive_true_or_swap_backend() {
+        for (before, after) in [
+            (
+                "if [[ \"$value\" == \"true\" ]]; then",
+                "if [[ \"$value\" == \"True\" ]]; then",
+            ),
+            ("enabled=false", "enabled=true"),
+            ("fi\n", "fi\n  enabled=true\n"),
+            (
+                "vulkan_enabled:MESH_VULKAN_INFERENCE_RUNNER_ENABLED",
+                "vulkan_enabled:MESH_ROCM_INFERENCE_RUNNER_ENABLED",
+            ),
+        ] {
+            let mut workflows = workflows();
+            let document = workflows
+                .get_mut("ci-linux-product-smoke-slice.yml")
+                .unwrap();
+            let Node::Seq(steps) = h::mutable(
+                h::mutable(h::mutable(document, "jobs"), "gpu_runner_gate"),
+                "steps",
+            ) else {
+                unreachable!()
+            };
+            let command = steps
+                .iter_mut()
+                .find(|step| super::super::field(step, "id") == Some("check"))
+                .unwrap();
+            let source = super::super::field(command, "run").unwrap();
+            assert!(source.contains(before));
+            let replaced = source.replace(before, after);
+            h::replace(command, &["run"], Node::Scalar(replaced));
+            assert!(platforms(&workflows).is_err());
+        }
+    }
+    fn gate_steps(workflows: &mut BTreeMap<String, Node>) -> &mut Vec<Node> {
+        let document = workflows
+            .get_mut("ci-linux-product-smoke-slice.yml")
+            .unwrap();
+        let Node::Seq(steps) = h::mutable(
+            h::mutable(h::mutable(document, "jobs"), "gpu_runner_gate"),
+            "steps",
+        ) else {
+            unreachable!()
+        };
+        steps
+    }
+    #[test]
+    fn gpu_decision_cannot_be_conditional_or_failure_tolerant() {
+        platforms(&workflows()).unwrap();
+        for (key, value) in [("if", "${{ false }}"), ("continue-on-error", "true")] {
+            let mut nodes = workflows();
+            let steps = gate_steps(&mut nodes);
+            let index = steps
+                .iter()
+                .position(|step| super::super::field(step, "id") == Some("check"))
+                .unwrap();
+            let Node::Map(entries) = &mut steps[index] else {
+                unreachable!()
+            };
+            entries.push((key.into(), Node::Scalar(value.into())));
+            assert!(platforms(&nodes).is_err(), "decision with {key}");
+        }
+    }
+    fn report_index(steps: &[Node]) -> usize {
+        steps
+            .iter()
+            .position(|step| {
+                super::super::field(step, "name")
+                    == Some("Report GPU rows without a qualified runner")
+            })
+            .unwrap()
+    }
+    #[test]
+    fn gpu_skip_report_cannot_drop_a_row_or_read_the_raw_variable() {
+        platforms(&workflows()).unwrap();
+        for (path, value) in [
+            (
+                vec!["env", "VULKAN_ENABLED"],
+                "${{ vars.MESH_VULKAN_INFERENCE_RUNNER_ENABLED }}",
+            ),
+            (
+                vec!["env", "ROCM_ENABLED"],
+                "${{ steps.check.outputs.vulkan_enabled }}",
+            ),
+            (
+                vec!["env", "ROCM_PLANNED"],
+                "${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') }}",
+            ),
+        ] {
+            let mut nodes = workflows();
+            let steps = gate_steps(&mut nodes);
+            let index = report_index(steps);
+            h::replace(&mut steps[index], &path, Node::Scalar(value.into()));
+            assert!(platforms(&nodes).is_err(), "{path:?}");
+        }
+        for (before, after) in [
+            (
+                "if [[ \"${!enabled}\" == \"true\" ]]; then",
+                "if true; then",
+            ),
+            ("\"Linux ROCm:ROCM:MESH_ROCM_INFERENCE_RUNNER_ENABLED\"", ""),
+            ("} >> \"$GITHUB_STEP_SUMMARY\"", "} >> /dev/null"),
+        ] {
+            let mut nodes = workflows();
+            let steps = gate_steps(&mut nodes);
+            let index = report_index(steps);
+            let source = super::super::field(&steps[index], "run").unwrap();
+            assert!(source.contains(before), "{before}");
+            let replaced = source.replace(before, after);
+            h::replace(&mut steps[index], &["run"], Node::Scalar(replaced));
+            assert!(platforms(&nodes).is_err(), "{before}");
+        }
+        let mut nodes = workflows();
+        let steps = gate_steps(&mut nodes);
+        let index = report_index(steps);
+        steps.remove(index);
+        assert!(platforms(&nodes).is_err(), "report removed");
+        let mut nodes = workflows();
+        let steps = gate_steps(&mut nodes);
+        let index = report_index(steps);
+        let report = steps.remove(index);
+        steps.insert(0, report);
+        assert!(platforms(&nodes).is_err(), "report before the decision");
+        for (key, value) in [("if", "${{ false }}"), ("continue-on-error", "true")] {
+            let mut nodes = workflows();
+            let steps = gate_steps(&mut nodes);
+            let index = report_index(steps);
+            let Node::Map(entries) = &mut steps[index] else {
+                unreachable!()
+            };
+            entries.push((key.into(), Node::Scalar(value.into())));
+            assert!(platforms(&nodes).is_err(), "report with {key}");
+        }
+    }
+}

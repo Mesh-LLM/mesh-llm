@@ -115,7 +115,11 @@ test('request logs keeps text, controls, and live status badges AA-compliant acr
   await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 50)))
   releaseEventsStream?.()
   await expect(infoBanner).toContainText('Monitor request activity and operational events from this MeshLLM host.')
-  await expect(infoBanner.getByText('Reconnecting', { exact: true })).toBeVisible()
+  // Generous timeout: the state itself is deterministic (held stream, paused
+  // clock), but under fullyParallel local workers the first /logs compile +
+  // mount + onerror render can exceed the 5s default. CI runs single-worker
+  // with retries, so this only bites locally.
+  await expect(infoBanner.getByText('Reconnecting', { exact: true })).toBeVisible({ timeout: 15_000 })
   // The rest of this test doesn't depend on the live-recovery clock — resume
   // it so axe's own internal scheduling (which yields via real timers) can
   // run. A frozen clock through the whole theme/accent loop below hangs
@@ -214,7 +218,8 @@ test('fallback log polling toggle remains AA-compliant while paused', async ({ p
   await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 50)))
   releaseRequestsStream?.()
   releaseAuditStream?.()
-  await expect(page.getByText('Reconnecting', { exact: true })).toBeVisible()
+  // Same parallel-load headroom as the Reconnecting assertion above.
+  await expect(page.getByText('Reconnecting', { exact: true })).toBeVisible({ timeout: 15_000 })
   const fallbackRequestsFulfilled = new Promise<void>((resolve) => {
     resolveFallbackRequestsFulfillment = resolve
   })

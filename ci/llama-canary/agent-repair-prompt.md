@@ -10,6 +10,14 @@ When the stage ABI changes, also read
 `.agents/skills/llama-stage-patch-changes/SKILL.md`. Their patch ownership,
 queue reconstruction, ABI, and validation rules are requirements.
 
+Do not write new Python tooling during repair, including temporary or inline
+helpers. Follow `.agents/skills/manage-ci/SKILL.md` for new repository
+automation in typed `tools/xtask` commands; from the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is an existing alias example.
+The existing patch generator below is transitional and stays in use until an
+equivalent Rust command has passed parity checks. This does not grant permission
+to edit the trusted scripts or CI boundary listed below.
+
 Own the repair end to end:
 
 1. Run `scripts/prepare-llama.sh pinned` and inspect the first real failure. If
@@ -22,7 +30,8 @@ Own the repair end to end:
    the broken patches. Keep the queue ordered. Do not delete instrumentation or
    weaken a gate to get a build through.
 3. Generate model-builder stage controls through the Clang rewriter and
-   `scripts/generate-skippy-family-patch.py`. Do not hand-edit per-family stage
+   `cargo xtool automation native-generator generate` with absolute `--git`
+   and `--rewriter` paths and `--max-diff-bytes 16777216`. Do not hand-edit per-family stage
    filtering or `begin_block`/`end_block` patches. Extend general AST rules for
    conventional upstream shapes. Preserve an exact `unsupported_shape` refusal
    for irregular builders until a sound general rule exists.
@@ -33,6 +42,15 @@ Own the repair end to end:
 5. Run prepare, the complete patched llama.cpp build with upstream tests, the
    generated-family check, affected Rust package checks, and focused smoke or
    real-model reproductions for your repairs. Inspect failures and fix them.
+   Run every build and test command through
+   `scripts/llama-canary-log-command.sh <short-label> <command> [args...]`.
+   For build or test commands containing pipelines, use `bash -o pipefail -c`
+   as the command argument so failures in earlier pipeline stages are reported.
+   For commands requiring shell syntax without pipelines, use `bash -c`.
+   The wrapper streams output, preserves the command's exit status, and saves a
+   separate full log for each invocation in the canary's 14-day build evidence
+   artifact. Use it on failed reproductions and retries too. Do not put secrets
+   in command output or labels.
    Keep build and test commands in the foreground. If you start any background
    command, record its PID, wait for it to exit, and check its exit status before
    returning. Do not leave `nohup`, detached, or still-running build and test

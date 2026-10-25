@@ -44,6 +44,7 @@ pub mod peer_state;
 pub mod release_attestation;
 pub mod requirements;
 pub mod selected_path;
+pub mod signed_record;
 #[cfg(feature = "host-io")]
 pub mod state;
 #[cfg(feature = "host-io")]

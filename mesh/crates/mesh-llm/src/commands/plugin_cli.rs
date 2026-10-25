@@ -164,6 +164,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         );
     }
     Ok(Some(plugin::ExternalPluginSpec {
+        openai_exchange_grant: None,
         name: metadata.name.clone(),
         command: executable.display().to_string(),
         args: Vec::new(),
@@ -311,6 +312,7 @@ mod tests {
             downloaded_asset_name: "demo.tar.gz".to_string(),
             install_path,
             enabled: true,
+            default_managed: false,
             manifest: None,
             last_protocol_version: None,
             last_status: None,

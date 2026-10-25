@@ -45,6 +45,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
         telemetry_setting("telemetry.prompt_shape_metrics", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::Url),
         analytics_setting("analytics.enabled", ConfigValueSchema::Boolean),
+        updates_setting("updates.check", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.enabled", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.log_path", ConfigValueSchema::Path),
         logging_audit_setting("logging.audit.log_format", string_enum(["json_lines"])),
@@ -115,6 +116,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
         native_runtime_setting(
             "runtime.native_runtime.selection",
             one_of([string_enum(["recommended"]), ConfigValueSchema::String]),
+        ),
+        native_runtime_setting(
+            "runtime.native_runtime.download",
+            ConfigValueSchema::Boolean,
         ),
         kv_disk_setting(
             "runtime.kv_cache.disk.mode",
@@ -294,7 +299,7 @@ fn topology_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
 
 fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
     let plugin_prefix = format!("plugin.{CANONICAL_PLUGIN_NAME_SEGMENT}");
-    vec![
+    let mut settings = vec![
         plugin_setting(&format!("{plugin_prefix}.name"), ConfigValueSchema::String),
         plugin_setting(
             &format!("{plugin_prefix}.enabled"),
@@ -346,7 +351,9 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             &format!("{plugin_prefix}.startup.lazy_start"),
             ConfigValueSchema::Boolean,
         ),
-    ]
+    ];
+    settings.extend(exchange_grants::exchange_grant_settings(&plugin_prefix));
+    settings
 }
 
 fn model_fit_settings(
@@ -363,7 +370,7 @@ fn model_fit_settings(
         hidden_setting(
             &format!("{prefix}.kv_unified"),
             bool_or_auto_schema(),
-            "Legacy setting: Skippy always uses unified KV; false is rejected",
+            "Unified KV selection: auto derives from lane count; false requests separate per-sequence KV",
         ),
         basic_setting(
             &format!("{prefix}.cache_ram_mib"),
@@ -397,10 +404,6 @@ fn model_fit_settings(
         basic_setting(
             &format!("{prefix}.prefix_cache.shared_record_limit"),
             ConfigValueSchema::Integer,
-        ),
-        basic_setting(
-            &format!("{prefix}.prefix_cache.payload_mode"),
-            string_enum(["resident-kv", "kv-recurrent", "full-state", "auto"]),
         ),
         unwired_setting(&format!("{prefix}.keep_tokens"), ConfigValueSchema::Integer),
         unwired_setting(&format!("{prefix}.context_shift"), bool_or_auto_schema()),
@@ -807,9 +810,26 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.verify_window_runahead_tokens"),
-            ConfigValueSchema::Integer,
+            integer_or_auto_schema(),
         ),
         basic_setting(&format!("{prefix}.ngram_fallback"), ConfigValueSchema::String),
+        basic_setting(&format!("{prefix}.gate"), bool_or_auto_schema()),
+        basic_setting(
+            &format!("{prefix}.gate_min_window_s"),
+            ConfigValueSchema::Integer,
+        ),
+        basic_setting(
+            &format!("{prefix}.gate_min_requests"),
+            ConfigValueSchema::Integer,
+        ),
+        basic_setting(
+            &format!("{prefix}.gate_decisive_margin"),
+            ConfigValueSchema::Float,
+        ),
+        basic_setting(
+            &format!("{prefix}.gate_cooldown_s"),
+            ConfigValueSchema::Integer,
+        ),
         basic_setting(&format!("{prefix}.spec_default"), bool_or_auto_schema()),
     ]
 }
@@ -904,6 +924,10 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         basic_setting(
             &format!("{prefix}.chat_template_file"),
             ConfigValueSchema::Path,
+        ),
+        basic_setting(
+            &format!("{prefix}.allow_request_chat_template"),
+            ConfigValueSchema::Boolean,
         ),
         basic_setting(&format!("{prefix}.jinja"), ConfigValueSchema::Boolean),
         basic_setting(

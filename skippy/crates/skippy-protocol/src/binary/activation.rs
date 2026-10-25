@@ -221,6 +221,16 @@ fn validate_descriptor(desc: &StageActivationDesc, payload_len: Option<usize>) -
         if rank == 0 || rank > MAX_STAGE_ACTIVATION_DIMS || token_axis >= rank {
             return Err(invalid_data("activation part shape is invalid"));
         }
+        // Axes past `rank` are unused. Only 0 or 1 may fill them, so no
+        // consumer can be led to walk a peer-chosen extent there.
+        if part.dimensions[rank..]
+            .iter()
+            .any(|&extent| extent != 0 && extent != 1)
+        {
+            return Err(invalid_data(
+                "activation part has an extent beyond its rank",
+            ));
+        }
         if part.dimensions[token_axis] != i64::from(desc.token_count) {
             return Err(invalid_data(
                 "activation part token dimension does not match frame",

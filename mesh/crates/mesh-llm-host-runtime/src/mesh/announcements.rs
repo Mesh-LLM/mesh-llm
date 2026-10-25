@@ -259,9 +259,12 @@ impl Node {
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
+            // Advertised unconditionally: there is no build-time variability
+            // behind it, unlike artifact transfer.
+            decode_batch_policy_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
             #[cfg(feature = "payments")]
-            lightning_offers: data.lightning_offers,
+            lightning_offers: data.lightning_offers.into(),
             cache_affinity: data.cache_affinity,
             latency_ms: None,
             latency_source: None,

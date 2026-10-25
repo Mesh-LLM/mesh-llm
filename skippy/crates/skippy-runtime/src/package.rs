@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::write_gguf_from_parts;
 
+pub mod artifact_plan;
 mod materialized_cache;
 
 #[derive(Debug, Clone)]
@@ -52,6 +53,7 @@ pub struct LayerPackageInfo {
     pub source_model_sha256: String,
     pub source_model_bytes: Option<u64>,
     pub layer_count: u32,
+    pub activation_width: Option<u32>,
     pub generation: Option<PackageGenerationInfo>,
     pub projectors: Vec<PackageProjectorInfo>,
     pub layers: Vec<LayerPackageLayerInfo>,
@@ -187,6 +189,8 @@ struct PackageManifest {
     source_model: PackageSourceModel,
     format: String,
     layer_count: u32,
+    #[serde(default)]
+    activation_width: Option<u32>,
     #[serde(default)]
     generation: Option<PackageGeneration>,
     shared: PackageShared,
@@ -579,6 +583,7 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             })
             .flatten(),
         layer_count: manifest.layer_count,
+        activation_width: manifest.activation_width,
         generation: manifest.generation.map(package_generation_info),
         projectors,
         layers: manifest
@@ -723,23 +728,12 @@ fn load_manifest(path: &Path, contents: &[u8]) -> Result<PackageManifest> {
 fn validate_manifest(manifest: &PackageManifest, request: &PackageStageRequest) -> Result<()> {
     validate_manifest_identity(manifest)?;
     let layer_counts = validate_layer_manifest(manifest)?;
-    if request.layer_start >= request.layer_end {
-        bail!("stage layer_start must be less than layer_end");
-    }
-    if request.layer_end > manifest.layer_count {
-        bail!(
-            "stage layer_end {} exceeds package layer_count {}",
-            request.layer_end,
-            manifest.layer_count
-        );
-    }
-
-    for layer_index in request.layer_start..request.layer_end {
-        if !layer_counts.contains_key(&layer_index) {
-            bail!("package is missing layer {layer_index}");
-        }
-    }
-    Ok(())
+    artifact_plan::validate_layer_range(
+        manifest,
+        &layer_counts,
+        request.layer_start,
+        request.layer_end,
+    )
 }
 
 fn validate_layer_manifest(manifest: &PackageManifest) -> Result<BTreeMap<u32, usize>> {

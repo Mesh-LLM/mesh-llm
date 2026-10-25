@@ -312,7 +312,12 @@ pub fn console_session_mode_for_term(
     stderr_is_tty: bool,
     term: Option<&str>,
 ) -> ConsoleSessionMode {
-    if stdin_is_tty && stderr_is_tty && terminal_supports_dashboard(term) {
+    if !stderr_is_tty {
+        // Pretty output goes to stderr. When nothing redraws it (a service, a
+        // container, a file), print each event once as a line: the dashboard
+        // text repeats every panel on every event, about 90 MB an hour idle.
+        ConsoleSessionMode::None
+    } else if stdin_is_tty && terminal_supports_dashboard(term) {
         ConsoleSessionMode::InteractiveDashboard
     } else {
         ConsoleSessionMode::Fallback
@@ -322,7 +327,9 @@ pub fn console_session_mode_for_term(
 fn terminal_supports_dashboard(term: Option<&str>) -> bool {
     match term.map(str::trim).filter(|term| !term.is_empty()) {
         Some(term) => term != "dumb",
-        None => false,
+        // Windows consoles (conhost, Windows Terminal) don't set TERM; the
+        // dashboard reaches them through crossterm and `CONOUT$`.
+        None => cfg!(windows),
     }
 }
 
@@ -551,6 +558,18 @@ pub enum OutputEvent {
     ApiReady {
         url: String,
     },
+    /// What `--strategy` composed, for the dashboard header.
+    ///
+    /// Counts rather than the axis list: the header has one line, and the full
+    /// report with a reason per axis is in `mesh-llm doctor split` and in
+    /// `/api/status`. What belongs here is the answer to "is a strategy even
+    /// in force", which is the first thing to establish when a split is slower
+    /// than expected.
+    ServingStrategyResolved {
+        strategy: String,
+        applied: usize,
+        declined: usize,
+    },
     RuntimeReady {
         api_url: String,
         console_url: Option<String>,
@@ -640,6 +659,7 @@ impl OutputEvent {
             OutputEvent::WebserverReady { .. } => "webserver_ready",
             OutputEvent::ApiStarting { .. } => "api_starting",
             OutputEvent::ApiReady { .. } => "api_ready",
+            OutputEvent::ServingStrategyResolved { .. } => "serving_strategy",
             OutputEvent::RuntimeReady { .. } => "ready",
             OutputEvent::ModelDownloadProgress { .. } => "model_download_progress",
             OutputEvent::RequestRouted { .. } => "request_routed",
@@ -676,6 +696,19 @@ impl OutputEvent {
         match self {
             OutputEvent::CliCommandLifecycle { family, outcome } => {
                 format!("CLI command {} ({})", outcome.as_str(), family.as_str())
+            }
+            OutputEvent::ServingStrategyResolved {
+                strategy,
+                applied,
+                declined,
+            } => {
+                let mut message = format!("serving strategy {strategy}: {applied} default(s) set");
+                if *declined > 0 {
+                    // Named explicitly: an operator who set a flag by hand
+                    // should see it survived rather than wonder.
+                    message.push_str(&format!(", {declined} left to your settings"));
+                }
+                message
             }
             OutputEvent::Info { message, .. } => message.clone(),
             OutputEvent::Startup { message, .. } => message

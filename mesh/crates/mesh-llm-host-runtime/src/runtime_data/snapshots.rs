@@ -107,6 +107,7 @@ pub(crate) struct StatusViewInput {
     pub is_host: bool,
     pub is_client: bool,
     pub llama_ready: bool,
+    pub external_inference_ready: bool,
     pub model_name: String,
     pub models: Vec<String>,
     pub available_models: Vec<String>,

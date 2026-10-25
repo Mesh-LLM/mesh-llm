@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--input",
+    "timestamp_overflow.json",
+    "--json-out",
+    "out/nested/metrics.json"
+  ],
+  "code": 1,
+  "output": null,
+  "raw_output": null,
+  "stderr_last_line": "OverflowError: date value out of range",
+  "stdout": ""
+}

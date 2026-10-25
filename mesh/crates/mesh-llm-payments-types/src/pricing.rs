@@ -38,20 +38,40 @@ pub fn payment_cap_msat(amount_msat: u64) -> Result<u64> {
 pub struct Pricing {
     pub input_msat_per_million: u64,
     pub output_msat_per_million: u64,
-    pub minimum_invoice_msat: u64,
+    /// Percentage taken off reported cached input only; zero preserves full price.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cache_discount_percent: u8,
+}
+
+pub(crate) fn is_zero<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 impl Pricing {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.minimum_invoice_msat > 0,
-            "minimum invoice must be positive"
-        );
-        ensure!(
             self.input_msat_per_million > 0 && self.output_msat_per_million > 0,
             "paid serving requires positive input and output rates"
         );
+        ensure!(
+            self.cache_discount_percent <= 100,
+            "cache discount must be 0..=100 percent"
+        );
         Ok(())
+    }
+
+    /// Weight cached and uncached input before rounding once to millisatoshis.
+    pub fn cached_input_charge(&self, tokens: u64, cached: u64) -> Result<u64> {
+        self.validate()?;
+        ensure!(cached <= tokens, "cached tokens exceed prompt tokens");
+        let weighted = u128::from(tokens - cached) * 100
+            + u128::from(cached) * u128::from(100 - self.cache_discount_percent);
+        u128::from(self.input_msat_per_million)
+            .checked_mul(weighted)
+            .context("inference charge overflow")?
+            .div_ceil(100_000_000)
+            .try_into()
+            .context("inference charge overflow")
     }
 
     pub fn input_charge(&self, tokens: u64) -> Result<u64> {
@@ -62,26 +82,13 @@ impl Pricing {
         self.charge(self.output_msat_per_million, tokens)
     }
 
-    /// The payer's total reservation for one request: both inference charges
-    /// plus the routing-fee allowance for each. Seller and payer both compute
-    /// this from the same inputs and the payer rejects terms that disagree, so
-    /// it must stay a pure function of pricing, input charge and output
-    /// allowance.
-    pub fn request_cap_msat(&self, input_amount: u64, max_output: u64) -> Result<u64> {
-        let output_amount = self.output_charge(max_output)?;
-        payment_cap_msat(input_amount)?
-            .checked_add(payment_cap_msat(output_amount)?)
-            .context("request price overflow")
-    }
-
     fn charge(&self, rate: u64, tokens: u64) -> Result<u64> {
         self.validate()?;
         if tokens == 0 {
             return Ok(0);
         }
-        let charge = (u128::from(rate) * u128::from(tokens)).div_ceil(1_000_000);
-        let minimum = u128::from(self.minimum_invoice_msat);
-        (charge.div_ceil(minimum) * minimum)
+        (u128::from(rate) * u128::from(tokens))
+            .div_ceil(1_000_000)
             .try_into()
             .context("inference charge overflow")
     }
@@ -92,11 +99,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cached_input_discount_is_bounded_and_rounded_once() {
+        let mut rates = Pricing {
+            input_msat_per_million: 1_000_000,
+            output_msat_per_million: 2_000_000,
+            cache_discount_percent: 75,
+        };
+        assert_eq!(rates.cached_input_charge(10, 8).unwrap(), 4);
+        assert_eq!(rates.output_charge(10).unwrap(), 20);
+        assert_eq!(rates.cached_input_charge(1, 1).unwrap(), 1);
+        assert!(rates.cached_input_charge(1, 2).is_err());
+        rates.cache_discount_percent = 100;
+        assert_eq!(rates.cached_input_charge(10, 10).unwrap(), 0);
+        rates.cache_discount_percent = 0;
+        assert_eq!(rates.cached_input_charge(10, 8).unwrap(), 10);
+        assert!(
+            !serde_json::to_string(&rates)
+                .unwrap()
+                .contains("cache_discount")
+        );
+        rates.cache_discount_percent = 101;
+        assert!(rates.validate().is_err());
+        rates.cache_discount_percent = 75;
+        rates.input_msat_per_million = u64::MAX;
+        assert!(rates.cached_input_charge(u64::MAX, 0).is_err());
+    }
+
+    #[test]
     fn fractional_rates_round_once_at_the_invoice_boundary() {
         let rates = Pricing {
             input_msat_per_million: 500,
             output_msat_per_million: 1500,
-            minimum_invoice_msat: 1,
+            cache_discount_percent: 0,
         };
         assert_eq!(rates.input_charge(1000).unwrap(), 1);
         assert_eq!(rates.output_charge(1000).unwrap(), 2);
@@ -126,12 +160,11 @@ mod tests {
         let rates = Pricing {
             input_msat_per_million: 1000,
             output_msat_per_million: 1000,
-            minimum_invoice_msat: 1,
+            cache_discount_percent: 0,
         };
-        // 100 msat input + 100 msat output, each with the floor allowance.
         assert_eq!(
-            rates.request_cap_msat(100, 100_000).unwrap(),
-            2 * (100 + FEE_ALLOWANCE_FLOOR_MSAT)
+            payment_cap_msat(rates.output_charge(100_000).unwrap()).unwrap(),
+            100 + FEE_ALLOWANCE_FLOOR_MSAT
         );
     }
 
@@ -146,13 +179,13 @@ mod tests {
     }
 
     #[test]
-    fn provider_granularity_and_overflow_are_enforced() {
+    fn charges_round_up_to_the_msat_and_overflow_is_enforced() {
         let mut rates = Pricing {
             input_msat_per_million: 1_000_001,
             output_msat_per_million: 1,
-            minimum_invoice_msat: 1000,
+            cache_discount_percent: 0,
         };
-        assert_eq!(rates.input_charge(1000).unwrap(), 2000);
+        assert_eq!(rates.input_charge(1000).unwrap(), 1001);
         rates.input_msat_per_million = u64::MAX;
         assert!(rates.input_charge(u64::MAX).is_err());
     }

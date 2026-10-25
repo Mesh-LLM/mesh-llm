@@ -7,6 +7,7 @@ pub mod binary_transport;
 pub mod compute_meter;
 pub mod embedded;
 pub mod frontend;
+mod grammar_bounds;
 pub mod kv_integration;
 pub mod kv_proto;
 mod listener;
@@ -40,6 +41,7 @@ pub mod settings;
 mod stage_performance;
 pub mod telemetry;
 pub use stage_performance::{StageDecodeTimingHint, stage_decode_timing_hints};
+pub mod thinking_probe;
 pub mod tokenizer;
 
 // Re-export key types for consumers
@@ -54,12 +56,13 @@ pub use frontend::{
     CONTEXT_BUDGET_MAX_TOKENS, DECODE_BATCH_HEADROOM_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
     DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend,
     EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
-    EmbeddedReasoningFormat, LayaSystemOneBackend, LinearProposal, LinearProposalDiscardReason,
+    EmbeddedReasoningFormat, InferenceGuardrailsConfig, InferenceGuardrailsStatus,
+    InferenceGuardrailsTarget, LayaSystemOneBackend, LinearProposal, LinearProposalDiscardReason,
     LinearProposalDisposition, LinearProposalIngress, LinearProposalQuery, LinearProposalReceipt,
     LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
-    OpaqueProposalDecisionId, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
-    OpenAiGuardrailsTarget, SpeculativeDecodeConfig, VerifyWindowConfig, embedded_openai_backend,
+    OpaqueProposalDecisionId, SpeculativeDecodeConfig, SpeechRecognitionBackend, SpeechTranscriber,
+    VerifyWindowConfig, embedded_openai_backend,
 };
 pub use skippy_protocol::StageConfig;
 pub use tokenizer::{MAX_TOKENIZE_TOKENS, TokenizerCapability, TokenizerCapabilityError};

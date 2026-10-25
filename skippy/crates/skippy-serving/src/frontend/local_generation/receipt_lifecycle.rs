@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation_receipt::GenerationStart;
 
 /// Marks a generation as started with the receipt sink, when a receipt
@@ -19,7 +19,7 @@ use crate::frontend::generation_receipt::GenerationStart;
 /// this through to `finalize_generation_receipt`.
 pub(super) fn begin_generation_receipt(
     config: Option<&crate::frontend::GenerationReceiptConfig>,
-    ids: &OpenAiGenerationIds,
+    ids: &InferenceGenerationIds,
     prompt_token_ids: &[i32],
 ) -> Option<Arc<[i32]>> {
     let receipt_prompt_token_ids = config.map(|_| Arc::<[i32]>::from(prompt_token_ids));

@@ -133,6 +133,21 @@ release archives contain `mesh-llm`, `host-imports.json`,
 `native-runtimes/<runtime-id>` directory. Backend-flavored archive names select
 different runtimes while retaining byte-identical host input for an OS/arch.
 
+macOS and Linux release archives also carry `plugins/`, holding the release
+archive of each default plugin the host pins for that target
+(`DEFAULT_PLUGINS` in `mesh-llm-plugin-manager`). `scripts/package-release.sh`
+lists them with `cargo xtool repository bundled-plugins --target <triple>`,
+downloads each from the plugin's own GitHub release, and fails unless it
+matches the pinned SHA-256 and the bundle's own host installs it as a default
+(`cargo xtool repository bundled-plugins-check --bundle <dir>`). The check runs
+even when nothing is listed, and fails if the host reports a default it pins for
+that platform as missing from the bundle. Packaging
+needs network access to GitHub; for an offline run, set
+`MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR` to a directory that already holds the
+archives, which are checked against the pins all the same. Windows packaging
+(`package-release.ps1`) bundles no plugins; no default pins a Windows build
+today.
+
 Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
 `valid` means the packaged binary matches a trusted release signer, `missing`
 means an unstamped build, and `invalid` means the bytes changed after packaging.

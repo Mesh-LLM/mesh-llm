@@ -113,6 +113,7 @@ pub(super) fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) ->
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -158,6 +159,7 @@ fn text_auto_request() -> BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
@@ -185,6 +187,7 @@ fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
@@ -204,6 +207,7 @@ fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 fn local_gguf_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
@@ -603,6 +607,7 @@ fn test_capture_path_for_request_uses_client_path() {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::OpenAiResponsesStream,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     assert_eq!(capture_path_for_request(&request), "/v1/responses?foo=1");
@@ -778,5 +783,39 @@ async fn system_one_read_is_not_sized_by_its_body() -> Result<()> {
         .await,
         vec![peer_id]
     );
+    Ok(())
+}
+
+#[cfg(feature = "payments")]
+fn paid_auto_peer(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
+    let mut peer = test_peer_serving_model(peer_id, model);
+    peer.lightning_offers.insert(
+        model.to_owned(),
+        mesh_llm_payments_types::pricing::Pricing {
+            input_msat_per_million: 1,
+            output_msat_per_million: 1,
+            cache_discount_percent: 0,
+        },
+    );
+    peer
+}
+
+#[cfg(feature = "payments")]
+#[tokio::test]
+async fn auto_plan_excludes_paid_model_before_selection() -> Result<()> {
+    let paid = "paid-model-70B";
+    let free = "free-model-7B";
+    let paid_id = iroh::SecretKey::generate().public();
+    let free_id = iroh::SecretKey::generate().public();
+    let node = test_node_with_remote_models(&[(paid, paid_id), (free, free_id)]).await;
+    node.insert_test_peer(paid_auto_peer(paid_id, paid)).await;
+    let affinity = AffinityRouter::new();
+    let mut request = text_auto_request();
+    let plan = build_mesh_request_plan(&node, &mut request, false, &affinity)
+        .await
+        .map_err(|_| anyhow::anyhow!("free alternate should be selected"))?;
+    assert_eq!(plan.effective_model.as_deref(), Some(free));
+    assert_eq!(plan.target_hosts, vec![free_id]);
+    node.endpoint.close().await;
     Ok(())
 }

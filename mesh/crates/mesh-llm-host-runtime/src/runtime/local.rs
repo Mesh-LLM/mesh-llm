@@ -20,7 +20,7 @@ use crate::runtime_data::{
 };
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_protocol::{FlashAttentionType, LoadMode};
 use skippy_serving::serving_hooks::SharedModelServingHooksFactory;
 use std::net::SocketAddr;
@@ -93,13 +93,21 @@ pub(super) enum LocalRuntimeBackendHandle {
         http: skippy::SkippyHttpHandle,
         _death_tx: tokio::sync::oneshot::Sender<()>,
     },
-    /// A Laya decision model: no sessions, KV cache, or guardrails, only
-    /// System One reads through its own HTTP server.
-    Laya {
-        _model: Arc<skippy_runtime::LayaModel>,
+    /// A single-purpose model behind its own HTTP backend, such as a Laya
+    /// decision model or a Whisper speech-recognition model: no sessions, KV
+    /// cache, or guardrails.
+    Dedicated {
+        model: DedicatedModel,
         http: skippy::SkippyHttpHandle,
         _death_tx: tokio::sync::oneshot::Sender<()>,
     },
+}
+
+/// The native model behind a dedicated backend. Its HTTP server holds
+/// another reference; the model is freed once both are dropped.
+pub(super) enum DedicatedModel {
+    Laya(Arc<skippy_runtime::LayaModel>),
+    Speech(Arc<skippy_runtime::SpeechRecognitionModel>),
 }
 
 pub(super) struct LocalRuntimeModelHandle {
@@ -109,15 +117,16 @@ pub(super) struct LocalRuntimeModelHandle {
     pub(super) slots: usize,
     pub(super) capabilities: models::ModelCapabilities,
     pub(super) workload_class: mesh::ModelWorkloadClass,
+    /// Render-only reasoning-control observations Skippy produced for this model.
+    pub(super) thinking: Option<skippy_inference_api::thinking::ThinkingControls>,
     pub(super) inner: LocalRuntimeBackendHandle,
 }
 
 impl LocalRuntimeModelHandle {
     pub(super) fn pid(&self) -> u32 {
         match &self.inner {
-            LocalRuntimeBackendHandle::Skippy { .. } | LocalRuntimeBackendHandle::Laya { .. } => {
-                std::process::id()
-            }
+            LocalRuntimeBackendHandle::Skippy { .. }
+            | LocalRuntimeBackendHandle::Dedicated { .. } => std::process::id(),
         }
     }
 
@@ -126,21 +135,21 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 Some(model.status().max_session_tokens)
             }
-            LocalRuntimeBackendHandle::Laya { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
         }
     }
 
     pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
-            LocalRuntimeBackendHandle::Laya { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
         }
     }
 
     pub(super) fn openai_server_status(&self) -> skippy_serving::EmbeddedServerStatus {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { http, .. }
-            | LocalRuntimeBackendHandle::Laya { http, .. } => http.status(),
+            | LocalRuntimeBackendHandle::Dedicated { http, .. } => http.status(),
         }
     }
 
@@ -152,7 +161,7 @@ impl LocalRuntimeModelHandle {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 model.set_openai_guardrail_mode(mode)
             }
-            LocalRuntimeBackendHandle::Laya { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
         }
     }
 
@@ -200,7 +209,7 @@ impl LocalRuntimeModelHandle {
                         .collect(),
                 })
             }
-            LocalRuntimeBackendHandle::Laya { .. } => None,
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
         }
     }
 
@@ -210,8 +219,14 @@ impl LocalRuntimeModelHandle {
                 let _ = http.shutdown().await;
                 model.shutdown();
             }
-            LocalRuntimeBackendHandle::Laya { http, .. } => {
+            LocalRuntimeBackendHandle::Dedicated { model, http, .. } => {
+                // Stop serving first so no request still holds the model,
+                // then release this handle's reference.
                 let _ = http.shutdown().await;
+                match model {
+                    DedicatedModel::Laya(model) => drop(model),
+                    DedicatedModel::Speech(model) => drop(model),
+                }
             }
         }
     }
@@ -291,7 +306,7 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
-    pub(super) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub(super) hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     pub(super) http_bind_addr: SocketAddr,
 }
@@ -474,6 +489,8 @@ pub(super) enum ModelLoadSource {
     DirectGguf,
     /// A catalog or repository model reference.
     LayerPackage,
+    /// A whisper.cpp model file, by path or repository reference.
+    WhisperFile,
 }
 
 impl ModelLoadSource {
@@ -481,6 +498,7 @@ impl ModelLoadSource {
         match self {
             Self::DirectGguf => "direct_gguf",
             Self::LayerPackage => "layer_package",
+            Self::WhisperFile => "whisper_file",
         }
     }
 
@@ -497,6 +515,8 @@ impl ModelLoadSource {
         match self {
             Self::DirectGguf => false,
             Self::LayerPackage => true,
+            // The name may come from a local path, so it is never reported.
+            Self::WhisperFile => false,
         }
     }
 }
@@ -825,8 +845,9 @@ pub(super) async fn start_runtime_local_model(
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
         .unwrap_or_else(|| spec.node.vram_bytes());
     let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
-    let hook_policy =
-        Some(skippy::MeshAutoHookPolicy::new(spec.node.clone()) as Arc<dyn OpenAiHookPolicy>);
+    let hook_policy = Some(crate::plugin::exchange_policy::compose_node_hooks(
+        spec.node.clone(),
+    ));
     let start_result = start_local_openai_model(
         LocalOpenAiModelStartSpec {
             mesh_config: spec.mesh_config,
@@ -941,6 +962,7 @@ pub(super) async fn start_local_openai_model(
     LocalRuntimeModelHandle,
     tokio::sync::oneshot::Receiver<()>,
 )> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let model_name = runtime_model_name.to_string();
     let package_ref = spec.model_path.to_string_lossy().to_string();
     let package = if skippy::is_layer_package_ref(&package_ref) {
@@ -960,6 +982,29 @@ pub(super) async fn start_local_openai_model(
         .map(|package| package.source_model_bytes)
         .unwrap_or_else(|| election::total_model_bytes(spec.model_path));
     let my_vram = spec.capacity_budget_bytes;
+
+    // Whisper models are whisper.cpp files, not GGUF, and open through their
+    // own native entry point, with their own capacity check. A ggml file of
+    // another layout or an unreadable file fails here with its real cause
+    // instead of as a GGUF parse error.
+    if package.is_none() {
+        let model_path = spec.model_path.to_path_buf();
+        let speech_header = tokio::task::spawn_blocking(move || {
+            skippy_runtime::SpeechModelHeader::read(&model_path)
+        })
+        .await
+        .context("join speech model header task")?
+        .with_context(|| format!("read model header of {}", spec.model_path.display()))?;
+        if let Some(header) = speech_header {
+            return super::local_speech::start_local_speech_model(
+                spec,
+                model_name,
+                total_model_bytes,
+                header,
+            )
+            .await;
+        }
+    }
 
     // For split/layer-package models, compute the local share of model weights
     // and the layer fraction so the context planner budgets correctly.
@@ -1201,6 +1246,7 @@ async fn start_local_skippy_model(
             slots: plan.slots,
             capabilities,
             workload_class,
+            thinking: skippy_model.thinking().cloned(),
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(skippy_model),
                 http,
@@ -1384,6 +1430,7 @@ async fn start_local_package_v2_model(
             slots: plan.slots,
             capabilities,
             workload_class,
+            thinking: handle.thinking().cloned(),
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(handle),
                 http,

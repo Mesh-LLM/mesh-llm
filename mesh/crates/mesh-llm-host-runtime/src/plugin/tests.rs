@@ -104,6 +104,7 @@ fn startup_virtual_model_lookup_rejects_concrete_collisions() {
 }
 
 #[test]
+#[serial_test::serial]
 fn resolves_default_builtin_plugins() {
     let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
     assert_eq!(resolved.externals.len(), 1);
@@ -120,6 +121,7 @@ fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         allow_peer_blocks: None,
+        openai_exchange_grant: None,
         command: None,
         args: Vec::new(),
         url: None,
@@ -129,6 +131,7 @@ fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
 }
 
 #[test]
+#[serial_test::serial]
 fn builtin_payments_is_served_in_process_and_can_be_switched_off() {
     super::config::TEST_PAYMENTS_COMPILED_IN.with(|slot| *slot.borrow_mut() = Some(true));
     let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
@@ -189,6 +192,7 @@ async fn builtin_plugin_without_arguments_refuses_them() {
 }
 
 #[test]
+#[serial_test::serial]
 fn retired_builtin_wallet_stanza_is_ignored() {
     // The built-in Lexe wallet was removed; an old stanza must not break
     // startup, whatever it sets, and registers nothing.
@@ -214,6 +218,7 @@ fn retired_builtin_wallet_stanza_is_ignored() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_wallet_plugin_is_an_ordinary_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -222,6 +227,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: Some("/opt/wallets/lexe-wallet".into()),
             args: Vec::new(),
             url: None,
@@ -238,6 +244,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_can_be_configured() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -246,6 +253,7 @@ fn external_plugin_can_be_configured() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: Some("mesh-llm-plugin-demo".into()),
             args: vec!["--stdio".into()],
             url: None,
@@ -267,6 +275,7 @@ fn external_plugin_can_be_configured() {
 #[test]
 fn failed_plugin_summary_redacts_urls_before_serialization() {
     let spec = ExternalPluginSpec {
+        openai_exchange_grant: None,
         name: "remote".into(),
         command: "mesh-llm-plugin-remote".into(),
         args: Vec::new(),
@@ -293,6 +302,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
 }
 
 #[test]
+#[serial_test::serial]
 fn blobstore_can_be_disabled() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -301,6 +311,7 @@ fn blobstore_can_be_disabled() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
             url: None,
@@ -316,6 +327,7 @@ fn blobstore_can_be_disabled() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_can_be_enabled_with_url() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -324,6 +336,7 @@ fn external_plugin_can_be_enabled_with_url() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
             url: Some("http://gpu-box:8000/v1".into()),
@@ -344,6 +357,7 @@ fn external_plugin_can_be_enabled_with_url() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_rejects_url_that_is_empty_after_normalization() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -352,6 +366,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
             url: Some("\u{2003}\t\n".into()),
@@ -367,6 +382,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
 }
 
 #[test]
+#[serial_test::serial]
 fn remote_plugin_control_url_is_rejected_without_authentication() {
     let raw_url = "\u{2003}tcp://user:secret@127.0.0.1:19091/control?token=private\u{2003}";
     let config = MeshConfig {
@@ -376,6 +392,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
             url: Some(raw_url.into()),
@@ -397,6 +414,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_can_be_enabled_with_command_args() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -405,6 +423,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: Some("/opt/plugins/endpoint-plugin".into()),
             args: vec!["--verbose".into()],
             url: None,
@@ -424,6 +443,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_ignores_disabled_entry_without_install() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -432,6 +452,7 @@ fn external_plugin_ignores_disabled_entry_without_install() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
             url: Some("http://gpu-box:8000/v1".into()),
@@ -447,6 +468,7 @@ fn external_plugin_ignores_disabled_entry_without_install() {
 }
 
 #[test]
+#[serial_test::serial]
 fn default_builtins_are_resolved_on_public_meshes() {
     let resolved = resolve_plugins(
         &MeshConfig::default(),
@@ -461,6 +483,7 @@ fn default_builtins_are_resolved_on_public_meshes() {
 }
 
 #[test]
+#[serial_test::serial]
 fn resolves_external_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -469,6 +492,7 @@ fn resolves_external_plugin() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: Some("/tmp/demo".into()),
             args: vec!["--flag".into()],
             url: None,
@@ -489,6 +513,7 @@ fn resolves_external_plugin() {
 async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {
+            openai_exchange_grant: None,
             name: "demo".into(),
             command: "mesh-llm-definitely-missing-plugin-binary".into(),
             args: Vec::new(),

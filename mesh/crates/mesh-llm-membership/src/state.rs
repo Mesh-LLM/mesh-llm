@@ -3,6 +3,7 @@
 use crate::connection_reservation::PendingConnectionHandshake;
 use crate::peer_state::PeerInfo;
 use crate::requirements::MeshRequirementRejectionEvent;
+use crate::signed_record::{CACHE_AFFINITY_RECORD, HeldRecords, NODE_RECORD};
 use iroh::{EndpointId, endpoint::Connection};
 use mesh_llm_identity::OwnershipStatus;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -43,6 +44,12 @@ pub struct MembershipState {
     /// Test seam for healthy admitted peers when an opaque iroh connection
     /// cannot be fabricated. Production leaves this set empty.
     pub test_peer_liveness: HashSet<EndpointId>,
+    /// Latest verified signed node record per node, plus this node's own,
+    /// relayed byte-for-byte.
+    pub node_records: HeldRecords,
+    /// Latest verified signed cache-affinity record per node, plus this
+    /// node's own, relayed byte-for-byte.
+    pub cache_affinity_records: HeldRecords,
 }
 
 impl Default for MembershipState {
@@ -61,6 +68,8 @@ impl Default for MembershipState {
             requirement_rejected_peers: HashSet::new(),
             recent_mesh_rejections: VecDeque::new(),
             test_peer_liveness: HashSet::new(),
+            node_records: HeldRecords::new(NODE_RECORD),
+            cache_affinity_records: HeldRecords::new(CACHE_AFFINITY_RECORD),
         }
     }
 }

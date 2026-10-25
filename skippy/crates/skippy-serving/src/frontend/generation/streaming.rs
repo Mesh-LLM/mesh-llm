@@ -1,4 +1,6 @@
+use crate::frontend::generation::GeneratedLogprobCandidate;
 use crate::frontend::generation::GeneratedText;
+use crate::frontend::generation::GeneratedTokenLogprob;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::GenerationMetrics;
 use crate::frontend::generation::ParsedChatMessage;
@@ -8,6 +10,7 @@ use crate::frontend::generation::incremental_text::suffix_delta;
 use crate::frontend::generation::tool_call_stream::ToolCallStreamState;
 use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::generation::tool_calls_stream_delta;
+use crate::frontend::stop_sequences::stop_in_new_text;
 use crate::frontend::tool_emulation;
 use crate::frontend::util::finish_reason_for_generation;
 use crate::frontend::util::openai_backend_error;
@@ -15,13 +18,14 @@ use crate::frontend::util::saturating_u32;
 use crate::frontend::util::trim_at_stop;
 use crate::frontend::util::valid_utf8_prefix_len;
 use crate::runtime_state::RuntimeState;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionChunk;
 use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::CompletionChunk;
 use skippy_inference_api::FinishReason;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_inference_api::Usage;
 use skippy_runtime::StageModelReader;
 use std::collections::BTreeMap;
@@ -29,8 +33,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub(in crate::frontend) type GenerationStream =
-    std::pin::Pin<Box<dyn futures_util::Stream<Item = OpenAiResult<GenerationStreamEvent>> + Send>>;
+pub(in crate::frontend) type GenerationStream = std::pin::Pin<
+    Box<dyn futures_util::Stream<Item = InferenceResult<GenerationStreamEvent>> + Send>,
+>;
 
 pub(in crate::frontend) enum GenerationStreamEvent {
     Delta(String),
@@ -82,9 +87,13 @@ impl ChatStreamDeltas {
         if let Some(delta) = suffix_delta(parsed.content.as_deref(), &mut self.emitted_content) {
             events.push(GenerationStreamEvent::Delta(delta));
         }
-        if let Some(tool_calls) = parsed.tool_calls.as_ref().and_then(Value::as_array)
-            && let Some(delta) = self.tool_calls.record(tool_calls, is_partial)
-        {
+        let tool_calls = parsed
+            .tool_calls
+            .as_ref()
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if let Some(delta) = self.tool_calls.record(tool_calls, is_partial) {
             events.push(GenerationStreamEvent::ToolCalls(delta));
         }
         events
@@ -92,12 +101,23 @@ impl ChatStreamDeltas {
 
     /// `FinishReason::ToolCalls` only when the terminal parse produced tool calls
     /// the client can reconstruct from the deltas it received.
-    pub(in crate::frontend) fn finish_reason(&self, fallback: FinishReason) -> FinishReason {
-        if self.tool_calls.completed() {
+    pub(in crate::frontend) fn finish_reason(
+        &self,
+        fallback: FinishReason,
+    ) -> InferenceResult<FinishReason> {
+        if fallback == FinishReason::Length {
+            return Ok(fallback);
+        }
+        if self.tool_calls.incomplete() && fallback == FinishReason::Stop {
+            return Err(openai_backend_error(anyhow::anyhow!(
+                "generation stopped with an incomplete or inconsistent tool call"
+            )));
+        }
+        Ok(if self.tool_calls.completed() {
             FinishReason::ToolCalls
         } else {
             fallback
-        }
+        })
     }
 }
 
@@ -168,15 +188,10 @@ impl ChatOutputStreamParser {
         request: ChatCompletionRequest,
         metadata: String,
         emit_reasoning: bool,
-    ) -> OpenAiResult<Self> {
+    ) -> InferenceResult<Self> {
         let passthrough_content =
             chat_stream_can_passthrough_content(&request, &metadata, emit_reasoning);
-        let model = backend
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let model = lock_runtime(&backend.runtime).model.reader();
         Ok(Self {
             backend,
             model,
@@ -191,7 +206,7 @@ impl ChatOutputStreamParser {
     pub(in crate::frontend) fn push_delta(
         &mut self,
         delta: &str,
-    ) -> OpenAiResult<Vec<GenerationStreamEvent>> {
+    ) -> InferenceResult<Vec<GenerationStreamEvent>> {
         self.text.push_str(delta);
         if self.passthrough_content {
             self.deltas.emitted_content.push_str(delta);
@@ -203,17 +218,19 @@ impl ChatOutputStreamParser {
     pub(in crate::frontend) fn finish(
         &mut self,
         text: &str,
-    ) -> OpenAiResult<Vec<GenerationStreamEvent>> {
+        fallback: FinishReason,
+    ) -> InferenceResult<(Vec<GenerationStreamEvent>, FinishReason)> {
         if self.text != text {
             self.text = text.to_string();
         }
-        self.events_for_text(false)
+        let events = self.events_for_text(false)?;
+        Ok((events, self.deltas.finish_reason(fallback)?))
     }
 
     pub(in crate::frontend) fn events_for_text(
         &mut self,
         is_partial: bool,
-    ) -> OpenAiResult<Vec<GenerationStreamEvent>> {
+    ) -> InferenceResult<Vec<GenerationStreamEvent>> {
         let Some(parsed) = self.backend.parse_chat_output_with_reader(
             &self.model,
             &self.text,
@@ -226,16 +243,12 @@ impl ChatOutputStreamParser {
         };
         Ok(self.deltas.events_for_parse(&parsed, is_partial))
     }
-
-    pub(in crate::frontend) fn finish_reason(&self, fallback: FinishReason) -> FinishReason {
-        self.deltas.finish_reason(fallback)
-    }
 }
 
 pub(in crate::frontend) fn generation_event_to_chat_chunk(
-    event: OpenAiResult<GenerationStreamEvent>,
+    event: InferenceResult<GenerationStreamEvent>,
     model: &str,
-) -> OpenAiResult<ChatCompletionChunk> {
+) -> InferenceResult<ChatCompletionChunk> {
     match event? {
         GenerationStreamEvent::Delta(delta) => {
             Ok(ChatCompletionChunk::delta(model.to_string(), delta))
@@ -289,9 +302,9 @@ pub(in crate::frontend) fn generation_event_to_chat_chunk(
 }
 
 pub(in crate::frontend) fn generation_event_to_completion_chunk(
-    event: OpenAiResult<GenerationStreamEvent>,
+    event: InferenceResult<GenerationStreamEvent>,
     model: &str,
-) -> OpenAiResult<CompletionChunk> {
+) -> InferenceResult<CompletionChunk> {
     match event? {
         GenerationStreamEvent::Delta(delta) => Ok(CompletionChunk::delta(model.to_string(), delta)),
         GenerationStreamEvent::ReasoningDelta(_) => {
@@ -338,7 +351,7 @@ pub(in crate::frontend) fn emulation_generation_active(
 
 pub(in crate::frontend) struct TextGenerationCollector<'a, F>
 where
-    F: FnMut(&str) -> OpenAiResult<()>,
+    F: FnMut(&str) -> InferenceResult<()>,
 {
     model: StageModelReader,
     stop_values: Vec<&'a str>,
@@ -346,34 +359,33 @@ where
     text: String,
     streamed_text_len: usize,
     max_stop_bytes: usize,
+    /// Length of `text` already searched for stop sequences.
+    stop_searched_len: usize,
     generated_text_bytes: Vec<u8>,
     completion_tokens: usize,
-    generation_gate: Option<Arc<dyn crate::frontend::generation_gate::GenerationGate>>,
     finish_reason: FinishReason,
     metrics: GenerationMetrics,
     emulation_active: bool,
     ignore_eos: bool,
+    /// Tokens counted as completion tokens, in order, to align logprobs.
+    emitted_tokens: Vec<i32>,
 }
 
 impl<'a, F> TextGenerationCollector<'a, F>
 where
-    F: FnMut(&str) -> OpenAiResult<()>,
+    F: FnMut(&str) -> InferenceResult<()>,
 {
     pub(in crate::frontend) fn new(
         runtime: Arc<Mutex<RuntimeState>>,
         stop_values: Vec<&'a str>,
         on_text_chunk: F,
-    ) -> OpenAiResult<Self> {
+    ) -> InferenceResult<Self> {
         let max_stop_bytes = stop_values
             .iter()
             .map(|value| value.len())
             .max()
             .unwrap_or(0);
-        let model = runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let model = lock_runtime(&runtime).model.reader();
         Ok(Self {
             model,
             stop_values,
@@ -381,13 +393,14 @@ where
             text: String::new(),
             streamed_text_len: 0,
             max_stop_bytes,
+            stop_searched_len: 0,
             generated_text_bytes: Vec::new(),
             completion_tokens: 0,
-            generation_gate: None,
             finish_reason: finish_reason_for_generation(true),
             metrics: GenerationMetrics::default(),
             emulation_active: false,
             ignore_eos: false,
+            emitted_tokens: Vec::new(),
         })
     }
 
@@ -405,15 +418,7 @@ where
         self
     }
 
-    pub(in crate::frontend) fn with_generation_gate(
-        mut self,
-        gate: Option<Arc<dyn crate::frontend::generation_gate::GenerationGate>>,
-    ) -> Self {
-        self.generation_gate = gate;
-        self
-    }
-
-    pub(in crate::frontend) fn push_token(&mut self, token: i32) -> OpenAiResult<TokenControl> {
+    pub(in crate::frontend) fn push_token(&mut self, token: i32) -> InferenceResult<TokenControl> {
         let eog_timer = Instant::now();
         if !self.ignore_eos
             && self
@@ -427,9 +432,7 @@ where
         }
         self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
         self.completion_tokens += 1;
-        if let Some(gate) = self.generation_gate.as_ref() {
-            gate.committed_token()?;
-        }
+        self.emitted_tokens.push(token);
         let detokenize_timer = Instant::now();
         let piece = self
             .model
@@ -440,20 +443,24 @@ where
         let valid_len = valid_utf8_prefix_len(&self.generated_text_bytes);
         if valid_len > 0 {
             let candidate = std::str::from_utf8(&self.generated_text_bytes[..valid_len])
-                .map_err(|error| OpenAiError::backend(error.to_string()))?;
+                .map_err(|error| InferenceError::backend(error.to_string()))?;
             if let Some(delta) = candidate.strip_prefix(&self.text) {
                 if !delta.is_empty() {
                     self.text = candidate.to_string();
                 }
             } else if candidate != self.text {
                 self.text = candidate.to_string();
+                self.stop_searched_len = 0;
             }
         }
-        if self
-            .stop_values
-            .iter()
-            .any(|stop| !stop.is_empty() && self.text.contains(stop))
-        {
+        let stop_found = stop_in_new_text(
+            &self.text,
+            self.stop_searched_len,
+            &self.stop_values,
+            self.max_stop_bytes,
+        );
+        self.stop_searched_len = self.text.len();
+        if stop_found {
             self.text = trim_at_stop(&self.text, &self.stop_values).to_string();
             self.emit_safe_delta(true)?;
             self.finish_reason = finish_reason_for_generation(false);
@@ -468,7 +475,7 @@ where
         Ok(TokenControl::Continue)
     }
 
-    pub(in crate::frontend) fn emit_safe_delta(&mut self, flush_all: bool) -> OpenAiResult<()> {
+    pub(in crate::frontend) fn emit_safe_delta(&mut self, flush_all: bool) -> InferenceResult<()> {
         let mut target_len = if flush_all || self.max_stop_bytes == 0 {
             self.text.len()
         } else {
@@ -497,8 +504,12 @@ where
         mut self,
         prompt_token_count: usize,
         cache_stats: GenerationCacheStats,
-    ) -> OpenAiResult<GeneratedText> {
+    ) -> InferenceResult<GeneratedText> {
         self.emit_safe_delta(true)?;
+        let token_logprobs = match cache_stats.token_logprobs {
+            Some(entries) => Some(self.aligned_logprobs(entries)?),
+            None => None,
+        };
         Ok(GeneratedText {
             prompt_tokens: saturating_u32(prompt_token_count),
             completion_tokens: saturating_u32(self.completion_tokens),
@@ -520,7 +531,52 @@ where
             detokenize_ms: self.metrics.detokenize_ms,
             text_emit_ms: self.metrics.text_emit_ms,
             eog_check_ms: self.metrics.eog_check_ms,
+            token_logprobs,
         })
+    }
+
+    /// The native session records an entry for every sampled token, including
+    /// the end-of-generation token that is never emitted; the emitted tokens
+    /// are therefore the leading entries, in order.
+    fn aligned_logprobs(
+        &self,
+        entries: Vec<skippy_runtime::TokenLogprobs>,
+    ) -> InferenceResult<Vec<GeneratedTokenLogprob>> {
+        if entries.len() < self.emitted_tokens.len()
+            || entries
+                .iter()
+                .zip(&self.emitted_tokens)
+                .any(|(entry, token)| entry.token != *token)
+        {
+            return Err(InferenceError::backend(
+                "recorded logprobs do not match the generated tokens",
+            ));
+        }
+        let candidate = |token: i32, logprob: f32| -> InferenceResult<GeneratedLogprobCandidate> {
+            let bytes = self
+                .model
+                .detokenize_bytes(&[token])
+                .map_err(openai_backend_error)?;
+            Ok(GeneratedLogprobCandidate {
+                text: String::from_utf8_lossy(&bytes).into_owned(),
+                bytes,
+                logprob: logprob.is_finite().then_some(logprob),
+            })
+        };
+        entries
+            .into_iter()
+            .take(self.emitted_tokens.len())
+            .map(|entry| {
+                Ok(GeneratedTokenLogprob {
+                    token: candidate(entry.token, entry.logprob)?,
+                    top: entry
+                        .top
+                        .iter()
+                        .map(|&(token, logprob)| candidate(token, logprob))
+                        .collect::<InferenceResult<_>>()?,
+                })
+            })
+            .collect()
     }
 }
 

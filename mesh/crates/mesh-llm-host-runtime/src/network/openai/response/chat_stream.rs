@@ -273,6 +273,14 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
         state.done_seen,
     )
     .await?;
+    if state.upstream_error_seen {
+        tcp_stream.record_exchange_outcome("backend_error");
+    }
+    if !state.done_seen && !state.upstream_error_seen {
+        tcp_stream.finish_wire_bytes(
+            skippy_inference_api::wire_bytes::WireBytesIncomplete::TransportError,
+        );
+    }
     let _ = tcp_stream.write_all(b"0\r\n\r\n").await;
     let _ = tcp_stream.shutdown().await;
     if state.upstream_error_seen {

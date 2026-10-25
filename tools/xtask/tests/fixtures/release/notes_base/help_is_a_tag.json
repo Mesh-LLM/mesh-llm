@@ -1,0 +1,11 @@
+{
+  "args": [
+    "-h"
+  ],
+  "code": 2,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "invalid release tag: -h\n",
+  "stdout": ""
+}

@@ -40,6 +40,11 @@ on:
         required: false
         default: ''
         type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON from the lane's product_automation producer. Required for Swift, whose bare macOS runner restores that executable instead of compiling xtask.
+        required: false
+        default: ''
+        type: string
       kotlin_artifact_name:
         required: false
         default: ''
@@ -161,10 +166,15 @@ jobs:
         env:
           SWIFT_ARTIFACT_NAME: ${{ inputs.swift_artifact_name }}
           SWIFT_ARTIFACT_MODE: ${{ inputs.swift_artifact_mode }}
+          PRODUCT_AUTOMATION: ${{ inputs.product_automation }}
         run: |
           set -euo pipefail
           if [[ -z "$SWIFT_ARTIFACT_NAME" ]]; then
             echo "swift_artifact_name is required for Swift SDK smoke" >&2
+            exit 1
+          fi
+          if [[ -z "$PRODUCT_AUTOMATION" ]]; then
+            echo "product_automation is required for Swift SDK smoke" >&2
             exit 1
           fi
           case "$SWIFT_ARTIFACT_MODE" in
@@ -228,13 +238,6 @@ jobs:
           name: ${{ inputs.kotlin_artifact_name }}
           path: ${{ inputs.kotlin_artifact_path }}
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        # rust is always containerized (only swift opts out), so this stays
-        # gated off in practice — the image bakes the venv this would shadow.
-        if: ${{ inputs.sdk_kind == 'rust' && job.container.id == '' }}
-        with:
-          python-version: "3.12"
-
       - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         # No JDK is baked into the image (not in verify-runner-image's
         # asserted tool list), so this stays ungated.
@@ -265,6 +268,20 @@ jobs:
         if: ${{ inputs.sdk_kind != 'swift' }}
         run: verify-runner-image public cpu
 
+      # Bare macos-15 has no runner image, linker, or compiler cache; restore
+      # the lane's xtask so admission never compiles it here.
+      - name: Restore product automation
+        if: ${{ inputs.sdk_kind == 'swift' }}
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
+
+      - name: Prepare external Python SDK contract source
+        uses: ./.github/actions/prepare-python-sdk-source
       - uses: ./.github/actions/restore-smoke-inputs
         id: model_inputs
         with:

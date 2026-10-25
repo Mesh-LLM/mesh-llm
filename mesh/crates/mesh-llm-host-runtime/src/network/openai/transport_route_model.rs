@@ -1,8 +1,13 @@
+#[path = "transport_route_exhaustion.rs"]
+mod exhaustion;
+
 use super::*;
 use crate::network::openai::routing_rank::{RankedCandidates, rank_targets_by_context};
 use crate::network::reservations::RoutingReservation;
 
 pub(crate) struct RouteModelRequestContext<'a> {
+    /// Peer ingress may execute local targets only, never discover a fallback peer.
+    pub(crate) local_execution_only: bool,
     pub(crate) exchange_id: Option<&'a str>,
     pub(crate) required_tokens: Option<u32>,
     pub(crate) affinity: &'a AffinityRouter,
@@ -27,8 +32,8 @@ pub(crate) struct RouteModelRequestContext<'a> {
 
 /// A delivered 2xx outcome: the routing-side test for "this attempt was
 /// served", which gates the `ServedByNodeIdSink` write. Mirrors
-/// `ingress::outcome_was_served`, kept here where the per-attempt target is in
-/// scope.
+/// `ingress::exchange_events::outcome_was_served`, kept here where the
+/// per-attempt target is in scope.
 fn route_outcome_was_served(outcome: &RouteDispatchOutcome) -> bool {
     matches!(
         outcome,
@@ -74,6 +79,7 @@ pub async fn route_model_request(
         targets,
         model,
         request,
+        local_execution_only: context.local_execution_only,
         exchange_id: context.exchange_id,
         required_tokens: context.required_tokens,
         affinity: context.affinity,
@@ -86,6 +92,7 @@ pub async fn route_model_request(
 }
 
 struct RouteModelRequestArgs<'a> {
+    local_execution_only: bool,
     node: mesh::Node,
     tcp_stream: ClientStream,
     targets: &'a election::ModelTargets,
@@ -103,6 +110,7 @@ struct RouteModelRequestArgs<'a> {
 struct RouteModelState {
     route_started: Instant,
     attempts: usize,
+    timeout_attempts: usize,
     refreshed: bool,
 }
 
@@ -142,6 +150,104 @@ async fn cache_target_for_request(
     selected
 }
 
+async fn execution_candidates(
+    node: &mesh::Node,
+    model: &str,
+    request: &BufferedHttpRequest,
+    targets: &election::ModelTargets,
+    local_execution_only: bool,
+) -> Vec<election::InferenceTarget> {
+    if local_execution_only {
+        let local = targets
+            .candidates(model)
+            .into_iter()
+            .filter(|target| matches!(target, election::InferenceTarget::Local(_)))
+            .collect::<Vec<_>>();
+        super::super::workload_routing::eligible_targets(node, model, &request.client_path, &local)
+            .await
+    } else {
+        super::super::workload_routing::ingress_candidates(
+            node,
+            model,
+            &request.client_path,
+            targets,
+        )
+        .await
+    }
+}
+
+fn clear_peer_capsule(sink: Option<&PeerCapsuleIdSink>) {
+    if let Some(sink) = sink {
+        sink.take();
+    }
+}
+
+struct PreparedModelCandidates {
+    ranked: RankedCandidates<election::InferenceTarget>,
+    ordered_candidates: Vec<election::InferenceTarget>,
+    payment_ranked: bool,
+}
+
+struct ModelRouteRejection {
+    status: u16,
+    reason: String,
+}
+
+impl ModelRouteRejection {
+    async fn respond(
+        self,
+        stream: ClientStream,
+        observer: OpenAiRouteObserver<'_>,
+    ) -> RouteDispatchOutcome {
+        let result = match self.status {
+            503 => send_503_observed(stream, &self.reason, observer).await,
+            status => send_error_observed(stream, status, &self.reason, observer).await,
+        };
+        response_outcome(self.status, result)
+    }
+}
+
+/// Prepare the context/payment/health eligible candidates before affinity and
+/// reservation selection. A rejection carries the existing HTTP error boundary.
+async fn prepare_model_candidates(
+    node: &mesh::Node,
+    targets: &election::ModelTargets,
+    model: &str,
+    request: &BufferedHttpRequest,
+    required_tokens: Option<u32>,
+    affinity: &AffinityRouter,
+    local_execution_only: bool,
+) -> Result<PreparedModelCandidates, ModelRouteRejection> {
+    let candidates =
+        execution_candidates(node, model, request, targets, local_execution_only).await;
+    let mut ranked = rank_targets_by_context(node, model, required_tokens, &candidates).await;
+    let payment_ranked = crate::network::openai::payment_routing::rank(
+        node,
+        model,
+        u64::from(request.completion_tokens.unwrap_or(256)),
+        &mut ranked,
+        request.body_json.as_ref(),
+    )
+    .await
+    .map_err(|reason| ModelRouteRejection {
+        status: 402,
+        reason: reason.into(),
+    })?;
+    let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);
+    if ordered_candidates.is_empty() {
+        record_route_model_unavailable(node, model, 0);
+        return Err(ModelRouteRejection {
+            status: 503,
+            reason: no_context_eligible_target_reason(model, required_tokens),
+        });
+    }
+    Ok(PreparedModelCandidates {
+        ranked,
+        ordered_candidates,
+        payment_ranked,
+    })
+}
+
 async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDispatchOutcome {
     let RouteModelRequestArgs {
         node,
@@ -149,6 +255,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         targets,
         model,
         request,
+        local_execution_only,
         required_tokens,
         exchange_id,
         affinity,
@@ -159,42 +266,24 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     } = args;
     let route_started = Instant::now();
     let mut tcp_stream = tcp_stream;
-    let candidates = super::super::workload_routing::ingress_candidates(
+    let PreparedModelCandidates {
+        ranked,
+        ordered_candidates,
+        payment_ranked,
+    } = match prepare_model_candidates(
         &node,
-        model,
-        &request.client_path,
         targets,
-    )
-    .await;
-    let mut ranked = rank_targets_by_context(&node, model, required_tokens, &candidates).await;
-    let payment_ranking = crate::network::openai::payment_routing::rank(
-        &node,
         model,
-        (request.body_len_bytes as u64).div_ceil(4),
-        u64::from(request.completion_tokens.unwrap_or(256)),
-        &mut ranked,
-        request.body_json.as_ref(),
+        request,
+        required_tokens,
+        affinity,
+        local_execution_only,
     )
-    .await;
-
-    let payment_ranked = match payment_ranking {
-        Ok(ranked) => ranked,
-        Err(reason) => {
-            return response_outcome(
-                402,
-                send_error_observed(tcp_stream, 402, reason, route_observer).await,
-            );
-        }
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(rejection) => return rejection.respond(tcp_stream, route_observer).await,
     };
-    let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);
-    if ordered_candidates.is_empty() {
-        record_route_model_unavailable(&node, model, 0);
-        let reason = no_context_eligible_target_reason(model, required_tokens);
-        return response_outcome(
-            503,
-            send_503_observed(tcp_stream, &reason, route_observer).await,
-        );
-    }
     route_observer.route_selected(Some(model));
 
     let affinity_body = super::super::workload_routing::affinity_body(request);
@@ -228,6 +317,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     let mut state = RouteModelState {
         route_started,
         attempts: 0,
+        timeout_attempts: 0,
         refreshed: false,
     };
     // `request.raw` was already stabilized at ingress (finalize_forwarded_request
@@ -242,17 +332,31 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         // stale value before moving on, or a retry that never sees (or
         // never sets) the header would silently inherit the PREVIOUS
         // peer's capsule_id and misattribute it to this attempt.
-        if let Some(sink) = peer_capsule_id {
-            sink.take();
-        }
+        clear_peer_capsule(peer_capsule_id);
         reservation.transfer_to(&target);
         state.attempts += 1;
         let attempt_started = Instant::now();
         let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
+        if let Some(outcome) = super::super::exchange_admission::admit_selected_route(
+            &node,
+            &mut tcp_stream,
+            request,
+            Some(model),
+            "mesh",
+            super::super::exchange_admission::SelectedRouteTarget::MeshLabel(&format!(
+                "{target:?}"
+            )),
+            state.attempts,
+        )
+        .await
+        {
+            return outcome;
+        }
         let attempt_result = route_attempt_for_target(
             &node,
             &mut tcp_stream,
             &target,
+            Some(model),
             forwarding_raw,
             retry_policy,
             RouteAttemptLoggingContext {
@@ -316,7 +420,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         }
     }
 
-    finish_exhausted_route_model_request(
+    exhaustion::finish_exhausted_route_model_request(
         &node,
         tcp_stream,
         model,
@@ -400,30 +504,6 @@ async fn send_route_model_none_target(
         route_observer,
     )
     .await;
-    response_outcome(503, result)
-}
-
-async fn finish_exhausted_route_model_request(
-    node: &mesh::Node,
-    tcp_stream: ClientStream,
-    model: &str,
-    total_targets: usize,
-    state: &RouteModelState,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> RouteDispatchOutcome {
-    let result = send_503_observed(
-        tcp_stream,
-        &format!("all {} target(s) for model '{model}' failed", total_targets),
-        route_observer,
-    )
-    .await;
-    record_route_model_unavailable(node, model, state.attempts);
-    tracing::warn!(
-        model = model,
-        attempts = state.attempts,
-        route_ms = state.route_started.elapsed().as_millis(),
-        "openai route_model_request exhausted targets"
-    );
     response_outcome(503, result)
 }
 
@@ -607,6 +687,7 @@ fn handle_retryable_route_model_timeout(
     target: &election::InferenceTarget,
     state: &mut RouteModelState,
 ) -> RouteModelDisposition {
+    state.timeout_attempts += 1;
     spawn_mesh_refresh_once(node, &mut state.refreshed);
     tracing::warn!("Target {target:?} timed out, trying next");
     RouteModelDisposition::Continue
@@ -841,6 +922,7 @@ mod tests {
         let state = RouteModelState {
             route_started: Instant::now(),
             attempts: 1,
+            timeout_attempts: 0,
             refreshed: false,
         };
         (node, affinity, target, selection, state)
@@ -1158,6 +1240,7 @@ mod tests {
             request_object_request_ids: Vec::new(),
             response_adapter: ResponseAdapter::None,
             correlation_id: None,
+            exchange_observation_id: None,
         };
 
         let outcome = route_model_request(
@@ -1167,6 +1250,7 @@ mod tests {
             model,
             &request,
             RouteModelRequestContext {
+                local_execution_only: false,
                 exchange_id: None,
                 required_tokens: None,
                 affinity: &affinity,

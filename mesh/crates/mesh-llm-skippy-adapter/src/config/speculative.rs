@@ -13,7 +13,7 @@ use skippy_serving::{
     SpeculativeDecodeConfig, VerifyWindowConfig,
 };
 
-use super::support::{pick_owned, pick_string, pick_string_owned};
+use super::support::{pick_owned, pick_string, pick_string_owned, resolve_bool_or_auto};
 use super::types::ResolvedSpeculativeConfig;
 use mesh_llm_config::{BoolOrAuto, SpeculativeConfig};
 
@@ -118,8 +118,11 @@ pub(super) fn resolve_speculative_config(
     if mode == "disabled" && draft_model_path.is_some() {
         bail!("skippy speculative draft source cannot be set when speculative.mode = \"disabled\"");
     }
-    let effective_draft_max_tokens =
-        resolved_draft_max_tokens(native_mtp_enabled, draft_max_tokens);
+    let effective_draft_max_tokens = resolved_draft_max_tokens(
+        native_mtp_enabled,
+        draft_max_tokens,
+        package_native_mtp_draft_tokens(&strategy, package_generation),
+    );
     validate_draft_min_max(draft_min_tokens, effective_draft_max_tokens)
         .map_err(anyhow::Error::msg)?;
     let native_mtp_sidecar_disabled = if native_mtp_enabled && draft_model_path.is_some() {
@@ -476,19 +479,100 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             .and_then(|config| config.verify_window_pipeline_depth),
     )
     .map_or(config.verify_window.pipeline_depth, |value| value as usize);
-    config.verify_window.runahead_max_tokens = pick_optional_u32(
-        input
-            .model_config
-            .and_then(|config| config.verify_window_runahead_tokens),
-        input
-            .global_config
-            .and_then(|config| config.verify_window_runahead_tokens),
-    )
-    .map_or(config.verify_window.runahead_max_tokens, |value| {
-        value as usize
-    });
+    // A number, or "auto" to let the per-deployment search decide. `auto` is
+    // not a value the engine can use, so it sets a flag instead and leaves the
+    // token figure at fixed-depth admission until the search moves it — the
+    // measured cost of guessing a shallow budget is a 10% loss, so an unsearched
+    // "auto" must not guess.
+    match input
+        .model_config
+        .and_then(|config| config.verify_window_runahead_tokens.as_ref())
+        .or_else(|| {
+            input
+                .global_config
+                .and_then(|config| config.verify_window_runahead_tokens.as_ref())
+        }) {
+        None => {}
+        Some(mesh_llm_config::IntegerOrString::String(value))
+            if value.eq_ignore_ascii_case("auto") =>
+        {
+            config.verify_window.runahead_auto = true;
+        }
+        Some(mesh_llm_config::IntegerOrString::String(_)) => {
+            bail!(
+                "skippy speculative verify_window_runahead_tokens must be an integer or \"auto\""
+            );
+        }
+        Some(mesh_llm_config::IntegerOrString::Integer(value)) => {
+            config.verify_window.runahead_max_tokens = usize::try_from(*value).map_err(|_| {
+                anyhow::anyhow!(
+                    "skippy speculative verify_window_runahead_tokens must not be negative"
+                )
+            })?;
+        }
+    }
     if config.verify_window.min_tokens > config.verify_window.max_tokens {
         bail!("skippy speculative verify window requires min_tokens <= max_tokens");
+    }
+    // The gate's settings, promoted out of SKIPPY_SPECULATION_GATE so a strategy
+    // can compose them (#2112 workstream 5 puts the gate under `balanced`). The
+    // environment variable stays an override and is resolved inside
+    // skippy-serving, so nothing here needs to read it.
+    // `auto` means "let the built-in default decide", so it is not an answer.
+    if let Some(enabled) = resolve_bool_or_auto(
+        input
+            .model_config
+            .and_then(|config| config.gate.as_ref())
+            .or_else(|| input.global_config.and_then(|config| config.gate.as_ref())),
+        "speculative.gate",
+    )? {
+        config.gate.enabled = enabled;
+    }
+    if let Some(value) = pick_optional_u64(
+        input
+            .model_config
+            .and_then(|config| config.gate_min_window_s),
+        input
+            .global_config
+            .and_then(|config| config.gate_min_window_s),
+    ) {
+        config.gate.min_window_s = value;
+    }
+    if let Some(value) = pick_optional_u64(
+        input
+            .model_config
+            .and_then(|config| config.gate_min_requests),
+        input
+            .global_config
+            .and_then(|config| config.gate_min_requests),
+    ) {
+        config.gate.min_requests = value;
+    }
+    if let Some(value) = input
+        .model_config
+        .and_then(|config| config.gate_decisive_margin)
+        .or_else(|| {
+            input
+                .global_config
+                .and_then(|config| config.gate_decisive_margin)
+        })
+    {
+        if !(value > 0.0 && value < 1.0) {
+            bail!(
+                "skippy speculative gate_decisive_margin must sit in (0, 1); got {value}. It is a \
+                 fractional change in decode rate, and a margin of 0 or 1 makes every trial \
+                 decisive or none of them"
+            );
+        }
+        config.gate.decisive_margin = value;
+    }
+    if let Some(value) = pick_optional_u64(
+        input.model_config.and_then(|config| config.gate_cooldown_s),
+        input
+            .global_config
+            .and_then(|config| config.gate_cooldown_s),
+    ) {
+        config.gate.cooldown_s = value;
     }
     let ngram_fallback = pick_string(
         input
@@ -603,6 +687,7 @@ fn package_decode_config(
             max_tokens: 4,
             pipeline_depth: 1,
             runahead_max_tokens: 0,
+            runahead_auto: false,
         });
     let effective_strategy = match (native_mtp.enabled, ngram.as_ref().map(|value| value.kind)) {
         (true, Some(NgramProposerKind::Cache)) => "native-mtp+ngram-cache",
@@ -641,17 +726,43 @@ fn native_proposer_config(
             )
         },
     );
-    if proposer_type != "native-mtp" || prediction_depth != Some(1) || layer_indices.is_empty() {
+    let Some(depth) = prediction_depth
+        .filter(|depth| native_mtp_depth_is_executable(*depth, layer_indices.len()))
+    else {
+        bail!("package native MTP proposer is not valid for the embedded runtime");
+    };
+    if proposer_type != "native-mtp" {
         bail!("package native MTP proposer is not valid for the embedded runtime");
     }
     Ok(NativeMtpProposalConfig {
         enabled: true,
-        max_draft_tokens: 1,
+        max_draft_tokens: depth as usize,
         min_draft_tokens: 0,
         reject_cooldown_tokens: 0,
         suppress_cooldown_drafts: false,
         suppress_cooldown_draft_limit: 0,
     })
+}
+
+/// The runtime chains a single NextN block to any depth up to its draft limit;
+/// multi-block heads draft at most one token per block.
+fn native_mtp_depth_is_executable(depth: u32, layer_count: usize) -> bool {
+    let max_depth = skippy_runtime::NativeMtpDraft::MAX_TOKENS;
+    depth >= 1
+        && depth as usize <= max_depth
+        && (layer_count == 1 || (layer_count > 1 && depth as usize <= layer_count))
+}
+
+/// Draft depth the package recommends for the requested strategy, if any.
+fn package_native_mtp_draft_tokens(
+    requested_strategy: &str,
+    package_generation: Option<&PackageGenerationInfo>,
+) -> Option<u32> {
+    package_decode_config(requested_strategy, package_generation)
+        .ok()
+        .flatten()
+        .filter(|config| config.native_mtp.enabled)
+        .and_then(|config| u32::try_from(config.native_mtp.max_draft_tokens).ok())
 }
 
 fn ngram_proposer_config(
@@ -691,6 +802,7 @@ fn verify_window_config(policy: &PackageWindowPolicyInfo) -> VerifyWindowConfig 
         max_tokens: policy.max_window as usize,
         pipeline_depth: policy.pipeline_depth.unwrap_or(1) as usize,
         runahead_max_tokens: 0,
+        runahead_auto: false,
     }
 }
 
@@ -703,6 +815,10 @@ fn ngram_effective_strategy(kind: NgramProposerKind) -> &'static str {
 
 fn nonzero_or(value: u32, default: u32) -> u32 {
     if value == 0 { default } else { value }
+}
+
+fn pick_optional_u64(model: Option<u64>, global: Option<u64>) -> Option<u64> {
+    model.or(global)
 }
 
 fn pick_optional_u32(model: Option<u32>, global: Option<u32>) -> Option<u32> {
@@ -728,7 +844,9 @@ fn strategy_uses_native_mtp(
             .as_deref()
             .and_then(|name| speculative.proposers.get(name))
             .map_or(
-                strategy.prediction_depth == Some(1) && !strategy.layer_indices.is_empty(),
+                strategy.prediction_depth.is_some_and(|depth| {
+                    native_mtp_depth_is_executable(depth, strategy.layer_indices.len())
+                }),
                 |proposer| proposer.proposer_type == "native-mtp",
             ),
         "composite" => strategy
@@ -740,9 +858,16 @@ fn strategy_uses_native_mtp(
     }
 }
 
-fn resolved_draft_max_tokens(native_mtp_enabled: bool, draft_max_tokens: u32) -> u32 {
+/// An explicit `draft_max_tokens` wins; otherwise native MTP drafts the depth
+/// the package declares, or the runtime default.
+fn resolved_draft_max_tokens(
+    native_mtp_enabled: bool,
+    draft_max_tokens: u32,
+    package_draft_tokens: Option<u32>,
+) -> u32 {
     if native_mtp_enabled && draft_max_tokens == 0 {
-        return skippy_config::local_serving::NATIVE_MTP_DRAFT_TOKENS as u32;
+        return package_draft_tokens
+            .unwrap_or(skippy_config::local_serving::NATIVE_MTP_DRAFT_TOKENS as u32);
     }
     draft_max_tokens
 }

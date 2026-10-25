@@ -9,6 +9,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -71,6 +72,7 @@ type ConnectionLoopFn = fn(
     Arc<Mutex<Option<PluginRuntime>>>,
     mpsc::Sender<super::proto::Envelope>,
     u64,
+    Arc<AtomicBool>,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 
 pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
@@ -83,7 +85,9 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
      rpc_bridge,
      runtime,
      outbound_tx,
-     generation| {
+     generation,
+     peer_state| {
+        let authenticated_peer = peer_state.load(Ordering::Acquire);
         Box::pin(async move {
             let result: Result<()> = async {
                 loop {
@@ -148,13 +152,30 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         outbound_tx.clone(),
                                     );
                                 }
+                                Some(super::proto::envelope::Payload::PluginKeyRequest(request)) => {
+                                    // Announced under the connection's own name,
+                                    // so one plugin cannot set another's key.
+                                    forward_plugin_key_request(
+                                        plugin_name.clone(),
+                                        request_id,
+                                        request,
+                                        mesh_tx.clone(),
+                                        outbound_tx.clone(),
+                                    );
+                                }
                                 Some(super::proto::envelope::Payload::RpcRequest(request)) => {
                                     forward_plugin_request(
                                         plugin_name.clone(),
                                         request_id,
                                         request,
+                                        mesh_tx.clone(),
                                         rpc_bridge.clone(),
                                         outbound_tx.clone(),
+                                        PluginRequestPeer {
+                                            authenticated: authenticated_peer,
+                                            runtime: runtime.clone(),
+                                            generation,
+                                        },
                                     );
                                 }
                                 Some(super::proto::envelope::Payload::RpcNotification(notification)) => {
@@ -187,6 +208,7 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
             let was_active_runtime = {
                 let mut runtime = runtime.lock().await;
                 if runtime.as_ref().map(|runtime| runtime.generation) == Some(generation) {
+                    peer_state.store(false, Ordering::Release);
                     *runtime = None;
                     true
                 } else {
@@ -574,14 +596,47 @@ where
     Ok(prost::Message::decode(body.as_slice())?)
 }
 
+struct PluginRequestPeer {
+    authenticated: bool,
+    runtime: Arc<Mutex<Option<PluginRuntime>>>,
+    generation: u64,
+}
+
 fn forward_plugin_request(
     plugin_name: String,
     request_id: u64,
     request: super::proto::RpcRequest,
+    mesh_tx: mpsc::Sender<PluginMeshEvent>,
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     outbound_tx: mpsc::Sender<super::proto::Envelope>,
+    peer: PluginRequestPeer,
 ) {
     tokio::spawn(async move {
+        if super::identity_services::is_identity_method(&request.method) {
+            let current_generation = peer
+                .runtime
+                .lock()
+                .await
+                .as_ref()
+                .map(|runtime| runtime.generation);
+            let payload = if peer.authenticated && current_generation == Some(peer.generation) {
+                super::identity_transport::forward_identity_service(&plugin_name, request, mesh_tx)
+                    .await
+            } else {
+                super::proto::envelope::Payload::ErrorResponse(plugin_mesh_stream_error(
+                    "identity services require an OS-authenticated launched plugin process",
+                ))
+            };
+            let _ = outbound_tx
+                .send(super::proto::Envelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    plugin_id: plugin_name,
+                    request_id,
+                    payload: Some(payload),
+                })
+                .await;
+            return;
+        }
         let bridge = rpc_bridge.lock().await.clone();
         let payload = match bridge {
             Some(bridge) => match bridge
@@ -716,6 +771,53 @@ fn forward_plugin_peer_block_request(
     });
 }
 
+fn forward_plugin_key_request(
+    plugin_name: String,
+    request_id: u64,
+    request: super::proto::PluginKeyRequest,
+    mesh_tx: mpsc::Sender<PluginMeshEvent>,
+    outbound_tx: mpsc::Sender<super::proto::Envelope>,
+) {
+    tokio::spawn(async move {
+        let (response_tx, response_rx) = oneshot::channel();
+        let deadline = tokio::time::Instant::now() + PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT;
+        let response = match tokio::time::timeout_at(
+            deadline,
+            mesh_tx.send(PluginMeshEvent::PluginKey {
+                plugin_id: plugin_name.clone(),
+                request,
+                response_tx,
+            }),
+        )
+        .await
+        {
+            Ok(Ok(())) => match tokio::time::timeout_at(deadline, response_rx).await {
+                Ok(Ok(response)) => response,
+                Ok(Err(_)) => Err(plugin_mesh_stream_error(
+                    "Plugin key handler dropped the response",
+                )),
+                Err(_) => Err(plugin_mesh_stream_error("Plugin key request timed out")),
+            },
+            Ok(Err(_)) => Err(plugin_mesh_stream_error(
+                "Plugin key handler is unavailable",
+            )),
+            Err(_) => Err(plugin_mesh_stream_error("Plugin key request timed out")),
+        };
+        let payload = match response {
+            Ok(response) => super::proto::envelope::Payload::PluginKeyResponse(response),
+            Err(error) => super::proto::envelope::Payload::ErrorResponse(error),
+        };
+        let _ = outbound_tx
+            .send(super::proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: plugin_name,
+                request_id,
+                payload: Some(payload),
+            })
+            .await;
+    });
+}
+
 fn forward_plugin_notification(
     plugin_name: String,
     notification: super::proto::RpcNotification,
@@ -729,6 +831,10 @@ fn forward_plugin_notification(
         }
     });
 }
+
+#[cfg(test)]
+#[path = "transport_peer_auth_tests.rs"]
+mod peer_auth_tests;
 
 #[cfg(test)]
 mod tests {

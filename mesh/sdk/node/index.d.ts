@@ -103,8 +103,6 @@ export declare class OpenAIRequestError extends Error {
 
 export declare class Inference {
   listModels(): Promise<Model[]>
-  chat(request: ChatRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
-  responsesText(request: ResponsesRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
   request(path: string, body: OpenAIRequestBody, options?: { raiseForStatus?: boolean }): Promise<OpenAIResponse>
   chatCompletions(body: OpenAIRequestBody): Promise<unknown>
   responses(body: OpenAIRequestBody): Promise<unknown>
@@ -192,67 +190,35 @@ export type NativeRuntimePruneResult = {
   removedDirs: string[]
 }
 
+export type NodeMode = 'client' | 'serve' | 'combined'
+
 export type NodeOptions = {
-  ownerKeypairHex: string
-  inviteToken: string
-  cacheDir?: string
-  runtimeDir?: string
-  servingEnabled?: boolean
-}
-
-export type ConsoleOptions = {
-  assetDir?: string
-  port?: number
-  listenAll?: boolean
-}
-
-export declare class Console {
-  readonly url: string
-  stop(): Promise<void>
-}
-
-export type ClientOptions = {
-  ownerKeypairHex: string
-  inviteToken: string
-}
-
-export declare class Client {
-  static create(options: ClientOptions): Client
-  readonly inference: Inference
-  start(): Promise<void>
-  stop(): Promise<void>
-  reconnect(): Promise<void>
-  status(): Promise<{ connected: boolean; peerCount: number }>
+  mode?: NodeMode
+  joinTokens?: string[]
+  models?: string[]
+  autoJoin?: boolean
+  ownerKeyPath?: string
+  apiPort?: number
+  consolePort?: number
 }
 
 export declare class Node {
-  static create(options: NodeOptions): Node
+  static create(options?: NodeOptions): Node
   readonly inference: Inference
-  readonly models: {
-    recommended(): Promise<ModelSummary[]>
-    search(query: { query: string; limit?: number }): Promise<ModelSummary[]>
-    show(modelRef: string): Promise<ModelDetails>
-    installed(): Promise<InstalledModel[]>
-    download(modelRef: string): Promise<{ modelRef: string; paths: string[]; primaryPath?: string | null }>
-  }
-  readonly serving: {
-    status(): Promise<ServingStatus>
-    load(modelRef: string, options?: LoadModelOptions): Promise<ServedModel>
-    unload(target: { modelId: string } | { instanceId: string }, options?: UnloadModelOptions): Promise<void>
-    unloadModel(modelId: string, options?: UnloadModelOptions): Promise<void>
-    unloadInstance(instanceId: string, options?: UnloadModelOptions): Promise<void>
-  }
   start(): Promise<void>
   stop(): Promise<void>
-  reconnect(): Promise<void>
-  status(): Promise<{ connected: boolean; peerCount: number }>
-  startConsole(options?: ConsoleOptions): Promise<Console>
+  status(): Promise<{
+    running: boolean
+    mode: NodeMode
+    apiBaseUrl?: string
+    consoleUrl?: string
+    payload?: unknown
+  }>
+  joinToken(token: string): Promise<void>
 }
 
-export declare function generateOwnerKeypairHex(): string
 export declare function currentMeshVersion(): string
 export declare function currentSkippyAbiVersion(): string
-export declare function defaultConsoleAssetDir(): string
 export declare function installNativeRuntime(options?: NativeRuntimeInstallOptions): Promise<NativeRuntimeInstallOutcome>
 export declare function installedNativeRuntimes(options?: { cacheDir?: string }): Promise<InstalledNativeRuntime[]>
 export declare function removeNativeRuntime(options: {

@@ -45,11 +45,13 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             version,
             flavor,
             detect_flavor,
+            no_default_plugins,
         } => {
             assembly.command.push_str(" update");
             assembly.redact("--version", version.is_some());
             assembly.redact("--flavor", flavor.is_some());
             assembly.flag("detect-flavor", *detect_flavor);
+            assembly.flag("no-default-plugins", *no_default_plugins);
         }
         Command::Gpus { json, command } => {
             administration::format_gpus(*json, command.as_ref(), assembly);
@@ -115,13 +117,14 @@ pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) 
             assembly.redact("--relay", !relay.is_empty());
         }
         Command::RotateKey => assembly.command.push_str(" rotate-key"),
-        Command::Goose { model, port } => format_agent("goose", model, *port, assembly),
-        Command::Claude { model, port } => format_agent("claude", model, *port, assembly),
+        Command::Goose { model, port, .. } => format_agent("goose", model, *port, assembly),
+        Command::Claude { model, port, .. } => format_agent("claude", model, *port, assembly),
         Command::Pi { model, host, write } => format_client("pi", model, host, *write, assembly),
         Command::Opencode { model, host, write } => {
             format_client("opencode", model, host, *write, assembly);
         }
         Command::Stop => assembly.command.push_str(" stop"),
+        Command::ServiceHost => assembly.command.push_str(" service-host"),
         Command::ModelPrepare {
             source_repo,
             quant,

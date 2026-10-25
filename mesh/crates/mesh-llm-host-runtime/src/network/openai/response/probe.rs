@@ -372,11 +372,21 @@ pub(in crate::network::openai::response) async fn probe_http_response_local<
     probe_http_response_with_timeout(reader, local_response_first_byte_timeout()).await
 }
 
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static TEST_RESPONSE_FIRST_BYTE_TIMEOUT: Duration;
+}
+
 /// Local OpenAI surface timeout: 10 minutes. This is a safety net for a wedged
 /// local runtime path, not a latency budget. Normal prefill even on slow
 /// hardware with large prompts and concurrent slots completes well within this
 /// window.
 fn local_response_first_byte_timeout() -> Duration {
+    #[cfg(test)]
+    if let Ok(timeout) = TEST_RESPONSE_FIRST_BYTE_TIMEOUT.try_with(|timeout| *timeout) {
+        return timeout;
+    }
+
     Duration::from_secs(10 * 60)
 }
 
@@ -398,11 +408,11 @@ pub(in crate::network::openai::response) async fn probe_http_response_with_timeo
             let read_timeout = timeout.saturating_sub(started.elapsed());
             let read_result = tokio::time::timeout(read_timeout, reader.read(&mut chunk))
                 .await
-                .map_err(|_| {
-                    anyhow!(
+                .map_err(|error| {
+                    anyhow!(error).context(format!(
                         "upstream sent no response within {:.3}s",
                         timeout.as_secs_f64()
-                    )
+                    ))
                 })??;
             if read_result == 0 {
                 bail!("unexpected EOF while reading HTTP response");

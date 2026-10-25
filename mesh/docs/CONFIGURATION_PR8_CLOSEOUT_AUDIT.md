@@ -37,7 +37,7 @@ schema row or stale manifest row from passing review:
 `telemetry.service_name`, `telemetry.endpoint`, `telemetry.headers`,
 `telemetry.export_interval_secs`, `telemetry.queue_size`,
 `telemetry.prompt_shape_metrics`, `telemetry.metrics.endpoint`,
-`analytics.enabled`,
+`analytics.enabled`, `updates.check`,
 `logging.audit.enabled`, `logging.audit.log_path`, `logging.audit.log_format`,
 `logging.audit.log_level`, `logging.audit.max_file_size_mb`,
 `logging.audit.max_files`, `logging.enabled`, `logging.application_state_root`,
@@ -57,7 +57,8 @@ schema row or stale manifest row from passing review:
 `runtime.activity.advertisement`, `runtime.reconcile_model_targets`,
 `runtime.reconcile_model_target_demand_upgrades`,
 `runtime.native_runtime.mesh_version`, `runtime.native_runtime.skippy_abi`,
-`runtime.native_runtime.selection`, `runtime.kv_cache.disk.mode`,
+`runtime.native_runtime.selection`, `runtime.native_runtime.download`,
+`runtime.kv_cache.disk.mode`,
 `runtime.kv_cache.disk.directory`, `runtime.kv_cache.disk.budget_mib`,
 `runtime.kv_cache.disk.minimum_free_mib`, `runtime.kv_cache.disk.codec`,
 `runtime.model_target_demand_upgrade_min_requests`,
@@ -70,7 +71,7 @@ schema row or stale manifest row from passing review:
 `model_fit.prefix_cache.enabled`, `model_fit.prefix_cache.max_entries`,
 `model_fit.prefix_cache.max_bytes`, `model_fit.prefix_cache.min_tokens`,
 `model_fit.prefix_cache.shared_stride_tokens`,
-`model_fit.prefix_cache.shared_record_limit`, `model_fit.prefix_cache.payload_mode`,
+`model_fit.prefix_cache.shared_record_limit`,
 `model_fit.keep_tokens`, `model_fit.context_shift`, `model_fit.swa_full`,
 `model_fit.checkpoint_interval`, `model_fit.checkpoint_count`,
 `model_fit.lookup_cache_static`, `model_fit.lookup_cache_dynamic`,
@@ -105,6 +106,7 @@ schema row or stale manifest row from passing review:
 `speculative.draft_cache_type_k`, `speculative.draft_cache_type_v`,
 `speculative.ngram_min`, `speculative.ngram_max`, `speculative.ngram_proposer`,
 `speculative.ngram_max_proposal_tokens`, `speculative.ngram_fallback`,
+`speculative.gate`, `speculative.gate_min_window_s`, `speculative.gate_min_requests`, `speculative.gate_decisive_margin`, `speculative.gate_cooldown_s`,
 `speculative.extension_max_tokens`,
 `speculative.native_mtp_reject_cooldown_tokens`,
 `speculative.native_mtp_suppress_cooldown_drafts`,
@@ -125,7 +127,8 @@ schema row or stale manifest row from passing review:
 `request_defaults.seed`, `request_defaults.logit_bias`, `request_defaults.ignore_eos`,
 `request_defaults.reasoning_format`, `request_defaults.reasoning_enabled`,
 `request_defaults.reasoning_budget`, `request_defaults.chat_template`,
-`request_defaults.chat_template_file`, `request_defaults.jinja`,
+`request_defaults.chat_template_file`,
+`request_defaults.allow_request_chat_template`, `request_defaults.jinja`,
 `request_defaults.chat_template_kwargs`, `request_defaults.skip_chat_parsing`,
 `request_defaults.prefill_assistant`, `request_defaults.system_prompt`,
 `multimodal.mmproj`, `hardware.mmproj`, `multimodal.mmproj_url`,
@@ -149,6 +152,21 @@ schema row or stale manifest row from passing review:
 `multimodal.reranking`, `multimodal.pooling`, `multimodal.vocoder`,
 `request_defaults.grammar`, `request_defaults.json_schema`,
 `request_defaults.logprobs`.
+
+The OpenAI exchange grant rows added by #1331 belong to plugin permissions,
+not PR8. Their reverse paths are recorded separately here so this inventory
+continues to cover every current `WIRING_MANIFEST` row. A manifest declaration
+does not grant access; the host intersects it with the operator configuration.
+Successful owner-control commits reconcile grants on the current manager, and
+manager startup installs the latest grants under the same apply serialization.
+
+| Final consumer or changed sink | Originating #1331 config paths | Reverse-path result |
+| --- | --- | --- |
+| Lifecycle subscription and pre-dispatch policy dispatch | `plugin.<name>.openai_exchange_grant.endpoints`, `plugin.<name>.openai_exchange_grant.phases`, `plugin.<name>.openai_exchange_grant.admission` | Plugin permission negotiation intersects endpoint and phase subscriptions with the declaration. Admission additionally requires an explicit grant and a pre-dispatch phase; a denial prevents dispatch. |
+| Request and response evidence delivered to an observer | `plugin.<name>.openai_exchange_grant.request_body`, `plugin.<name>.openai_exchange_grant.effective_request_body`, `plugin.<name>.openai_exchange_grant.response_body`, `plugin.<name>.openai_exchange_grant.headers` | Original request, effective request, and response entity bytes require independent permissions. Authenticated side streams carry exact bytes; selected headers require both an explicit allowlist and the host's sensitive-header filter. Revocation interrupts outstanding copies. |
+| Bounded plugin annotations and response headers | `plugin.<name>.openai_exchange_grant.metadata` | The lifecycle decision validator accepts metadata only when independently granted, bounds annotations, and restricts response headers to the permitted `x-plugin-` surface. |
+| Private identity setup RPCs and delegated evidence signing | `plugin.<name>.openai_exchange_grant.read_identity_bundle`, `plugin.<name>.openai_exchange_grant.delegate_signing_key`, `plugin.<name>.openai_exchange_grant.signing_scopes`, `plugin.<name>.openai_exchange_grant.max_delegation_ttl_secs` | Host identity services check the current plugin permissions and installed artifact binding. Delegation requires identity-read permission, the registered exchange-evidence scope, and a bounded lifetime; grant reductions revoke issued delegations. |
+| Lifecycle callback and body-copy resource enforcement | `plugin.<name>.openai_exchange_grant.deadline_ms`, `plugin.<name>.openai_exchange_grant.max_body_bytes`, `plugin.<name>.openai_exchange_grant.max_queue_bytes`, `plugin.<name>.openai_exchange_grant.max_in_flight`, `plugin.<name>.openai_exchange_grant.failure_policy` | Configuration validation bounds each resource. Effective limits are the minimum of the declaration and grant; lifecycle dispatch and copy workers enforce deadlines, body and queue byte limits, and concurrent exchange limits. Required hook failures reject admission, while best-effort failures remain recipient-specific. |
 
 | Final consumer or changed sink | Originating PR8 config path | Reverse-path result |
 | --- | --- | --- |

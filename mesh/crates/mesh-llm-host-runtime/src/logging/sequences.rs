@@ -70,23 +70,6 @@ impl SequenceGenerators {
             ReplayChannel::System => self.system.counter.load(Ordering::Relaxed),
         }
     }
-
-    /// Verify that the generators remain consistent after cloning.
-    #[allow(dead_code)]
-    pub fn assert_counters_shared(&self, other: &Self) -> bool {
-        // Clones share Arc<ChannelCounter> — counters should be at the same address conceptually.
-        // We verify by checking both see the same current value before any new next() call.
-        for ch in [
-            ReplayChannel::Requests,
-            ReplayChannel::Operations,
-            ReplayChannel::System,
-        ] {
-            if self.current(ch) != other.current(ch) {
-                return false;
-            }
-        }
-        true
-    }
 }
 
 #[cfg(test)]

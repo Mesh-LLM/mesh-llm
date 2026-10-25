@@ -64,11 +64,20 @@ const FALLBACK_DEFAULTS_CATEGORY: ConfigurationDefaultsCategory = {
 }
 
 function categoryForPath(canonicalPath: string) {
+  if (canonicalPath.startsWith('runtime.native_runtime.')) return 'runtime'
   if (canonicalPath.startsWith('runtime.')) return 'runtime-policy'
   return 'advanced'
 }
 
 const CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory> = {
+  runtime: {
+    id: 'runtime',
+    label: 'Runtime',
+    summary: 'Load-time runtime behavior and concurrency defaults',
+    help: 'Load-time runtime behavior and concurrency defaults',
+    tomlSection: 'runtime',
+    order: 10
+  },
   'runtime-policy': {
     id: 'runtime-policy',
     label: 'Runtime Policy',

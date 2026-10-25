@@ -227,8 +227,9 @@ pub(super) async fn start_local_laya_model(
             slots: 1,
             capabilities,
             workload_class: mesh::ModelWorkloadClass::Decision,
-            inner: LocalRuntimeBackendHandle::Laya {
-                _model: model,
+            thinking: None,
+            inner: LocalRuntimeBackendHandle::Dedicated {
+                model: super::local::DedicatedModel::Laya(model),
                 http,
                 _death_tx: death_tx,
             },

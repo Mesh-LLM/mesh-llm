@@ -330,7 +330,9 @@ mod tests {
             downloaded_asset_name: "blackboard.tar.gz".to_string(),
             install_path: PathBuf::from("/tmp/blackboard"),
             enabled: true,
+            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
+                openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: "blackboard".to_string(),
                     schema_version: mesh_llm_config::SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION,

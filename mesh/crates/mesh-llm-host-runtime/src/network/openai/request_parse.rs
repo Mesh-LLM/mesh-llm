@@ -15,6 +15,7 @@ mod audio_multipart;
 use audio_multipart::multipart_model_field;
 mod body_rewrite;
 mod chunked;
+mod effective_entity;
 pub use body_rewrite::{inject_skippy_hooks_flag, rewrite_model_field};
 use chunked::{ChunkedDecoder, try_decode_chunked_body};
 
@@ -55,6 +56,37 @@ pub(super) struct HttpReadLimits {
     pub(super) max_chunked_wire_bytes: usize,
 }
 
+/// How long a client may take to send its complete request headers. Slow
+/// clients that never finish them would otherwise hold a connection and its
+/// task open forever. Matches the mesh tunnel's header read timeout.
+pub(super) const HTTP_HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Time a request body gets before it must keep up a minimum rate. A body that
+/// stalls is dropped after the grace period; one that trickles below
+/// [`HTTP_BODY_MIN_BYTES_PER_SEC`] is dropped once it falls behind.
+pub(super) const HTTP_BODY_READ_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+/// Slowest average body rate a client may sustain after the grace period.
+pub(super) const HTTP_BODY_MIN_BYTES_PER_SEC: usize = 64 * 1024;
+
+/// Deadline for reading a request body: the grace period plus one second for
+/// every [`HTTP_BODY_MIN_BYTES_PER_SEC`] bytes already received.
+pub(super) struct BodyReadDeadline {
+    started: tokio::time::Instant,
+}
+
+impl BodyReadDeadline {
+    pub(super) fn new(started: tokio::time::Instant) -> Self {
+        Self { started }
+    }
+
+    pub(super) fn at(&self, received_bytes: usize) -> tokio::time::Instant {
+        let earned = std::time::Duration::from_secs_f64(
+            received_bytes as f64 / HTTP_BODY_MIN_BYTES_PER_SEC as f64,
+        );
+        self.started + HTTP_BODY_READ_GRACE + earned
+    }
+}
+
 const HTTP_READ_LIMITS: HttpReadLimits = HttpReadLimits {
     max_header_bytes: MAX_HEADER_BYTES,
     max_body_bytes: MAX_BODY_BYTES,
@@ -71,6 +103,10 @@ struct ParsedHeaders {
     content_type: Option<String>,
     is_chunked: bool,
     expects_continue: bool,
+    /// A live transcription handshake (`GET /v1/realtime` with an upgrade):
+    /// bytes after the head are its first websocket frames, not a body, and
+    /// are kept for the relay. Every other request drops them.
+    is_realtime_upgrade: bool,
     correlation_id: Option<String>,
 }
 
@@ -148,6 +184,8 @@ pub struct BufferedHttpRequest {
     pub request_object_request_ids: Vec<String>,
     pub response_adapter: ResponseAdapter,
     pub correlation_id: Option<String>,
+    /// Host-only observation join key; never accepted from an HTTP header.
+    pub exchange_observation_id: Option<String>,
 }
 
 impl BufferedHttpRequest {
@@ -378,9 +416,13 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut raw = Vec::with_capacity(8192);
-    let parsed = read_until_headers_parsed(stream, &mut raw, limits.max_header_bytes)
-        .await
-        .map_err(OpenAiRequestReadError::before_headers)?;
+    let parsed = tokio::time::timeout(
+        HTTP_HEADER_READ_TIMEOUT,
+        read_until_headers_parsed(stream, &mut raw, limits.max_header_bytes),
+    )
+    .await
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out reading request headers")))
+    .map_err(OpenAiRequestReadError::before_headers)?;
     let body_limits = body_limits_for_path(&parsed.path, limits);
     let header_end = parsed.header_end;
     let body = read_buffered_request_body(stream, &mut raw, &parsed, header_end, body_limits)
@@ -474,6 +516,7 @@ where
         response_adapter,
         request_id: parsed.request_id,
         correlation_id: parsed.correlation_id,
+        exchange_observation_id: None,
     })
 }
 
@@ -487,8 +530,10 @@ async fn read_buffered_request_body<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let deadline = BodyReadDeadline::new(tokio::time::Instant::now());
     if parsed.is_chunked {
-        return read_chunked_request_body(stream, raw, parsed, header_end, body_limits).await;
+        return read_chunked_request_body(stream, raw, parsed, header_end, body_limits, &deadline)
+            .await;
     }
     if let Some(content_length) = parsed.content_length {
         return read_fixed_length_request_body(
@@ -498,10 +543,15 @@ where
             header_end,
             content_length,
             body_limits,
+            &deadline,
         )
         .await;
     }
-    raw.truncate(header_end);
+    // A client may send its first websocket frames together with the
+    // handshake; they stay in `raw` behind the head for the relay.
+    if !parsed.is_realtime_upgrade {
+        raw.truncate(header_end);
+    }
     Ok(Vec::new())
 }
 
@@ -511,6 +561,7 @@ async fn read_chunked_request_body<S>(
     parsed: &ParsedHeaders,
     header_end: usize,
     body_limits: HttpReadLimits,
+    deadline: &BodyReadDeadline,
 ) -> Result<Vec<u8>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -526,7 +577,7 @@ where
             stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
             sent_continue = true;
         }
-        read_more(stream, raw).await?;
+        read_body_more(stream, raw, deadline.at(raw.len() - header_end)).await?;
         if raw.len().saturating_sub(header_end) > body_limits.max_chunked_wire_bytes {
             bail!(
                 "HTTP chunked wire body exceeds {} bytes",
@@ -543,6 +594,7 @@ async fn read_fixed_length_request_body<S>(
     header_end: usize,
     content_length: usize,
     body_limits: HttpReadLimits,
+    deadline: &BodyReadDeadline,
 ) -> Result<Vec<u8>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -557,7 +609,7 @@ where
             stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
             sent_continue = true;
         }
-        read_more(stream, raw).await?;
+        read_body_more(stream, raw, deadline.at(raw.len() - header_end)).await?;
     }
     raw.truncate(body_end);
     Ok(raw[header_end..body_end].to_vec())
@@ -748,6 +800,8 @@ where
                 let mut content_length = None;
                 let mut is_chunked = false;
                 let mut expects_continue = false;
+                let mut upgrade_requested = false;
+                let mut connection_upgrade = false;
                 let mut correlation_id = None;
                 let mut content_type = None;
 
@@ -765,6 +819,13 @@ where
                         is_chunked = val
                             .split(',')
                             .any(|part| part.trim().eq_ignore_ascii_case("chunked"));
+                    } else if header.name.eq_ignore_ascii_case("upgrade") {
+                        upgrade_requested = !header.value.trim_ascii().is_empty();
+                    } else if header.name.eq_ignore_ascii_case("connection") {
+                        let val = std::str::from_utf8(header.value).unwrap_or("");
+                        connection_upgrade |= val
+                            .split(',')
+                            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"));
                     } else if header.name.eq_ignore_ascii_case("expect") {
                         let val = std::str::from_utf8(header.value).unwrap_or("");
                         expects_continue = val
@@ -794,6 +855,10 @@ where
                     content_length = None;
                 }
 
+                let is_realtime_upgrade = upgrade_requested
+                    && connection_upgrade
+                    && method.eq_ignore_ascii_case("GET")
+                    && path.split('?').next() == Some("/v1/realtime");
                 return Ok(ParsedHeaders {
                     header_end,
                     method,
@@ -803,6 +868,7 @@ where
                     content_type,
                     is_chunked,
                     expects_continue,
+                    is_realtime_upgrade,
                     correlation_id,
                 });
             }
@@ -969,7 +1035,7 @@ fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>
 /// wire order; duplicates are returned as separate entries. `Err(())` means
 /// at least one occurrence of `name` had non-UTF-8 bytes -- the caller must
 /// reject the request rather than silently drop that occurrence.
-fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+pub(crate) fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
     untrimmed_header_values_from_raw(raw, name).map(|values| {
         values
             .iter()
@@ -1025,6 +1091,18 @@ fn client_nonce_from_headers(headers: &[httparse::Header<'_>]) -> (String, Optio
             Some(skippy_inference_api::lifecycle::CLIENT_NONCE_ORIGIN_FRONTEND),
         ),
     }
+}
+
+/// Reads more of a request body, failing once the body falls behind its
+/// minimum-rate deadline.
+async fn read_body_more<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    buf: &mut Vec<u8>,
+    deadline: tokio::time::Instant,
+) -> Result<()> {
+    tokio::time::timeout_at(deadline, read_more(stream, buf))
+        .await
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out reading HTTP request body")))
 }
 
 async fn read_more<S: AsyncRead + Unpin>(stream: &mut S, buf: &mut Vec<u8>) -> Result<()> {

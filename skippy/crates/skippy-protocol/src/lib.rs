@@ -27,7 +27,7 @@ pub use config::{
     ActivationDType, ActivationDescriptor, ActivationLayout, FlashAttentionType, GlmDsaPolicy,
     LoadMode, PeerConfig, SplitMode, StageActivationCodec, StageActivationCodecPolicy, StageConfig,
     StageDevice, StageIdentity, StageKvCacheCodec, StageKvCacheConfig, StageKvCacheMode,
-    StageKvCachePayload, StageTopology, StageTopologyEntry,
+    StageTopology, StageTopologyEntry,
 };
 pub use messages::{
     AckMessage, DecodeTokenMessage, ErrorMessage, FinalPrefillChunkMessage, MessageBase,
@@ -89,6 +89,7 @@ mod tests {
                 activation_import_bindings: Vec::new(),
                 activation_export_bindings: Vec::new(),
             }],
+            kv_graph_state: "dense".into(),
         }
     }
 

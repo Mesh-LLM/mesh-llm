@@ -11,10 +11,10 @@ use http_body_util::BodyExt;
 use serde_json::json;
 use skippy_inference_api::{
     CancellationToken, ChatCompletionResponse, ChatCompletionStream, CompletionResponse,
-    CompletionStream, ModelObject, OpenAiBackend, OpenAiBackendOperation, OpenAiFailure,
-    OpenAiFrontendConfig, OpenAiFrontendRoute, OpenAiLifecycleEvent, OpenAiLifecycleObserver,
-    OpenAiRejection, OpenAiRequestContext, OpenAiResult, OpenAiTerminalResult, OpenAiUsage, Usage,
-    router_for_with_config,
+    CompletionStream, InferenceBackend, InferenceBackendOperation, InferenceFailure,
+    InferenceFrontendConfig, InferenceFrontendRoute, InferenceLifecycleEvent,
+    InferenceLifecycleObserver, InferenceRejection, InferenceRequestContext, InferenceResult,
+    InferenceTerminalResult, InferenceUsage, ModelObject, Usage, router_for_with_config,
 };
 use tower::ServiceExt;
 
@@ -36,11 +36,11 @@ const STREAM_CANCEL_ID: &str = "d81c76f6-09c7-4b02-a20f-d4e50643a6c9";
 
 #[derive(Default)]
 struct RecordingObserver {
-    events: Mutex<Vec<OpenAiLifecycleEvent>>,
+    events: Mutex<Vec<InferenceLifecycleEvent>>,
 }
 
 impl RecordingObserver {
-    fn events(&self) -> Vec<OpenAiLifecycleEvent> {
+    fn events(&self) -> Vec<InferenceLifecycleEvent> {
         self.events
             .lock()
             .expect("test observer lock poisoned")
@@ -48,8 +48,8 @@ impl RecordingObserver {
     }
 }
 
-impl OpenAiLifecycleObserver for RecordingObserver {
-    fn observe(&self, event: &OpenAiLifecycleEvent) {
+impl InferenceLifecycleObserver for RecordingObserver {
+    fn observe(&self, event: &InferenceLifecycleEvent) {
         self.events
             .lock()
             .expect("test observer lock poisoned")
@@ -65,17 +65,19 @@ struct TestBackend {
 }
 
 #[async_trait]
-impl OpenAiBackend for TestBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for TestBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("test-model")])
     }
 
     async fn chat_completion(
         &self,
         request: skippy_inference_api::ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         if request.model == "backend-error" {
-            return Err(skippy_inference_api::OpenAiError::backend("backend failed"));
+            return Err(skippy_inference_api::InferenceError::backend(
+                "backend failed",
+            ));
         }
         Ok(ChatCompletionResponse::new(
             request.model,
@@ -87,8 +89,8 @@ impl OpenAiBackend for TestBackend {
     async fn chat_completion_stream(
         &self,
         request: skippy_inference_api::ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         self.stream_request_ids
             .lock()
             .expect("test request-id lock poisoned")
@@ -108,7 +110,7 @@ impl OpenAiBackend for TestBackend {
             ));
         if request.model == "stream-error" {
             return Ok(Box::pin(stream::iter(vec![Err(
-                skippy_inference_api::OpenAiError::backend("stream failed"),
+                skippy_inference_api::InferenceError::backend("stream failed"),
             )])));
         }
         if request.model == "pending" {
@@ -133,7 +135,7 @@ impl OpenAiBackend for TestBackend {
     async fn completion(
         &self,
         request: skippy_inference_api::CompletionRequest,
-    ) -> OpenAiResult<CompletionResponse> {
+    ) -> InferenceResult<CompletionResponse> {
         Ok(CompletionResponse::new(
             request.model,
             "ok",
@@ -144,8 +146,8 @@ impl OpenAiBackend for TestBackend {
     async fn completion_stream(
         &self,
         request: skippy_inference_api::CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         Ok(Box::pin(stream::iter(vec![Ok(
             skippy_inference_api::CompletionChunk::done(request.model),
         )])))
@@ -252,7 +254,7 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
 
     let limited = router_for_with_config(
         Arc::new(TestBackend::default()),
-        OpenAiFrontendConfig::default()
+        InferenceFrontendConfig::default()
             .with_max_request_body_bytes(32)
             .with_lifecycle_observer(observer.clone()),
     );
@@ -291,28 +293,28 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
     let chat_usage = events_for(&events, CHAT_ID)
         .into_iter()
         .filter_map(|event| match event {
-            OpenAiLifecycleEvent::ResponseCompleted { usage, .. } => Some(*usage),
+            InferenceLifecycleEvent::ResponseCompleted { usage, .. } => Some(*usage),
             _ => None,
         })
         .collect::<Vec<_>>();
     assert_eq!(
         chat_usage,
-        vec![OpenAiUsage {
+        vec![InferenceUsage {
             prompt_tokens: 2,
             cached_tokens: Some(1),
             completion_tokens: 1,
             total_tokens: 3,
         }]
     );
-    assert_admitted_route(&events, HEALTH_ID, OpenAiFrontendRoute::Health);
-    assert_admitted_route(&events, READY_ID, OpenAiFrontendRoute::Readyz);
-    assert_admitted_route(&events, MODELS_ID, OpenAiFrontendRoute::Models);
+    assert_admitted_route(&events, HEALTH_ID, InferenceFrontendRoute::Health);
+    assert_admitted_route(&events, READY_ID, InferenceFrontendRoute::Readyz);
+    assert_admitted_route(&events, MODELS_ID, InferenceFrontendRoute::Models);
 
     assert_terminal_matches(&events, HEALTH_ID, |event| {
         matches!(
             event,
-            OpenAiLifecycleEvent::NonStreamTerminal {
-                result: OpenAiTerminalResult::Completed { status_code: 200 },
+            InferenceLifecycleEvent::NonStreamTerminal {
+                result: InferenceTerminalResult::Completed { status_code: 200 },
                 ..
             }
         )
@@ -320,10 +322,10 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
     assert_terminal_matches(&events, BACKEND_FAILURE_ID, |event| {
         matches!(
             event,
-            OpenAiLifecycleEvent::NonStreamTerminal {
-                result: OpenAiTerminalResult::Failed {
+            InferenceLifecycleEvent::NonStreamTerminal {
+                result: InferenceTerminalResult::Failed {
                     status_code: 502,
-                    failure: OpenAiFailure::Backend,
+                    failure: InferenceFailure::Backend,
                 },
                 ..
             }
@@ -332,9 +334,9 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
     assert_terminal_matches(&events, INVALID_ID, |event| {
         matches!(
             event,
-            OpenAiLifecycleEvent::Rejected {
+            InferenceLifecycleEvent::Rejected {
                 status_code: 400,
-                rejection: OpenAiRejection::InvalidRequest,
+                rejection: InferenceRejection::InvalidRequest,
                 ..
             }
         )
@@ -342,9 +344,9 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
     assert_terminal_matches(&events, OVERSIZED_ID, |event| {
         matches!(
             event,
-            OpenAiLifecycleEvent::Rejected {
+            InferenceLifecycleEvent::Rejected {
                 status_code: 413,
-                rejection: OpenAiRejection::PayloadTooLarge,
+                rejection: InferenceRejection::PayloadTooLarge,
                 ..
             }
         )
@@ -352,9 +354,9 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
     assert_terminal_matches(&events, METHOD_ID, |event| {
         matches!(
             event,
-            OpenAiLifecycleEvent::Rejected {
+            InferenceLifecycleEvent::Rejected {
                 status_code: 405,
-                rejection: OpenAiRejection::MethodNotAllowed,
+                rejection: InferenceRejection::MethodNotAllowed,
                 ..
             }
         )
@@ -362,9 +364,9 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
     assert_terminal_matches(&events, NOT_FOUND_ID, |event| {
         matches!(
             event,
-            OpenAiLifecycleEvent::Rejected {
+            InferenceLifecycleEvent::Rejected {
                 status_code: 404,
-                rejection: OpenAiRejection::NotFound,
+                rejection: InferenceRejection::NotFound,
                 ..
             }
         )
@@ -373,18 +375,24 @@ async fn observer_tracks_non_streaming_ingress_rejections_and_backend_dispatch()
     assert_eq!(
         backend_operations(&events),
         vec![
-            (READY_ID.to_string(), OpenAiBackendOperation::Models),
-            (MODELS_ID.to_string(), OpenAiBackendOperation::Models),
-            (CHAT_ID.to_string(), OpenAiBackendOperation::ChatCompletion),
+            (READY_ID.to_string(), InferenceBackendOperation::Models),
+            (MODELS_ID.to_string(), InferenceBackendOperation::Models),
+            (
+                CHAT_ID.to_string(),
+                InferenceBackendOperation::ChatCompletion
+            ),
             (
                 BACKEND_FAILURE_ID.to_string(),
-                OpenAiBackendOperation::ChatCompletion,
+                InferenceBackendOperation::ChatCompletion,
             ),
             (
                 COMPLETION_ID.to_string(),
-                OpenAiBackendOperation::Completion,
+                InferenceBackendOperation::Completion,
             ),
-            (RESPONSES_ID.to_string(), OpenAiBackendOperation::Responses),
+            (
+                RESPONSES_ID.to_string(),
+                InferenceBackendOperation::Responses
+            ),
         ]
     );
 }
@@ -460,7 +468,7 @@ async fn observer_tracks_stream_completion_error_drop_and_cancel_once() {
         assert_eq!(
             events_for(&events, request_id)
                 .into_iter()
-                .filter(|event| matches!(event, OpenAiLifecycleEvent::StreamFirstItem { .. }))
+                .filter(|event| matches!(event, InferenceLifecycleEvent::StreamFirstItem { .. }))
                 .count(),
             1,
             "a non-empty backend stream emits one first-item event"
@@ -469,8 +477,8 @@ async fn observer_tracks_stream_completion_error_drop_and_cancel_once() {
     assert_terminal_matches(&events, STREAM_ID, |event| {
         matches!(
             event,
-            OpenAiLifecycleEvent::StreamTerminal {
-                result: OpenAiTerminalResult::CompletedWithUsage {
+            InferenceLifecycleEvent::StreamTerminal {
+                result: InferenceTerminalResult::CompletedWithUsage {
                     status_code: 200,
                     usage,
                 },
@@ -483,39 +491,39 @@ async fn observer_tracks_stream_completion_error_drop_and_cancel_once() {
     assert_terminal_matches(&events, STREAM_ERROR_ID, |event| {
         matches!(
             event,
-            OpenAiLifecycleEvent::StreamTerminal {
-                result: OpenAiTerminalResult::Failed {
+            InferenceLifecycleEvent::StreamTerminal {
+                result: InferenceTerminalResult::Failed {
                     status_code: 502,
-                    failure: OpenAiFailure::Backend
+                    failure: InferenceFailure::Backend
                 },
                 ..
             }
         )
     });
     assert_terminal_matches(&events, STREAM_DROP_ID, |event| {
-        matches!(event, OpenAiLifecycleEvent::StreamDropped { .. })
+        matches!(event, InferenceLifecycleEvent::StreamDropped { .. })
     });
     assert_terminal_matches(&events, STREAM_CANCEL_ID, |event| {
-        matches!(event, OpenAiLifecycleEvent::StreamCancelled { .. })
+        matches!(event, InferenceLifecycleEvent::StreamCancelled { .. })
     });
     assert_eq!(
         backend_operations(&events),
         vec![
             (
                 STREAM_ID.to_string(),
-                OpenAiBackendOperation::ChatCompletionStream,
+                InferenceBackendOperation::ChatCompletionStream,
             ),
             (
                 STREAM_ERROR_ID.to_string(),
-                OpenAiBackendOperation::ChatCompletionStream,
+                InferenceBackendOperation::ChatCompletionStream,
             ),
             (
                 STREAM_DROP_ID.to_string(),
-                OpenAiBackendOperation::ChatCompletionStream,
+                InferenceBackendOperation::ChatCompletionStream,
             ),
             (
                 STREAM_CANCEL_ID.to_string(),
-                OpenAiBackendOperation::ChatCompletionStream,
+                InferenceBackendOperation::ChatCompletionStream,
             ),
         ]
     );
@@ -542,12 +550,12 @@ async fn observer_tracks_stream_completion_error_drop_and_cancel_once() {
         events_for(&events, STREAM_ID)
             .into_iter()
             .find_map(|event| match event {
-                OpenAiLifecycleEvent::ResponseCompleted { usage, .. } => Some(*usage),
+                InferenceLifecycleEvent::ResponseCompleted { usage, .. } => Some(*usage),
                 _ => None,
             });
     assert_eq!(
         completed_usage,
-        Some(OpenAiUsage {
+        Some(InferenceUsage {
             prompt_tokens: 8,
             cached_tokens: Some(5),
             completion_tokens: 2,
@@ -556,9 +564,9 @@ async fn observer_tracks_stream_completion_error_drop_and_cancel_once() {
     );
     for request_id in [STREAM_ERROR_ID, STREAM_DROP_ID, STREAM_CANCEL_ID] {
         assert!(
-            events_for(&events, request_id)
-                .into_iter()
-                .all(|event| { !matches!(event, OpenAiLifecycleEvent::ResponseCompleted { .. }) })
+            events_for(&events, request_id).into_iter().all(|event| {
+                !matches!(event, InferenceLifecycleEvent::ResponseCompleted { .. })
+            })
         );
     }
 }
@@ -566,7 +574,7 @@ async fn observer_tracks_stream_completion_error_drop_and_cancel_once() {
 fn observed_app(backend: Arc<TestBackend>, observer: Arc<RecordingObserver>) -> axum::Router {
     router_for_with_config(
         backend,
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer),
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer),
     )
 }
 
@@ -601,11 +609,11 @@ fn assert_response_id(response: Response, request_id: &str) {
     assert_eq!(response.headers()["x-request-id"], request_id);
 }
 
-fn assert_admitted_and_has_one_terminal(events: &[OpenAiLifecycleEvent], request_id: &str) {
+fn assert_admitted_and_has_one_terminal(events: &[InferenceLifecycleEvent], request_id: &str) {
     let request_events = events_for(events, request_id);
     assert!(matches!(
         request_events.first(),
-        Some(OpenAiLifecycleEvent::Admitted { .. })
+        Some(InferenceLifecycleEvent::Admitted { .. })
     ));
     assert_eq!(
         request_events
@@ -618,20 +626,20 @@ fn assert_admitted_and_has_one_terminal(events: &[OpenAiLifecycleEvent], request
 }
 
 fn assert_admitted_route(
-    events: &[OpenAiLifecycleEvent],
+    events: &[InferenceLifecycleEvent],
     request_id: &str,
-    route: OpenAiFrontendRoute,
+    route: InferenceFrontendRoute,
 ) {
     assert!(matches!(
         events_for(events, request_id).first(),
-        Some(OpenAiLifecycleEvent::Admitted { context }) if context.route == route
+        Some(InferenceLifecycleEvent::Admitted { context }) if context.route == route
     ));
 }
 
 fn assert_terminal_matches(
-    events: &[OpenAiLifecycleEvent],
+    events: &[InferenceLifecycleEvent],
     request_id: &str,
-    matches_terminal: impl Fn(&OpenAiLifecycleEvent) -> bool,
+    matches_terminal: impl Fn(&InferenceLifecycleEvent) -> bool,
 ) {
     let terminal = events_for(events, request_id)
         .into_iter()
@@ -640,11 +648,13 @@ fn assert_terminal_matches(
     assert!(matches_terminal(terminal));
 }
 
-fn backend_operations(events: &[OpenAiLifecycleEvent]) -> Vec<(String, OpenAiBackendOperation)> {
+fn backend_operations(
+    events: &[InferenceLifecycleEvent],
+) -> Vec<(String, InferenceBackendOperation)> {
     events
         .iter()
         .filter_map(|event| match event {
-            OpenAiLifecycleEvent::BackendDispatched { context, operation } => {
+            InferenceLifecycleEvent::BackendDispatched { context, operation } => {
                 Some((context.request_id.as_ref().to_string(), *operation))
             }
             _ => None,
@@ -652,9 +662,9 @@ fn backend_operations(events: &[OpenAiLifecycleEvent]) -> Vec<(String, OpenAiBac
         .collect()
 }
 
-fn assert_backend_dispatches_have_one_terminal(events: &[OpenAiLifecycleEvent]) {
+fn assert_backend_dispatches_have_one_terminal(events: &[InferenceLifecycleEvent]) {
     for event in events {
-        let OpenAiLifecycleEvent::BackendDispatched { context, operation } = event else {
+        let InferenceLifecycleEvent::BackendDispatched { context, operation } = event else {
             continue;
         };
         let matching = events
@@ -662,7 +672,7 @@ fn assert_backend_dispatches_have_one_terminal(events: &[OpenAiLifecycleEvent]) 
             .filter(|candidate| {
                 matches!(
                     candidate,
-                    OpenAiLifecycleEvent::BackendTerminal {
+                    InferenceLifecycleEvent::BackendTerminal {
                         context: terminal_context,
                         operation: terminal_operation,
                         ..
@@ -678,44 +688,46 @@ fn assert_backend_dispatches_have_one_terminal(events: &[OpenAiLifecycleEvent]) 
 }
 
 fn events_for<'a>(
-    events: &'a [OpenAiLifecycleEvent],
+    events: &'a [InferenceLifecycleEvent],
     request_id: &str,
-) -> Vec<&'a OpenAiLifecycleEvent> {
+) -> Vec<&'a InferenceLifecycleEvent> {
     events
         .iter()
         .filter(|event| event_request_id(event) == request_id)
         .collect()
 }
 
-fn event_request_id(event: &OpenAiLifecycleEvent) -> String {
+fn event_request_id(event: &InferenceLifecycleEvent) -> String {
     event_context(event).request_id.as_ref().to_string()
 }
 
-fn event_context(event: &OpenAiLifecycleEvent) -> &skippy_inference_api::OpenAiLifecycleContext {
+fn event_context(
+    event: &InferenceLifecycleEvent,
+) -> &skippy_inference_api::InferenceLifecycleContext {
     match event {
-        OpenAiLifecycleEvent::Admitted { context }
-        | OpenAiLifecycleEvent::StreamDropped { context }
-        | OpenAiLifecycleEvent::StreamCancelled { context }
-        | OpenAiLifecycleEvent::RequestCancelled { context }
-        | OpenAiLifecycleEvent::Rejected { context, .. }
-        | OpenAiLifecycleEvent::BackendDispatched { context, .. }
-        | OpenAiLifecycleEvent::BackendTerminal { context, .. }
-        | OpenAiLifecycleEvent::StreamFirstItem { context, .. }
-        | OpenAiLifecycleEvent::ExchangeIdentified { context, .. }
-        | OpenAiLifecycleEvent::ResponseCompleted { context, .. }
-        | OpenAiLifecycleEvent::NonStreamTerminal { context, .. }
-        | OpenAiLifecycleEvent::StreamTerminal { context, .. } => context,
+        InferenceLifecycleEvent::Admitted { context }
+        | InferenceLifecycleEvent::StreamDropped { context }
+        | InferenceLifecycleEvent::StreamCancelled { context }
+        | InferenceLifecycleEvent::RequestCancelled { context }
+        | InferenceLifecycleEvent::Rejected { context, .. }
+        | InferenceLifecycleEvent::BackendDispatched { context, .. }
+        | InferenceLifecycleEvent::BackendTerminal { context, .. }
+        | InferenceLifecycleEvent::StreamFirstItem { context, .. }
+        | InferenceLifecycleEvent::ExchangeIdentified { context, .. }
+        | InferenceLifecycleEvent::ResponseCompleted { context, .. }
+        | InferenceLifecycleEvent::NonStreamTerminal { context, .. }
+        | InferenceLifecycleEvent::StreamTerminal { context, .. } => context,
     }
 }
 
-fn is_terminal(event: &OpenAiLifecycleEvent) -> bool {
+fn is_terminal(event: &InferenceLifecycleEvent) -> bool {
     matches!(
         event,
-        OpenAiLifecycleEvent::Rejected { .. }
-            | OpenAiLifecycleEvent::NonStreamTerminal { .. }
-            | OpenAiLifecycleEvent::StreamTerminal { .. }
-            | OpenAiLifecycleEvent::StreamDropped { .. }
-            | OpenAiLifecycleEvent::StreamCancelled { .. }
-            | OpenAiLifecycleEvent::RequestCancelled { .. }
+        InferenceLifecycleEvent::Rejected { .. }
+            | InferenceLifecycleEvent::NonStreamTerminal { .. }
+            | InferenceLifecycleEvent::StreamTerminal { .. }
+            | InferenceLifecycleEvent::StreamDropped { .. }
+            | InferenceLifecycleEvent::StreamCancelled { .. }
+            | InferenceLifecycleEvent::RequestCancelled { .. }
     )
 }

@@ -11,8 +11,9 @@ use serde_json::{Value, json};
 use skippy_inference_api::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
     CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream, FinishReason,
-    GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, ModelObject, OpenAiBackend, OpenAiError,
-    OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult, Usage, messages_to_plain_prompt,
+    GuardedInferenceBackend, GuardrailMode, GuardrailPolicy, InferenceBackend, InferenceError,
+    InferenceFrontendConfig, InferenceRequestContext, InferenceResult, ModelObject, Usage,
+    messages_to_plain_prompt,
 };
 use tower::ServiceExt;
 
@@ -27,15 +28,15 @@ struct GuardedBenchyBackend {
 const BENCHY_MODEL_ID: &str = "org/repo:Q4_K_M";
 
 #[async_trait]
-impl OpenAiBackend for BenchyBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for BenchyBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new(BENCHY_MODEL_ID)])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         ensure_model(&request.model)?;
         let completion_tokens = request.effective_max_tokens().unwrap_or(2);
         Ok(ChatCompletionResponse::new(
@@ -51,8 +52,8 @@ impl OpenAiBackend for BenchyBackend {
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         ensure_model(&request.model)?;
         let completion_tokens = request.effective_max_tokens().unwrap_or(2);
         let model = request.model;
@@ -70,7 +71,7 @@ impl OpenAiBackend for BenchyBackend {
         ])))
     }
 
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         ensure_model(&request.model)?;
         let completion_tokens = request.max_tokens.unwrap_or(2);
         Ok(CompletionResponse::new(
@@ -83,8 +84,8 @@ impl OpenAiBackend for BenchyBackend {
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         ensure_model(&request.model)?;
         let completion_tokens = request.max_tokens.unwrap_or(2);
         let model = request.model;
@@ -103,15 +104,15 @@ impl OpenAiBackend for BenchyBackend {
 }
 
 #[async_trait]
-impl OpenAiBackend for GuardedBenchyBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for GuardedBenchyBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new(BENCHY_MODEL_ID)])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         ensure_model(&request.model)?;
         self.seen_chat_requests
             .lock()
@@ -127,8 +128,8 @@ impl OpenAiBackend for GuardedBenchyBackend {
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         ensure_model(&request.model)?;
         self.seen_stream_requests
             .lock()
@@ -150,24 +151,24 @@ impl OpenAiBackend for GuardedBenchyBackend {
         ])))
     }
 
-    async fn completion(&self, _request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, _request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         unreachable!("guarded benchy backend test only calls chat")
     }
 
     async fn completion_stream(
         &self,
         _request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         unreachable!("guarded benchy backend test only calls chat")
     }
 }
 
-fn ensure_model(model: &str) -> OpenAiResult<()> {
+fn ensure_model(model: &str) -> InferenceResult<()> {
     if model == BENCHY_MODEL_ID {
         Ok(())
     } else {
-        Err(OpenAiError::model_not_found(model))
+        Err(InferenceError::model_not_found(model))
     }
 }
 
@@ -367,7 +368,7 @@ async fn request(method: &str, path: &str, value: Value) -> axum::response::Resp
 }
 
 fn guarded_backend_app(backend: Arc<GuardedBenchyBackend>) -> axum::Router {
-    let guarded = Arc::new(GuardedOpenAiBackend::new(
+    let guarded = Arc::new(GuardedInferenceBackend::new(
         backend,
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -377,7 +378,7 @@ fn guarded_backend_app(backend: Arc<GuardedBenchyBackend>) -> axum::Router {
     ));
     skippy_inference_api::router_for_with_config(
         guarded,
-        OpenAiFrontendConfig::default().without_backend_timeout(),
+        InferenceFrontendConfig::default().without_backend_timeout(),
     )
 }
 

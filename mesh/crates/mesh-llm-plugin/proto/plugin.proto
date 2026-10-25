@@ -32,6 +32,8 @@ message Envelope {
     OpenMeshStreamResponse open_mesh_stream_response = 31;
     PeerBlockRequest peer_block_request = 32;
     PeerBlockResponse peer_block_response = 33;
+    PluginKeyRequest plugin_key_request = 34;
+    PluginKeyResponse plugin_key_response = 35;
   }
 }
 
@@ -195,6 +197,8 @@ message PluginManifest {
   optional PluginConfigSchemaManifest config_schema = 11;
   optional PluginWebUiManifest web_ui = 12;
   repeated VirtualModelManifest virtual_models = 13;
+  // Optional, additive generation-3 lifecycle contract. Declarations are not grants.
+  optional OpenAiExchangeHookManifest openai_exchange_hook = 14;
 }
 
 message VirtualModelManifest {
@@ -502,6 +506,8 @@ enum ServiceKind {
   SERVICE_KIND_RESOURCE = 3;
   SERVICE_KIND_COMPLETION = 4;
   SERVICE_KIND_VIRTUAL_MODEL = 5;
+  // Host-private lifecycle service, never projected as MCP or plugin HTTP.
+  SERVICE_KIND_OPENAI_EXCHANGE = 6;
 }
 
 message InvokeServiceRequest {
@@ -718,8 +724,50 @@ message PeerBlockResponse {
   string choice_json = 1;
 }
 
+// A plugin asks this node to announce a public key the plugin signs with,
+// bound to this node by the node's own key (`PluginKey` in the node protocol),
+// so peers' plugins can check what this plugin signed. One key per plugin: a
+// later request replaces it, and an empty `public_key` withdraws it. The key is
+// announced under the host's own name for the plugin connection, never a name
+// the plugin claims. Handled only by a host listing the `plugin_keys.v1`
+// capability. Peers' verified keys are listed at `GET /api/plugin-keys`.
+message PluginKeyRequest {
+  // A 32-byte Ed25519 public key, or empty to withdraw.
+  bytes public_key = 1;
+}
+
+message PluginKeyResponse {
+  // This node's endpoint id, 64 hex characters.
+  string node_id = 1;
+  // The binding signature announced with the key; empty after a withdrawal.
+  bytes binding_signature = 2;
+}
+
 message ErrorResponse {
   int32 code = 1;
   string message = 2;
   string data_json = 3;
+}
+
+// Invoked using existing authenticated InvokeService; bulk bytes use negotiated side streams.
+message OpenAiExchangeHookManifest {
+  uint32 contract_version = 1;
+  string handler = 2;
+  bool required = 3;
+  repeated string endpoints = 4;
+  repeated string phases = 5;
+  bool request_body = 6;
+  bool effective_request_body = 7;
+  bool response_body = 8;
+  repeated string headers = 9;
+  bool admission = 10;
+  bool metadata = 11;
+  uint64 deadline_ms = 12;
+  uint64 max_body_bytes = 13;
+  uint64 max_queue_bytes = 14;
+  uint32 max_in_flight = 15;
+  bool read_identity_bundle = 16;
+  bool delegate_signing_key = 17;
+  repeated string signing_scopes = 18;
+  uint64 max_delegation_ttl_secs = 19;
 }

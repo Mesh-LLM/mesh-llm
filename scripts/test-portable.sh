@@ -33,7 +33,7 @@ website_build() {
 }
 
 script_and_sdk_tests() {
-    python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+    just ci-legacy-contracts
     node --test scripts/console-format.test.js
     npm test --prefix mesh/sdk/node
     scripts/check-sdk-contract.sh

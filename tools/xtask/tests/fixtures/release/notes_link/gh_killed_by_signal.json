@@ -1,0 +1,38 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--repo",
+    "o/r",
+    "--out-body",
+    "body.linked.md",
+    "--out-links",
+    "links.json"
+  ],
+  "code": 0,
+  "gh_argv": [
+    [
+      "api",
+      "repos/o/r/commits/a/pulls",
+      "--jq",
+      "[.[].number]"
+    ]
+  ],
+  "git_argv": [
+    [
+      "cwd={root}",
+      "log",
+      "--reverse",
+      "--format=%H%x1f%s%x1f%b%x1e",
+      "v1.0.0..v1.0.1"
+    ]
+  ],
+  "outputs": {
+    "body.linked.md": "## What's Changed\n\n**Full Changelog**: compare\n",
+    "links.json": "{}\n"
+  },
+  "stderr": "release-notes-link: gh api repos/o/r/commits/a/pulls --jq [.[].number] failed: Command '['gh', 'api', 'repos/o/r/commits/a/pulls', '--jq', '[.[].number]']' died with <Signals.SIGKILL: 9>.\nrelease-notes-link: 1 API call(s) failed\n",
+  "stdout": "linked 0 commit(s) to a pull request through the API; recovered 0 entry(ies) GitHub did not credit (0 published)\n"
+}

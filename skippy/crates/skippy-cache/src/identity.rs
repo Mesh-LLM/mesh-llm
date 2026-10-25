@@ -1061,7 +1061,6 @@ mod identity_stability_tests {
             kv_cache: Some(skippy_protocol::StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: skippy_protocol::StageKvCacheMode::LookupRecord,
-                payload: skippy_protocol::StageKvCachePayload::KvRecurrent,
                 max_entries: 64,
                 max_bytes: 0,
                 l2_max_bytes: 0,

@@ -28,7 +28,7 @@ mesh-llm node. Full reference: `mesh/docs/AGENTS.md`.
 mesh-llm launches the major agent CLIs with config injected for you:
 
 ```bash
-mesh-llm goose     [--model <id>]                 # writes ~/.config/goose/custom_providers/mesh.json
+mesh-llm goose     [--model <id>]                 # writes custom_providers/mesh.json in goose's config dir
 mesh-llm claude    [--model <id>]
 mesh-llm opencode  [--model <id>] [--host <h>]    # injects OPENCODE_CONFIG_CONTENT (no file edits)
 mesh-llm pi        [--model <id>] [--host <h>]    # writes ~/.pi/agent/models.json
@@ -67,14 +67,14 @@ Exact manual provider JSON for OpenCode and Pi is in `mesh/docs/AGENTS.md`.
 Direct API contract probe (tool-call forcing, streaming reconstruction):
 
 ```bash
-scripts/qa-agent-tool-call-reliability.py \
+cargo xtool automation stability tool-call \
   --base-url http://127.0.0.1:9337/v1 --models auto,mesh --attempts 3 \
   --output target/agent-tool-call-reliability/results.jsonl
 ```
 
 Broader harness (models, chat, streaming, plus optional Goose/OpenCode/Pi
-smokes): `scripts/qa-nightly-stability.py` — see `mesh/docs/AGENTS.md`. Use
-`--print-plan` on either script for a side-effect-free preview.
+smokes): `cargo xtool automation stability nightly` — see `mesh/docs/AGENTS.md`. Use
+`--print-plan` on either command for a side-effect-free preview.
 
 ## Blackboard (cross-mesh agent coordination)
 

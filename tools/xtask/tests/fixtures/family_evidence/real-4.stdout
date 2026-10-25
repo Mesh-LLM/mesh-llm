@@ -1,0 +1,4750 @@
+{
+  "generated_by": "scripts/plan-family-battery.py",
+  "github_matrix": {
+    "include": [
+      {
+        "estimated_work_bytes": 333056103780,
+        "families": "qwen3-dense,llama,gpt-oss,qwen2-moe,qwen4exp,granite-hybrid,qwen35,laguna,phi3,gemma,starcoder2,arcee,apertus,deepseek32,dots1,lfm2-moe,minicpm,qwen3vlmoe,mistral4,paddleocr,deepseek4,mistral3,nemotron-nano",
+        "id": "family-battery-03",
+        "shard_index": 2
+      },
+      {
+        "estimated_work_bytes": 333063824160,
+        "families": "glm4,jamba2,nemotron,qwen2-vl,gemma2,phi4,cohere2,qwen2,gemma3,phi2,mpt,bailingmoe3,ernie4-5,ernie4-5-moe,gemma3n,granite-swa,granite-moe,hunyuan-dense,hy-v3,spark2-5,t5-encoder-decoder,inkling,llama4,bailingmoe2",
+        "id": "family-battery-02",
+        "shard_index": 1
+      },
+      {
+        "estimated_work_bytes": 333069696612,
+        "families": "glm47-flash,glm45-air,falcon-h1,kimi-linear,rwkv7,granite-dense,qwen3-vl,internlm2,bloom,exaone4,nemotron-expansion,afmoe,arwkv7,chameleon,grovemoe,jais,maincoder,mellum,qwen35moe,step35,nomic-bert-embedding,jina-bert-v2-rerank,ultravox,minimax-m2",
+        "id": "family-battery-04",
+        "shard_index": 3
+      },
+      {
+        "estimated_work_bytes": 333075593304,
+        "families": "deepseek2,qwen3-moe,qwen3-next,mamba,mamba2,rwkv6,lfm2,lfm2-vl,falcon-dense,mistral-small,smollm3,stablelm,olmo2,minicpm3,glm4-expansion,gemma4,gptneox,granite-switch,jais2,kimi-k3,mimo2,minimax-m3,qwen3tts,muse-glimmer",
+        "id": "family-battery-01",
+        "shard_index": 0
+      }
+    ]
+  },
+  "manifest": "ci/llama-canary/family-certified.json",
+  "manifest_sha256": "90834e6f52cf494cff216b3bce40953919109596512eb68efd07b4e33f938cdf",
+  "model_class_lanes": {
+    "causal_generation": [
+      "single-step",
+      "chain",
+      "state-handoff"
+    ],
+    "embedding": [
+      "embedding-smoke",
+      "embedding-oracle"
+    ],
+    "encoder_decoder": [
+      "encoder-decoder-smoke",
+      "encoder-decoder-oracle"
+    ],
+    "ocr": [
+      "ocr-smoke",
+      "ocr-oracle"
+    ],
+    "rerank": [
+      "rerank-smoke",
+      "rerank-oracle"
+    ],
+    "speech_recognition": [
+      "speech-recognition-smoke",
+      "speech-recognition-oracle"
+    ],
+    "speech_synthesis": [
+      "speech-synthesis-smoke",
+      "speech-synthesis-oracle"
+    ]
+  },
+  "requested_families": null,
+  "required_certification_lanes": [
+    "single-step",
+    "chain",
+    "state-handoff"
+  ],
+  "schema_version": 1,
+  "selected_family_count": 95,
+  "selected_models": [
+    {
+      "architecture": "qwen3",
+      "artifact": {
+        "file_integrity": {
+          "Qwen3-0.6B-Q8_0.gguf": {
+            "blob_id": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+            "size_bytes": 639446688
+          }
+        },
+        "files": [
+          "Qwen3-0.6B-Q8_0.gguf"
+        ],
+        "repo": "Qwen/Qwen3-0.6B-GGUF",
+        "revision": "23749fefcc72300e3a2ad315e1317431b06b590a",
+        "selector": "Q8_0"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 28,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 28
+      },
+      "family": "qwen3-dense",
+      "manifest_index": 0,
+      "mmproj_artifact": null,
+      "notes": "core production dense baseline",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 633495552,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "llama",
+      "artifact": {
+        "file_integrity": {
+          "Llama-3.2-1B-Instruct-Q4_K_M.gguf": {
+            "blob_id": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+            "size_bytes": 807694464
+          }
+        },
+        "files": [
+          "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+        "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 16,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 16
+      },
+      "family": "llama",
+      "manifest_index": 1,
+      "mmproj_artifact": null,
+      "notes": "production dense baseline; covers the trimmed olmo2 architecture path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 799862912,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "deepseek2",
+      "artifact": {
+        "file_integrity": {
+          "GLM-4.7-Flash-Q4_K_M.gguf": {
+            "blob_id": "29837ed2c0fc5f51981adf8ac8083fcf80743c598381f13e9f06cbad0498b174",
+            "size_bytes": 18312339808
+          }
+        },
+        "files": [
+          "GLM-4.7-Flash-Q4_K_M.gguf"
+        ],
+        "repo": "unsloth/GLM-4.7-Flash-GGUF",
+        "revision": "0d32489ecb9db6d2a4fc93bd27ef01519f95474d",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 47,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 47
+      },
+      "family": "glm47-flash",
+      "manifest_index": 2,
+      "mmproj_artifact": null,
+      "notes": "production MLA path shared with deepseek2; tensors span blk.0 through blk.46",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 18302863872,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "chatglm",
+      "artifact": {
+        "file_integrity": {
+          "glm-4-9b-chat-Q4_K_M.gguf": {
+            "blob_id": "aa6cb8f5ef0a70399bdbf92eef566c26c6017ee0b131a424b65b5c757f1c81a2",
+            "size_bytes": 6250926848
+          }
+        },
+        "files": [
+          "glm-4-9b-chat-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/glm-4-9b-chat-GGUF",
+        "revision": "74a33eafa149550a60bff0fdafcdd34caa6df9f0",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 40
+      },
+      "family": "glm4",
+      "manifest_index": 3,
+      "mmproj_artifact": null,
+      "notes": "production dense GLM path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 6244892672,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "glm4moe",
+      "artifact": {
+        "file_integrity": {
+          "Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf": {
+            "blob_id": "3e7e5d25a6db33b7c90f8c5203d6f490d6c0a4f04a46f228af0e33727db5df5e",
+            "size_bytes": 50000746752
+          },
+          "Q4_K_M/GLM-4.5-Air-Q4_K_M-00002-of-00002.gguf": {
+            "blob_id": "ac6e50523d45c53faf3bf72d8fe109f3dd54bc6abe98a7773a3636112ead82a6",
+            "size_bytes": 22975001632
+          }
+        },
+        "files": [
+          "Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf",
+          "Q4_K_M/GLM-4.5-Air-Q4_K_M-00002-of-00002.gguf"
+        ],
+        "repo": "unsloth/GLM-4.5-Air-GGUF",
+        "revision": "506d64aa8c5cfe9dbbf00bc7a15739438f83204d",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff",
+        "native-mtp-heads"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 47,
+        "mtp_layers": 1,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 46
+      },
+      "family": "glm45-air",
+      "manifest_index": 4,
+      "mmproj_artifact": null,
+      "notes": "GLM4.5 MoE lineage; 46 trunk layers plus one MTP runtime layer; two shards",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 72966388736,
+        "minimum_runner_memory_gib": 256,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "deepseek2",
+      "artifact": {
+        "file_integrity": {
+          "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf": {
+            "blob_id": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8",
+            "size_bytes": 10364416768
+          }
+        },
+        "files": [
+          "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+        "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 27,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 27
+      },
+      "family": "deepseek2",
+      "manifest_index": 5,
+      "mmproj_artifact": null,
+      "notes": "production MLA path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 10360420352,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "gpt-oss",
+      "artifact": {
+        "file_integrity": {
+          "gpt-oss-20b-MXFP4.gguf": {
+            "blob_id": "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901",
+            "size_bytes": 12109566624
+          }
+        },
+        "files": [
+          "gpt-oss-20b-MXFP4.gguf"
+        ],
+        "repo": "ggml-org/gpt-oss-20b-GGUF",
+        "revision": "ef9b12f2ff56c69cf32153a02784e7a3c88bf524",
+        "selector": "MXFP4"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2880,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "gpt-oss",
+      "manifest_index": 6,
+      "mmproj_artifact": null,
+      "notes": "MoE plus MXFP4; only quantization shipped",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 12096558336,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen3moe",
+      "artifact": {
+        "file_integrity": {
+          "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf": {
+            "blob_id": "6c997b8af17debdfb01d890214400ccbab00db6acc0ba8da5de1cc906c4774d0",
+            "size_bytes": 18556686752
+          }
+        },
+        "files": [
+          "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"
+        ],
+        "repo": "unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF",
+        "revision": "eea7b2be5805a5f151f8847ede8e5f9a9284bf77",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 48,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 48
+      },
+      "family": "qwen3-moe",
+      "manifest_index": 7,
+      "mmproj_artifact": null,
+      "notes": "production MoE; graph_max_nodes budget lane",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 18550716416,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen2moe",
+      "artifact": {
+        "file_integrity": {
+          "Qwen1.5-MoE-A2.7B-Chat.Q4_K_M.gguf": {
+            "blob_id": "3dcfb1032781788bf373edb49b888fcac5b6093ea0fe0edf5e23a977390b3eea",
+            "size_bytes": 9496236768
+          }
+        },
+        "files": [
+          "Qwen1.5-MoE-A2.7B-Chat.Q4_K_M.gguf"
+        ],
+        "repo": "RichardErkhov/Qwen_-_Qwen1.5-MoE-A2.7B-Chat-gguf",
+        "revision": "947580e7b3904cd4081810d0efec4520a75609c7",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "qwen2-moe",
+      "manifest_index": 8,
+      "mmproj_artifact": null,
+      "notes": "small MoE architecture probe",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 9490282496,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "falcon-h1",
+      "artifact": {
+        "file_integrity": {
+          "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf": {
+            "blob_id": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f",
+            "size_bytes": 944786656
+          }
+        },
+        "files": [
+          "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
+        "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "falcon-h1",
+      "manifest_index": 9,
+      "mmproj_artifact": null,
+      "notes": "hybrid boundary sweep",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 942121232,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "jamba",
+      "artifact": {
+        "file_integrity": {
+          "ai21labs_AI21-Jamba2-3B-Q4_K_M.gguf": {
+            "blob_id": "fa0876fa152f38689cefd6d498907d6255cf515780d65b16346d3190df6a0794",
+            "size_bytes": 1932696448
+          }
+        },
+        "files": [
+          "ai21labs_AI21-Jamba2-3B-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/ai21labs_AI21-Jamba2-3B-GGUF",
+        "revision": "02d70acd708332ec4e78e9ceefe116851a307411",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2560,
+        "layer_end": 28,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 28
+      },
+      "family": "jamba2",
+      "manifest_index": 10,
+      "mmproj_artifact": null,
+      "notes": "hybrid boundary sweep",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1931112448,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "kimi-linear",
+      "artifact": {
+        "file_integrity": {
+          "moonshotai_Kimi-Linear-48B-A3B-Instruct-IQ2_XS.gguf": {
+            "blob_id": "883be5561005ed6558c3f9d58d33bd9df818ea41c18086a49769047278953c0e",
+            "size_bytes": 13897237408
+          }
+        },
+        "files": [
+          "moonshotai_Kimi-Linear-48B-A3B-Instruct-IQ2_XS.gguf"
+        ],
+        "repo": "bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF",
+        "revision": "228dbe476e5a02091624a19068f4c962caa8a1c5",
+        "selector": "IQ2_XS"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2304,
+        "layer_end": 27,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 27
+      },
+      "family": "kimi-linear",
+      "manifest_index": 11,
+      "mmproj_artifact": null,
+      "notes": "hybrid 3:1 interleave; canonical boundary-sweep model",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 13890288384,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen3next",
+      "artifact": {
+        "file_integrity": {
+          "Qwen_Qwen3-Next-80B-A3B-Thinking-IQ2_XS.gguf": {
+            "blob_id": "ece0ffe31891d1a0f1993565db4a977ae6d862d0ae2e45fc7282ff0a06cf5d5d",
+            "size_bytes": 22217422720
+          }
+        },
+        "files": [
+          "Qwen_Qwen3-Next-80B-A3B-Thinking-IQ2_XS.gguf"
+        ],
+        "repo": "bartowski/Qwen_Qwen3-Next-80B-A3B-Thinking-GGUF",
+        "revision": "c36ac5f15be18742fcd09baa61d48dfc016aae79",
+        "selector": "IQ2_XS"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 48,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 48
+      },
+      "family": "qwen3-next",
+      "manifest_index": 12,
+      "mmproj_artifact": null,
+      "notes": "hybrid three-linear-to-one-attention path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 22211435520,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen4exp",
+      "artifact": {
+        "file_integrity": {
+          "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00001-of-00003.gguf": {
+            "blob_id": "88a1420825a9304063e882ada29d438263617f51ac8923d438d927496693bafd",
+            "size_bytes": 10946624
+          },
+          "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00002-of-00003.gguf": {
+            "blob_id": "3a62e35bbf9add4733bd1438ebd3a67649d5edd6cb0e72bb78e33c913992b2b6",
+            "size_bytes": 49990818368
+          },
+          "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00003-of-00003.gguf": {
+            "blob_id": "0e25ceaeb89b8a80aa973c6c0c7448943682f7408c2855b2ebd016b7643a861a",
+            "size_bytes": 22544696352
+          }
+        },
+        "files": [
+          "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00001-of-00003.gguf",
+          "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00002-of-00003.gguf",
+          "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00003-of-00003.gguf"
+        ],
+        "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
+        "revision": "c8b5954a88c2775c546b92593eda40ea041d3176",
+        "selector": "UD-IQ1_S"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 10240,
+        "layer_end": 48,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 48
+      },
+      "family": "qwen4exp",
+      "manifest_index": 13,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-F16.gguf": {
+            "blob_id": "1f7b7f0b984cf065c604360c29c8098362ed61b290db0ff12c6f360bb1a8a980",
+            "size_bytes": 904004000
+          }
+        },
+        "files": [
+          "mmproj-F16.gguf"
+        ],
+        "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
+        "revision": "c8b5954a88c2775c546b92593eda40ea041d3176",
+        "selector": "F16"
+      },
+      "notes": "Qwen4 experimental hybrid path; four-wide hyper-connected residual boundary and QSA indexer; pinned projector with local and split image smoke",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 72535436800,
+        "minimum_runner_memory_gib": 256,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": 900
+      }
+    },
+    {
+      "architecture": "nemotron_h_moe",
+      "artifact": {
+        "file_integrity": {
+          "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf": {
+            "blob_id": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+            "size_bytes": 25266255936
+          }
+        },
+        "files": [
+          "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf"
+        ],
+        "repo": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+        "revision": "f2d3fe3694501008786e81e5f20360cbf715496a",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff",
+        "native-mtp-heads"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2688,
+        "layer_end": 53,
+        "mtp_layers": 1,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 52
+      },
+      "family": "nemotron",
+      "manifest_index": 14,
+      "mmproj_artifact": null,
+      "notes": "hybrid Mamba2 plus attention MoE; replacement for the invalid all-zero head_count_kv artifact",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 25258358528,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "mamba",
+      "artifact": {
+        "file_integrity": {
+          "mamba-130m-hf.Q4_K_M.gguf": {
+            "blob_id": "2784131bc0546f802bcb720cbc77d26c174c85514400cc645507146ad95f07da",
+            "size_bytes": 103576544
+          }
+        },
+        "files": [
+          "mamba-130m-hf.Q4_K_M.gguf"
+        ],
+        "repo": "Felladrin/gguf-mamba-130m-hf",
+        "revision": "83ef2222e1a0437d26bda213537afc195a53b3ad",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 768,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "mamba",
+      "manifest_index": 15,
+      "mmproj_artifact": null,
+      "notes": "cheap recurrent boundary sweep",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 101794800,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "mamba",
+      "artifact": {
+        "file_integrity": {
+          "falcon-mamba-7b-Q4_K_M.gguf": {
+            "blob_id": "ef8ba78a1fd0b0fd1d1c966acc5f4c043b12fbbd7044f4d9aad82e6b7a51e0a7",
+            "size_bytes": 4204230656
+          }
+        },
+        "files": [
+          "falcon-mamba-7b-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/falcon-mamba-7b-GGUF",
+        "revision": "1236a076ebddbcfcbd6ba0fe310d473d20527f11",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 64,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 64
+      },
+      "family": "mamba2",
+      "manifest_index": 16,
+      "mmproj_artifact": null,
+      "notes": "Mamba2 SSM canonical path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 4201906176,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "rwkv6",
+      "artifact": {
+        "file_integrity": {
+          "rwkv-6-finch-1b6-Q4_0.gguf": {
+            "blob_id": "7b345728c3792f0168a615bd529a319d63f8becb760090330ce583a24f55e46b",
+            "size_bytes": 992738848
+          }
+        },
+        "files": [
+          "rwkv-6-finch-1b6-Q4_0.gguf"
+        ],
+        "repo": "latestissue/rwkv-6-finch-1b6-gguf",
+        "revision": "9f4420bafb8fe463599b9983d81e12e1868c3746",
+        "selector": "Q4_0"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "rwkv6",
+      "manifest_index": 17,
+      "mmproj_artifact": null,
+      "notes": "recurrent v_first sideband crossing",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 991330304,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "rwkv7",
+      "artifact": {
+        "file_integrity": {
+          "RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf": {
+            "blob_id": "bfcb5b239cf99ac4a590d7163266bbe3bb14f41d221ad6f7a2bf602b610211b0",
+            "size_bytes": 2314884576
+          }
+        },
+        "files": [
+          "RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf"
+        ],
+        "repo": "Mungert/RWKV7-Goose-World3-2.9B-HF-GGUF",
+        "revision": "e85c69858772a4d6b481d99e1e49910dad48e123",
+        "selector": "Q4_K"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2560,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "rwkv7",
+      "manifest_index": 18,
+      "mmproj_artifact": null,
+      "notes": "recurrent; only real RWKV7 World3 GGUF",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 2313461760,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "granitehybrid",
+      "artifact": {
+        "file_integrity": {
+          "granite-4.0-h-350m-Q4_K_M.gguf": {
+            "blob_id": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb",
+            "size_bytes": 222662560
+          }
+        },
+        "files": [
+          "granite-4.0-h-350m-Q4_K_M.gguf"
+        ],
+        "repo": "ibm-granite/granite-4.0-h-350m-GGUF",
+        "revision": "a864f823cce6e6048b5752e2816fe7a23987d790",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 768,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "granite-hybrid",
+      "manifest_index": 19,
+      "mmproj_artifact": null,
+      "notes": "cheap hybrid boundary sweep",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 219091712,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen35",
+      "artifact": {
+        "file_integrity": {
+          "Qwen3.5-0.8B-Q4_K_M.gguf": {
+            "blob_id": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+            "size_bytes": 532517120
+          }
+        },
+        "files": [
+          "Qwen3.5-0.8B-Q4_K_M.gguf"
+        ],
+        "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+        "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "qwen35",
+      "manifest_index": 20,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-F16.gguf": {
+            "blob_id": "56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453",
+            "size_bytes": 204987232
+          }
+        },
+        "files": [
+          "mmproj-F16.gguf"
+        ],
+        "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+        "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+        "selector": "F16"
+      },
+      "notes": "smallest public Qwen3.5 dense GGUF; hybrid gated-delta-net family with full-attention interval 4; coverage-expansion repair from the failed CI fixture row; pinned projector with local and split image smoke",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 521555200,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "granite",
+      "artifact": {
+        "file_integrity": {
+          "ibm-granite_granite-3.2-2b-instruct-Q4_K_M.gguf": {
+            "blob_id": "e1b915b0849becf4fdda188dee7b09cbebbfabd71c6f3f2b75dd3eca0a8fded1",
+            "size_bytes": 1545296512
+          }
+        },
+        "files": [
+          "ibm-granite_granite-3.2-2b-instruct-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/ibm-granite_granite-3.2-2b-instruct-GGUF",
+        "revision": "9be2c106c8c073f5a140ec03c8c7a6a6e72d097b",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 40
+      },
+      "family": "granite-dense",
+      "manifest_index": 21,
+      "mmproj_artifact": null,
+      "notes": "dense Granite path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1543549872,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "lfm2",
+      "artifact": {
+        "file_integrity": {
+          "LFM2-350M-Q4_K_M.gguf": {
+            "blob_id": "a4d000c7064bd3b2e42c6845836286a899a4e79cf1791da1a6797b58d575957d",
+            "size_bytes": 229309376
+          }
+        },
+        "files": [
+          "LFM2-350M-Q4_K_M.gguf"
+        ],
+        "repo": "LiquidAI/LFM2-350M-GGUF",
+        "revision": "8fdc9d526b7ed346b19257551b05816c7912ecc2",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 16,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 16
+      },
+      "family": "lfm2",
+      "manifest_index": 22,
+      "mmproj_artifact": null,
+      "notes": "cheap hybrid boundary sweep",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 226925568,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "lfm2",
+      "artifact": {
+        "file_integrity": {
+          "LFM2-VL-450M-Q8_0.gguf": {
+            "blob_id": "e97704a0cf0a1d00ca604b4c672c82f4234318dba9d43a7f7a4c0d2df6747844",
+            "size_bytes": 379215264
+          }
+        },
+        "files": [
+          "LFM2-VL-450M-Q8_0.gguf"
+        ],
+        "repo": "ggml-org/LFM2-VL-450M-GGUF",
+        "revision": "0ff2ce5a6710f9bf0a6de87ec91832b43fa0ac05",
+        "selector": "Q8_0"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 16,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 16
+      },
+      "family": "lfm2-vl",
+      "manifest_index": 23,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-LFM2-VL-450M-Q8_0.gguf": {
+            "blob_id": "a6a813fae4ba3f90852a990fdd4786a017dba0e80e599a366853ba539ee2b5ef",
+            "size_bytes": 103890016
+          }
+        },
+        "files": [
+          "mmproj-LFM2-VL-450M-Q8_0.gguf"
+        ],
+        "repo": "ggml-org/LFM2-VL-450M-GGUF",
+        "revision": "0ff2ce5a6710f9bf0a6de87ec91832b43fa0ac05",
+        "selector": "Q8_0"
+      },
+      "notes": "small official multimodal hybrid model; text, recurrent, and mmproj lanes",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 376830976,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "laguna",
+      "artifact": {
+        "file_integrity": {
+          "Laguna-XS-2.1-Q4_K_M.gguf": {
+            "blob_id": "1ac7079101fca5a6df8c5a7523a3c30ea7d1c0e4b1258090e7d6d4039287f6cb",
+            "size_bytes": 20274300032
+          }
+        },
+        "files": [
+          "Laguna-XS-2.1-Q4_K_M.gguf"
+        ],
+        "repo": "poolside/Laguna-XS-2.1-GGUF",
+        "revision": "1a37c0a5fb8c7a18e6106decb6be6327d1b63fa6",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 40
+      },
+      "family": "laguna",
+      "manifest_index": 24,
+      "mmproj_artifact": null,
+      "notes": "dense explicit poolside row",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 20270574592,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen2vl",
+      "artifact": {
+        "file_integrity": {
+          "Qwen2-VL-2B-Instruct-Q4_K_M.gguf": {
+            "blob_id": "4ef095263343fc1237e8ca879790bb262bcf209f082e0a9bfce219b7ece55e8b",
+            "size_bytes": 986047232
+          }
+        },
+        "files": [
+          "Qwen2-VL-2B-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/Qwen2-VL-2B-Instruct-GGUF",
+        "revision": "2160e265f926e84e84dbb1c73e623b5324b23707",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1536,
+        "layer_end": 28,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 28
+      },
+      "family": "qwen2-vl",
+      "manifest_index": 25,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-Qwen2-VL-2B-Instruct-f16.gguf": {
+            "blob_id": "05cc3ae461a7b6aa4023312ccab549ecab77cf8677efee04f049fcbab55b8bc3",
+            "size_bytes": 1331656192
+          }
+        },
+        "files": [
+          "mmproj-Qwen2-VL-2B-Instruct-f16.gguf"
+        ],
+        "repo": "bartowski/Qwen2-VL-2B-Instruct-GGUF",
+        "revision": "2160e265f926e84e84dbb1c73e623b5324b23707",
+        "selector": "f16"
+      },
+      "notes": "multimodal sideband path; mmproj smoke lane",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 980097536,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen3vl",
+      "artifact": {
+        "file_integrity": {
+          "Qwen3-VL-8B-Instruct-Q4_K_M.gguf": {
+            "blob_id": "108e7ff92b78eefd3db4741885104acba514255c11b617d3c7b197a5f46efe89",
+            "size_bytes": 5027785568
+          }
+        },
+        "files": [
+          "Qwen3-VL-8B-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "unsloth/Qwen3-VL-8B-Instruct-GGUF",
+        "revision": "b93a7ee713758252c555be4210c00540df954dc2",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 36,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 36
+      },
+      "family": "qwen3-vl",
+      "manifest_index": 26,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-F16.gguf": {
+            "blob_id": "d406d03ebabefdef86a2c86bf0c1b65f9e046f7a81c218f25de4931b46a07fc4",
+            "size_bytes": 1159030336
+          }
+        },
+        "files": [
+          "mmproj-F16.gguf"
+        ],
+        "repo": "unsloth/Qwen3-VL-8B-Instruct-GGUF",
+        "revision": "b93a7ee713758252c555be4210c00540df954dc2",
+        "selector": "F16"
+      },
+      "notes": "multimodal path; ggml-org repository is gated; mmproj smoke lane",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 5021827072,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": 600
+      }
+    },
+    {
+      "architecture": "gemma2",
+      "artifact": {
+        "file_integrity": {
+          "2b_it_v2.gguf": {
+            "blob_id": "8fc1a799613b873edd085ffcf33fd710077daf03833ead29e136cca9b528ecb6",
+            "size_bytes": 10463413632
+          }
+        },
+        "files": [
+          "2b_it_v2.gguf"
+        ],
+        "repo": "google/gemma-2-2b-it-GGUF",
+        "revision": "67803c710cb0c89bae2047a5f50a2481c9339d24",
+        "selector": "2b_it_v2"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2304,
+        "layer_end": 26,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 26
+      },
+      "family": "gemma2",
+      "manifest_index": 27,
+      "mmproj_artifact": null,
+      "notes": "dense; only file in repository; gemma3 path trimmed",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 10457367552,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "phi3",
+      "artifact": {
+        "file_integrity": {
+          "Phi-3-mini-4k-instruct-q4.gguf": {
+            "blob_id": "8a83c7fb9049a9b2e92266fa7ad04933bb53aa1e85136b7b30f1b8000ff2edef",
+            "size_bytes": 2393231072
+          }
+        },
+        "files": [
+          "Phi-3-mini-4k-instruct-q4.gguf"
+        ],
+        "repo": "microsoft/Phi-3-mini-4k-instruct-gguf",
+        "revision": "a64113399c2f6b8ad3e11c394733a2ddadaa7f33",
+        "selector": "q4"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 3072,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "phi3",
+      "manifest_index": 28,
+      "mmproj_artifact": null,
+      "notes": "dense Phi3 path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 2392493568,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "llama",
+      "artifact": {
+        "file_integrity": {
+          "phi-4-Q4_K_M.gguf": {
+            "blob_id": "01e1f25b3e6931054c6c2227b06f4969828434eebc299e8e171f55dab6814485",
+            "size_bytes": 8890306112
+          }
+        },
+        "files": [
+          "phi-4-Q4_K_M.gguf"
+        ],
+        "repo": "unsloth/phi-4-GGUF",
+        "revision": "5110b7771e8166d5530e73346a15aea096a8cb99",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 5120,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 40
+      },
+      "family": "phi4",
+      "manifest_index": 29,
+      "mmproj_artifact": null,
+      "notes": "dense; Microsoft repository does not publish Q4_K_M",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 8886743040,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "falcon",
+      "artifact": {
+        "file_integrity": {
+          "tiiuae-falcon-7b-instruct-Q4_K_M.gguf": {
+            "blob_id": "6f6c886ed07d4f6133a4dd7f8b799764ed719c50973d96816b2ac5ff3ada9913",
+            "size_bytes": 4975385792
+          }
+        },
+        "files": [
+          "tiiuae-falcon-7b-instruct-Q4_K_M.gguf"
+        ],
+        "repo": "maddes8cht/tiiuae-falcon-7b-instruct-gguf",
+        "revision": "56d71fbb3ea040a1d35459013bd2688613075668",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4544,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "falcon-dense",
+      "manifest_index": 30,
+      "mmproj_artifact": null,
+      "notes": "dense Falcon path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 4972826368,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "internlm2",
+      "artifact": {
+        "file_integrity": {
+          "internlm2-chat-1_8b.F16.gguf": {
+            "blob_id": "377e44d5967ea2a51570fbc28448dd8693d0139c73b13b9e773fad783f7bd957",
+            "size_bytes": 3780559520
+          }
+        },
+        "files": [
+          "internlm2-chat-1_8b.F16.gguf"
+        ],
+        "repo": "Felladrin/gguf-internlm2-chat-1_8b",
+        "revision": "cdd579415ed57fca8af5c5e09b35ee5124449876",
+        "selector": "F16"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "internlm2",
+      "manifest_index": 31,
+      "mmproj_artifact": null,
+      "notes": "dense InternLM2 path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 3778420736,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "llama",
+      "artifact": {
+        "file_integrity": {
+          "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf": {
+            "blob_id": "a3cc56310807ed0d145eaf9f018ccda9ae7ad8edb41ec870aa2454b0d4700b3c",
+            "size_bytes": 14333922848
+          }
+        },
+        "files": [
+          "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf"
+        ],
+        "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
+        "revision": "b750ec2299225e492f1bd27cab88a0a595fa848f",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 5120,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 40
+      },
+      "family": "mistral-small",
+      "manifest_index": 32,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-F16.gguf": {
+            "blob_id": "d6af684ae9136398eaa0b59ea9e0b0b850bb6ac5084f1e8c5cb8f85251825eaf",
+            "size_bytes": 878053568
+          }
+        },
+        "files": [
+          "mmproj-F16.gguf"
+        ],
+        "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
+        "revision": "b750ec2299225e492f1bd27cab88a0a595fa848f",
+        "selector": "F16"
+      },
+      "notes": "dense; relabelled from mistral3; pinned projector with local and split image smoke",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 14326026240,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "cohere2",
+      "artifact": {
+        "file_integrity": {
+          "c4ai-command-r7b-12-2024-Q4_K_M.gguf": {
+            "blob_id": "0653c1915f7e4819a980deea8e9ba86b0a78cbb283712785cbf091c3ffbe3b13",
+            "size_bytes": 5057009792
+          }
+        },
+        "files": [
+          "c4ai-command-r7b-12-2024-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/c4ai-command-r7b-12-2024-GGUF",
+        "revision": "bfc7a934c45cb839d84c8ca01d87f1cfa51aaa3f",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "cohere2",
+      "manifest_index": 33,
+      "mmproj_artifact": null,
+      "notes": "dense Cohere2 path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 5046091776,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "smollm3",
+      "artifact": {
+        "file_integrity": {
+          "SmolLM3-Q4_K_M.gguf": {
+            "blob_id": "8334b850b7bd46238c16b0c550df2138f0889bf433809008cc17a8b05761863e",
+            "size_bytes": 1915305312
+          }
+        },
+        "files": [
+          "SmolLM3-Q4_K_M.gguf"
+        ],
+        "repo": "ggml-org/SmolLM3-3B-GGUF",
+        "revision": "4965cb60b150737b68a0408c36aeefb65078f894",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 36,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 36
+      },
+      "family": "smollm3",
+      "manifest_index": 34,
+      "mmproj_artifact": null,
+      "notes": "dense SmolLM3 path",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1907462144,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen2",
+      "artifact": {
+        "file_integrity": {
+          "qwen2-0_5b-instruct-q4_k_m.gguf": {
+            "blob_id": "f0a42bb979ca62b5e61f3bf924ab4b6a40aa091825ee7dcb4039949980ab81a8",
+            "size_bytes": 397805248
+          }
+        },
+        "files": [
+          "qwen2-0_5b-instruct-q4_k_m.gguf"
+        ],
+        "repo": "Qwen/Qwen2-0.5B-Instruct-GGUF",
+        "revision": "198f08841147e5196a6a69bd0053690fb1fd3857",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 896,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 24
+      },
+      "family": "qwen2",
+      "manifest_index": 35,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense qwen2 arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 391859712,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "bloom",
+      "artifact": {
+        "file_integrity": {
+          "bloom-560m.q4_k_m.gguf": {
+            "blob_id": "383bc73de0c2e96704301b27117e7fd209255eda0474198dafdf4dd61ad7bf3e",
+            "size_bytes": 561444928
+          }
+        },
+        "files": [
+          "bloom-560m.q4_k_m.gguf"
+        ],
+        "repo": "afrideva/bloom-560m-GGUF",
+        "revision": "fe8ad7e97957783ea24f6960f73e28e709aa6e96",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 24
+      },
+      "family": "bloom",
+      "manifest_index": 36,
+      "mmproj_artifact": null,
+      "notes": "expansion: bloom arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 548823040,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "gemma",
+      "artifact": {
+        "file_integrity": {
+          "gemma-2b-it-q4_k_m.gguf": {
+            "blob_id": "144b3eb4fb500556034a29172cfa2b17f28cfce7c7698ac3467600adc510efcd",
+            "size_bytes": 1495245728
+          }
+        },
+        "files": [
+          "gemma-2b-it-q4_k_m.gguf"
+        ],
+        "repo": "lmstudio-ai/gemma-2b-it-GGUF",
+        "revision": "a0b140bfb922a743f89dd0682a24a17516071ab9",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 18,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 18
+      },
+      "family": "gemma",
+      "manifest_index": 37,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense gemma arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1489203200,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "gemma3",
+      "artifact": {
+        "file_integrity": {
+          "gemma-3-1b-it-Q4_K_M.gguf": {
+            "blob_id": "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135",
+            "size_bytes": 806058240
+          }
+        },
+        "files": [
+          "gemma-3-1b-it-Q4_K_M.gguf"
+        ],
+        "repo": "ggml-org/gemma-3-1b-it-GGUF",
+        "revision": "f9c28bcd85737ffc5aef028638d3341d49869c27",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1152,
+        "layer_end": 26,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 26
+      },
+      "family": "gemma3",
+      "manifest_index": 38,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense gemma3 arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 799525120,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "phi2",
+      "artifact": {
+        "file_integrity": {
+          "phi-2.Q4_K_M.gguf": {
+            "blob_id": "324356668fa5ba9f4135de348447bb2bbe2467eaa1b8fcfb53719de62fbd2499",
+            "size_bytes": 1789239136
+          }
+        },
+        "files": [
+          "phi-2.Q4_K_M.gguf"
+        ],
+        "repo": "TheBloke/phi-2-GGUF",
+        "revision": "5a454d977c6438bb9fb2df233c8ca70f21c87420",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2560,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 32
+      },
+      "family": "phi2",
+      "manifest_index": 39,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense phi2 arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1787432960,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "starcoder2",
+      "artifact": {
+        "file_integrity": {
+          "starcoder2-3b-Q4_K_M.gguf": {
+            "blob_id": "d8fb39287a463549b80d97473b0a7595c3a5a6da3ae2604ca33906a1a43f7175",
+            "size_bytes": 1848976448
+          }
+        },
+        "files": [
+          "starcoder2-3b-Q4_K_M.gguf"
+        ],
+        "repo": "second-state/StarCoder2-3B-GGUF",
+        "revision": "7fca3e2da2ce31df411461e2cb9cae2d2b492f35",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 3072,
+        "layer_end": 30,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 30
+      },
+      "family": "starcoder2",
+      "manifest_index": 40,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense starcoder2 arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1847230464,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "stablelm",
+      "artifact": {
+        "file_integrity": {
+          "stablelm-2-zephyr-1_6b-Q4_K_M.gguf": {
+            "blob_id": "4224a8a08417e34d5a224efb1291491c4f5762b46aa012021adaf0a0578848e2",
+            "size_bytes": 1031442432
+          }
+        },
+        "files": [
+          "stablelm-2-zephyr-1_6b-Q4_K_M.gguf"
+        ],
+        "repo": "second-state/stablelm-2-zephyr-1.6b-GGUF",
+        "revision": "6da77f49f48f36f1a01753ca27ba531bde13b861",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 24
+      },
+      "family": "stablelm",
+      "manifest_index": 41,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense stablelm arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1027883008,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "olmo2",
+      "artifact": {
+        "file_integrity": {
+          "OLMo-2-0425-1B-Instruct-Q4_K_M.gguf": {
+            "blob_id": "abd8187934a438fbf7cfff0a1de5b9d2793ce913f158794df1951dcba6c93cc6",
+            "size_bytes": 935515296
+          }
+        },
+        "files": [
+          "OLMo-2-0425-1B-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "allenai/OLMo-2-0425-1B-Instruct-GGUF",
+        "revision": "62f8c199538474c3e33ed5d7e0580abd66686a27",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 16,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 16
+      },
+      "family": "olmo2",
+      "manifest_index": 42,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense olmo2 arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 931962880,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "exaone4",
+      "artifact": {
+        "file_integrity": {
+          "EXAONE-4.0-1.2B-Q4_K_M.gguf": {
+            "blob_id": "7b5e753540183ae4d56e6febd9b48cdd944de53386e6faa8f51c8f98cb2b47df",
+            "size_bytes": 812437792
+          }
+        },
+        "files": [
+          "EXAONE-4.0-1.2B-Q4_K_M.gguf"
+        ],
+        "repo": "LGAI-EXAONE/EXAONE-4.0-1.2B-GGUF",
+        "revision": "162446400ea4596377a3ce1d3ddffa32971af0a6",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 30,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 30
+      },
+      "family": "exaone4",
+      "manifest_index": 43,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense exaone4 arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 808230016,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "minicpm3",
+      "artifact": {
+        "file_integrity": {
+          "minicpm3-4b-q4_k_m.gguf": {
+            "blob_id": "64913247e927414ecf47fd3e9ea8e3f0c9acae293f583dfa7e24b8872e20fa4c",
+            "size_bytes": 2469791584
+          }
+        },
+        "files": [
+          "minicpm3-4b-q4_k_m.gguf"
+        ],
+        "repo": "openbmb/MiniCPM3-4B-GGUF",
+        "revision": "816dc79b35f92827e0d2d87aacea3567e49661a8",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2560,
+        "layer_end": 62,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 62
+      },
+      "family": "minicpm3",
+      "manifest_index": 44,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense minicpm3 arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 2468069280,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "nemotron",
+      "artifact": {
+        "file_integrity": {
+          "Nemotron-Mini-4B-Instruct-Q4_K_M.gguf": {
+            "blob_id": "2bf02846dbd45e9580b9338b90505fb54e00d185713d4b7f06699e2d5d298e48",
+            "size_bytes": 2697387072
+          }
+        },
+        "files": [
+          "Nemotron-Mini-4B-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/Nemotron-Mini-4B-Instruct-GGUF",
+        "revision": "fb49cde090c86092d89905bea2ffc41c23c2615e",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 3072,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 32
+      },
+      "family": "nemotron-expansion",
+      "manifest_index": 45,
+      "mmproj_artifact": null,
+      "notes": "expansion: dense nemotron arch coverage (distinct from nemotron_h_moe row)",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 2691047424,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "arcee",
+      "artifact": {
+        "file_integrity": {
+          "AFM-4.5B-Q4_K_M.gguf": {
+            "blob_id": "f05516b323f581bebae1af2cbf900d83a2569b0a60c54366daf4a9c15ae30d4f",
+            "size_bytes": 2916301824
+          }
+        },
+        "files": [
+          "AFM-4.5B-Q4_K_M.gguf"
+        ],
+        "repo": "arcee-ai/AFM-4.5B-GGUF",
+        "revision": "741fded55739927f94be7934a174c2bcfc751969",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2560,
+        "layer_end": 36,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 36
+      },
+      "family": "arcee",
+      "manifest_index": 46,
+      "mmproj_artifact": null,
+      "notes": "expansion: arcee/AFM arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 2908474660,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "mpt",
+      "artifact": {
+        "file_integrity": {
+          "mosaicml-mpt-7b-instruct-Q4_K_M.gguf": {
+            "blob_id": "bfc1cf1333d60dd8f4c9ea97652ebdb984501c389d22cebc02b564f45c68d628",
+            "size_bytes": 4390524128
+          }
+        },
+        "files": [
+          "mosaicml-mpt-7b-instruct-Q4_K_M.gguf"
+        ],
+        "repo": "maddes8cht/mosaicml-mpt-7b-instruct-gguf",
+        "revision": "939bf1d3b1fcab272e542599bfaf74dcd04a9931",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 32
+      },
+      "family": "mpt",
+      "manifest_index": 47,
+      "mmproj_artifact": null,
+      "notes": "expansion: mpt arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 4388741120,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "apertus",
+      "artifact": {
+        "file_integrity": {
+          "swiss-ai_Apertus-8B-Instruct-2509-Q4_K_M.gguf": {
+            "blob_id": "5901007f15aec9aabeea401cbe65559671166fc851bbdf8c26f56c2b61e9cd1d",
+            "size_bytes": 5057885568
+          }
+        },
+        "files": [
+          "swiss-ai_Apertus-8B-Instruct-2509-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/swiss-ai_Apertus-8B-Instruct-2509-GGUF",
+        "revision": "d2ffbcc459d0a1bccb2097aca8bb825974f7678c",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 32
+      },
+      "family": "apertus",
+      "manifest_index": 48,
+      "mmproj_artifact": null,
+      "notes": "expansion: apertus arch coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 5049991424,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "glm4",
+      "artifact": {
+        "file_integrity": {
+          "GLM-4-9B-0414-Q4_K_M.gguf": {
+            "blob_id": "8027e1089273e8817b2df0d91c9aa17c5ea467246dcdacac34989f8919fe6540",
+            "size_bytes": 6166574944
+          }
+        },
+        "files": [
+          "GLM-4-9B-0414-Q4_K_M.gguf"
+        ],
+        "repo": "unsloth/GLM-4-9B-0414-GGUF",
+        "revision": "40a17a0c8f24664ddd851dafd03935553c25a57e",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 40
+      },
+      "family": "glm4-expansion",
+      "manifest_index": 49,
+      "mmproj_artifact": null,
+      "notes": "expansion: glm4/chatglm arch coverage (distinct from existing glm4 row arch chatglm: replaces it only if identical family label is rejected)",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 6157238272,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "afmoe",
+      "artifact": {
+        "file_integrity": {
+          "Trinity-Mini.Q4_K_M.gguf": {
+            "blob_id": "2c43474de9017d68331455cbf3852c1d365f7a5f9d3b050418e024ba3374a19e",
+            "size_bytes": 15823053440
+          }
+        },
+        "files": [
+          "Trinity-Mini.Q4_K_M.gguf"
+        ],
+        "repo": "MaziyarPanahi/Trinity-Mini-GGUF",
+        "revision": "3a7d7a64abeabff7302851a2bc98508b36d0b8f7",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "afmoe",
+      "manifest_index": 50,
+      "mmproj_artifact": null,
+      "notes": "downloaded AFMoE architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 15815687168,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "arwkv7",
+      "artifact": {
+        "file_integrity": {
+          "ARWKV-7B-Preview-0.1-NoG-32B.i1-Q4_K_M.gguf": {
+            "blob_id": "841c66e3242e2a7e1b64641e1ff92248b2650129b196dc3e27c016f541cb0059",
+            "size_bytes": 5117561504
+          }
+        },
+        "files": [
+          "ARWKV-7B-Preview-0.1-NoG-32B.i1-Q4_K_M.gguf"
+        ],
+        "repo": "mradermacher/ARWKV-7B-Preview-0.1-NoG-32B-i1-GGUF",
+        "revision": "301a9554c8271bca175a78f599b20e49bce383fa",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 3584,
+        "layer_end": 28,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 28
+      },
+      "family": "arwkv7",
+      "manifest_index": 51,
+      "mmproj_artifact": null,
+      "notes": "ARWKV recurrent architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 5111586816,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "bailingmoe3",
+      "artifact": {
+        "file_integrity": {
+          "Ling-3.0-tiny-abliterated-bf16.gguf": {
+            "blob_id": "8c2ea2ead488a0e00bcc02c41fd144d6226ef70eb626afcd589e3960ce39fc85",
+            "size_bytes": 15803475200
+          }
+        },
+        "files": [
+          "Ling-3.0-tiny-abliterated-bf16.gguf"
+        ],
+        "repo": "SC117/Ling-3.0-tiny-abliterated-APEX-GGUF",
+        "revision": "b923d16fcf28261f12be9ece2b520ed442403f70",
+        "selector": "BF16"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1536,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "bailingmoe3",
+      "manifest_index": 52,
+      "mmproj_artifact": null,
+      "notes": "hybrid three-recurrent-to-one-attention boundary sweep",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 15796958848,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "chameleon",
+      "artifact": {
+        "file_integrity": {
+          "AA-chameleon-7b-plus.i1-Q4_K_M.gguf": {
+            "blob_id": "6af766cf8ac2c729c06c430eabc506e32ce10d237c92b426742b3b4cceabcd37",
+            "size_bytes": 4274466400
+          }
+        },
+        "files": [
+          "AA-chameleon-7b-plus.i1-Q4_K_M.gguf"
+        ],
+        "repo": "mradermacher/AA-chameleon-7b-plus-i1-GGUF",
+        "revision": "5e13750981e775965061feefb701f4b6e1e1f7d9",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "chameleon",
+      "manifest_index": 53,
+      "mmproj_artifact": null,
+      "notes": "downloaded Chameleon architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 4272308224,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "deepseek32",
+      "artifact": {
+        "file_integrity": {
+          "DeepSeek-V3.2-4Layers-Q8_0.gguf": {
+            "blob_id": "a7587dc5291aab8ce6d806c1046a169c499fb39008d4188acbca223fd6ad686d",
+            "size_bytes": 16131110560
+          }
+        },
+        "files": [
+          "DeepSeek-V3.2-4Layers-Q8_0.gguf"
+        ],
+        "repo": "sszymczyk/DeepSeek-V3.2-4Layers-GGUF",
+        "revision": "54c8e50a9bfaced560a51eeb63cace952e3ea247",
+        "selector": "Q8_0"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 7168,
+        "layer_end": 4,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 4
+      },
+      "family": "deepseek32",
+      "manifest_index": 54,
+      "mmproj_artifact": null,
+      "notes": "compact four-layer DeepSeek 3.2 architecture probe",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 16125871104,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "dots1",
+      "artifact": {
+        "file_integrity": {
+          "dots.llm1.test-q6_k.gguf": {
+            "blob_id": "2789482e96ffe36999a3c32c1224f0747c030f7aefe576a3a8510a0aa84fde7e",
+            "size_bytes": 14302555328
+          }
+        },
+        "files": [
+          "dots.llm1.test-q6_k.gguf"
+        ],
+        "repo": "Robertp423/dots.llm1.test-Q6_K-GGUF",
+        "revision": "a0404996541e6505cad00b7e3bfa4c7447f4f501",
+        "selector": "Q6_K"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 27,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 27
+      },
+      "family": "dots1",
+      "manifest_index": 55,
+      "mmproj_artifact": null,
+      "notes": "downloaded dots1 MoE architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 14296595968,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "ernie4_5",
+      "artifact": {
+        "file_integrity": {
+          "baidu__ERNIE-4.5-0.3B-PT_llamacpp_optimized.gguf": {
+            "blob_id": "86202506dbbffaddaaa615c932676d3e4c21d1f93e11cd1da3ffb9c6d10cbaed",
+            "size_bytes": 240645504
+          }
+        },
+        "files": [
+          "baidu__ERNIE-4.5-0.3B-PT_llamacpp_optimized.gguf"
+        ],
+        "repo": "Arm/ernie-4-5-0-3b-pt-q4-k-m-llamacpp-raspberrypi5",
+        "revision": "86a80f7bb8780cdc73bed0ffbaab3f6ed98c8b63",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 18,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 18
+      },
+      "family": "ernie4-5",
+      "manifest_index": 56,
+      "mmproj_artifact": null,
+      "notes": "small ERNIE 4.5 dense architecture probe",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 238262272,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "ernie4_5-moe",
+      "artifact": {
+        "file_integrity": {
+          "ERNIE-21B-A3B-Claude-4.5-High-OPUS-Thinking.i1-Q4_K_M.gguf": {
+            "blob_id": "5658d5e0b82578ea7ec0a40d022cbed31013dc6bb0da11c11d16261915b7bcf3",
+            "size_bytes": 13245833216
+          }
+        },
+        "files": [
+          "ERNIE-21B-A3B-Claude-4.5-High-OPUS-Thinking.i1-Q4_K_M.gguf"
+        ],
+        "repo": "mradermacher/ERNIE-21B-A3B-Claude-4.5-High-OPUS-Thinking-i1-GGUF",
+        "revision": "51b8fa4872193aee98ddf4ae60c63aef52e2a07a",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2560,
+        "layer_end": 28,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 28
+      },
+      "family": "ernie4-5-moe",
+      "manifest_index": 57,
+      "mmproj_artifact": null,
+      "notes": "downloaded ERNIE 4.5 MoE architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 13243429632,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "gemma3n",
+      "artifact": {
+        "file_integrity": {
+          "gemma-3n-E4B-it-Q4_K_M.gguf": {
+            "blob_id": "7fcb647151fa19a0750538672cf824ef6cf18f74bb86ebe5592e1ed59b4070a0",
+            "size_bytes": 4237063328
+          }
+        },
+        "files": [
+          "gemma-3n-E4B-it-Q4_K_M.gguf"
+        ],
+        "repo": "lmstudio-community/gemma-3n-E4B-it-text-GGUF",
+        "revision": "48ddb4928f7910916a599054277dac92ab70201a",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 35,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 35
+      },
+      "family": "gemma3n",
+      "manifest_index": 58,
+      "mmproj_artifact": null,
+      "notes": "text-only Gemma 3n architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 4230498240,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "gemma4",
+      "artifact": {
+        "file_integrity": {
+          "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf": {
+            "blob_id": "d0027dd3a9128d9323e9f282c8bf010a8526c46477584535991dc1a869b56e96",
+            "size_bytes": 5335285728
+          }
+        },
+        "files": [
+          "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"
+        ],
+        "repo": "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive",
+        "revision": "45b6a334b4bcd1d7f37179df58b3b1d66a184e5d",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2560,
+        "layer_end": 42,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 42
+      },
+      "family": "gemma4",
+      "manifest_index": 59,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf": {
+            "blob_id": "debad39ab9c1152ab67695a674fb35e8375b2320c57bfd5075835d3ccb16c7db",
+            "size_bytes": 990288832
+          }
+        },
+        "files": [
+          "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf"
+        ],
+        "repo": "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive",
+        "revision": "45b6a334b4bcd1d7f37179df58b3b1d66a184e5d",
+        "selector": "F16"
+      },
+      "notes": "Gemma 4 text and projector lanes",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 5319465128,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "gptneox",
+      "artifact": {
+        "file_integrity": {
+          "gpt-neox-20b.i1-Q4_K_M.gguf": {
+            "blob_id": "1a35c13535c26bb925a2379d9f021de67a0390124ffe2051aa94412002652d6d",
+            "size_bytes": 13135032320
+          }
+        },
+        "files": [
+          "gpt-neox-20b.i1-Q4_K_M.gguf"
+        ],
+        "repo": "mradermacher/gpt-neox-20b-i1-GGUF",
+        "revision": "aea1d77733d7cef1ccc4556c63666d17e5f95a28",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 6144,
+        "layer_end": 44,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 44
+      },
+      "family": "gptneox",
+      "manifest_index": 60,
+      "mmproj_artifact": null,
+      "notes": "downloaded GPT-NeoX architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 13133230080,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "granite_swa",
+      "artifact": {
+        "file_integrity": {
+          "granite-swash-3b-a600m-BF16.gguf": {
+            "blob_id": "1961c3d8eb4e97536a2b95ebe0bd6830d508031443e81124516c05505af8c615",
+            "size_bytes": 6047918368
+          }
+        },
+        "files": [
+          "granite-swash-3b-a600m-BF16.gguf"
+        ],
+        "repo": "emredeveloper/granite-swash-3b-a600m-GGUF",
+        "revision": "d20c88f11ef8622464f9678e6437ed9e72a07dcd",
+        "selector": "BF16"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1280,
+        "layer_end": 28,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 28
+      },
+      "family": "granite-swa",
+      "manifest_index": 61,
+      "mmproj_artifact": null,
+      "notes": "Granite sliding-window MoE architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 6044351680,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "granitemoe",
+      "artifact": {
+        "file_integrity": {
+          "Q4_K_M/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf": {
+            "blob_id": "3a2ec1c2a78cb29d901e29bbf5162dcd03381e13803d2cbdcff838d4d08142eb",
+            "size_bytes": 821847360
+          }
+        },
+        "files": [
+          "Q4_K_M/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf"
+        ],
+        "repo": "sinatras/granite-moe-1b-split",
+        "revision": "3beccd31cf6d51f94c93007e56a21e0df41a101a",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "granite-moe",
+      "manifest_index": 62,
+      "mmproj_artifact": null,
+      "notes": "downloaded Granite MoE architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 820107736,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "graniteswitch",
+      "artifact": {
+        "file_integrity": {
+          "granite-switch-4.1-3b-preview-f16.gguf": {
+            "blob_id": "3c5edd7df00fa175defc73b6f4af58c9b3d66bfc091ade885d3acdd4ded87510",
+            "size_bytes": 8428497696
+          }
+        },
+        "files": [
+          "granite-switch-4.1-3b-preview-f16.gguf"
+        ],
+        "repo": "barha/granite-switch-4.1-3b-preview-GGUF",
+        "revision": "1537da1c12cd890ef0e632678221ecd663485d4e",
+        "selector": "F16"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2560,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 40
+      },
+      "family": "granite-switch",
+      "manifest_index": 63,
+      "mmproj_artifact": null,
+      "notes": "Granite Switch adapter-router architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 8424888320,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "grovemoe",
+      "artifact": {
+        "file_integrity": {
+          "GroveMoE-Inst.i1-Q4_K_M.gguf": {
+            "blob_id": "e1d8ce9e762f74e65d85bea1e8f8e06db70f2dd735cecee9a6d889c71e6fc010",
+            "size_bytes": 20167310304
+          }
+        },
+        "files": [
+          "GroveMoE-Inst.i1-Q4_K_M.gguf"
+        ],
+        "repo": "mradermacher/GroveMoE-Inst-i1-GGUF",
+        "revision": "4e342287d10e5b616e087509fe2a979293bc7b0d",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 48,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 48
+      },
+      "family": "grovemoe",
+      "manifest_index": 64,
+      "mmproj_artifact": null,
+      "notes": "downloaded GroveMoE architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 20161329152,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "hunyuan-dense",
+      "artifact": {
+        "file_integrity": {
+          "tencent_Hunyuan-1.8B-Instruct-Q4_K_M.gguf": {
+            "blob_id": "558ae86fc4251fd73cd54685319a83e7550997537e3ad41043ad5c0b5a2a26d4",
+            "size_bytes": 1133084864
+          }
+        },
+        "files": [
+          "tencent_Hunyuan-1.8B-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "bartowski/tencent_Hunyuan-1.8B-Instruct-GGUF",
+        "revision": "bc16eeb7f561c3d7937aa2cde457668695c237ca",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "hunyuan-dense",
+      "manifest_index": 65,
+      "mmproj_artifact": null,
+      "notes": "downloaded Hunyuan dense architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1127990304,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "hy_v3",
+      "artifact": {
+        "file_integrity": {
+          "Tencent-Hy-30B-A3B-uncensored-heretic.i1-Q4_K_M.gguf": {
+            "blob_id": "76d19eb68bea4de46f2f3dfc82cfa6896da447b9aec91d7c6c3e7791f2d306ac",
+            "size_bytes": 18236703520
+          }
+        },
+        "files": [
+          "Tencent-Hy-30B-A3B-uncensored-heretic.i1-Q4_K_M.gguf"
+        ],
+        "repo": "mradermacher/Tencent-Hy-30B-A3B-uncensored-heretic-i1-GGUF",
+        "revision": "6a7a7d5bea1641ec15202f14d4b467d45c104f06",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 48,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 48
+      },
+      "family": "hy-v3",
+      "manifest_index": 66,
+      "mmproj_artifact": null,
+      "notes": "downloaded Tencent HY v3 MoE architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 18231574016,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "jais",
+      "artifact": {
+        "file_integrity": {
+          "jais-family-13b.i1-Q4_K_M.gguf": {
+            "blob_id": "8783a7d62b714c8520f2b03155f7f52145714dd9006653b7a64a6a6a097f5407",
+            "size_bytes": 8967115424
+          }
+        },
+        "files": [
+          "jais-family-13b.i1-Q4_K_M.gguf"
+        ],
+        "repo": "mradermacher/jais-family-13b-i1-GGUF",
+        "revision": "0339532e089ec7b6dd502eee16c758fc324046c3",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 5120,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 40
+      },
+      "family": "jais",
+      "manifest_index": 67,
+      "mmproj_artifact": null,
+      "notes": "downloaded Jais architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 8962816000,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "jais2",
+      "artifact": {
+        "file_integrity": {
+          "Q4_K_M.gguf": {
+            "blob_id": "26aef0cee0f9960cb12cc74ffa1049ca5e35e8159621aa1bacd9f9f703239923",
+            "size_bytes": 5104022560
+          }
+        },
+        "files": [
+          "Q4_K_M.gguf"
+        ],
+        "repo": "inception42/Jais-2-8B-Chat-GGUF",
+        "revision": "61365d41aad6a2ffa9d7b7f79dfce21b65833254",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 3328,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "jais2",
+      "manifest_index": 68,
+      "mmproj_artifact": null,
+      "notes": "gated Jais 2 artifact with locally verified immutable digest",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 5097211392,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "kimi-k3",
+      "artifact": {
+        "file_integrity": {
+          "Kimi-K3-0.40B-F16.gguf": {
+            "blob_id": "411c197b503e6fb9199a2b22115e32dc4e2cad803fb112b24967737b3bab26c7",
+            "size_bytes": 784318432
+          }
+        },
+        "files": [
+          "Kimi-K3-0.40B-F16.gguf"
+        ],
+        "repo": "murillo2000/Kimi-K3-0.40B-GGUF",
+        "revision": "88de02cf8fa37f87eb06daaed370ac9c3411d5ca",
+        "selector": "F16"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 8,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 8
+      },
+      "family": "kimi-k3",
+      "manifest_index": 69,
+      "mmproj_artifact": null,
+      "notes": "compact hybrid three-recurrent-to-one-attention boundary sweep",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 777396384,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "lfm2moe",
+      "artifact": {
+        "file_integrity": {
+          "LFM2.5-8B-A1B-MXFP4_MOE.gguf": {
+            "blob_id": "a492e8b1d8c201b90de421f0ea1b6ed478aa7f4948604ea6659cd9afca715f3a",
+            "size_bytes": 5138197824
+          }
+        },
+        "files": [
+          "LFM2.5-8B-A1B-MXFP4_MOE.gguf"
+        ],
+        "repo": "noctrex/LFM2.5-8B-A1B-MXFP4_MOE-GGUF",
+        "revision": "6f9e38da4a1715057e3c3a45105037944e767117",
+        "selector": "MXFP4_MOE"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 24,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 24
+      },
+      "family": "lfm2-moe",
+      "manifest_index": 70,
+      "mmproj_artifact": null,
+      "notes": "LFM2 MoE hybrid recurrent boundary sweep",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 5129959168,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "maincoder",
+      "artifact": {
+        "file_integrity": {
+          "Maincoder-1B.Q4_K_M.gguf": {
+            "blob_id": "2db4b53955a58f4483442110fdd5534bfa22a45447f35a131b839a034ffa2998",
+            "size_bytes": 672108288
+          }
+        },
+        "files": [
+          "Maincoder-1B.Q4_K_M.gguf"
+        ],
+        "repo": "mradermacher/Maincoder-1B-GGUF",
+        "revision": "1c963c98dfb478ea3b4719299bd85fbb5cf30899",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 1536,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "maincoder",
+      "manifest_index": 71,
+      "mmproj_artifact": null,
+      "notes": "downloaded Maincoder architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 666155520,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "mellum",
+      "artifact": {
+        "file_integrity": {
+          "mellum2-claude-Q4_K_M.gguf": {
+            "blob_id": "2086900d9374d7a12388b6a44f7d34afcf5817abcba7983dc733d38c5003e2ea",
+            "size_bytes": 8071294784
+          }
+        },
+        "files": [
+          "mellum2-claude-Q4_K_M.gguf"
+        ],
+        "repo": "yuxinlu1/Mellum2-12B-A2.5B-Claude-4.6-4.8-Opus-Thinking-GGUF",
+        "revision": "a9c7b1a32ead28d4a868ff31bbf9c15a97362cfe",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2304,
+        "layer_end": 28,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 28
+      },
+      "family": "mellum",
+      "manifest_index": 72,
+      "mmproj_artifact": null,
+      "notes": "Mellum MoE sliding-window architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 8067705856,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "minicpm",
+      "artifact": {
+        "file_integrity": {
+          "MiniCPM4.1-8B-Q4_K_M.gguf": {
+            "blob_id": "9d2ffb9145bf7a88ddb94b2542b42d925293666c42962aa158eeb62fc9708654",
+            "size_bytes": 4965526048
+          }
+        },
+        "files": [
+          "MiniCPM4.1-8B-Q4_K_M.gguf"
+        ],
+        "repo": "openbmb/MiniCPM4.1-8B-GGUF",
+        "revision": "ebb834d0ad9acfa98bd16bc963ec51be5f7e08c1",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 32,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 32
+      },
+      "family": "minicpm",
+      "manifest_index": 73,
+      "mmproj_artifact": null,
+      "notes": "downloaded MiniCPM 4.1 architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 4963831552,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen35moe",
+      "artifact": {
+        "file_integrity": {
+          "Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf": {
+            "blob_id": "2e8f5f705355c56311432d0a8a5d14a696dbb7e4b197d05c75ba805fc1857bef",
+            "size_bytes": 10756586464
+          }
+        },
+        "files": [
+          "Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf"
+        ],
+        "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+        "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+        "selector": "UD-IQ2_XXS"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 40
+      },
+      "family": "qwen35moe",
+      "manifest_index": 74,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-F16.gguf": {
+            "blob_id": "8971ee4f331ff0a4c609374f32984b3d4e6dc086c0aa35f1d637fad1829e887f",
+            "size_bytes": 899283680
+          }
+        },
+        "files": [
+          "mmproj-F16.gguf"
+        ],
+        "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+        "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+        "selector": "F16"
+      },
+      "notes": "Qwen3.6 MoE gated-delta-net family with a four-layer full-attention interval; pinned projector with local and split image smoke",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 10745596416,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "qwen3vlmoe",
+      "artifact": {
+        "file_integrity": {
+          "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf": {
+            "blob_id": "87bb374d849f80ebdfabb304189fac9e0bd35a0f74506e6a59c51b206cbe863b",
+            "size_bytes": 18556687168
+          }
+        },
+        "files": [
+          "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf"
+        ],
+        "repo": "Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF",
+        "revision": "f54435e6cc31258f04b0969105c3f6badb197931",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 48,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 48
+      },
+      "family": "qwen3vlmoe",
+      "manifest_index": 75,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf": {
+            "blob_id": "82a9966edfdbc1b18a27fd90af96d50cbf111a51484f6290e946dccf461c8150",
+            "size_bytes": 712148928
+          }
+        },
+        "files": [
+          "mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf"
+        ],
+        "repo": "Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF",
+        "revision": "f54435e6cc31258f04b0969105c3f6badb197931",
+        "selector": "Q8_0"
+      },
+      "notes": "Qwen3 VL MoE text and real-projector split certification",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 18550716416,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": 900
+      }
+    },
+    {
+      "architecture": "mistral4",
+      "artifact": {
+        "file_integrity": {
+          "Mistral-Small-4-119B-2603-UD-IQ2_XXS.gguf": {
+            "blob_id": "82a676844e27065abe36cf9292603b6e2484a23ca5665a6d8a0bc62ac478beb3",
+            "size_bytes": 34924187328
+          }
+        },
+        "files": [
+          "Mistral-Small-4-119B-2603-UD-IQ2_XXS.gguf"
+        ],
+        "repo": "unsloth/Mistral-Small-4-119B-2603-GGUF",
+        "revision": "bd93c721735aa32c035c0f19e738cb3371fd56ff",
+        "selector": "UD-IQ2_XXS"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 36,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 36
+      },
+      "family": "mistral4",
+      "manifest_index": 76,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-F16.gguf": {
+            "blob_id": "8afb53096537664e248a0b4a9240c25677bb0f8a8cb5a5aad3cd1d608776a4e7",
+            "size_bytes": 857078496
+          }
+        },
+        "files": [
+          "mmproj-F16.gguf"
+        ],
+        "repo": "unsloth/Mistral-Small-4-119B-2603-GGUF",
+        "revision": "bd93c721735aa32c035c0f19e738cb3371fd56ff",
+        "selector": "F16"
+      },
+      "notes": "Mistral Small 4 MoE and MLA architecture coverage; pinned projector with local and split image smoke",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 34916274176,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "step35",
+      "artifact": {
+        "file_integrity": {
+          "stepfun-ai_Step-3.5-Flash-IQ1_S.gguf": {
+            "blob_id": "69a6683e8e427c17170aaa55c8ac1160d7b24c18aa2a60ea11e3f5810c3ebb97",
+            "size_bytes": 41301534944
+          }
+        },
+        "files": [
+          "stepfun-ai_Step-3.5-Flash-IQ1_S.gguf"
+        ],
+        "repo": "bartowski/stepfun-ai_Step-3.5-Flash-GGUF",
+        "revision": "a2943ef56a0a240bdfb9a2feee97a775f612476d",
+        "selector": "IQ1_S"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 45,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 45
+      },
+      "family": "step35",
+      "manifest_index": 77,
+      "mmproj_artifact": null,
+      "notes": "Step 3.5 Flash MoE with three leading dense blocks and mixed attention windows",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 41296256512,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "mimo2",
+      "artifact": {
+        "file_integrity": {
+          "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00001-of-00002.gguf": {
+            "blob_id": "a4f597f6dd9369240cf12d0b4a8c118e0659bf123b4290e042a6f334c2182520",
+            "size_bytes": 39894774368
+          },
+          "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00002-of-00002.gguf": {
+            "blob_id": "50b56e1aabb935f7505b7aea37883957489509bb56c34a575c90496754ad593f",
+            "size_bytes": 24622278784
+          }
+        },
+        "files": [
+          "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00001-of-00002.gguf",
+          "MiMo-V2.5-IQ1_S/MiMo-V2.5-IQ1_S-00002-of-00002.gguf"
+        ],
+        "repo": "bartowski/MiMo-V2.5-GGUF",
+        "revision": "e528cbf4b6197dd642b393acc069fb1cd529e085",
+        "selector": "IQ1_S"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff",
+        "native-mtp-heads"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 51,
+        "mtp_layers": 3,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 48
+      },
+      "family": "mimo2",
+      "manifest_index": 78,
+      "mmproj_artifact": null,
+      "notes": "MiMo V2.5 MoE with three native NextN heads",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 64511067648,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "minimax-m3",
+      "artifact": {
+        "file_integrity": {
+          "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00001-of-00004.gguf": {
+            "blob_id": "b1c2b41d5078f43c2229c790f86266c68ce5d6d23f05c93085951a30acaca998",
+            "size_bytes": 8243104
+          },
+          "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00002-of-00004.gguf": {
+            "blob_id": "fee0653b3aaaf3f41f0e15c297550995149c4a448b7c7b6d056a6cc227fee3bc",
+            "size_bytes": 49165334304
+          },
+          "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00003-of-00004.gguf": {
+            "blob_id": "c3253c3f5f7d99ab7a6855ce8d1ed870b3630e08cf509dc4606fb5bfdf447f36",
+            "size_bytes": 49782135840
+          },
+          "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00004-of-00004.gguf": {
+            "blob_id": "ac01e73d8d7e829f0627a7a82bb253725f15312f5fec0d00b98ae7e168baafbb",
+            "size_bytes": 29461567904
+          }
+        },
+        "files": [
+          "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00001-of-00004.gguf",
+          "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00002-of-00004.gguf",
+          "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00003-of-00004.gguf",
+          "UD-IQ1_M/MiniMax-M3-UD-IQ1_M-00004-of-00004.gguf"
+        ],
+        "repo": "unsloth/MiniMax-M3-GGUF",
+        "revision": "a31ac6425155f773fdde697421c3b8cf42083ecf",
+        "selector": "UD-IQ1_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 6144,
+        "layer_end": 60,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 60
+      },
+      "family": "minimax-m3",
+      "manifest_index": 79,
+      "mmproj_artifact": null,
+      "notes": "MiniMax M3 MoE with three leading dense blocks and sparse-attention state",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 128408977920,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "spark2_5",
+      "artifact": {
+        "file_integrity": {
+          "Spark-X2.5-4B-Q4_K_M.gguf": {
+            "blob_id": "adfcfa19a4ed6a5985da8bf565fe15f8e1a7e131d79bae2d19d48d1c40109428",
+            "size_bytes": 2600224352
+          }
+        },
+        "files": [
+          "Spark-X2.5-4B-Q4_K_M.gguf"
+        ],
+        "repo": "XHToken/Spark-X2.5-4B-GGUF",
+        "revision": "d313463f1ff7dc29db20193fddc4ad8386d16261",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 2560,
+        "layer_end": 36,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 36
+      },
+      "family": "spark2-5",
+      "manifest_index": 80,
+      "mmproj_artifact": null,
+      "notes": "Spark X2.5 dense mixed-window attention architecture coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 2594836480,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "nomic-bert",
+      "artifact": {
+        "file_integrity": {
+          "nomic-embed-text-v1.5.Q8_0.gguf": {
+            "blob_id": "3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7",
+            "size_bytes": 146146432
+          }
+        },
+        "files": [
+          "nomic-embed-text-v1.5.Q8_0.gguf"
+        ],
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+        "revision": "0188c9bf409793f810680a5a431e7b899c46104c",
+        "selector": "Q8_0"
+      },
+      "certification_lanes": [
+        "embedding-smoke",
+        "embedding-oracle"
+      ],
+      "certification_status": "certified",
+      "class": "embedding",
+      "draft_artifact": null,
+      "evidence": {
+        "comparison": "batch and individual vectors within 1e-4 coordinate error and 0.99999 cosine",
+        "fixture": "scripts/workload_fixtures.py#EMBEDDING_INPUTS"
+      },
+      "execution": {
+        "activation_width": 768,
+        "layer_end": 12,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 12
+      },
+      "family": "nomic-bert-embedding",
+      "manifest_index": 81,
+      "mmproj_artifact": null,
+      "notes": "Local full-model embedding, HTTP and official SDK smoke, and pinned CPU monolithic batch/single-vector parity; staged tensor filtering is intentionally unsupported",
+      "oracle": "local-monolithic",
+      "profile": "workload-oracle",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 145389792,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "jina-bert-v2",
+      "artifact": {
+        "file_integrity": {
+          "Jina-Bert-Implementation-38M-F16.gguf": {
+            "blob_id": "71abc010bb3dce97812ee971509a5cb6ff6f6b8cfffd8480129242f605521fca",
+            "size_bytes": 76971168
+          }
+        },
+        "files": [
+          "Jina-Bert-Implementation-38M-F16.gguf"
+        ],
+        "repo": "ggml-org/jina-reranker-v1-turbo-en-GGUF",
+        "revision": "607d8664c787e517e5d6e339d21f680f9002c931",
+        "selector": "F16"
+      },
+      "certification_lanes": [
+        "rerank-smoke",
+        "rerank-oracle"
+      ],
+      "certification_status": "certified",
+      "class": "rerank",
+      "draft_artifact": null,
+      "evidence": {
+        "comparison": "scores within 1e-4 and identical document order",
+        "fixture": "scripts/workload_fixtures.py#RERANK_DOCUMENTS"
+      },
+      "execution": {
+        "activation_width": 384,
+        "layer_end": 6,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 6
+      },
+      "family": "jina-bert-v2-rerank",
+      "manifest_index": 82,
+      "mmproj_artifact": null,
+      "notes": "Local full-model cross-encoder rerank and HTTP smoke with pinned CPU monolithic score/order parity; staged tensor filtering is intentionally unsupported",
+      "oracle": "local-monolithic",
+      "profile": "workload-oracle",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 75293188,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "t5",
+      "artifact": {
+        "file_integrity": {
+          "flan-t5-small.Q8_0.gguf": {
+            "blob_id": "f7f769c360b1ba830b10dd3b7e7d146dbcc4d487962be7dd806d7d52e0a9c2f0",
+            "size_bytes": 113709824
+          }
+        },
+        "files": [
+          "flan-t5-small.Q8_0.gguf"
+        ],
+        "repo": "Felladrin/gguf-flan-t5-small",
+        "revision": "d71c51f67519edd3154527c2d8f20288bdde9705",
+        "selector": "Q8_0"
+      },
+      "certification_lanes": [
+        "encoder-decoder-smoke",
+        "encoder-decoder-oracle"
+      ],
+      "certification_status": "certified",
+      "class": "encoder_decoder",
+      "draft_artifact": null,
+      "evidence": {
+        "comparison": "identical normalized greedy text from pinned llama-completion",
+        "fixture": "scripts/workload_fixtures.py#ENCODER_DECODER_PROMPT"
+      },
+      "execution": {
+        "activation_width": 512,
+        "layer_end": 8,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 8
+      },
+      "family": "t5-encoder-decoder",
+      "manifest_index": 83,
+      "mmproj_artifact": null,
+      "notes": "Local full-model encoder-decoder generation and HTTP smoke with pinned CPU monolithic completion text parity; cross-attention staging is intentionally unsupported",
+      "oracle": "local-monolithic",
+      "profile": "workload-oracle",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 112678400,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "paddleocr",
+      "artifact": {
+        "file_integrity": {
+          "PaddleOCR-VL-1.6-GGUF.gguf": {
+            "blob_id": "f3ae46ec885050acf4b3d31944431e1fd90d50664fb09126af4a3c050ba14ee8",
+            "size_bytes": 935769056
+          }
+        },
+        "files": [
+          "PaddleOCR-VL-1.6-GGUF.gguf"
+        ],
+        "repo": "PaddlePaddle/PaddleOCR-VL-1.6-GGUF",
+        "revision": "511b09642bb324401f15f97cc23bc67e8f0a291d",
+        "selector": "BF16"
+      },
+      "certification_lanes": [
+        "ocr-smoke",
+        "ocr-oracle"
+      ],
+      "certification_status": "certified",
+      "class": "ocr",
+      "draft_artifact": null,
+      "evidence": {
+        "comparison": "normalized monolithic text parity plus independent MESH 42 label",
+        "fixture": "scripts/generate-ocr-oracle-fixture.py#MESH 42"
+      },
+      "execution": {
+        "activation_width": 1024,
+        "layer_end": 18,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 18
+      },
+      "family": "paddleocr",
+      "manifest_index": 84,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "PaddleOCR-VL-1.6-GGUF-mmproj.gguf": {
+            "blob_id": "204d757d7610d9b3faab10d506d69e5b244e32bf765e2bab2d0167e65e0a058a",
+            "size_bytes": 881770560
+          }
+        },
+        "files": [
+          "PaddleOCR-VL-1.6-GGUF-mmproj.gguf"
+        ],
+        "repo": "PaddlePaddle/PaddleOCR-VL-1.6-GGUF",
+        "revision": "511b09642bb324401f15f97cc23bc67e8f0a291d",
+        "selector": "BF16"
+      },
+      "notes": "Local full-model OCR and HTTP smoke with the pinned PaddleOCR projector and mandatory generated-image monolithic parity; projector and trunk remain colocated",
+      "oracle": "local-monolithic",
+      "profile": "workload-oracle",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 933384192,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": 900
+      }
+    },
+    {
+      "architecture": "qwen3tts",
+      "artifact": {
+        "file_integrity": {
+          "Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf": {
+            "blob_id": "ac7931aeb2e7aad1a6ed6602d353a5679c9d096b18ce8204ac730a8408d572e1",
+            "size_bytes": 1847874400
+          }
+        },
+        "files": [
+          "Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+        ],
+        "repo": "ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+        "revision": "ca27d74bc954b73dadab5b71ca265d87fc861a7c",
+        "selector": "Q8_0"
+      },
+      "certification_lanes": [
+        "speech-synthesis-smoke",
+        "speech-synthesis-oracle"
+      ],
+      "certification_status": "certified",
+      "class": "speech_synthesis",
+      "draft_artifact": null,
+      "evidence": {
+        "comparison": "fixed-seed PCM format and length; RMS error at most 2 percent and waveform cosine at least 0.9995",
+        "fixture": "scripts/skippy-tts-oracle.py#PROMPT"
+      },
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 28,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 28
+      },
+      "family": "qwen3tts",
+      "manifest_index": 85,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf": {
+            "blob_id": "6fd65188839bcd6ecc91b277ad471e22a0edfada4699a0fe82f1165c18cfcce2",
+            "size_bytes": 446422912
+          }
+        },
+        "files": [
+          "mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+        ],
+        "repo": "ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+        "revision": "ca27d74bc954b73dadab5b71ca265d87fc861a7c",
+        "selector": "Q8_0"
+      },
+      "notes": "Local full-model speech-synthesis and HTTP WAV smoke with deterministic pinned monolithic PCM parity; distributed staging is intentionally unsupported",
+      "oracle": "local-monolithic",
+      "profile": "workload-oracle",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1841844224,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": 600
+      }
+    },
+    {
+      "architecture": "llama",
+      "artifact": {
+        "file_integrity": {
+          "Llama-3.2-1B-Instruct-Q8_0.gguf": {
+            "blob_id": "432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3",
+            "size_bytes": 1321083008
+          }
+        },
+        "files": [
+          "Llama-3.2-1B-Instruct-Q8_0.gguf"
+        ],
+        "repo": "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF",
+        "revision": "5390c7c41cbd6f261f7f205fc0c5ae61bbdca650",
+        "selector": "Q8_0"
+      },
+      "certification_lanes": [
+        "speech-recognition-smoke",
+        "speech-recognition-oracle"
+      ],
+      "certification_status": "certified",
+      "class": "speech_recognition",
+      "draft_artifact": null,
+      "evidence": {
+        "comparison": "identical normalized transcript against pinned llama-server; fixture is unlabeled",
+        "fixture": "ci/llama-canary/fixtures/audio-smoke.wav"
+      },
+      "execution": {
+        "activation_width": 2048,
+        "layer_end": 16,
+        "mtp_layers": 0,
+        "speculative_policy": "disabled",
+        "trunk_layers": 16
+      },
+      "family": "ultravox",
+      "manifest_index": 86,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-ultravox-v0_5-llama-3_2-1b-f16.gguf": {
+            "blob_id": "b34dde1835752949d6b960528269af93c92fec91c61ea0534fcc73f96c1ed8b2",
+            "size_bytes": 1371123616
+          }
+        },
+        "files": [
+          "mmproj-ultravox-v0_5-llama-3_2-1b-f16.gguf"
+        ],
+        "repo": "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF",
+        "revision": "5390c7c41cbd6f261f7f205fc0c5ae61bbdca650",
+        "selector": "F16"
+      },
+      "notes": "Local full-model audio-to-text and HTTP smoke with the pinned Ultravox projector and monolithic transcript parity; unlabeled WAV does not establish transcription accuracy",
+      "oracle": "local-monolithic",
+      "profile": "workload-oracle",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 1313251456,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": 600
+      }
+    },
+    {
+      "architecture": "inkling",
+      "artifact": {
+        "file_integrity": {
+          "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00001-of-00004.gguf": {
+            "blob_id": "110190a3c20fbc6d9783125184e470ab7479a79bee7bdf4b5ceda2a6a736f496",
+            "size_bytes": 12986592
+          },
+          "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00002-of-00004.gguf": {
+            "blob_id": "8df5f2d79e206f7edfc811303c352734c95dc05a2e6c7bc0192c967fdd783d7f",
+            "size_bytes": 49513784096
+          },
+          "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00003-of-00004.gguf": {
+            "blob_id": "6078bcbe08ad005feb3cfd87dd2a21258101197bcefee9d7d6c65eb94317f4bb",
+            "size_bytes": 49969966752
+          },
+          "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00004-of-00004.gguf": {
+            "blob_id": "dd0f2e32d7ca2fabb7b1c40e8bcbc1f951e8271c42b31f8c318c002b7cdc4209",
+            "size_bytes": 20057642400
+          }
+        },
+        "files": [
+          "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00001-of-00004.gguf",
+          "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00002-of-00004.gguf",
+          "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00003-of-00004.gguf",
+          "UD-Q3_K_XL/Inkling-Small-UD-Q3_K_XL-00004-of-00004.gguf"
+        ],
+        "repo": "unsloth/Inkling-Small-GGUF",
+        "revision": "1a19ef82883cb7b9c581b93c30ea252dabbf658d",
+        "selector": "UD-Q3_K_XL"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 42,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 42
+      },
+      "family": "inkling",
+      "manifest_index": 87,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-F16.gguf": {
+            "blob_id": "bf1e6afc9889151b3fee61119d3ee2cd224b59a1d881cdf87e33962f64aecc7e",
+            "size_bytes": 138684128
+          }
+        },
+        "files": [
+          "mmproj-F16.gguf"
+        ],
+        "repo": "unsloth/Inkling-Small-GGUF",
+        "revision": "1a19ef82883cb7b9c581b93c30ea252dabbf658d",
+        "selector": "F16"
+      },
+      "notes": "Inkling-Small MoE with per-layer short-convolution state, a Q3 quant sized for the single-host certification runner, and real split image-projector coverage",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 119541330088,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": 1800
+      }
+    },
+    {
+      "architecture": "llama4",
+      "artifact": {
+        "file_integrity": {
+          "Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00001-of-00002.gguf": {
+            "blob_id": "fbe956902467171ed7c0c326e5d868771a84d46468d407abecd0f289297313f9",
+            "size_bytes": 49848379744
+          },
+          "Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00002-of-00002.gguf": {
+            "blob_id": "e7330ae14527f08e8a44a6a573b45084052b8822c4b8a5179c5cad9cd6f6f795",
+            "size_bytes": 15511520608
+          }
+        },
+        "files": [
+          "Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00001-of-00002.gguf",
+          "Q4_K_M/Llama-4-Scout-17B-16E-Instruct-Q4_K_M-00002-of-00002.gguf"
+        ],
+        "repo": "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF",
+        "revision": "72a6853f56a66dc13a3a4b6bdc9cf7ee4c364b47",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 5120,
+        "layer_end": 48,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 48
+      },
+      "family": "llama4",
+      "manifest_index": 88,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-F16.gguf": {
+            "blob_id": "70240ddf9daa0a91570a0975c0480044cb6b84bea427feb52bc0226df682fdeb",
+            "size_bytes": 1746780928
+          }
+        },
+        "files": [
+          "mmproj-F16.gguf"
+        ],
+        "repo": "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF",
+        "revision": "72a6853f56a66dc13a3a4b6bdc9cf7ee4c364b47",
+        "selector": "F16"
+      },
+      "notes": "Llama 4 Scout MoE with single-split, chained-split, and exact-state certification; pinned projector with local and split image smoke",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 65346798336,
+        "minimum_runner_memory_gib": 256,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": 1800
+      }
+    },
+    {
+      "architecture": "deepseek4",
+      "artifact": {
+        "file_integrity": {
+          "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf": {
+            "blob_id": "9b6a9671fc7edfca95cdf54b121f82c878c6bb75825c9f283beaa0ba1eacb6b6",
+            "size_bytes": 5305248
+          },
+          "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00002-of-00003.gguf": {
+            "blob_id": "2e67b9def2486211d94f4510b5108388f8c50143e4f3e0e5147d340aa6c68d7d",
+            "size_bytes": 49437013568
+          },
+          "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00003-of-00003.gguf": {
+            "blob_id": "55e35127ec9c3020d2684e759144541afc5233b27fde6b1b7ee492ac9d1c65bf",
+            "size_bytes": 47390237120
+          }
+        },
+        "files": [
+          "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf",
+          "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00002-of-00003.gguf",
+          "UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00003-of-00003.gguf"
+        ],
+        "repo": "unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF",
+        "revision": "87ce15810931a270f165e5e50439cd446f6b4ba5",
+        "selector": "UD-Q2_K_XL"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 43,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 43
+      },
+      "family": "deepseek4",
+      "manifest_index": 89,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-F16.gguf": {
+            "blob_id": "fd997ca416f418dcb6a103e57e25dd6ea286bdc8ddd7225455d30c9301f2c442",
+            "size_bytes": 933258400
+          }
+        },
+        "files": [
+          "mmproj-F16.gguf"
+        ],
+        "repo": "unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF",
+        "revision": "87ce15810931a270f165e5e50439cd446f6b4ba5",
+        "selector": "F16"
+      },
+      "notes": "deepseek4 hybrid-connection MoE with a vision projector; ~97 GB Q2 artifact, so manual-full only; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 96824555936,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "minimax-m2",
+      "artifact": {
+        "file_integrity": {
+          "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00001-of-00003.gguf": {
+            "blob_id": "ec73a864385ed70633fb85719985ac7ceae6d7f54993bb1885de73e0adca8d37",
+            "size_bytes": 8237824
+          },
+          "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00002-of-00003.gguf": {
+            "blob_id": "2ed4db6452da66c69021e959c6b31dca32c5c1253aef6fef7ada0d56960ffed9",
+            "size_bytes": 49844040960
+          },
+          "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00003-of-00003.gguf": {
+            "blob_id": "d1964bae02fe0ece1a8b4012bc320c47705f7a63655f5331749aa6c88ee72656",
+            "size_bytes": 43785019584
+          }
+        },
+        "files": [
+          "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00001-of-00003.gguf",
+          "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00002-of-00003.gguf",
+          "UD-Q3_K_S/MiniMax-M2.7-UD-Q3_K_S-00003-of-00003.gguf"
+        ],
+        "repo": "unsloth/MiniMax-M2.7-GGUF",
+        "revision": "d2a05ccf69491b03db0cc40b335aec14bdaf7198",
+        "selector": "UD-Q3_K_S"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 3072,
+        "layer_end": 62,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 62
+      },
+      "family": "minimax-m2",
+      "manifest_index": 90,
+      "mmproj_artifact": null,
+      "notes": "minimax-m2 MoE (256 experts, 8 active); smallest 3-bit artifact is ~94 GB, so this row is manual-full only; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 93629298368,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "bailingmoe2",
+      "artifact": {
+        "file_integrity": {
+          "sarvam-30b-Q4_K_M.gguf-00001-of-00006.gguf": {
+            "blob_id": "3846a49dd94118a313ab0368f376c9f0866b6fd95e8e893171f546643949165d",
+            "size_bytes": 3920955744
+          },
+          "sarvam-30b-Q4_K_M.gguf-00002-of-00006.gguf": {
+            "blob_id": "d96ae2e9012c030b132c661ff16ea0780705b121cf98f9b365f18dc3ff65f93b",
+            "size_bytes": 3585809856
+          },
+          "sarvam-30b-Q4_K_M.gguf-00003-of-00006.gguf": {
+            "blob_id": "4846470605585a8c720a2e99b47ff3092795f6204dc3ea8fd65bd19456948a8c",
+            "size_bytes": 3700365408
+          },
+          "sarvam-30b-Q4_K_M.gguf-00004-of-00006.gguf": {
+            "blob_id": "38efbe4b63741e744a0862cef39d3d960daaeb692d675f08f6fe4ea268df30e2",
+            "size_bytes": 3885293184
+          },
+          "sarvam-30b-Q4_K_M.gguf-00005-of-00006.gguf": {
+            "blob_id": "34ceb9cb125c7a2523317bd9421ae020980a0e3a6bb3b4d791db1aa9b35b985f",
+            "size_bytes": 3867549056
+          },
+          "sarvam-30b-Q4_K_M.gguf-00006-of-00006.gguf": {
+            "blob_id": "4dfe5bf3ced850378af5a3b879b2bde7c681b8afd2f8af101f56bc7ca3674ad8",
+            "size_bytes": 610812416
+          }
+        },
+        "files": [
+          "sarvam-30b-Q4_K_M.gguf-00001-of-00006.gguf",
+          "sarvam-30b-Q4_K_M.gguf-00002-of-00006.gguf",
+          "sarvam-30b-Q4_K_M.gguf-00003-of-00006.gguf",
+          "sarvam-30b-Q4_K_M.gguf-00004-of-00006.gguf",
+          "sarvam-30b-Q4_K_M.gguf-00005-of-00006.gguf",
+          "sarvam-30b-Q4_K_M.gguf-00006-of-00006.gguf"
+        ],
+        "repo": "sarvamai/sarvam-30b-gguf",
+        "revision": "54e15edbbcb112e7d6c69b612e5041973e953c2f",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 4096,
+        "layer_end": 19,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 19
+      },
+      "family": "bailingmoe2",
+      "manifest_index": 91,
+      "mmproj_artifact": null,
+      "notes": "bailingmoe2 MoE (128 experts, 6 active) shipping only as a six-shard Q4_K_M set; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 19562785664,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "muse-glimmer",
+      "artifact": {
+        "file_integrity": {
+          "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf": {
+            "blob_id": "4cc57c0f51040a226e5a72cc47b7613f7772950e460a665f7083de89f183f60e",
+            "size_bytes": 16756683904
+          }
+        },
+        "files": [
+          "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf"
+        ],
+        "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+        "revision": "70bf1b61ac09f91b24d39038091b41c582bc5d7a",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": {
+        "file_integrity": {
+          "dflash-Muse-Glimmer-30B-Q4_K_M.gguf": {
+            "blob_id": "b2e808bf656086fe86bd0d0bd990f01d33e377537a07c02d45371517c8b264ef",
+            "size_bytes": 1631208128
+          }
+        },
+        "files": [
+          "dflash-Muse-Glimmer-30B-Q4_K_M.gguf"
+        ],
+        "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+        "revision": "70bf1b61ac09f91b24d39038091b41c582bc5d7a",
+        "selector": "Q4_K_M"
+      },
+      "execution": {
+        "activation_width": 6656,
+        "layer_end": 52,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 52
+      },
+      "family": "muse-glimmer",
+      "manifest_index": 92,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "mmproj-Muse-Glimmer-30B-Q4_K_M.gguf": {
+            "blob_id": "f48b452316f9b213758e8659444029b961a24a07f99a1abb2a9f88b06f7c00c6",
+            "size_bytes": 1400328928
+          }
+        },
+        "files": [
+          "mmproj-Muse-Glimmer-30B-Q4_K_M.gguf"
+        ],
+        "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+        "revision": "70bf1b61ac09f91b24d39038091b41c582bc5d7a",
+        "selector": "Q4_K_M"
+      },
+      "notes": "dense 30B with a vision projector and a paired dflash speculative drafter; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 16748683904,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "mistral3",
+      "artifact": {
+        "file_integrity": {
+          "Ministral-3-14B-Reasoning-2512-Q4_K_M.gguf": {
+            "blob_id": "fe08ca2158cd7438211ec6a4e5256d31bc980f016e3f5b635fe91fe6848d461c",
+            "size_bytes": 8239591488
+          }
+        },
+        "files": [
+          "Ministral-3-14B-Reasoning-2512-Q4_K_M.gguf"
+        ],
+        "repo": "mistralai/Ministral-3-14B-Reasoning-2512-GGUF",
+        "revision": "fe3b038f30334729263d860d5dadbaa34e0f2a18",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 5120,
+        "layer_end": 40,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 40
+      },
+      "family": "mistral3",
+      "manifest_index": 93,
+      "mmproj_artifact": {
+        "file_integrity": {
+          "Ministral-3-14B-Reasoning-2512-BF16-mmproj.gguf": {
+            "blob_id": "d2be75b7f374b964656ca69e7f5b0e8a99729c0a3a9e4c163b6de01551558adb",
+            "size_bytes": 879258784
+          }
+        },
+        "files": [
+          "Ministral-3-14B-Reasoning-2512-BF16-mmproj.gguf"
+        ],
+        "repo": "mistralai/Ministral-3-14B-Reasoning-2512-GGUF",
+        "revision": "fe3b038f30334729263d860d5dadbaa34e0f2a18",
+        "selector": "BF16-mmproj"
+      },
+      "notes": "dense mistral3 with a separate BF16 vision projector; distinct repository from family-mistral-small; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 8231591488,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    },
+    {
+      "architecture": "nemotron_h",
+      "artifact": {
+        "file_integrity": {
+          "NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf": {
+            "blob_id": "be5d9a656a51922f24f1f09a759cebb694e1f5d9728bf0ef9f8c972c5a0b5ef2",
+            "size_bytes": 2837072864
+          }
+        },
+        "files": [
+          "NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf"
+        ],
+        "repo": "nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF",
+        "revision": "ba223d14e45525f7fae81db77ea8cabeb2fc6c25",
+        "selector": "Q4_K_M"
+      },
+      "certification_lanes": [
+        "single-step",
+        "chain",
+        "state-handoff"
+      ],
+      "certification_status": "certified",
+      "class": "causal_generation",
+      "draft_artifact": null,
+      "execution": {
+        "activation_width": 3136,
+        "layer_end": 42,
+        "mtp_layers": 0,
+        "speculative_policy": "mtp-if-present",
+        "trunk_layers": 42
+      },
+      "family": "nemotron-nano",
+      "manifest_index": 94,
+      "mmproj_artifact": null,
+      "notes": "nemotron_h hybrid (Mamba2 + attention) Nano 4B; head_count_kv is per-layer and zero on non-attention layers; estimated_model_bytes is the declared file set minus ~8 MB of GGUF metadata",
+      "oracle": "local-monolithic",
+      "profile": "full",
+      "resources": {
+        "cache_policy": "immutable-local",
+        "estimated_model_bytes": 2829072864,
+        "runner_role": "family-certify",
+        "startup_timeout_secs": null
+      }
+    }
+  ],
+  "shards": [
+    {
+      "estimated_work_bytes": 333075593304,
+      "families": [
+        "deepseek2",
+        "qwen3-moe",
+        "qwen3-next",
+        "mamba",
+        "mamba2",
+        "rwkv6",
+        "lfm2",
+        "lfm2-vl",
+        "falcon-dense",
+        "mistral-small",
+        "smollm3",
+        "stablelm",
+        "olmo2",
+        "minicpm3",
+        "glm4-expansion",
+        "gemma4",
+        "gptneox",
+        "granite-switch",
+        "jais2",
+        "kimi-k3",
+        "mimo2",
+        "minimax-m3",
+        "qwen3tts",
+        "muse-glimmer"
+      ],
+      "id": "family-battery-01",
+      "shard_index": 0
+    },
+    {
+      "estimated_work_bytes": 333063824160,
+      "families": [
+        "glm4",
+        "jamba2",
+        "nemotron",
+        "qwen2-vl",
+        "gemma2",
+        "phi4",
+        "cohere2",
+        "qwen2",
+        "gemma3",
+        "phi2",
+        "mpt",
+        "bailingmoe3",
+        "ernie4-5",
+        "ernie4-5-moe",
+        "gemma3n",
+        "granite-swa",
+        "granite-moe",
+        "hunyuan-dense",
+        "hy-v3",
+        "spark2-5",
+        "t5-encoder-decoder",
+        "inkling",
+        "llama4",
+        "bailingmoe2"
+      ],
+      "id": "family-battery-02",
+      "shard_index": 1
+    },
+    {
+      "estimated_work_bytes": 333056103780,
+      "families": [
+        "qwen3-dense",
+        "llama",
+        "gpt-oss",
+        "qwen2-moe",
+        "qwen4exp",
+        "granite-hybrid",
+        "qwen35",
+        "laguna",
+        "phi3",
+        "gemma",
+        "starcoder2",
+        "arcee",
+        "apertus",
+        "deepseek32",
+        "dots1",
+        "lfm2-moe",
+        "minicpm",
+        "qwen3vlmoe",
+        "mistral4",
+        "paddleocr",
+        "deepseek4",
+        "mistral3",
+        "nemotron-nano"
+      ],
+      "id": "family-battery-03",
+      "shard_index": 2
+    },
+    {
+      "estimated_work_bytes": 333069696612,
+      "families": [
+        "glm47-flash",
+        "glm45-air",
+        "falcon-h1",
+        "kimi-linear",
+        "rwkv7",
+        "granite-dense",
+        "qwen3-vl",
+        "internlm2",
+        "bloom",
+        "exaone4",
+        "nemotron-expansion",
+        "afmoe",
+        "arwkv7",
+        "chameleon",
+        "grovemoe",
+        "jais",
+        "maincoder",
+        "mellum",
+        "qwen35moe",
+        "step35",
+        "nomic-bert-embedding",
+        "jina-bert-v2-rerank",
+        "ultravox",
+        "minimax-m2"
+      ],
+      "id": "family-battery-04",
+      "shard_index": 3
+    }
+  ]
+}

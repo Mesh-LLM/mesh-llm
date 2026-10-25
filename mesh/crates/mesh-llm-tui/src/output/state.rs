@@ -588,6 +588,13 @@ impl DashboardRequestWindow {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ServingStrategySummary {
+    pub(super) strategy: String,
+    pub(super) applied: usize,
+    pub(super) declined: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DashboardState {
     pub(super) session_started_at: Instant,
@@ -595,6 +602,10 @@ pub struct DashboardState {
     pub(super) node_id: Option<String>,
     pub(super) mesh_id: Option<String>,
     pub(super) runtime_ready: bool,
+    /// What `--strategy` composed, for the header. `None` means none was
+    /// named, which the header says rather than omits: an absent field reads
+    /// as a missing feature, not as a node on built-in defaults.
+    pub(super) serving_strategy: Option<ServingStrategySummary>,
     pub(super) peer_ids: BTreeSet<String>,
     pub(super) llama_instances: Vec<LlamaInstanceState>,
     pub(super) multi_model_mode: Option<MultiModelModeState>,
@@ -638,6 +649,7 @@ impl Default for DashboardState {
         let mut state = Self {
             session_started_at: Instant::now(),
             version: None,
+            serving_strategy: None,
             node_id: None,
             mesh_id: None,
             runtime_ready: false,

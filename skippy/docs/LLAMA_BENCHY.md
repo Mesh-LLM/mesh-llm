@@ -1,7 +1,7 @@
 # llama-benchy Against serve-openai
 
 [`llama-benchy`](https://github.com/eugr/llama-benchy) is an OpenAI-compatible
-benchmark client. Its upstream README currently says it evaluates
+benchmark client. Its [README at the pinned source commit](https://github.com/eugr/llama-benchy/blob/e9be344578cec17745066b220798b80a0d2686d3/README.md) says it evaluates
 `/v1/chat/completions` only, auto-discovers a model from `/v1/models` when
 `--model` is omitted, and expects `--base-url` to include the `/v1` prefix.
 
@@ -80,7 +80,26 @@ Artifacts default to `/tmp/skippy-openai-smoke`.
 
 ## Run Benchy
 
-The helper script defaults to the local `serve-openai` address:
+The helper script defaults to the local `serve-openai` address. If `MODEL` is
+unset, native `cargo xtool automation endpoint-model-discovery` selects the
+first advertised `/v1/models` ID with a ten-second deadline. An explicit `MODEL`
+bypasses discovery. `SERVED_MODEL_NAME` defaults to the selected model, and an
+explicit served name stays unchanged. Run from the repository root, or supply
+an absolute executable `MESH_LLM_AUTOMATION_BIN` from automation preparation.
+Discovery reads `API_KEY` from the environment and keeps its bearer bytes out of
+child argv and displayed commands. DNS/HTTPS discovery uses the existing
+supervised curl transport, which requires installed curl 8.4 or newer.
+
+The benchmark still uses the optional external `uvx llama-benchy` dependency.
+The wrapper defaults to upstream commit
+[`e9be344578cec17745066b220798b80a0d2686d3`](https://github.com/eugr/llama-benchy/commit/e9be344578cec17745066b220798b80a0d2686d3),
+which fixes the benchmark source used by the documented command. Set
+`LLAMA_BENCHY_FROM` to use another package source; the wrapper forwards an
+explicit override unchanged. Use a full immutable commit reference when the
+override must produce repeatable results.
+Its existing `--api-key` argument remains visible to the operating system's
+process inspection, although this wrapper redacts the displayed command.
+Native discovery does not certify the loaded model's bytes or benchmark results:
 
 ```bash
 MODEL=meta-llama/Llama-3.2-1B-Instruct:Q4_K_M \
@@ -97,7 +116,9 @@ scripts/run-llama-benchy-openai.sh
 Equivalent direct command:
 
 ```bash
-uvx --from git+https://github.com/eugr/llama-benchy llama-benchy \
+uvx --from \
+  git+https://github.com/eugr/llama-benchy@e9be344578cec17745066b220798b80a0d2686d3 \
+  llama-benchy \
   --base-url http://127.0.0.1:9337/v1 \
   --model meta-llama/Llama-3.2-1B-Instruct:Q4_K_M \
   --served-model-name meta-llama/Llama-3.2-1B-Instruct:Q4_K_M \
@@ -124,7 +145,7 @@ curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
 ```
 
 ```bash
-python3 scripts/run-openai-guardrail-corpus.py \
+just automation-run automation guardrail-corpus \
   --base-url http://127.0.0.1:9337/v1 \
   --model meta-llama/Llama-3.2-1B-Instruct:Q4_K_M \
   --guardrail-mode metrics \

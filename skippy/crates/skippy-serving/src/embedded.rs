@@ -1,13 +1,14 @@
+use crate::runtime_state::panic_recovery::{PanicRecovery, lock_runtime, try_lock_recovering};
 use std::{
     net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
-    sync::{Arc, Mutex, OnceLock, TryLockError},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use anyhow::{Context, Result};
 use axum::Router;
 use skippy_config::validate_config;
-use skippy_inference_api::{OpenAiBackend, OpenAiFrontendConfig, OpenAiLifecycleObserver};
+use skippy_inference_api::{InferenceBackend, InferenceFrontendConfig, InferenceLifecycleObserver};
 use skippy_protocol::{StageConfig, StageTopology};
 use skippy_runtime::{ActivationBoundaryDesc, MtpSource, WorkloadInfo};
 use tokio::{sync::oneshot, task::JoinHandle};
@@ -121,43 +122,28 @@ struct RuntimeHandleState {
 
 impl SkippyRuntimeHandle {
     pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .input_activation_boundary()
+        lock_runtime(&self.runtime).input_activation_boundary()
     }
 
     pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .output_activation_boundary()
+        lock_runtime(&self.runtime).output_activation_boundary()
     }
 
     /// Returns the runtime-probed workload contract for the loaded model.
     pub fn workload_info(&self) -> Result<WorkloadInfo> {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .workload_info()
+        lock_runtime(&self.runtime).workload_info()
     }
 
     /// True only when the loaded multimodal projector exposes llama.cpp's
     /// audio-generation helper contract.
     pub fn supports_speech_synthesis(&self) -> bool {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .supports_speech_synthesis()
+        lock_runtime(&self.runtime).supports_speech_synthesis()
     }
 
     /// True only when this loaded runtime can execute System One reads: a valid
     /// decision canvas on one unsplit execution lane.
     pub fn supports_system_one(&self) -> bool {
-        self.runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .supports_system_one_endpoint()
+        lock_runtime(&self.runtime).supports_system_one_endpoint()
     }
 
     /// Assemble a ready handle around an already-loaded runtime.
@@ -173,10 +159,7 @@ impl SkippyRuntimeHandle {
         telemetry: Telemetry,
     ) -> Self {
         let initial_session_stats = Captured {
-            value: runtime
-                .lock()
-                .expect("runtime lock poisoned")
-                .session_stats(),
+            value: lock_runtime(&runtime).session_stats(),
             captured_at_unix_nanos: now_unix_nanos(),
         };
         Self {
@@ -336,7 +319,7 @@ impl SkippyRuntimeHandle {
 
     pub fn shutdown(&self) {
         self.tokenizer_active.store(false, Ordering::Release);
-        let runtime = self.runtime.lock().expect("runtime lock poisoned");
+        let runtime = lock_runtime(&self.runtime);
         drop(runtime);
         let mut status = self.status.lock().expect("runtime status lock poisoned");
         if status.state == EmbeddedState::Stopped {
@@ -429,14 +412,14 @@ pub fn start_embedded_openai(args: EmbeddedOpenAiArgs) -> EmbeddedServerHandle {
 
 pub fn start_openai_backend(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
 ) -> EmbeddedServerHandle {
     spawn_openai_backend(bind_addr, skippy_inference_api::router_for(backend))
 }
 
 pub fn start_openai_backend_with_tokenizer(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
 ) -> EmbeddedServerHandle {
     spawn_openai_backend(bind_addr, openai_backend_router(backend, tokenizer))
@@ -481,7 +464,7 @@ fn spawn_openai_backend(bind_addr: SocketAddr, router: Router) -> EmbeddedServer
 }
 
 pub(crate) fn openai_backend_router(
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
 ) -> Router {
     skippy_inference_api::router_for(backend).merge(tokenizer_http_router(tokenizer))
@@ -493,8 +476,8 @@ pub(crate) fn openai_backend_router(
 /// behavior for embedders that do not own a logging runtime.
 pub fn start_openai_backend_with_lifecycle_observer(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
-    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+    backend: Arc<dyn InferenceBackend>,
+    lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
 ) -> EmbeddedServerHandle {
     spawn_openai_backend(
         bind_addr,
@@ -506,9 +489,9 @@ pub fn start_openai_backend_with_lifecycle_observer(
 /// lifecycle observer.
 pub fn start_openai_backend_with_tokenizer_and_lifecycle_observer(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
-    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+    lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
 ) -> EmbeddedServerHandle {
     let router = openai_backend_router_with_lifecycle_observer(backend, lifecycle_observer)
         .merge(tokenizer_http_router(tokenizer));
@@ -516,11 +499,11 @@ pub fn start_openai_backend_with_tokenizer_and_lifecycle_observer(
 }
 
 fn openai_backend_router_with_lifecycle_observer(
-    backend: Arc<dyn OpenAiBackend>,
-    lifecycle_observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
+    backend: Arc<dyn InferenceBackend>,
+    lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
 ) -> Router {
-    let config = lifecycle_observer.map_or_else(OpenAiFrontendConfig::default, |observer| {
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer)
+    let config = lifecycle_observer.map_or_else(InferenceFrontendConfig::default, |observer| {
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer)
     });
     skippy_inference_api::router_for_with_config(backend, config)
 }
@@ -639,18 +622,19 @@ fn finish_server_status(status: &Arc<Mutex<ServerHandleState>>, result: &Result<
 /// must propagate it rather than stamp the value as freshly observed. Nothing
 /// may gate admission, routing, eviction or shutdown on these values.
 ///
-/// A poisoned `source` still panics, as the previous blocking `lock().expect`
-/// did: cached stats over a panicked runtime would hide a real failure.
+/// A poisoned `source` is recovered, as every other runtime lock is, so the
+/// value read afterwards reflects the reset state rather than a stale cache.
 fn read_without_blocking<S, V>(
     source: &Mutex<S>,
     cache: &Mutex<Captured<V>>,
     read: impl FnOnce(&S) -> V,
 ) -> Captured<V>
 where
+    S: PanicRecovery,
     V: Clone,
 {
-    match source.try_lock() {
-        Ok(guard) => {
+    match try_lock_recovering(source) {
+        Some(guard) => {
             let value = read(&guard);
             drop(guard);
             let captured = Captured {
@@ -662,8 +646,7 @@ where
         }
         // Inference holds the runtime: serve the last published snapshot,
         // carrying the time it was taken, instead of blocking.
-        Err(TryLockError::WouldBlock) => cache.lock().expect("stats cache lock poisoned").clone(),
-        Err(TryLockError::Poisoned(error)) => panic!("runtime lock poisoned: {error}"),
+        None => cache.lock().expect("stats cache lock poisoned").clone(),
     }
 }
 
@@ -674,6 +657,12 @@ mod tests {
     use skippy_protocol::LoadMode;
 
     use super::*;
+
+    impl PanicRecovery for u32 {
+        fn reset_after_panic(&mut self) {
+            *self = 0;
+        }
+    }
 
     #[test]
     fn binary_stage_cannot_be_ready_before_boundaries_are_published() {
@@ -939,11 +928,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "runtime lock poisoned")]
-    fn read_without_blocking_still_panics_on_a_poisoned_runtime() {
-        // A poisoned runtime means inference panicked. Serving cached stats
-        // over the top of that would report a healthy node, so this must keep
-        // the pre-existing panic behaviour rather than fall back to the cache.
+    fn read_without_blocking_recovers_a_poisoned_runtime() {
+        // A poisoned runtime means inference panicked. The read recovers the
+        // lock, so it reports the reset state instead of a stale cache.
         let source = Mutex::new(7u32);
         let cache = empty_cache(0);
         let _ = std::panic::catch_unwind(|| {
@@ -951,7 +938,9 @@ mod tests {
             panic!("inference exploded");
         });
         assert!(source.is_poisoned(), "precondition: source is poisoned");
-        let _ = read_without_blocking(&source, &cache, |v| *v);
+        let read = read_without_blocking(&source, &cache, |v| *v);
+        assert_eq!(read.value, 0, "recovery resets the state before the read");
+        assert!(!source.is_poisoned());
     }
 }
 
@@ -965,9 +954,9 @@ mod lifecycle_tests {
         http::{Request, StatusCode},
     };
     use skippy_inference_api::{
-        ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, ModelObject,
-        OpenAiFrontendRoute, OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRequestContext,
-        OpenAiResult,
+        ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
+        InferenceFrontendRoute, InferenceLifecycleEvent, InferenceLifecycleObserver,
+        InferenceRequestContext, InferenceResult, ModelObject,
     };
     use tower::ServiceExt;
 
@@ -976,16 +965,16 @@ mod lifecycle_tests {
     struct ModelsBackend;
 
     #[async_trait]
-    impl OpenAiBackend for ModelsBackend {
-        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    impl InferenceBackend for ModelsBackend {
+        async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
             Ok(vec![ModelObject::new("embedded-model")])
         }
 
         async fn chat_completion(
             &self,
             _request: ChatCompletionRequest,
-        ) -> OpenAiResult<ChatCompletionResponse> {
-            Err(skippy_inference_api::OpenAiError::unsupported(
+        ) -> InferenceResult<ChatCompletionResponse> {
+            Err(skippy_inference_api::InferenceError::unsupported(
                 "not used by this test",
             ))
         }
@@ -993,19 +982,19 @@ mod lifecycle_tests {
         async fn chat_completion_stream(
             &self,
             _request: ChatCompletionRequest,
-            _context: OpenAiRequestContext,
-        ) -> OpenAiResult<ChatCompletionStream> {
-            Err(skippy_inference_api::OpenAiError::unsupported(
+            _context: InferenceRequestContext,
+        ) -> InferenceResult<ChatCompletionStream> {
+            Err(skippy_inference_api::InferenceError::unsupported(
                 "not used by this test",
             ))
         }
     }
 
     #[derive(Default)]
-    struct RecordingObserver(Mutex<Vec<OpenAiLifecycleEvent>>);
+    struct RecordingObserver(Mutex<Vec<InferenceLifecycleEvent>>);
 
-    impl OpenAiLifecycleObserver for RecordingObserver {
-        fn observe(&self, event: &OpenAiLifecycleEvent) {
+    impl InferenceLifecycleObserver for RecordingObserver {
+        fn observe(&self, event: &InferenceLifecycleEvent) {
             self.0
                 .lock()
                 .expect("recording observer lock poisoned")
@@ -1018,7 +1007,7 @@ mod lifecycle_tests {
         let observer = Arc::new(RecordingObserver::default());
         let observed_response = openai_backend_router_with_lifecycle_observer(
             Arc::new(ModelsBackend),
-            Some(Arc::clone(&observer) as Arc<dyn OpenAiLifecycleObserver>),
+            Some(Arc::clone(&observer) as Arc<dyn InferenceLifecycleObserver>),
         )
         .oneshot(
             Request::builder()
@@ -1037,9 +1026,9 @@ mod lifecycle_tests {
                 .iter()
                 .any(|event| matches!(
                     event,
-                    OpenAiLifecycleEvent::Admitted {
-                        context: skippy_inference_api::OpenAiLifecycleContext {
-                            route: OpenAiFrontendRoute::Models,
+                    InferenceLifecycleEvent::Admitted {
+                        context: skippy_inference_api::InferenceLifecycleContext {
+                            route: InferenceFrontendRoute::Models,
                             ..
                         }
                     }

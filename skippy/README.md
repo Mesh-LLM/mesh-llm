@@ -50,6 +50,7 @@ shared HTTP surface in
 - [Configuration reference](docs/CONFIGURATION.md)
 - [Split serving](docs/SKIPPY_SPLITS.md)
 - [Layer package repositories](docs/LAYER_PACKAGE_REPOS.md)
+- [Qwen3-MoE native MTP](docs/QWEN3_MOE_NATIVE_MTP.md)
 - [Supported model families](docs/FAMILY_STATUS.md)
 - [Non-chat models](docs/NON_CHAT_MODELS.md)
 - [Data flow](docs/DATA_FLOW.md)

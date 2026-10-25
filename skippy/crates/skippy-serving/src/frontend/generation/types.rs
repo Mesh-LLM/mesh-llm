@@ -14,13 +14,13 @@ use crate::frontend::generation::DraftRunner;
 use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::GenerationTokenLimit;
-use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PreparedGenerationPrompt;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::native_mtp::NativeMtpDecodeTelemetry;
 use crate::frontend::prefill::PrefillChunkPolicy;
-use crate::frontend::speculative::OpenAiSpeculativeStats;
+use crate::frontend::speculative::InferenceSpeculativeStats;
 use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
 use crate::telemetry::Telemetry;
@@ -29,7 +29,7 @@ use serde_json::Value;
 use serde_json::json;
 use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::FinishReason;
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::Usage;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReply;
@@ -56,8 +56,10 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) model_id: String,
     pub(in crate::frontend) default_max_tokens: u32,
     pub(in crate::frontend) request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// Render-only reasoning-control observations for this loaded model.
+    pub(in crate::frontend) thinking: Option<skippy_inference_api::thinking::ThinkingControls>,
     pub(in crate::frontend) ctx_size: usize,
-    pub(in crate::frontend) mode: OpenAiBackendMode,
+    pub(in crate::frontend) mode: InferenceBackendMode,
     pub(in crate::frontend) draft: Option<Arc<Mutex<DraftRunner>>>,
     pub(in crate::frontend) speculative_window: usize,
     pub(in crate::frontend) adaptive_speculative_window: bool,
@@ -67,6 +69,10 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     /// keep. `None` leaves the resolved plan's setting in force unconditionally.
     pub(in crate::frontend) speculation_governor:
         Option<std::sync::Arc<crate::frontend::speculation_gate::SpeculationGovernor>>,
+    /// Searches for the run-ahead budget when the plan states `auto` instead of
+    /// a number. `None` leaves the plan's own figure in force.
+    pub(in crate::frontend) runahead_governor:
+        Option<std::sync::Arc<crate::frontend::runahead_search::RunaheadGovernor>>,
     pub(in crate::frontend) generation_limit: Arc<GenerationConcurrencyController>,
     pub(in crate::frontend) generation_queue_depth: Arc<AtomicUsize>,
     pub(in crate::frontend) generation_queue_limit: usize,
@@ -75,7 +81,7 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) generation_session_locks:
         Arc<Mutex<BTreeMap<String, Arc<GenerationSessionLockEntry>>>>,
     pub(in crate::frontend) generation_token_budget: Arc<GenerationTokenBudget>,
-    pub(in crate::frontend) hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub(in crate::frontend) hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub(in crate::frontend) generation_receipt: Option<GenerationReceiptConfig>,
     pub(in crate::frontend) generation_lifecycle: Option<GenerationLifecycleConfig>,
     pub(in crate::frontend) linear_proposal_ingress: Option<LinearProposalIngressConfig>,
@@ -85,7 +91,7 @@ pub(in crate::frontend) struct StageOpenAiBackend {
 
 #[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
-pub(in crate::frontend) enum OpenAiBackendMode {
+pub(in crate::frontend) enum InferenceBackendMode {
     LocalRuntime,
     EmbeddedStageZero {
         config: StageConfig,
@@ -98,7 +104,7 @@ pub(in crate::frontend) enum OpenAiBackendMode {
     },
 }
 
-impl OpenAiBackendMode {
+impl InferenceBackendMode {
     pub(in crate::frontend) const EMBEDDED_STAGE_ZERO_LABEL: &'static str = "embedded-stage0";
 
     pub(in crate::frontend) fn label(&self) -> &'static str {
@@ -158,7 +164,7 @@ pub(in crate::frontend) struct LocalGeneration<'a> {
     pub(in crate::frontend) hook_request: Option<ChatCompletionRequest>,
     pub(in crate::frontend) hook_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::frontend) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
-    pub(in crate::frontend) ids: &'a OpenAiGenerationIds,
+    pub(in crate::frontend) ids: &'a InferenceGenerationIds,
 }
 
 pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
@@ -183,7 +189,18 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) hook_request: Option<ChatCompletionRequest>,
     pub(in crate::frontend) hook_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::frontend) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
-    pub(in crate::frontend) ids: &'a OpenAiGenerationIds,
+    pub(in crate::frontend) ids: &'a InferenceGenerationIds,
+}
+
+impl EmbeddedStageZeroGeneration<'_> {
+    /// Draft depth to request of the final stage on decode and verify messages.
+    pub(in crate::frontend) fn native_mtp_draft_tokens(&self) -> usize {
+        if self.native_mtp_enabled {
+            self.speculative.native_mtp.max_draft_tokens
+        } else {
+            0
+        }
+    }
 }
 
 pub(in crate::frontend) struct SplitMultimodalGeneration<'a> {
@@ -192,7 +209,7 @@ pub(in crate::frontend) struct SplitMultimodalGeneration<'a> {
     pub(in crate::frontend) stop: Option<&'a skippy_inference_api::StopSequence>,
     pub(in crate::frontend) sampling: SamplingConfig,
     pub(in crate::frontend) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
-    pub(in crate::frontend) ids: OpenAiGenerationIds,
+    pub(in crate::frontend) ids: InferenceGenerationIds,
     pub(in crate::frontend) config: StageConfig,
     pub(in crate::frontend) activation_width: i32,
     pub(in crate::frontend) downstream_wire_condition: WireCondition,
@@ -247,7 +264,7 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) native_mtp_stats: NativeMtpStats,
     pub(in crate::frontend) native_mtp_decode_telemetry: Option<NativeMtpDecodeTelemetry>,
     pub(in crate::frontend) verify_window_pipeline_stats: Option<VerifyWindowPipelineStats>,
-    pub(in crate::frontend) speculative_stats: Option<OpenAiSpeculativeStats>,
+    pub(in crate::frontend) speculative_stats: Option<InferenceSpeculativeStats>,
     pub(in crate::frontend) prompt_ms: f64,
     pub(in crate::frontend) predicted_ms: f64,
     pub(in crate::frontend) queue_wait_ms: f64,
@@ -257,6 +274,23 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) detokenize_ms: f64,
     pub(in crate::frontend) text_emit_ms: f64,
     pub(in crate::frontend) eog_check_ms: f64,
+    /// One entry per completion token, when the request asked for logprobs.
+    pub(in crate::frontend) token_logprobs: Option<Vec<GeneratedTokenLogprob>>,
+}
+
+/// A completion token's log-probability and its alternatives, with their text.
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::frontend) struct GeneratedTokenLogprob {
+    pub(in crate::frontend) token: GeneratedLogprobCandidate,
+    pub(in crate::frontend) top: Vec<GeneratedLogprobCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::frontend) struct GeneratedLogprobCandidate {
+    pub(in crate::frontend) text: String,
+    pub(in crate::frontend) bytes: Vec<u8>,
+    /// `None` when the runtime could not read the logits row.
+    pub(in crate::frontend) logprob: Option<f32>,
 }
 
 impl GeneratedText {

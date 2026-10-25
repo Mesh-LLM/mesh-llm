@@ -362,7 +362,7 @@ async fn discover_hf_repo_for_bare_name(name: &str) -> Result<Option<String>> {
     Ok(select_strong_repo_hit(name, &repo_ids))
 }
 
-async fn canonicalize_model_ref_input(input: &str) -> Result<String> {
+pub(super) async fn canonicalize_model_ref_input(input: &str) -> Result<String> {
     if parse_exact_model_ref(input).is_ok() {
         return Ok(input.to_string());
     }

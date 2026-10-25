@@ -9,7 +9,7 @@ use crate::{
         StopSequence, StreamOptions, Usage, agent_session_metadata, agent_session_source_metadata,
         completion_id, now_unix_secs, set_agent_session_metadata,
     },
-    errors::OpenAiError,
+    errors::InferenceError,
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
@@ -71,48 +71,50 @@ impl ChatCompletionRequest {
             .unwrap_or(false)
     }
 
-    pub fn validate(&self) -> Result<(), OpenAiError> {
+    pub fn validate(&self) -> Result<(), InferenceError> {
         if self.model.trim().is_empty() {
-            return Err(OpenAiError::invalid_request("model is required"));
+            return Err(InferenceError::invalid_request("model is required"));
         }
         if self.messages.is_empty() {
-            return Err(OpenAiError::invalid_request("messages is required"));
+            return Err(InferenceError::invalid_request("messages is required"));
         }
         if matches!(self.max_tokens, Some(0)) || matches!(self.max_completion_tokens, Some(0)) {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "max_tokens must be greater than zero",
             ));
         }
         if self.n.is_some_and(|n| n == 0) {
-            return Err(OpenAiError::invalid_request("n must be greater than zero"));
+            return Err(InferenceError::invalid_request(
+                "n must be greater than zero",
+            ));
         }
         if self.n.is_some_and(|n| n > 1) {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "n > 1 is parsed but multiple choices are not yet implemented",
             ));
         }
         if self.top_logprobs.is_some() && !self.logprobs.unwrap_or(false) {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "top_logprobs requires logprobs=true",
             ));
         }
         if let Some(tools) = self.tools.as_ref() {
             validate_tools_value(tools)
-                .map_err(|message| OpenAiError::invalid_request(message).with_param("tools"))?;
+                .map_err(|message| InferenceError::invalid_request(message).with_param("tools"))?;
         }
         if self
             .response_format
             .as_ref()
             .is_some_and(invalid_response_format_value)
         {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "response_format must be an object with a type field",
             ));
         }
         let prompt_is_empty = messages_to_plain_prompt(&self.messages).trim().is_empty();
         let media_can_supply_prompt = crate::hooks::first_chat_media(&self.messages).is_some();
         if prompt_is_empty && !media_can_supply_prompt {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "messages produced an empty prompt",
             ));
         }
@@ -315,7 +317,7 @@ pub struct ChatCompletionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<BTreeMap<String, Value>>,
     /// Rung-ladder response-leg marker, minted by
-    /// [`crate::hooks::OpenAiHookPolicy::capsule_marker_for_response`]. Never
+    /// [`crate::hooks::InferenceHookPolicy::capsule_marker_for_response`]. Never
     /// serialized into the OpenAI-shaped JSON body — a real `X-Capsule-Id`
     /// rides as an HTTP response header, set from this field by the router's
     /// `frontend_lifecycle_middleware`, the same layer that already sets
@@ -323,7 +325,7 @@ pub struct ChatCompletionResponse {
     #[serde(skip)]
     pub capsule_marker: Option<CapsuleMarker>,
     /// The host-minted per-exchange id ([`crate::hooks::ChatExchangeRoute::exchange_id`]),
-    /// the same value [`crate::hooks::OpenAiHookPolicy::on_chat_completion_terminal`]
+    /// the same value [`crate::hooks::InferenceHookPolicy::on_chat_completion_terminal`]
     /// received for this exchange. Never serialized into the OpenAI-shaped
     /// JSON body — it rides as an `X-Exchange-Id` HTTP response header, set
     /// from this field by the router's `frontend_lifecycle_middleware`,
@@ -398,7 +400,7 @@ impl ChatCompletionResponse {
     /// need full control over those fields, unlike [`Self::new`]/
     /// [`Self::new_with_reason`], which always mint a fresh id and a single
     /// choice. `capsule_marker` always starts `None`; it is attached later,
-    /// by [`crate::hooks::HookedOpenAiBackend`]. Exists so a downstream
+    /// by [`crate::hooks::HookedInferenceBackend`]. Exists so a downstream
     /// crate that previously built this via struct literal has a
     /// `#[non_exhaustive]`-safe replacement.
     pub fn from_parts(

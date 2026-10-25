@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "ERROR: target directory must be a child of the workspace\n",
+  "stdout": ""
+}

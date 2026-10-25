@@ -1,5 +1,5 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
-use super::default_plugins::resolve_after_defaults;
+use super::failed_node_start::cleanup_failed_node_start;
 use super::join_sources;
 use super::plugin_host_role;
 use super::startup_identity::{emit_private_mesh_name_warning, handle_public_identity_transition};
@@ -45,7 +45,7 @@ use crate::runtime::{
 };
 use crate::system::{autoupdate, benchmark, hardware};
 use anyhow::{Context, Result};
-use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
+use mesh_llm_events::{LogFormat, OutputEvent, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
 use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
@@ -310,19 +310,10 @@ pub(super) async fn run_runtime_cli(
     })
     .await?;
 
-    // Finish the release check before startup continues.
-    if !checked_updates
-        && !options.command_is_update
-        && !options.command_uses_machine_output
-        && let Some(notice) = autoupdate::check_for_update(crate::BUILD_VERSION).await
-    {
-        let _ = emit_event(OutputEvent::Info {
-            message: notice.message,
-            context: None,
-        });
-    }
-
     let mut config = plugin::load_config(options.config.as_deref())?;
+
+    super::startup_update_check::announce_newer_release(&options, checked_updates, &config).await;
+
     let effective_mode = resolve_effective_mode(&options, config.runtime.mode);
     if let Err(error) = check_mode_conflicts(&options, explicit_surface, config.runtime.mode) {
         anyhow::bail!("mode conflict: {error}");
@@ -397,9 +388,13 @@ pub(super) async fn run_runtime_cli(
     handle_public_identity_transition(&options)?;
 
     let mut auto_join_candidates: Vec<(String, Option<String>)> = Vec::new();
+    let native_available = skippy_runtime::native_runtime_loaded();
+    if !native_available {
+        options.max_vram = Some(0.0);
+    }
     let auto_local_fit_gb = maybe_discover_join_candidates(
         &mut options,
-        has_startup_models,
+        has_startup_models || !native_available,
         &mut auto_join_candidates,
         config.gpu.host_ram_offload.unwrap_or(false),
     )
@@ -407,7 +402,7 @@ pub(super) async fn run_runtime_cli(
     maybe_select_small_auto_contribution(
         &mut options,
         effective_mode,
-        has_startup_models,
+        has_startup_models || !native_available,
         &auto_join_candidates,
         auto_local_fit_gb,
     );
@@ -777,10 +772,7 @@ pub(super) fn configure_run_auto_process_state(
     }
 
     let native_log_rx = skippy_runtime::register_filtered_native_logs();
-    configure_startup_lifecycle_log_parser(
-        config.runtime.lifecycle_log_parser,
-        config.runtime.lifecycle_log_parser_source.as_str(),
-    );
+    configure_startup_lifecycle_log_parser(config.runtime.lifecycle_log_parser_selection());
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));
@@ -909,7 +901,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
     if !options.headless && owner_config.keypair.is_none() {
         emit_configuration_ui_read_only_hint();
     }
-    let max_vram = if options.client {
+    let max_vram = if options.client || !skippy_runtime::native_runtime_loaded() {
         Some(0.0)
     } else {
         options.max_vram
@@ -951,10 +943,14 @@ pub(super) async fn start_run_auto_node_and_plugins(
         .iter()
         .any(|spec| spec.name == plugin::MOA_PLUGIN_ID)
     {
-        anyhow::bail!(
-            "Plugin name '{}' is reserved for the built-in MoA virtual model",
-            plugin::MOA_PLUGIN_ID
-        );
+        return Err(cleanup_failed_node_start(
+            &node,
+            anyhow::anyhow!(
+                "Plugin name '{}' is reserved for the built-in MoA virtual model",
+                plugin::MOA_PLUGIN_ID
+            ),
+        )
+        .await);
     }
     let mut moa_spec = plugin::in_process_builtin_spec(plugin::MOA_PLUGIN_ID);
     moa_spec.startup.optional = false;
@@ -966,16 +962,27 @@ pub(super) async fn start_run_auto_node_and_plugins(
     let moa_runner: plugin::InProcessPluginRunner =
         std::sync::Arc::new(|stream| Box::pin(mesh_llm_moa_plugin::run(stream)));
     let in_process = in_process.with(plugin::MOA_PLUGIN_ID, moa_runner);
-    let plugin_manager = plugin::PluginManager::start_with_in_process(
+    let plugin_manager = match plugin::PluginManager::start_with_in_process(
         &resolved_plugins,
         plugin_host_mode(options),
         plugin_mesh_tx,
         in_process,
     )
-    .await?;
+    .await
+    {
+        Ok(manager) => manager,
+        Err(error) => return Err(cleanup_failed_node_start(&node, error).await),
+    };
+    if let Err(error) =
+        crate::system::native_runtime_requirement::confirm_external_provider(&plugin_manager).await
+    {
+        plugin_manager.shutdown().await;
+        return Err(cleanup_failed_node_start(&node, error).await);
+    }
     crate::network::openai::virtual_model::install_inference_bridge(&plugin_manager, options.port)
         .await;
-    node.set_plugin_manager(plugin_manager.clone()).await;
+    node.install_plugin_manager_with_exchange_grants(plugin_manager.clone())
+        .await?;
     #[cfg(feature = "payments")]
     crate::network::payments::spawn_payment_recovery(&node).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
@@ -1107,7 +1114,7 @@ pub(super) fn start_relay_health_monitor_for_discovery_mode(
 }
 
 pub(super) fn run_auto_survey_hardware(is_client: bool) -> hardware::HardwareSurvey {
-    if is_client {
+    if is_client || !skippy_runtime::native_runtime_loaded() {
         hardware::HardwareSurvey::default()
     } else {
         hardware::query(&[
@@ -1136,7 +1143,7 @@ pub(super) async fn build_run_auto_node_setup(
     let console_port = Some(options.console);
     let is_client = options.client;
     let skippy_telemetry = skippy_telemetry_options(options);
-    let local_models = if is_client {
+    let local_models = if is_client || !skippy_runtime::native_runtime_loaded() {
         vec![]
     } else {
         models::scan_local_models()
@@ -1173,7 +1180,7 @@ pub(super) async fn build_run_auto_node_setup(
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
     let lan_bootstrap_tasks = spawn_mdns_reverse_dial(options, &node);
 
-    if !is_client {
+    if !is_client && skippy_runtime::native_runtime_loaded() {
         spawn_node_benchmark_task(&node, bin_dir);
         raise_open_file_limit();
     } else {
@@ -1339,7 +1346,6 @@ pub(super) struct RunAutoStartupTasksContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) config: &'a plugin::MeshConfig,
     pub(super) node: &'a mesh::Node,
-    pub(super) tunnel_mgr: &'a tunnel::Manager,
     pub(super) startup_models: &'a [StartupModelPlan],
     pub(super) primary_startup_model: Option<&'a StartupModelPlan>,
     pub(super) model_name: &'a str,
@@ -1401,7 +1407,6 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         options,
         config,
         node,
-        tunnel_mgr,
         startup_models,
         primary_startup_model,
         model_name,
@@ -1460,7 +1465,6 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_task = tokio::spawn(Box::pin(startup_local_model_loop(StartupLocalModelTask {
         node: node.clone(),
         config: config.clone(),
-        tunnel_mgr: tunnel_mgr.clone(),
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
         model_ref: primary_model_ref,
@@ -1530,7 +1534,6 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         options,
         config,
         node,
-        tunnel_mgr,
         startup_models,
         primary_model_name: model_name,
         target_tx,
@@ -1743,7 +1746,10 @@ async fn run_auto_inner(
     // legacy/profile-unaware request cannot bypass local-required policy in
     // that window. False entries deliberately clear stale in-process policy.
     register_pre_accept_local_source_policies(&config, &startup_specs);
-    let resolved_plugins = resolve_after_defaults(&config, &options).await?;
+    // The default plugins come from this release's bundled copy, never a
+    // download, and are installed before plugins are resolved.
+    super::default_plugins::provision_bundled_defaults_at_start(&config, &options);
+    let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(
         mesh_requirements = ?runtime_startup_requirements(&startup_mesh_creation_state),
@@ -1782,7 +1788,13 @@ async fn run_auto_inner(
         initial_run_auto_requested_models(&startup_specs, &requested_model_names);
     node.set_requested_models(initial_requested_models).await;
 
-    run_auto_join_mesh_phase(&mut options, &node, &auto_join_candidates).await?;
+    // On cancellation, continue to the lifecycle owner below so it can run
+    // the existing ordered cleanup for the node we have already created.
+    tokio::select! {
+        biased;
+        _ = crate::sdk::embedded_shutdown::cancelled() => {},
+        result = run_auto_join_mesh_phase(&mut options, &node, &auto_join_candidates) => result?,
+    }
 
     let affinity_router = affinity::AffinityRouter::new();
 
@@ -1813,7 +1825,6 @@ async fn run_auto_inner(
     // Serving hosts terminate inbound HTTP tunnel streams directly in the
     // shared OpenAI ingress. Client-only nodes remain unreachable as hosts.
     if !is_client {
-        tunnel_mgr.set_http_port(api_port);
         tunnel_mgr.set_http_ingress(target_rx.clone(), affinity_router.clone());
         plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
     }
@@ -1844,6 +1855,7 @@ async fn run_auto_inner(
         affinity_router: &affinity_router,
         control_tx: &control_tx,
         owner_key_path: &runtime_owner_key_path,
+        update_check: config.updates.check_enabled(),
     })
     .await?;
     publish_initial_openai_guardrails_status(
@@ -1900,18 +1912,7 @@ async fn run_auto_inner(
         config.runtime.startup_failure_policy,
     );
     if startup_specs.is_empty() {
-        let _ = emit_event(OutputEvent::PassiveMode {
-            role: if is_client { "client" } else { "standby" }.to_string(),
-            status: RuntimeStatus::Ready,
-            capacity_gb: (!is_client).then(|| node.vram_bytes() as f64 / 1e9),
-            models_on_disk: (!is_client).then_some(local_models),
-            detail: Some(if is_client {
-                "Client daemon ready; local model loading is disabled".to_string()
-            } else {
-                "Runtime daemon ready; no local models are loaded".to_string()
-            }),
-        });
-        record_runtime_operational_event(RuntimeOperationalEvent::Ready);
+        super::passive_readiness::emit_passive_ready(is_client, &node, local_models);
     }
 
     // Discovery publish loop (if --publish) or Nostr watchdog (if --auto, to take over if publisher dies).
@@ -1951,7 +1952,6 @@ async fn run_auto_inner(
         presentation_subscriber,
         runtime_event_driver,
         startup_specs: &startup_specs,
-        tunnel_mgr: &tunnel_mgr,
         skippy_telemetry: &skippy_telemetry,
         api_port,
         console_port,
@@ -2102,6 +2102,7 @@ mod tests {
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
                 allow_peer_blocks: None,
+                openai_exchange_grant: None,
                 command: Some("invalid-blobstore-command".to_owned()),
                 args: Vec::new(),
                 url: None,

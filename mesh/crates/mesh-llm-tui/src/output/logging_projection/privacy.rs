@@ -185,7 +185,9 @@ fn safe_param_key(key: &str) -> bool {
 }
 
 fn is_private_absolute_path(word: &str) -> bool {
-    word.starts_with('/')
+    // A bare `/` is the separator in text such as `runtime 0.76.1 / ABI 0.1.71`;
+    // revealing the filesystem root is no leak.
+    (word.starts_with('/') && word != "/")
         || word.to_ascii_lowercase().starts_with("file://")
         || is_windows_absolute_path(word)
         || word.contains(HOME_SENTINEL)
@@ -504,6 +506,22 @@ mod tests {
                 "startup failed at [REDACTED_PATH]"
             );
         }
+    }
+
+    #[test]
+    fn keeps_a_slash_separator_but_redacts_paths_next_to_it() {
+        assert_eq!(
+            sanitize_text("no runtime for Skippy runtime 0.76.1 / ABI 0.1.71"),
+            "no runtime for Skippy runtime 0.76.1 / ABI 0.1.71"
+        );
+        assert_eq!(
+            sanitize_text("copied / to /srv/private/model.gguf"),
+            "copied / to [REDACTED_PATH]"
+        );
+        assert_eq!(
+            sanitize_text("startup failed at (/home/operator/x)"),
+            "startup failed at ([REDACTED_PATH])"
+        );
     }
 
     #[test]

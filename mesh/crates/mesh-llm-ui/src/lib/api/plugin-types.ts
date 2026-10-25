@@ -79,6 +79,8 @@ export type PluginStartupSummaryRaw = {
 }
 
 export type PluginManifestOverviewRaw = {
+  readonly openai_exchange_body_access_requested?: boolean
+  readonly openai_exchange_status?: string
   readonly capabilities?: readonly string[]
   readonly web_ui?: PluginWebUiManifestOverviewRaw
   readonly [key: string]: unknown

@@ -1,0 +1,1 @@
+{"family":"dense","exit_code":0,"split_layer":10,"outcomes":[{"name":"chain","status":"fail","status":"pass","exit_code":0},{"name":"single-step","status":"pass","exit_code":0},{"name":"state-handoff","status":"pass","exit_code":0}]}

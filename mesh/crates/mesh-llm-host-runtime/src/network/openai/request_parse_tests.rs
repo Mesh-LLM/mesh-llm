@@ -87,6 +87,59 @@ fn raw_lifecycle_marker_requires_one_matching_canonical_request_id() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn stalled_request_headers_fail_after_the_read_deadline() {
+    // A client that sends part of its headers and then goes quiet must not
+    // hold the connection, and its task, open indefinitely (slowloris).
+    let (mut client, mut server) = tokio::io::duplex(1024);
+    client
+        .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n")
+        .await
+        .unwrap();
+
+    let read = tokio::time::timeout(
+        HTTP_HEADER_READ_TIMEOUT * 2,
+        read_http_request_with_limits(&mut server, HTTP_READ_LIMITS, None),
+    )
+    .await
+    .expect("a stalled request must fail within the header read deadline");
+    assert!(read.is_err());
+    drop(client);
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_request_bodies_fail_after_the_body_read_deadline() {
+    // Complete headers followed by a body that never arrives must not hold
+    // the connection open either.
+    for headers in [
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 100\r\n\r\n{",
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n{",
+    ] {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        client.write_all(headers.as_bytes()).await.unwrap();
+
+        let read = tokio::time::timeout(
+            HTTP_BODY_READ_GRACE * 2,
+            read_http_request_with_limits(&mut server, HTTP_READ_LIMITS, None),
+        )
+        .await
+        .expect("a stalled body must fail within the body read deadline");
+        assert!(read.is_err());
+        drop(client);
+    }
+}
+
+#[test]
+fn body_read_deadline_grows_with_the_bytes_received() {
+    let started = tokio::time::Instant::now();
+    let deadline = BodyReadDeadline::new(started);
+    assert_eq!(deadline.at(0), started + HTTP_BODY_READ_GRACE);
+    assert_eq!(
+        deadline.at(HTTP_BODY_MIN_BYTES_PER_SEC * 3),
+        started + HTTP_BODY_READ_GRACE + std::time::Duration::from_secs(3)
+    );
+}
+
 #[tokio::test]
 async fn parse_failures_expose_lifecycle_context_only_after_complete_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -368,6 +421,7 @@ fn public_model_alias_rewrites_request_to_internal_model_name() {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     rewrite_public_model_alias(&mut request, &models, &descriptors);
@@ -823,6 +877,7 @@ fn test_rewrite_model_field_updates_body_and_content_length() {
             request_object_request_ids: Vec::new(),
             response_adapter: ResponseAdapter::None,
             correlation_id: None,
+            exchange_observation_id: None,
         };
 
     rewrite_model_field(&mut request, "SmolLM2-135M-Instruct-Q8_0");
@@ -869,6 +924,7 @@ fn artifact_media_kind_is_closed_to_parsed_openai_json_routes() {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     assert_eq!(
@@ -1118,6 +1174,7 @@ fn request_with_raw(raw: &[u8]) -> BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 
@@ -1193,4 +1250,23 @@ fn mesh_routing_header_values_rejects_non_utf8_x_mesh_exclude() {
     raw.extend_from_slice(b"\r\n\r\n{}");
     let request = request_with_raw(&raw);
     assert!(request.mesh_routing_header_values().is_err());
+}
+
+#[tokio::test]
+async fn only_realtime_upgrades_keep_bytes_after_the_head() {
+    let realtime = read_request_from_parts(vec![
+        b"GET /v1/realtime?model=m HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n\x81\x05early".to_vec(),
+    ])
+    .await;
+    assert!(realtime.raw.ends_with(b"\r\n\r\n\x81\x05early"));
+
+    let other = read_request_from_parts(vec![
+        b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nUpgrade: x\r\nConnection: upgrade\r\n\r\n{\"model\":\"m\"}".to_vec(),
+    ])
+    .await;
+    assert!(
+        other.raw.ends_with(b"\r\n\r\n"),
+        "{:?}",
+        String::from_utf8_lossy(&other.raw)
+    );
 }

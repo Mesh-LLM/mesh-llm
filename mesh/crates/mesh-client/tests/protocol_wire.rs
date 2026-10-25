@@ -127,6 +127,8 @@ fn control_plane_bootstrap_uses_explicit_control_endpoint() {
 
 fn make_valid_gossip_frame() -> GossipFrame {
     GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
@@ -213,6 +215,8 @@ fn gossip_frame_roundtrip() {
 #[test]
 fn mesh_requirements_missing_optional_fields_remain_legacy_compatible() {
     let frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0x44; 32],
         peers: vec![PeerAnnouncement {
@@ -239,6 +243,8 @@ fn mesh_requirements_missing_optional_fields_remain_legacy_compatible() {
 #[test]
 fn mesh_requirements_gossip_roundtrip_preserves_policy_and_attestation_fields() {
     let frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0x44; 32],
         peers: vec![PeerAnnouncement {
@@ -345,6 +351,8 @@ fn gossip_frame_bad_generation_rejected() {
 #[test]
 fn gossip_subprotocol_discovery_roundtrip_and_validation() {
     let frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {

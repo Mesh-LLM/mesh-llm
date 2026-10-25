@@ -42,7 +42,7 @@ entry_prs() {
 # pull requests merged into a staging branch and rebased into the release is
 # credited once, to the roll-up. It only adds entries, which the gate below
 # enforces, and every one of its API calls is best-effort.
-python3 "$ROOT/scripts/release-notes-link.py" \
+cargo xtool release notes-link \
   --body "$WORKDIR/body.github.md" \
   --range "$BASE..$TAG" \
   --repo "$REPO" \
@@ -64,13 +64,13 @@ fi
 # with no entries at all. That is the case the link pass exists to repair, and
 # reading the published body first skipped it: v0.76.2 shipped with its only
 # fix, #1844, missing from the notes.
-if ! python3 "$ROOT/scripts/release-notes-classify.py" \
+if ! cargo xtool release notes-classify \
     --body "$WORKDIR/body.md" --has-entries; then
   echo "release-notes: no PR entries after the link pass; nothing to regroup"
   exit 0
 fi
 
-python3 "$ROOT/scripts/release-notes-classify.py" \
+cargo xtool release notes-classify \
   --body "$WORKDIR/body.md" \
   --range "$BASE..$TAG" \
   --version "$version" \
@@ -79,7 +79,7 @@ python3 "$ROOT/scripts/release-notes-classify.py" \
   --links "$WORKDIR/links.json" \
   --out "$WORKDIR/plan.deterministic.json"
 
-python3 "$ROOT/scripts/release-notes-regroup.py" \
+cargo xtool release notes-regroup \
   --body "$WORKDIR/body.md" \
   --plan "$WORKDIR/plan.deterministic.json" \
   --out "$WORKDIR/notes.deterministic.md"
@@ -133,8 +133,10 @@ agent_reachable() {
 }
 
 agent_review() {
-  python3 "$ROOT/scripts/release-notes-regroup.py" \
+  cargo xtool release notes-regroup \
     --body "$WORKDIR/body.md" --list > "$WORKDIR/entries.tsv" 2>/dev/null
+
+  rm -f "$WORKDIR/plan.agent.json" "$WORKDIR/notes.agent.md"
 
   local prompt
   prompt="$(cat <<PROMPT
@@ -171,7 +173,7 @@ PROMPT
   fi
   # Version and date come from the deterministic plan, never the agent's, and
   # the renderer rejects any section or heading text the agent invents.
-  if ! python3 "$ROOT/scripts/release-notes-regroup.py" \
+  if ! cargo xtool release notes-regroup \
       --body "$WORKDIR/body.md" --plan "$WORKDIR/plan.agent.json" \
       --metadata-from "$WORKDIR/plan.deterministic.json" \
       --out "$WORKDIR/notes.agent.md"; then

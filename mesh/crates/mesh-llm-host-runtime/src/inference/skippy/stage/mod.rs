@@ -201,7 +201,10 @@ impl StageControlState {
             .as_ref()
             .map(|source| source.layer_count)
             .unwrap_or(0);
-        let available_ranges = if source.is_some() && layer_count > 0 {
+        let available_ranges = if source.is_some()
+            && layer_count > 0
+            && crate::system::native_runtime_requirement::ensure_native_runtime_available().is_ok()
+        {
             vec![LayerRange {
                 layer_start: 0,
                 layer_end: layer_count,
@@ -265,6 +268,16 @@ impl StageControlState {
     }
 
     async fn load(&mut self, mut load: StageLoadRequest) -> Result<StageReadyResponse> {
+        if let Err(error) =
+            crate::system::native_runtime_requirement::ensure_native_runtime_available()
+        {
+            let error = error.to_string();
+            return Ok(StageReadyResponse {
+                accepted: false,
+                status: failed_status_from_load(&load, error.clone()),
+                error: Some(error),
+            });
+        }
         anyhow::ensure!(
             load.backend == "skippy",
             "unsupported stage backend '{}'",

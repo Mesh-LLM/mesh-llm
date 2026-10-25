@@ -146,6 +146,7 @@ pub(super) async fn unregister_runtime_instance(
         set_advertised_model_context(node, model_name, None).await;
         withdraw_advertised_model(node, model_name, "").await;
         remove_serving_assignment(node, model_name).await;
+        crate::inference::skippy::forget_local_thinking(model_name);
         true
     } else {
         if context_changed {

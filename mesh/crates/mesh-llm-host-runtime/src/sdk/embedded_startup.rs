@@ -112,6 +112,8 @@ mod tests {
     fn loaded_native_runtime_allows_embedded_serve() {
         ensure_embedded_native_runtime_ready(&EmbeddedMeshNodeMode::Serve, true, requirement())
             .expect("loaded runtime should allow embedded serving");
+        ensure_embedded_native_runtime_ready(&EmbeddedMeshNodeMode::ServeOnly, true, requirement())
+            .expect("loaded runtime should allow serve-only embedding");
     }
 
     #[test]

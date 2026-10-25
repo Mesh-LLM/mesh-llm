@@ -187,6 +187,60 @@ impl Drop for EnvVarGuard {
     }
 }
 
+#[tokio::test]
+async fn discover_name_names_the_mesh_when_a_join_token_picks_it() {
+    let mut options = make_runtime_cli(&["client", "--discover=t3", "--join", "tok-a"]);
+    let mut candidates = Vec::new();
+
+    let fit = super::super::auto_join::maybe_discover_join_candidates(
+        &mut options,
+        false,
+        &mut candidates,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(fit, None, "a join token skips discovery");
+    assert!(candidates.is_empty());
+    assert_eq!(options.mesh_name.as_deref(), Some("t3"));
+}
+
+#[tokio::test]
+async fn explicit_mesh_name_wins_over_discover_name_with_a_join_token() {
+    let mut options = make_runtime_cli(&[
+        "client",
+        "--mesh-name",
+        "named",
+        "--discover=t3",
+        "--join",
+        "tok-a",
+    ]);
+    super::super::auto_join::maybe_discover_join_candidates(
+        &mut options,
+        false,
+        &mut Vec::new(),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(options.mesh_name.as_deref(), Some("named"));
+
+    let mut bare = make_runtime_cli(&["client", "--discover", "--join", "tok-a"]);
+    super::super::auto_join::maybe_discover_join_candidates(
+        &mut bare,
+        false,
+        &mut Vec::new(),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        bare.mesh_name, None,
+        "a bare --discover has no name to give"
+    );
+}
+
 #[test]
 fn mesh_name_does_not_force_publish() {
     let options = make_cli(&[

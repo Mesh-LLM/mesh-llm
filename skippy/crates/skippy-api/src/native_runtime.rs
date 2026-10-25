@@ -9,6 +9,22 @@ use skippy_runtime_install::{
     host_runtime_profile,
 };
 
+/// Fail closed when a path that requires an executing native runtime is entered
+/// without one loaded.
+///
+/// Local model, metadata, split-stage, and native stage-planning loads must not
+/// reach the FFI boundary when no native runtime is available. Statically
+/// linked builds always report a loaded runtime here, so the guard is inert for
+/// them.
+pub(crate) fn ensure_native_runtime_available() -> Result<()> {
+    if !skippy_runtime::native_runtime_loaded() {
+        anyhow::bail!(
+            "Local model and split-stage loading require a MeshLLM native runtime; run `mesh-llm runtime install` and restart this node"
+        );
+    }
+    Ok(())
+}
+
 /// Explicit native runtime selection supplied by the embedding application.
 #[derive(Clone, Debug, Default)]
 pub struct NativeRuntimeOptions {

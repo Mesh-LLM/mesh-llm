@@ -893,9 +893,11 @@ impl Node {
         protocol: ControlProtocol,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         let node = self.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             if let Err(error) = node
                 .handle_gossip_stream(remote, protocol, send, recv)
                 .await
@@ -928,20 +930,23 @@ impl Node {
         protocol: ControlProtocol,
         send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         let node = self.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             if protocol == ControlProtocol::ProtoV1 {
-                let proto_buf = match read_len_prefixed(&mut recv).await {
-                    Ok(buf) => buf,
-                    Err(error) => {
-                        tracing::warn!(
-                            "Route request: failed to read proto body — rejecting: {error}"
-                        );
-                        node.capture_route_request(remote, protocol, "read_error");
-                        return;
-                    }
-                };
+                let proto_buf =
+                    match super::pre_admission::read_pre_admission_frame(&mut recv).await {
+                        Ok(buf) => buf,
+                        Err(error) => {
+                            tracing::warn!(
+                                "Route request: failed to read proto body — rejecting: {error}"
+                            );
+                            node.capture_route_request(remote, protocol, "read_error");
+                            return;
+                        }
+                    };
                 let req = match crate::proto::node::RouteTableRequest::decode(proto_buf.as_slice())
                 {
                     Ok(request) => request,
@@ -1090,11 +1095,14 @@ impl Node {
         stream_type: u8,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         match stream_type {
-            STREAM_GOSSIP => self.spawn_gossip_stream(remote, protocol, send, recv),
+            STREAM_GOSSIP => self.spawn_gossip_stream(remote, protocol, send, recv, slot),
             STREAM_TUNNEL_MAP => self.spawn_tunnel_map_stream(remote, protocol, recv),
-            STREAM_ROUTE_REQUEST => self.spawn_route_request_stream(remote, protocol, send, recv),
+            STREAM_ROUTE_REQUEST => {
+                self.spawn_route_request_stream(remote, protocol, send, recv, slot)
+            }
             STREAM_PEER_DOWN => self.spawn_peer_down_stream(remote, recv),
             STREAM_PEER_LEAVING => self.spawn_peer_leaving_stream(remote, recv),
             STREAM_DIRECT_PATH_REQUEST => self.spawn_direct_path_request_stream(remote, recv),

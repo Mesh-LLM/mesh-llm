@@ -46,7 +46,7 @@ impl PluginRpcBridge for CompletionRecorder {
 }
 
 /// Track request-owned blobs through ingress rejection and assert cleanup ownership.
-async fn rejected_request_releases_objects(model: &str, media: bool) {
+async fn rejected_request_releases_objects(model: &str, media: bool, required_hook: bool) {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
         .await
         .unwrap();
@@ -60,6 +60,28 @@ async fn rejected_request_releases_objects(model: &str, media: bool) {
         available: true,
         detail: None,
     }]);
+    if required_hook {
+        manager
+            .apply_exchange_grants(&crate::plugin::MeshConfig {
+                plugins: vec![
+                    serde_json::from_value(serde_json::json!({
+                        "name":"unavailable-required-observer",
+                        "openai_exchange_grant": {
+                            "endpoints":["chat_completions"],
+                        "phases":["request_received"],
+                        "failure_policy":"required",
+                        "deadline_ms":100,
+                        "max_body_bytes":1024,
+                        "max_queue_bytes":1024,
+                        "max_in_flight":1
+                        }
+                    }))
+                    .unwrap(),
+                ],
+                ..Default::default()
+            })
+            .await;
+    }
     node.set_plugin_manager(manager.clone()).await;
     let mut targets = election::ModelTargets::default();
     targets.targets.insert(
@@ -79,7 +101,7 @@ async fn rejected_request_releases_objects(model: &str, media: bool) {
         ..Default::default()
     }])
     .await;
-    let path = if media {
+    let path = if media || required_hook {
         "/v1/chat/completions"
     } else {
         "/v1/embeddings"
@@ -123,7 +145,12 @@ async fn rejected_request_releases_objects(model: &str, media: bool) {
     let mut response = String::new();
     client.read_to_string(&mut response).await.unwrap();
     handler.await.unwrap();
-    assert!(response.starts_with("HTTP/1.1 422"), "{response}");
+    let expected_status = if required_hook {
+        "HTTP/1.1 503"
+    } else {
+        "HTTP/1.1 422"
+    };
+    assert!(response.starts_with(expected_status), "{response}");
     assert_eq!(*recorder.0.lock().unwrap(), ["upload-a", "upload-b"]);
 }
 
@@ -133,9 +160,19 @@ async fn workload_and_media_rejections_complete_each_request_object_once() {
     for (model, media) in [("text-only", false), ("auto", false), ("auto", true)] {
         tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            rejected_request_releases_objects(model, media),
+            rejected_request_releases_objects(model, media, false),
         )
         .await
         .expect("rejected ingress must complete");
     }
+}
+
+#[tokio::test]
+async fn required_hook_admission_failure_completes_each_request_object_once() {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        rejected_request_releases_objects("text-only", false, true),
+    )
+    .await
+    .expect("required-hook rejection must complete");
 }

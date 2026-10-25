@@ -15,16 +15,7 @@ ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
 PRECOMPOSED_PRODUCT_DIR="${MESH_LLM_PRECOMPOSED_PRODUCT_DIR:-}"
 ATTESTATION_PREVERIFIED="${MESH_RELEASE_ATTESTATION_PREVERIFIED:-0}"
 
-python_bin() {
-    if command -v python3 >/dev/null 2>&1; then
-        echo python3
-    elif command -v python >/dev/null 2>&1; then
-        echo python
-    else
-        echo "python3 or python is required for packaging" >&2
-        exit 1
-    fi
-}
+source "$SCRIPT_DIR/lib/automation.sh"
 
 release_os_name() {
     if [[ -n "${MESH_RELEASE_OS:-}" ]]; then
@@ -112,53 +103,28 @@ create_archive() {
     local source_dir="$1"
     local archive_path="$2"
     local archive_kind="$3"
-    local py
-    py="$(python_bin)"
+    if [[ "$archive_path" != /* ]]; then
+        archive_path="$PWD/$archive_path"
+    fi
+    mesh_automation product archive-write "$source_dir" "$archive_path" "$archive_kind"
+}
 
-    rm -f "$archive_path"
-    mkdir -p "$(dirname "$archive_path")"
-
-    "$py" - "$source_dir" "$archive_path" "$archive_kind" <<'PY'
-import os
-import sys
-import tarfile
-import zipfile
-
-source_dir, archive_path, archive_kind = sys.argv[1:4]
-base = os.path.basename(os.path.normpath(source_dir))
-root = os.path.dirname(os.path.normpath(source_dir))
-
-if archive_kind == "tar.gz":
-    with tarfile.open(archive_path, "w:gz") as tf:
-        tf.add(source_dir, arcname=base)
-elif archive_kind == "zip":
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for current_root, dirs, files in os.walk(source_dir):
-            dirs.sort()
-            files.sort()
-            rel_root = os.path.relpath(current_root, root)
-            if rel_root != ".":
-                zf.write(current_root, rel_root)
-            for filename in files:
-                path = os.path.join(current_root, filename)
-                rel = os.path.relpath(path, root)
-                zf.write(path, rel)
-else:
-    raise SystemExit(f"unsupported archive kind: {archive_kind}")
-PY
+sha256_hex() {
+    local file="$1"
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print tolower($1)}'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print tolower($1)}'
+    else
+        echo "shasum or sha256sum is required to hash release files" >&2
+        exit 1
+    fi
 }
 
 write_checksum_sidecar() {
     local file="$1"
     local digest
-    if command -v shasum >/dev/null 2>&1; then
-        digest="$(shasum -a 256 "$file" | awk '{print tolower($1)}')"
-    elif command -v sha256sum >/dev/null 2>&1; then
-        digest="$(sha256sum "$file" | awk '{print tolower($1)}')"
-    else
-        echo "shasum or sha256sum is required to write checksum sidecars" >&2
-        exit 1
-    fi
+    digest="$(sha256_hex "$file")"
     printf '%s  %s\n' "$digest" "$(basename "$file")" > "$file.sha256"
 }
 
@@ -172,7 +138,7 @@ select_native_runtime_dir() {
     cuda_version="${MESH_CUDA_VERSION:-}"
     cuda_major="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-${cuda_version%%.*}}"
 
-    "$(python_bin)" "$SCRIPT_DIR/select-native-runtime.py" \
+    mesh_automation native select-runtime \
         --root "$NATIVE_RUNTIME_ROOT" \
         --os "${platform%%/*}" \
         --arch "${platform#*/}" \
@@ -187,7 +153,7 @@ write_product_manifest() {
     local version="$4"
     local flavor="$5"
 
-    "$(python_bin)" "$SCRIPT_DIR/compose-product-bundle.py" \
+    mesh_automation product compose \
         --bundle "$bundle_dir" \
         --host "$host_path" \
         --runtime "$runtime_path" \
@@ -226,7 +192,6 @@ stamp_bundle_binary() {
     local binary_path="$1"
     local inspect_json
     local inspect_status
-    local py
 
     if [[ "${MESH_RELEASE_HOST_PRESTAMPED:-0}" == "1" ]]; then
         if [[ -z "$ATTESTATION_PUBLIC_KEY_FILE" || ! -s "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
@@ -239,12 +204,12 @@ stamp_bundle_binary() {
         fi
         inspect_json="$(
             cd "$REPO_ROOT"
-            cargo run -q -p xtask -- release-attestation inspect \
+            mesh_automation release-attestation inspect \
                 --binary "$binary_path" \
                 --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" \
                 --json
         )"
-        inspect_status="$(printf '%s' "$inspect_json" | "$(python_bin)" -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+        inspect_status="$(printf '%s' "$inspect_json" | mesh_automation product attestation-status)"
         if [[ "$inspect_status" != "valid" ]]; then
             echo "pre-stamped release host is not valid: $binary_path ($inspect_status)" >&2
             exit 1
@@ -268,21 +233,19 @@ stamp_bundle_binary() {
         return 0
     fi
 
-    py="$(python_bin)"
-
     inspect_json="$(
         cd "$REPO_ROOT"
-        cargo run -q -p xtask -- release-attestation stamp \
+        mesh_automation release-attestation stamp \
             --binary "$binary_path" \
             --signing-key-file "$ATTESTATION_SIGNING_KEY_FILE" \
             >/dev/null
-        cargo run -q -p xtask -- release-attestation inspect \
+        mesh_automation release-attestation inspect \
             --binary "$binary_path" \
             --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" \
             --json
     )"
     printf '%s\n' "$inspect_json"
-    inspect_status="$(printf '%s' "$inspect_json" | "$py" -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+    inspect_status="$(printf '%s' "$inspect_json" | mesh_automation product attestation-status)"
     if [[ "$inspect_status" != "valid" ]]; then
         echo "release-attestation inspect reported status '$inspect_status' for $binary_path" >&2
         exit 1
@@ -444,6 +407,8 @@ resolve_release_target() {
     esac
 
     STABLE_ASSET="$(printf 'mesh-llm-%s%s.%s\n' "$TARGET_TRIPLE" "$(flavor_suffix "$effective_flavor")" "$ARCHIVE_EXT")"
+    # Plugins are built per target, not per backend flavor.
+    PLUGIN_TARGET_TRIPLE="$TARGET_TRIPLE"
     TARGET_TRIPLE="${TARGET_TRIPLE}$(flavor_suffix "$effective_flavor")"
 
     return 0
@@ -508,7 +473,7 @@ copy_and_verify_precomposed_product() {
 
     stamp_bundle_binary "$bundle_binary"
     verify_mesh_binary_version "$bundle_binary" "$version"
-    "$(python_bin)" "$SCRIPT_DIR/verify-host-dependencies.py" \
+    mesh_automation native verify-host-dependencies \
         "$bundle_binary" \
         --report "$verification_report"
 
@@ -528,13 +493,77 @@ copy_and_verify_precomposed_product() {
         exit 1
     fi
     "$SCRIPT_DIR/verify-native-runtime-package.sh" "$runtime_dir"
-    "$(python_bin)" "$SCRIPT_DIR/compose-product-bundle.py" \
+    mesh_automation product compose \
         --bundle "$bundle_dir" \
         --host "$bundle_binary" \
         --runtime "$runtime_dir" \
         --version "$version" \
         --backend "$flavor" \
         --check
+}
+
+# Place the default plugins this release bundles under plugins/ beside the
+# host, where a node installs its defaults from. Each one is the archive its
+# own release published, at the version and SHA-256 pinned in
+# mesh-llm-plugin-manager's DEFAULT_PLUGINS; `repository bundled-plugins`
+# lists the ones pinned for this target and where to fetch them.
+# MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR names a directory that already holds the
+# archives, for offline or local runs; they are checked against the pins all
+# the same. A missing archive or a digest mismatch fails the release. The
+# bundle's own host must then install every placed archive as a default and
+# report no default it pins for this platform as missing, even when nothing
+# was listed; it runs on this machine, as verify_mesh_binary_version already
+# requires.
+place_bundled_plugins() {
+    local bundle_dir="$1"
+    local target="$2"
+    local input_dir="${MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR:-}"
+    local plugins_dir="$bundle_dir/plugins"
+    local pins
+    local name
+    local version
+    local pinned_sha256
+    local url
+    local archive_name
+    local archive
+    local actual_sha256
+
+    pins="$(
+        mesh_automation repository bundled-plugins \
+            --target "$target" \
+            --defaults "$REPO_ROOT/mesh/crates/mesh-llm-plugin-manager/src/defaults.rs"
+    )"
+    if [[ -z "$pins" ]]; then
+        # No plugins/ at all, not an empty one; the check below still asks
+        # the host whether it pins a default for this platform.
+        echo "No default plugin is pinned for $target; bundling none"
+    else
+        mkdir -p "$plugins_dir"
+        while read -r name version pinned_sha256 url; do
+            archive_name="$name-$version-$target.tar.gz"
+            archive="$plugins_dir/$archive_name"
+            if [[ -n "$input_dir" ]]; then
+                if [[ ! -f "$input_dir/$archive_name" ]]; then
+                    echo "Bundled plugin archive is missing: $input_dir/$archive_name" >&2
+                    exit 1
+                fi
+                cp "$input_dir/$archive_name" "$archive"
+            elif ! curl --fail --location --silent --show-error \
+                --proto '=https' --proto-redir '=https' \
+                --retry 3 --retry-delay 2 --connect-timeout 30 \
+                --output "$archive" "$url"; then
+                echo "Could not download bundled plugin archive $url" >&2
+                exit 1
+            fi
+            actual_sha256="$(sha256_hex "$archive")"
+            if [[ "$actual_sha256" != "$pinned_sha256" ]]; then
+                echo "Bundled plugin archive $archive_name is $actual_sha256, not the pinned $pinned_sha256" >&2
+                exit 1
+            fi
+            echo "Bundled default plugin $name $version ($archive_name)"
+        done <<< "$pins"
+    fi
+    mesh_automation repository bundled-plugins-check --bundle "$bundle_dir"
 }
 
 main() {
@@ -584,7 +613,7 @@ main() {
 
         stamp_bundle_binary "$bundle_binary"
         verify_mesh_binary_version "$bundle_binary" "$version"
-        "$(python_bin)" "$SCRIPT_DIR/verify-host-dependencies.py" \
+        mesh_automation native verify-host-dependencies \
             "$bundle_binary" \
             --report "$bundle_dir/host-imports.json"
 
@@ -600,10 +629,10 @@ main() {
             "$(effective_release_flavor)"
     fi
 
+    place_bundled_plugins "$bundle_dir" "$PLUGIN_TARGET_TRIPLE"
+
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
-    write_checksum_sidecar "$output_dir/$versioned_asset"
     create_archive "$bundle_dir" "$output_dir/$STABLE_ASSET" "$ARCHIVE_EXT"
-    write_checksum_sidecar "$output_dir/$STABLE_ASSET"
 
     echo "Created release archives:"
     find "$output_dir" -maxdepth 1 -type f -print | sort

@@ -295,22 +295,7 @@ fn parse_failure_family(
     if explicit_surface.is_some() {
         return CliCommandFamily::Runtime;
     }
-    let value_taking_options: Vec<String> = mesh_llm_cli::Cli::command()
-        .get_arguments()
-        .filter(|argument| {
-            matches!(
-                argument.get_action(),
-                clap::ArgAction::Set | clap::ArgAction::Append
-            )
-        })
-        .flat_map(|argument| {
-            argument
-                .get_long()
-                .map(|long| format!("--{long}"))
-                .into_iter()
-                .chain(argument.get_short().map(|short| format!("-{short}")))
-        })
-        .collect();
+    let value_taking_options = mesh_llm_cli::parser::value_taking_option_names();
     let is_value_taking_option =
         |argument: &str| value_taking_options.iter().any(|option| option == argument);
     let mut skip_next = false;
@@ -400,22 +385,7 @@ where
     let args: Vec<_> = args.into_iter().collect();
     let has_help_flag = args.iter().any(|arg| arg == "--help" || arg == "-h");
 
-    let value_taking_options: Vec<String> = mesh_llm_cli::Cli::command()
-        .get_arguments()
-        .filter(|argument| {
-            matches!(
-                argument.get_action(),
-                clap::ArgAction::Set | clap::ArgAction::Append
-            )
-        })
-        .flat_map(|argument| {
-            argument
-                .get_long()
-                .map(|long| format!("--{long}"))
-                .into_iter()
-                .chain(argument.get_short().map(|short| format!("-{short}")))
-        })
-        .collect();
+    let value_taking_options = mesh_llm_cli::parser::value_taking_option_names();
     let is_value_taking_option =
         |argument: &str| value_taking_options.iter().any(|option| option == argument);
 
@@ -603,7 +573,14 @@ fn speculative_overrides_from_cli(
     overrides.verify_window_min_tokens = cli.speculative_verify_window_min_tokens;
     overrides.verify_window_max_tokens = cli.speculative_verify_window_max_tokens;
     overrides.verify_window_pipeline_depth = cli.speculative_verify_window_pipeline_depth;
-    overrides.verify_window_runahead_tokens = cli.speculative_verify_window_runahead_tokens;
+    // The flag stays a number. It is a mechanism override — "use exactly this
+    // budget" — and the whole point of an override is to assert a value. `auto`
+    // is the absence of an assertion, so it is reachable through the config file
+    // and through `--strategy interactive`, which is what composes it.
+    overrides.verify_window_runahead_tokens =
+        cli.speculative_verify_window_runahead_tokens.map(|tokens| {
+            mesh_llm_host_runtime::sdk::config::IntegerOrString::Integer(i64::from(tokens))
+        });
     overrides.ngram_fallback = cli
         .speculative_ngram_fallback
         .map(|fallback| fallback.as_str().to_string());

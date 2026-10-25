@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 mod control_behavior;
 #[cfg(test)]
+mod exchange_tests;
+#[cfg(test)]
 mod exemplar_tests;
 mod web_ui;
 
@@ -36,6 +38,7 @@ pub enum ManifestEntry {
     MeshChannel(proto::MeshChannelManifest),
     MeshEventSubscription(proto::MeshEventSubscriptionManifest),
     WebUi(proto::PluginWebUiManifest),
+    OpenAiExchangeHook(proto::OpenAiExchangeHookManifest),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -82,6 +85,9 @@ impl PluginManifestBuilder {
                 self.manifest.mesh_event_subscriptions.push(subscription);
             }
             ManifestEntry::WebUi(web_ui) => self.manifest.web_ui = Some(web_ui),
+            ManifestEntry::OpenAiExchangeHook(hook) => {
+                self.manifest.openai_exchange_hook = Some(Box::new(hook))
+            }
         }
     }
 }
@@ -345,6 +351,8 @@ struct PackagedPluginManifest {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     config_schema: Option<PackagedPluginConfigSchema>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    openai_exchange_hook: Option<proto::OpenAiExchangeHookManifest>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     web_ui: Option<PackagedPluginWebUi>,
 }
 
@@ -363,7 +371,11 @@ impl TryFrom<&proto::PluginManifest> for PackagedPluginManifest {
             .map(PackagedPluginWebUi::try_from)
             .transpose()?;
 
+        if let Some(hook) = &value.openai_exchange_hook {
+            crate::openai_exchange::validate_openai_exchange_manifest(hook)?;
+        }
         Ok(Self {
+            openai_exchange_hook: value.openai_exchange_hook.as_deref().cloned(),
             config_schema,
             web_ui,
         })

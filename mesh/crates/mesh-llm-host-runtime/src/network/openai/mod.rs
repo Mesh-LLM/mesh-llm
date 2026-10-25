@@ -2,6 +2,7 @@ pub(crate) mod accept;
 pub(crate) mod auto_route;
 pub(crate) mod automatic;
 pub(crate) mod client_stream;
+mod exchange_admission;
 mod forwarded_request;
 pub(crate) mod ingress;
 mod model_names;
@@ -30,5 +31,5 @@ mod payment_routing;
 pub(crate) use response::payment_recovery;
 
 #[cfg(all(test, feature = "payments"))]
-pub(crate) use response::paid::exchange as test_payment_exchange;
+pub(crate) use response::paid::start as test_metered_start;
 mod workload_routing;

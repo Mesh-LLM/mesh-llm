@@ -173,6 +173,7 @@ impl Scenario {
             edges,
             activation_frame_bytes: self.model.activation_frame_bytes,
             auto_balance: false,
+            placement_objective: Default::default(),
         }
     }
 

@@ -19,7 +19,7 @@ pub(crate) use mesh_llm_control_api::status::metrics::{
 };
 pub(crate) use mesh_llm_control_api::status::runtime::*;
 use serde::Serialize;
-use skippy_serving::OpenAiGuardrailsStatus;
+use skippy_serving::InferenceGuardrailsStatus;
 
 pub(crate) fn current_runtime_events_summary() -> Option<RuntimeEventsStatusSummary> {
     let engine = crate::runtime_events::runtime_event_engine()?;
@@ -94,6 +94,49 @@ pub(crate) struct RuntimeStatusPayload {
     /// Reducer-derived runtime-event summary. Optional for backward compatibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) runtime_events: Option<RuntimeEventsStatusSummary>,
+    /// What `--strategy` composed, and what it declined to. Absent when no
+    /// strategy was named, which is itself the answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) serving_strategy: Option<ServingStrategyPayload>,
+}
+
+/// The resolved serving strategy, as the console and `doctor split` show it.
+///
+/// `declined` is as important as `applied`: an operator who set one flag by
+/// hand should be able to see that it survived the strategy rather than guess.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct ServingStrategyPayload {
+    pub(crate) strategy: &'static str,
+    pub(crate) applied: Vec<ServingStrategyAxisPayload>,
+    pub(crate) declined: Vec<ServingStrategyAxisPayload>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct ServingStrategyAxisPayload {
+    pub(crate) axis: &'static str,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub(crate) value: String,
+    pub(crate) because: &'static str,
+}
+
+pub(crate) fn build_serving_strategy_payload() -> Option<ServingStrategyPayload> {
+    let plan = crate::runtime::serving_strategy::resolved_plan()?;
+    let strategy = plan.strategy?;
+    let axes = |decisions: Vec<crate::runtime::serving_strategy::StrategyDecision>| {
+        decisions
+            .into_iter()
+            .map(|decision| ServingStrategyAxisPayload {
+                axis: decision.axis,
+                value: decision.value,
+                because: decision.because,
+            })
+            .collect()
+    };
+    Some(ServingStrategyPayload {
+        strategy,
+        applied: axes(plan.applied),
+        declined: axes(plan.declined),
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -108,8 +151,8 @@ pub(crate) struct OpenAiGuardrailsPayload {
     pub(crate) max_structured_retries: u8,
 }
 
-impl From<OpenAiGuardrailsStatus> for OpenAiGuardrailsPayload {
-    fn from(value: OpenAiGuardrailsStatus) -> Self {
+impl From<InferenceGuardrailsStatus> for OpenAiGuardrailsPayload {
+    fn from(value: InferenceGuardrailsStatus) -> Self {
         Self {
             mode: value.mode,
             target: value.target,
@@ -724,6 +767,7 @@ pub(crate) fn build_runtime_status_payload(
         lifecycle_instances: vec![],
         intent_summary: None,
         runtime_events: current_runtime_events_summary(),
+        serving_strategy: build_serving_strategy_payload(),
     }
 }
 
@@ -979,6 +1023,7 @@ mod tests {
                 lifecycle_instances: vec![],
                 intent_summary: None,
                 runtime_events: None,
+                serving_strategy: None,
             },
             model_name: "Qwen".to_string(),
             models: vec![],
@@ -1053,6 +1098,7 @@ mod tests {
                 lifecycle_instances: vec![],
                 intent_summary: None,
                 runtime_events: None,
+                serving_strategy: None,
             },
             model_name: "Qwen".to_string(),
             models: vec!["Qwen".to_string()],
@@ -1120,6 +1166,7 @@ mod tests {
                 lifecycle_instances: vec![],
                 intent_summary: None,
                 runtime_events: None,
+                serving_strategy: None,
             },
             model_name: String::new(),
             models: vec![],
@@ -1196,6 +1243,7 @@ mod tests {
                 lifecycle_instances: vec![],
                 intent_summary: None,
                 runtime_events: None,
+                serving_strategy: None,
             },
             model_name: String::new(),
             models: vec![],
@@ -1277,7 +1325,7 @@ mod tests {
         let payload = build_runtime_status_payload(
             "Qwen-Test",
             Some("skippy".to_string()),
-            Some(OpenAiGuardrailsPayload::from(OpenAiGuardrailsStatus {
+            Some(OpenAiGuardrailsPayload::from(InferenceGuardrailsStatus {
                 mode: "metrics",
                 target: "skippy",
                 streaming: "pass_through",
@@ -1344,7 +1392,7 @@ mod tests {
         let payload = build_runtime_status_payload(
             "Qwen-Test",
             Some("skippy".to_string()),
-            Some(OpenAiGuardrailsPayload::from(OpenAiGuardrailsStatus {
+            Some(OpenAiGuardrailsPayload::from(InferenceGuardrailsStatus {
                 mode: "disabled",
                 target: "skippy",
                 streaming: "pass_through",

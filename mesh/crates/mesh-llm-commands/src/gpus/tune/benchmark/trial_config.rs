@@ -41,6 +41,7 @@ pub(crate) fn apply_trial_runtime_config(
     if config.runtime.native_runtime.mesh_version.is_some()
         || config.runtime.native_runtime.skippy_abi.is_some()
         || config.runtime.native_runtime.selection.is_some()
+        || config.runtime.native_runtime.download.is_some()
     {
         let native_runtime = ensure_trial_subtable(runtime, "native_runtime")?;
 
@@ -52,6 +53,9 @@ pub(crate) fn apply_trial_runtime_config(
         }
         if let Some(selection) = config.runtime.native_runtime.selection.as_deref() {
             native_runtime["selection"] = toml_edit::value(selection);
+        }
+        if let Some(download) = config.runtime.native_runtime.download {
+            native_runtime["download"] = toml_edit::value(download);
         }
     }
 

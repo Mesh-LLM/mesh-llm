@@ -1,0 +1,7 @@
+{
+  "code": 1,
+  "github_output": null,
+  "stats": null,
+  "stderr": "ERROR: artifact name must contain only letters, numbers, dots, underscores, and hyphens\n",
+  "stdout": ""
+}

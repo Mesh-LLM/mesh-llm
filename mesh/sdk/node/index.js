@@ -55,69 +55,21 @@ function nativeAddonName() {
 const native = loadNativeAddon()
 nativeRuntime.configureNativeRuntimeBinding(native)
 
-class Client {
-  constructor(handle) {
-    this._handle = handle
-    this.inference = new Inference(handle)
-  }
-
-  static create(options) {
-    const handle = native.Node.create(
-      options.ownerKeypairHex,
-      options.inviteToken,
-      null,
-      null,
-      false
-    )
-    return new Client(handle)
-  }
-
-  start() {
-    return this._handle.start()
-  }
-
-  stop() {
-    return this._handle.stop()
-  }
-
-  reconnect() {
-    return this._handle.reconnect()
-  }
-
-  async status() {
-    return parse(await this._handle.statusJson())
-  }
-}
-
-class Console {
-  constructor(handle) {
-    this._handle = handle
-  }
-
-  get url() {
-    return this._handle.url
-  }
-
-  stop() {
-    return this._handle.stop()
-  }
-}
-
 class Node {
   constructor(handle) {
     this._handle = handle
     this.inference = new Inference(handle)
-    this.models = new Models(handle)
-    this.serving = new Serving(handle)
   }
 
-  static create(options) {
+  static create(options = {}) {
     const handle = native.Node.create(
-      options.ownerKeypairHex,
-      options.inviteToken,
-      options.cacheDir || null,
-      options.runtimeDir || null,
-      options.servingEnabled === true
+      options.mode || 'client',
+      options.joinTokens || [],
+      options.models || [],
+      options.autoJoin === true,
+      options.ownerKeyPath || null,
+      options.apiPort ?? 9337,
+      options.consolePort ?? 3131
     )
     return new Node(handle)
   }
@@ -130,74 +82,12 @@ class Node {
     return this._handle.stop()
   }
 
-  reconnect() {
-    return this._handle.reconnect()
-  }
-
   async status() {
     return parse(await this._handle.statusJson())
   }
 
-  async startConsole(options = {}) {
-    const assetDir = options.assetDir || defaultConsoleAssetDir()
-    const handle = await this._handle.startConsole(
-      assetDir,
-      options.port == null ? null : options.port,
-      options.listenAll === true
-    )
-    return new Console(handle)
-  }
-}
-
-class Models {
-  constructor(handle) {
-    this._handle = handle
-  }
-
-  async recommended() {
-    return parse(await this._handle.recommendedModelsJson())
-  }
-
-  async search(query) {
-    return parse(await this._handle.searchModelsJson(query.query, query.limit || null))
-  }
-
-  async show(modelRef) {
-    return parse(await this._handle.showModelJson(modelRef))
-  }
-
-  async installed() {
-    return parse(await this._handle.installedModelsJson())
-  }
-
-  async download(modelRef) {
-    return parse(await this._handle.downloadModelJson(modelRef))
-  }
-}
-
-class Serving {
-  constructor(handle) {
-    this._handle = handle
-  }
-
-  async status() {
-    return parse(await this._handle.servingStatusJson())
-  }
-
-  async load(modelRef, options = {}) {
-    return parse(await this._handle.loadServingModelJson(modelRef, JSON.stringify(options)))
-  }
-
-  unload(target, options = {}) {
-    return this._handle.unloadServingModel(JSON.stringify(target), JSON.stringify(options))
-  }
-
-  unloadModel(modelId, options = {}) {
-    return this.unload({ modelId }, options)
-  }
-
-  unloadInstance(instanceId, options = {}) {
-    return this.unload({ instanceId }, options)
+  joinToken(token) {
+    return this._handle.joinToken(token)
   }
 }
 
@@ -205,20 +95,12 @@ function parse(json) {
   return JSON.parse(json)
 }
 
-function defaultConsoleAssetDir() {
-  return path.join(__dirname, 'console')
-}
-
 module.exports = {
-  Client,
-  Console,
   Inference,
   Node,
   OpenAIRequestError,
-  generateOwnerKeypairHex: native.generateOwnerKeypairHex,
   currentMeshVersion: nativeRuntime.currentMeshVersion,
   currentSkippyAbiVersion: nativeRuntime.currentSkippyAbiVersion,
-  defaultConsoleAssetDir,
   installNativeRuntime: nativeRuntime.installNativeRuntime,
   installedNativeRuntimes: nativeRuntime.installedNativeRuntimes,
   removeNativeRuntime: nativeRuntime.removeNativeRuntime,

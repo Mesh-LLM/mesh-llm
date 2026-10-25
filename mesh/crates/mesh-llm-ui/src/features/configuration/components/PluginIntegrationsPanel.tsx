@@ -178,6 +178,11 @@ function PluginIntegrationCard({
           {summary.enabled ? 'Process enabled' : 'Process disabled'}
         </StatusBadge>
         <StatusBadge tone={processTone(summary)}>{summary.status}</StatusBadge>
+        {summary.manifest?.openai_exchange_status ? (
+          <StatusBadge tone={summary.manifest.openai_exchange_status === 'healthy' ? 'good' : 'muted'}>
+            Observation: {summary.manifest.openai_exchange_status.replaceAll('_', ' ')}
+          </StatusBadge>
+        ) : null}
         <StatusBadge tone={webUiTone(entry)}>{webUiLabel(entry)}</StatusBadge>
         <StatusBadge tone={entry.available ? 'good' : 'muted'}>
           {entry.available ? 'Assets available' : 'Assets unavailable'}
@@ -185,6 +190,11 @@ function PluginIntegrationCard({
       </div>
 
       {entry.unavailableReason ? <p className="type-caption mt-3 text-fg-dim">{entry.unavailableReason}</p> : null}
+      {summary.manifest?.openai_exchange_body_access_requested ? (
+        <p role="status" className="type-caption mt-3 text-warning">
+          This plugin requests prompt or response body access. Review its host grants before enabling observation.
+        </p>
+      ) : null}
       {entry.configSections.length > 0 ? (
         <p className="type-caption mt-3 text-fg-dim">
           Config sections:{' '}

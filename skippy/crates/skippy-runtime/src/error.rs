@@ -7,7 +7,7 @@ use crate::Status;
 
 pub(crate) fn format_skippy_error(status: Status, message: &str) -> String {
     if message.is_empty() {
-        format!("{:?}", status)
+        format!("{:?}: native runtime returned no error detail", status)
     } else {
         format!("{:?}: {}", status, message)
     }

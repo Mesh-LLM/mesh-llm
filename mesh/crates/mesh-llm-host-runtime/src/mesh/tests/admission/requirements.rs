@@ -372,7 +372,12 @@ pub(crate) fn assert_fast_join_apply_failure_closes_connection_and_propagates_er
             conn.clone(),
             announcements,
             42,
-        );
+        )
+        .with_plugin_keys(vec![crate::mesh::plugin_keys::bind(
+            &iroh::SecretKey::from_bytes(&[0x42; 32]),
+            "capsules",
+            [5; 32],
+        )]);
 
         let result = joiner.commit_join_probe_success(success).await;
         assert!(
@@ -398,6 +403,12 @@ pub(crate) fn assert_fast_join_apply_failure_closes_connection_and_propagates_er
         assert!(
             closed.is_ok(),
             "QUIC connection must be closed on apply failure, not left orphaned"
+        );
+
+        // The rejected candidate's plugin keys are never listed.
+        assert!(
+            !joiner.plugin_keys.peers().contains_key(&bootstrap_id),
+            "a rejected candidate is not listed with plugin keys"
         );
     });
 }
@@ -605,6 +616,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_untrusted_release_signer
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
+            decode_batch_policy_supported: true,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -703,6 +715,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_invalid_release_attestat
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
+            decode_batch_policy_supported: true,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -798,6 +811,7 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_wrong_mesh_id() {
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
+            decode_batch_policy_supported: true,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),

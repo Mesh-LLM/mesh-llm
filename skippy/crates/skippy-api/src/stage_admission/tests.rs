@@ -7,6 +7,28 @@ use std::collections::BTreeMap;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+#[cfg(feature = "dynamic-native-runtime")]
+#[test]
+fn unavailable_native_runtime_rejects_stage_planning_before_reading_package() {
+    if skippy_runtime::native_runtime_loaded() {
+        return;
+    }
+    let missing = Path::new("/missing/issue1204-package");
+    let error = realize_stage_admissions(missing, &[(0, 1)], &[], "graph", "cpu").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("require a MeshLLM native runtime")
+    );
+    let error = realize_native_stage_chain(missing, &[(0, 1)], &[], "graph", "cpu", &[Vec::new()])
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("require a MeshLLM native runtime")
+    );
+}
+
 /// A minimal, self-consistent v2 manifest whose tensor catalog contains
 /// exactly `package.tensor.a` and `package.tensor.b`.
 fn manifest() -> PackageManifest {
@@ -98,6 +120,7 @@ fn planned_profile(profile_id: &str) -> PlannedStageProfile {
         activation_exports: Vec::new(),
         activation_import_bindings: Vec::new(),
         activation_export_bindings: Vec::new(),
+        state_effects: Vec::new(),
     }
 }
 
@@ -130,6 +153,7 @@ fn planned(m: &PackageManifest, tensors: &[&str], profiles: &[&str]) -> PlannedS
         resident_tensor_ids: tensors.iter().map(|t| t.to_string()).collect(),
         sidecars: Vec::new(),
         profiles: profiles.iter().map(|p| planned_profile(p)).collect(),
+        kv_graph_state: "full-state".into(),
     }
 }
 
@@ -451,4 +475,83 @@ fn rejects_changed_execution_contract_with_unchanged_plan_identity() {
         admit_stage_plan(&p, &r, &m),
         Err(StagePlanAdmissionError::ExecutionContractMismatch)
     ));
+}
+
+#[test]
+fn graph_state_requires_consistent_profiles_and_rejects_derived_state() {
+    use skippy_ffi::{StagePlanStateAccess, StagePlanStateKind, StagePlanStateResidency};
+    let effect = |kind| RealizedStageStateEffect {
+        identity: "state".into(),
+        kind,
+        access: StagePlanStateAccess::Write,
+        residency: StagePlanStateResidency::LayerLocal,
+        layer: 0,
+        write_ordinal: 0,
+    };
+    let mut decode = planned_profile("decode");
+    decode.state_effects.push(effect(StagePlanStateKind::KvKey));
+    let mut prefill = planned_profile("prefill");
+    prefill
+        .state_effects
+        .push(effect(StagePlanStateKind::KvValue));
+    assert_eq!(
+        super::kv_graph_state([
+            decode.state_effects.as_slice(),
+            prefill.state_effects.as_slice()
+        ]),
+        "dense"
+    );
+    prefill
+        .state_effects
+        .push(effect(StagePlanStateKind::RecurrentSsm));
+    assert_eq!(
+        super::kv_graph_state([
+            decode.state_effects.as_slice(),
+            prefill.state_effects.as_slice()
+        ]),
+        "full-state"
+    );
+    decode
+        .state_effects
+        .push(effect(StagePlanStateKind::RecurrentConv));
+    assert_eq!(
+        super::kv_graph_state([
+            decode.state_effects.as_slice(),
+            prefill.state_effects.as_slice()
+        ]),
+        "recurrent"
+    );
+    decode
+        .state_effects
+        .push(effect(StagePlanStateKind::DerivedPersistent));
+    assert_eq!(
+        super::kv_graph_state([
+            decode.state_effects.as_slice(),
+            prefill.state_effects.as_slice()
+        ]),
+        "full-state"
+    );
+}
+
+#[test]
+fn package_metadata_vetoes_a_dense_graph_with_recurrent_state() {
+    use skippy_ffi::{StagePlanStateAccess, StagePlanStateKind, StagePlanStateResidency};
+    let mut manifest = manifest();
+    manifest.model_metadata.insert(
+        "model.attention.recurrent_layers".into(),
+        serde_json::json!([false, true]),
+    );
+    let mut profile = realized_profile("decode");
+    profile.state_effects.push(RealizedStageStateEffect {
+        identity: "kv-key".into(),
+        kind: StagePlanStateKind::KvKey,
+        access: StagePlanStateAccess::Write,
+        residency: StagePlanStateResidency::LayerLocal,
+        layer: 0,
+        write_ordinal: 0,
+    });
+    assert_eq!(
+        super::package_kv_graph_state(&manifest, &[profile]),
+        "full-state"
+    );
 }

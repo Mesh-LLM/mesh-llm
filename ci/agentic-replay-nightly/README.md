@@ -93,12 +93,13 @@ become full-session baselines. Missing cells/turns/metrics, OOM, qualification
 failures and cancellation cannot trigger performance repair. All available
 artifacts survive failure/cancellation. Warmup is never included in history.
 
-Example, after resolving the pinned dataset:
+Build the optional reader with `just with-lld cargo build --locked -p trajectory-reader --features parquet-input --bin trajectory-reader`. Example, after resolving and verifying the pinned model and dataset:
 
 ```sh
-python3 scripts/agentic-replay-params.py \
+cargo xtool automation replay-matrix run-family \
   --matrix ci/agentic-replay-nightly/matrix.json \
-  --run-family granite-3.1-2b --ref main=HEAD \
+  --reader "$PWD/target/debug/trajectory-reader" --timeout 21600 \
+  --run-family granite-3.1-2b --ref main=HEAD --model-file /path/to/verified.gguf \
   --dataset-file /path/to/sessions.parquet --output /path/to/evidence/dense
 ```
 
@@ -106,3 +107,15 @@ No live duration or successful long-context qualification is claimed by this
 configuration. Session count may be revised after calibration; selected traces
 remain complete and long. Runtime/canary work on micstudio must be coordinated
 before starting a validation run.
+
+Matrix validation, export, immutable pin projection and downloaded-byte checks
+belong to `cargo xtool automation replay-matrix`. `run-family` admits the explicit
+local GGUF against the selected immutable pin, selects whole trajectories through
+the separately built native Parquet reader, and supervises the Rust `execute-run` owner.
+The verified family-to-local-path mapping is retained for repair; repair never
+rediscovers or downloads a model. `--reader` selects the explicit native reader executable; it does not select a model-serving process. Progress uses typed stderr records;
+request JSONL remains the evidence source. History, card rendering and hardware
+capture have typed Rust owners. The manual comparative/L3 caller cutover remains
+migration work, separate from native reader qualification.
+
+Benchmark corpus generation also uses this native tool: `just bench-corpus smoke` builds its optional `corpus-input` feature, reads pinned repository Parquet or the declared CommitPackFT/APPS JSONL layouts, and publishes a complete corpus/manifest directory. Use a fresh `--out-root` to regenerate an existing tier. The obsolete DuckDB project and lock are removed; no Python interpreter is used for trajectory or corpus selection.

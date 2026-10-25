@@ -60,6 +60,7 @@ export interface MeshModelRaw {
   status: 'warm' | 'cold'
   size_gb?: number
   node_count: number
+  mesh_vram_gb?: number
   capabilities?: ModelCapabilities
   quantization?: string
   context_length?: number
@@ -76,6 +77,7 @@ export interface MeshModelRaw {
   moe?: boolean
   vision?: boolean
   license?: string
+  fit_label?: string
 }
 
 export enum LatencySource {
@@ -145,10 +147,26 @@ export interface RuntimeStageInfo {
   state: string
 }
 
+/// One axis a serving strategy either filled in or deferred on.
+export interface ServingStrategyAxis {
+  axis: string
+  value?: string
+  because: string
+}
+
+/// What `--strategy` resolved to. `declined` matters as much as `applied`: an
+/// operator who set a flag by hand should be able to see that it won.
+export interface ServingStrategyInfo {
+  strategy: string
+  applied: ServingStrategyAxis[]
+  declined: ServingStrategyAxis[]
+}
+
 export interface RuntimeInfo {
   backend?: string
   models?: { name: string; status: string; port?: number }[]
   stages?: RuntimeStageInfo[]
+  serving_strategy?: ServingStrategyInfo
 }
 
 export interface LoggingStatus {

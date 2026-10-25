@@ -175,6 +175,7 @@ impl StageActivationCodecPolicy {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct StageConfig {
     pub run_id: String,
     pub topology_id: String,
@@ -370,15 +371,6 @@ pub enum StageKvCacheMode {
     LookupRecord,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum StageKvCachePayload {
-    Auto,
-    ResidentKv,
-    KvRecurrent,
-    FullState,
-}
-
 /// Durable KV representation used below the in-process exact-state cache.
 /// CacheGen is opt-in until every backend/dtype combination clears its
 /// hardware quality and latency gate.
@@ -392,11 +384,10 @@ pub enum StageKvCacheCodec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct StageKvCacheConfig {
     #[serde(default = "default_kv_cache_mode")]
     pub mode: StageKvCacheMode,
-    #[serde(default = "default_kv_cache_payload")]
-    pub payload: StageKvCachePayload,
     #[serde(default = "default_kv_cache_max_entries")]
     pub max_entries: usize,
     #[serde(default)]
@@ -421,10 +412,6 @@ pub struct StageKvCacheConfig {
 
 fn default_kv_cache_mode() -> StageKvCacheMode {
     StageKvCacheMode::Auto
-}
-
-fn default_kv_cache_payload() -> StageKvCachePayload {
-    StageKvCachePayload::Auto
 }
 
 fn default_kv_cache_max_entries() -> usize {
@@ -515,4 +502,27 @@ pub struct ActivationDescriptor {
     pub flags: u64,
     #[serde(default)]
     pub payload_sha256: Option<String>,
+}
+
+#[cfg(test)]
+mod operator_cache_config_tests {
+    use super::*;
+
+    #[test]
+    fn graph_state_and_payload_claims_are_rejected() {
+        let stage = serde_json::to_value(StageConfig::default()).unwrap();
+        let mut claimed = stage.clone();
+        claimed["kv_graph_state"] = serde_json::json!("dense");
+        assert!(serde_json::from_value::<StageConfig>(claimed).is_err());
+        for payload in ["auto", "resident-kv", "kv-recurrent", "full-state"] {
+            let mut claimed = stage.clone();
+            claimed["kv_cache"] = serde_json::json!({"payload": payload});
+            assert!(serde_json::from_value::<StageConfig>(claimed).is_err());
+        }
+        let mut resources = stage;
+        resources["kv_cache"] = serde_json::json!({
+            "mode": "lookup-record", "max_entries": 32, "max_bytes": 1024,
+        });
+        assert!(serde_json::from_value::<StageConfig>(resources).is_ok());
+    }
 }

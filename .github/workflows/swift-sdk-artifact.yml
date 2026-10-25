@@ -3,6 +3,26 @@ name: Reusable Swift SDK Artifact
 on:
   workflow_call:
     inputs:
+      authority_linux_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_linux_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_macos_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_windows_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: false
@@ -279,6 +299,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Resolve product source layout
         id: layout
         uses: Mesh-LLM/mesh-llm/.github/actions/resolve-source-layout@5c8fb4d472bc57058c8153761c561daa77dd5b94 # product-layout compatibility helpers

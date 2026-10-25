@@ -116,6 +116,7 @@ mod tests {
 
     #[test]
     fn cache_drafts_from_committed_history_and_never_mutates_for_a_prefix() {
+        crate::test_support::require_native_runtime();
         let mut cache = Cache::new(2, 2).unwrap();
         cache.reset(&[1, 2, 3, 1, 2, 3, 1, 2]).unwrap();
 
@@ -126,6 +127,7 @@ mod tests {
 
     #[test]
     fn cache_append_extends_the_committed_history() {
+        crate::test_support::require_native_runtime();
         let mut cache = Cache::new(2, 2).unwrap();
         cache.reset(&[1, 9, 7, 1, 9, 7, 1]).unwrap();
 

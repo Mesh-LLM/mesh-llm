@@ -1453,3 +1453,36 @@ pub(super) fn shutdown_suppresses_late_ready_render() {
         Some(RuntimeStatus::ShuttingDown)
     ));
 }
+
+#[test]
+pub(super) fn dashboard_header_always_reports_whether_a_strategy_is_in_force() {
+    // "Is a strategy even in force" is the first thing to establish when a
+    // split is slower than expected, so the header answers it either way
+    // rather than omitting the field.
+    let mut state = DashboardState::default();
+    assert!(render_dashboard_text(&state).contains("strategy=none"));
+
+    state.apply_output_event(&OutputEvent::ServingStrategyResolved {
+        strategy: "throughput".to_string(),
+        applied: 4,
+        declined: 0,
+    });
+    let rendered = render_dashboard_text(&state);
+    assert!(
+        rendered.contains("strategy=throughput (4 set)"),
+        "{rendered}"
+    );
+
+    // A deferred axis is called out, because an operator who set a flag by
+    // hand needs to see it survived the strategy.
+    state.apply_output_event(&OutputEvent::ServingStrategyResolved {
+        strategy: "interactive".to_string(),
+        applied: 2,
+        declined: 1,
+    });
+    let rendered = render_dashboard_text(&state);
+    assert!(
+        rendered.contains("strategy=interactive (2 set, 1 yours)"),
+        "{rendered}"
+    );
+}

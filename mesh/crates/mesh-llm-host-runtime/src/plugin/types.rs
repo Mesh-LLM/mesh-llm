@@ -9,6 +9,12 @@ use tokio::sync::oneshot;
 
 #[derive(Debug)]
 pub enum PluginMeshEvent {
+    /// Host-private identity services use the authenticated connection name.
+    IdentityService {
+        plugin_id: String,
+        request: proto::RpcRequest,
+        response_tx: oneshot::Sender<Result<proto::RpcResponse, proto::ErrorResponse>>,
+    },
     Channel {
         plugin_id: String,
         message: proto::ChannelMessage,
@@ -29,6 +35,17 @@ pub enum PluginMeshEvent {
         request: proto::PeerBlockRequest,
         response_tx: oneshot::Sender<Result<proto::PeerBlockResponse, proto::ErrorResponse>>,
     },
+    /// `plugin_id` is the host's name for the plugin connection, never an id
+    /// the plugin claimed in its envelope.
+    PluginKey {
+        plugin_id: String,
+        request: proto::PluginKeyRequest,
+        response_tx: oneshot::Sender<Result<proto::PluginKeyResponse, proto::ErrorResponse>>,
+    },
+    /// The plugin stopped for good (disabled, or shut down): the host
+    /// withdraws what it announced for it. Not sent when the plugin restarts
+    /// after a failure, so its key stays announced across a restart.
+    PluginStopped { plugin_id: String },
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -97,6 +114,11 @@ pub struct PluginSummary {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginManifestOverview {
+    /// The declaration requests access; this does not imply a host grant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openai_exchange_body_access_requested: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openai_exchange_status: Option<String>,
     pub operations: usize,
     pub resources: usize,
     pub resource_templates: usize,

@@ -352,6 +352,14 @@ fn prepare_raw_safetensors_gguf_with_files(
         source.display()
     );
     let metadata_seed = options.metadata.clone();
+    if matches!(options.tensor_name_map,TensorNameMap::NemotronHMoeMtp{..})
+        && metadata_seed.as_ref().is_some_and(|metadata|metadata.iter().any(|kv|matches!(kv,GgufKv::String{key,..} if key=="skippy.convert.tokenizer_profile_sha256"))) {
+        crate::gguf_template::nemotron_mtp::validate_roster(
+            metadata_seed.as_deref().expect("profile marker requires metadata"),
+            files.iter().flat_map(|file|file.tensors().keys().map(String::as_str)),
+        )?;
+    }
+
     let glm_dsa_kv_b_split = glm_dsa_kv_b_split_mode(metadata_seed.as_deref())?;
     let hf_layout = HfTensorLayout::from_checkpoint(source, options.tensor_name_map)?;
     let tensors = collect_tensor_sources(
@@ -555,8 +563,11 @@ fn collect_tensor_sources(
             }
             if matches!(
                 tensor_name_map,
-                TensorNameMap::HfToGguf | TensorNameMap::HfToGgufWithMtp { .. }
-            ) && let Some(expert) = ExpertSourceTensor::parse(tensor.name())?
+                TensorNameMap::HfToGguf
+                    | TensorNameMap::HfToGgufWithMtp { .. }
+                    | TensorNameMap::NemotronHMoeMtp { .. }
+            ) && let Some(expert) =
+                ExpertSourceTensor::parse(&tensor_name_map.expert_source_name(tensor.name())?)?
             {
                 match expert_groups.entry(expert.group_key()) {
                     Entry::Vacant(entry) => {

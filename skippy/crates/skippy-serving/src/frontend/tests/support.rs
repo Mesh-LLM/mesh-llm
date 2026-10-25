@@ -44,7 +44,6 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
         kv_cache: Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::ResidentKv,
             max_entries: 8,
             max_bytes: 0,
             l2_max_bytes: 0,
@@ -115,7 +114,7 @@ pub(super) fn seed_resident_prefix(kv: &KvStageIntegration, identity: &PrefillKv
         .expect("synthetic radix prefix should record");
 }
 
-pub(super) fn unsupported_code(error: OpenAiError) -> Option<String> {
+pub(super) fn unsupported_code(error: InferenceError) -> Option<String> {
     error.body().error.code
 }
 
@@ -142,14 +141,16 @@ pub(super) fn local_openai_backend(
         model_id: model_id.into(),
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        thinking: None,
         ctx_size,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
         ngram_max: 0,
         speculative: SpeculativeDecodeConfig::default(),
         speculation_governor: None,
+        runahead_governor: None,
         generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,

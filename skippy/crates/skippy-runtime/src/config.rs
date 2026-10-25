@@ -124,8 +124,9 @@ pub struct RuntimeConfig {
     /// K/V cache backend offload. `None` preserves llama.cpp's derived
     /// default (offloaded); `Some` forces the value.
     pub kv_offload: Option<bool>,
-    /// Legacy unified-KV setting. `None` and `Some(true)` use Skippy's
-    /// mandatory unified pool; `Some(false)` is rejected.
+    /// Whether the KV cache is unified across lanes. `None` derives the value
+    /// from lane count; `Some(true)` and `Some(false)` select it explicitly.
+    /// Recurrent and hybrid models always use unified KV.
     pub kv_unified: Option<bool>,
     /// Sliding-window-attention full (unshifted) cache window. `None`
     /// preserves llama.cpp's built-in default (full).
@@ -196,9 +197,6 @@ impl RuntimeConfig {
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.kv_unified == Some(false) {
-            return Err("non-unified KV is not supported by Skippy");
-        }
         if self.layer_start >= self.layer_end {
             return Err("layer_start must be less than layer_end");
         }
@@ -378,7 +376,7 @@ impl RuntimeConfig {
                     GlmDsaPolicy::V1 => 1,
                 },
                 kv_offload: tristate(self.kv_offload),
-                kv_unified: skippy_ffi::TRISTATE_TRUE,
+                kv_unified: tristate(self.kv_unified),
                 swa_full: tristate(self.swa_full),
                 op_offload: tristate(self.op_offload),
                 no_host_buffer: self.no_host_buffer,
@@ -1030,11 +1028,11 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_raw_uses_unified_kv_by_default() -> anyhow::Result<()> {
+    fn runtime_config_raw_preserves_kv_auto_by_default() -> anyhow::Result<()> {
         let raw = RuntimeConfig::default().as_raw()?.raw;
 
         assert_eq!(raw.kv_offload, skippy_ffi::TRISTATE_AUTO);
-        assert_eq!(raw.kv_unified, skippy_ffi::TRISTATE_TRUE);
+        assert_eq!(raw.kv_unified, skippy_ffi::TRISTATE_AUTO);
         assert_eq!(raw.swa_full, skippy_ffi::TRISTATE_AUTO);
         Ok(())
     }
@@ -1061,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_rejects_non_unified_kv() -> anyhow::Result<()> {
+    fn runtime_config_raw_forces_kv_unified_when_configured() -> anyhow::Result<()> {
         let enabled = RuntimeConfig {
             kv_unified: Some(true),
             ..RuntimeConfig::default()
@@ -1071,13 +1069,12 @@ mod tests {
         let disabled = RuntimeConfig {
             kv_unified: Some(false),
             ..RuntimeConfig::default()
-        };
+        }
+        .as_raw()?
+        .raw;
 
         assert_eq!(enabled.kv_unified, skippy_ffi::TRISTATE_TRUE);
-        assert_eq!(
-            disabled.validate(),
-            Err("non-unified KV is not supported by Skippy")
-        );
+        assert_eq!(disabled.kv_unified, skippy_ffi::TRISTATE_FALSE);
         Ok(())
     }
 

@@ -16,6 +16,7 @@ fn external_plugin_startup_policy_is_resolved() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: Some("mesh-llm-plugin-metrics".into()),
             args: Vec::new(),
             url: None,
@@ -53,6 +54,7 @@ fn optional_missing_installed_plugin_becomes_inactive_summary() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
             url: None,
@@ -99,6 +101,7 @@ fn optional_missing_installed_plugin_becomes_inactive_summary() {
 async fn required_plugin_load_failure_stops_manager_startup() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {
+            openai_exchange_grant: None,
             name: "broken".into(),
             command: "mesh-llm-definitely-missing-plugin-binary".into(),
             args: vec!["--stdio".into()],
@@ -168,6 +171,7 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
     let specs = ResolvedPlugins {
         externals: vec![
             ExternalPluginSpec {
+                openai_exchange_grant: None,
                 name: "first".into(),
                 command: String::new(),
                 args: Vec::new(),
@@ -179,6 +183,7 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
                 installed_metadata: None,
             },
             ExternalPluginSpec {
+                openai_exchange_grant: None,
                 name: "broken".into(),
                 command: "mesh-llm-definitely-missing-plugin-binary".into(),
                 args: Vec::new(),
@@ -211,6 +216,7 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
 async fn optional_plugin_load_failure_becomes_inactive_summary() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {
+            openai_exchange_grant: None,
             name: "optional-broken".into(),
             command: "mesh-llm-definitely-missing-plugin-binary".into(),
             args: Vec::new(),
@@ -253,6 +259,7 @@ async fn remote_connect_failures_honor_required_and_optional_policy() {
     let address = listener.local_addr().expect("listener address");
     drop(listener);
     let remote_spec = |name: &str, optional| ExternalPluginSpec {
+        openai_exchange_grant: None,
         name: name.into(),
         command: String::new(),
         args: Vec::new(),
@@ -300,6 +307,7 @@ async fn remote_connect_failures_honor_required_and_optional_policy() {
 async fn lazy_start_plugin_does_not_block_manager_startup() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {
+            openai_exchange_grant: None,
             name: "lazy".into(),
             command: "mesh-llm-definitely-missing-plugin-binary".into(),
             args: Vec::new(),

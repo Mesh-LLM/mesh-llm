@@ -150,22 +150,10 @@ async fn handle(
         object.remove("stream");
     }
 
-    let needs_vision = contains_any_key(&invocation.request, &["image_url", "input_image"]);
-    let needs_audio = contains_any_key(
-        &invocation.request,
-        &["audio_url", "input_audio", "input_audio_buffer"],
-    );
-    let needs_tools = invocation.request.get("tools").is_some_and(|tools| {
-        !tools.is_null() && tools.as_array().is_none_or(|items| !items.is_empty())
-    });
-    invocation.candidates.retain(|candidate| {
-        (!needs_vision || candidate.supports_vision)
-            && (!needs_audio || candidate.supports_audio)
-            && (!needs_tools || candidate.supports_tools)
-    });
-    if invocation.candidates.is_empty() {
-        return error_response(422, "no concrete model satisfies the request capabilities");
-    }
+    let (needs_vision, needs_audio) = match select_request_candidates(&mut invocation) {
+        Ok(media) => media,
+        Err(response) => return response,
+    };
     // Media always takes the direct path, so its eligible standbys should not
     // be discarded by a cap that only exists for committee fan-out.
     let all_small = if needs_vision || needs_audio {
@@ -243,6 +231,42 @@ async fn handle(
         headers,
         event_stream: requested_stream,
     }
+}
+
+/// Media capabilities are runtime requirements; missing tool evidence is not
+/// proof that a model cannot call tools. Prefer advertised tool support within
+/// the media-eligible pool, but keep that pool when no member advertises it.
+fn select_request_candidates(
+    invocation: &mut VirtualModelInvocation,
+) -> Result<(bool, bool), VirtualModelResponse> {
+    let needs_vision = contains_any_key(&invocation.request, &["image_url", "input_image"]);
+    let needs_audio = contains_any_key(
+        &invocation.request,
+        &["audio_url", "input_audio", "input_audio_buffer"],
+    );
+    let needs_tools = invocation.request.get("tools").is_some_and(|tools| {
+        !tools.is_null() && tools.as_array().is_none_or(|items| !items.is_empty())
+    });
+    invocation.candidates.retain(|candidate| {
+        (!needs_vision || candidate.supports_vision) && (!needs_audio || candidate.supports_audio)
+    });
+    if invocation.candidates.is_empty() {
+        return Err(error_response(
+            422,
+            "no concrete model satisfies the request capabilities",
+        ));
+    }
+    if needs_tools
+        && invocation
+            .candidates
+            .iter()
+            .any(|candidate| candidate.supports_tools)
+    {
+        invocation
+            .candidates
+            .retain(|candidate| candidate.supports_tools);
+    }
+    Ok((needs_vision, needs_audio))
 }
 
 async fn direct_capability_response(
@@ -611,6 +635,103 @@ mod tests {
             request: json!({"messages": [{"role": "user", "content": "hi"}]}),
             candidates,
             response_adapter: String::new(),
+        }
+    }
+
+    fn tools_invocation(
+        candidates: Vec<mesh_llm_plugin::VirtualModelCandidate>,
+    ) -> VirtualModelInvocation {
+        let mut invocation = invocation(candidates);
+        invocation.request["tools"] = json!([{
+            "type": "function",
+            "function": {"name": "report_status", "parameters": {"type": "object"}}
+        }]);
+        invocation
+    }
+
+    #[tokio::test]
+    async fn tools_without_advertised_support_reach_inference() {
+        let mut worker = candidate("qwen", Some(27.0), "local");
+        worker.supports_tools = false;
+        let mut invocation = tools_invocation(vec![worker]);
+        assert_eq!(
+            select_request_candidates(&mut invocation).unwrap(),
+            (false, false)
+        );
+        let original_request = invocation.request.clone();
+        let response =
+            direct_with_fallback(invocation, false, Duration::from_secs(1), move |request| {
+                assert_eq!(request.model_id, "qwen");
+                assert_eq!(request.request, original_request);
+                async {
+                    Ok(mesh_llm_plugin::HostInferenceResponse {
+                        status_code: 200,
+                        body: json!({"choices": [{"message": {"tool_calls": [{
+                            "type": "function",
+                            "function": {"name": "report_status", "arguments": "{}"}
+                        }]}}]}),
+                        served_by: Some("local".into()),
+                    })
+                }
+            })
+            .await;
+        assert_eq!(response.status_code, 200);
+        assert_eq!(
+            response.body["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+            "report_status"
+        );
+    }
+
+    #[test]
+    fn tools_prefer_advertised_support_over_larger_unknown_models() {
+        let mut unknown = candidate("unknown", Some(70.0), "a");
+        unknown.supports_tools = false;
+        let mut invocation = tools_invocation(vec![unknown, candidate("tools", Some(8.0), "b")]);
+        select_request_candidates(&mut invocation).unwrap();
+        apply_pool_policy(&mut invocation.candidates);
+        assert_eq!(invocation.candidates.len(), 1);
+        assert_eq!(invocation.candidates[0].model_id, "tools");
+    }
+
+    #[test]
+    fn absent_null_or_empty_tools_do_not_filter_candidates() {
+        for tools in [None, Some(Value::Null), Some(json!([]))] {
+            let mut unknown = candidate("unknown", Some(70.0), "a");
+            unknown.supports_tools = false;
+            let mut invocation = invocation(vec![unknown, candidate("tools", Some(8.0), "b")]);
+            if let Some(tools) = tools {
+                invocation.request["tools"] = tools;
+            }
+            select_request_candidates(&mut invocation).unwrap();
+            assert_eq!(invocation.candidates.len(), 2);
+        }
+    }
+
+    #[test]
+    fn tools_fallback_never_relaxes_media_requirements() {
+        for key in ["image_url", "input_audio"] {
+            let mut worker = candidate("text", Some(27.0), "a");
+            worker.supports_tools = false;
+            let mut invocation = tools_invocation(vec![worker]);
+            invocation.request["messages"][0]["content"] = json!([{key: {"url": "fixture"}}]);
+            let response = select_request_candidates(&mut invocation).unwrap_err();
+            assert_eq!(response.status_code, 422);
+        }
+    }
+
+    #[test]
+    fn tools_preference_is_computed_after_media_filtering() {
+        for key in ["image_url", "input_audio"] {
+            let text = candidate("text-tools", Some(70.0), "a");
+            let mut media = candidate("media", Some(27.0), "b");
+            media.supports_tools = false;
+            media.supports_vision = true;
+            media.supports_audio = true;
+            let mut invocation = tools_invocation(vec![text, media]);
+            invocation.request["messages"][0]["content"] = json!([{key: {"url": "fixture"}}]);
+            select_request_candidates(&mut invocation).unwrap();
+            assert_eq!(invocation.candidates.len(), 1);
+            assert_eq!(invocation.candidates[0].model_id, "media");
         }
     }
 

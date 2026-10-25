@@ -1,18 +1,13 @@
-From 08c2198cd40b70abb947484d8ccc2fb2d1a01480 Mon Sep 17 00:00:00 2001
+From deffabcb3b09a6fa9eb136aafb7af2399d34ae7f Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 18:30:01 +1000
-Subject: [PATCH] models: add inkling family support
+Subject: [PATCH 1/6] models: add inkling family support
 
 ---
  common/chat.cpp                     |   8 +
  common/parsers/inkling.cpp          | 117 +++++
  common/parsers/parsers.h            |   2 +
  common/parsers/sources.cmake        |   1 +
- conversion/__init__.py              |   2 +
- conversion/base.py                  |  14 +
- conversion/inkling.py               | 423 +++++++++++++++++
- gguf-py/gguf/constants.py           |  50 ++
- gguf-py/gguf/tensor_mapping.py      |  49 ++
  models/templates/Inkling.jinja      | 514 +++++++++++++++++++++
  src/llama-arch.cpp                  |  15 +
  src/llama-arch.h                    |  24 +
@@ -44,19 +39,18 @@ Subject: [PATCH] models: add inkling family support
  tools/mtmd/mtmd-image.cpp           |  72 +++
  tools/mtmd/mtmd-image.h             |  20 +
  tools/mtmd/mtmd.cpp                 |  37 +-
- 40 files changed, 2608 insertions(+), 22 deletions(-)
+ 35 files changed, 2070 insertions(+), 22 deletions(-)
  create mode 100644 common/parsers/inkling.cpp
- create mode 100644 conversion/inkling.py
  create mode 100644 models/templates/Inkling.jinja
  create mode 100644 src/models/inkling.cpp
  create mode 100644 tools/mtmd/models/inkling.cpp
 
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 49e1f53a0..50c91a638 100644
+index 287d92bc2..f526789a7 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -1264,6 +1264,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
-         return common_chat_params_init_cohere2moe(tmpl, params);
+@@ -1277,6 +1277,14 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const
+         return common_chat_params_init_cohere2moe;
      }
  
 +    // Inkling / TML: this marker combination is unique to the template
@@ -64,15 +58,15 @@ index 49e1f53a0..50c91a638 100644
 +        src.find("<|content_text|>") != std::string::npos &&
 +        src.find("<|message_model|>") != std::string::npos) {
 +        LOG_DBG("Using specialized template: Inkling\n");
-+        return common_chat_params_init_inkling(tmpl, params);
++        return common_chat_params_init_inkling;
 +    }
 +
      if (is_lfm2_template(src)) {
          LOG_DBG("Using specialized template: LFM2\n");
-         return common_chat_params_init_lfm2(tmpl, params, /* tool_list_tokens = */ true);
+         return common_chat_params_init_lfm2_tokens;
 diff --git a/common/parsers/inkling.cpp b/common/parsers/inkling.cpp
 new file mode 100644
-index 000000000..fce3cc0ef
+index 000000000..6bf2ed611
 --- /dev/null
 +++ b/common/parsers/inkling.cpp
 @@ -0,0 +1,117 @@
@@ -123,7 +117,7 @@ index 000000000..fce3cc0ef
 +            data.generation_prompt += END_MESSAGE + TEXT + msg.render_content();
 +        }
 +
-+        data.prompt += data.generation_prompt;
++        data.prompt.append(data.generation_prompt);
 +    }
 +
 +    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
@@ -189,15 +183,15 @@ index 000000000..fce3cc0ef
 +               p.optional(p.literal(END_SAMPLING)) + end;
 +    });
 +
-+    data.parser = parser.save();
++    data.parser = parser;
 +
 +    return data;
 +}
 diff --git a/common/parsers/parsers.h b/common/parsers/parsers.h
-index f86636007..81f4993a9 100644
+index 8f0a97ce3..c9362b6e7 100644
 --- a/common/parsers/parsers.h
 +++ b/common/parsers/parsers.h
-@@ -65,6 +65,8 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template &
+@@ -67,6 +67,8 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template &
  
  common_chat_params common_chat_params_init_ling3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
  
@@ -207,661 +201,17 @@ index f86636007..81f4993a9 100644
  common_chat_params common_chat_params_init_lfm2(const common_chat_template & tmpl, const autoparser::generation_params & inputs, bool tool_list_tokens);
  
 diff --git a/common/parsers/sources.cmake b/common/parsers/sources.cmake
-index 70af84e25..bfae5460b 100644
+index 152397074..d7dc6edc9 100644
 --- a/common/parsers/sources.cmake
 +++ b/common/parsers/sources.cmake
-@@ -12,6 +12,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
+@@ -13,6 +13,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
      ${CMAKE_CURRENT_LIST_DIR}/kimi-k2.cpp
      ${CMAKE_CURRENT_LIST_DIR}/kimi-k3.cpp
      ${CMAKE_CURRENT_LIST_DIR}/ling3.cpp
 +    ${CMAKE_CURRENT_LIST_DIR}/inkling.cpp
      ${CMAKE_CURRENT_LIST_DIR}/lfm2.cpp
+     ${CMAKE_CURRENT_LIST_DIR}/llm-jp-harmony.cpp
      ${CMAKE_CURRENT_LIST_DIR}/minicpm5.cpp
-     ${CMAKE_CURRENT_LIST_DIR}/minimax-m3.cpp
-diff --git a/conversion/__init__.py b/conversion/__init__.py
-index 85db1d643..a8c7172b0 100644
---- a/conversion/__init__.py
-+++ b/conversion/__init__.py
-@@ -129,6 +129,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
-     "HYV3ForCausalLM": "hunyuan",
-     "HYV4ForCausalLM": "hy_v4",
-     "IQuestCoderForCausalLM": "llama",
-+    "InklingForConditionalGeneration": "inkling",
-     "InternLM2ForCausalLM": "internlm",
-     "InternLM3ForCausalLM": "internlm",
-     "JAISLMHeadModel": "jais",
-@@ -313,6 +314,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
-     "GraniteSpeechPlusForConditionalGeneration": "granite",
-     "HunYuanVLForConditionalGeneration": "hunyuan",
-     "Idefics3ForConditionalGeneration": "smolvlm",
-+    "InklingForConditionalGeneration": "inkling",
-     "InternVisionModel": "internvl",
-     "JanusForConditionalGeneration": "januspro",
-     "KimiK25ForConditionalGeneration": "kimivl",
-diff --git a/conversion/base.py b/conversion/base.py
-index 9fba5a86b054cea2d34f0bd035fe2a4325b67c46..4a1a7dd35 100644
---- a/conversion/base.py
-+++ b/conversion/base.py
-@@ -562,6 +562,20 @@ class ModelBase:
-                 else:
-                     raise NotImplementedError(f"Quant format {quant_format!r} for method {quant_method!r} is not yet supported")
-             elif quant_method == "modelopt":
-+                # Stacked-expert NVFP4 checkpoints (e.g. Inkling-NVFP4) store experts as
-+                # w13_weight/w2_weight with .scale/.scale2/.input_amax/.original_shape
-+                # auxiliaries; the main tensors do not end in .weight, so the NVFP4 path
-+                # below would silently skip them. Reject them with a clear error.
-+                stacked_expert_aux = [
-+                    n for n in self.model_tensors
-+                    if n.endswith((".scale2", ".input_amax", ".original_shape"))
-+                ]
-+                if stacked_expert_aux:
-+                    raise NotImplementedError(
-+                        "This checkpoint stores quantized experts in the stacked ModelOpt NVFP4 layout "
-+                        f"({len(stacked_expert_aux)} auxiliary tensors like {stacked_expert_aux[0]!r}), "
-+                        "which is not supported yet. Convert from the unquantized (BF16) checkpoint instead."
-+                    )
-                 # Mixed-precision ModelOpt models: NVFP4 tensors are handled by
-                 # _generate_nvfp4_tensors; FP8 tensors have 1D weight_scale and
-                 # are dequantized here. k/v scale tensors are unused.
-diff --git a/conversion/inkling.py b/conversion/inkling.py
-new file mode 100644
-index 000000000..3ba4418ed
---- /dev/null
-+++ b/conversion/inkling.py
-@@ -0,0 +1,423 @@
-+from __future__ import annotations
-+
-+import re
-+
-+from typing import Callable, Iterable, TYPE_CHECKING
-+
-+if TYPE_CHECKING:
-+    from torch import Tensor
-+
-+from .base import MmprojModel, ModelBase, TextModel, gguf, logger
-+
-+
-+@ModelBase.register("InklingForConditionalGeneration")
-+class InklingModel(TextModel):
-+    model_arch = gguf.MODEL_ARCH.INKLING
-+    undo_permute = False
-+    supports_mtp_export = True
-+
-+    _SKIP_PREFIXES = ("model.visual.", "model.audio.")
-+    _MTP_SHARED_NAMES = {
-+        "model.llm.embed.weight",
-+        "model.llm.embed_norm.weight",
-+        "model.llm.norm.weight",
-+        "model.llm.unembed.weight",
-+    }
-+
-+    def __init__(self, *args, **kwargs):
-+        super().__init__(*args, **kwargs)
-+        # explicit raises (not assert, stripped by python -O) guard the single supported variant
-+        hp = self.hparams
-+
-+        # normalize keys renamed by HF-port re-saved configs back to checkpoint names
-+        if "dense_intermediate_size" not in hp and "moe_intermediate_size" in hp:
-+            hp["dense_intermediate_size"] = hp["intermediate_size"]
-+            hp["intermediate_size"] = hp["moe_intermediate_size"]
-+        if "sconv_kernel_size" not in hp and "conv_kernel_size" in hp:
-+            hp["sconv_kernel_size"] = hp["conv_kernel_size"]
-+        if "dense_mlp_idx" not in hp and hp.get("mlp_layer_types"):
-+            types = hp["mlp_layer_types"]
-+            hp["dense_mlp_idx"] = next((i for i, t in enumerate(types) if t != "dense"), len(types))
-+
-+        if hp.get("gate_activation", "sigmoid") != "sigmoid":
-+            raise NotImplementedError(
-+                f"unsupported gate_activation {hp.get('gate_activation')!r}; only 'sigmoid' is implemented"
-+            )
-+        for flag, want in (
-+            ("norm_after_topk", True),
-+            ("shared_expert_sink", True),
-+            ("use_sconv", True),
-+            ("use_embed_norm", True),
-+            ("use_gate_bias", True),
-+            ("use_global_scale", True),
-+        ):
-+            if hp.get(flag, want) is not want:
-+                raise NotImplementedError(f"unsupported {flag}={hp.get(flag)!r}; only {want} is implemented")
-+        if hp.get("q_bias", False) is not False or hp.get("o_bias", False) is not False:
-+            raise NotImplementedError("attention q_bias / o_bias are not supported")
-+        if hp.get("final_logit_softcapping") not in (None, 0, 0.0):
-+            raise NotImplementedError(
-+                f"final_logit_softcapping={hp.get('final_logit_softcapping')!r} is not supported"
-+            )
-+        if hp["swa_head_dim"] != hp["head_dim"]:
-+            raise ValueError(f"swa_head_dim {hp['swa_head_dim']} must equal head_dim {hp['head_dim']}")
-+        if hp["swa_num_attention_heads"] != hp["num_attention_heads"]:
-+            raise ValueError(
-+                f"swa_num_attention_heads {hp['swa_num_attention_heads']} must equal "
-+                f"num_attention_heads {hp['num_attention_heads']}"
-+            )
-+
-+        # context length comes from model_max_length per the design contract
-+        if (mml := hp.get("model_max_length")) is not None:
-+            self.hparams["max_position_embeddings"] = mml
-+
-+        # checked by the base find_hparam list before the MoE "intermediate_size"
-+        self.hparams["prefix_dense_intermediate_size"] = hp["dense_intermediate_size"]
-+
-+        self._local_layer_flags = self._get_local_layer_flags()
-+        mtp = hp.get("mtp_config") or {}
-+        self._n_nextn = int(
-+            mtp.get("num_nextn_predict_layers", hp.get("num_mtp_layers", 0)) or 0
-+        )
-+        if mtp.get("chain_hidden_post_norm", hp.get("chain_hidden_post_norm", False)):
-+            raise NotImplementedError("Inkling MTP chain_hidden_post_norm=true is not supported")
-+        mtp_local_ids = set(mtp.get("local_layer_ids", hp.get("mtp_local_layer_ids", [])) or [])
-+        self._mtp_local_layer_flags = [i in mtp_local_ids for i in range(self._n_nextn)]
-+
-+        if self.no_mtp:
-+            self._n_nextn = 0
-+            self._mtp_local_layer_flags = []
-+        self.block_count = hp["num_hidden_layers"] + self._n_nextn
-+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-+
-+        all_local_layer_flags = self._local_layer_flags + self._mtp_local_layer_flags
-+        self.hparams["num_key_value_heads"] = [
-+            hp["swa_num_key_value_heads"] if is_local else hp["num_key_value_heads"]
-+            for is_local in all_local_layer_flags
-+        ]
-+
-+    def _get_local_layer_flags(self) -> list[bool]:
-+        # local_layer_ids is authoritative; a round-tripped layer_types may be stale and must not override it
-+        n_layer = self.hparams["num_hidden_layers"]
-+        local_ids = self.hparams.get("local_layer_ids")
-+        if local_ids is None:
-+            # default: global at id % 6 == 5; omitted/null must not collapse to all-global (explicit [] does)
-+            local_ids = [i for i in range(n_layer) if i % 6 != 5]
-+        local_ids = set(local_ids)
-+        return [i in local_ids for i in range(n_layer)]
-+
-+    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
-+        tokens, toktypes, tokpre = super().get_vocab_base()
-+        # dedicated pre-type: o200k-family regex that keeps combining marks attached to base letters
-+        tokpre = "inkling"
-+        import gguf as _gguf
-+        n_vocab = self.hparams["vocab_size"]
-+        n_unpadded = self.hparams.get("unpadded_vocab_size") or n_vocab
-+        if len(tokens) != n_vocab:
-+            raise ValueError(f"Inkling tokenizer produced {len(tokens)} entries, expected {n_vocab}")
-+        # force-CONTROL special ids from added_tokens_decoder, else the trailing-60 convention
-+        try:
-+            import json as _json
-+            import pathlib as _pl
-+            tc = _json.loads((_pl.Path(self.dir_model) / "tokenizer_config.json").read_text())
-+            special_ids = sorted(int(i) for i, d in tc.get("added_tokens_decoder", {}).items() if d.get("special"))
-+        except Exception:
-+            special_ids = list(range(n_unpadded - 60, n_unpadded))
-+        for tid in special_ids:
-+            if 0 <= tid < n_vocab:
-+                toktypes[tid] = _gguf.TokenType.CONTROL
-+        if any(t != _gguf.TokenType.UNUSED for t in toktypes[n_unpadded:]):
-+            raise ValueError("real tokens found at/above unpadded_vocab_size; padded-vocab mask would hide them")
-+        return tokens, toktypes, tokpre
-+
-+    def set_vocab(self):
-+        self._set_vocab_gpt2()
-+        eos_id = int(self.hparams.get("eos_token_id", 200006))
-+        if eos_id < 199998:
-+            # HF-port configs re-save generic bos/eos defaults; the real EOS lives at 199998+
-+            eos_id = 200006
-+        # 200006 is the SOLE end-of-generation token; <|end_message|> (200010) is an
-+        # intra-turn block separator and must NOT be registered eot/eog
-+        self.gguf_writer.add_eos_token_id(eos_id)
-+        # no BOS is ever prepended; pin bos to EOS so a stale base-tokenizer bos id never surfaces
-+        self.gguf_writer.add_bos_token_id(eos_id)
-+        self.gguf_writer.add_add_bos_token(False)
-+
-+    def set_gguf_parameters(self):
-+        super().set_gguf_parameters()
-+        hp = self.hparams
-+
-+        self.gguf_writer.add_vocab_size(hp["vocab_size"])
-+        self.gguf_writer.add_expert_feed_forward_length(hp["intermediate_size"])
-+        self.gguf_writer.add_expert_shared_count(hp["n_shared_experts"])
-+        self.gguf_writer.add_expert_weights_scale(hp["route_scale"])
-+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
-+
-+        # sliding_window_size is canonical; explicit is-None fallback so a serialized 0 cannot bypass the mismatch check
-+        canonical_window = hp["sliding_window_size"]
-+        sliding_window = hp.get("sliding_window")
-+        if sliding_window is None:
-+            sliding_window = canonical_window
-+        elif sliding_window != canonical_window:
-+            raise ValueError(
-+                f"sliding_window {sliding_window} disagrees with sliding_window_size "
-+                f"{canonical_window!r}"
-+            )
-+        if sliding_window <= 0:
-+            raise ValueError(f"sliding_window must be positive, got {sliding_window}")
-+        self.gguf_writer.add_sliding_window(sliding_window)
-+        # true = local (swa) layer
-+        all_local_layer_flags = self._local_layer_flags + self._mtp_local_layer_flags
-+        self.gguf_writer.add_sliding_window_pattern(all_local_layer_flags)
-+        if self._n_nextn > 0:
-+            self.gguf_writer.add_nextn_predict_layers(self._n_nextn)
-+
-+        # no RoPE (arch-determined NONE); custom inkling.* keys per INKLING_DESIGN.md
-+        arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
-+        self.gguf_writer.add_uint32(f"{arch}.d_rel", hp["d_rel"])
-+        self.gguf_writer.add_uint32(f"{arch}.rel_extent", hp["rel_extent"])
-+        self.gguf_writer.add_uint32(f"{arch}.rel_extent_swa", sliding_window)
-+        self.gguf_writer.add_uint32(f"{arch}.shortconv_kernel", hp["sconv_kernel_size"])
-+        self.gguf_writer.add_uint32(f"{arch}.dense_block_count", hp["dense_mlp_idx"])
-+        self.gguf_writer.add_float32(f"{arch}.logit_scale_denom", hp["logits_mup_width_multiplier"])
-+        self.gguf_writer.add_uint32(f"{arch}.log_scaling_n_floor", int(hp.get("log_scaling_n_floor") or 0))
-+        self.gguf_writer.add_float32(f"{arch}.log_scaling_alpha", hp.get("log_scaling_alpha", 0.0))
-+        n_unpadded = hp.get("unpadded_vocab_size") or hp["vocab_size"]
-+        self.gguf_writer.add_uint32(f"{arch}.unpadded_vocab_size", n_unpadded)
-+
-+        logger.info(f"gguf: (inkling) swa pattern (true=local) = {self._local_layer_flags}")
-+        if self._n_nextn > 0:
-+            logger.info(
-+                "gguf: (inkling) MTP depths = %d, local pattern = %s",
-+                self._n_nextn,
-+                self._mtp_local_layer_flags,
-+            )
-+        logger.info(f"gguf: (inkling) unpadded_vocab_size = {n_unpadded}")
-+
-+    @classmethod
-+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-+        name, gen = item
-+
-+        if name.startswith(cls._SKIP_PREFIXES):
-+            return None
-+        is_mtp = name.startswith("model.mtp.")
-+        if is_mtp and cls.no_mtp:
-+            return None
-+        if cls.mtp_only and not is_mtp and name not in cls._MTP_SHARED_NAMES:
-+            return None
-+
-+        name = name.replace("model.llm.", "model.")
-+        # parameter has no ".weight"-style suffix in the checkpoint
-+        name = name.replace("rel_logits_proj.proj", "rel_logits_proj.weight")
-+
-+        return super().filter_tensors((name, gen))
-+
-+    @staticmethod
-+    def _deinterleave_w13(w13: Tensor) -> tuple[Tensor, Tensor]:
-+        # interleaved SwiGLU along the output rows: silu(z[..., ::2]) * z[..., 1::2]
-+        gate = w13[..., 0::2, :].contiguous()
-+        up   = w13[..., 1::2, :].contiguous()
-+        return gate, up
-+
-+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-+        match = re.match(r"^model\.mtp\.layers\.(\d+)\.(.*)$", name)
-+        if match is not None:
-+            mtp_idx = int(match.group(1))
-+            if mtp_idx >= self._n_nextn:
-+                raise ValueError(f"MTP layer index {mtp_idx} >= declared count {self._n_nextn}")
-+            rest = match.group(2)
-+            rest = {
-+                "embed_norm.weight": "enorm.weight",
-+                "hidden_norm.weight": "hnorm.weight",
-+                "input_proj.weight": "eh_proj.weight",
-+            }.get(rest, rest.removeprefix("transformer_block."))
-+            bid = self.hparams["num_hidden_layers"] + mtp_idx
-+            name = f"model.layers.{bid}.{rest}"
-+        elif name.startswith("model.mtp."):
-+            raise ValueError(f"unexpected Inkling MTP tensor {name!r}")
-+
-+        # short convs: [C, 1, K] -> [C, K] (same layout as LFM2 shortconv.conv)
-+        if name.endswith("_sconv.weight"):
-+            data_torch = data_torch.squeeze(1)
-+            return [(self.map_tensor_name(name), data_torch)]
-+
-+        if name.endswith(".mlp.w13_dn.weight"):
-+            assert bid is not None
-+            gate, up = self._deinterleave_w13(data_torch)
-+            return [
-+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), gate),
-+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP,   bid), up),
-+            ]
-+
-+        if name.endswith(".mlp.global_scale") or name.endswith(".mlp.gate.global_scale"):
-+            assert bid is not None
-+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GSCALE, bid), data_torch.float())]
-+
-+        if name.endswith(".mlp.gate.bias"):
-+            assert bid is not None
-+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_EXP_PROBS_B, bid, ".bias"), data_torch.float())]
-+
-+        if name.endswith(".mlp.experts.w13_weight"):
-+            assert bid is not None
-+            gate, up = self._deinterleave_w13(data_torch)
-+            return [
-+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), gate),
-+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP,   bid), up),
-+            ]
-+        if name.endswith(".mlp.experts.w2_weight"):
-+            assert bid is not None
-+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid), data_torch)]
-+
-+        # shared experts stored stacked for mul_mat_id
-+        if name.endswith(".mlp.shared_experts.shared_w13_weight"):
-+            assert bid is not None
-+            gate, up = self._deinterleave_w13(data_torch)
-+            return [
-+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), gate),
-+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP,   bid), up),
-+            ]
-+        if name.endswith(".mlp.shared_experts.shared_w2_weight"):
-+            assert bid is not None
-+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, bid), data_torch)]
-+
-+        return [(self.map_tensor_name(name), data_torch)]
-+
-+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int):
-+        # used in fp32 rel-bias math; keep full precision
-+        if new_name.endswith("attn_rel_proj.weight"):
-+            return gguf.GGMLQuantizationType.F32
-+        # ggml_ssm_conv kernels are F32-only
-+        if ".shortconv_" in new_name:
-+            return gguf.GGMLQuantizationType.F32
-+        return super().tensor_force_quant(name, new_name, bid, n_dims)
-+
-+    def prepare_metadata(self, vocab_only: bool):
-+        from_dir = self.fname_out.is_dir()
-+        super().prepare_metadata(vocab_only=vocab_only)
-+        if not self.mtp_only or not from_dir:
-+            return
-+        output_type: str = self.ftype.name.partition("_")[2]
-+        fname_default: str = gguf.naming_convention(
-+            self.metadata.name,
-+            self.metadata.basename,
-+            self.metadata.finetune,
-+            self.metadata.version,
-+            size_label=None,
-+            output_type=output_type,
-+            model_type=None,
-+        )
-+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
-+
-+
-+@ModelBase.register("InklingForConditionalGeneration")
-+class InklingMmprojModel(MmprojModel):
-+    """Export Inkling's hMLP and dMel towers as one mtmd projector."""
-+
-+    has_vision_encoder = True
-+    has_audio_encoder = True
-+
-+    _IMAGE_MEAN = [0.48145466, 0.4578275, 0.40821073]
-+    _IMAGE_STD = [0.26862954, 0.2613026, 0.2757771]
-+
-+    def __init__(self, *args, **kwargs):
-+        super().__init__(*args, **kwargs)
-+        assert self.hparams_vision is not None
-+        hp = self.hparams_vision
-+        expected = {
-+            "vision_encoder_type": "hmlp",
-+            "patch_size": 40,
-+            "temporal_patch_size": 2,
-+            "n_channels": 3,
-+            "n_layers": 4,
-+            "decoder_dmodel": 6144,
-+            "use_vision_norm": True,
-+        }
-+        for key, want in expected.items():
-+            got = hp.get(key, want)
-+            if got != want:
-+                raise NotImplementedError(
-+                    f"Inkling mmproj requires vision_config.{key}={want!r}, got {got!r}"
-+                )
-+
-+        assert self.hparams_audio is not None
-+        ahp = self.hparams_audio
-+        audio_expected = {
-+            "audio_mode": "dmel",
-+            "decoder_dmodel": 6144,
-+            "n_mel_bins": 80,
-+            "mel_vocab_size": 16,
-+            "use_audio_norm": True,
-+        }
-+        for key, want in audio_expected.items():
-+            got = ahp.get(key, want)
-+            if got != want:
-+                raise NotImplementedError(
-+                    f"Inkling mmproj requires audio_config.{key}={want!r}, got {got!r}"
-+                )
-+
-+    def set_gguf_parameters(self):
-+        hp = self.hparams_vision
-+        assert hp is not None
-+
-+        self.gguf_writer.add_file_type(self.ftype)
-+        self.gguf_writer.add_clip_has_vision_encoder(True)
-+        self.gguf_writer.add_clip_has_audio_encoder(True)
-+        self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.INKLING)
-+        self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.INKLING)
-+        self.gguf_writer.add_vision_projection_dim(hp["decoder_dmodel"])
-+
-+        # clip.cpp requires these common fields even though hMLP is not a ViT.
-+        self.gguf_writer.add_vision_image_size(hp["patch_size"])
-+        self.gguf_writer.add_vision_patch_size(hp["patch_size"])
-+        self.gguf_writer.add_vision_embedding_length(hp["n_channels"])
-+        self.gguf_writer.add_vision_feed_forward_length(0)
-+        self.gguf_writer.add_vision_block_count(hp["n_layers"])
-+        self.gguf_writer.add_vision_head_count(1)
-+        self.gguf_writer.add_vision_attention_layernorm_eps(1e-6)
-+        self.gguf_writer.add_vision_image_mean(self._IMAGE_MEAN)
-+        self.gguf_writer.add_vision_image_std(self._IMAGE_STD)
-+
-+        ahp = self.hparams_audio
-+        assert ahp is not None
-+        self.gguf_writer.add_audio_projection_dim(ahp["decoder_dmodel"])
-+        self.gguf_writer.add_audio_embedding_length(ahp["decoder_dmodel"])
-+        self.gguf_writer.add_audio_feed_forward_length(0)
-+        self.gguf_writer.add_audio_block_count(0)
-+        self.gguf_writer.add_audio_head_count(1)
-+        self.gguf_writer.add_audio_attention_layernorm_eps(1e-6)
-+        self.gguf_writer.add_audio_num_mel_bins(ahp["n_mel_bins"])
-+
-+    @classmethod
-+    def filter_tensors(cls, item):
-+        name, gen = item
-+        if not name.startswith(("model.visual.", "visual.", "model.audio.", "audio.")):
-+            return None
-+        return name, gen
-+
-+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-+        del bid
-+        if name.startswith(("model.audio.", "audio.")):
-+            prefix = "model.audio." if name.startswith("model.audio.") else "audio."
-+            local = name.removeprefix(prefix)
-+            if local == "encoder.weight":
-+                yield "a.dmel.embedding.weight", data_torch
-+                return
-+            if local == "final_norm.weight":
-+                yield "a.dmel.final_norm.weight", data_torch
-+                return
-+            raise ValueError(f"unexpected Inkling audio tensor {name!r}")
-+
-+        prefix = "model.visual." if name.startswith("model.visual.") else "visual."
-+        local = name.removeprefix(prefix)
-+        if local == "final_norm.weight":
-+            yield "v.hmlp.final_norm.weight", data_torch
-+            return
-+
-+        parts = local.split(".")
-+        if len(parts) == 3 and parts[0] == "layers" and parts[2] == "weight":
-+            kind, sep, layer_s = parts[1].partition("_")
-+            if sep and kind in ("linear", "norm") and layer_s.isdigit():
-+                yield f"v.hmlp.{int(layer_s)}.{kind}.weight", data_torch
-+                return
-+
-+        raise ValueError(f"unexpected Inkling vision tensor {name!r}")
-diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index f585adcee..bffd089ff 100644
---- a/gguf-py/gguf/constants.py
-+++ b/gguf-py/gguf/constants.py
-@@ -638,6 +638,7 @@ class MODEL_ARCH(IntEnum):
-     NANBEIGE         = auto()
-     QWEN3TTS         = auto()
-     POCKETTTS        = auto()
-+    INKLING          = auto()
- 
- 
- class VISION_PROJECTOR_TYPE(IntEnum):
-@@ -888,6 +889,14 @@ class MODEL_TENSOR(IntEnum):
-     SHORTCONV_CONV       = auto()
-     SHORTCONV_INPROJ     = auto()
-     SHORTCONV_OUTPROJ    = auto()
-+    # inkling
-+    ATTN_R               = auto()
-+    ATTN_REL_PROJ        = auto()
-+    SHORTCONV_K          = auto()
-+    SHORTCONV_V          = auto()
-+    SHORTCONV_ATTN       = auto()
-+    SHORTCONV_MLP        = auto()
-+    FFN_GSCALE           = auto()
-     VISEXP_ATTN_QKV      = auto()
-     VISEXP_ATTN_OUT      = auto()
-     VISEXP_GATE          = auto()
-@@ -1397,6 +1406,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
-     MODEL_ARCH.NANBEIGE:         "nanbeige",
-     MODEL_ARCH.QWEN3TTS:         "qwen3tts",
-     MODEL_ARCH.POCKETTTS:        "pockettts",
-+    MODEL_ARCH.INKLING:          "inkling",
- }
- 
- VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
-@@ -1645,6 +1655,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
-     MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
-     MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
-     MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
-+    MODEL_TENSOR.ATTN_R:                    "blk.{bid}.attn_r",             # inkling
-+    MODEL_TENSOR.ATTN_REL_PROJ:             "blk.{bid}.attn_rel_proj",      # inkling
-+    MODEL_TENSOR.SHORTCONV_K:               "blk.{bid}.shortconv_k",        # inkling
-+    MODEL_TENSOR.SHORTCONV_V:               "blk.{bid}.shortconv_v",        # inkling
-+    MODEL_TENSOR.SHORTCONV_ATTN:            "blk.{bid}.shortconv_attn",     # inkling
-+    MODEL_TENSOR.SHORTCONV_MLP:             "blk.{bid}.shortconv_mlp",      # inkling
-+    MODEL_TENSOR.FFN_GSCALE:                "blk.{bid}.ffn_gscale",         # inkling
-     MODEL_TENSOR.VISEXP_ATTN_QKV:           "blk.{bid}.vis_attn_qkv",
-     MODEL_TENSOR.VISEXP_ATTN_OUT:           "blk.{bid}.vis_attn_output",
-     MODEL_TENSOR.VISEXP_GATE:               "blk.{bid}.vis_gate",
-@@ -4976,6 +4993,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
-         MODEL_TENSOR.FFN_UP_EXP,
-         MODEL_TENSOR.FFN_EXP_PROBS_B,
-     ],
-+    MODEL_ARCH.INKLING: [
-+        MODEL_TENSOR.TOKEN_EMBD,
-+        MODEL_TENSOR.TOKEN_EMBD_NORM,
-+        MODEL_TENSOR.OUTPUT_NORM,
-+        MODEL_TENSOR.OUTPUT,
-+        MODEL_TENSOR.ATTN_NORM,
-+        MODEL_TENSOR.ATTN_Q,
-+        MODEL_TENSOR.ATTN_K,
-+        MODEL_TENSOR.ATTN_V,
-+        MODEL_TENSOR.ATTN_R,
-+        MODEL_TENSOR.ATTN_OUT,
-+        MODEL_TENSOR.ATTN_Q_NORM,
-+        MODEL_TENSOR.ATTN_K_NORM,
-+        MODEL_TENSOR.ATTN_REL_PROJ,
-+        MODEL_TENSOR.SHORTCONV_K,
-+        MODEL_TENSOR.SHORTCONV_V,
-+        MODEL_TENSOR.SHORTCONV_ATTN,
-+        MODEL_TENSOR.SHORTCONV_MLP,
-+        MODEL_TENSOR.FFN_NORM,
-+        MODEL_TENSOR.FFN_GATE,
-+        MODEL_TENSOR.FFN_UP,
-+        MODEL_TENSOR.FFN_DOWN,
-+        MODEL_TENSOR.FFN_GSCALE,
-+        MODEL_TENSOR.FFN_GATE_INP,
-+        MODEL_TENSOR.FFN_EXP_PROBS_B,
-+        MODEL_TENSOR.FFN_GATE_EXP,
-+        MODEL_TENSOR.FFN_UP_EXP,
-+        MODEL_TENSOR.FFN_DOWN_EXP,
-+        MODEL_TENSOR.FFN_GATE_SHEXP,
-+        MODEL_TENSOR.FFN_UP_SHEXP,
-+        MODEL_TENSOR.FFN_DOWN_SHEXP,
-+    ],
-     MODEL_ARCH.SMALLTHINKER: [
-         MODEL_TENSOR.TOKEN_EMBD,
-         MODEL_TENSOR.OUTPUT_NORM,
-@@ -5816,6 +5865,7 @@ class GGUFValueType(IntEnum):
- 
- 
- class VisionProjectorType:
-+    INKLING = "inkling"
-     GEMMA3 = "gemma3"
-     GEMMA3NV = "gemma3nv"
-     GEMMA3NA = "gemma3na"
-diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
-index d2dfeece5..3b1732e88 100644
---- a/gguf-py/gguf/tensor_mapping.py
-+++ b/gguf-py/gguf/tensor_mapping.py
-@@ -63,6 +63,7 @@ class TensorNameMap:
-             "model.layers.0.pre_norm",    # rwkv7
-             "backbone.norm",              # wavtokenizer
-             "model.embedding_norm",       # lfm2
-+            "model.embed_norm",           # inkling
-         ),
- 
-         # Position embeddings
-@@ -86,6 +87,7 @@ class TensorNameMap:
-             "model.lm_head",             # dflash
-             "model.transformer.ff_out",  # llada
-             "head.decoder",              # modern-bert
-+            "model.unembed",             # inkling
-         ),
-         MODEL_TENSOR.DENSE_2_OUT: (
-             "dense_2_out",  # embeddinggemma
-@@ -2761,6 +2763,53 @@ class TensorNameMap:
- 
-     # architecture-specific block mappings
-     arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
-+        MODEL_ARCH.INKLING: {
-+            MODEL_TENSOR.ATTN_NORM: (
-+                "model.layers.{bid}.attn_norm",
-+            ),
-+            MODEL_TENSOR.ATTN_Q: (
-+                "model.layers.{bid}.attn.wq_du",
-+            ),
-+            MODEL_TENSOR.ATTN_K: (
-+                "model.layers.{bid}.attn.wk_dv",
-+            ),
-+            MODEL_TENSOR.ATTN_V: (
-+                "model.layers.{bid}.attn.wv_dv",
-+            ),
-+            MODEL_TENSOR.ATTN_R: (
-+                "model.layers.{bid}.attn.wr_du",
-+            ),
-+            MODEL_TENSOR.ATTN_OUT: (
-+                "model.layers.{bid}.attn.wo_ud",
-+            ),
-+            MODEL_TENSOR.ATTN_Q_NORM: (
-+                "model.layers.{bid}.attn.q_norm",
-+            ),
-+            MODEL_TENSOR.ATTN_K_NORM: (
-+                "model.layers.{bid}.attn.k_norm",
-+            ),
-+            MODEL_TENSOR.ATTN_REL_PROJ: (
-+                "model.layers.{bid}.attn.rel_logits_proj",
-+            ),
-+            MODEL_TENSOR.SHORTCONV_K: (
-+                "model.layers.{bid}.attn.k_sconv",
-+            ),
-+            MODEL_TENSOR.SHORTCONV_V: (
-+                "model.layers.{bid}.attn.v_sconv",
-+            ),
-+            MODEL_TENSOR.SHORTCONV_ATTN: (
-+                "model.layers.{bid}.attn_sconv",
-+            ),
-+            MODEL_TENSOR.SHORTCONV_MLP: (
-+                "model.layers.{bid}.mlp_sconv",
-+            ),
-+            MODEL_TENSOR.FFN_NORM: (
-+                "model.layers.{bid}.mlp_norm",
-+            ),
-+            MODEL_TENSOR.FFN_DOWN: (
-+                "model.layers.{bid}.mlp.w2_md",
-+            ),
-+        },
-         MODEL_ARCH.ARCTIC: {
-             MODEL_TENSOR.FFN_NORM: (
-                 "model.layers.{bid}.residual_layernorm",
 diff --git a/models/templates/Inkling.jinja b/models/templates/Inkling.jinja
 new file mode 100644
 index 000000000..95874d23d
@@ -1383,19 +733,19 @@ index 000000000..95874d23d
 +{%- endif -%}
 +{#- Unsloth translation to jinja from TML's parser #}
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index 5e2aa6963..843da23c2 100644
+index 50cf12122..89e1fc386 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -158,6 +158,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
-     { LLM_ARCH_NANBEIGE,         "nanbeige"         },
+@@ -164,6 +164,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
      { LLM_ARCH_QWEN3TTS,         "qwen3tts"         },
      { LLM_ARCH_POCKETTTS,        "pockettts"        },
+     { LLM_ARCH_K2_HORIZON,       "k2-horizon"       },
 +    { LLM_ARCH_INKLING,          "inkling"          },
      { LLM_ARCH_UNKNOWN,          "(unknown)"        },
  };
  
-@@ -374,6 +375,18 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
-     { LLM_KV_DFLASH_SELECTOR_TOP_K,   "%s.selector_top_k"   },
+@@ -402,6 +403,18 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+     { LLM_KV_LILICORR_MLP_HIDDEN_SIZE,   "lilicorr.mlp_hidden_size"  },
  
      { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
 +
@@ -1413,7 +763,7 @@ index 5e2aa6963..843da23c2 100644
      // sentence-transformers dense modules feature dims
      { LLM_KV_DENSE_2_FEAT_IN,        "%s.dense_2_feat_in"  },
      { LLM_KV_DENSE_2_FEAT_OUT,       "%s.dense_2_feat_out" },
-@@ -1113,6 +1126,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
+@@ -1234,6 +1247,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
          case LLM_ARCH_QWEN4EXP:
          case LLM_ARCH_DEEPSEEK4:
          case LLM_ARCH_MINIMAX_01:
@@ -1421,27 +771,27 @@ index 5e2aa6963..843da23c2 100644
              return true;
          default:
              return false;
-@@ -1181,6 +1195,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
+@@ -1318,6 +1332,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
          case LLM_ARCH_KIMI_K3:
+         case LLM_ARCH_GLM5_NEXT:
          case LLM_ARCH_QWEN3TTS:
-         case LLM_ARCH_QWEN4EXP:   // TODO: fix test-llama-archs
 +        case LLM_ARCH_INKLING:
              return false;
          default:
              return true;
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index e6732e854..c48613aca 100644
+index d822d6d76..fe46aa888 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -163,6 +163,7 @@ enum llm_arch {
-     LLM_ARCH_POCKETTTS,
+@@ -169,6 +169,7 @@ enum llm_arch {
      LLM_ARCH_MINIMAX_01,
      LLM_ARCH_HRM_TEXT,
+     LLM_ARCH_K2_HORIZON,
 +    LLM_ARCH_INKLING,
      LLM_ARCH_UNKNOWN,
  };
  
-@@ -420,6 +421,17 @@ enum llm_kv {
+@@ -448,6 +449,17 @@ enum llm_kv {
  
      LLM_KV_SHORTCONV_L_CACHE,
  
@@ -1459,7 +809,7 @@ index e6732e854..c48613aca 100644
      LLM_KV_XIELU_ALPHA_N,
      LLM_KV_XIELU_ALPHA_P,
      LLM_KV_XIELU_BETA,
-@@ -487,6 +499,10 @@ enum llm_tensor {
+@@ -527,6 +539,10 @@ enum llm_tensor {
      LLM_TENSOR_FFN_DOWN_CHEXPS,
      LLM_TENSOR_FFN_GATE_CHEXPS,
      LLM_TENSOR_FFN_UP_CHEXPS,
@@ -1470,7 +820,7 @@ index e6732e854..c48613aca 100644
      LLM_TENSOR_FFN_EXP_PROBS_B,
      LLM_TENSOR_FFN_EXP_PROBS_B_VL,
      LLM_TENSOR_FFN_LATENT_DOWN,
-@@ -673,6 +689,14 @@ enum llm_tensor {
+@@ -732,6 +748,14 @@ enum llm_tensor {
      LLM_TENSOR_SHORTCONV_CONV,
      LLM_TENSOR_SHORTCONV_INPROJ,
      LLM_TENSOR_SHORTCONV_OUTPROJ,
@@ -1486,10 +836,10 @@ index e6732e854..c48613aca 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 43b424361..66d484684 100644
+index b966f8ccd..56390f221 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -181,6 +181,12 @@ llama_context::llama_context(
+@@ -272,6 +272,12 @@ llama_context::llama_context(
          }
      }
  
@@ -1503,10 +853,10 @@ index 43b424361..66d484684 100644
      // the trunk tensors through ctx_other (see graph_mtp in nemotron-h-moe.cpp).
      // Without this clause the constructor silently drops params.ctx_other and
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 53b287d48..b5025dd26 100644
+index ec6e4d075..569b27022 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -3122,9 +3122,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3401,9 +3401,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
  
      ggml_tensor * cur;
  
@@ -1549,10 +899,10 @@ index e53a51cd8..057123fd6 100644
      }
  
 diff --git a/src/llama-hparams.h b/src/llama-hparams.h
-index de8cfdd3d..9387f526b 100644
+index a7c608537..bc30ead2f 100644
 --- a/src/llama-hparams.h
 +++ b/src/llama-hparams.h
-@@ -93,9 +93,17 @@ struct llama_hparams {
+@@ -103,9 +103,17 @@ struct llama_hparams {
  
      uint32_t n_shortconv_l_cache  = 0;
  
@@ -1572,10 +922,10 @@ index de8cfdd3d..9387f526b 100644
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
      std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 9d855f1d5..fea4ce1c6 100644
+index 80edf6865..021fdfe2e 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
-@@ -268,6 +268,10 @@ public:
+@@ -287,6 +287,10 @@ public:
      void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
      void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
  
@@ -1586,7 +936,7 @@ index 9d855f1d5..fea4ce1c6 100644
      void set_input_k_rot(ggml_tensor * dst) const;
      void set_input_v_rot(ggml_tensor * dst) const;
  
-@@ -479,6 +483,7 @@ public:
+@@ -504,6 +508,7 @@ public:
      void set_input_k_shift   (ggml_tensor * dst) const;
      void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
      void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
@@ -1595,31 +945,31 @@ index 9d855f1d5..fea4ce1c6 100644
      void set_input_k_rot(ggml_tensor * dst) const;
      void set_input_v_rot(ggml_tensor * dst) const;
 diff --git a/src/llama-model-saver.cpp b/src/llama-model-saver.cpp
-index 39160a417..e466919d5 100644
+index e011e24ea..7ddb0a54b 100644
 --- a/src/llama-model-saver.cpp
 +++ b/src/llama-model-saver.cpp
-@@ -20,6 +20,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
-         case LLM_ARCH_T5:
-         case LLM_ARCH_APERTUS:
+@@ -22,6 +22,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
          case LLM_ARCH_STEP35:
+         case LLM_ARCH_CLEF: // the head tensors are not saved
+         case LLM_ARCH_VLLM_DECISION2:
 +        case LLM_ARCH_INKLING:
              return false;
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 8bbb935ef..887adad5f 100644
+index 9901eca36..e39a0dcfb 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -343,6 +343,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
-             return new llama_model_step35(params);
-         case LLM_ARCH_SPARK2_5:
+@@ -355,6 +355,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_spark2_5(params);
+         case LLM_ARCH_K2_HORIZON:
+             return new llama_model_k2_horizon(params);
 +        case LLM_ARCH_INKLING:
 +            return new llama_model_inkling(params);
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -2682,8 +2684,19 @@ llama_memory_i * llama_model::create_memory(
+@@ -3215,8 +3217,19 @@ llama_memory_i * llama_model::create_memory(
                      llama_memory_hybrid::layer_filter_cb filter_idx  = nullptr;
                      const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP);
                      if (arch == LLM_ARCH_FALCON_H1) {
@@ -1639,19 +989,19 @@ index 8bbb935ef..887adad5f 100644
                      } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                          filter_attn = [&](uint32_t il) {
                              return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
-@@ -3052,6 +3065,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
-         case LLM_ARCH_NEMOTRON_H_MOE:
+@@ -3600,6 +3613,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_KIMI_LINEAR:
          case LLM_ARCH_KIMI_K3:
+         case LLM_ARCH_GLM5_NEXT:
 +        case LLM_ARCH_INKLING:
              return LLAMA_ROPE_TYPE_NONE;
  
          // use what we call a normal RoPE, operating on pairs of consecutive head values
 diff --git a/src/llama-model.h b/src/llama-model.h
-index c394542e2..fe05b611d 100644
+index 42210ef67..34a94365d 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -593,6 +593,15 @@ struct llama_layer {
+@@ -623,6 +623,15 @@ struct llama_layer {
  
      struct llama_layer_nextn nextn;
  
@@ -1668,7 +1018,7 @@ index c394542e2..fe05b611d 100644
  };
  
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 4a22b95d4..e7cb08315 100644
+index 1fdb97303..9992659d8 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
 @@ -324,6 +324,16 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
@@ -1689,7 +1039,7 @@ index 4a22b95d4..e7cb08315 100644
      quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
      quantize &= name.find("indexer.q_proj.weight") == std::string::npos;
 diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
-index e038637ce..5fee4fdaa 100644
+index 9b5cc2e1c..a800d3ff3 100644
 --- a/src/llama-vocab.cpp
 +++ b/src/llama-vocab.cpp
 @@ -443,6 +443,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
@@ -1705,7 +1055,7 @@ index e038637ce..5fee4fdaa 100644
              case LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI:
                  // Same lookaheads as GPT4O but with \p{M} added so combining marks
                  // (diacritics) attach to their base letters. Avoids excessive
-@@ -2340,6 +2346,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+@@ -2475,6 +2481,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                  tokenizer_pre == "talkie") {
                  pre_type = LLAMA_VOCAB_PRE_TYPE_GPT4O;
                  clean_spaces = false;
@@ -1717,20 +1067,20 @@ index e038637ce..5fee4fdaa 100644
                  tokenizer_pre == "granite-embed-multi-97m") {
                  pre_type = LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI;
 diff --git a/src/llama-vocab.h b/src/llama-vocab.h
-index 3fb061f0e..e7d5f5dfb 100644
+index 898a23ae6..3ab139857 100644
 --- a/src/llama-vocab.h
 +++ b/src/llama-vocab.h
-@@ -68,6 +68,7 @@ enum llama_vocab_pre_type {
-     LLAMA_VOCAB_PRE_TYPE_HY_V4             = 57,
-     LLAMA_VOCAB_PRE_TYPE_SPARK2_5          = 58,
+@@ -70,6 +70,7 @@ enum llama_vocab_pre_type {
      LLAMA_VOCAB_PRE_TYPE_UFAKZEKA          = 59,
-+    LLAMA_VOCAB_PRE_TYPE_INKLING           = 60,
+     LLAMA_VOCAB_PRE_TYPE_MMBERT            = 60,
+     LLAMA_VOCAB_PRE_TYPE_K2_HORIZON        = 61,
++    LLAMA_VOCAB_PRE_TYPE_INKLING           = 62,
  };
  
  struct LLM_KV;
 diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
 new file mode 100644
-index 000000000..79c9f9286
+index 000000000..4037a31ec
 --- /dev/null
 +++ b/src/models/inkling.cpp
 @@ -0,0 +1,687 @@
@@ -2323,7 +1673,7 @@ index 000000000..79c9f9286
 +        GGML_ASSERT(layer.nextn.eh_proj && layer.nextn.enorm && layer.nextn.hnorm);
 +        GGML_ASSERT(shared_model->tok_embd && shared_model->tok_norm && shared_model->output);
 +
-+        auto mtp_inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
++        auto mtp_inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd, hparams.n_embd);
 +        mtp_inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
 +        ggml_set_input(mtp_inp->tokens);
 +        mtp_inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
@@ -2422,10 +1772,10 @@ index 000000000..79c9f9286
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 3f9c67c63..527ea4ba6 100644
+index 88fd07d97..fc5e5b61d 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -2173,6 +2173,19 @@ struct llama_model_lfm2moe : public llama_model_base {
+@@ -2264,6 +2264,19 @@ struct llama_model_lfm2moe : public llama_model_base {
  };
  
  
@@ -2446,7 +1796,7 @@ index 3f9c67c63..527ea4ba6 100644
      llama_model_smallthinker(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/src/models/nemotron-h-moe.cpp b/src/models/nemotron-h-moe.cpp
-index bd8408d5a..ce1cec84f 100644
+index a80d7970e..7b454ba00 100644
 --- a/src/models/nemotron-h-moe.cpp
 +++ b/src/models/nemotron-h-moe.cpp
 @@ -23,7 +23,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
@@ -2459,7 +1809,7 @@ index bd8408d5a..ce1cec84f 100644
      ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens
                            : (model.tok_embd          ? model.tok_embd
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 3d15111fb304c38341aade0a9e44e09962f55c87..18f39a7d9 100644
+index 3d15111fb..258c86143 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
 @@ -7,6 +7,7 @@
@@ -2537,7 +1887,7 @@ index 3d15111fb304c38341aade0a9e44e09962f55c87..18f39a7d9 100644
      // MTP consumes complete pre-norm output rows, which can be wider than
      // token embeddings (for example DeepSeek4 hyperconnections).
      const int32_t n_hidden = llama_model_n_embd_out(session->stage_model->model);
-@@ -337,9 +364,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -340,9 +367,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
  }
  
  int skippy_external_decode_observe(llama_context * ctx, const llama_batch & batch) {
@@ -2596,7 +1946,7 @@ index 3d15111fb304c38341aade0a9e44e09962f55c87..18f39a7d9 100644
  }
  
  skippy_graph_build_inputs skippy_external_decode_build_inputs(llama_context * ctx) {
-@@ -390,7 +463,7 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -393,7 +466,7 @@ enum skippy_status skippy_mtp_propose_next(
              max_draft_tokens,
              SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS);
      const bool chain_heads = mtp_depth_scope.chains_heads();
@@ -2606,10 +1956,10 @@ index 3d15111fb304c38341aade0a9e44e09962f55c87..18f39a7d9 100644
          draft_limit = std::min<size_t>(draft_limit, mtp_depth_scope.depth_count);
      }
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index e125786fa..32a55d405 100644
+index bff571609..c6be5a10a 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
-@@ -2991,6 +2991,97 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -3032,6 +3032,97 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
              .run();
      }
  
@@ -2707,7 +2057,7 @@ index e125786fa..32a55d405 100644
      {
          // Google Gemma 2 2B - does not support tool calling
          auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja");
-@@ -7322,6 +7413,28 @@ static void test_template_generation_prompt() {
+@@ -7690,6 +7781,28 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
  
@@ -2722,9 +2072,9 @@ index e125786fa..32a55d405 100644
 +            inputs.chat_template_kwargs["reasoning_effort"] = json(effort).dump();
 +            return common_chat_templates_apply(tmpls.get(), inputs).prompt;
 +        };
-+        const auto off  = render_effort("none");
-+        const auto high = render_effort("high");
-+        const auto max  = render_effort("max");
++        const auto off  = render_effort("none").str();
++        const auto high = render_effort("high").str();
++        const auto max  = render_effort("max").str();
 +        assert_contains(off, "Thinking effort level: 0");
 +        assert_contains(high, "Thinking effort level: 0.9");
 +        assert_contains(max, "Thinking effort level: 0.99");
@@ -2734,22 +2084,22 @@ index e125786fa..32a55d405 100644
 +    }
 +
      {
-         // The stage alias hardening must win when thinking is explicitly disabled.
+         // Preserve canonical "none" while keeping the boolean aliases disabled.
          auto render_disabled = [](const char * template_path) {
-@@ -7355,6 +7468,8 @@ static void test_template_generation_prompt() {
+@@ -7723,6 +7836,8 @@ static void test_template_generation_prompt() {
          assert_contains(qwen, "<think>\n\n</think>\n\n");
-         const auto gpt_oss = render_disabled("models/templates/openai-gpt-oss-120b.jinja");
-         assert_contains(gpt_oss, "Reasoning: 0");
-+        const auto inkling = render_disabled("models/templates/Inkling.jinja");
+         const auto gpt_oss = render_disabled("models/templates/openai-gpt-oss-120b.jinja").str();
+         assert_contains(gpt_oss, "Reasoning: none");
++        const auto inkling = render_disabled("models/templates/Inkling.jinja").str();
 +        assert_contains(inkling, "Thinking effort level: 0");
      }
  }
  
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 32d8c6af3..a8150b9ff 100644
+index ef56c4c61..e791fcaf9 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -747,6 +747,10 @@ static bool arch_supported(const llm_arch arch) {
+@@ -936,6 +936,10 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -2761,7 +2111,7 @@ index 32d8c6af3..a8150b9ff 100644
  #ifdef GGML_USE_WEBGPU
      if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
 diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
-index 91db32c40..2e8225a8b 100644
+index 82f74bdc9..860f6d3ea 100644
 --- a/tools/mtmd/CMakeLists.txt
 +++ b/tools/mtmd/CMakeLists.txt
 @@ -43,6 +43,7 @@ add_library(mtmd
@@ -2773,10 +2123,10 @@ index 91db32c40..2e8225a8b 100644
              models/kimik25.cpp
              models/nemotron-v2-vl.cpp
 diff --git a/tools/mtmd/clip-impl.h b/tools/mtmd/clip-impl.h
-index d18c76bf8..760735967 100644
+index 3d6c6f8c4..f936f3ceb 100644
 --- a/tools/mtmd/clip-impl.h
 +++ b/tools/mtmd/clip-impl.h
-@@ -374,6 +374,13 @@
+@@ -378,6 +378,13 @@
  #define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
  #define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
  
@@ -2790,7 +2140,7 @@ index d18c76bf8..760735967 100644
  // mobilenetv5 (gemma3n) definitions
  #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
  #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
-@@ -442,6 +449,7 @@
+@@ -446,6 +453,7 @@
  struct clip_ctx;
  
  enum projector_type {
@@ -2798,7 +2148,7 @@ index d18c76bf8..760735967 100644
      PROJECTOR_TYPE_MLP,
      PROJECTOR_TYPE_MLP_NORM,
      PROJECTOR_TYPE_LDP,
-@@ -509,6 +517,7 @@ enum projector_type {
+@@ -519,6 +527,7 @@ enum projector_type {
  };
  
  static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
@@ -2807,10 +2157,10 @@ index d18c76bf8..760735967 100644
      { PROJECTOR_TYPE_LDP,               "ldp" },
      { PROJECTOR_TYPE_LDPV2,             "ldpv2"},
 diff --git a/tools/mtmd/clip-model.h b/tools/mtmd/clip-model.h
-index f737ccc24..f47a30054 100644
+index 2c4ea398c..bef80ac73 100644
 --- a/tools/mtmd/clip-model.h
 +++ b/tools/mtmd/clip-model.h
-@@ -550,6 +550,12 @@ struct clip_code2wav {
+@@ -556,6 +556,12 @@ struct clip_code2wav {
      ggml_tensor * dac_post_snake_beta  = nullptr;
      ggml_tensor * dac_post_conv_w      = nullptr;
      ggml_tensor * dac_post_conv_b      = nullptr;
@@ -2823,7 +2173,7 @@ index f737ccc24..f47a30054 100644
  };
  
  struct clip_model {
-@@ -566,6 +572,12 @@ struct clip_model {
+@@ -572,6 +578,12 @@ struct clip_model {
      ggml_tensor * norm_embd_w = nullptr;
      ggml_tensor * norm_embd_b = nullptr;
  
@@ -2837,10 +2187,10 @@ index f737ccc24..f47a30054 100644
      ggml_tensor * patch_norm_1_w = nullptr;
      ggml_tensor * patch_norm_1_b = nullptr;
 diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
-index 62d146e1d..b404bb767 100644
+index 4c1185a43..38ace4b1a 100644
 --- a/tools/mtmd/clip.cpp
 +++ b/tools/mtmd/clip.cpp
-@@ -933,6 +933,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
+@@ -956,6 +956,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const
      std::unique_ptr<clip_graph> builder;
  
      switch (ctx->proj_type()) {
@@ -2850,8 +2200,8 @@ index 62d146e1d..b404bb767 100644
 +            } break;
          case PROJECTOR_TYPE_GEMMA3:
          case PROJECTOR_TYPE_IDEFICS3:
-         case PROJECTOR_TYPE_LFM2:
-@@ -1423,6 +1427,21 @@ struct clip_model_loader {
+         case PROJECTOR_TYPE_COHERE2V:
+@@ -1456,6 +1460,21 @@ struct clip_model_loader {
  
              // model-specific params
              switch (model.proj_type) {
@@ -2873,7 +2223,7 @@ index 62d146e1d..b404bb767 100644
                  case PROJECTOR_TYPE_MLP:
                  case PROJECTOR_TYPE_MLP_NORM:
                  case PROJECTOR_TYPE_LDP:
-@@ -2254,7 +2273,8 @@ struct clip_model_loader {
+@@ -2348,7 +2367,8 @@ struct clip_model_loader {
          const bool has_standard_layers = (
              model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
              model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
@@ -2883,7 +2233,7 @@ index 62d146e1d..b404bb767 100644
  
          // layers
          const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
-@@ -2348,6 +2368,23 @@ struct clip_model_loader {
+@@ -2443,6 +2463,23 @@ struct clip_model_loader {
  
  
          switch (model.proj_type) {
@@ -2907,7 +2257,7 @@ index 62d146e1d..b404bb767 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
                  {
-@@ -3700,6 +3737,11 @@ struct clip_model_loader {
+@@ -3818,6 +3855,11 @@ struct clip_model_loader {
              LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
          }
          batch.entries.push_back(img);
@@ -2919,7 +2269,7 @@ index 62d146e1d..b404bb767 100644
          return batch;
      }
  
-@@ -4117,6 +4159,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
+@@ -4253,6 +4295,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
      projector_type proj = ctx->proj_type();
  
      switch (proj) {
@@ -2936,7 +2286,7 @@ index 62d146e1d..b404bb767 100644
          case PROJECTOR_TYPE_MLP:
          case PROJECTOR_TYPE_MLP_NORM:
          case PROJECTOR_TYPE_JANUS_PRO:
-@@ -4610,6 +4662,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -4768,6 +4820,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
      // set input per projector
      switch (ctx->model.proj_type) {
@@ -2947,7 +2297,7 @@ index 62d146e1d..b404bb767 100644
          case PROJECTOR_TYPE_MUSE_GLIMMER:
              {
                  const int grid_w = pos_w;            // image_size_width  / patch_size
-@@ -5944,6 +6000,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
+@@ -6108,6 +6164,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
  
  int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
      switch (ctx->model.proj_type) {
@@ -3070,7 +2420,7 @@ index 000000000..c04a8c989
 +    return gf;
 +}
 diff --git a/tools/mtmd/models/models.h b/tools/mtmd/models/models.h
-index adb5ede30..ee0f351d6 100644
+index 2f4676a54..fbedb1b71 100644
 --- a/tools/mtmd/models/models.h
 +++ b/tools/mtmd/models/models.h
 @@ -17,6 +17,17 @@ struct clip_graph_siglip : clip_graph {
@@ -3092,10 +2442,10 @@ index adb5ede30..ee0f351d6 100644
      clip_graph_gemma4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
      ggml_cgraph * build() override;
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index 6f017519f..ebdc39cf0 100644
+index 2eebb90bd..d75c03cb5 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
-@@ -539,6 +539,75 @@ static bool log_mel_spectrogram(
+@@ -541,6 +541,75 @@ static bool log_mel_spectrogram(
      return true;
  }
  
@@ -3172,10 +2522,10 @@ index 6f017519f..ebdc39cf0 100644
  // mtmd_audio_preprocessor_whisper
  //
 diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
-index 4a15fe6d4..984b475d8 100644
+index 4ca6cbd55..9e7c8da55 100644
 --- a/tools/mtmd/mtmd-audio.h
 +++ b/tools/mtmd/mtmd-audio.h
-@@ -69,6 +69,16 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
+@@ -70,6 +70,16 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
      mtmd_audio_cache cache;
  };
  
@@ -3191,9 +2541,9 @@ index 4a15fe6d4..984b475d8 100644
 +
  struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
      mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
-     void initialize() override;
+     mtmd_audio_preprocessor_conformer(const clip_hparams & hparams) : mtmd_audio_preprocessor(hparams) {}
 diff --git a/tools/mtmd/mtmd-image.cpp b/tools/mtmd/mtmd-image.cpp
-index 9b2e98862..c17392fc9 100644
+index a34fd4548..5a9c11025 100644
 --- a/tools/mtmd/mtmd-image.cpp
 +++ b/tools/mtmd/mtmd-image.cpp
 @@ -487,6 +487,78 @@ private:
@@ -3276,7 +2626,7 @@ index 9b2e98862..c17392fc9 100644
  // mtmd_image_preprocessor_llava_uhd
  //
 diff --git a/tools/mtmd/mtmd-image.h b/tools/mtmd/mtmd-image.h
-index e2cf69872..39ec62b19 100644
+index b318b2d42..e44ee2744 100644
 --- a/tools/mtmd/mtmd-image.h
 +++ b/tools/mtmd/mtmd-image.h
 @@ -26,6 +26,20 @@ struct mtmd_image_preproc_out {
@@ -3300,7 +2650,7 @@ index e2cf69872..39ec62b19 100644
  // base class, models must inherit from this class
  struct mtmd_image_preprocessor {
      const clip_hparams & hparams;
-@@ -115,6 +129,12 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
+@@ -126,6 +140,12 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
      mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
  };
  
@@ -3314,10 +2664,10 @@ index e2cf69872..39ec62b19 100644
  // if image_resize_pad is true, the resized image will be padded, otherwise it will be either stretched or center-cropped depending on image_resize_pad
  // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
 diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
-index 2efa4d65d..f70fe3f16 100644
+index 2fa02f83e..ef113a3a0 100644
 --- a/tools/mtmd/mtmd.cpp
 +++ b/tools/mtmd/mtmd.cpp
-@@ -631,6 +631,12 @@ struct mtmd_context {
+@@ -673,6 +673,12 @@ struct mtmd_context {
          projector_type proj = clip_get_projector_type(ctx_v);
  
          switch (proj) {
@@ -3330,7 +2680,7 @@ index 2efa4d65d..f70fe3f16 100644
              case PROJECTOR_TYPE_MLP:
              case PROJECTOR_TYPE_MLP_NORM:
              case PROJECTOR_TYPE_LDP:
-@@ -929,6 +935,13 @@ struct mtmd_context {
+@@ -1001,6 +1007,13 @@ struct mtmd_context {
  
          // set preprocessor
          switch (proj) {
@@ -3344,7 +2694,7 @@ index 2efa4d65d..f70fe3f16 100644
              case PROJECTOR_TYPE_QWEN2A:
              case PROJECTOR_TYPE_QWEN25O:
                  {
-@@ -1492,23 +1505,35 @@ struct mtmd_tokenizer {
+@@ -1579,23 +1592,35 @@ struct mtmd_tokenizer {
                  }
  
                  size_t n_tokens = 0;
@@ -3387,5 +2737,5 @@ index 2efa4d65d..f70fe3f16 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

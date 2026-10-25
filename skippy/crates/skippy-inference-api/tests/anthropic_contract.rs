@@ -1,7 +1,7 @@
 //! Contract tests for the Anthropic `/v1/messages` surface.
 //!
 //! Same shape as `lifecycle_observer.rs` / `benchy_contract.rs`: a mock
-//! [`OpenAiBackend`] behind the real router, exercised via
+//! [`InferenceBackend`] behind the real router, exercised via
 //! `tower::ServiceExt::oneshot`, asserting the wire protocol end to end
 //! (request translation, response envelope, SSE event sequence, tool
 //! round-trips, and error bodies).
@@ -18,8 +18,9 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use skippy_inference_api::{
     ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta, ChatCompletionRequest,
-    ChatCompletionResponse, ChatCompletionStream, FinishReason, ModelObject, OpenAiBackend,
-    OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult, Usage, router_for_with_config,
+    ChatCompletionResponse, ChatCompletionStream, FinishReason, InferenceBackend,
+    InferenceFrontendConfig, InferenceRequestContext, InferenceResult, ModelObject, Usage,
+    router_for_with_config,
 };
 use tower::ServiceExt;
 
@@ -28,32 +29,32 @@ const MODEL_ID: &str = "org/repo:Q4_K_M";
 #[derive(Default)]
 struct RecordingBackend {
     seen_requests: Mutex<Vec<ChatCompletionRequest>>,
-    stream_responses: Mutex<Vec<Vec<OpenAiResult<ChatCompletionChunk>>>>,
+    stream_responses: Mutex<Vec<Vec<InferenceResult<ChatCompletionChunk>>>>,
 }
 
 impl RecordingBackend {
     /// Queue a chunk script for the next streaming call (LIFO, mirroring the
     /// mock style used in `benchy_contract.rs`).
-    fn queue_stream(&self, chunks: Vec<OpenAiResult<ChatCompletionChunk>>) {
+    fn queue_stream(&self, chunks: Vec<InferenceResult<ChatCompletionChunk>>) {
         self.stream_responses.lock().expect("lock").push(chunks);
     }
 }
 
 #[async_trait]
-impl OpenAiBackend for RecordingBackend {
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+impl InferenceBackend for RecordingBackend {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
         self.seen_requests.lock().expect("lock").push(request);
         Ok(42)
     }
 
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new(MODEL_ID)])
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.seen_requests.lock().expect("lock").push(request);
         let mut response = ChatCompletionResponse::new(
             MODEL_ID,
@@ -67,8 +68,8 @@ impl OpenAiBackend for RecordingBackend {
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         self.seen_requests.lock().expect("lock").push(request);
         let scripted = self
             .stream_responses
@@ -88,12 +89,12 @@ impl OpenAiBackend for RecordingBackend {
 fn app() -> axum::Router {
     router_for_with_config(
         Arc::new(RecordingBackend::default()),
-        OpenAiFrontendConfig::default(),
+        InferenceFrontendConfig::default(),
     )
 }
 
 fn app_with(backend: RecordingBackend) -> axum::Router {
-    router_for_with_config(Arc::new(backend), OpenAiFrontendConfig::default())
+    router_for_with_config(Arc::new(backend), InferenceFrontendConfig::default())
 }
 
 async fn post_json(uri: &str, body: Value) -> (StatusCode, Value) {
@@ -607,10 +608,10 @@ async fn review_error_does_not_emit_success_end_turn() {
     let backend = RecordingBackend::default();
     backend.queue_stream(vec![
         Ok(ChatCompletionChunk::delta(MODEL_ID, "partial")),
-        Err(skippy_inference_api::OpenAiError::internal(
+        Err(skippy_inference_api::InferenceError::internal(
             "backend failed",
         )),
-        Err(skippy_inference_api::OpenAiError::internal(
+        Err(skippy_inference_api::InferenceError::internal(
             "second failure",
         )),
         Ok(ChatCompletionChunk::delta(MODEL_ID, "after failure")),
@@ -640,19 +641,19 @@ async fn review_usage_after_finish_is_reported() {
 }
 
 #[derive(Default)]
-struct AnthropicObserver(Mutex<Vec<skippy_inference_api::OpenAiLifecycleEvent>>);
-impl skippy_inference_api::OpenAiLifecycleObserver for AnthropicObserver {
-    fn observe(&self, event: &skippy_inference_api::OpenAiLifecycleEvent) {
+struct AnthropicObserver(Mutex<Vec<skippy_inference_api::InferenceLifecycleEvent>>);
+impl skippy_inference_api::InferenceLifecycleObserver for AnthropicObserver {
+    fn observe(&self, event: &skippy_inference_api::InferenceLifecycleEvent) {
         self.0.lock().unwrap().push(event.clone());
     }
 }
 struct InjectingHook;
 #[async_trait]
-impl skippy_inference_api::OpenAiHookPolicy for InjectingHook {
+impl skippy_inference_api::InferenceHookPolicy for InjectingHook {
     async fn before_chat_completion(
         &self,
         request: &mut ChatCompletionRequest,
-    ) -> OpenAiResult<skippy_inference_api::ChatHookOutcome> {
+    ) -> InferenceResult<skippy_inference_api::ChatHookOutcome> {
         assert_eq!(request.extra.get("mesh_hooks"), Some(&json!(true)));
         Ok(skippy_inference_api::ChatHookOutcome::injected(
             "hook-marker",
@@ -662,15 +663,15 @@ impl skippy_inference_api::OpenAiHookPolicy for InjectingHook {
 
 #[tokio::test]
 async fn anthropic_and_chat_share_hooks_and_terminal_usage() {
-    use skippy_inference_api::{HookedOpenAiBackend, OpenAiLifecycleEvent};
+    use skippy_inference_api::{HookedInferenceBackend, InferenceLifecycleEvent};
     let backend = Arc::new(RecordingBackend::default());
     let observer = Arc::new(AnthropicObserver::default());
     let app = router_for_with_config(
-        Arc::new(HookedOpenAiBackend::new(
+        Arc::new(HookedInferenceBackend::new(
             backend.clone(),
             Arc::new(InjectingHook),
         )),
-        OpenAiFrontendConfig::default().with_lifecycle_observer(observer.clone()),
+        InferenceFrontendConfig::default().with_lifecycle_observer(observer.clone()),
     );
     for path in ["/v1/messages", "/v1/chat/completions"] {
         let body = json!({"model":MODEL_ID,"max_tokens":32,"mesh_hooks":true,"messages":[{"role":"user","content":"hello"}]});
@@ -701,7 +702,7 @@ async fn anthropic_and_chat_share_hooks_and_terminal_usage() {
     let usages: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            OpenAiLifecycleEvent::ResponseCompleted { usage, .. } => Some(*usage),
+            InferenceLifecycleEvent::ResponseCompleted { usage, .. } => Some(*usage),
             _ => None,
         })
         .collect();
@@ -710,7 +711,7 @@ async fn anthropic_and_chat_share_hooks_and_terminal_usage() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event, OpenAiLifecycleEvent::NonStreamTerminal { .. }))
+            .filter(|event| matches!(event, InferenceLifecycleEvent::NonStreamTerminal { .. }))
             .count(),
         2
     );

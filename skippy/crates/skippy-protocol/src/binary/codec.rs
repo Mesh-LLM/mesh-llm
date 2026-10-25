@@ -202,7 +202,9 @@ fn write_native_mtp_draft(
     if draft.token_ids.len() > MAX_STAGE_PREDICTED_TOKENS {
         return Err(invalid_input("too many native MTP draft tokens"));
     }
-    write_i32(&mut writer, 1)?;
+    // Marker 2 is only sent to a stage 0 that set
+    // NATIVE_MTP_DRAFT_AFTER_CORRECTION; older readers reject it.
+    write_i32(&mut writer, if draft.follows_correction { 2 } else { 1 })?;
     write_i32(
         &mut writer,
         i32::try_from(draft.token_ids.len())
@@ -217,7 +219,7 @@ fn write_native_mtp_draft(
 fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNativeMtpDraft>> {
     match read_i32(&mut reader)? {
         0 => Ok(None),
-        1 => {
+        marker @ (1 | 2) => {
             let token_count = checked_i32_len(
                 read_i32(&mut reader)?,
                 MAX_STAGE_PREDICTED_TOKENS,
@@ -231,6 +233,7 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNative
             Ok(Some(StageNativeMtpDraft {
                 token_ids,
                 proposal_compute_us: read_i64(&mut reader)?,
+                follows_correction: marker == 2,
             }))
         }
         _ => Err(invalid_data("unknown native MTP draft reply marker")),

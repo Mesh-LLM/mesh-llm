@@ -429,13 +429,12 @@ fn read_source(repo_root: &Path, file: &str) -> DynResult<String> {
 }
 
 /// Entry point for `xtask repo-consistency no-console-print`.
-pub(crate) fn check_no_console_print_command(rest: &[String]) -> DynResult<()> {
+pub(crate) fn check_no_console_print_command(repo_root: &Path, rest: &[String]) -> DynResult<()> {
     if !rest.is_empty() {
         return Err("usage: cargo run -p xtask -- repo-consistency no-console-print".into());
     }
-    let repo_root = crate::repo_consistency::repo_root()?;
-    scope::check_exempt_crates(&repo_root)?;
-    check_no_console_prints(&repo_root)?;
+    scope::check_exempt_crates(repo_root)?;
+    check_no_console_prints(repo_root)?;
     println!("repo consistency checks passed: no-console-print");
     Ok(())
 }
@@ -606,7 +605,7 @@ fn f() {
 
     #[test]
     fn no_console_print_command_rejects_trailing_arguments() {
-        let error = check_no_console_print_command(&["--regen".to_owned()])
+        let error = check_no_console_print_command(Path::new("."), &["--regen".to_owned()])
             .unwrap_err()
             .to_string();
         assert_eq!(
@@ -698,7 +697,7 @@ fn f() {
                 "fn main() { println!(\"tool\"); }",
             ),
             (
-                "skippy/crates/skippy-bench/src/lib.rs",
+                "skippy/crates/metrics-server/src/lib.rs",
                 "fn f() { println!(\"bench\"); }",
             ),
         ]);
@@ -711,7 +710,7 @@ fn f() {
             "crates/demo/src/lib.rs:1",
             "crates/demo/tests/integration.rs",
             "crates/demo/src/bin/tool.rs",
-            "skippy/crates/skippy-bench/src/lib.rs",
+            "skippy/crates/metrics-server/src/lib.rs",
         ] {
             assert!(!error.contains(out_of_scope), "{out_of_scope}: {error}");
         }

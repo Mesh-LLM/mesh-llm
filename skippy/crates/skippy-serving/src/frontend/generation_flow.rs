@@ -7,8 +7,8 @@ use crate::frontend::GenerationStart;
 use crate::frontend::generation::GeneratedText;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::GenerationTokenLimit;
-use crate::frontend::generation::OpenAiBackendMode;
-use crate::frontend::generation::OpenAiGenerationIds;
+use crate::frontend::generation::InferenceBackendMode;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::PreparedGenerationPrompt;
 use crate::frontend::generation::SplitMultimodalGeneration;
@@ -24,17 +24,19 @@ use crate::frontend::request::wire_sampling_config;
 use crate::frontend::util::generation_stop_values;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::openai_io_error;
+use crate::frontend::util::openai_media_error;
 use crate::frontend::wire_messages::MultimodalPrefillArgs;
 use crate::frontend::wire_messages::ReusableDecodeMessage;
 use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
 use crate::frontend::wire_messages::generation_config_message;
 use crate::frontend::wire_messages::multimodal_prefill_message;
 use crate::kv_integration::proactive_eviction_attrs;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use anyhow::anyhow;
 use serde_json::json;
 use skippy_inference_api::ChatCompletionRequest;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
@@ -82,6 +84,7 @@ impl StageOpenAiBackend {
     /// caused it. Every request is folded in; the gate only decides once a
     /// window has closed.
     fn record_speculation_outcome(&self, output: &GeneratedText, speculated: bool) {
+        self.record_runahead_outcome(output, speculated);
         let Some(governor) = self.speculation_governor.as_ref() else {
             return;
         };
@@ -114,6 +117,42 @@ impl StageOpenAiBackend {
             serde_json::json!(governor.allows_speculation()),
         );
         self.telemetry.emit("stage.openai_speculation_gate", attrs);
+    }
+
+    /// Fold a finished request into the run-ahead budget search.
+    ///
+    /// Only requests that actually speculated, while the speculation gate was
+    /// holding rather than trialling, can be attributed to a budget — see
+    /// `runahead_search`'s module docs on why the two controllers must not
+    /// read each other's windows.
+    fn record_runahead_outcome(&self, output: &GeneratedText, speculated: bool) {
+        let Some(governor) = self.runahead_governor.as_ref() else {
+            return;
+        };
+        if output.predicted_ms <= 0.0 || output.completion_tokens == 0 {
+            return;
+        }
+        // A gate that is mid-trial has just flipped speculation for this
+        // request, so its rate carries the gate's effect and not the budget's.
+        // With no gate at all there is nothing to be mid-trial.
+        let gate_quiescent = self
+            .speculation_governor
+            .as_ref()
+            .is_none_or(|gate| !gate.is_trialling());
+        let decode_rate = f64::from(output.completion_tokens) * 1000.0 / output.predicted_ms;
+        let Some(decision) = governor.record(super::runahead_search::RequestOutcome {
+            decode_tokens_per_second: decode_rate,
+            speculated,
+            gate_quiescent,
+        }) else {
+            return;
+        };
+        let mut attrs = std::collections::BTreeMap::new();
+        attrs.insert(
+            "llama_stage.spec.runahead_decision".to_string(),
+            serde_json::json!(format!("{decision:?}")),
+        );
+        self.telemetry.emit("stage.openai_runahead_search", attrs);
     }
 
     /// Whether the gate currently allows speculation. `true` when ungoverned.
@@ -153,11 +192,11 @@ impl StageOpenAiBackend {
         hook_request: Option<ChatCompletionRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-        ids: OpenAiGenerationIds,
-        on_text_chunk: impl FnMut(&str) -> OpenAiResult<()>,
-    ) -> OpenAiResult<GeneratedText> {
+        ids: InferenceGenerationIds,
+        on_text_chunk: impl FnMut(&str) -> InferenceResult<()>,
+    ) -> InferenceResult<GeneratedText> {
         match self.mode.clone() {
-            OpenAiBackendMode::EmbeddedStageZero {
+            InferenceBackendMode::EmbeddedStageZero {
                 config,
                 activation_width,
                 downstream_wire_condition,
@@ -166,7 +205,7 @@ impl StageOpenAiBackend {
                 ..
             } if config.downstream.is_some() => {
                 let lane_pool = lane_pool.ok_or_else(|| {
-                    OpenAiError::backend("embedded stage 0 has no downstream lane pool")
+                    InferenceError::backend("embedded stage 0 has no downstream lane pool")
                 })?;
                 let prediction_return = prediction_returns
                     .as_ref()
@@ -196,10 +235,11 @@ impl StageOpenAiBackend {
         }
 
         match &self.mode {
-            OpenAiBackendMode::LocalRuntime => {}
-            OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_none() => {}
-            OpenAiBackendMode::EmbeddedStageZero { .. } => {
-                return Err(OpenAiError::unsupported(
+            InferenceBackendMode::LocalRuntime => {}
+            InferenceBackendMode::EmbeddedStageZero { config, .. }
+                if config.downstream.is_none() => {}
+            InferenceBackendMode::EmbeddedStageZero { .. } => {
+                return Err(InferenceError::unsupported(
                     "multimodal requests require an embedded stage-0 runtime",
                 ));
             }
@@ -261,7 +301,7 @@ impl StageOpenAiBackend {
                         "openai-media-prefill",
                         move |runtime| {
                             if !runtime.has_media_projector() {
-                                return Err(OpenAiError::invalid_request(
+                                return Err(InferenceError::invalid_request(
                                     "multimodal request requires a configured projector",
                                 ));
                             }
@@ -273,7 +313,7 @@ impl StageOpenAiBackend {
                                     &scheduler_prompt.media,
                                     scheduler_sampling.enabled.then_some(&scheduler_sampling),
                                 )
-                                .map_err(openai_backend_error)?;
+                                .map_err(openai_media_error)?;
                             let token_signal =
                                 runtime.last_token_signal(&scheduler_session_id).ok();
                             let signal_window = runtime
@@ -365,7 +405,7 @@ impl StageOpenAiBackend {
                                     &scheduler_session_id,
                                 )
                                 .map_err(|error| {
-                                    skippy_inference_api::OpenAiError::backend(error.to_string())
+                                    skippy_inference_api::InferenceError::backend(error.to_string())
                                 })
                         },
                     ) {
@@ -635,8 +675,8 @@ impl StageOpenAiBackend {
     pub(super) fn generate_split_multimodal_text(
         &self,
         mut request: SplitMultimodalGeneration<'_>,
-        on_text_chunk: impl FnMut(&str) -> OpenAiResult<()>,
-    ) -> OpenAiResult<GeneratedText> {
+        on_text_chunk: impl FnMut(&str) -> InferenceResult<()>,
+    ) -> InferenceResult<GeneratedText> {
         let stop_value_storage =
             generation_stop_values(request.stop, request.prompt.chat_parse_metadata.as_deref());
         let stop_values = stop_value_storage
@@ -697,7 +737,7 @@ impl StageOpenAiBackend {
                     "embedded-media-prefill",
                     move |runtime| {
                         if !runtime.has_media_projector() {
-                            return Err(OpenAiError::invalid_request(
+                            return Err(InferenceError::invalid_request(
                                 "multimodal request requires a configured projector",
                             ));
                         }
@@ -708,7 +748,7 @@ impl StageOpenAiBackend {
                                 &scheduler_prompt.text,
                                 &scheduler_prompt.media,
                             )
-                            .map_err(openai_backend_error)?;
+                            .map_err(openai_media_error)?;
                         let runtime_sessions_after = runtime.session_stats();
                         Ok((prefill, runtime_sessions_before, runtime_sessions_after))
                     },
@@ -783,14 +823,14 @@ impl StageOpenAiBackend {
             .map_err(openai_io_error)?;
             let reply = recv_reply(&mut lane.stream).map_err(openai_io_error)?;
             if reply.kind != WireReplyKind::Ack {
-                return Err(OpenAiError::backend(format!(
+                return Err(InferenceError::backend(format!(
                     "expected multimodal generation config ACK from downstream, got {:?}",
                     reply.kind
                 )));
             }
 
             let media_chunks = if prefill.chunks.is_empty() {
-                return Err(OpenAiError::backend(
+                return Err(InferenceError::backend(
                     "multimodal prefill produced no activation chunks",
                 ));
             } else {
@@ -840,7 +880,7 @@ impl StageOpenAiBackend {
                     WireReplyKind::Ack
                 };
                 if reply.kind != expected {
-                    return Err(OpenAiError::backend(format!(
+                    return Err(InferenceError::backend(format!(
                         "expected multimodal prefill {expected:?} reply from downstream chunk {chunk_index}, got {:?}",
                         reply.kind
                     )));
@@ -853,11 +893,11 @@ impl StageOpenAiBackend {
                 prefill_pos_start = prefill_pos_start
                     .checked_add(chunk.token_count)
                     .ok_or_else(|| {
-                        OpenAiError::backend("multimodal prefill token offset overflow")
+                        InferenceError::backend("multimodal prefill token offset overflow")
                     })?;
             }
             let reply = final_reply.ok_or_else(|| {
-                OpenAiError::backend("multimodal prefill produced no predicted token")
+                InferenceError::backend("multimodal prefill produced no predicted token")
             })?;
             let mut attrs = self.openai_attrs(&request.ids);
             attrs.insert(
@@ -909,6 +949,7 @@ impl StageOpenAiBackend {
                 base_pos_start: prefill.token_count,
                 sampling: wire_sampling.clone(),
                 sideband_capacity: 1,
+                native_mtp_draft_tokens: 0,
             })?;
 
             while decoded_tokens < max_tokens as usize {
@@ -944,7 +985,7 @@ impl StageOpenAiBackend {
                 let batch_outcome = self.iteration_scheduler.execute_frame_iteration(
                     &session_key,
                     u64::try_from(message.pos_start).map_err(|_| {
-                        OpenAiError::backend("negative authoritative decode position")
+                        InferenceError::backend("negative authoritative decode position")
                     })?,
                     &[current],
                     &[],
@@ -1007,10 +1048,8 @@ impl StageOpenAiBackend {
                 // a stride so the rate is observable without a debug build or a
                 // telemetry sink: phase spans only reach a job artifact, and
                 // SKIPPY_GRAPH_TRACE emits nothing here.
-                if decode_input_index.is_multiple_of(GRAPH_REUSE_LOG_STRIDE)
-                    && let Ok(runtime) = self.runtime.lock()
-                {
-                    let stats = runtime.session_stats();
+                if decode_input_index.is_multiple_of(GRAPH_REUSE_LOG_STRIDE) {
+                    let stats = lock_runtime(&self.runtime).session_stats();
                     if stats.tokens_evaluated > 0 {
                         tracing::info!(
                             target: "skippy::graph_reuse",
@@ -1146,7 +1185,9 @@ impl StageOpenAiBackend {
             move |runtime| {
                 runtime
                     .drop_session_timed(&scheduler_session_key)
-                    .map_err(|error| skippy_inference_api::OpenAiError::backend(error.to_string()))
+                    .map_err(|error| {
+                        skippy_inference_api::InferenceError::backend(error.to_string())
+                    })
             },
         ) {
             let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;

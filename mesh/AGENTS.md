@@ -43,7 +43,7 @@ The build runs Tailwind, Eleventy and Pagefind. It copies website source assets 
 
 A release binary left in `target/release/mesh-llm` may predate the latest debug build. Its presence does not prove it contains current code; rerun `just release-build` when in doubt. For serious testing and deployment, use a composed release product.
 
-The host dependency policy is enforced by `scripts/verify-host-dependencies.py`. Release, installer, SDK, native-package, and image lanes must not bypass it or copy backend libraries beside the host. For isolated runtime discovery, set `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"` and a fresh `MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`. Discovery never searches the working directory. Do not reintroduce an external `llama-server` or `rpc-server` lane.
+The host dependency policy is enforced by `cargo xtool native verify-host-dependencies`. Release, installer, SDK, native-package, and image lanes must not bypass it or copy backend libraries beside the host. For isolated runtime discovery, set `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"` and a fresh `MESH_LLM_NATIVE_RUNTIME_CACHE_DIR`. Discovery never searches the working directory. Do not reintroduce an external `llama-server` or `rpc-server` lane.
 
 ### npm "Exit handler never called" error
 
@@ -183,6 +183,13 @@ Shipped binary and CLI (`mesh/crates/mesh-llm/src/`, `mesh/crates/mesh-llm-cli/s
 - `mesh-llm-cli/src/parser.rs` — Clap surface, serve/client arg normalization, advanced help.
 - `mesh-llm-commands/src/` — user-facing handlers (auth, gpus, update, skills, agent launchers, plugin, benchmark).
 
+## Peer Inference Execution Boundary
+
+- Local-user HTTP ingress may select a mesh host and retry eligible peers.
+- Incoming QUIC HTTP inference is already assigned to this host: execute the named local model (including a registered serving plugin) or return an error to the caller. Never forward it to another mesh peer, including on local failure, missing model, automatic/virtual model selection, or routing headers.
+- Incoming QUIC inference must never reconnect to the main Mesh HTTP API port (9337 by default, including configured replacements). Use in-process execution ingress; if it is unavailable, return an error. Do not restore a TCP fallback. Headers are not proof of local origin. Model-name aliases and multiple hosts advertising the same model are normal and must not weaken the boundary.
+- Keep real-QUIC regression tests proving local execution, local-unavailable rejection without a second hop, and continued local-user HTTP routing when changing ingress or target selection.
+
 ## Mesh Protocol Compatibility
 
 Mesh compatibility across versions is critical. Nodes in the wild run different versions and must interoperate.
@@ -252,7 +259,7 @@ For changes that affect routing, MoA, gossip, the OpenAI surface, agent harnesse
 
 1. **2-node private mesh** — start one node with `mesh-llm serve --model <big> --port 9337 --console 3131`, grab its invite token from the JSON log, and start the second node with `mesh-llm serve --gguf <small.gguf> --port 9447 --console 3145 --join <token>`. Confirm peers=1 on both consoles and `/v1/models` returns the union. Exercises QUIC tunnelling and cross-node routing.
 2. **Public mesh as a client** — `mesh-llm client --auto` from a workstation. Confirm `discovery_joined` plus a structured client-ready event (`passive_mode`, `status=ready`, `role=client`) in the log and an inference call against a mesh-advertised model returns. Exercises the read-only routing path agent users hit.
-3. **Agent harness** — run ≥ 1 of the harnesses (“mini-agent” Python loops at `/tmp/mini-agent*.py`, Goose, OpenCode) against the local proxy with both `model=auto` and `model=mesh` to catch tool-call and reducer regressions that simple curl checks miss.
+3. **Agent harness** — run at least one existing client smoke (`scripts/ci-goose-smoke.sh`, `scripts/ci-opencode-smoke.sh`, or `scripts/ci-pi-smoke.sh`) against the local proxy with both `model=auto` and `model=mesh` to catch tool-call and reducer regressions that simple curl checks miss. See `mesh/docs/AGENTS.md` for client setup and the direct tool-call reliability probe.
 
 ## Mesh package validation
 

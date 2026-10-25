@@ -27,20 +27,25 @@ with-lld *COMMAND:
 
 [private]
 [windows]
-with-lld *COMMAND:
-    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'"
+[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+@with-lld *COMMAND:
+    $ErrorActionPreference = 'Stop'
+    if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }
+    $LASTEXITCODE = 0
+    Invoke-Expression '{{ COMMAND }}'
+    exit $LASTEXITCODE
 
 
 # Build both local products for the current platform: Skippy, then MeshLLM.
 # The MeshLLM host stays backend-neutral beside Skippy's packaged runtime.
 [macos]
 build backend="" cuda_arch="" rocm_arch="":
-    @python3 scripts/manage-build-cache.py build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+    @just automation-run ci-ops build-cache build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Fast local iteration build: dynamic host + adjacent native runtime + UI.
 [macos]
 build-dev:
-    @python3 scripts/manage-build-cache.py build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev
+    @just automation-run ci-ops build-cache build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev
 
 # Linux overrides:
 #   just build backend=cpu
@@ -49,12 +54,12 @@ build-dev:
 # just build backend=vulkan
 [linux]
 build backend="" cuda_arch="" rocm_arch="":
-    @python3 scripts/manage-build-cache.py build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+    @just automation-run ci-ops build-cache build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Fast local iteration build: dynamic host + adjacent native runtime + UI.
 [linux]
 build-dev backend="" cuda_arch="" rocm_arch="":
-    @python3 scripts/manage-build-cache.py build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+    @just automation-run ci-ops build-cache build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Windows overrides:
 #   just build backend=cpu
@@ -69,3 +74,31 @@ build backend="" cuda_arch="" rocm_arch="":
 [windows]
 build-dev backend="" cuda_arch="" rocm_arch="":
     @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:MESH_LLM_BUILD_PROFILE='dev'; & './scripts/build-windows.ps1' -Backend '{{ backend }}' -CudaArch '{{ cuda_arch }}' -RocmArch '{{ rocm_arch }}' -DynamicHost"
+
+# Build the installable host-private OpenAI lifecycle observer exemplar.
+build-openai-exchange-exemplar message_format="human":
+    @just with-lld cargo build -p mesh-llm-plugin --example openai-exchange-observer --message-format={{ message_format }}
+
+# Produce a local-install archive, with the same plugin.toml/executable layout as releases.
+[unix]
+package-openai-exchange-exemplar:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    package_root="$(mktemp -d)"
+    trap 'rm -rf "$package_root"' EXIT
+    plugin_name=openai-exchange-observer
+    just build-openai-exchange-exemplar json > "$package_root/build.json"
+    # Cargo reports the artifact built by this invocation, including configured
+    # target directories and build target triples. Never fall back to a stale binary.
+    plugin_executable="$(jq -er -s 'map(select(.reason == "compiler-artifact" and .target.name == "openai-exchange-observer" and .executable != null)) | last | .executable // error("exemplar executable missing from Cargo artifacts")' "$package_root/build.json")"
+    mkdir -p "$package_root/$plugin_name" dist
+    cp "$plugin_executable" "$package_root/$plugin_name/$plugin_name"
+    printf 'name = "%s"\nversion = "1.0.0"\n' "$plugin_name" > "$package_root/$plugin_name/plugin.toml"
+    "$plugin_executable" --manifest > "$package_root/$plugin_name/plugin-manifest.json"
+    tar -czf "dist/$plugin_name.tar.gz" -C "$package_root" "$plugin_name"
+
+# Run installed-process lifecycle conformance over loopback HTTP and QUIC.
+[unix]
+test-openai-exchange-conformance: package-openai-exchange-exemplar
+    @just with-lld cargo test -p mesh-llm-plugin --example openai-exchange-observer
+    @just with-lld cargo test -p mesh-llm-host-runtime --lib --no-default-features installed_ -- --ignored --test-threads=1

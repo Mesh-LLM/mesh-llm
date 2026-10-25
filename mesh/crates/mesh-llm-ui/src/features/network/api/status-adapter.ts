@@ -283,8 +283,46 @@ function adaptStatusMetrics(payload: StatusPayload): StatusMetric[] {
       id: 'inflight',
       label: 'Inflight',
       value: inflightRequests
-    }
+    },
+    servingStrategyMetric(payload)
   ]
+}
+
+/// The resolved serving strategy, as a badge on the status strip.
+///
+/// Shown always rather than only when set, because "no strategy" is itself the
+/// answer somebody needs when a split is slower than they expected — an absent
+/// tile reads as a missing feature, not as a node on built-in defaults.
+///
+/// The badge counts composed axes rather than naming them: the full list, with
+/// the reason for each and the ones the strategy deferred on, is in
+/// `mesh-llm doctor split` and in `runtime.serving_strategy`.
+function servingStrategyMetric(payload: StatusPayload): StatusMetric {
+  const strategy = payload.runtime?.serving_strategy
+  if (!strategy) {
+    return {
+      id: 'serving-strategy',
+      label: 'Strategy',
+      value: 'none',
+      meta: 'running built-in defaults',
+      badge: { label: 'not set', tone: 'muted' }
+    }
+  }
+  const applied = strategy.applied?.length ?? 0
+  const declined = strategy.declined?.length ?? 0
+  return {
+    id: 'serving-strategy',
+    label: 'Strategy',
+    value: strategy.strategy,
+    meta:
+      declined > 0
+        ? `${applied} composed · ${declined} left to your settings`
+        : `${applied} default${applied === 1 ? '' : 's'} composed`,
+    badge: {
+      label: applied > 0 ? 'composed' : 'nothing to compose',
+      tone: applied > 0 ? 'accent' : 'muted'
+    }
+  }
 }
 
 function adaptMeshNodeSeeds(payload: StatusPayload): MeshNode[] {

@@ -358,7 +358,10 @@ pub(crate) fn generate_release_attestation_keypair(args: &[String]) -> DynResult
     }))
 }
 
-pub(crate) fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
+pub(crate) fn stamp_release_attestation(
+    args: &[String],
+    repo_root: Option<&Path>,
+) -> DynResult<()> {
     let parsed = parse_stamp_args(args)?;
     let binary = parsed.binary.ok_or("--binary is required")?;
     let signing_key_file = parsed
@@ -371,7 +374,9 @@ pub(crate) fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
     let artifact_digest = format!("sha256:{}", sha256_bytes(&base_binary_bytes));
     let node_version = match parsed.node_version {
         Some(version) => version,
-        None => default_node_version()?,
+        None => {
+            default_node_version(crate::repository::RepositoryRoot::resolve(repo_root)?.as_path())?
+        }
     };
     let commit = resolve_commit(parsed.commit);
     if parsed.require_source_commit {

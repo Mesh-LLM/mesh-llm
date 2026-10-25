@@ -14,13 +14,27 @@ pip install mesh-llm
 
 Release wheels contain the generated binding and a native library for the wheel's target platform. Python 3.10 or newer is supported.
 
-For a repository checkout:
+The SDK source, Python generators and component tests are owned by
+`Mesh-LLM/mesh-llm-python-sdk`. Mesh records the immutable SDK commit and source
+manifest in `ci/required-sdk-python/sdk-source.json`. The [SDK](https://github.com/Mesh-LLM/mesh-llm-python-sdk) and [research](https://github.com/Mesh-LLM/mesh-llm-research) projects are published.
+Fresh anonymous restore and native source admission passed; hosted and installed SDK/native/model qualification remain separate, and this does not establish a new PyPI release.
+
+For SDK development, use the external checkout with explicit absolute paths to
+the Mesh source, an existing UniFFI 0.32.0 generator and an already built native
+FFI bridge for the target platform:
 
 ```bash
-mesh/sdk/python/scripts/generate-python-bindings.sh
-mesh/sdk/python/scripts/build-native.sh
-python3 -m pip install -e mesh/sdk/python
+"$SDK_SOURCE/sdk/scripts/generate-python-bindings.sh" "$MESH_SOURCE" "$UNIFFI_BINDGEN"
+"$SDK_SOURCE/sdk/scripts/build-native.sh" "$PREBUILT_MESH_FFI_LIBRARY"
+python3 -I -m pip install -e "$SDK_SOURCE/sdk"
 ```
+
+The SDK stager never builds a missing bridge. Generated bindings and bridge
+checksums must match the selected Mesh native artifact before packaging. Changes
+to generated source require a new external source manifest and checkpoint;
+runtime admission must not reuse the prior pin for changed bytes. Required
+OpenAI, LangChain, LiteLLM and embedding client checks retain their existing
+cadence through the admitted external source and locked environments.
 
 ## Connect to a mesh
 

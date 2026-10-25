@@ -8,4 +8,4 @@ runs:
       shell: /bin/zsh -il {0}
       run: |
         set -eu
-        python3 scripts/configure-canary-cache.py
+        "${MESH_LLM_AUTOMATION_BIN:?protected controller automation required}" ci-ops configure-canary-cache

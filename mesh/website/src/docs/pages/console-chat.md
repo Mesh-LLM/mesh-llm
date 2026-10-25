@@ -51,7 +51,7 @@ or try a smaller model:
 
 ```sh
 mesh-llm stop
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL
 ```
 
 See [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for idle, proxying, and

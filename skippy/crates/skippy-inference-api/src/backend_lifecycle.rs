@@ -3,25 +3,25 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use crate::{
-    backend::{OpenAiRequestContext, OpenAiResult},
-    errors::OpenAiError,
+    backend::{InferenceRequestContext, InferenceResult},
+    errors::InferenceError,
     lifecycle::{
-        CLIENT_CLOSED_REQUEST_STATUS, OpenAiBackendOperation, OpenAiFailure,
-        OpenAiLifecycleContext, OpenAiLifecycleEvent, OpenAiLifecycleObserver,
-        OpenAiTerminalResult, terminal_result_for_error,
+        CLIENT_CLOSED_REQUEST_STATUS, InferenceBackendOperation, InferenceFailure,
+        InferenceLifecycleContext, InferenceLifecycleEvent, InferenceLifecycleObserver,
+        InferenceTerminalResult, terminal_result_for_error,
     },
 };
 
 pub(crate) async fn call_backend<T, F>(
-    observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
-    context: &OpenAiLifecycleContext,
-    operation: OpenAiBackendOperation,
+    observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+    context: &InferenceLifecycleContext,
+    operation: InferenceBackendOperation,
     operation_name: &'static str,
     timeout: Option<Duration>,
     future: F,
-) -> OpenAiResult<T>
+) -> InferenceResult<T>
 where
-    F: Future<Output = OpenAiResult<T>>,
+    F: Future<Output = InferenceResult<T>>,
 {
     call_backend_inner(
         observer,
@@ -36,16 +36,16 @@ where
 }
 
 pub(crate) async fn call_backend_with_context<T, F>(
-    observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
-    lifecycle_context: &OpenAiLifecycleContext,
-    operation: OpenAiBackendOperation,
+    observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+    lifecycle_context: &InferenceLifecycleContext,
+    operation: InferenceBackendOperation,
     operation_name: &'static str,
     timeout: Option<Duration>,
-    request_context: &OpenAiRequestContext,
+    request_context: &InferenceRequestContext,
     future: F,
-) -> OpenAiResult<T>
+) -> InferenceResult<T>
 where
-    F: Future<Output = OpenAiResult<T>>,
+    F: Future<Output = InferenceResult<T>>,
 {
     call_backend_inner(
         observer,
@@ -60,16 +60,16 @@ where
 }
 
 async fn call_backend_inner<T, F>(
-    observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
-    lifecycle_context: &OpenAiLifecycleContext,
-    operation: OpenAiBackendOperation,
+    observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+    lifecycle_context: &InferenceLifecycleContext,
+    operation: InferenceBackendOperation,
     operation_name: &'static str,
     timeout: Option<Duration>,
-    request_context: Option<&OpenAiRequestContext>,
+    request_context: Option<&InferenceRequestContext>,
     future: F,
-) -> OpenAiResult<T>
+) -> InferenceResult<T>
 where
-    F: Future<Output = OpenAiResult<T>>,
+    F: Future<Output = InferenceResult<T>>,
 {
     let mut lifecycle = BackendLifecycle::start(
         observer,
@@ -84,7 +84,7 @@ where
                 if let Some(context) = request_context {
                     context.cancel();
                 }
-                let error = OpenAiError::timeout(format!(
+                let error = InferenceError::timeout(format!(
                     "{operation_name} timed out after {} ms",
                     timeout.as_millis()
                 ));
@@ -95,7 +95,7 @@ where
         None => future.await,
     };
     let terminal = match &result {
-        Ok(_) => OpenAiTerminalResult::Completed { status_code: 200 },
+        Ok(_) => InferenceTerminalResult::Completed { status_code: 200 },
         Err(error) => terminal_result_for_error(error),
     };
     lifecycle.finish(terminal);
@@ -103,22 +103,22 @@ where
 }
 
 struct BackendLifecycle {
-    observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
-    context: OpenAiLifecycleContext,
-    operation: OpenAiBackendOperation,
-    request_context: Option<OpenAiRequestContext>,
+    observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+    context: InferenceLifecycleContext,
+    operation: InferenceBackendOperation,
+    request_context: Option<InferenceRequestContext>,
     terminal: bool,
 }
 
 impl BackendLifecycle {
     fn start(
-        observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
-        context: OpenAiLifecycleContext,
-        operation: OpenAiBackendOperation,
-        request_context: Option<OpenAiRequestContext>,
+        observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+        context: InferenceLifecycleContext,
+        operation: InferenceBackendOperation,
+        request_context: Option<InferenceRequestContext>,
     ) -> Self {
         if let Some(observer) = &observer {
-            observer.observe(&OpenAiLifecycleEvent::BackendDispatched {
+            observer.observe(&InferenceLifecycleEvent::BackendDispatched {
                 context: context.clone(),
                 operation,
             });
@@ -132,13 +132,13 @@ impl BackendLifecycle {
         }
     }
 
-    fn finish(&mut self, result: OpenAiTerminalResult) {
+    fn finish(&mut self, result: InferenceTerminalResult) {
         if self.terminal {
             return;
         }
         self.terminal = true;
         if let Some(observer) = &self.observer {
-            observer.observe(&OpenAiLifecycleEvent::BackendTerminal {
+            observer.observe(&InferenceLifecycleEvent::BackendTerminal {
                 context: self.context.clone(),
                 operation: self.operation,
                 result,
@@ -155,9 +155,9 @@ impl Drop for BackendLifecycle {
         if let Some(context) = &self.request_context {
             context.cancel();
         }
-        self.finish(OpenAiTerminalResult::Failed {
+        self.finish(InferenceTerminalResult::Failed {
             status_code: CLIENT_CLOSED_REQUEST_STATUS,
-            failure: OpenAiFailure::Cancelled,
+            failure: InferenceFailure::Cancelled,
         });
     }
 }
@@ -167,22 +167,22 @@ mod tests {
     use std::{sync::Mutex, time::Duration};
 
     use super::*;
-    use crate::lifecycle::{OpenAiFrontendRoute, OpenAiRequestMethod, parse_request_id};
+    use crate::lifecycle::{InferenceFrontendRoute, InferenceRequestMethod, parse_request_id};
 
     #[derive(Default)]
-    struct RecordingObserver(Mutex<Vec<OpenAiLifecycleEvent>>);
+    struct RecordingObserver(Mutex<Vec<InferenceLifecycleEvent>>);
 
-    impl OpenAiLifecycleObserver for RecordingObserver {
-        fn observe(&self, event: &OpenAiLifecycleEvent) {
+    impl InferenceLifecycleObserver for RecordingObserver {
+        fn observe(&self, event: &InferenceLifecycleEvent) {
             self.0.lock().expect("observer lock").push(event.clone());
         }
     }
 
-    fn context() -> OpenAiLifecycleContext {
-        OpenAiLifecycleContext::new(
+    fn context() -> InferenceLifecycleContext {
+        InferenceLifecycleContext::new(
             parse_request_id("f84fa37c-a268-4d3a-962e-aa4b229672fa").expect("request ID"),
-            OpenAiRequestMethod::Post,
-            OpenAiFrontendRoute::ChatCompletions,
+            InferenceRequestMethod::Post,
+            InferenceFrontendRoute::ChatCompletions,
         )
     }
 
@@ -192,10 +192,10 @@ mod tests {
         let result = call_backend(
             Some(observer.clone()),
             &context(),
-            OpenAiBackendOperation::Models,
+            InferenceBackendOperation::Models,
             "models",
             None,
-            async { Ok::<_, OpenAiError>(()) },
+            async { Ok::<_, InferenceError>(()) },
         )
         .await;
 
@@ -204,9 +204,9 @@ mod tests {
         assert!(matches!(
             events.as_slice(),
             [
-                OpenAiLifecycleEvent::BackendDispatched { .. },
-                OpenAiLifecycleEvent::BackendTerminal {
-                    result: OpenAiTerminalResult::Completed { status_code: 200 },
+                InferenceLifecycleEvent::BackendDispatched { .. },
+                InferenceLifecycleEvent::BackendTerminal {
+                    result: InferenceTerminalResult::Completed { status_code: 200 },
                     ..
                 },
             ]
@@ -216,15 +216,15 @@ mod tests {
     #[tokio::test]
     async fn timeout_cancels_context_and_classifies_backend_terminal() {
         let observer = Arc::new(RecordingObserver::default());
-        let request_context = OpenAiRequestContext::with_request_id(context().request_id);
+        let request_context = InferenceRequestContext::with_request_id(context().request_id);
         let result = call_backend_with_context(
             Some(observer.clone()),
             &context(),
-            OpenAiBackendOperation::ChatCompletion,
+            InferenceBackendOperation::ChatCompletion,
             "chat_completion",
             Some(Duration::from_millis(1)),
             &request_context,
-            std::future::pending::<OpenAiResult<()>>(),
+            std::future::pending::<InferenceResult<()>>(),
         )
         .await;
 
@@ -234,11 +234,11 @@ mod tests {
         assert!(matches!(
             events.as_slice(),
             [
-                OpenAiLifecycleEvent::BackendDispatched { .. },
-                OpenAiLifecycleEvent::BackendTerminal {
-                    result: OpenAiTerminalResult::Failed {
+                InferenceLifecycleEvent::BackendDispatched { .. },
+                InferenceLifecycleEvent::BackendTerminal {
+                    result: InferenceTerminalResult::Failed {
                         status_code: 504,
-                        failure: OpenAiFailure::Timeout,
+                        failure: InferenceFailure::Timeout,
                     },
                     ..
                 },

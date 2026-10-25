@@ -54,61 +54,7 @@ ensure_target_version_not_older() {
     local target="$2"
     local compare_status
 
-    if python3 - "$current" "$target" <<'PY'
-import re
-import sys
-
-current, target = sys.argv[1:3]
-pattern = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
-
-
-def parse(value):
-    match = pattern.match(value)
-    if not match:
-        raise SystemExit(2)
-    major, minor, patch, prerelease = match.groups()
-    return (int(major), int(minor), int(patch), parse_prerelease(prerelease))
-
-
-def parse_prerelease(value):
-    if value is None:
-        return None
-    parts = []
-    for part in value.split("."):
-        if part.isdigit():
-            parts.append((0, int(part)))
-        else:
-            parts.append((1, part))
-    return parts
-
-
-def compare_prerelease(left, right):
-    if left is None and right is None:
-        return 0
-    if left is None:
-        return 1
-    if right is None:
-        return -1
-    for left_part, right_part in zip(left, right):
-        if left_part == right_part:
-            continue
-        return -1 if left_part < right_part else 1
-    if len(left) == len(right):
-        return 0
-    return -1 if len(left) < len(right) else 1
-
-
-current_version = parse(current)
-target_version = parse(target)
-
-for left, right in zip(current_version[:3], target_version[:3]):
-    if right > left:
-        raise SystemExit(0)
-    if right < left:
-        raise SystemExit(1)
-
-raise SystemExit(0 if compare_prerelease(target_version[3], current_version[3]) >= 0 else 1)
-PY
+    if cargo xtool release version-at-least "$current" "$target"
     then
         compare_status=0
     else
@@ -299,7 +245,7 @@ main() {
     require_command gh
     require_command git
     require_command perl
-    require_command python3
+    require_command cargo
 
     local version
     local tag

@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--body",
+    "b",
+    "-h"
+  ],
+  "code": 0,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "",
+  "stdout": "usage: release-notes-link.py [-h] --body BODY --range RANGE --repo REPO\n                             [--repo-root REPO_ROOT] --out-body OUT_BODY\n                             --out-links OUT_LINKS [--api-budget API_BUDGET]\n\nLink release commits to the pull requests that carried them. The classifier\nreaches a commit through the \"(#N)\" suffix that a squash merge leaves on the\nsubject, and GitHub's generated body credits one entry per pull request merged\ninto the release branch. Two routes break that pairing: * a commit that\nreached the branch without the suffix has no link back to its entry, so the\nclassifier cannot read its type and a perfectly ordinary \"test(ci): ...\" lands\nin \"Other changes\"; * a batch of pull requests merged into a staging branch\nthat then reached the release by rebase is credited once, to the roll-up pull\nrequest, and every fix inside it disappears from the notes. v0.76.1 shipped\nsixteen fixes behind a single \"Fixed\" entry that way. This step repairs both\nbefore classification. It resolves the missing links through the GitHub API,\nwrites an augmented body that credits the recovered pull requests, and hands\nthe classifier the commit records git alone could not key. It only adds\nentries: an entry GitHub published is never dropped or rewritten here. Every\nAPI call is best-effort. A pull request it cannot resolve keeps the behaviour\nit has today rather than failing the release. Usage: release-notes-link.py\n--body BODY.md --range v0.76.0..v0.76.1 --repo Mesh-LLM/mesh-llm --out-body\nbody.linked.md --out-links links.json\n\noptions:\n  -h, --help            show this help message and exit\n  --body BODY           published release body\n  --range RANGE         git range, e.g. v0.76.0..v0.76.1\n  --repo REPO           OWNER/NAME\n  --repo-root REPO_ROOT\n  --out-body OUT_BODY   write the augmented body here\n  --out-links OUT_LINKS\n                        write the commit records here\n  --api-budget API_BUDGET\n"
+}

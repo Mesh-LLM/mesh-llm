@@ -3,13 +3,13 @@ use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
 use crate::frontend::GenerationLifecycleConfig;
 use crate::frontend::GenerationReceiptConfig;
+use crate::frontend::InferenceGuardrailsConfig;
+use crate::frontend::InferenceGuardrailsStatus;
 use crate::frontend::LinearProposalIngressConfig;
-use crate::frontend::OpenAiGuardrailsConfig;
-use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationServiceEstimator;
-use crate::frontend::generation::OpenAiBackendMode;
+use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
@@ -24,10 +24,14 @@ use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_pro
 use crate::kv_integration::KvStageIntegration;
 use crate::listener::bind_serve_listener;
 use crate::runtime_state::RuntimeState;
-use crate::runtime_state::{loaded_model_has_indexer_memory, loaded_model_state_kind};
+use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
+use crate::thinking_probe::ThinkingProbeInputs;
+use crate::thinking_probe::emit_probe_status;
+use crate::thinking_probe::native_renderer_identity;
+use crate::thinking_probe::probe_loaded_model;
 use crate::tokenizer::{TokenizerCapability, tokenizer_http_router};
 use anyhow::Context;
 use anyhow::Result;
@@ -42,9 +46,10 @@ use axum::middleware::Next;
 use axum::response::Response;
 use serde_json::Value;
 use serde_json::json;
+use skippy_inference_api::InferenceBackend;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::ModelId;
-use skippy_inference_api::OpenAiBackend;
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::thinking::ThinkingControls;
 use skippy_protocol::StageConfig;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -58,15 +63,16 @@ use std::time::Duration;
 /// Serve a caller-owned backend and tokenizer, awaiting all accepted HTTP work on shutdown.
 pub async fn serve_openai_backend_with_shutdown(
     bind_addr: SocketAddr,
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
     telemetry: Telemetry,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
     let app = instrumented_openai_router(backend, tokenizer, telemetry);
-    let listener = bind_serve_listener(bind_addr)?;
-    skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
-        message: format!("skippy-serving listening: openai={bind_addr}"),
+    let listener = bind_with_readiness(bind_addr, || {
+        skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
+            message: format!("skippy-serving listening: openai={bind_addr}"),
+        })
     })?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
@@ -112,11 +118,11 @@ pub struct EmbeddedOpenAiArgs {
     pub downstream_wire_condition: WireCondition,
     pub prediction_returns: Option<Arc<PredictionReturnHub>>,
     pub telemetry: Telemetry,
-    pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub generation_receipt: Option<GenerationReceiptConfig>,
     pub generation_lifecycle: Option<GenerationLifecycleConfig>,
     pub linear_proposal_ingress: Option<LinearProposalIngressConfig>,
-    pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
+    pub openai_guardrails: Option<InferenceGuardrailsConfig>,
     pub kv_lifecycle_observer: Option<Arc<dyn crate::kv_integration::KvLifecycleObserver>>,
     /// Node-scoped durable disk-cache owner supplied by the embedding host.
     /// `None` keeps standalone and cache-disabled launches in-memory only.
@@ -151,18 +157,19 @@ async fn serve_embedded_openai_with_shutdown_and_scheduler(
     let bind_addr = args.bind_addr;
     let binding = embedded_openai_router_with_scheduler(args, iteration_scheduler)?;
 
-    skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
-        message: format!(
-            "skippy-serving listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
-            bind_addr,
-            binding.model_id,
-            binding.generation_concurrency,
-            binding.generation_queue_capacity,
-            binding.generation_admission_timeout_secs,
-        ),
+    let listener = bind_with_readiness(bind_addr, || {
+        skippy_events::diagnostics::emit(skippy_events::diagnostics::ServingDiagnostic::Status {
+            message: format!(
+                "skippy-serving listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
+                bind_addr,
+                binding.model_id,
+                binding.generation_concurrency,
+                binding.generation_queue_capacity,
+                binding.generation_admission_timeout_secs,
+            ),
+        })
     })?;
 
-    let listener = bind_serve_listener(bind_addr)?;
     axum::serve(listener, binding.router)
         .with_graceful_shutdown(shutdown)
         .await?;
@@ -178,12 +185,13 @@ pub struct EmbeddedOpenAiRouter {
 }
 
 pub struct EmbeddedOpenAiBackend {
-    pub backend: Arc<dyn OpenAiBackend>,
+    pub backend: Arc<dyn InferenceBackend>,
     pub model_id: String,
+    pub thinking: Option<ThinkingControls>,
     pub generation_concurrency: usize,
     pub generation_queue_capacity: usize,
     pub generation_admission_timeout_secs: u64,
-    pub openai_guardrails: Option<OpenAiGuardrailsStatus>,
+    pub openai_guardrails: Option<InferenceGuardrailsStatus>,
 }
 
 pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiRouter> {
@@ -262,6 +270,10 @@ fn embedded_openai_backend_with_scheduler(
         args.speculative_window,
         &args.speculative,
     )?;
+    // Render-only probe of the selected chat template, run once at load. This is
+    // where every input is in hand: the loaded runtime, the stage config, and the
+    // selected template. `/v1/models` publishes the result as `thinking`.
+    let thinking = Some(probe_thinking_controls(&args));
     let model_id = ModelId::new(
         args.model_id
             .unwrap_or_else(|| args.config.model_id.clone()),
@@ -280,7 +292,7 @@ fn embedded_openai_backend_with_scheduler(
         policy_arg: "--prefill-chunk-policy",
     })?;
     let mode = if args.config.downstream.is_none() {
-        OpenAiBackendMode::LocalRuntime
+        InferenceBackendMode::LocalRuntime
     } else {
         let lane_pool = PersistentStageLanePool::new(
             &args.config,
@@ -290,7 +302,7 @@ fn embedded_openai_backend_with_scheduler(
         )
         .context("create embedded OpenAI persistent downstream lanes")?;
         let prefill_reply_credit_limit = args.reply_credit_limit.unwrap_or(3);
-        OpenAiBackendMode::EmbeddedStageZero {
+        InferenceBackendMode::EmbeddedStageZero {
             config: args.config.clone(),
             prefill_chunk_policy,
             activation_width: args.activation_width,
@@ -321,11 +333,20 @@ fn embedded_openai_backend_with_scheduler(
     let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &args.config,
         loaded_model_state_kind(Some(&args.runtime)),
-        loaded_model_has_indexer_memory(Some(&args.runtime)),
+        loaded_memory_cache_capabilities(Some(&args.runtime)),
         args.l3_manager.clone(),
         args.kv_lifecycle_observer.clone(),
     )?
     .map(Arc::new);
+    if let Some(kv) = kv.as_ref() {
+        let mut attrs = lifecycle_attrs(&args.config);
+        attrs.extend(
+            kv.attrs()
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value)),
+        );
+        args.telemetry.emit("stage.kv_payload_selected", attrs);
+    }
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
@@ -338,7 +359,7 @@ fn embedded_openai_backend_with_scheduler(
             args.telemetry.clone(),
         )?,
     };
-    let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
+    let backend: Arc<dyn InferenceBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         workload: Default::default(),
         config: args.config.clone(),
@@ -346,6 +367,7 @@ fn embedded_openai_backend_with_scheduler(
         model_id: model_id.clone(),
         default_max_tokens: args.default_max_tokens,
         request_defaults: args.request_defaults,
+        thinking: thinking.clone(),
         ctx_size,
         mode,
         draft,
@@ -356,12 +378,22 @@ fn embedded_openai_backend_with_scheduler(
         // off there is nothing to stand down, and trialling it on would turn a
         // deliberate `strategy = "disabled"` into something that flips back on
         // by itself.
-        speculation_governor: (crate::frontend::speculation_gate::speculation_gate_enabled()
-            && crate::frontend::speculation_gate::speculation_plan_is_active(&args.speculative))
+        speculation_governor: (crate::frontend::speculation_gate::speculation_gate_enabled(
+            args.speculative.gate,
+        ) && crate::frontend::speculation_gate::speculation_plan_is_active(
+            &args.speculative,
+        ))
         .then(|| {
             std::sync::Arc::new(crate::frontend::speculation_gate::SpeculationGovernor::new(
-                crate::frontend::speculation_gate::SpeculationGateConfig::default(),
+                args.speculative.gate.into(),
                 true,
+            ))
+        }),
+        // Only when the plan declines to state a number. A stated budget,
+        // including a stated zero, is the operator's and is not searched.
+        runahead_governor: args.speculative.verify_window.runahead_auto.then(|| {
+            std::sync::Arc::new(crate::frontend::runahead_search::RunaheadGovernor::new(
+                crate::frontend::runahead_search::RunaheadSearchConfig::default(),
             ))
         }),
         speculative: args.speculative,
@@ -390,7 +422,7 @@ fn embedded_openai_backend_with_scheduler(
     let openai_guardrails = args
         .openai_guardrails
         .as_ref()
-        .map(OpenAiGuardrailsConfig::status);
+        .map(InferenceGuardrailsConfig::status);
     let backend = args
         .openai_guardrails
         .as_ref()
@@ -401,11 +433,36 @@ fn embedded_openai_backend_with_scheduler(
     Ok(EmbeddedOpenAiBackend {
         backend,
         model_id,
+        thinking,
         generation_concurrency: args.generation_concurrency,
         generation_queue_capacity: args.generation_queue_capacity,
         generation_admission_timeout_secs: args.generation_admission_timeout_secs,
         openai_guardrails,
     })
+}
+
+/// Renders the selected template to learn which reasoning controls it reacts to.
+///
+/// Never generates: see [`crate::thinking_probe`] for what the observations can
+/// and cannot claim.
+fn probe_thinking_controls(args: &EmbeddedOpenAiArgs) -> ThinkingControls {
+    let artifact = args
+        .config
+        .source_model_sha256
+        .clone()
+        .or_else(|| args.config.package_ref.clone());
+    let report = probe_loaded_model(
+        &args.runtime,
+        &ThinkingProbeInputs {
+            defaults: &args.request_defaults,
+            model_id: &args.config.model_id,
+            artifact: artifact.as_deref(),
+            template_override: args.request_defaults.chat_template.as_deref(),
+            renderer: &native_renderer_identity(),
+        },
+    );
+    let _ = emit_probe_status(&report);
+    report.controls().clone()
 }
 
 fn validate_generation_receipt_topology(
@@ -473,7 +530,7 @@ fn insert_generation_admission_config_attrs(
 }
 
 pub(in crate::frontend) fn instrumented_openai_router(
-    backend: Arc<dyn OpenAiBackend>,
+    backend: Arc<dyn InferenceBackend>,
     tokenizer: TokenizerCapability,
     telemetry: Telemetry,
 ) -> Router {
@@ -513,6 +570,17 @@ pub(in crate::frontend) async fn openai_http_telemetry(
     response
 }
 
+/// Readiness cannot be printed for a socket whose bind failed. A writer error
+/// drops the already-owned listener before returning to the command caller.
+fn bind_with_readiness(
+    address: std::net::SocketAddr,
+    emit_readiness: impl FnOnce() -> std::io::Result<()>,
+) -> Result<tokio::net::TcpListener> {
+    let listener = bind_serve_listener(address)?;
+    emit_readiness()?;
+    Ok(listener)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -522,6 +590,7 @@ mod tests {
     use crate::frontend::GenerationLifecycleConfig;
     use crate::frontend::GenerationReceiptConfig;
     use crate::serving_hooks::ModelServingHooks;
+    use std::io::Write;
     use std::sync::Arc;
 
     #[test]
@@ -585,5 +654,71 @@ mod tests {
         assert!(
             resolve_adaptive_generation_min_concurrency(true, Some(9), 8, "--minimum").is_err()
         );
+    }
+    #[tokio::test]
+    async fn failed_openai_listener_bind_cannot_emit_readiness() {
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = occupied.local_addr().unwrap();
+        let mut out = Vec::new();
+        assert!(
+            super::bind_with_readiness(address, || writeln!(
+                out,
+                "skippy-serving listening: openai={address}"
+            ))
+            .is_err()
+        );
+        assert!(out.is_empty());
+        drop(occupied);
+    }
+
+    #[tokio::test]
+    async fn openai_listener_is_owned_before_unchanged_readiness_write() {
+        struct Observer {
+            address: std::net::SocketAddr,
+            bytes: Vec<u8>,
+            bound: bool,
+        }
+        impl std::io::Write for Observer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bound |= std::net::TcpListener::bind(self.address).is_err();
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = reservation.local_addr().unwrap();
+        drop(reservation);
+        let mut out = Observer {
+            address,
+            bytes: Vec::new(),
+            bound: false,
+        };
+        let listener = super::bind_with_readiness(address, || writeln!(out, "skippy-serving listening: openai={address} model_id=fixture backend=fixture generation_concurrency=1")).unwrap();
+        assert!(out.bound);
+        assert_eq!(listener.local_addr().unwrap(), address);
+        assert_eq!(out.bytes, format!("skippy-serving listening: openai={address} model_id=fixture backend=fixture generation_concurrency=1\n").as_bytes());
+        drop(listener);
+    }
+
+    #[tokio::test]
+    async fn openai_readiness_write_failure_releases_owned_listener() {
+        struct Refuse;
+        impl std::io::Write for Refuse {
+            fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture refusal"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = reservation.local_addr().unwrap();
+        drop(reservation);
+        assert!(super::bind_with_readiness(address, || writeln!(Refuse, "ready")).is_err());
+        let rebound = std::net::TcpListener::bind(address).unwrap();
+        drop(rebound);
     }
 }

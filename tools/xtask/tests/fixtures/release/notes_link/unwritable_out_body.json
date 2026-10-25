@@ -1,0 +1,41 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--repo",
+    "o/r",
+    "--out-body",
+    "missing/out.md",
+    "--out-links",
+    "links.json"
+  ],
+  "code": 1,
+  "gh_argv": [
+    [
+      "pr",
+      "view",
+      "1",
+      "--repo",
+      "o/r",
+      "--json",
+      "title,author"
+    ]
+  ],
+  "git_argv": [
+    [
+      "cwd={root}",
+      "log",
+      "--reverse",
+      "--format=%H%x1f%s%x1f%b%x1e",
+      "v1.0.0..v1.0.1"
+    ]
+  ],
+  "outputs": {
+    "body.linked.md": null,
+    "links.json": null
+  },
+  "stderr": "Traceback (most recent call last):\nFileNotFoundError: [Errno 2] No such file or directory: 'missing/out.md'\n",
+  "stdout": ""
+}

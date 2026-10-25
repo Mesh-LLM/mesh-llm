@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "families": {
+    "rwkv6": ["src/models/rwkv6qwen2.cpp", "src/models/rwkv6.cpp"],
+    "mistral4": ["src/models/deepseek2.cpp"],
+    "afmoe": ["src/models/afmoe.cpp"],
+    "deepseek2": ["src/models/deepseek2.cpp"]
+  }
+}

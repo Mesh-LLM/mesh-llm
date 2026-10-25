@@ -3,6 +3,7 @@ mod multimodal;
 mod profile;
 mod runtime;
 mod schema_types;
+mod updates;
 
 pub use built_in_schema::{
     BuiltInConfigPathResolution, built_in_config_schema_descriptor, built_in_config_settings,
@@ -16,6 +17,7 @@ pub use runtime::{
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
 };
 pub use schema_types::*;
+pub use updates::UpdatesConfig;
 
 pub use mesh_llm_types::runtime::ModelRuntimeKind;
 use serde::ser::SerializeStruct;
@@ -40,6 +42,8 @@ pub struct MeshConfig {
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub analytics: AnalyticsConfig,
+    #[serde(default)]
+    pub updates: UpdatesConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -129,6 +133,11 @@ pub struct RuntimeConfig {
     pub lifecycle_log_parser: LifecycleLogParserMode,
     #[serde(skip)]
     pub lifecycle_log_parser_source: ConfigValueSource,
+    /// Set by `MESH_LLM_LIFECYCLE_LOG_PARSER` for this process only. Never
+    /// saved, so an applied config cannot write the variable into
+    /// `config.toml`.
+    #[serde(skip)]
+    pub lifecycle_log_parser_override: Option<LifecycleLogParserMode>,
     /// Seconds before forcibly unloading a draining instance (default 30).
     #[serde(default = "default_drain_timeout_secs")]
     pub drain_timeout_secs: u64,
@@ -162,6 +171,7 @@ impl Default for RuntimeConfig {
             startup_failure_policy: runtime::StartupFailurePolicy::default(),
             lifecycle_log_parser: LifecycleLogParserMode::default(),
             lifecycle_log_parser_source: ConfigValueSource::Default,
+            lifecycle_log_parser_override: None,
             drain_timeout_secs: runtime::DEFAULT_DRAIN_TIMEOUT_SECS,
             drain_timeout_max_secs: runtime::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
             activity: runtime::RuntimeActivityConfig::default(),
@@ -273,6 +283,21 @@ pub struct NativeRuntimeConfig {
     pub skippy_abi: Option<String>,
     #[serde(default)]
     pub selection: Option<String>,
+    /// Whether startup may fetch the release catalog and download a runtime.
+    /// Unset means yes; off, only bundled and installed runtimes load.
+    /// `mesh-llm runtime install` ignores it.
+    #[serde(default)]
+    pub download: Option<bool>,
+    /// Set by `MESH_LLM_NO_RUNTIME_DOWNLOAD` for this process only. Never
+    /// saved, so an applied config cannot write the variable into `config.toml`.
+    #[serde(skip)]
+    pub download_override: Option<bool>,
+}
+
+impl NativeRuntimeConfig {
+    pub fn download_enabled(&self) -> bool {
+        self.download_override.or(self.download) != Some(false)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -470,8 +495,6 @@ pub struct PrefixCacheConfig {
     pub shared_stride_tokens: Option<u32>,
     #[serde(default)]
     pub shared_record_limit: Option<u32>,
-    #[serde(default)]
-    pub payload_mode: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -701,8 +724,15 @@ pub struct SpeculativeConfig {
     pub verify_window_min_tokens: Option<u32>,
     pub verify_window_max_tokens: Option<u32>,
     pub verify_window_pipeline_depth: Option<u32>,
-    pub verify_window_runahead_tokens: Option<u32>,
+    pub verify_window_runahead_tokens: Option<IntegerOrString>,
     pub ngram_fallback: Option<String>,
+    /// Closed-loop speculation gating: measure whether speculation pays and
+    /// stand it down when it does not. See #2112 workstream 5.
+    pub gate: Option<BoolOrAuto>,
+    pub gate_min_window_s: Option<u64>,
+    pub gate_min_requests: Option<u64>,
+    pub gate_decisive_margin: Option<f64>,
+    pub gate_cooldown_s: Option<u64>,
     pub spec_default: Option<BoolOrAuto>,
     pub(crate) legacy_draft_model_path_used: bool,
 }
@@ -756,6 +786,11 @@ impl SpeculativeConfig {
             verify_window_pipeline_depth: pick!(verify_window_pipeline_depth),
             verify_window_runahead_tokens: pick!(verify_window_runahead_tokens),
             ngram_fallback: pick!(ngram_fallback),
+            gate: pick!(gate),
+            gate_min_window_s: pick!(gate_min_window_s),
+            gate_min_requests: pick!(gate_min_requests),
+            gate_decisive_margin: pick!(gate_decisive_margin),
+            gate_cooldown_s: pick!(gate_cooldown_s),
             spec_default: pick!(spec_default),
             legacy_draft_model_path_used: overrides
                 .filter(|config| config.draft_model.is_some())
@@ -829,9 +864,19 @@ struct SpeculativeConfigRaw {
     #[serde(default)]
     verify_window_pipeline_depth: Option<u32>,
     #[serde(default)]
-    verify_window_runahead_tokens: Option<u32>,
+    verify_window_runahead_tokens: Option<IntegerOrString>,
     #[serde(default)]
     ngram_fallback: Option<String>,
+    #[serde(default)]
+    gate: Option<BoolOrAuto>,
+    #[serde(default)]
+    gate_min_window_s: Option<u64>,
+    #[serde(default)]
+    gate_min_requests: Option<u64>,
+    #[serde(default)]
+    gate_decisive_margin: Option<f64>,
+    #[serde(default)]
+    gate_cooldown_s: Option<u64>,
     #[serde(default)]
     spec_default: Option<BoolOrAuto>,
 }
@@ -879,6 +924,11 @@ impl<'de> Deserialize<'de> for SpeculativeConfig {
             verify_window_pipeline_depth: raw.verify_window_pipeline_depth,
             verify_window_runahead_tokens: raw.verify_window_runahead_tokens,
             ngram_fallback: raw.ngram_fallback,
+            gate: raw.gate,
+            gate_min_window_s: raw.gate_min_window_s,
+            gate_min_requests: raw.gate_min_requests,
+            gate_decisive_margin: raw.gate_decisive_margin,
+            gate_cooldown_s: raw.gate_cooldown_s,
             spec_default: raw.spec_default,
             legacy_draft_model_path_used: legacy_used,
         })
@@ -946,6 +996,11 @@ impl Serialize for SpeculativeConfig {
             &self.verify_window_runahead_tokens,
         )?;
         map.serialize_entry("ngram_fallback", &self.ngram_fallback)?;
+        map.serialize_entry("gate", &self.gate)?;
+        map.serialize_entry("gate_min_window_s", &self.gate_min_window_s)?;
+        map.serialize_entry("gate_min_requests", &self.gate_min_requests)?;
+        map.serialize_entry("gate_decisive_margin", &self.gate_decisive_margin)?;
+        map.serialize_entry("gate_cooldown_s", &self.gate_cooldown_s)?;
         map.serialize_entry("spec_default", &self.spec_default)?;
         map.end()
     }
@@ -1016,6 +1071,10 @@ pub struct RequestDefaultsConfig {
     pub chat_template: Option<String>,
     #[serde(default)]
     pub chat_template_file: Option<String>,
+    /// Lets requests supply their own chat template on this node. Off by
+    /// default; see the configuration reference before enabling it.
+    #[serde(default)]
+    pub allow_request_chat_template: Option<bool>,
     #[serde(default)]
     pub jinja: Option<bool>,
     #[serde(default)]
@@ -1156,6 +1215,8 @@ struct RawMeshConfig {
     #[serde(default)]
     analytics: AnalyticsConfig,
     #[serde(default)]
+    updates: UpdatesConfig,
+    #[serde(default)]
     logging: LoggingConfig,
     #[serde(default)]
     defaults: Option<ModelConfigDefaults>,
@@ -1265,6 +1326,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             owner_control: raw.owner_control,
             telemetry: raw.telemetry,
             analytics: raw.analytics,
+            updates: raw.updates,
             logging: raw.logging,
             defaults: raw.defaults,
             runtime: raw.runtime,
@@ -1734,6 +1796,9 @@ pub struct PluginConfigEntry {
     /// peer. Host-owned; off unless the operator turns it on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_peer_blocks: Option<bool>,
+    /// Explicit operator lifecycle permissions. An absent grant gives no access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_exchange_grant: Option<crate::OpenAiExchangeGrant>,
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]

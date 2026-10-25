@@ -120,6 +120,7 @@ fn request(path: &str, model: &str) -> BufferedHttpRequest {
         request_object_request_ids: vec![],
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 
@@ -416,6 +417,7 @@ async fn host_dispatch_rejects_local_legacy_target_without_capable_replicas() {
             MODEL,
             &request,
             RouteModelRequestContext {
+                local_execution_only: false,
                 exchange_id: None,
                 required_tokens: None,
                 affinity: &affinity,

@@ -252,6 +252,7 @@ function categoryForDefaultsPath(canonicalPath: string) {
   if (canonicalPath.startsWith('telemetry.')) return 'telemetry'
   if (canonicalPath === 'runtime.debug') return 'meshllm'
   if (canonicalPath === 'runtime.listen_all') return 'network'
+  if (canonicalPath.startsWith('runtime.native_runtime.')) return 'runtime'
   if (canonicalPath.startsWith('runtime.')) return 'runtime-policy'
   if (canonicalPath.startsWith('owner_control.')) return 'network'
   if (canonicalPath.startsWith('mesh_requirements.')) return 'attestation'

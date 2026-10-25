@@ -17,7 +17,8 @@ impl PaymentService {
                 let balance = self.wallet().await?.balance().await?;
                 let available = self
                     .ledger
-                    .available_budget(balance.spendable_msat, crate::now_ms())?;
+                    .available_budget(crate::now_ms())?
+                    .min(balance.spendable_msat);
                 Ok(
                     json!({"spendable_msat": balance.spendable_msat, "available_for_inference_msat": available}),
                 )
@@ -64,6 +65,20 @@ impl PaymentService {
                 self.ledger.policy_status(crate::now_ms())
             }
             ControlCommand::Pricing => Ok(serde_json::to_value(self.ledger.pricing()?)?),
+            ControlCommand::MinPayment { value_msat } => {
+                if let Some(value_msat) = value_msat {
+                    self.ledger.set_min_payment_msat(value_msat)?;
+                }
+                Ok(serde_json::json!({ "min_payment_msat": self.ledger.min_payment_msat()? }))
+            }
+            ControlCommand::SetCacheDiscount { model, percent } => {
+                let mut pricing = self.ledger.pricing()?.remove(&model).ok_or_else(|| {
+                    anyhow::anyhow!("set model input/output rates before a cache discount")
+                })?;
+                pricing.cache_discount_percent = percent;
+                self.ledger.set_pricing(&model, Some(&pricing))?;
+                Ok(serde_json::to_value(self.ledger.pricing()?)?)
+            }
             ControlCommand::SetPricing { model, value } => {
                 self.ledger.set_pricing(&model, value.as_ref())?;
                 Ok(serde_json::to_value(self.ledger.pricing()?)?)
@@ -153,9 +168,8 @@ impl PaymentService {
             pricing: Pricing {
                 input_msat_per_million: 1,
                 output_msat_per_million: 1,
-                minimum_invoice_msat: 1,
+                cache_discount_percent: 0,
             },
-            input_tokens: 0,
             max_output_tokens: 1,
             max_total_msat: cap,
             expires_at_ms: invoice.expires_at_ms,

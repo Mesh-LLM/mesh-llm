@@ -49,6 +49,7 @@ pub mod attr {
 }
 
 pub mod metric {
+    pub const KV_SELECTED_PAYLOADS: &str = "skippy.kv.selected_payloads";
     pub const LLAMA_DECODE_SECONDS: &str = "skippy.llama_decode_seconds";
     pub const ACTIVATION_BYTES_SENT: &str = "skippy.activation_bytes_sent";
     pub const OTEL_QUEUE_DEPTH: &str = "skippy.otel_queue_depth";

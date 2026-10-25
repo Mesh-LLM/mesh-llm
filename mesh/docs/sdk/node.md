@@ -1,152 +1,27 @@
 # Node.js SDK
 
-Use `@mesh-llm/sdk` from npm for Node.js and Electron applications.
+Install the package with `npm install @mesh-llm/sdk`. When developing from this
+checkout, run `npm run build:native` in `mesh/sdk/node` before using the SDK.
 
-## Install
-
-```bash
-npm install @mesh-llm/sdk
-```
-
-When building from this repository, build the native N-API addon first:
-
-```bash
-cd mesh/sdk/node
-npm run build:native
-```
-
-## Client: Public Mesh
-
-Node.js public discovery helpers are not currently exported by `@mesh-llm/sdk`.
-Use a public invite token selected by your app or service.
+The npm package exposes one embedded `Node` with `client`, `serve`, and
+`combined` roles. `serve` is serve-only.
 
 ```js
-const { Client, generateOwnerKeypairHex } = require('@mesh-llm/sdk')
-
-const client = Client.create({
-  ownerKeypairHex: generateOwnerKeypairHex(),
-  inviteToken: process.env.MESH_PUBLIC_INVITE
-})
-
-await client.start()
-const models = await client.inference.listModels()
-const result = await client.inference.chat({
-  model: models[0].id,
-  messages: [{ role: 'user', content: 'Say hello from a public mesh.' }]
-})
-console.log(result.content)
-await client.stop()
-```
-
-## Agent streaming
-
-```js
-await client.start()
-try {
-  const models = await client.inference.listModels()
-  for await (const event of client.inference.streamChatCompletions({
-    model: models[0].id,
-    messages: [{ role: 'user', content: 'What is the weather?' }],
-    tools: [{ type: 'function', function: { name: 'get_weather' } }]
-  })) {
-    if (event.type === 'sse' && !event.done) console.log(event.event, event.json())
-  }
-} finally {
-  await client.stop()
-}
-```
-
-The stream retains named and raw SSE frames, incremental tool-call arguments,
-and future JSON fields. Ending iteration early cancels the native request.
-
-## Client: Private Mesh
-
-```js
-const { Client, generateOwnerKeypairHex } = require('@mesh-llm/sdk')
-
-const client = Client.create({
-  ownerKeypairHex: generateOwnerKeypairHex(),
-  inviteToken: process.env.MESH_PRIVATE_INVITE
-})
-
-await client.start()
-const models = await client.inference.listModels()
-const result = await client.inference.chat({
-  model: models[0].id,
-  messages: [{ role: 'user', content: 'Say hello from a private mesh.' }]
-})
-console.log(result.content)
-await client.stop()
-```
-
-## Serving: Install Runtime
-
-Install or resolve a native runtime before starting local serving:
-
-```js
-const { resolveNativeRuntime } = require('@mesh-llm/sdk')
-
-await resolveNativeRuntime({
-  artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,
-  allowDownload: process.env.MESH_SDK_RUNTIME_ALLOW_DOWNLOAD === '1',
-  onProgress: (event) => console.log(event)
-})
-```
-
-## Serving: Public Mesh
-
-```js
-const { Node, generateOwnerKeypairHex, resolveNativeRuntime } = require('@mesh-llm/sdk')
-
-await resolveNativeRuntime({
-  artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,
-  allowDownload: process.env.MESH_SDK_RUNTIME_ALLOW_DOWNLOAD === '1',
-  onProgress: (event) => console.log(event)
-})
-
-const modelRef = process.env.MESH_SDK_MODEL_REF || 'Qwen2.5-3B-Instruct-Q4_K_M'
-const node = Node.create({
-  ownerKeypairHex: generateOwnerKeypairHex(),
-  inviteToken: process.env.MESH_PUBLIC_INVITE,
-  servingEnabled: true,
-  cacheDir: process.env.MESH_SDK_CACHE_DIR,
-  runtimeDir: process.env.MESH_SDK_RUNTIME_DIR
-})
-
+const { Node } = require('@mesh-llm/sdk')
+const node = Node.create({ mode: 'client', autoJoin: true })
 await node.start()
-await node.models.download(modelRef)
-const served = await node.serving.load(modelRef, { devicePolicy: 'auto' })
-const result = await node.inference.chat({
-  model: served.modelId,
-  messages: [{ role: 'user', content: 'Say hello from a public serving node.' }]
+const models = await node.inference.listModels()
+const response = await node.inference.chatCompletions({
+  model: models[0].id,
+  messages: [{ role: 'user', content: 'Hello' }]
 })
-console.log(result.content)
-await node.serving.unloadModel(served.modelId)
 await node.stop()
 ```
 
-## Serving: Private Mesh
+Use `joinTokens: [token]` for a private mesh. To serve local models, choose
+`mode: 'serve'` or `'combined'` and set `models: [modelRef]`. Serving requires a
+matching native runtime. `ownerKeyPath` accepts a Mesh LLM keystore path. The
+old `Client` and owner keypair hex constructor are removed.
 
-Private mesh serving uses the same lifecycle with `MESH_PRIVATE_INVITE`:
-
-```js
-const node = Node.create({
-  ownerKeypairHex: generateOwnerKeypairHex(),
-  inviteToken: process.env.MESH_PRIVATE_INVITE,
-  servingEnabled: true,
-  cacheDir: process.env.MESH_SDK_CACHE_DIR,
-  runtimeDir: process.env.MESH_SDK_RUNTIME_DIR
-})
-```
-
-## Console Assets
-
-Published Node packages that advertise console support include the built web
-console as package resources. Use the package helper to find those assets in
-normal package usage:
-
-```js
-const { defaultConsoleAssetDir } = require('@mesh-llm/sdk')
-
-const assetDir = defaultConsoleAssetDir()
-```
+Stream with `node.inference.streamChatCompletions(body)` or
+`streamResponses(body)`. See [runtime artifacts](../SDK.md#native-runtime-artifacts).

@@ -8,8 +8,22 @@ pub const SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EmbeddedMeshNodeMode {
-    Serve,
+    /// Consume inference without loading or advertising local models.
     Client,
+    /// Serve local models without exposing the SDK's client inference handle.
+    ServeOnly,
+    /// Serve local models and consume inference from the mesh.
+    Serve,
+}
+
+impl EmbeddedMeshNodeMode {
+    pub fn allows_client_inference(&self) -> bool {
+        matches!(self, Self::Client | Self::Serve)
+    }
+
+    pub fn allows_serving(&self) -> bool {
+        matches!(self, Self::ServeOnly | Self::Serve)
+    }
 }
 
 pub type EmbeddedServeMode = EmbeddedMeshNodeMode;
@@ -202,6 +216,11 @@ impl EmbeddedMeshNodeBuilder {
 
     pub fn serve(mut self) -> Self {
         self.config.mode = EmbeddedMeshNodeMode::Serve;
+        self
+    }
+
+    pub fn serve_only(mut self) -> Self {
+        self.config.mode = EmbeddedMeshNodeMode::ServeOnly;
         self
     }
 

@@ -84,8 +84,13 @@ name = "openai-endpoint"
 url = "http://127.0.0.1:8000/v1"
 ```
 
-Start it with bare `mesh-llm serve`. Provider models can appear in
-`/v1/models` while no local model process exists. See
+Start it with bare `mesh-llm serve`. An enabled, resolved inference adapter
+with a valid URL can serve without a native runtime when no local model startup
+is requested. Mesh reports the missing runtime, advertises no native capacity,
+and rejects later local-model and split-stage loads. Install a compatible native
+runtime and restart to use those operations. Explicit local-model arguments and
+configured `[[models]]` entries still require a native runtime. Provider models
+can appear in `/v1/models` while no local model process exists. See
 [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) and
 [provider quick start](/docs/pages/external-model-endpoints/) for Ollama, vLLM
 and LM Studio, release compatibility, and HTTP/authentication limitations.

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::source_ref::is_valid_name;
 
 mod control_behavior;
+mod exchange_access;
+pub use exchange_access::InstalledOpenAiExchangeAccess;
 
 pub use control_behavior::{
     InstalledPluginConditionOperator, InstalledPluginConditionValue,
@@ -20,10 +22,14 @@ pub use control_behavior::{
 };
 
 const METADATA_FILE: &str = "plugin-install.json";
+/// Marks a default plugin the operator turned off while it was not installed.
+const DEFAULT_OFF_FILE: &str = "default-off";
 pub const SUPPORTED_PLUGIN_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginManifestMetadata {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub openai_exchange_hook: Option<InstalledOpenAiExchangeAccess>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub config_schema: Option<InstalledPluginConfigSchema>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -271,6 +277,8 @@ pub struct InstalledPluginMetadata {
     pub downloaded_asset_name: String,
     pub install_path: PathBuf,
     pub enabled: bool,
+    #[serde(default)]
+    pub default_managed: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub manifest: Option<InstalledPluginManifestMetadata>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -282,9 +290,13 @@ pub struct InstalledPluginMetadata {
 }
 
 impl InstalledPluginMetadata {
+    /// The plugin's executable, named for the target it was installed for,
+    /// the same name the install checked. A stored triple this build does not
+    /// support (a hand-written or test record) falls back to the host's suffix.
     pub fn executable_path(&self) -> PathBuf {
-        self.install_path
-            .join(format!("{}{}", self.name, std::env::consts::EXE_SUFFIX))
+        let suffix = crate::target::PluginTarget::executable_suffix_for(&self.target_triple)
+            .unwrap_or(std::env::consts::EXE_SUFFIX);
+        self.install_path.join(format!("{}{suffix}", self.name))
     }
 
     pub fn web_ui_asset_root_path(&self) -> Option<PathBuf> {
@@ -410,6 +422,30 @@ impl PluginStore {
         Ok(())
     }
 
+    /// Record whether a default plugin is turned off: while it is, the
+    /// installers and `mesh-llm update` do not install it. This works when
+    /// the plugin is not installed: `plugins delete` leaves this record for a
+    /// default, and `plugins disable` leaves it for a default not installed.
+    pub fn set_default_turned_off(&self, name: &str, off: bool) -> Result<()> {
+        validate_plugin_name(name)?;
+        let marker = self.plugin_dir(name).join(DEFAULT_OFF_FILE);
+        if off {
+            let plugin_dir = self.plugin_dir(name);
+            fs::create_dir_all(&plugin_dir).with_context(|| {
+                format!("create plugin metadata directory {}", plugin_dir.display())
+            })?;
+            fs::write(&marker, b"").with_context(|| format!("write {}", marker.display()))?;
+        } else if marker.exists() {
+            fs::remove_file(&marker).with_context(|| format!("remove {}", marker.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Whether `plugins disable` turned this default off while it was not installed.
+    pub fn default_turned_off(&self, name: &str) -> bool {
+        is_valid_name(name) && self.plugin_dir(name).join(DEFAULT_OFF_FILE).exists()
+    }
+
     fn plugin_dir(&self, name: &str) -> PathBuf {
         self.root.join(name)
     }
@@ -441,6 +477,28 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn executable_path_follows_the_stored_target_on_any_host() {
+        let mut item = metadata("demo");
+        for (triple, executable) in [
+            ("x86_64-pc-windows-msvc", "demo.exe".to_string()),
+            ("aarch64-pc-windows-msvc", "demo.exe".to_string()),
+            ("x86_64-unknown-linux-gnu", "demo".to_string()),
+            ("aarch64-apple-darwin", "demo".to_string()),
+            (
+                "test-target",
+                format!("demo{}", std::env::consts::EXE_SUFFIX),
+            ),
+        ] {
+            item.target_triple = triple.to_string();
+            assert_eq!(
+                item.executable_path(),
+                item.install_path.join(&executable),
+                "{triple}"
+            );
+        }
+    }
+
     fn metadata(name: &str) -> InstalledPluginMetadata {
         InstalledPluginMetadata {
             name: name.to_string(),
@@ -450,7 +508,9 @@ mod tests {
             downloaded_asset_name: "blackboard-v1.0.0-aarch64-apple-darwin.tar.gz".to_string(),
             install_path: PathBuf::from("/tmp/plugins/blackboard"),
             enabled: true,
+            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
+                openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: name.to_string(),
                     schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,

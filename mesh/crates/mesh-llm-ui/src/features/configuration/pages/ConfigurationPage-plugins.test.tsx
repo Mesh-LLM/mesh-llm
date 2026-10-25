@@ -268,7 +268,13 @@ describe('ConfigurationPage plugin integrations', () => {
       pluginSummary('disabled-ui', disabledPluginWebUi()),
       pluginSummary('invalid-ui', invalidPluginWebUi()),
       pluginSummary('stopped-ui', pluginNotRunningWebUi()),
-      pluginSummary('legacy-plugin', nonePluginWebUi()),
+      {
+        ...pluginSummary('legacy-plugin', nonePluginWebUi()),
+        manifest: {
+          openai_exchange_body_access_requested: true,
+          openai_exchange_status: 'not_granted'
+        }
+      },
       pluginSummary('other-parent', readyPluginWebUi({ parent_tab: 'advanced' }))
     ]
     const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
@@ -298,6 +304,8 @@ describe('ConfigurationPage plugin integrations', () => {
     }
     expect(screen.getByText('web UI disabled by configuration')).toBeInTheDocument()
     expect(screen.getByText('bundle missing')).toBeInTheDocument()
+    expect(screen.getByText(/This plugin requests prompt or response body access/)).toBeInTheDocument()
+    expect(screen.getByText('Observation: not granted')).toBeInTheDocument()
     expect(screen.getByText('plugin process unavailable')).toBeInTheDocument()
     expect(screen.getByText('Web UI not declared')).toBeInTheDocument()
     expect(screen.queryByRole('switch', { name: 'legacy-plugin web UI projection' })).not.toBeInTheDocument()

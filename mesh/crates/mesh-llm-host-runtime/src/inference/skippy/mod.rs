@@ -13,6 +13,8 @@ mod materialization;
 pub(crate) mod metal_pipeline_cache;
 mod model_capabilities;
 mod model_open_drain;
+#[cfg(all(test, feature = "dynamic-native-runtime"))]
+mod native_unavailable_tests;
 mod package;
 mod projector;
 #[cfg(test)]
@@ -37,23 +39,24 @@ use std::{
 #[cfg(test)]
 use skippy_inference_api::CompactionConfig;
 #[cfg(test)]
-use skippy_serving::OpenAiGuardrailsTarget;
+use skippy_serving::InferenceGuardrailsTarget;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use skippy_inference_api::thinking::ThinkingControls;
 use skippy_inference_api::{
     AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompletionRequest,
     CompletionResponse, CompletionStream, EmbeddingResponse, EmbeddingsRequest, GuardrailMode,
-    GuardrailPolicy, GuardrailPolicyHandle, ModelObject, OpenAiBackend, OpenAiHookPolicy,
-    OpenAiRequestContext, OpenAiResult, RerankRequest, RerankResponse,
+    GuardrailPolicy, GuardrailPolicyHandle, InferenceBackend, InferenceHookPolicy,
+    InferenceRequestContext, InferenceResult, ModelObject, RerankRequest, RerankResponse,
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{ModelInfo, MtpSource};
 use skippy_serving::serving_hooks::SharedModelServingHooksFactory;
 use skippy_serving::{
     EmbeddedRuntimeOptions, EmbeddedRuntimeStatus, EmbeddedServerHandle, EmbeddedState,
-    OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, SkippyRuntimeHandle,
+    InferenceGuardrailsConfig, InferenceGuardrailsStatus, SkippyRuntimeHandle,
     binary_transport::PredictionReturnListener, binary_transport::WireCondition,
 };
 
@@ -98,7 +101,7 @@ pub(crate) use resolver::{
 };
 pub(crate) use skippy_api::family_policy;
 pub(crate) use skippy_api::family_policy::family_policy_for_stage_config;
-pub(crate) use skippy_serving::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
+pub(crate) use skippy_serving::InferenceGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use split_certification::{SplitCertificationAdmission, require_split_certification};
 #[cfg(test)]
 pub(crate) use stage::test_stage_admission;
@@ -182,7 +185,7 @@ pub(crate) struct SkippyModelStatus {
     pub(crate) n_gpu_layers: i32,
     pub(crate) flash_attn_type: FlashAttentionType,
     pub(crate) selected_device: Option<SkippyDeviceDescriptor>,
-    pub(crate) openai_guardrails: Option<OpenAiGuardrailsStatus>,
+    pub(crate) openai_guardrails: Option<InferenceGuardrailsStatus>,
     pub(crate) layer_start: u32,
     pub(crate) layer_end: u32,
     pub(crate) stage_id: String,
@@ -201,13 +204,13 @@ pub(crate) struct SkippySessionLaneStatus {
     pub(crate) token_count: Option<u64>,
 }
 
-pub(crate) fn default_skippy_openai_guardrails() -> OpenAiGuardrailsConfig {
-    OpenAiGuardrailsConfig::for_standalone_mode(
-        skippy_serving::frontend::OpenAiGuardrailsMode::default(),
+pub(crate) fn default_skippy_openai_guardrails() -> InferenceGuardrailsConfig {
+    InferenceGuardrailsConfig::for_standalone_mode(
+        skippy_serving::frontend::InferenceGuardrailsMode::default(),
     )
 }
 
-pub(crate) fn skippy_openai_guardrails_for_mode(mode: GuardrailMode) -> OpenAiGuardrailsConfig {
+pub(crate) fn skippy_openai_guardrails_for_mode(mode: GuardrailMode) -> InferenceGuardrailsConfig {
     // v1 only wraps hosted Skippy OpenAI backends constructed at the local/staged
     // seams below. MoA `model:"mesh"` arbitration and Virtual LLM consult paths
     // stay unwrapped until they adopt the backend-free guardrail core directly.
@@ -220,8 +223,8 @@ pub(crate) fn skippy_openai_guardrails_for_mode(mode: GuardrailMode) -> OpenAiGu
 
 pub(crate) fn skippy_openai_guardrails_for_policy_handle(
     policy: GuardrailPolicyHandle,
-) -> OpenAiGuardrailsConfig {
-    OpenAiGuardrailsConfig::with_policy(policy)
+) -> InferenceGuardrailsConfig {
+    InferenceGuardrailsConfig::with_policy(policy)
 }
 
 #[derive(Debug)]
@@ -233,9 +236,14 @@ struct HandleState {
 
 pub(crate) struct SkippyModelHandle {
     runtime: SkippyRuntimeHandle,
-    backend: Arc<dyn OpenAiBackend>,
-    openai_guardrails: Option<OpenAiGuardrailsConfig>,
+    backend: Arc<dyn InferenceBackend>,
+    openai_guardrails: Option<InferenceGuardrailsConfig>,
     config: StageConfig,
+    /// Render-only reasoning-control observations Skippy produced for this model.
+    ///
+    /// Skippy owns both the shape (see `skippy_inference_api::thinking`) and the
+    /// probe; the host only carries the value to `/v1/models`.
+    thinking: Option<ThinkingControls>,
     started_at_unix_nanos: i64,
     status: Arc<Mutex<HandleState>>,
     _prediction_return_listener: Option<PredictionReturnListener>,
@@ -247,7 +255,7 @@ pub(crate) struct SkippyHttpHandle {
 }
 
 pub(crate) struct SkippyOpenAiGuardrailOptions {
-    config: Option<OpenAiGuardrailsConfig>,
+    config: Option<InferenceGuardrailsConfig>,
     telemetry: survey::SurveyTelemetry,
 }
 
@@ -258,7 +266,7 @@ pub(crate) use model_open_drain::{ModelOpenObservation, ModelOpenReturn, NativeM
 
 impl SkippyOpenAiGuardrailOptions {
     pub(crate) fn new(
-        config: Option<OpenAiGuardrailsConfig>,
+        config: Option<InferenceGuardrailsConfig>,
         telemetry: survey::SurveyTelemetry,
     ) -> Self {
         Self { config, telemetry }
@@ -269,6 +277,7 @@ pub(crate) fn load_laya_model(
     path: &Path,
     device: Option<&str>,
 ) -> Result<Arc<skippy_runtime::LayaModel>> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let threads = std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(4);
@@ -296,6 +305,40 @@ pub(crate) fn start_laya_http_on(
     }
 }
 
+pub(crate) fn load_speech_recognition_model(
+    path: &Path,
+    device: Option<&str>,
+) -> Result<Arc<skippy_runtime::SpeechRecognitionModel>> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
+    Ok(Arc::new(skippy_runtime::SpeechRecognitionModel::open(
+        path, device,
+    )?))
+}
+
+pub(crate) fn start_speech_recognition_http_on(
+    model_id: &str,
+    model: Arc<skippy_runtime::SpeechRecognitionModel>,
+    concurrency: usize,
+    bind_addr: std::net::SocketAddr,
+) -> SkippyHttpHandle {
+    let lifecycle_observer = crate::network::openai::runtime_events::compose_lifecycle_observer(
+        crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+    );
+    let server = skippy_serving::start_openai_backend_with_lifecycle_observer(
+        bind_addr,
+        Arc::new(skippy_serving::SpeechRecognitionBackend::new(
+            model_id,
+            model,
+            concurrency,
+        )),
+        lifecycle_observer,
+    );
+    SkippyHttpHandle {
+        port: bind_addr.port(),
+        server,
+    }
+}
+
 impl SkippyHttpHandle {
     pub(crate) fn port(&self) -> u16 {
         self.port
@@ -311,20 +354,20 @@ impl SkippyHttpHandle {
 }
 
 impl SkippyModelHandle {
-    pub(crate) fn backend(&self) -> Arc<dyn OpenAiBackend> {
+    pub(crate) fn backend(&self) -> Arc<dyn InferenceBackend> {
         self.backend.clone()
     }
 
-    pub(crate) fn openai_guardrails(&self) -> Option<OpenAiGuardrailsStatus> {
+    pub(crate) fn openai_guardrails(&self) -> Option<InferenceGuardrailsStatus> {
         self.openai_guardrails
             .as_ref()
-            .map(OpenAiGuardrailsConfig::status)
+            .map(InferenceGuardrailsConfig::status)
     }
 
     pub(crate) fn set_openai_guardrail_mode(
         &self,
         mode: GuardrailMode,
-    ) -> Option<OpenAiGuardrailsStatus> {
+    ) -> Option<InferenceGuardrailsStatus> {
         let guardrails = self.openai_guardrails.as_ref()?;
         guardrails.policy.set_mode(mode);
         Some(guardrails.status())
@@ -393,11 +436,11 @@ impl Drop for SkippyModelHandle {
 
 #[cfg(test)]
 fn wrap_host_guardrail_backend(
-    backend: Arc<dyn OpenAiBackend>,
-    openai_guardrails: Option<&OpenAiGuardrailsConfig>,
+    backend: Arc<dyn InferenceBackend>,
+    openai_guardrails: Option<&InferenceGuardrailsConfig>,
     context_limit_tokens: Option<usize>,
     telemetry: Option<Arc<dyn skippy_inference_api::GuardrailTelemetrySink>>,
-) -> Arc<dyn OpenAiBackend> {
+) -> Arc<dyn InferenceBackend> {
     match openai_guardrails {
         Some(config) => {
             config.wrap_backend_with_telemetry(backend, context_limit_tokens, telemetry)
@@ -407,39 +450,39 @@ fn wrap_host_guardrail_backend(
 }
 
 #[async_trait]
-impl OpenAiBackend for SkippyModelHandle {
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> OpenAiResult<u32> {
+impl InferenceBackend for SkippyModelHandle {
+    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
 
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         self.backend.models().await
     }
 
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.backend.chat_completion(request).await
     }
 
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         self.backend.chat_completion_stream(request, context).await
     }
 
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         self.backend.completion(request).await
     }
 
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         self.backend.completion_stream(request, context).await
     }
 
@@ -447,8 +490,8 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn embeddings(
         &self,
         request: EmbeddingsRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<EmbeddingResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<EmbeddingResponse> {
         self.backend.embeddings(request, context).await
     }
 
@@ -456,8 +499,8 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn rerank(
         &self,
         request: RerankRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<RerankResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<RerankResponse> {
         self.backend.rerank(request, context).await
     }
 
@@ -465,8 +508,8 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn audio_speech(
         &self,
         request: AudioSpeechRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioResponse> {
         self.backend.audio_speech(request, context).await
     }
 
@@ -474,8 +517,8 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn audio_transcription(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.backend.audio_transcription(request, context).await
     }
 
@@ -483,13 +526,14 @@ impl OpenAiBackend for SkippyModelHandle {
     async fn audio_translation(
         &self,
         request: AudioTranscriptionRequest,
-        context: OpenAiRequestContext,
-    ) -> OpenAiResult<AudioTranscriptionResponse> {
+        context: InferenceRequestContext,
+    ) -> InferenceResult<AudioTranscriptionResponse> {
         self.backend.audio_translation(request, context).await
     }
 }
 
 pub(crate) fn infer_layer_count(path: &Path) -> Result<u32> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let info =
         ModelInfo::open(path).with_context(|| format!("open model metadata {}", path.display()))?;
     let layer_count = info
@@ -508,7 +552,7 @@ fn status_from_parts(
     embedded: &EmbeddedRuntimeStatus,
     local: &HandleState,
     started_at_unix_nanos: i64,
-    openai_guardrails: Option<OpenAiGuardrailsStatus>,
+    openai_guardrails: Option<InferenceGuardrailsStatus>,
 ) -> SkippyModelStatus {
     SkippyModelStatus {
         state: match local.state {
@@ -616,13 +660,76 @@ pub(crate) fn forget_stage0_compute_meter(run_id: &str) {
     }
 }
 
+/// Render-only reasoning-control observations for the models this process serves.
+///
+/// Keyed by the mesh model name so `/v1/models` can attach them to the entry it
+/// publishes. The value is the serialized Skippy report: the host never inspects
+/// or reshapes it. Local-only state — it is never gossiped, because a peer cannot
+/// see this node's selected template.
+static LOCAL_THINKING: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, serde_json::Value>>,
+> = std::sync::LazyLock::new(Default::default);
+
+pub(crate) fn register_local_thinking(model_name: &str, thinking: Option<&ThinkingControls>) {
+    let value = thinking.and_then(|thinking| serde_json::to_value(thinking).ok());
+    let Ok(mut registry) = LOCAL_THINKING.lock() else {
+        return;
+    };
+    match value {
+        Some(value) => {
+            registry.insert(model_name.to_string(), value);
+        }
+        // A reload that produced no observations must not leave the previous
+        // load's report behind.
+        None => {
+            registry.remove(model_name);
+        }
+    }
+}
+
+pub(crate) fn forget_local_thinking(model_name: &str) {
+    if let Ok(mut registry) = LOCAL_THINKING.lock() {
+        registry.remove(model_name);
+    }
+}
+
+pub(crate) fn local_thinking(model_name: &str) -> Option<serde_json::Value> {
+    LOCAL_THINKING.lock().ok()?.get(model_name).cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    use skippy_inference_api::{MESH_COMPACT_FIELD, OpenAiError};
+    use skippy_inference_api::{InferenceError, MESH_COMPACT_FIELD};
     use skippy_serving::runtime_state::RuntimeSessionStats;
     use skippy_serving::telemetry::TelemetryStats;
+
+    fn thinking_fixture() -> ThinkingControls {
+        ThinkingControls {
+            toggle: skippy_inference_api::thinking::ThinkingToggle::Observed,
+            reasoning_parser: Some(true),
+            efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+        }
+    }
+
+    #[test]
+    fn local_thinking_registry_round_trips_and_clears_on_an_unprobed_reload() {
+        let model = "registry-unit-test-model";
+        forget_local_thinking(model);
+        assert!(local_thinking(model).is_none());
+
+        register_local_thinking(model, Some(&thinking_fixture()));
+        let value = local_thinking(model).expect("registered thinking");
+        assert_eq!(value["toggle"], "observed");
+        assert_eq!(value["reasoning_parser"], true);
+        assert_eq!(value["efforts"][2], "high");
+
+        // A reload that produced no observations must not leave the previous
+        // load's report behind.
+        register_local_thinking(model, None);
+        assert!(local_thinking(model).is_none());
+    }
 
     #[test]
     fn lifecycle_only_hooks_leave_exact_receipts_unset() {
@@ -662,15 +769,15 @@ mod tests {
     }
 
     #[async_trait]
-    impl OpenAiBackend for RecordingHostBackend {
-        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    impl InferenceBackend for RecordingHostBackend {
+        async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
             Ok(vec![ModelObject::new("host-skippy")])
         }
 
         async fn chat_completion(
             &self,
             request: ChatCompletionRequest,
-        ) -> OpenAiResult<ChatCompletionResponse> {
+        ) -> InferenceResult<ChatCompletionResponse> {
             *self.seen_chat.lock().expect("seen chat lock poisoned") = Some(request.clone());
             Ok(ChatCompletionResponse::new(
                 request.model,
@@ -682,9 +789,9 @@ mod tests {
         async fn chat_completion_stream(
             &self,
             _request: ChatCompletionRequest,
-            _context: OpenAiRequestContext,
-        ) -> OpenAiResult<ChatCompletionStream> {
-            Err(OpenAiError::unsupported(
+            _context: InferenceRequestContext,
+        ) -> InferenceResult<ChatCompletionStream> {
+            Err(InferenceError::unsupported(
                 "streaming is not needed by this host wrapper test",
             ))
         }
@@ -905,7 +1012,7 @@ mod tests {
             &embedded,
             &local,
             222,
-            Some(OpenAiGuardrailsStatus {
+            Some(InferenceGuardrailsStatus {
                 mode: "disabled",
                 target: "skippy",
                 streaming: "pass_through",
@@ -996,8 +1103,8 @@ mod tests {
         let backend = Arc::new(RecordingHostBackend::default());
         let wrapped = wrap_host_guardrail_backend(
             backend.clone(),
-            Some(&OpenAiGuardrailsConfig {
-                target: OpenAiGuardrailsTarget::Skippy,
+            Some(&InferenceGuardrailsConfig {
+                target: InferenceGuardrailsTarget::Skippy,
                 policy: GuardrailPolicyHandle::default(),
                 compaction: Some(CompactionConfig::default()),
             }),
@@ -1041,8 +1148,8 @@ mod tests {
         let policy = GuardrailPolicyHandle::default();
         let wrapped = wrap_host_guardrail_backend(
             backend.clone(),
-            Some(&OpenAiGuardrailsConfig {
-                target: OpenAiGuardrailsTarget::Skippy,
+            Some(&InferenceGuardrailsConfig {
+                target: InferenceGuardrailsTarget::Skippy,
                 policy: policy.clone(),
                 compaction: None,
             }),

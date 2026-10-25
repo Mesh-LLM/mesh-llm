@@ -7,6 +7,11 @@ metadata:
 
 # Release Notes
 
+Release-note automation uses the Rust commands under `cargo xtool release`.
+The older Python scripts remain as compatibility references while their test
+coverage is migrated. New automation follows the Rust ownership rule in
+`../manage-ci/SKILL.md`.
+
 The release workflow publishes with GitHub-generated release notes, so every
 MeshLLM release starts life as one flat `## What's Changed` list. A normal minor
 release carries a few hundred entries in merge order, which buries the handful
@@ -75,7 +80,7 @@ publishes unless both hold.
 
 ### 1. Link pass (authoritative, best-effort calls)
 
-`scripts/release-notes-link.py` pairs each commit in the range with the pull
+`cargo xtool release notes-link` pairs each commit in the range with the pull
 request that carried it. The `(#N)` suffix a squash merge leaves on the subject
 is authoritative and free; a commit without one costs a
 `repos/{repo}/commits/{sha}/pulls` lookup, and a commit the API cannot place is
@@ -94,7 +99,7 @@ back to the behaviour the pipeline had before the pass existed.
 
 ### 2. Deterministic pass (authoritative)
 
-`scripts/release-notes-classify.py` reads the canonical squash-merge commits
+`cargo xtool release notes-classify` reads the canonical squash-merge commits
 between the comparison base and the tag, and maps each entry by its
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) type:
 
@@ -113,7 +118,7 @@ Two rules override the type. A tooling scope — `ci`, `release`, `build`,
 commit trailer wins outright, and is the escape hatch when the type cannot
 express the change.
 
-`scripts/release-notes-regroup.py` then renders the plan, refusing unless it
+`cargo xtool release notes-regroup` then renders the plan, refusing unless it
 covers the body exactly.
 
 ### 3. Agent review pass (optional, best-effort)
@@ -155,9 +160,9 @@ keep running the scripts from the repository root:
 ```bash
 WORK="$(mktemp -d)"
 gh release view "$RELEASE_TAG" --json body -q .body > "$WORK/body.md"
-python3 scripts/release-notes-regroup.py --body "$WORK/body.md" --list
+cargo xtool release notes-regroup --body "$WORK/body.md" --list
 # write "$WORK/plan.json", then:
-python3 scripts/release-notes-regroup.py \
+cargo xtool release notes-regroup \
   --body "$WORK/body.md" --plan "$WORK/plan.json" --out "$WORK/new.md"
 ```
 
@@ -237,7 +242,7 @@ title is what has to be conventional.
 Coverage is a measurable property of a release:
 
 ```bash
-python3 scripts/release-notes-classify.py --body body.md \
+cargo xtool release notes-classify --body body.md \
   --range v0.75.1..v0.76.0 --version 0.76.0 --date 2026-09-10 --out plan.json
 # classified 182/272 entries deterministically (90 in 'Other changes')
 ```

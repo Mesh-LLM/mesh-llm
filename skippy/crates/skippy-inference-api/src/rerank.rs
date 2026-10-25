@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{OpenAiError, OpenAiResult, Usage};
+use crate::{InferenceError, InferenceResult, Usage};
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
@@ -11,14 +11,14 @@ pub enum RerankDocument {
 
 impl RerankDocument {
     /// Borrow plain text or a document object's required string `text` field.
-    pub fn text(&self) -> OpenAiResult<&str> {
+    pub fn text(&self) -> InferenceResult<&str> {
         match self {
             Self::Text(text) => Ok(text),
             Self::Object(value) => value
                 .get("text")
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| {
-                    OpenAiError::invalid_request(
+                    InferenceError::invalid_request(
                         "rerank document objects must contain a string 'text' field",
                     )
                 }),
@@ -39,27 +39,27 @@ pub struct RerankRequest {
 
 impl RerankRequest {
     /// Validate every document before admission, including optional top-N bounds.
-    pub fn validate(&self) -> OpenAiResult<()> {
+    pub fn validate(&self) -> InferenceResult<()> {
         if self.model.trim().is_empty() {
-            return Err(OpenAiError::invalid_request("model must not be empty"));
+            return Err(InferenceError::invalid_request("model must not be empty"));
         }
         if self.query.is_empty() {
-            return Err(OpenAiError::invalid_request("query must not be empty"));
+            return Err(InferenceError::invalid_request("query must not be empty"));
         }
         if self.documents.is_empty() {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "documents must contain at least one item",
             ));
         }
         for document in &self.documents {
             if document.text()?.is_empty() {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "rerank documents must not be empty",
                 ));
             }
         }
         if self.top_n == Some(0) {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "top_n must be greater than zero",
             ));
         }

@@ -114,7 +114,7 @@ requiring users to send `prompt_cache_key`.
 The default is conditional, not universal:
 
 - unsupported or unknown families may leave `kv_cache` unset.
-- raw `skippy-serving serve-openai` leaves cache off unless the stage config or
+- raw `skippy serve` leaves cache off unless the stage config or
   `SKIPPY_KV_CACHE`/`SKIPPY_PREFIX_CACHE` enables it.
 - operators can disable cache with `model_fit.prompt_cache = false` or
   `model_fit.prefix_cache.enabled = false`.
@@ -123,8 +123,8 @@ The default is conditional, not universal:
 
 ## Benchmarking
 
-Use `skippy/evals/skippy-openai-cache-matrix.py` to compare cold and warm behavior
-across native llama-server and Skippy OpenAI endpoints. The script records four
+Use `just automation-run automation openai-cache-matrix` to compare cold and warm behavior
+across native llama-server and Skippy OpenAI endpoints. The native command records four
 rows:
 
 - cold native: llama-server with request cache disabled.
@@ -141,7 +141,7 @@ the final current token that drives decode, so `cacheable = prompt_tokens - 1`.
 Example:
 
 ```bash
-python3 skippy/evals/skippy-openai-cache-matrix.py \
+just automation-run automation openai-cache-matrix \
   --llama-cold-base-url http://127.0.0.1:8081 \
   --llama-warm-base-url http://127.0.0.1:8082 \
   --skippy-cold-base-url http://127.0.0.1:9337/v1 \
@@ -155,7 +155,7 @@ endpoint with `--cache-ram N` or the llama-server default prompt-cache setting.
 
 The default benchmark pattern is `exact`, so the warmup and measured request
 use the same prompt. To exercise Skippy's shared-prefix grid against
-llama-server's LCP reuse, add `--pattern shared-prefix`. By default, the script
+llama-server's LCP reuse, add `--pattern shared-prefix`. By default, the command
 exits non-zero when either warm row reports zero cached tokens; use
 `--allow-missing-warm-cache` only for exploratory timing runs where the endpoint
 does not expose cached-token counts.

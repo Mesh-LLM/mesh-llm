@@ -1,3 +1,4 @@
+mod conversation;
 mod tools;
 
 use serde::{Deserialize, Serialize};
@@ -6,8 +7,9 @@ use serde_json::{Map, Value};
 use crate::{
     chat::{ChatCompletionChunk, ChatCompletionResponse},
     common::{THINKING_BOOLEAN_ALIASES, Usage, normalize_reasoning_compat_fields},
-    errors::OpenAiError,
+    errors::InferenceError,
 };
+use conversation::{is_responses_tool_item, translate_responses_conversation_items};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseAdapterMode {
@@ -55,8 +57,8 @@ pub struct ChatCompletionStreamChoice {
     pub delta: Option<ChatCompletionStreamDelta>,
     #[serde(default)]
     pub logprobs: Option<Value>,
-    #[serde(rename = "finish_reason", default)]
-    _finish_reason: Option<String>,
+    #[serde(default)]
+    pub finish_reason: Option<String>,
     #[serde(flatten)]
     _extra: Map<String, Value>,
 }
@@ -142,7 +144,7 @@ fn object_or_url_container(
     }
 }
 
-fn translate_responses_content_item(item: &Value) -> Result<Value, OpenAiError> {
+fn translate_responses_content_item(item: &Value) -> Result<Value, InferenceError> {
     let Some(object) = item.as_object() else {
         return Ok(serde_json::json!({
             "type": "text",
@@ -152,7 +154,7 @@ fn translate_responses_content_item(item: &Value) -> Result<Value, OpenAiError> 
     let item_type = object.get("type").and_then(Value::as_str).unwrap_or("text");
 
     match item_type {
-        "input_text" | "text" => {
+        "input_text" | "output_text" | "text" => {
             let text = object
                 .get("text")
                 .and_then(Value::as_str)
@@ -165,7 +167,9 @@ fn translate_responses_content_item(item: &Value) -> Result<Value, OpenAiError> 
                 object.get("url").and_then(Value::as_str),
             )
             .ok_or_else(|| {
-                OpenAiError::invalid_request("responses input_image block is missing image_url/url")
+                InferenceError::invalid_request(
+                    "responses input_image block is missing image_url/url",
+                )
             })?;
             Ok(serde_json::json!({"type": "image_url", "image_url": container}))
         }
@@ -192,7 +196,7 @@ fn translate_responses_content_item(item: &Value) -> Result<Value, OpenAiError> 
                 }
             }
             if container.is_empty() {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "responses input_audio block is missing input_audio/audio_url/url",
                 ));
             }
@@ -204,7 +208,7 @@ fn translate_responses_content_item(item: &Value) -> Result<Value, OpenAiError> 
                 object.get("url").and_then(Value::as_str),
             )
             .ok_or_else(|| {
-                OpenAiError::invalid_request(
+                InferenceError::invalid_request(
                     "responses input_file block is missing input_file/file/url",
                 )
             })?;
@@ -224,7 +228,7 @@ fn translate_responses_content_item(item: &Value) -> Result<Value, OpenAiError> 
             }
             Ok(serde_json::json!({"type": "input_file", "input_file": container}))
         }
-        other => Err(OpenAiError::unsupported(format!(
+        other => Err(InferenceError::unsupported(format!(
             "unsupported /v1/responses content block type '{other}'"
         ))),
     }
@@ -239,7 +243,7 @@ fn collapse_blocks_if_text_only(blocks: Vec<Value>) -> Value {
     Value::Array(blocks)
 }
 
-fn translate_responses_message_content(content: &Value) -> Result<Value, OpenAiError> {
+fn translate_responses_message_content(content: &Value) -> Result<Value, InferenceError> {
     match content {
         Value::String(text) => Ok(Value::String(text.clone())),
         Value::Array(items) => {
@@ -252,15 +256,17 @@ fn translate_responses_message_content(content: &Value) -> Result<Value, OpenAiE
         Value::Object(_) => Ok(collapse_blocks_if_text_only(vec![
             translate_responses_content_item(content)?,
         ])),
-        _ => Err(OpenAiError::unsupported(
+        _ => Err(InferenceError::unsupported(
             "unsupported /v1/responses input content shape",
         )),
     }
 }
 
-fn translate_responses_input_message(message: &Value) -> Result<Map<String, Value>, OpenAiError> {
+fn translate_responses_input_message(
+    message: &Value,
+) -> Result<Map<String, Value>, InferenceError> {
     let Some(object) = message.as_object() else {
-        return Err(OpenAiError::unsupported(
+        return Err(InferenceError::unsupported(
             "unsupported /v1/responses message shape",
         ));
     };
@@ -278,12 +284,15 @@ fn translate_responses_input_message(message: &Value) -> Result<Map<String, Valu
     ]))
 }
 
-fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, OpenAiError> {
+fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, InferenceError> {
     match input {
         Value::String(text) => Ok(vec![serde_json::json!({
             "role": "user",
             "content": text,
         })]),
+        Value::Array(items) if items.iter().any(is_responses_tool_item) => {
+            translate_responses_conversation_items(items)
+        }
         Value::Array(items) => {
             let looks_like_messages = items.iter().all(|item| {
                 item.as_object()
@@ -317,13 +326,15 @@ fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, Op
                 })])
             }
         }
-        _ => Err(OpenAiError::unsupported(
+        _ => Err(InferenceError::unsupported(
             "unsupported /v1/responses input shape",
         )),
     }
 }
 
-fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<bool, OpenAiError> {
+fn translate_openai_responses_input(
+    object: &mut Map<String, Value>,
+) -> Result<bool, InferenceError> {
     let mut changed = tools::normalize(object)?;
     let mut messages = Vec::new();
     let mut state_cache_key = None;
@@ -430,7 +441,7 @@ pub fn request_body_requires_json_normalization(path: &str, body: &[u8]) -> bool
 pub fn normalize_openai_compat_request(
     path: &str,
     body: &mut Value,
-) -> Result<NormalizationOutcome, OpenAiError> {
+) -> Result<NormalizationOutcome, InferenceError> {
     if path_only(path) == "/v1/messages" {
         crate::anthropic::normalize_messages_request(body)?;
         let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
@@ -637,26 +648,26 @@ fn apply_agent_compat_response_defaults(response: &mut Map<String, Value>, creat
     insert_absent(response, "user", Value::Null);
 }
 
-pub fn translate_chat_completion_to_responses(body: &[u8]) -> Result<Vec<u8>, OpenAiError> {
+pub fn translate_chat_completion_to_responses(body: &[u8]) -> Result<Vec<u8>, InferenceError> {
     let value: Value = serde_json::from_slice(body).map_err(|error| {
-        OpenAiError::invalid_request(format!("parse chat completion response body: {error}"))
+        InferenceError::invalid_request(format!("parse chat completion response body: {error}"))
     })?;
     translate_chat_completion_value_to_responses(&value)
 }
 
 pub fn translate_chat_completion_response_to_responses(
     response: &ChatCompletionResponse,
-) -> Result<Value, OpenAiError> {
+) -> Result<Value, InferenceError> {
     let value = serde_json::to_value(response).map_err(|error| {
-        OpenAiError::internal(format!("serialize chat completion response: {error}"))
+        InferenceError::internal(format!("serialize chat completion response: {error}"))
     })?;
     let bytes = translate_chat_completion_value_to_responses(&value)?;
     serde_json::from_slice(&bytes).map_err(|error| {
-        OpenAiError::internal(format!("parse translated responses response: {error}"))
+        InferenceError::internal(format!("parse translated responses response: {error}"))
     })
 }
 
-fn translate_chat_completion_value_to_responses(value: &Value) -> Result<Vec<u8>, OpenAiError> {
+fn translate_chat_completion_value_to_responses(value: &Value) -> Result<Vec<u8>, InferenceError> {
     let id = value
         .get("id")
         .and_then(Value::as_str)
@@ -720,12 +731,13 @@ fn translate_chat_completion_value_to_responses(value: &Value) -> Result<Vec<u8>
         apply_agent_compat_response_defaults(object, created_at);
     }
     serde_json::to_vec(&response)
-        .map_err(|error| OpenAiError::internal(format!("serialize /v1/responses body: {error}")))
+        .map_err(|error| InferenceError::internal(format!("serialize /v1/responses body: {error}")))
 }
 
-pub fn parse_chat_stream_chunk(data: &str) -> Result<ChatCompletionStreamChunk, OpenAiError> {
-    serde_json::from_str(data)
-        .map_err(|error| OpenAiError::invalid_request(format!("parse chat stream chunk: {error}")))
+pub fn parse_chat_stream_chunk(data: &str) -> Result<ChatCompletionStreamChunk, InferenceError> {
+    serde_json::from_str(data).map_err(|error| {
+        InferenceError::invalid_request(format!("parse chat stream chunk: {error}"))
+    })
 }
 
 pub fn responses_stream_created_event(model: &str, created_at: i64) -> Value {
@@ -1224,8 +1236,8 @@ mod tests {
     use crate::{
         AssistantMessage, ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse,
         ChatCompletionStream, CompletionRequest, CompletionResponse, CompletionStream,
-        FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, ModelObject,
-        OpenAiBackend, OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult, Usage,
+        FinishReason, GuardedInferenceBackend, GuardrailMode, GuardrailPolicy, InferenceBackend,
+        InferenceFrontendConfig, InferenceRequestContext, InferenceResult, ModelObject, Usage,
         router_for_with_config,
     };
 
@@ -1235,15 +1247,15 @@ mod tests {
     }
 
     #[async_trait]
-    impl OpenAiBackend for GuardedResponsesBackend {
-        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+    impl InferenceBackend for GuardedResponsesBackend {
+        async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
             Ok(vec![ModelObject::new("Qwen3-8B-Q4_K_M")])
         }
 
         async fn chat_completion(
             &self,
             request: ChatCompletionRequest,
-        ) -> OpenAiResult<ChatCompletionResponse> {
+        ) -> InferenceResult<ChatCompletionResponse> {
             self.seen_chat_requests
                 .lock()
                 .unwrap()
@@ -1280,8 +1292,8 @@ mod tests {
         async fn chat_completion_stream(
             &self,
             request: ChatCompletionRequest,
-            _context: OpenAiRequestContext,
-        ) -> OpenAiResult<ChatCompletionStream> {
+            _context: InferenceRequestContext,
+        ) -> InferenceResult<ChatCompletionStream> {
             Ok(Box::pin(stream::iter(vec![Ok(
                 crate::ChatCompletionChunk::done(request.model),
             )])))
@@ -1290,15 +1302,15 @@ mod tests {
         async fn completion(
             &self,
             _request: CompletionRequest,
-        ) -> OpenAiResult<CompletionResponse> {
+        ) -> InferenceResult<CompletionResponse> {
             unreachable!("guarded responses backend test only calls chat")
         }
 
         async fn completion_stream(
             &self,
             _request: CompletionRequest,
-            _context: OpenAiRequestContext,
-        ) -> OpenAiResult<CompletionStream> {
+            _context: InferenceRequestContext,
+        ) -> InferenceResult<CompletionStream> {
             unreachable!("guarded responses backend test only calls chat")
         }
     }
@@ -1894,7 +1906,7 @@ mod tests {
     }
 
     fn guarded_responses_app(backend: Arc<GuardedResponsesBackend>) -> Router {
-        let guarded = Arc::new(GuardedOpenAiBackend::new(
+        let guarded = Arc::new(GuardedInferenceBackend::new(
             backend,
             GuardrailPolicy {
                 mode: GuardrailMode::Enforce,
@@ -1904,7 +1916,7 @@ mod tests {
         ));
         router_for_with_config(
             guarded,
-            OpenAiFrontendConfig::default().without_backend_timeout(),
+            InferenceFrontendConfig::default().without_backend_timeout(),
         )
     }
 

@@ -141,6 +141,7 @@ fn trial_config_includes_runtime_native_runtime() {
     config.runtime.native_runtime.skippy_abi = Some("0.1.25".to_string());
     config.runtime.native_runtime.selection =
         Some("exact:meshllm-native-runtime-linux-x86_64-cuda12".to_string());
+    config.runtime.native_runtime.download = Some(false);
 
     let rendered = trial_config(&config, &prepared, &candidate).expect("trial config renders");
     let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
@@ -157,6 +158,7 @@ fn trial_config_includes_runtime_native_runtime() {
         parsed.runtime.native_runtime.selection.as_deref(),
         Some("exact:meshllm-native-runtime-linux-x86_64-cuda12")
     );
+    assert_eq!(parsed.runtime.native_runtime.download, Some(false));
 }
 
 #[test]

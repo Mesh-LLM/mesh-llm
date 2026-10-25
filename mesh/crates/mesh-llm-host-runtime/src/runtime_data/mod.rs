@@ -14,6 +14,7 @@ mod plugin_tests;
 mod plugins;
 mod processes;
 mod producers;
+mod runtime_status;
 mod snapshots;
 mod subscriptions;
 
@@ -391,6 +392,7 @@ pub(crate) mod tests {
             is_host: false,
             is_client: false,
             llama_ready: false,
+            external_inference_ready: false,
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
             available_models: vec!["Qwen-Test".into()],
@@ -444,6 +446,7 @@ pub(crate) mod tests {
                 lifecycle_instances: vec![],
                 intent_summary: None,
                 runtime_events: None,
+                serving_strategy: None,
             },
             model_name: "Qwen-Test".into(),
             models: vec!["Qwen-Test".into()],
@@ -554,6 +557,7 @@ pub(crate) mod tests {
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
+            decode_batch_policy_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -589,6 +593,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],
@@ -695,6 +700,7 @@ pub(crate) mod tests {
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
+            decode_batch_policy_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -736,6 +742,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],
@@ -840,6 +847,7 @@ pub(crate) mod tests {
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
             local_gguf_content_id_supported: false,
+            decode_batch_policy_supported: false,
             advertised_model_throughput: vec![crate::network::metrics::ModelThroughputHint {
                 model_name: "Qwen/Qwen3-Coder".into(),
                 avg_tokens_per_second_milli: 13_400,
@@ -882,6 +890,7 @@ pub(crate) mod tests {
             is_host: true,
             is_client: false,
             llama_ready: true,
+            external_inference_ready: false,
             model_name: "Self-Model".into(),
             models: vec!["Self-Model".into()],
             available_models: vec!["Self-Model".into()],
@@ -990,6 +999,133 @@ pub(crate) mod tests {
             "mesh-llm serve --auto --model Example-Model"
         );
         assert_eq!(payload[0].fit_label, "Likely comfortable");
+    }
+
+    #[test]
+    fn runtime_data_model_snapshot_uses_gossiped_metadata_without_local_inventory() {
+        let collector = RuntimeDataCollector::new();
+        let gossiped_model = "Remote-Model".to_string();
+        let legacy_model = "Legacy-Model".to_string();
+        let descriptor_with_metadata = crate::mesh::ServedModelDescriptor {
+            identity: crate::mesh::ServedModelIdentity {
+                model_name: gossiped_model.clone(),
+                ..Default::default()
+            },
+            capabilities_known: false,
+            capabilities: crate::models::ModelCapabilities::default(),
+            topology: None,
+            metadata: Some(crate::mesh::ServedModelMetadata {
+                native_context_length: Some(131_072),
+                quant: Some("Q4_K_M".to_string()),
+                ..Default::default()
+            }),
+        };
+        let descriptor_without_metadata = crate::mesh::ServedModelDescriptor {
+            identity: crate::mesh::ServedModelIdentity {
+                model_name: legacy_model.clone(),
+                ..Default::default()
+            },
+            capabilities_known: false,
+            capabilities: crate::models::ModelCapabilities::default(),
+            topology: None,
+            metadata: None,
+        };
+
+        let snapshot = collector.build_model_view(ModelViewInput {
+            peers: vec![],
+            catalog: vec![
+                MeshCatalogEntry {
+                    model_name: gossiped_model.clone(),
+                    descriptor: Some(descriptor_with_metadata),
+                },
+                MeshCatalogEntry {
+                    model_name: legacy_model.clone(),
+                    descriptor: Some(descriptor_without_metadata),
+                },
+            ],
+            served_models: vec![gossiped_model.clone(), legacy_model.clone()],
+            active_demand: HashMap::new(),
+            my_serving_models: vec![],
+            my_hosted_models: vec![],
+            local_inventory: LocalModelInventorySnapshot::default(),
+            node_hostname: Some("client.local".into()),
+            my_vram_gb: 0.0,
+            model_name: String::new(),
+            model_size_bytes: 0,
+            now_unix_secs: 1_700_000_000,
+        });
+
+        let payload = mesh_models(snapshot);
+        assert_eq!(payload.len(), 2);
+        let gossiped = payload
+            .iter()
+            .find(|model| model.name == gossiped_model)
+            .expect("gossiped model should be exposed");
+        assert_eq!(gossiped.context_length, Some(131_072));
+        assert_eq!(gossiped.quantization, Some("Q4_K_M".to_string()));
+        let legacy = payload
+            .iter()
+            .find(|model| model.name == legacy_model)
+            .expect("legacy model should be exposed");
+        assert_eq!(legacy.context_length, None);
+        assert_eq!(legacy.quantization, None);
+    }
+
+    #[test]
+    fn runtime_data_model_snapshot_prefers_local_inventory_over_gossiped_metadata() {
+        let collector = RuntimeDataCollector::new();
+        let model_name = "Shared-Model".to_string();
+        let descriptor = crate::mesh::ServedModelDescriptor {
+            identity: crate::mesh::ServedModelIdentity {
+                model_name: model_name.clone(),
+                ..Default::default()
+            },
+            capabilities_known: false,
+            capabilities: crate::models::ModelCapabilities::default(),
+            topology: None,
+            metadata: Some(crate::mesh::ServedModelMetadata {
+                native_context_length: Some(8_192),
+                quant: Some("Q8_0".to_string()),
+                ..Default::default()
+            }),
+        };
+        let local_inventory = LocalModelInventorySnapshot {
+            model_names: HashSet::from([model_name.clone()]),
+            size_by_name: HashMap::new(),
+            metadata_by_name: HashMap::from([(
+                model_name.clone(),
+                crate::proto::node::CompactModelMetadata {
+                    model_key: model_name.clone(),
+                    context_length: 131_072,
+                    quantization_type: "Q4_K_M".to_string(),
+                    ..Default::default()
+                },
+            )]),
+            display_name_by_name: HashMap::new(),
+        };
+
+        let snapshot = collector.build_model_view(ModelViewInput {
+            peers: vec![],
+            catalog: vec![MeshCatalogEntry {
+                model_name: model_name.clone(),
+                descriptor: Some(descriptor),
+            }],
+            served_models: vec![model_name.clone()],
+            active_demand: HashMap::new(),
+            my_serving_models: vec![model_name.clone()],
+            my_hosted_models: vec![model_name.clone()],
+            local_inventory,
+            node_hostname: Some("node.local".into()),
+            my_vram_gb: 24.0,
+            model_name: model_name.clone(),
+            model_size_bytes: 0,
+            now_unix_secs: 1_700_000_000,
+        });
+
+        let payload = mesh_models(snapshot);
+        assert_eq!(payload.len(), 1);
+        assert_eq!(payload[0].context_length, Some(131_072));
+        assert_eq!(payload[0].quantization, Some("Q4_K_M".to_string()));
     }
 
     #[test]

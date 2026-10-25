@@ -1,4 +1,4 @@
-use crate::events::{ClientEvent, OpenAiStreamEventNative};
+use crate::events::OpenAiStreamEventNative;
 
 #[derive(uniffi::Enum)]
 pub enum NativeRuntimeVerificationPolicyNative {
@@ -54,11 +54,6 @@ pub struct NativeRuntimeInstallOutcomeNative {
 #[derive(uniffi::Record)]
 pub struct NativeRuntimePruneResultNative {
     pub removed_dirs: Vec<String>,
-}
-
-#[uniffi::export(callback_interface)]
-pub trait EventListener: Send + Sync {
-    fn on_event(&self, event: ClientEvent);
 }
 
 #[uniffi::export(callback_interface)]

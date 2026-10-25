@@ -41,6 +41,7 @@ fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 
@@ -216,6 +217,7 @@ fn dispatch_kind_request(
         request_object_request_ids: Vec::new(),
         response_adapter,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 
@@ -346,6 +348,7 @@ async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_w
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     };
     let decision = AutoRouteDecision {
         effective_model: None,
@@ -1116,7 +1119,7 @@ fn test_endpoint_id(seed: u8) -> iroh::EndpointId {
 /// fake address. `hosts_for_model` returns the peer's `EndpointId` without
 /// any gossip round trip, so `resolve_remote_mesh_route` finds it and
 /// `route_missing_local_model` takes the remote-mesh branch.
-fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
+pub(super) fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
     // Deterministic fake id derived from seed so callers can build multiple
     // non-colliding peers.
     let secret = {
@@ -1177,6 +1180,7 @@ fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
+        decode_batch_policy_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1270,6 +1274,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     // Confirm the nonce header round-trips through the raw bytes before the
@@ -1373,7 +1378,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
 /// Some(SidecarGeneratedFallback)` on both published envelopes when the
 /// request carries BOTH `x-capsule-client-nonce` AND `x-capsule-nonce-origin`.
 ///
-/// The `remote_mesh_nonce_source` helper (ingress.rs lines 35-46) maps:
+/// The `client_nonce_source` helper in ingress/exchange_events.rs maps:
 /// - nonce=Some, nonce_origin=None  → `ClientSupplied`   (covered by the
 ///   sibling test above)
 /// - nonce=Some, nonce_origin=Some  → `SidecarGeneratedFallback`  ← this test
@@ -1438,6 +1443,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     // Confirm both headers are readable before the routing function runs.
@@ -1628,6 +1634,7 @@ fn twin_bracket_header_values_keep_non_http_whitespace_for_the_parser() {
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     let values = request.twin_bracket_header_values().unwrap();
@@ -1953,6 +1960,7 @@ fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::None,
         correlation_id: None,
+        exchange_observation_id: None,
     }
 }
 
@@ -2363,6 +2371,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
 
     let ctx = IngressRouteContext {
@@ -2586,6 +2595,7 @@ async fn local_route_terminal_names_the_peer_that_delivered() {
             served_locally: true,
             request_digest: Some(&digest),
             requested_by_node_id: None,
+            client_nonce: None,
         },
     )
     .await;
@@ -2638,6 +2648,7 @@ async fn local_route_terminal_from_a_peer_keeps_the_twin_bracket_id() {
         request_object_request_ids: Vec::new(),
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
+        exchange_observation_id: None,
     };
     let peer_hex = "ab".repeat(32);
     let outcome = proxy::RouteDispatchOutcome::Responded(200);

@@ -124,10 +124,10 @@ pub struct PeerAnnouncement {
     pub stage_protocol_generation_supported: bool,
     pub stage_status_list_supported: bool,
     pub local_gguf_content_id_supported: bool,
+    pub decode_batch_policy_supported: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     #[cfg(feature = "payments")]
-    pub lightning_offers:
-        std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
+    pub lightning_offers: mesh_llm_payments_types::offers::LightningOffers,
     pub cache_affinity: Option<CacheAffinityAdvertisement>,
     pub latency_ms: Option<u32>,
     pub latency_source: Option<proto_node::LatencySource>,
@@ -414,10 +414,10 @@ pub struct PeerInfo {
     pub stage_protocol_generation_supported: bool,
     pub stage_status_list_supported: bool,
     pub local_gguf_content_id_supported: bool,
+    pub decode_batch_policy_supported: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     #[cfg(feature = "payments")]
-    pub lightning_offers:
-        std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
+    pub lightning_offers: mesh_llm_payments_types::offers::LightningOffers,
     pub cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     /// Most recent direct RTT sample for display purposes (refreshed periodically).
     pub display_rtt: Option<DirectLatencyObservation>,
@@ -487,6 +487,7 @@ impl PeerInfo {
             stage_protocol_generation_supported: ann.stage_protocol_generation_supported,
             stage_status_list_supported: ann.stage_status_list_supported,
             local_gguf_content_id_supported: ann.local_gguf_content_id_supported,
+            decode_batch_policy_supported: ann.decode_batch_policy_supported,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
             #[cfg(feature = "payments")]
             lightning_offers: ann.lightning_offers.clone(),

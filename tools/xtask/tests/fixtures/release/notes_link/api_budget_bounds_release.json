@@ -1,0 +1,46 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--repo",
+    "o/r",
+    "--out-body",
+    "body.linked.md",
+    "--out-links",
+    "links.json",
+    "--api-budget",
+    "2"
+  ],
+  "code": 0,
+  "gh_argv": [
+    [
+      "api",
+      "repos/o/r/commits/s0/pulls",
+      "--jq",
+      "[.[].number]"
+    ],
+    [
+      "api",
+      "repos/o/r/commits/s1/pulls",
+      "--jq",
+      "[.[].number]"
+    ]
+  ],
+  "git_argv": [
+    [
+      "cwd={root}",
+      "log",
+      "--reverse",
+      "--format=%H%x1f%s%x1f%b%x1e",
+      "v1.0.0..v1.0.1"
+    ]
+  ],
+  "outputs": {
+    "body.linked.md": "## What's Changed\n\n**Full Changelog**: compare\n",
+    "links.json": "{\n  \"1\": {\n    \"subject\": \"chore: a change 0\",\n    \"trailers\": {}\n  },\n  \"2\": {\n    \"subject\": \"chore: a change 1\",\n    \"trailers\": {}\n  }\n}\n"
+  },
+  "stderr": "release-notes-link: API budget exhausted; remaining commits keep their published entries\nrelease-notes-link: cannot credit #1 without its author; skipping it\nrelease-notes-link: cannot credit #2 without its author; skipping it\n",
+  "stdout": "linked 2 commit(s) to a pull request through the API; recovered 0 entry(ies) GitHub did not credit (0 published)\n"
+}

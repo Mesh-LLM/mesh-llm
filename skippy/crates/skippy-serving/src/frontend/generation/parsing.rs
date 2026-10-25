@@ -9,9 +9,9 @@ use skippy_inference_api::ChatCompletionResponse;
 use skippy_inference_api::ChatHookAction;
 use skippy_inference_api::ChatHookOutcome;
 use skippy_inference_api::FinishReason;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_inference_api::MessageContent;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
 use skippy_runtime::ChatReasoningFormat;
 use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
@@ -21,13 +21,13 @@ use std::collections::BTreeMap;
 pub(in crate::frontend) fn ensure_requested_model(
     advertised_model_id: &str,
     requested: &str,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if requested == advertised_model_id
         || strip_default_revision(requested) == strip_default_revision(advertised_model_id)
     {
         Ok(())
     } else {
-        Err(OpenAiError::model_not_found(requested))
+        Err(InferenceError::model_not_found(requested))
     }
 }
 
@@ -229,7 +229,7 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
                     reasoning_content: parsed.reasoning_content,
                     tool_calls: parsed.tool_calls,
                 },
-                logprobs: None,
+                logprobs: chat_logprobs(output),
                 finish_reason: Some(finish_reason),
             }],
             output.usage(),
@@ -237,26 +237,78 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
         );
     }
 
-    ChatCompletionResponse::new_with_reason(
+    let mut response = ChatCompletionResponse::new_with_reason(
         model,
         output.text.clone(),
         output.usage(),
         output.finish_reason,
     )
-    .with_timings(output.timings())
+    .with_timings(output.timings());
+    if let Some(choice) = response.choices.first_mut() {
+        choice.logprobs = chat_logprobs(output);
+    }
+    response
+}
+
+/// OpenAI chat `logprobs`: one entry per completion token.
+fn chat_logprobs(output: &GeneratedText) -> Option<Value> {
+    let candidate = |candidate: &super::GeneratedLogprobCandidate| {
+        json!({
+            "token": candidate.text,
+            "logprob": candidate.logprob,
+            "bytes": candidate.bytes,
+        })
+    };
+    let content = output
+        .token_logprobs
+        .as_ref()?
+        .iter()
+        .map(|entry| {
+            let mut value = candidate(&entry.token);
+            value["top_logprobs"] = Value::Array(entry.top.iter().map(candidate).collect());
+            value
+        })
+        .collect::<Vec<_>>();
+    Some(json!({ "content": content, "refusal": null }))
 }
 
 pub(in crate::frontend) fn completion_response_from_generated_text(
     model: String,
     output: &GeneratedText,
 ) -> skippy_inference_api::CompletionResponse {
-    skippy_inference_api::CompletionResponse::new_with_reason(
+    let mut response = skippy_inference_api::CompletionResponse::new_with_reason(
         model,
         output.text.clone(),
         output.usage(),
         output.finish_reason,
     )
-    .with_timings(output.timings())
+    .with_timings(output.timings());
+    if let Some(choice) = response.choices.first_mut() {
+        choice.logprobs = completion_logprobs(output);
+    }
+    response
+}
+
+/// OpenAI legacy completion `logprobs`: parallel lists, with the alternatives
+/// keyed by token text (the first, most likely, wins a repeated text).
+/// `text_offset` is left out: it only matters with `echo`, which is not supported.
+fn completion_logprobs(output: &GeneratedText) -> Option<Value> {
+    let entries = output.token_logprobs.as_ref()?;
+    let tokens = entries.iter().map(|entry| json!(entry.token.text));
+    let token_logprobs = entries.iter().map(|entry| json!(entry.token.logprob));
+    let top_logprobs = entries.iter().map(|entry| {
+        let mut top = serde_json::Map::new();
+        for candidate in &entry.top {
+            top.entry(candidate.text.clone())
+                .or_insert(json!(candidate.logprob));
+        }
+        Value::Object(top)
+    });
+    Some(json!({
+        "tokens": tokens.collect::<Vec<_>>(),
+        "token_logprobs": token_logprobs.collect::<Vec<_>>(),
+        "top_logprobs": top_logprobs.collect::<Vec<_>>(),
+    }))
 }
 
 pub(in crate::frontend) fn parsed_chat_message_from_json(
@@ -410,9 +462,9 @@ pub(in crate::frontend) fn chat_message_generation_value(
     message: &skippy_inference_api::ChatMessage,
     marker: &str,
     media: &mut Vec<MediaInput>,
-) -> OpenAiResult<Value> {
+) -> InferenceResult<Value> {
     let mut value = serde_json::to_value(message)
-        .map_err(|error| OpenAiError::invalid_request(format!("serialize message: {error}")))?;
+        .map_err(|error| InferenceError::invalid_request(format!("serialize message: {error}")))?;
     let content = match message.content.as_ref() {
         Some(MessageContent::Other(Value::Null)) | None => None,
         Some(content) => Some(message_content_to_generation_text(content, marker, media)?),

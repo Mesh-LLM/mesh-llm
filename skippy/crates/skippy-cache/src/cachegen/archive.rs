@@ -440,13 +440,27 @@ fn encode_component(
         bail!("V payload is not uniform across tokens");
     }
     let v_row = v_layer_bytes / token_count;
-    let v_channels = component.v_type.channels_for_row(v_row)?;
-    if component.v_transposed {
-        if component.v_type.element_bytes() as u32 != component.v_element_bytes {
-            bail!("transposed V page element size disagrees with its value type");
+    // MLA caches (DeepSeek/GLM indexers) publish no V stream at all, so their page carries
+    // an empty V payload. Those layers must produce no V records: the native importer
+    // skips V tiles for the same geometry, and any V record here would drift the
+    // record-count check that keeps the two sides aligned.
+    let has_v_payload = v_bytes != 0;
+    let v_channels = if has_v_payload {
+        component.v_type.channels_for_row(v_row)?
+    } else {
+        if component.v_row_bytes != 0 || component.v_element_bytes != 0 {
+            bail!("V page declares V geometry without a V payload");
         }
-    } else if component.v_row_bytes as usize != v_row {
-        bail!("non-transposed V payload disagrees with its row size");
+        0
+    };
+    if has_v_payload {
+        if component.v_transposed {
+            if component.v_type.element_bytes() as u32 != component.v_element_bytes {
+                bail!("transposed V page element size disagrees with its value type");
+            }
+        } else if component.v_row_bytes as usize != v_row {
+            bail!("non-transposed V payload disagrees with its row size");
+        }
     }
 
     let end = base
@@ -480,7 +494,8 @@ fn encode_component(
     }
 
     let v_base = k_bytes;
-    for layer in 0..layer_count {
+    let v_layers = if has_v_payload { layer_count } else { 0 };
+    for layer in 0..v_layers {
         let layer_offset = v_base + layer * v_layer_bytes;
         let layer_tile = &component_raw[layer_offset..layer_offset + v_layer_bytes];
         for row_start in (0..token_count).step_by(MAX_TOKENS_PER_CHUNK) {
@@ -1093,6 +1108,72 @@ mod tests {
             assert_eq!(decoded.len(), raw.len());
             assert_eq!(archive.tile_count, 4);
         }
+    }
+
+    #[test]
+    fn v_less_components_emit_k_records_only() {
+        let token_count = 4_u64;
+        let layer_count = 2_u32;
+        let channels = 32usize;
+        let k_row_bytes = native_row_bytes(ValueType::F16, channels).expect("K row");
+        let payload_bytes = token_count as usize * layer_count as usize * k_row_bytes;
+        let layout = PageLayout {
+            payload_bytes: payload_bytes as u64,
+            components: vec![ComponentLayout {
+                token_count,
+                layer_count,
+                k_type: ValueType::F16,
+                // An MLA cache publishes no V type; the runtime descriptor still carries one.
+                v_type: ValueType::F32,
+                k_row_bytes: k_row_bytes as u32,
+                v_row_bytes: 0,
+                v_element_bytes: 0,
+                k_idx_row_bytes: 0,
+                payload_offset: 0,
+                payload_bytes: payload_bytes as u64,
+                v_transposed: false,
+            }],
+        };
+        let raw = (0..token_count as usize * layer_count as usize * channels)
+            .flat_map(|index| f32_to_f16_bits(((index % 37) as f32 - 18.0) / 11.0).to_le_bytes())
+            .collect::<Vec<_>>();
+
+        let archive = encode_page(&layout, &raw).expect("encode V-less page");
+        let validated = validate_archive(&archive.bytes, raw.len()).expect("validate");
+        assert_eq!(validated.records.len(), layer_count as usize);
+        assert!(
+            validated
+                .records
+                .iter()
+                .all(|record| record.kind == RecordKind::CacheGen)
+        );
+        assert_eq!(archive.tile_count, layer_count as usize);
+        assert_eq!(
+            decode_page(&archive.bytes, raw.len())
+                .expect("decode V-less page")
+                .len(),
+            raw.len()
+        );
+
+        let mut declared_v = layout.clone();
+        declared_v.components[0].v_row_bytes = k_row_bytes as u32;
+        assert!(
+            encode_page(&declared_v, &raw).is_err(),
+            "V geometry without a V payload must be rejected"
+        );
+
+        // A V-less page may still carry the transposed-V flag: the exporter sets it from the
+        // cache mode, which says nothing when there is no V stream to transpose.
+        let mut transposed_flag = layout.clone();
+        transposed_flag.components[0].v_transposed = true;
+        let archived = encode_page(&transposed_flag, &raw).expect("encode flagged V-less page");
+        assert_eq!(
+            validate_archive(&archived.bytes, raw.len())
+                .expect("validate flagged V-less page")
+                .records
+                .len(),
+            layer_count as usize
+        );
     }
 
     #[test]

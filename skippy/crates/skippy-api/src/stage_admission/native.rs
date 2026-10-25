@@ -50,6 +50,7 @@ pub(super) fn realize_native_stage_chain_from_manifest(
     backend_id: &str,
     sidecars_by_stage: &[Vec<Sidecar>],
 ) -> anyhow::Result<(PackageManifest, Vec<RealizedStagePlan>)> {
+    crate::native_runtime::ensure_native_runtime_available()?;
     anyhow::ensure!(!ranges.is_empty(), "stage plan chain is empty");
     anyhow::ensure!(
         ranges.len() == sidecars_by_stage.len(),

@@ -317,6 +317,11 @@ pub(super) struct SplitParticipant {
     /// edges to this peer stay latency-only.
     pub(super) large_frame_mib_per_s: Option<u32>,
     pub(super) artifact_transfer_supported: bool,
+    /// Whether this peer honours `StageLoad.last_stage_decode_batch`. A peer
+    /// predating the field ignores it and serves unbatched, which looks like
+    /// nothing but lower throughput, so placement warns rather than leaving it
+    /// to be inferred.
+    pub(super) decode_batch_policy_supported: bool,
     availability_score: u32,
     /// Sustained memory bandwidth in MiB/s, summed across GPUs (gpu-bench,
     /// gossip). `None` until measured and advertised.
@@ -354,6 +359,7 @@ impl SplitParticipant {
             rtt_corroborated: false,
             large_frame_mib_per_s: None,
             artifact_transfer_supported: false,
+            decode_batch_policy_supported: false,
             availability_score: 0,
             sustained_mem_bandwidth_mib_per_s: None,
             sustained_compute_gflop_per_s: None,
@@ -377,6 +383,8 @@ impl SplitParticipant {
         let mut participant = Self::new(node_id, vram_bytes, first_joined_mesh_ts);
         participant.cached_slice_bytes = package.source_model_bytes;
         participant.artifact_transfer_supported = true;
+        // Ourselves: this build honours the field by construction.
+        participant.decode_batch_policy_supported = true;
         participant.availability_score = package.layer_count;
         participant
     }
@@ -442,6 +450,14 @@ impl SplitParticipant {
         self.sustained_mem_bandwidth_mib_per_s = perf.sustained_mem_bandwidth_mib_per_s;
         self.sustained_compute_gflop_per_s = perf.sustained_compute_gflop_per_s;
         self.observed_decode_us_per_layer = perf.observed_decode_us_per_layer;
+        self
+    }
+
+    /// Its own builder rather than another positional argument on
+    /// `with_package_signals`, which has a dozen call sites that have nothing
+    /// to say about this capability. Mirrors `with_decode_speed`.
+    pub(super) fn with_decode_batch_policy(mut self, supported: bool) -> Self {
+        self.decode_batch_policy_supported = supported;
         self
     }
 
@@ -810,6 +826,7 @@ pub(super) async fn collect_split_participants(
                             artifact_transfer_allowed,
                             perf,
                         )
+                        .with_decode_batch_policy(peer.decode_batch_policy_supported)
                         .with_edge_bandwidth(peer.large_frame_mib_per_s())
                         .with_rtt_observation(peer.rtt_observation_ages()),
                 );

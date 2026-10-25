@@ -2,9 +2,12 @@ mod authoring;
 mod diagnostic;
 mod env_overrides;
 mod hardware_validation;
+mod local_model_path;
 mod model;
 mod model_validation;
+mod openai_exchange;
 mod plugin_validation;
+mod private_file;
 mod size;
 mod store;
 mod validate;
@@ -24,13 +27,22 @@ pub use authoring::{
 pub use env_overrides::{
     CONFIG_OVERRIDE_ENV_NAMES, ConfigValueSource, EventSystemTrialMode,
     LifecycleLogParserSelection, MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV, MESH_LLM_CONFIG_ENV,
-    MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV, MESH_LLM_LIFECYCLE_LOG_PARSER_ENV, apply_env_overrides,
-    benchmark_tune_trial_enabled, event_system_off,
+    MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV, MESH_LLM_LIFECYCLE_LOG_PARSER_ENV,
+    MESH_LLM_NO_RUNTIME_DOWNLOAD_ENV, MESH_LLM_NO_UPDATE_CHECK_ENV, apply_env_overrides,
+    benchmark_tune_trial_enabled, env_override_in_child_for_test, event_system_off,
     event_system_progress_diagnostic_bypass_enabled, event_system_trial_mode,
     resolve_benchmark_tune_trial_gate, resolve_event_system_trial_mode,
-    resolve_lifecycle_log_parser_override, with_env_override_for_test,
+    resolve_lifecycle_log_parser_override, resolve_no_runtime_download_override,
+    resolve_no_update_check_override, with_env_override_for_test,
+};
+pub use local_model_path::{
+    LocalModelPathError, check_local_model_path, local_model_path_diagnostics,
 };
 pub use model::*;
+pub use openai_exchange::{
+    OPENAI_EXCHANGE_ENDPOINTS, OPENAI_EXCHANGE_PHASES, OpenAiExchangeFailurePolicy,
+    OpenAiExchangeGrant, safe_exchange_header,
+};
 pub use plugin_validation::control_behavior::{
     PluginConditionOperator, PluginConditionValue, PluginConditionalDisable, PluginConflictRule,
     PluginControlAvailability, PluginControlAvailabilitySource, PluginControlBehavior,
@@ -42,6 +54,7 @@ pub use plugin_validation::{
     PluginSettingConstraint, PluginSettingSchema, PluginValueKind, PluginValueSchema,
     SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION,
 };
+pub use private_file::restrict_private_directory;
 pub use size::{IecSizeParseError, parse_iec_size};
 pub use store::{
     ConfigStore, config_path, config_to_toml, load_config, parse_config_toml,
@@ -66,7 +79,7 @@ mod tests {
         ConfigApplyMode, ConfigRestartScope, ConfigStore, ConfigValueSource, GpuAssignment,
         KvDiskTierMode, LifecycleLogParserMode, LocalServingNodeConfig, MeshConfig,
         SpeculativeConfig, built_in_config_schema, canonicalize_built_in_config_identifier,
-        parse_config_toml, resolve_lifecycle_log_parser_override, validate_config,
+        config_to_toml, parse_config_toml, resolve_lifecycle_log_parser_override, validate_config,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
@@ -112,6 +125,24 @@ mod tests {
 
         assert_eq!(selection.mode, LifecycleLogParserMode::Enabled);
         assert_eq!(selection.source, ConfigValueSource::Env);
+    }
+
+    #[test]
+    fn lifecycle_log_parser_override_wins_but_is_never_saved() {
+        let mut config = parse_config_toml("[runtime]\nlifecycle_log_parser = \"disabled\"\n")
+            .expect("closed enum should parse");
+        config.runtime.lifecycle_log_parser_override = Some(LifecycleLogParserMode::Enabled);
+
+        let selection = config.runtime.lifecycle_log_parser_selection();
+        assert_eq!(selection.mode, LifecycleLogParserMode::Enabled);
+        assert_eq!(selection.source, ConfigValueSource::Env);
+
+        let reloaded = parse_config_toml(&config_to_toml(&config).unwrap()).unwrap();
+        assert_eq!(
+            reloaded.runtime.lifecycle_log_parser,
+            LifecycleLogParserMode::Disabled
+        );
+        assert_eq!(reloaded.runtime.lifecycle_log_parser_override, None);
     }
 
     #[test]
@@ -274,6 +305,34 @@ selection = "cuda12"
             config.runtime.native_runtime.selection.as_deref(),
             Some("cuda12")
         );
+    }
+
+    #[test]
+    fn native_runtime_download_is_on_unless_the_config_turns_it_off() {
+        let parse = |toml: &str| parse_config_toml(toml).unwrap();
+        assert!(parse("").runtime.native_runtime.download_enabled());
+        assert!(
+            parse("[runtime.native_runtime]\ndownload = true\n")
+                .runtime
+                .native_runtime
+                .download_enabled()
+        );
+        let config = parse("[runtime.native_runtime]\ndownload = false\n");
+        assert!(!config.runtime.native_runtime.download_enabled());
+
+        let reloaded = parse(&config_to_toml(&config).unwrap());
+        assert_eq!(reloaded.runtime.native_runtime.download, Some(false));
+    }
+
+    #[test]
+    fn native_runtime_download_override_wins_but_is_never_saved() {
+        let mut config = parse_config_toml("[runtime.native_runtime]\ndownload = true\n").unwrap();
+        config.runtime.native_runtime.download_override = Some(false);
+        assert!(!config.runtime.native_runtime.download_enabled());
+
+        let reloaded = parse_config_toml(&config_to_toml(&config).unwrap()).unwrap();
+        assert_eq!(reloaded.runtime.native_runtime.download, Some(true));
+        assert_eq!(reloaded.runtime.native_runtime.download_override, None);
     }
 
     #[test]
@@ -935,6 +994,10 @@ gpu_id = "pci:0000:65:00.0"
                 "PluginConfigEditor::args",
                 vec!["plugin.<plugin-name>.args"],
             ),
+            (
+                "PluginConfigEditor::openai_exchange_grant",
+                vec!["plugin.<plugin-name>.openai_exchange_grant.metadata"],
+            ),
             ("PluginConfigEditor::url", vec!["plugin.<plugin-name>.url"]),
             (
                 "PluginConfigEditor::connect_timeout_secs",
@@ -1002,7 +1065,12 @@ gpu_id = "pci:0000:65:00.0"
         let source_model = include_str!("model.rs");
         let source_multimodal = include_str!("model/multimodal.rs");
         let source_runtime = include_str!("model/runtime.rs");
-        let sources = [source_model, source_multimodal, source_runtime];
+        let sources = [
+            source_model,
+            source_multimodal,
+            source_runtime,
+            include_str!("openai_exchange.rs"),
+        ];
         let occurrences = [
             ("MeshConfig", 1usize),
             ("OwnerControlConfig", 1),
@@ -1029,6 +1097,7 @@ gpu_id = "pci:0000:65:00.0"
             ("AuditConfig", 1),
             ("PluginConfigEntry", 1),
             ("PluginStartupConfig", 1),
+            ("OpenAiExchangeGrant", 1),
             ("RuntimeActivityConfig", 1),
             ("LoggingConfig", 1),
             ("LoggingArtifactConfig", 1),
@@ -1061,6 +1130,7 @@ gpu_id = "pci:0000:65:00.0"
             "AdvancedServerConfig",
             "PluginConfigEntry",
             "PluginStartupConfig",
+            "OpenAiExchangeGrant",
             "RuntimeActivityConfig",
             "LoggingConfig",
             "LoggingArtifactConfig",
@@ -1070,6 +1140,8 @@ gpu_id = "pci:0000:65:00.0"
             "extra",
             "gpu_id_from_legacy_shim",
             "lifecycle_log_parser_source",
+            "lifecycle_log_parser_override",
+            "download_override",
             "models",
             "plugins",
             "settings",

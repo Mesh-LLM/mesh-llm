@@ -154,6 +154,27 @@ mod tests {
             native_mtp_draft: Some(StageNativeMtpDraft {
                 token_ids: vec![43, 44],
                 proposal_compute_us: 12_345,
+                follows_correction: false,
+            }),
+            window: StageReplyWindow::default(),
+            stats: StageReplyStats::default(),
+        };
+        let mut bytes = Vec::new();
+        send_reply_message(&mut bytes, &reply).unwrap();
+
+        assert_eq!(recv_reply(Cursor::new(bytes)).unwrap(), reply);
+    }
+
+    #[test]
+    fn reply_round_trips_native_mtp_draft_after_correction() {
+        let reply = StageReply {
+            kind: WireReplyKind::PredictedTokens,
+            predicted: 42,
+            predicted_tokens: vec![42, 7, 9],
+            native_mtp_draft: Some(StageNativeMtpDraft {
+                token_ids: vec![43, 44, 45],
+                proposal_compute_us: 99,
+                follows_correction: true,
             }),
             window: StageReplyWindow::default(),
             stats: StageReplyStats::default(),
@@ -393,6 +414,33 @@ mod tests {
         assert_eq!(sampling.top_k, 40);
         assert_eq!(sampling.logit_bias[0].token_id, 123);
         assert_eq!(sampling.logit_bias[0].bias, -50.0);
+    }
+
+    #[test]
+    fn native_mtp_draft_depth_round_trips_beside_other_flags() {
+        let frame = multipart_activation_frame(1);
+        let mut message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
+        assert_eq!(message.state.native_mtp_draft_tokens(), None);
+        message.state.flags |= state_flags::LIGHT_CONTEXT;
+        message.state.set_native_mtp_draft_tokens(3);
+
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let mut decoded = read_stage_message(Cursor::new(bytes), 2).unwrap();
+        assert_eq!(decoded.state.native_mtp_draft_tokens(), Some(3));
+        assert_ne!(decoded.state.flags & state_flags::LIGHT_CONTEXT, 0);
+
+        decoded.state.set_native_mtp_draft_tokens(99);
+        assert_eq!(decoded.state.native_mtp_draft_tokens(), Some(15));
+        decoded.state.set_native_mtp_draft_tokens(0);
+        assert_eq!(decoded.state.native_mtp_draft_tokens(), Some(0));
+        assert!(!decoded.state.accepts_native_mtp_draft_after_correction());
+        decoded
+            .state
+            .set_accepts_native_mtp_draft_after_correction(true);
+        assert!(decoded.state.accepts_native_mtp_draft_after_correction());
+        assert_eq!(decoded.state.native_mtp_draft_tokens(), Some(0));
+        assert_ne!(decoded.state.flags & state_flags::LIGHT_CONTEXT, 0);
     }
 
     #[test]
@@ -1125,6 +1173,33 @@ mod tests {
             activation_frame_wire_bytes(crate::StageActivationCodec::RawF32V1, &desc),
             "decoded activation payload byte count exceeds maximum",
         );
+    }
+
+    #[test]
+    fn activation_descriptor_rejects_extents_beyond_rank() {
+        // A peer controls every dimension, including axes past `rank`. The
+        // native verify path once walked those axes, so only an extent of
+        // 0 or 1 (an unused axis) may pass.
+        for (axis, extent) in [(2, 1000), (3, 2), (2, -1)] {
+            let frame = multipart_activation_frame(1);
+            let mut desc = frame.desc.clone();
+            desc.parts[0].dimensions[axis] = extent;
+
+            assert_invalid_data(
+                encode_raw_activation_frame(&StageActivationFrame {
+                    desc,
+                    payload: frame.payload,
+                }),
+                "activation part has an extent beyond its rank",
+            );
+        }
+
+        for extent in [0, 1] {
+            let mut frame = multipart_activation_frame(1);
+            frame.desc.parts[0].dimensions[2] = extent;
+            frame.desc.parts[0].dimensions[3] = extent;
+            encode_raw_activation_frame(&frame).expect("unused axes may be 0 or 1");
+        }
     }
 
     #[test]

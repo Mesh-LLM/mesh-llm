@@ -38,29 +38,29 @@ mod tests {
         let price = Pricing {
             input_msat_per_million: 10,
             output_msat_per_million: 20,
-            minimum_invoice_msat: 1,
+            cache_discount_percent: 0,
         };
-        assert!(profile.restrict(&broad).permits(&price, 4000));
-        assert!(!profile.restrict(&broad).permits(&price, 4001));
-        assert!(!PaymentIntent::FreeOnly.restrict(&broad).permits(&price, 1));
-        assert!(
-            !profile
-                .restrict(&PaymentIntent::FreeOnly)
-                .permits(&price, 1)
-        );
+        assert!(profile.restrict(&broad).permits(&price));
+        let dearer = Pricing {
+            output_msat_per_million: 21,
+            ..price.clone()
+        };
+        assert!(!profile.restrict(&broad).permits(&dearer));
+        assert!(!PaymentIntent::FreeOnly.restrict(&broad).permits(&price));
+        assert!(!profile.restrict(&PaymentIntent::FreeOnly).permits(&price));
     }
 
     #[test]
-    fn intent_defaults_free_and_caps_rates_and_fees_across_restart() -> Result<()> {
+    fn intent_defaults_free_and_survives_restart() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let price = Pricing {
             input_msat_per_million: 10,
             output_msat_per_million: 20,
-            minimum_invoice_msat: 1000,
+            cache_discount_percent: 0,
         };
         {
             let ledger = Ledger::open(directory.path())?;
-            assert!(!ledger.payment_intent()?.permits(&price, 4000));
+            assert!(!ledger.payment_intent()?.permits(&price));
             ledger.set_policy(&crate::ledger::Policy {
                 mode: crate::ledger::ApprovalMode::Automatic,
                 daily_budget_msat: Some(4000),
@@ -68,15 +68,15 @@ mod tests {
         }
         let ledger = Ledger::open(directory.path())?;
         let intent = ledger.payment_intent()?;
-        assert!(intent.permits(&price, 4000));
-        assert!(!intent.permits(&price, 4001));
+        // No per-request total cap: the daily budget gates admission elsewhere.
+        assert!(intent.permits(&price));
         let expensive = Pricing {
             input_msat_per_million: 11,
             ..price
         };
-        assert!(intent.permits(&expensive, 2000));
+        assert!(intent.permits(&expensive));
         ledger.set_policy(&crate::ledger::Policy::default())?;
-        assert!(!ledger.payment_intent()?.permits(&expensive, 1));
+        assert!(!ledger.payment_intent()?.permits(&expensive));
         assert!(
             serde_json::from_str::<PaymentIntent>(r#"{"mode":"allow_paid","max_total_msat":1000}"#)
                 .is_err()

@@ -13,6 +13,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/lib/automation.sh"
+
 RELEASE_TAG="${1:?usage: $0 <release-tag>}"
 REPO="${MESH_RC_RELEASE_REPO:-Mesh-LLM/mesh-llm}"
 MODEL_REF="${MESH_RC_RELEASE_MODEL:-Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m}"
@@ -110,6 +114,14 @@ kill_pids() {
     done
 }
 
+kill_pid_lines() {
+    local signal="$1"
+    local pid
+    while IFS= read -r pid; do
+        kill_pids "$signal" "$pid"
+    done
+}
+
 escape_ere() {
     printf '%s' "$1" | sed 's/[][(){}.^$*+?|\\]/\\&/g'
 }
@@ -144,11 +156,11 @@ kill_mesh_bundle_processes() {
     fi
     # The blobstore plugin is another invocation of the same extracted binary.
     # Sweep by this audit-local path so a reparented plugin cannot survive.
-    kill_pids TERM $pids
+    kill_pid_lines TERM <<< "$pids"
     if ! wait_for_no_mesh_bundle_processes 5; then
         pids="$(mesh_bundle_pids | sort -u || true)"
         if [[ -n "$pids" ]]; then
-            kill_pids KILL $pids
+            kill_pid_lines KILL <<< "$pids"
         fi
     fi
 }
@@ -160,7 +172,7 @@ kill_tree() {
     local children
     children="$(descendant_pids "$pid" | sort -u || true)"
     if [[ -n "$children" ]]; then
-        kill_pids TERM $children
+        kill_pid_lines TERM <<< "$children"
     fi
     kill_pids TERM "$pid"
 
@@ -174,7 +186,7 @@ kill_tree() {
 
     children="$(descendant_pids "$pid" | sort -u || true)"
     if [[ -n "$children" ]]; then
-        kill_pids KILL $children
+        kill_pid_lines KILL <<< "$children"
     fi
     kill_pids KILL "$pid"
     wait "$pid" 2>/dev/null || true
@@ -246,7 +258,7 @@ for second in $(seq 1 "$MAX_WAIT"); do
     MODELS_JSON="$(curl -fsS "http://127.0.0.1:${API_PORT}/v1/models" 2>/dev/null || true)"
     MODEL_ID="$(
         printf '%s' "$MODELS_JSON" |
-            python3 -c 'import json,sys; data=json.load(sys.stdin).get("data", []); print(data[0].get("id", "") if data else "")' 2>/dev/null ||
+            mesh_automation product rc-ok model 2>/dev/null ||
             true
     )"
     if [[ -n "$MODEL_ID" ]]; then
@@ -263,17 +275,7 @@ done
 
 echo "checking /v1/chat/completions"
 CHAT_PAYLOAD="$(
-    python3 - "$MODEL_ID" <<'PY'
-import json
-import sys
-
-print(json.dumps({
-    "model": sys.argv[1],
-    "messages": [{"role": "user", "content": "Reply with exactly: rc-ok"}],
-    "max_tokens": 16,
-    "temperature": 0,
-}))
-PY
+    mesh_automation product rc-ok request "$MODEL_ID"
 )"
 CHAT_RESPONSE="$(
     curl -fsS "http://127.0.0.1:${API_PORT}/v1/chat/completions" \
@@ -283,7 +285,7 @@ CHAT_RESPONSE="$(
 )"
 printf '%s' "$CHAT_RESPONSE" >"$AUDIT/chat-completions.json"
 printf '%s' "$CHAT_RESPONSE" |
-    python3 -c 'import json,sys; content=json.load(sys.stdin)["choices"][0]["message"]["content"]; raise SystemExit(0 if content.strip() == "rc-ok" else 1)'
+    mesh_automation product rc-ok verify
 
 cleanup
 MESH_PID=""

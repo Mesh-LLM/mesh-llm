@@ -26,8 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh |
 ```
 
 The installer puts `mesh-llm` on your `PATH`. After install, run `mesh-llm setup`
-to finish runtime configuration and, on supported macOS and Linux machines,
-optionally install the background service.
+to finish runtime configuration and, on macOS, Linux, and Windows, optionally
+install the background service.
 
 Source builds must use `just`:
 
@@ -60,13 +60,18 @@ mesh-llm setup
 mesh-llm serve --auto
 mesh-llm serve --model Qwen2.5-32B
 mesh-llm serve --join <token>
-mesh-llm serve --discover "my-mesh"
+mesh-llm serve --discover=my-mesh
 mesh-llm serve --model MiniMax-M2.5-Q4_K_M --mesh-guardrails metrics
 mesh-llm client --auto
 mesh-llm gpus
 mesh-llm discover
 mesh-llm discover --name "my-mesh"
 ```
+
+To pin an inference request to a specific mesh provider, use the HTTP API's
+`x-mesh-target` header alongside the exact model ID. See
+[provider selection](PROVIDER_SELECTION.md) for discovery, curl and SDK examples,
+fail-closed behavior, and paid-provider requirements.
 
 Mesh workflow details live in [MESHES.md](MESHES.md). Big-model split serving
 lives in [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md).
@@ -104,7 +109,7 @@ Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint
 
 ## Setup
 
-Use `mesh-llm setup` after the executable is installed. It configures the native runtime and can install the background service on supported macOS and Linux machines.
+Use `mesh-llm setup` after the executable is installed. It configures the native runtime and can install the background service on macOS, Linux, and Windows.
 
 See [CLI.md](CLI.md) for the setup flags and the service options.
 
@@ -462,7 +467,7 @@ cache_type_k     = "auto"        # KV key dtype: auto f16 f32 bf16 q8_0 q4_0 …
 cache_type_v     = "auto"        # KV value dtype (same enum)
 flash_attention  = "auto"        # auto enabled disabled
 kv_offload       = "auto"        # bool or "auto" — KV residency / offload policy
-kv_unified       = "auto"        # legacy compatibility; unified KV is always used, false is rejected
+kv_unified       = "auto"        # bool or "auto"; auto derives from lane count; false selects per-sequence KV
 cache_ram_mib    = 0             # host-RAM L2 budget in MiB; 0 = disabled; requires L3
 cache_idle_slots = 0             # idle slot retention count (schema-reserved)
 prompt_cache     = "auto"        # bool or "auto" — reuse previous prompt KV
@@ -476,7 +481,6 @@ max_bytes            = 0         # 0 = no explicit byte cap
 min_tokens           = 64
 shared_stride_tokens = 32        # stride for shared-prefix record matching
 shared_record_limit  = 4         # max retained shared-prefix records
-payload_mode         = "auto"    # resident-kv kv-recurrent full-state auto
 
 # Schema-reserved fields (accepted but not yet wired to runtime):
 # keep_tokens          = 256     # session prompt retention
@@ -583,7 +587,7 @@ spec_default               = "auto"          # bool or "auto"
 # Native MTP strategy override
 # strategy = "mtp"  # force native model MTP when available
 # strategy = "disabled"       # disable package/model native MTP
-# draft_max_tokens = 1        # MTP/draft max draft-token window (native MTP defaults to 1)
+# draft_max_tokens = 1        # MTP/draft max draft-token window (native MTP defaults to the package's prediction_depth, else 1)
 # draft_min_tokens = 0        # MTP/draft min draft-token window
 
 # Draft hardware (leave unset to share host model's device)
@@ -654,6 +658,10 @@ reasoning_budget  = "auto"   # integer, low/medium/high, auto, or unrestricted
 # Chat template (leave unset to use model's embedded template)
 # chat_template      = "chatml"
 # chat_template_file = "/path/to.jinja"
+# Requests that set their own chat_template get a 400 unless this node
+# enables the opt-in below. Templates run unsandboxed, so this trusts every
+# caller that can reach the node, including mesh-routed requests.
+# allow_request_chat_template = false
 # jinja              = false
 # skip_chat_parsing  = false
 
@@ -1227,9 +1235,16 @@ Start mesh-llm normally:
 mesh-llm serve
 ```
 
-No `[[models]]` entry or placeholder local model is required. `on_demand`
-prevents any configured local models from loading eagerly while preserving the
-ability to load one later.
+No `[[models]]` entry or placeholder local model is required. With an installed,
+enabled inference adapter and no local model startup request, this flow can start
+without an available native runtime. Mesh prints a startup warning, advertises no
+native model capacity, and rejects local-model and split-stage loads until a
+compatible runtime is installed and Mesh restarts. Explicit local model arguments
+and configured `[[models]]` entries retain the native runtime requirement.
+
+Use a host-compatible adapter release. Adapter 0.2.0 uses plugin protocol 3;
+0.1.2 uses protocol 2 and cannot initialize on a protocol-3 host. A missing or
+disabled plugin, blank URL, or non-inference plugin does not enable this flow.
 
 After startup, mesh-llm should include Lemonade-hosted models in its own model list:
 

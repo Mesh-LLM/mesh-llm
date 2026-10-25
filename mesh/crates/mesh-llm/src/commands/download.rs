@@ -1,35 +1,31 @@
 use std::io::Write;
 
 use anyhow::Result;
+use skippy_commands::models::lifecycle::{
+    acquire_model_ref, canonical_catalog_ref, catalog_summaries,
+};
 
 pub(crate) async fn dispatch_download_command(name: Option<&str>, draft: bool) -> Result<()> {
     match name {
         Some(query) => {
-            let model_ref =
-                mesh_llm_host_runtime::command_support::models::find_remote_catalog_model_exact(
-                    query,
-                )
-                .map(|model| {
-                    mesh_llm_host_runtime::command_support::models::remote_catalog_model_ref(&model)
-                })
-                .unwrap_or_else(|| query.to_string());
-            let download =
-                mesh_llm_host_runtime::command_support::models::download_model_ref_with_progress_details(&model_ref, true).await;
+            let model_ref = canonical_catalog_ref(query);
+            let download = acquire_model_ref(
+                &model_ref,
+                mesh_llm_commands::model_output::model_output_context(),
+            )
+            .await;
             // Reported before `?` so an attempt that fails still counts: what
             // people try and cannot get is the more useful half of this.
             mesh_llm_commands::usage_reporting::record_model_download(&model_ref, download.is_ok());
             let download = download?;
             if draft {
-                if let Some(draft_name) = download
-                    .details
-                    .as_ref()
-                    .and_then(|details| details.draft.as_deref())
-                {
-                    let draft_ref = mesh_llm_host_runtime::command_support::models::find_remote_catalog_model_exact(draft_name)
-                        .map(|model| mesh_llm_host_runtime::command_support::models::remote_catalog_model_ref(&model))
-                        .unwrap_or_else(|| draft_name.to_string());
-                    let draft_download =
-                        mesh_llm_host_runtime::command_support::models::download_model_ref_with_progress_details(&draft_ref, true).await;
+                if let Some(draft_name) = download.draft_ref.as_deref() {
+                    let draft_ref = canonical_catalog_ref(draft_name);
+                    let draft_download = acquire_model_ref(
+                        &draft_ref,
+                        mesh_llm_commands::model_output::model_output_context(),
+                    )
+                    .await;
                     // The draft is a second model this command fetches, so it
                     // is a second attempt to count. Reported before `?` for the
                     // same reason as the primary.
@@ -45,13 +41,11 @@ pub(crate) async fn dispatch_download_command(name: Option<&str>, draft: bool) -
             }
         }
         None => {
-            mesh_llm_host_runtime::command_support::models::remote_catalog::ensure_catalog()?;
+            let models = catalog_summaries()?;
             let mut err = mesh_llm_events::console_err();
             writeln!(err, "Available models:")?;
             writeln!(err)?;
-            for model in
-                mesh_llm_host_runtime::command_support::models::remote_catalog::loaded_models()?
-            {
+            for model in models {
                 let size = model.size.as_deref().unwrap_or("?");
                 let description = model.description.as_deref().unwrap_or("");
                 writeln!(err, "  {:40} {:>6}  {}", model.name, size, description)?;

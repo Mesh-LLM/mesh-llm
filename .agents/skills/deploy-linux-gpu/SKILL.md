@@ -147,7 +147,7 @@ nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader
 ss -lntp | grep -E '9337|3131'
 
 # Models (union of local + mesh peers)
-curl -s http://localhost:9337/v1/models | python3 -m json.tool
+curl -s http://localhost:9337/v1/models
 
 # Inference — confirm the returned "model" is YOUR model id
 curl -s http://localhost:9337/v1/chat/completions \

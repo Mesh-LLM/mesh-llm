@@ -1,0 +1,12 @@
+{
+  "manifest": "default",
+  "input": {
+    "profile": "manual-full",
+    "event_name": "workflow_dispatch",
+    "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_sha": "",
+    "changed_files": [
+      "__force_all__"
+    ]
+  }
+}

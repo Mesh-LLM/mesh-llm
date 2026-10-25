@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::frontend::{EmbeddedOpenAiRequestDefaults, OpenAiGuardrailsConfig};
+use crate::frontend::{EmbeddedOpenAiRequestDefaults, InferenceGuardrailsConfig};
 
 #[derive(Clone, Debug, Default)]
 pub struct ServingTuning {
@@ -11,7 +11,7 @@ pub struct ServingTuning {
     pub continuous_batching: Option<bool>,
     pub pipeline_decode_groups: Option<usize>,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
-    pub guardrails: Option<OpenAiGuardrailsConfig>,
+    pub guardrails: Option<InferenceGuardrailsConfig>,
     pub draft_model_path: Option<PathBuf>,
     pub speculative_window: Option<usize>,
     pub adaptive_speculative_window: Option<bool>,
