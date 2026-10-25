@@ -164,24 +164,47 @@ impl<T: RepoType> HFRepository<T> {
         )?;
 
         let headers = self.hf_client.auth_headers();
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client
-                .http_client()
-                .head(&url)
-                .headers(headers.clone())
-                .send()
-        })
-        .await?;
-        let response = self
-            .hf_client
-            .check_response(
-                response,
-                Some(&repo_path),
-                crate::error::NotFoundContext::Entry {
-                    path: filename.clone(),
-                },
-            )
+        // As in huggingface_hub, only same-host redirects are followed (a
+        // renamed repo, `/api/resolve-cache/`). A Xet- or LFS-backed file
+        // answers with a redirect to its CDN, and only that redirect carries
+        // `X-Repo-Commit` and the linked ETag and size: the CDN's own answer
+        // has none of them.
+        let mut url = url;
+        let mut followed = 0;
+        let response = loop {
+            let response = retry::retry(self.hf_client.retry_config(), || {
+                head_client(&self.hf_client)
+                    .head(&url)
+                    .headers(headers.clone())
+                    .send()
+            })
             .await?;
+            match same_host_redirect(&url, &response) {
+                Some(next) if followed < MAX_SAME_HOST_REDIRECTS => {
+                    url = next;
+                    followed += 1;
+                }
+                _ => break response,
+            }
+        };
+        let location = if response.status().is_redirection() {
+            redirect_target(&url, &response)
+        } else {
+            Some(response.url().to_string())
+        };
+        let response = if response.status().is_redirection() {
+            response
+        } else {
+            self.hf_client
+                .check_response(
+                    response,
+                    Some(&repo_path),
+                    crate::error::NotFoundContext::Entry {
+                        path: filename.clone(),
+                    },
+                )
+                .await?
+        };
 
         let etag = extract_etag(&response).ok_or_else(|| {
             HFError::malformed_response_at(
@@ -203,7 +226,6 @@ impl<T: RepoType> HFRepository<T> {
             );
             0
         });
-        let location = Some(response.url().to_string());
 
         Ok(FileMetadataInfo {
             filename,
@@ -214,6 +236,52 @@ impl<T: RepoType> HFRepository<T> {
             location,
         })
     }
+}
+
+/// Same-host redirects [`HFRepository::get_file_metadata`] follows before it
+/// reads the metadata.
+const MAX_SAME_HOST_REDIRECTS: usize = 5;
+
+/// The client for metadata HEADs, which leaves redirects to the caller. The
+/// wasm backend follows them itself whatever it is told, so it has no such
+/// client.
+#[cfg(not(target_family = "wasm"))]
+fn head_client(client: &crate::HFClient) -> &reqwest::Client {
+    client.no_redirect_client()
+}
+
+#[cfg(target_family = "wasm")]
+fn head_client(client: &crate::HFClient) -> &reqwest::Client {
+    client.http_client()
+}
+
+/// Where `response` redirects to, if that is a `Location` without a host,
+/// resolved against `url`. `None` for any other answer, including a redirect
+/// to another host such as the Xet or LFS CDN.
+fn same_host_redirect(url: &str, response: &reqwest::Response) -> Option<String> {
+    let location = location_header(response)?;
+    // `//host/path` names another host just as `https://host/path` does.
+    if location.starts_with("//") || Url::parse(location).is_ok() {
+        return None;
+    }
+    Url::parse(url).ok()?.join(location).ok().map(String::from)
+}
+
+/// Where a redirect answered for `url` points.
+fn redirect_target(url: &str, response: &reqwest::Response) -> Option<String> {
+    let location = location_header(response)?;
+    Url::parse(url).ok()?.join(location).ok().map(String::from)
+}
+
+fn location_header(response: &reqwest::Response) -> Option<&str> {
+    if !response.status().is_redirection() {
+        return None;
+    }
+    response
+        .headers()
+        .get(reqwest::header::LOCATION)?
+        .to_str()
+        .ok()
 }
 
 #[cfg(feature = "blocking")]
@@ -284,5 +352,130 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .maybe_revision(revision)
                 .send(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::HFClientBuilder;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const COMMIT: &str = "0123456789012345678901234567890123456789";
+
+    /// Answers each request with the status line and headers mapped to its
+    /// path, or 404, as the Hub and its CDN do for a HEAD.
+    fn serve(listener: tokio::net::TcpListener, answers: Vec<(String, String)>) {
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let answers = answers.clone();
+                tokio::spawn(async move {
+                    let mut request = vec![0; 4096];
+                    let Ok(read) = socket.read(&mut request).await else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&request[..read]);
+                    let path = request.split_whitespace().nth(1).unwrap_or_default();
+                    let head = answers.iter().find(|(at, _)| at == path).map_or(
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n",
+                        |(_, head)| head,
+                    );
+                    let _ = socket
+                        .write_all(format!("{head}Connection: close\r\n\r\n").as_bytes())
+                        .await;
+                });
+            }
+        });
+    }
+
+    async fn hub() -> (tokio::net::TcpListener, String) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        (listener, endpoint)
+    }
+
+    #[tokio::test]
+    async fn metadata_comes_from_the_hub_redirect_not_the_cdn_answer() {
+        let (listener, endpoint) = hub().await;
+        let cdn = format!("{endpoint}/xet-bridge/blob");
+        serve(
+            listener,
+            vec![
+                (
+                    "/owner/repo/resolve/main/model.gguf".into(),
+                    format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {cdn}\r\nX-Repo-Commit: {COMMIT}\r\n\
+                         X-Linked-ETag: \"sha\"\r\nX-Linked-Size: 5680522464\r\n\
+                         X-Xet-Hash: xet\r\nContent-Length: 0\r\n"
+                    ),
+                ),
+                // A Xet CDN answer carries none of the Hub's headers.
+                (
+                    "/xet-bridge/blob".into(),
+                    "HTTP/1.1 200 OK\r\nContent-Length: 5680522464\r\n".into(),
+                ),
+            ],
+        );
+        let client = HFClientBuilder::new().endpoint(endpoint).build().unwrap();
+
+        let info = client
+            .model("owner", "repo")
+            .get_file_metadata()
+            .filepath("model.gguf")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(info.commit_hash, COMMIT);
+        assert_eq!(info.etag, "sha");
+        assert_eq!(info.file_size, 5_680_522_464);
+        assert_eq!(info.xet_hash.as_deref(), Some("xet"));
+        assert_eq!(info.location.as_deref(), Some(cdn.as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_same_host_redirect_is_followed_to_the_file() {
+        let (listener, endpoint) = hub().await;
+        let cached = format!("/api/resolve-cache/models/owner/repo/{COMMIT}/README.md");
+        serve(
+            listener,
+            vec![
+                // The redirect's Content-Length is its own body, not the file's.
+                (
+                    "/owner/repo/resolve/main/README.md".into(),
+                    format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {cached}\r\n\
+                         X-Repo-Commit: {COMMIT}\r\nX-Linked-ETag: \"readme\"\r\n\
+                         Content-Length: 254\r\n"
+                    ),
+                ),
+                (
+                    cached.clone(),
+                    format!(
+                        "HTTP/1.1 200 OK\r\nETag: \"readme\"\r\nX-Repo-Commit: {COMMIT}\r\n\
+                         Content-Length: 28503\r\n"
+                    ),
+                ),
+            ],
+        );
+        let client = HFClientBuilder::new()
+            .endpoint(endpoint.clone())
+            .build()
+            .unwrap();
+
+        let info = client
+            .model("owner", "repo")
+            .get_file_metadata()
+            .filepath("README.md")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(info.commit_hash, COMMIT);
+        assert_eq!(info.etag, "readme");
+        assert_eq!(info.file_size, 28_503);
+        assert_eq!(info.location, Some(format!("{endpoint}{cached}")));
     }
 }
