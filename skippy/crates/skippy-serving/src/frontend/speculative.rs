@@ -1132,6 +1132,7 @@ mod ngram_tests {
 
     #[test]
     fn cache_proposer_syncs_only_the_committed_prefix() {
+        skippy_runtime::test_support::require_native_runtime();
         let mut proposer = CachedNgramProposer::new(2, 2).unwrap();
         let history = [1, 2, 3, 1, 2, 3, 1, 2];
 

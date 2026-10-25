@@ -35,7 +35,7 @@ impl InferenceRpcBridge {
         Self {
             api_port,
             plugins,
-            client: reqwest::Client::new(),
+            client: crate::network::local_http::local_http_client(),
         }
     }
 

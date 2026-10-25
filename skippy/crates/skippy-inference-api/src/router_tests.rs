@@ -759,9 +759,10 @@ impl InferenceBackend for FakeBackend {
         request: AudioTranscriptionRequest,
         _context: InferenceRequestContext,
     ) -> InferenceResult<AudioTranscriptionResponse> {
-        Ok(AudioTranscriptionResponse {
-            text: format!("transcribed {} bytes", request.file.len()),
-        })
+        Ok(AudioTranscriptionResponse::text(format!(
+            "transcribed {} bytes",
+            request.file.len()
+        )))
     }
 
     /// Return a translation fixture containing the upload length.
@@ -772,6 +773,17 @@ impl InferenceBackend for FakeBackend {
     ) -> InferenceResult<AudioTranscriptionResponse> {
         Ok(AudioTranscriptionResponse {
             text: format!("translated {} bytes", request.file.len()),
+            timing: Some(crate::audio::AudioTranscriptionTiming {
+                language: "en".into(),
+                duration: 1.5,
+                segments: vec![crate::audio::AudioTranscriptionSegment {
+                    id: 0,
+                    start: 0.0,
+                    end: 1.5,
+                    text: " translated".into(),
+                    no_speech_prob: 0.0,
+                }],
+            }),
         })
     }
 }

@@ -1,52 +1,52 @@
-//! argparse emulation for `.github/actions/capture-sccache-stats/capture.py`:
-//! required `--artifact-name`/`--output`, optional `--github-output`,
-//! `--cache-expectation {cold,warm,opportunistic}` and a `float`
-//! `--minimum-hit-rate`, with unique-prefix options, `=value`, `-h`
-//! bundling, `--` handling and Python 3.13's sequential error order.
+//! Typed arguments for `ci-ops sccache-stats`.
 
-use crate::ci_operations::build_cache_options::{
-    Kind, classify_abbreviated, first_ambiguity, help_flag, is_option_like,
-};
-use crate::ci_operations::runner_identity_argv::error;
 use crate::repository::check_report::CheckReport;
-use crate::repository::text::repr;
 
-const PROG: &str = "capture.py";
-const USAGE: &str = "\
-usage: capture.py [-h] --artifact-name ARTIFACT_NAME --output OUTPUT
-                  [--github-output GITHUB_OUTPUT]
-                  [--cache-expectation {cold,warm,opportunistic}]
-                  [--minimum-hit-rate MINIMUM_HIT_RATE]
-";
-const OPTIONS: [&str; 7] = [
-    "-h",
-    "--help",
-    "--artifact-name",
-    "--output",
-    "--github-output",
-    "--cache-expectation",
-    "--minimum-hit-rate",
-];
-const EXPECTATIONS: [&str; 3] = ["cold", "warm", "opportunistic"];
+const PROG: &str = "cargo xtool ci-ops sccache-stats";
+const USAGE: &str = "usage: cargo xtool ci-ops sccache-stats --artifact-name <name> \
+                     --output <path> [--github-output <path>] \
+                     [--cache-expectation <cold|warm|opportunistic>] \
+                     [--minimum-hit-rate <rate>]\n";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Expectation {
+    Cold,
+    Warm,
+    Opportunistic,
+}
+
+impl Expectation {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Cold => "cold",
+            Self::Warm => "warm",
+            Self::Opportunistic => "opportunistic",
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct Args {
     pub(crate) artifact_name: String,
     pub(crate) output: String,
     pub(crate) github_output: Option<String>,
-    pub(crate) expectation: &'static str,
+    pub(crate) expectation: Expectation,
     pub(crate) minimum_hit_rate: f64,
 }
 
 fn fail(message: &str) -> CheckReport {
-    error(USAGE, PROG, message)
+    CheckReport {
+        stdout: String::new(),
+        stderr: format!("{USAGE}{PROG}: error: {message}\n"),
+        code: 2,
+    }
 }
 
 fn help() -> String {
     format!(
-        "{USAGE}\noptions:\n  -h, --help            show this help message and exit\n  \
-         --artifact-name ARTIFACT_NAME\n  --output OUTPUT\n  --github-output GITHUB_OUTPUT\n  \
-         --cache-expectation {{cold,warm,opportunistic}}\n  \
-         --minimum-hit-rate MINIMUM_HIT_RATE\n"
+        "{USAGE}\nOptions:\n  -h, --help\n  --artifact-name <name>\n  --output <path>\n  \
+         --github-output <path>\n  --cache-expectation <cold|warm|opportunistic>\n  \
+         --minimum-hit-rate <rate>\n"
     )
 }
 
@@ -55,150 +55,167 @@ struct Seen {
     artifact_name: Option<String>,
     output: Option<String>,
     github_output: Option<String>,
-    expectation: Option<&'static str>,
+    expectation: Option<Expectation>,
     minimum_hit_rate: Option<f64>,
 }
 
-/// Parses `args`, or returns the help/usage report argparse would produce.
 pub(crate) fn parse(args: &[String]) -> Result<Args, CheckReport> {
-    if let Some(message) = first_ambiguity(args, &OPTIONS) {
-        return Err(fail(&message));
-    }
     let mut seen = Seen::default();
-    let mut extras: Vec<String> = Vec::new();
-    let mut positional_only = false;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         index += 1;
-        if positional_only || arg == "--" {
-            positional_only = true;
-            extras.push(arg.clone());
-            continue;
+        if arg == "-h" || arg == "--help" {
+            return Err(CheckReport::success(help()));
         }
-        match classify_abbreviated(arg, &OPTIONS) {
-            Kind::Positional | Kind::Unknown => extras.push(arg.clone()),
-            Kind::Known("-h" | "--help", explicit, sep) => {
-                help_flag(explicit, sep, "-h/--help", &fail)?;
-                return Err(CheckReport::success(help()));
+
+        let (option, attached) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(name, value)| {
+                (name, Some(value.to_owned()))
+            });
+        match option {
+            "--artifact-name" => {
+                seen.artifact_name = Some(take_value(option, attached, args, &mut index, false)?);
             }
-            Kind::Known(option, explicit, _) => {
-                let value = take_value(explicit, args, &mut index, option)?;
-                apply(&mut seen, option, value)?;
+            "--output" => {
+                seen.output = Some(take_value(option, attached, args, &mut index, false)?);
             }
+            "--github-output" => {
+                seen.github_output = Some(take_value(option, attached, args, &mut index, false)?);
+            }
+            "--cache-expectation" => {
+                let value = take_value(option, attached, args, &mut index, false)?;
+                seen.expectation = Some(match value.as_str() {
+                    "cold" => Expectation::Cold,
+                    "warm" => Expectation::Warm,
+                    "opportunistic" => Expectation::Opportunistic,
+                    _ => {
+                        return Err(fail(
+                            "--cache-expectation must be cold, warm, or opportunistic",
+                        ));
+                    }
+                });
+            }
+            "--minimum-hit-rate" => {
+                let value = take_value(option, attached, args, &mut index, true)?;
+                seen.minimum_hit_rate = Some(value.parse().map_err(|_| {
+                    fail("--minimum-hit-rate must be a decimal number between 0 and 1")
+                })?);
+            }
+            _ => return Err(fail(&format!("unknown argument: {arg}"))),
         }
     }
-    finish(seen, &extras)
-}
 
-fn take_value(
-    explicit: Option<String>,
-    args: &[String],
-    index: &mut usize,
-    option: &str,
-) -> Result<String, CheckReport> {
-    if let Some(value) = explicit {
-        return Ok(value);
+    let mut missing = Vec::new();
+    if seen.artifact_name.is_none() {
+        missing.push("--artifact-name");
     }
-    match args.get(*index) {
-        Some(next) if !is_option_like(next, &OPTIONS) => {
-            *index += 1;
-            Ok(next.clone())
-        }
-        _ => Err(fail(&format!("argument {option}: expected one argument"))),
+    if seen.output.is_none() {
+        missing.push("--output");
     }
-}
-
-fn apply(seen: &mut Seen, option: &str, value: String) -> Result<(), CheckReport> {
-    match option {
-        "--artifact-name" => seen.artifact_name = Some(value),
-        "--output" => seen.output = Some(value),
-        "--github-output" => seen.github_output = Some(value),
-        "--cache-expectation" => {
-            let Some(choice) = EXPECTATIONS.iter().find(|choice| **choice == value) else {
-                let choices: Vec<String> = EXPECTATIONS.iter().map(|name| repr(name)).collect();
-                return Err(fail(&format!(
-                    "argument {option}: invalid choice: {} (choose from {})",
-                    repr(&value),
-                    choices.join(", ")
-                )));
-            };
-            seen.expectation = Some(choice);
-        }
-        _ => {
-            let Some(rate) = python_float(&value) else {
-                return Err(fail(&format!(
-                    "argument {option}: invalid float value: {}",
-                    repr(&value)
-                )));
-            };
-            seen.minimum_hit_rate = Some(rate);
-        }
-    }
-    Ok(())
-}
-
-fn finish(seen: Seen, extras: &[String]) -> Result<Args, CheckReport> {
-    let missing: Vec<&str> = [
-        ("--artifact-name", seen.artifact_name.is_none()),
-        ("--output", seen.output.is_none()),
-    ]
-    .into_iter()
-    .filter_map(|(name, absent)| absent.then_some(name))
-    .collect();
     if !missing.is_empty() {
         return Err(fail(&format!(
-            "the following arguments are required: {}",
+            "required arguments missing: {}",
             missing.join(", ")
         )));
     }
-    if !extras.is_empty() {
-        return Err(fail(&format!(
-            "unrecognized arguments: {}",
-            extras.join(" ")
-        )));
-    }
+
     Ok(Args {
         artifact_name: seen.artifact_name.unwrap_or_default(),
         output: seen.output.unwrap_or_default(),
         github_output: seen.github_output,
-        expectation: seen.expectation.unwrap_or("opportunistic"),
+        expectation: seen.expectation.unwrap_or(Expectation::Opportunistic),
         minimum_hit_rate: seen.minimum_hit_rate.unwrap_or(0.0),
     })
 }
 
-/// Python `float(text)`: surrounding whitespace ignored, underscores only
-/// between digits, `inf`/`infinity`/`nan` in any case with a sign.
-pub(crate) fn python_float(text: &str) -> Option<f64> {
-    let text = text.trim();
-    let bytes = text.as_bytes();
-    let separated = bytes.iter().enumerate().all(|(index, byte)| {
-        *byte != b'_'
-            || (index > 0
-                && bytes[index - 1].is_ascii_digit()
-                && bytes.get(index + 1).is_some_and(u8::is_ascii_digit))
-    });
-    if !separated {
-        return None;
+fn take_value(
+    option: &str,
+    attached: Option<String>,
+    args: &[String],
+    index: &mut usize,
+    allow_negative: bool,
+) -> Result<String, CheckReport> {
+    if let Some(value) = attached {
+        return Ok(value);
     }
-    // Non-finite values parse like CPython and are rejected by the range
-    // check in `sccache_evidence::assess`, as in the legacy script.
-    text.replace('_', "").parse::<f64>().ok()
+    let Some(value) = args.get(*index) else {
+        return Err(fail(&format!("{option} requires a value")));
+    };
+    if value == "--" || (value.starts_with('-') && !allow_negative) {
+        return Err(fail(&format!("{option} requires a value")));
+    }
+    *index += 1;
+    Ok(value.clone())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::python_float;
+    use super::{Expectation, parse};
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
 
     #[test]
-    fn migration_ci_operations_python_float_follows_cpython() {
-        assert_eq!(python_float("0.5"), Some(0.5));
-        assert_eq!(python_float("1_0"), Some(10.0));
-        assert_eq!(python_float("0_5e-2"), Some(0.05));
-        assert_eq!(python_float(" 0.5\n"), Some(0.5));
-        assert_eq!(python_float("-iNfInity"), Some(f64::NEG_INFINITY));
-        assert!(python_float("+nan").is_some_and(f64::is_nan));
-        for rejected in ["", "_1", "1_", "1__0", "1_.5", "x", "0x10", "1e"] {
-            assert_eq!(python_float(rejected), None, "{rejected}");
+    fn parses_the_capture_action_options_and_defaults() {
+        let parsed = parse(&args(&[
+            "--artifact-name",
+            "build-linux",
+            "--cache-expectation",
+            "warm",
+            "--minimum-hit-rate=0.75",
+            "--output",
+            "stats.json",
+            "--github-output",
+            "outputs.txt",
+        ]))
+        .expect("valid capture arguments");
+        assert_eq!(parsed.artifact_name, "build-linux");
+        assert_eq!(parsed.output, "stats.json");
+        assert_eq!(parsed.github_output.as_deref(), Some("outputs.txt"));
+        assert_eq!(parsed.expectation, Expectation::Warm);
+        assert_eq!(parsed.minimum_hit_rate, 0.75);
+
+        let defaults = parse(&args(&["--artifact-name", "a", "--output", "o"]))
+            .expect("required capture arguments");
+        assert_eq!(defaults.expectation, Expectation::Opportunistic);
+        assert_eq!(defaults.minimum_hit_rate, 0.0);
+    }
+
+    #[test]
+    fn rejects_abbreviations_and_malformed_typed_values() {
+        for input in [
+            args(&["--artifact", "a", "--output", "o"]),
+            args(&[
+                "--artifact-name",
+                "a",
+                "--output",
+                "o",
+                "--cache-expectation",
+                "other",
+            ]),
+            args(&[
+                "--artifact-name",
+                "a",
+                "--output",
+                "o",
+                "--minimum-hit-rate",
+                "0_5",
+            ]),
+        ] {
+            let error = parse(&input).expect_err("malformed arguments must be rejected");
+            assert_eq!(error.code, 2);
+            assert!(error.stdout.is_empty());
+            assert!(!error.stderr.is_empty());
         }
+    }
+
+    #[test]
+    fn help_shows_supported_flags() {
+        let error = parse(&args(&["--help"])).expect_err("help is returned as a report");
+        assert_eq!(error.code, 0);
+        assert!(error.stdout.contains("--cache-expectation"));
+        assert!(error.stdout.contains("--minimum-hit-rate"));
     }
 }

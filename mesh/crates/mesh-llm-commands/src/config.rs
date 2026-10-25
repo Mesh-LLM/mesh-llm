@@ -8,7 +8,7 @@ use mesh_llm_config::{
     PluginDisabledWritePolicy, PluginNumericControl, PluginObjectPropertySchema,
     PluginOptionsSource, PluginSchemaAvailability, PluginSettingConstraint, PluginSettingSchema,
     PluginTextFormat, PluginValueKind, PluginValueSchema, SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION,
-    apply_env_overrides, config_path, parse_config_toml_structural,
+    apply_env_overrides, config_path, local_model_path_diagnostics, parse_config_toml_structural,
     validate_config_diagnostics_with_plugin_schemas,
 };
 use mesh_llm_plugin_manager::{
@@ -62,8 +62,10 @@ fn validate_config_file(override_path: Option<&Path>) -> Result<ConfigFileValida
     let mut config: MeshConfig = parse_config_toml_structural(&raw)
         .with_context(|| format!("Invalid config {}", path.display()))?;
     apply_env_overrides(&mut config)?;
-    let diagnostics =
+    let mut diagnostics =
         validate_config_diagnostics_with_plugin_schemas(&config, Some(&raw), plugin_schema);
+    // `serve` reads these paths on this host before it starts; check them here too.
+    diagnostics.extend(local_model_path_diagnostics(&config));
     Ok(ConfigFileValidation { path, diagnostics })
 }
 
@@ -705,15 +707,20 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn config_validate_file_still_rejects_invalid_lifecycle_log_parser_env_override() {
-        let (_dir, path) = write_fixture_file(VALID_FIXTURE);
-
-        let result = mesh_llm_config::with_env_override_for_test(
+        if !mesh_llm_config::env_override_in_child_for_test(
+            concat!(
+                module_path!(),
+                "::config_validate_file_still_rejects_invalid_lifecycle_log_parser_env_override"
+            ),
             "MESH_LLM_LIFECYCLE_LOG_PARSER",
             "not-a-real-mode",
-            || validate_config_file(Some(path.as_path())),
-        );
+        ) {
+            return;
+        }
+        let (_dir, path) = write_fixture_file(VALID_FIXTURE);
+
+        let result = validate_config_file(Some(path.as_path()));
 
         let err = result.expect_err(
             "an invalid MESH_LLM_LIFECYCLE_LOG_PARSER value must still fail \
@@ -721,6 +728,38 @@ mod tests {
              validate_config_file no longer hard-errors on semantic diagnostics",
         );
         assert!(format!("{err:#}").contains("MESH_LLM_LIFECYCLE_LOG_PARSER"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn config_validate_file_reports_a_model_path_serve_would_refuse() {
+        let (dir, path) = write_fixture_file("");
+        let model = dir.path().join("model.gguf");
+        std::fs::write(&model, b"GGUF").expect("write model file");
+        let raw = format!(
+            "[[models]]\nmodel = 'named-good'\n[models.hardware]\nmodel_path = '{}'\n\n\
+             [[models]]\nmodel = 'named-bad'\n[models.hardware]\nmodel_path = 'models/relative.gguf'\n",
+            model.display()
+        );
+        std::fs::write(&path, raw).expect("write fixture config");
+
+        let validation = validate_config_file(Some(path.as_path()))
+            .expect("a config with a bad model_path still reports diagnostics");
+        let report =
+            ConfigValidateReport::from_diagnostics(validation.path, validation.diagnostics);
+
+        // A warning: the file may be meant for another node, where the path
+        // can be right, so it doesn't fail validation on this machine.
+        assert!(report.ok);
+        assert_eq!(report.diagnostics.len(), 1, "{:?}", report.diagnostics);
+        assert_eq!(
+            report.diagnostics[0].path.as_deref(),
+            Some("models[1].hardware.model_path")
+        );
+        assert_eq!(
+            report.diagnostics[0].severity,
+            ConfigDiagnosticSeverity::Warning
+        );
     }
 
     fn plugin_settings_path(plugin_name: &str) -> ConfigPath {

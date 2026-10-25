@@ -76,13 +76,13 @@ fn sdk_console_manifest_when_zero_entries_exist() -> TestResult {
 }
 
 #[test]
-fn sdk_console_verify_when_all_tags_and_duplicate_attrs_exist() -> TestResult {
+fn sdk_console_verify_when_comments_raw_text_and_asset_tags_exist() -> TestResult {
     let scratch = fixture(
         "<!-- <img src=missing> --><style><img src=missing></style>\
          <script>var text = '<img src=missing>';</script>\
-         <IMG SRC=missing src=assets/app.js HREF=missing href=''>\
-         <a src=missing src href=assets/app.js></a>\
-         <script src=assets/app.js /><img src=assets/app.js>",
+         <IMG SRC=assets/app.js HREF=assets/app.js>\
+         <a href=assets/app.js></a>\
+         <script src=assets/app.js></script><img src=assets/app.js>",
         "index.html\nassets/app.js\n",
     )?;
     verified(&scratch)
@@ -91,7 +91,7 @@ fn sdk_console_verify_when_all_tags_and_duplicate_attrs_exist() -> TestResult {
 #[test]
 fn sdk_console_verify_when_local_external_and_entity_refs_exist() -> TestResult {
     let scratch = fixture(
-        "<img src='assets/a&amp;b.js'><a href='assets&#47;app.js?x#f'>\
+        "<img src='assets/a&amp;b.js'><a href='assets&#47;app.js?x=1&y=2#f'>\
          <img src=/assets/app.js><a href='//cdn.test/x'><a href=https://cdn.test/x>\
          <a href='custom+scheme:x'><a href='data:a'><a href='mailto:a'><a href='#x'>\
          <a href='?x'><a href='/'><a href='assets/app.js;params?x'>",

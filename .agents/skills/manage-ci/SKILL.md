@@ -88,6 +88,27 @@ fixtures may be retained only with an explicit maintainer decision; new Python
 tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
 Python-free or remove legacy validation before its Rust replacement passes.
 
+Retained external Python dependencies have bounded owners: the admitted external
+Python SDK and its locked client environments, llama.cpp's upstream Jinja tests
+using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
+an immutable default source commit. These interfaces do not authorize new
+repository Python implementations. The canary Jinja environment belongs to its
+run's state directory and must use a preinstalled interpreter; dependency
+restoration must not download an interpreter or skip upstream tests. Freeze the
+Jinja project before selecting historical source checkouts so older sources do
+not need to contain the dependency manifest.
+
+`just ci-crate-lists`, selected by the normal Quality validation gate, also
+checks repository Python tooling. Its typed policy is
+`ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
+and executable invocation exceptions must retain their documented owners and
+reviewed occurrence counts. The census includes tracked and new nonignored
+files, including hidden directories. Python sources, shebangs, unapproved
+package inputs and direct interpreter invocations fail validation. Archived
+receipts and documentation examples remain data. Literal process checks are
+bounded static analysis; native caller tests must continue to reject the
+retired parser behavior, and source review still owns semantic emulation.
+
 ## Required procedure
 
 1. Inspect `git status`, applicable `AGENTS.md` files, the complete workflows,
@@ -349,7 +370,9 @@ Python-free or remove legacy validation before its Rust replacement passes.
   Both variables are matched case-sensitively in a shell validation step,
   because a GitHub Actions `==` expression ignores case: `TRUE`/`True` would
   otherwise enable a row whose runner is not certified for that backend. The
-  GPU rows gate on the normalized result, never on the variable directly.
+  GPU rows gate on the normalized result, never on the variable directly, and
+  the gate job reports each planned row from that result in its step summary,
+  so a skipped GPU row is visible as skipped rather than read as covered.
 - Never route untrusted code to a persistent self-hosted runner. Public-repo
   self-hosted execution requires ephemeral runners, restricted credentials and
   network access, and a runner group limited to the repository and exact

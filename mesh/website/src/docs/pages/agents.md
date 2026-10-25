@@ -44,6 +44,8 @@ mesh-llm pi --host 127.0.0.1:9337
 
 The built-in launchers point the agent at Mesh for you. If `--model` is omitted, Mesh chooses from models available on the local mesh.
 
+`mesh-llm goose` and `mesh-llm claude` also give the agent Mesh's MCP tools from the node's console. If the node runs its console on another port than 3131, pass the same port with `--console`.
+
 ## Manual setup
 
 For tools without a Mesh launcher, configure an OpenAI-compatible provider:

@@ -2104,3 +2104,86 @@ async fn a_plugin_sets_replaces_and_withdraws_only_its_own_key() {
         .is_err(), "a name the gossip format cannot carry is refused");
     assert!(node.plugin_keys.own().is_empty(), "nothing was announced by a refused request");
 }
+
+/// A node whose 7-day certificate enters its 36-hour renewal window re-signs
+/// it for a full lifetime, so peers checking the expiry keep admitting it.
+#[tokio::test]
+async fn a_running_node_renews_its_ownership_certificate_inside_the_window() {
+    use crate::crypto::{
+        DEFAULT_NODE_CERT_LIFETIME_SECS, TrustPolicy, TrustStore, sign_node_ownership,
+        verify_node_ownership,
+    };
+    const HOUR_MS: u64 = 60 * 60 * 1000;
+    let lifetime_ms = DEFAULT_NODE_CERT_LIFETIME_SECS * 1000;
+    let owner = test_owner_keypair(0xc1, 0xc2);
+    let mut node = super::Node::new_for_tests(super::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.owner_keypair = Some(owner.clone());
+    let start = crate::mesh::current_time_unix_ms();
+    let first = sign_node_ownership(
+        &owner,
+        node.id().as_bytes(),
+        start + lifetime_ms,
+        Some("rig".to_string()),
+        Some("host-a".to_string()),
+    )
+    .expect("sign the startup certificate");
+    *node.owner_attestation.lock().await = Some(first.clone());
+
+    let two_days_left = start + lifetime_ms - 48 * HOUR_MS;
+    assert!(
+        node.renew_owner_attestation_if_due(two_days_left)
+            .await
+            .expect("check outside the window")
+            .is_none(),
+        "48 hours left is outside the 36-hour window"
+    );
+    assert_eq!(node.owner_attestation.lock().await.as_ref(), Some(&first));
+
+    let one_day_left = start + lifetime_ms - 24 * HOUR_MS;
+    let renewed = node
+        .renew_owner_attestation_if_due(one_day_left)
+        .await
+        .expect("renew inside the window")
+        .expect("24 hours left is inside the window");
+    assert_eq!(renewed.claim.expires_at_unix_ms, one_day_left + lifetime_ms);
+    assert_ne!(renewed.claim.cert_id, first.claim.cert_id);
+    assert_eq!(renewed.claim.node_label.as_deref(), Some("rig"));
+    assert_eq!(renewed.claim.hostname_hint.as_deref(), Some("host-a"));
+    assert_eq!(node.owner_attestation.lock().await.as_ref(), Some(&renewed));
+
+    let summary = node.owner_summary().await;
+    assert_eq!(summary.status, OwnershipStatus::Verified);
+    assert_eq!(summary.cert_id.as_deref(), Some(renewed.claim.cert_id.as_str()));
+    assert_eq!(summary.expires_at_unix_ms, Some(one_day_left + lifetime_ms));
+
+    // What a peer sees once the startup certificate has expired.
+    let past_first_expiry = start + lifetime_ms + HOUR_MS;
+    let peer_view = |ownership| {
+        verify_node_ownership(
+            Some(ownership),
+            node.id().as_bytes(),
+            &TrustStore::default(),
+            TrustPolicy::Off,
+            past_first_expiry,
+        )
+        .status
+    };
+    assert_eq!(peer_view(&first), OwnershipStatus::Expired);
+    assert_eq!(peer_view(&renewed), OwnershipStatus::Verified);
+}
+
+#[tokio::test]
+async fn a_node_without_an_owner_key_has_no_certificate_to_renew() {
+    let node = super::Node::new_for_tests(super::NodeRole::Worker)
+        .await
+        .expect("test node");
+    let far_future = crate::mesh::current_time_unix_ms() + 365 * 24 * 60 * 60 * 1000;
+    assert!(
+        node.renew_owner_attestation_if_due(far_future)
+            .await
+            .expect("nothing to do")
+            .is_none()
+    );
+}

@@ -1,9 +1,8 @@
-//! `ci-ops build-cache`: the Rust owner of `scripts/manage-build-cache.py`.
-//! Measures and safely prunes a repository-local Cargo target directory.
+//! `ci-ops build-cache` measures and safely prunes a repository-local Cargo target directory.
 //! The target must be a strict child of the workspace; pruning removes only
 //! the incremental directories and Cargo packages it selects, refuses while
 //! a build holds the shared lock or a compiler is running, and previews by
-//! default. Streams and exit statuses match the legacy tool byte for byte.
+//! default. Valid options keep the cache operation and report contracts stable.
 
 use crate::ci_operations::build_cache_argv::{Args, Mode, Parsed, parse};
 use crate::ci_operations::build_cache_cargo::{

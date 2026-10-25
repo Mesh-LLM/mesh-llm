@@ -35,7 +35,7 @@ mod families;
 #[path = "runtime_events_native/family_coverage.rs"]
 mod family_coverage;
 #[cfg(feature = "dynamic-native-runtime")]
-#[path = "runtime_events_native/libraries.rs"]
+#[path = "../src/test_support/libraries.rs"]
 mod libraries;
 #[cfg(feature = "dynamic-native-runtime")]
 #[path = "runtime_events_native/model_open_checks.rs"]

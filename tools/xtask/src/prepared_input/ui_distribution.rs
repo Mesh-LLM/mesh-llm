@@ -153,13 +153,9 @@ fn collect(dir: &Path, prefix: &str, files: &mut BTreeMap<String, String>) -> Ch
     Ok(())
 }
 
-/// Python evaluates `any(...)` lazily: a valueless `src` fails only when no
-/// earlier module script already matched.
 fn references_local_module(index: &str, files: &BTreeMap<String, String>) -> Checked<()> {
-    for source in module_sources(index) {
-        let Some(source) = source else {
-            return Err("UI index module script has a src attribute without a value".into());
-        };
+    let sources = module_sources(index).map_err(Rejected)?;
+    for source in sources {
         let local = source.strip_prefix('/').unwrap_or(&source);
         if files.contains_key(local) && source.ends_with(".js") {
             return Ok(());
