@@ -482,7 +482,7 @@ mod dynamic {
             " (runtime downloads at startup are off: `runtime.native_runtime.download` or `MESH_LLM_NO_RUNTIME_DOWNLOAD`)"
         };
         format!(
-            "no compatible MeshLLM native runtime is installed or installable for MeshLLM {} / Skippy ABI {abi}{downloads}; run `mesh-llm runtime install` or inspect available runtimes with `mesh-llm runtime list --available`",
+            "no compatible MeshLLM native runtime is installed or installable for Skippy runtime {} / ABI {abi}{downloads}; run `mesh-llm runtime install` or inspect available runtimes with `mesh-llm runtime list --available`",
             options.release_version
         )
     }
@@ -1868,6 +1868,7 @@ mod dynamic {
 
             let message = error.to_string();
             assert!(message.contains("no compatible MeshLLM native runtime"));
+            assert!(message.contains("for Skippy runtime 0.68.0 / ABI 0.1.25"));
             assert!(message.contains("mesh-llm runtime install"));
             assert!(message.contains("mesh-llm runtime list --available"));
             assert_eq!(install_calls.lock().unwrap().len(), 1);
