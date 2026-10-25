@@ -237,3 +237,61 @@ gh issue list --repo Mesh-LLM/mesh-llm --state open --limit 300 \
 
 Re-read each body before trusting a rank: several entries cite commit SHAs, line numbers, and
 release tags that will have moved.
+
+## Progress
+
+| Rank | Issue | Status | Branch | PR | Evidence |
+|---:|---|---|---|---|---|
+| 1 | [#2119](https://github.com/Mesh-LLM/mesh-llm/issues/2119) | NOT-REPRODUCIBLE | `fix/1-2119-value-taking-flags` | — | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2119#issuecomment-6402598950) |
+| 2 | [#1955](https://github.com/Mesh-LLM/mesh-llm/issues/1955) | IN-PROGRESS | `fix/2-1955-catalog-filters` | — | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1955#issuecomment-6403463791) |
+| 3 | [#2339](https://github.com/Mesh-LLM/mesh-llm/issues/2339) | TODO | — | — | — |
+| 4 | [#2210](https://github.com/Mesh-LLM/mesh-llm/issues/2210) | TODO | — | — | — |
+| 5 | [#2214](https://github.com/Mesh-LLM/mesh-llm/issues/2214) | TODO | — | — | — |
+| 6 | [#2212](https://github.com/Mesh-LLM/mesh-llm/issues/2212) | TODO | — | — | — |
+| 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | TODO | — | — | — |
+| 8 | [#2135](https://github.com/Mesh-LLM/mesh-llm/issues/2135) | TODO | — | — | — |
+| 9 | [#1954](https://github.com/Mesh-LLM/mesh-llm/issues/1954) | TODO | — | — | — |
+| 10 | [#2029](https://github.com/Mesh-LLM/mesh-llm/issues/2029) | TODO | — | — | — |
+| 11 | [#2385](https://github.com/Mesh-LLM/mesh-llm/issues/2385) | TODO | — | — | — |
+| 12 | [#2003](https://github.com/Mesh-LLM/mesh-llm/issues/2003) | TODO | — | — | — |
+| 13 | [#2384](https://github.com/Mesh-LLM/mesh-llm/issues/2384) | TODO | — | — | — |
+| 14 | [#2195](https://github.com/Mesh-LLM/mesh-llm/issues/2195) | TODO | — | — | — |
+| 15 | [#2563](https://github.com/Mesh-LLM/mesh-llm/issues/2563) | TODO | — | — | — |
+| 16 | [#2205](https://github.com/Mesh-LLM/mesh-llm/issues/2205) | TODO | — | — | — |
+| 17 | [#2246](https://github.com/Mesh-LLM/mesh-llm/issues/2246) | TODO | — | — | — |
+| 18 | [#2059](https://github.com/Mesh-LLM/mesh-llm/issues/2059) | TODO | — | — | — |
+| 19 | [#2216](https://github.com/Mesh-LLM/mesh-llm/issues/2216) | TODO | — | — | — |
+| 20 | [#2213](https://github.com/Mesh-LLM/mesh-llm/issues/2213) | TODO | — | — | — |
+| 21 | [#2211](https://github.com/Mesh-LLM/mesh-llm/issues/2211) | TODO | — | — | — |
+| 22 | [#2340](https://github.com/Mesh-LLM/mesh-llm/issues/2340) | TODO | — | — | — |
+| 23 | [#2343](https://github.com/Mesh-LLM/mesh-llm/issues/2343) | TODO | — | — | — |
+| 24 | [#2338](https://github.com/Mesh-LLM/mesh-llm/issues/2338) | TODO | — | — | — |
+| 25 | [#2342](https://github.com/Mesh-LLM/mesh-llm/issues/2342) | TODO | — | — | — |
+| 26 | [#2348](https://github.com/Mesh-LLM/mesh-llm/issues/2348) | TODO | — | — | — |
+| 27 | [#1951](https://github.com/Mesh-LLM/mesh-llm/issues/1951) | TODO | — | — | — |
+| 28 | [#2352](https://github.com/Mesh-LLM/mesh-llm/issues/2352) | TODO | — | — | — |
+| 29 | [#2508](https://github.com/Mesh-LLM/mesh-llm/issues/2508) | TODO | — | — | — |
+| 30 | [#2217](https://github.com/Mesh-LLM/mesh-llm/issues/2217) | TODO | — | — | — |
+| 31 | [#2218](https://github.com/Mesh-LLM/mesh-llm/issues/2218) | TODO | — | — | — |
+| 32 | [#2206](https://github.com/Mesh-LLM/mesh-llm/issues/2206) | TODO | — | — | — |
+| 33 | [#2207](https://github.com/Mesh-LLM/mesh-llm/issues/2207) | TODO | — | — | — |
+| 34 | [#2208](https://github.com/Mesh-LLM/mesh-llm/issues/2208) | TODO | — | — | — |
+| 35 | [#2193](https://github.com/Mesh-LLM/mesh-llm/issues/2193) | TODO | — | — | — |
+| 36 | [#2192](https://github.com/Mesh-LLM/mesh-llm/issues/2192) | TODO | — | — | — |
+| 37 | [#2383](https://github.com/Mesh-LLM/mesh-llm/issues/2383) | TODO | — | — | — |
+| 38 | [#2387](https://github.com/Mesh-LLM/mesh-llm/issues/2387) | TODO | — | — | — |
+| 39 | [#2151](https://github.com/Mesh-LLM/mesh-llm/issues/2151) | TODO | — | — | — |
+| 40 | [#1001](https://github.com/Mesh-LLM/mesh-llm/issues/1001) | TODO | — | — | — |
+| 41 | [#2182](https://github.com/Mesh-LLM/mesh-llm/issues/2182) | TODO | — | — | — |
+| 42 | [#2147](https://github.com/Mesh-LLM/mesh-llm/issues/2147) | TODO | — | — | — |
+| 43 | [#2055](https://github.com/Mesh-LLM/mesh-llm/issues/2055) | TODO | — | — | — |
+| 44 | [#2146](https://github.com/Mesh-LLM/mesh-llm/issues/2146) | TODO | — | — | — |
+| 45 | [#2199](https://github.com/Mesh-LLM/mesh-llm/issues/2199) | TODO | — | — | — |
+| 46 | [#2209](https://github.com/Mesh-LLM/mesh-llm/issues/2209) | TODO | — | — | — |
+| 47 | [#2349](https://github.com/Mesh-LLM/mesh-llm/issues/2349) | TODO | — | — | — |
+| 48 | [#2228](https://github.com/Mesh-LLM/mesh-llm/issues/2228) | TODO | — | — | — |
+| 49 | [#2247](https://github.com/Mesh-LLM/mesh-llm/issues/2247) | TODO | — | — | — |
+| 50 | [#2158](https://github.com/Mesh-LLM/mesh-llm/issues/2158) | TODO | — | — | — |
+| 51 | [#2191](https://github.com/Mesh-LLM/mesh-llm/issues/2191) | TODO | — | — | — |
+| 52 | [#2190](https://github.com/Mesh-LLM/mesh-llm/issues/2190) | TODO | — | — | — |
+| 53 | [#2318](https://github.com/Mesh-LLM/mesh-llm/issues/2318) | TODO | — | — | — |
