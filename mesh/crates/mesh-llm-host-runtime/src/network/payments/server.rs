@@ -79,12 +79,13 @@ async fn serve_inner(
     let admission = match admit(node, &payments, peer.clone(), initial, targets).await {
         Ok(admission) => admission,
         Err(error) => {
-            // Without this line a refused buyer only sees its own 503.
+            // Without this line a refused buyer only sees its own 503. The
+            // detail stays in this log; the peer gets only the bounded token.
             tracing::warn!(buyer = %peer, error = %format!("{error:#}"), "refused paid admission");
             let _ = wire::write(
                 writer,
                 &Frame::Error {
-                    message: format!("admission refused: {error:#}"),
+                    message: super::refusal::Refusal::AdmissionRefused.message().into(),
                 },
             )
             .await;
@@ -186,6 +187,11 @@ async fn admit(
     let (deposit, deposit_msat, min_payment_msat) = match admitted {
         ServeAdmitResponse::Blocked { reason } => {
             tracing::warn!(buyer = %peer, model = %priced, %reason, "refused paid admission");
+            // `Blocked` is defined by the payments.v1 contract as "too many
+            // unpaid final invoices" (its only producer is the strike limit in
+            // mesh-llm-payments `serving.rs`), so it maps to `DebtBlocked`.
+            // `reason` is free text for the log only. A future non-debt block
+            // must add its own contract variant rather than reuse `Blocked`.
             return Ok(Admission::Refused(super::refusal::Refusal::DebtBlocked));
         }
         ServeAdmitResponse::Replayed { request_id } => {
