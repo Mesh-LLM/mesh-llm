@@ -112,7 +112,7 @@ fn replacement_preserves_durability_but_branch_and_namespace_changes_do_not() {
 }
 
 #[test]
-fn restore_drops_invalid_suffixes_and_demotion_prioritizes_latest() {
+fn restore_drops_invalid_suffixes_and_demotion_prioritizes_shared_boundaries() {
     let mut set = RecurrentCheckpoints::default();
     for count in 1..=4 {
         let tokens = (1..=count).collect::<Vec<_>>();
@@ -122,8 +122,8 @@ fn restore_drops_invalid_suffixes_and_demotion_prioritizes_latest() {
     assert_eq!(lengths(&set), [1, 2, 3]);
     let demoted = set.take_for_demotion();
     assert_eq!(demoted.len(), 3);
-    assert_eq!(demoted[0].identity.token_ids, [1, 2, 3]);
-    assert_eq!(demoted[1].identity.token_ids, [1, 2]);
+    assert_eq!(demoted[0].identity.token_ids, [1, 2]);
+    assert_eq!(demoted[1].identity.token_ids, [1, 2, 3]);
     assert_eq!(demoted[2].identity.token_ids, [1]);
     assert!(set.is_empty());
     assert_eq!(set.retained_bytes(), 0);
@@ -149,6 +149,11 @@ fn demotion_offers_nearest_shared_boundary_before_older_fallbacks() {
         .iter()
         .map(|entry| entry.identity.token_ids.len())
         .collect();
-    assert_eq!(positions, [199, 188, 128, 100]);
+    assert_eq!(positions, [188, 128, 100, 199]);
+    assert_eq!(
+        &positions[..2],
+        [188, 128],
+        "two recorder credits cover both shared boundaries"
+    );
     assert!(set.is_empty());
 }

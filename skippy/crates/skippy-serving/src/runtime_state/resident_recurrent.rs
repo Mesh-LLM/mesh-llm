@@ -221,11 +221,11 @@ impl RuntimeState {
 
     pub(super) fn demote_recurrent_lane(lane: &mut RuntimeLaneSession, start: u32, end: u32) {
         let mut candidates = lane.recurrent_prefixes.take_for_demotion().into_iter();
-        if let Some(latest) = candidates.next() {
-            Self::demote_recurrent_checkpoint(lane, latest, start, end);
+        if let Some(preferred) = candidates.next() {
+            Self::demote_recurrent_checkpoint(lane, preferred, start, end);
         }
-        for shared in candidates {
-            if Self::demote_recurrent_checkpoint(lane, shared, start, end) {
+        for fallback in candidates {
+            if Self::demote_recurrent_checkpoint(lane, fallback, start, end) {
                 break;
             }
         }

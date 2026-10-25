@@ -82,26 +82,20 @@ impl RecurrentCheckpoints {
         &self.entries[index]
     }
 
-    /// Offer the latest continuation first, then the nearest durable shared
-    /// boundary. A changed chat tail can reuse that boundary even when it
-    /// cannot reuse the generated continuation. Keep older boundaries as
-    /// admission fallbacks; the caller exports at most one of them.
+    /// Offer durable shared boundaries before request-specific continuations.
+    /// The recorder normally has room for two exports, so the nearest and
+    /// preceding shared boundaries must win those slots. A shortened chat
+    /// tail can diverge before the nearest boundary and still reuse the older
+    /// one. Keep later continuations as admission fallbacks.
     pub fn take_for_demotion(&mut self) -> Vec<ResidentRecurrentCheckpoint> {
         let mut entries = std::mem::take(&mut self.entries);
-        if entries.len() <= 1 {
-            return entries;
-        }
-        let latest = entries.pop().expect("at least two checkpoints");
         entries.sort_by_key(|entry| {
             std::cmp::Reverse((
                 entry.policy.write_through_l3,
                 entry.identity.token_ids.len(),
             ))
         });
-        let mut candidates = Vec::with_capacity(entries.len() + 1);
-        candidates.push(latest);
-        candidates.extend(entries);
-        candidates
+        entries
     }
 }
 
