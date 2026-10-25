@@ -569,6 +569,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
 
     let stage1_handle =
         crate::embedded::start_binary_stage(crate::binary_transport::BinaryStageOptions {
+            stage_transport: None,
             tuning: Default::default(),
             config: stage1_config,
             topology: None,
@@ -629,7 +630,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         stage0_config.clone(),
         crate::telemetry::TelemetryLevel::Off,
     );
-    let lane_pool = PersistentStageLanePool::new(&stage0_config, 1, 5, telemetry.clone())?
+    let lane_pool = PersistentStageLanePool::new(&stage0_config, None, 1, 5, telemetry.clone())?
         .context("create split smoke lane pool")?;
     let runtime = load_runtime(&stage0_config)?.context("load stage-0 smoke runtime")?;
     let ctx_size = usize::try_from(stage0_config.ctx_size).unwrap_or(usize::MAX);

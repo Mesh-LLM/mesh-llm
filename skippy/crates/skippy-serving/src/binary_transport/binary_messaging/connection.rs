@@ -56,6 +56,7 @@ use crate::binary_transport::stage_output_activation_capacity;
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::kv_integration::KvStageIntegration;
+use crate::stage_transport::StageConnection;
 use crate::telemetry::Telemetry;
 use crate::telemetry::now_unix_nanos;
 use anyhow::{Context, Result, bail};
@@ -70,7 +71,6 @@ use skippy_protocol::binary::send_reply_ack;
 use skippy_protocol::binary::send_reply_ack_with_stats;
 use skippy_protocol::{StageConfig, StageTopology};
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -81,8 +81,8 @@ pub(super) fn handle_binary_connection(
     iteration_scheduler: &IterationScheduler,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
-    upstream: &mut TcpStream,
-    downstream: Option<TcpStream>,
+    upstream: &mut StageConnection,
+    downstream: Option<StageConnection>,
     input_activation_width: i32,
     output_activation_width: i32,
     max_inflight: usize,
@@ -138,8 +138,8 @@ fn handle_binary_connection_messages(
     iteration_scheduler: &IterationScheduler,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
-    upstream: &mut TcpStream,
-    mut downstream: Option<TcpStream>,
+    upstream: &mut StageConnection,
+    mut downstream: Option<StageConnection>,
     input_activation_width: i32,
     output_activation_width: i32,
     max_inflight: usize,
@@ -161,7 +161,7 @@ fn handle_binary_connection_messages(
     let mut pending_prefill_replies = 0usize;
     let mut pending_reply_stats = StageReplyStats::default();
     let mut request_summary = BinaryRequestSummary::default();
-    let mut prediction_return_streams: BTreeMap<(u64, u64), TcpStream> = BTreeMap::new();
+    let mut prediction_return_streams: BTreeMap<(u64, u64), StageConnection> = BTreeMap::new();
     let mut next_message = Some(first_message);
     let discard_registry = Arc::new(StaleDiscardRegistry::default());
     let inbound_reader = spawn_message_reader(

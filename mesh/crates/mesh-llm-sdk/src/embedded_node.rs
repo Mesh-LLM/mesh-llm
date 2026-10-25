@@ -78,6 +78,12 @@ pub struct MeshNodeBuilder {
 
 impl MeshNodeBuilder {
     #[must_use]
+    pub fn stage_transport_policy(mut self, policy: crate::protocol::StageTransportPolicy) -> Self {
+        self.inner = self.inner.stage_transport_policy(policy);
+        self
+    }
+
+    #[must_use]
     pub fn protocol(mut self, handler: std::sync::Arc<dyn crate::protocol::MeshProtocol>) -> Self {
         self.inner = self.inner.protocol(handler);
         self
@@ -608,9 +614,30 @@ mod tests {
         let config = MeshNode::builder()
             .client()
             .protocol(handler.clone())
+            .stage_transport_policy(crate::protocol::StageTransportPolicy::RequireProvider)
             .build();
         assert_eq!(config.protocols.len(), 1);
         assert!(std::sync::Arc::ptr_eq(&config.protocols[0], &handler));
+        assert_eq!(
+            config.stage_transport_policy,
+            crate::protocol::StageTransportPolicy::RequireProvider
+        );
+    }
+
+    #[tokio::test]
+    async fn required_provider_configuration_fails_before_runtime_startup() {
+        let result = MeshNode::builder()
+            .client()
+            .stage_transport_policy(crate::protocol::StageTransportPolicy::RequireProvider)
+            .start()
+            .await;
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("required stage transport provider is not registered")
+        );
     }
 
     #[test]

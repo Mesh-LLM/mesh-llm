@@ -1,5 +1,6 @@
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::util::openai_io_error;
+use crate::stage_transport::StageConnection;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -9,7 +10,6 @@ use skippy_inference_api::InferenceResult;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
-use std::net::TcpStream;
 
 pub(super) fn prefill_chunk_end(
     pos_start: usize,
@@ -346,7 +346,7 @@ impl EmbeddedPrefillDrain {
 }
 
 pub(super) fn drain_one_embedded_prefill_reply(
-    downstream: &mut TcpStream,
+    downstream: &mut StageConnection,
     pending_prefill_replies: &mut usize,
     stats: &mut StageReplyStats,
 ) -> InferenceResult<EmbeddedPrefillDrain> {
@@ -372,7 +372,7 @@ pub(super) fn drain_one_embedded_prefill_reply(
 }
 
 pub(super) fn drain_embedded_prefill_replies(
-    downstream: &mut TcpStream,
+    downstream: &mut StageConnection,
     pending_prefill_replies: &mut usize,
     stats: &mut StageReplyStats,
 ) -> InferenceResult<EmbeddedPrefillDrain> {

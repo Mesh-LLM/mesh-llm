@@ -6,6 +6,32 @@ Production stage service and embeddable staged runtime crate.
 non-blocking telemetry emission. Argument parsing and the `skippy` executable live
 in [`skippy-cli`](../skippy-cli/README.md); Mesh hosts the same service loops in-process.
 
+## Supplied stage connections
+
+Embedding hosts set `BinaryStageOptions::stage_transport` and
+`EmbeddedRuntimeOptions::stage_transport` to an `Arc<dyn StageTransport>` from
+[`stage_transport`](src/stage_transport.rs). The host supplies outbound peer
+connections and a bounded inbound queue. Forward lanes, warm connections and
+prediction return all consume the resulting `StageConnection`; Skippy does not
+choose an inter-machine transport or depend on its provider crate.
+
+`StageConnection::from_async(stream, runtime_handle)` adapts a host's ordered
+async stream for blocking execution threads. Reads and writes progress
+independently, buffering stays bounded, readiness peeks preserve bytes, and
+shared shutdown interrupts pending I/O. No TCP bridge or background copy loop is
+created. The host retains authorization and revocation for handed-off streams.
+Without a supplied transport, standalone stages continue using TCP.
+
+```mermaid
+flowchart LR
+    E[Stage execution] <--> C[StageConnection]
+    C <--> P[Host supplied stream]
+    P <--> R[Remote execution]
+```
+
+These Rust interface changes preserve existing stage encoding and protocol versions.
+Run `cargo test -p skippy-serving stage_transport` for socket-free connection tests.
+
 ## Native runtime startup
 
 On Unix, `just skippy-cli-build` builds the dynamic standalone host for local
@@ -349,10 +375,10 @@ stays small after upstream compute ends.
 
 ## Persistent OpenAI Stage Lanes
 
-Embedded stage-0 OpenAI serving keeps stage-chain TCP streams connected before
+Embedded stage-0 OpenAI serving keeps stage-chain connections established before
 customer requests arrive. The pool size is the OpenAI generation concurrency, so
 a depth-`N` benchmark can lease up to `N` independent stage-chain lanes without
-paying downstream TCP setup on the request hot path.
+paying downstream connection setup on the request hot path.
 
 ```mermaid
 sequenceDiagram

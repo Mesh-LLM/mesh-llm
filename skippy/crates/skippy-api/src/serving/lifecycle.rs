@@ -55,6 +55,7 @@ pub struct LoadedModelBackend {
 
 impl ModelLoadRequest {
     pub fn load(self) -> Result<LoadedModelBackend> {
+        let stage_transport = self.runtime.stage_transport.clone();
         let config = self.runtime.config.clone();
         ensure!(
             config.stage_index == 0 && config.layer_start == 0 && config.upstream.is_none(),
@@ -96,7 +97,10 @@ impl ModelLoadRequest {
             self.kv_observer,
         )?;
         let prediction_return_listener = if config.downstream.is_some() {
-            Some(PredictionReturnListener::start(config.bind_addr.parse()?)?)
+            Some(match stage_transport.as_ref() {
+                Some(transport) => PredictionReturnListener::start_supplied(transport.clone())?,
+                None => PredictionReturnListener::start(config.bind_addr.parse()?)?,
+            })
         } else {
             None
         };
@@ -117,6 +121,7 @@ impl ModelLoadRequest {
         args.prediction_returns = prediction_return_listener
             .as_ref()
             .map(PredictionReturnListener::hub);
+        args.stage_transport = stage_transport;
         args.downstream_wire_condition = self.downstream_wire_condition;
         args.generation_receipt = hooks.generation_receipt();
         args.generation_lifecycle = hooks.generation_lifecycle();
@@ -209,6 +214,7 @@ mod tests {
                 false,
             ),
             runtime: EmbeddedRuntimeOptions {
+                stage_transport: None,
                 config,
                 topology: None,
                 n_threads: None,

@@ -24,6 +24,7 @@ use crate::frontend::wire_messages::openai_stage_mask;
 use crate::kv_integration::KvStageIntegration;
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
+use crate::stage_transport::StageConnection;
 use anyhow::Context;
 use serde_json::Value;
 use serde_json::json;
@@ -41,7 +42,6 @@ use skippy_protocol::binary::recv_reply;
 use skippy_runtime::ActivationFrame;
 use skippy_runtime::SamplingConfig;
 use std::collections::BTreeMap;
-use std::net::TcpStream;
 use std::sync::Arc;
 
 mod split_restore;
@@ -772,7 +772,7 @@ impl StageOpenAiBackend {
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
     ) -> InferenceResult<Option<EmbeddedFusedFirstDecode>> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(None);
@@ -880,7 +880,7 @@ impl StageOpenAiBackend {
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
     ) -> InferenceResult<Option<EmbeddedFusedFirstDecode>> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(None);
@@ -959,7 +959,7 @@ impl StageOpenAiBackend {
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         prefill_tokens: &[i32],
         current: i32,
         wire_sampling: Option<WireSamplingConfig>,
@@ -1164,7 +1164,7 @@ impl StageOpenAiBackend {
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
     ) {
         let scheduler_session_key = session_key.to_string();
         let _ = self.iteration_scheduler.execute_runtime(

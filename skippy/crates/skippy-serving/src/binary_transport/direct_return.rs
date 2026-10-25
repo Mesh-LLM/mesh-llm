@@ -1,7 +1,12 @@
+pub(crate) use super::prediction_return_open::{
+    open_downstream_prediction_return_stream, open_prediction_return_stream,
+    send_direct_prediction_return,
+};
+use crate::stage_transport::{StageConnection, StageListener};
 use std::{
     collections::HashMap,
     io::{self, Read},
-    net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{Shutdown, SocketAddr},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -13,19 +18,14 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use skippy_protocol::{
-    StageConfig, StageTopology,
-    binary::{
-        STAGE_WIRE_FIXED_HEADER_BYTES, StageReply, StageStateHeader, StageWireMessage,
-        WireMessageKind, WireReplyKind, read_stage_message, recv_ready, recv_reply, send_ready,
-        send_reply_message, write_stage_message,
-    },
+use skippy_protocol::binary::{
+    STAGE_WIRE_FIXED_HEADER_BYTES, StageReply, StageStateHeader, StageWireMessage, WireMessageKind,
+    WireReplyKind, read_stage_message, recv_reply, send_ready,
 };
 
-use super::socket::{connect_downstream_socket, downstream_source_ip, resolve_downstream_endpoint};
-use super::stage_execution::{
-    consume_optional_client_ready_hello, send_client_ready_hello_if_enabled,
-};
+use super::stage_connections::consume_optional_client_ready_hello;
+#[cfg(test)]
+use skippy_protocol::binary::write_stage_message;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PredictionReturnKey {
@@ -47,7 +47,7 @@ pub struct PredictionReturnHub {
     /// Handles to the return streams being read for each waiter, so that
     /// ending the waiter can close them. Without this, a peer that stops
     /// replying keeps its connection, and its listener slot, forever.
-    streams: Mutex<HashMap<PredictionReturnKey, Vec<(u64, TcpStream)>>>,
+    streams: Mutex<HashMap<PredictionReturnKey, Vec<(u64, StageConnection)>>>,
     next_stream_id: AtomicU64,
 }
 
@@ -68,7 +68,17 @@ const PREDICTION_RETURN_WAITER_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 pub(crate) struct PredictionReturnSinks {
-    streams: Mutex<HashMap<PredictionReturnKey, TcpStream>>,
+    pub(crate) transport: Option<Arc<dyn crate::stage_transport::StageTransport>>,
+    streams: Mutex<HashMap<PredictionReturnKey, StageConnection>>,
+}
+
+impl PredictionReturnSinks {
+    pub(crate) fn new(transport: Option<Arc<dyn crate::stage_transport::StageTransport>>) -> Self {
+        Self {
+            transport,
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for PredictionReturnHub {
@@ -93,8 +103,21 @@ impl PredictionReturnListener {
     }
 
     fn start_with_connection_limit(bind_addr: SocketAddr, connection_limit: usize) -> Result<Self> {
-        let listener = TcpListener::bind(bind_addr)
+        let listener = StageListener::bind(bind_addr)
             .with_context(|| format!("bind direct prediction return listener {bind_addr}"))?;
+        Self::start_listener(listener, connection_limit)
+    }
+
+    pub fn start_supplied(
+        transport: Arc<dyn crate::stage_transport::StageTransport>,
+    ) -> Result<Self> {
+        Self::start_listener(
+            StageListener::supplied(transport),
+            MAX_PREDICTION_RETURN_CONNECTIONS,
+        )
+    }
+
+    fn start_listener(listener: StageListener, connection_limit: usize) -> Result<Self> {
         listener
             .set_nonblocking(true)
             .context("set direct prediction return listener nonblocking")?;
@@ -183,7 +206,7 @@ impl Drop for PredictionReturnListener {
 
 fn handle_prediction_return_connection(
     hub: Arc<PredictionReturnHub>,
-    stream: TcpStream,
+    stream: StageConnection,
 ) -> Result<()> {
     handle_prediction_return_connection_within(hub, stream, PREDICTION_RETURN_OPEN_TIMEOUT)
 }
@@ -193,7 +216,7 @@ fn handle_prediction_return_connection(
 /// deadline is lifted once the connection has identified its request.
 fn handle_prediction_return_connection_within(
     hub: Arc<PredictionReturnHub>,
-    mut stream: TcpStream,
+    mut stream: StageConnection,
     open_timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + open_timeout;
@@ -213,7 +236,11 @@ fn handle_prediction_return_connection_within(
 /// Fills `buf` before `deadline`. A read timeout alone restarts for every
 /// read, so a peer sending one byte at a time could otherwise stretch the
 /// open indefinitely.
-fn read_exact_before(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<()> {
+fn read_exact_before(
+    stream: &mut StageConnection,
+    buf: &mut [u8],
+    deadline: Instant,
+) -> Result<()> {
     let mut filled = 0;
     while filled < buf.len() {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -234,7 +261,7 @@ fn read_exact_before(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) 
 }
 
 fn read_prediction_return_open(
-    stream: &mut TcpStream,
+    stream: &mut StageConnection,
     deadline: Instant,
 ) -> Result<StageWireMessage> {
     let mut header = [0_u8; STAGE_WIRE_FIXED_HEADER_BYTES];
@@ -314,7 +341,7 @@ impl PredictionReturnHub {
     fn track_stream(
         &self,
         key: PredictionReturnKey,
-        stream: &TcpStream,
+        stream: &StageConnection,
     ) -> Result<TrackedStream<'_>> {
         let handle = stream
             .try_clone()
@@ -332,7 +359,7 @@ impl PredictionReturnHub {
     pub(crate) fn handle_return_connection(
         &self,
         open: StageWireMessage,
-        stream: TcpStream,
+        stream: StageConnection,
     ) -> Result<()> {
         if open.kind != WireMessageKind::PredictionReturnOpen {
             bail!("expected prediction return open message");
@@ -341,7 +368,11 @@ impl PredictionReturnHub {
         self.handle_return_stream(key, stream)
     }
 
-    fn handle_return_stream(&self, key: PredictionReturnKey, mut stream: TcpStream) -> Result<()> {
+    fn handle_return_stream(
+        &self,
+        key: PredictionReturnKey,
+        mut stream: StageConnection,
+    ) -> Result<()> {
         let sender = self
             .waiters
             .lock()
@@ -390,7 +421,7 @@ impl PredictionReturnHub {
     fn wait_for_reply(
         &self,
         key: PredictionReturnKey,
-        stream: &TcpStream,
+        stream: &StageConnection,
     ) -> io::Result<ReturnWait> {
         // Darwin refuses any socket option once both directions are shut
         // down, which `unregister` can do at any point. The waiter is removed
@@ -468,7 +499,7 @@ pub(crate) struct PredictionReturnReceiver {
 }
 
 impl PredictionReturnReceiver {
-    pub(crate) fn attach_opened_stream(&self, stream: TcpStream) {
+    pub(crate) fn attach_opened_stream(&self, stream: StageConnection) {
         let hub = self.hub.clone();
         let key = self.key;
         thread::spawn(move || {
@@ -533,7 +564,7 @@ impl PredictionReturnSinks {
     pub(crate) fn insert_opened_sink(
         &self,
         open: StageWireMessage,
-        stream: TcpStream,
+        stream: StageConnection,
     ) -> Result<()> {
         if open.kind != WireMessageKind::PredictionReturnOpen {
             bail!("expected prediction return open message");
@@ -555,7 +586,7 @@ impl PredictionReturnSinks {
         request_id: u64,
         session_id: u64,
         timeout: Duration,
-    ) -> Result<Option<TcpStream>> {
+    ) -> Result<Option<StageConnection>> {
         let key = PredictionReturnKey::new(request_id, session_id);
         let started = std::time::Instant::now();
         loop {
@@ -582,146 +613,7 @@ impl PredictionReturnSinks {
     }
 }
 
-/// Read timeout for the return-sink ready handshake. `recv_ready` is a blocking
-/// `read_exact`; without this a stalled downstream connection hangs the open
-/// forever, which mid-generation blocks the request from ever falling back to
-/// the upstream reply. Cleared afterwards so the sink's normal reads stay
-/// blocking.
-///
-/// Budget sizing (20s): over a WAN mesh the return sink connects to a LOCAL
-/// bridge alias, but the remote `ready` byte only arrives after the bridge
-/// COLD-establishes a fresh stage QUIC connection (up to ~10s) and the remote
-/// inbound handler then dials its local binary server. A 5s budget timed out
-/// during that cold setup (observed EAGAIN on a healthy ~26ms WAN split), even
-/// though the pooled forward lanes — which get a 20s initial connect budget and
-/// are then reused — succeeded on the same bridge. Matching the forward-lane
-/// budget lets the cold return path complete instead of failing to the slower
-/// upstream-reply fallback.
-///
-/// This is a *single bounded deadline*, not a retry budget: the sink is opened
-/// on the generation hot path, and `connect_downstream_socket` already bounds
-/// the connect itself, so wrapping this in an outer retry only compounds the
-/// worst-case stall (see PR #1011 review).
-const RETURN_SINK_READY_READ_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// Connect to `return_addr`, complete the ready handshake, and send the
-/// prediction-return open message. Single bounded attempt — on failure the
-/// caller falls back to the upstream reply path.
-fn open_return_sink_once(
-    return_addr: SocketAddr,
-    source_ip: Option<IpAddr>,
-    request_id: u64,
-    session_id: u64,
-    not_ready_context: &'static str,
-) -> Result<TcpStream> {
-    let mut stream = connect_downstream_socket(return_addr, source_ip, Duration::from_secs(2))
-        .map_err(|error| anyhow!(error))?;
-    stream.set_nodelay(true).ok();
-    send_client_ready_hello_if_enabled(&mut stream)
-        .context("send prediction return client ready hello")?;
-    // Bound the ready handshake read. `recv_ready` is a blocking `read_exact`;
-    // without a timeout a stalled downstream connection hangs the return-sink
-    // open forever, blocking generation from falling back to the upstream reply.
-    // A single short deadline (no outer retry) fails fast to that fallback.
-    // Both the set and the clear are propagated: if the set fails, `recv_ready`
-    // would be unbounded (defeating the fix); if the clear fails, the handshake
-    // timeout would leak into the sink's later reads.
-    stream
-        .set_read_timeout(Some(RETURN_SINK_READY_READ_TIMEOUT))
-        .context("set prediction return ready read timeout")?;
-    let ready = recv_ready(&mut stream).context(not_ready_context);
-    stream
-        .set_read_timeout(None)
-        .context("clear prediction return ready read timeout")?;
-    ready?;
-    write_stage_message(
-        &mut stream,
-        &prediction_return_open_message(request_id, session_id),
-    )
-    .context("open prediction return stream")?;
-    Ok(stream)
-}
-
-pub(crate) fn open_prediction_return_stream(
-    config: &StageConfig,
-    topology: Option<&StageTopology>,
-    request_id: u64,
-    session_id: u64,
-    _timeout_secs: u64,
-) -> Result<TcpStream> {
-    let endpoint = driver_stage_endpoint(config, topology)?;
-    let source_ip = downstream_source_ip(config)?;
-    let return_addr = resolve_downstream_endpoint(endpoint, source_ip)?;
-    open_return_sink_once(
-        return_addr,
-        source_ip,
-        request_id,
-        session_id,
-        "prediction return sink did not become ready",
-    )
-    .with_context(|| format!("connect direct prediction return sink at {endpoint}"))
-}
-
-pub(crate) fn open_downstream_prediction_return_stream(
-    config: &StageConfig,
-    request_id: u64,
-    session_id: u64,
-) -> Result<TcpStream> {
-    let downstream = config
-        .downstream
-        .as_ref()
-        .ok_or_else(|| anyhow!("direct prediction return requires downstream stage"))?;
-    let endpoint = strip_tcp_prefix(&downstream.endpoint);
-    let source_ip = downstream_source_ip(config)?;
-    let return_addr = resolve_downstream_endpoint(endpoint, source_ip)?;
-    open_return_sink_once(
-        return_addr,
-        source_ip,
-        request_id,
-        session_id,
-        "downstream prediction return sink did not become ready",
-    )
-    .with_context(|| format!("connect downstream prediction return sink at {endpoint}"))
-}
-
-pub(crate) fn send_direct_prediction_return(
-    stream: &mut TcpStream,
-    reply: StageReply,
-) -> Result<()> {
-    send_reply_message(stream, &reply).context("send direct prediction return")
-}
-
-fn driver_stage_endpoint<'a>(
-    config: &'a StageConfig,
-    topology: Option<&'a StageTopology>,
-) -> Result<&'a str> {
-    if let Some(topology) = topology {
-        return driver_stage_endpoint_from_topology(topology);
-    }
-    if let Some(upstream) = config
-        .upstream
-        .as_ref()
-        .filter(|upstream| upstream.stage_index == 0)
-    {
-        return Ok(strip_tcp_prefix(&upstream.endpoint));
-    }
-    Err(anyhow!("direct prediction return requires topology"))
-}
-
-fn driver_stage_endpoint_from_topology(topology: &StageTopology) -> Result<&str> {
-    topology
-        .stages
-        .iter()
-        .find(|stage| stage.stage_index == 0)
-        .map(|stage| strip_tcp_prefix(&stage.endpoint))
-        .ok_or_else(|| anyhow!("topology does not contain driver-facing stage 0"))
-}
-
-fn strip_tcp_prefix(endpoint: &str) -> &str {
-    endpoint.strip_prefix("tcp://").unwrap_or(endpoint)
-}
-
-fn prediction_return_open_message(request_id: u64, session_id: u64) -> StageWireMessage {
+pub(super) fn prediction_return_open_message(request_id: u64, session_id: u64) -> StageWireMessage {
     StageWireMessage {
         kind: WireMessageKind::PredictionReturnOpen,
         pos_start: 0,
@@ -752,9 +644,9 @@ mod tests {
         let session_id = 23;
         let hub = Arc::new(PredictionReturnHub::default());
         let receiver = hub.register(request_id, session_id).unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let mut client = TcpStream::connect(addr).unwrap();
+        let mut client = StageConnection::connect(addr).unwrap();
         let (server, _) = listener.accept().unwrap();
         let open = prediction_return_open_message(request_id, session_id);
         let handle = {
@@ -776,8 +668,8 @@ mod tests {
     #[test]
     fn prediction_return_open_rejects_metadata_before_reading_its_body() {
         let hub = Arc::new(PredictionReturnHub::default());
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let mut client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let (result_tx, result_rx) = std::sync::mpsc::channel();
         let handle = thread::spawn(move || {
@@ -808,8 +700,8 @@ mod tests {
         // A client that connects and never sends its open message must not
         // hold the connection's thread forever.
         let hub = Arc::new(PredictionReturnHub::default());
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let mut client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let (result_tx, result_rx) = std::sync::mpsc::channel();
         let handle = thread::spawn(move || {
@@ -834,8 +726,8 @@ mod tests {
         // Each byte arrives well within a per-read timeout, but the whole open
         // takes far longer than the deadline allows.
         let hub = Arc::new(PredictionReturnHub::default());
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let mut client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let (result_tx, result_rx) = std::sync::mpsc::channel();
         let handle = thread::spawn(move || {
@@ -872,8 +764,8 @@ mod tests {
         // keep the connection once the request it belongs to is over.
         let hub = Arc::new(PredictionReturnHub::default());
         let receiver = hub.register(31, 37).unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let open = prediction_return_open_message(31, 37);
         let (done_tx, done_rx) = std::sync::mpsc::channel();
@@ -896,15 +788,15 @@ mod tests {
 
     #[test]
     fn prediction_return_listener_refuses_connections_past_its_limit() {
-        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let probe = StageListener::bind("127.0.0.1:0").unwrap();
         let addr = probe.local_addr().unwrap();
         drop(probe);
         let listener = PredictionReturnListener::start_with_connection_limit(addr, 1).unwrap();
 
-        let mut held = TcpStream::connect(addr).unwrap();
+        let mut held = StageConnection::connect(addr).unwrap();
         recv_ready(&mut held).unwrap();
 
-        let mut refused = TcpStream::connect(addr).unwrap();
+        let mut refused = StageConnection::connect(addr).unwrap();
         refused
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -940,8 +832,8 @@ mod tests {
         let session_id = 67;
         let hub = Arc::new(PredictionReturnHub::default());
         let receiver = hub.register(request_id, session_id).unwrap();
-        let listener = TcpListener::bind("localhost:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("localhost:0").unwrap();
+        let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let open = prediction_return_open_message(request_id, session_id);
         let handle = {
@@ -960,9 +852,9 @@ mod tests {
 
     #[test]
     fn direct_prediction_return_preserves_typed_native_mtp_draft() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let mut client = TcpStream::connect(addr).unwrap();
+        let mut client = StageConnection::connect(addr).unwrap();
         let (mut server, _) = listener.accept().unwrap();
 
         let reply = StageReply {
@@ -999,9 +891,9 @@ mod tests {
         let request_id = 31;
         let session_id = 37;
         let sinks = PredictionReturnSinks::default();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let client = TcpStream::connect(addr).unwrap();
+        let client = StageConnection::connect(addr).unwrap();
         let (server, _) = listener.accept().unwrap();
 
         sinks
@@ -1021,10 +913,10 @@ mod tests {
     #[test]
     fn prediction_return_sinks_enforce_and_release_the_pending_limit() {
         let sinks = PredictionReturnSinks::default();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
 
         for request_id in 0..MAX_PENDING_PREDICTION_RETURN_SINKS as u64 {
-            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
             let (server, _) = listener.accept().unwrap();
             sinks
                 .insert_opened_sink(prediction_return_open_message(request_id, 1), server)
@@ -1032,7 +924,7 @@ mod tests {
             drop(client);
         }
 
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let error = sinks
             .insert_opened_sink(prediction_return_open_message(u64::MAX, 1), server)
@@ -1045,7 +937,7 @@ mod tests {
         drop(client);
 
         sinks.remove(0, 1);
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         sinks
             .insert_opened_sink(prediction_return_open_message(u64::MAX, 1), server)
@@ -1062,8 +954,8 @@ mod tests {
         let request_id = 41;
         let session_id = 43;
         let sinks = PredictionReturnSinks::default();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
 
         sinks

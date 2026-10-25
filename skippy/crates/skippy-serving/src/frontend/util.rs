@@ -1,5 +1,7 @@
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::panic_recovery::lock_runtime;
+#[cfg(test)]
+use crate::stage_transport::StageConnection;
 use sha2::Digest;
 use sha2::Sha256;
 use skippy_inference_api::FinishReason;
@@ -15,7 +17,7 @@ use anyhow::{Result, anyhow};
 #[cfg(test)]
 use skippy_protocol::binary::recv_ready;
 #[cfg(test)]
-use std::{net::TcpStream, time::Duration};
+use std::time::Duration;
 
 pub(super) fn trim_at_stop<'a>(text: &'a str, stop_values: &[&str]) -> &'a str {
     let first_stop = stop_values
@@ -126,12 +128,12 @@ pub(super) fn openai_io_error(error: std::io::Error) -> InferenceError {
 }
 
 #[cfg(test)]
-pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Result<TcpStream> {
+pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Result<StageConnection> {
     let endpoint = endpoint.strip_prefix("tcp://").unwrap_or(endpoint);
     let attempts = timeout_secs.saturating_mul(2).max(1);
     let mut last_error = None;
     for _ in 0..attempts {
-        match TcpStream::connect(endpoint) {
+        match StageConnection::connect(endpoint) {
             Ok(mut stream) => {
                 stream.set_nodelay(true).ok();
                 match recv_ready(&mut stream) {

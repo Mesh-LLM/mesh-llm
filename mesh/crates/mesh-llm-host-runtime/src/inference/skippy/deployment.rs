@@ -38,6 +38,7 @@ pub(crate) fn remote_stage_load_request(
     downstream: Option<StagePeerDescriptor>,
 ) -> StageLoadRequest {
     StageLoadRequest {
+        stage_transport: None,
         topology_id: context.topology_id.to_string(),
         run_id: context.run_id.to_string(),
         model_id: context.model_id.to_string(),

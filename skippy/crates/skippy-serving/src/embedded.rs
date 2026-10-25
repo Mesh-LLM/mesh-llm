@@ -74,6 +74,7 @@ pub struct EmbeddedServerStatus {
 
 #[derive(Clone)]
 pub struct EmbeddedRuntimeOptions {
+    pub stage_transport: Option<Arc<dyn crate::stage_transport::StageTransport>>,
     pub config: StageConfig,
     pub topology: Option<StageTopology>,
     pub n_threads: Option<usize>,

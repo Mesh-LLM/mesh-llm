@@ -140,6 +140,19 @@ fn derive_attention_widths(meta: &mut GgufCompactMeta) {
 mod tests {
     use super::*;
 
+    /// Unique fixture path: the nanosecond clock can be coarse on virtualized
+    /// runners, and parallel tests in this binary would otherwise collide on
+    /// the same temp file name and delete each other's fixtures mid-scan.
+    fn temp_fixture_path() -> std::path::PathBuf {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("gguf-namespace-{nanos}-{sequence}.gguf"))
+    }
+
     fn string(bytes: &mut Vec<u8>, text: &str) {
         bytes.extend_from_slice(&(text.len() as u64).to_le_bytes());
         bytes.extend_from_slice(text.as_bytes());
@@ -171,11 +184,7 @@ mod tests {
         if architecture_first == Some(false) {
             architecture(&mut bytes);
         }
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("gguf-namespace-{unique}.gguf"));
+        let path = temp_fixture_path();
         std::fs::write(&path, bytes).unwrap();
         let result = scan_gguf_compact_meta(&path);
         std::fs::remove_file(path).unwrap();

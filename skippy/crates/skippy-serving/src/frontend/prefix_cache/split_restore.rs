@@ -1,11 +1,12 @@
 use super::*;
+use crate::stage_transport::StageConnection;
 
 impl StageOpenAiBackend {
     pub(in crate::frontend) fn try_restore_embedded_split_prefill(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
-        downstream: &mut TcpStream,
+        downstream: &mut StageConnection,
         prefill_tokens: &[i32],
     ) -> InferenceResult<Option<ChainPrefixRestore>> {
         let Some(kv) = self.kv.as_ref() else {

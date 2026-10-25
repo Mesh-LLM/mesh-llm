@@ -1,18 +1,21 @@
-use std::{
-    collections::BTreeMap,
-    env,
-    io::{self, Read, Write},
-    net::TcpStream,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
-    time::{Duration, Instant},
+pub(crate) use super::stage_connections::{
+    connect_binary_downstream, connect_binary_downstream_cancellable,
+    send_client_ready_hello_if_enabled,
+};
+pub(in crate::binary_transport) use super::stage_connections::{
+    consume_optional_client_ready_hello, prepare_binary_stage_connection, take_ready_downstream,
+    warm_downstream_preconnect_enabled,
+};
+#[cfg(test)]
+use super::stage_connections::{
+    take_warm_or_connect_downstream, warm_downstream_is_healthy,
+    warm_downstream_preconnect_enabled_from,
 };
 
+use std::{collections::BTreeMap, time::Instant};
+
 use crate::{runtime_state::RuntimeState, telemetry::lifecycle_attrs};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use skippy_metrics::attr;
 #[cfg(test)]
@@ -21,10 +24,7 @@ use skippy_protocol::{
 };
 use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
-    binary::{
-        READY_MAGIC, StageNativeMtpDraft, StageWireMessage, WireMessageKind, WireReplyKind,
-        send_ready,
-    },
+    binary::{StageNativeMtpDraft, StageWireMessage, WireMessageKind, WireReplyKind},
 };
 use skippy_runtime::{
     ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame,
@@ -37,278 +37,6 @@ use super::native_mtp_reply::{
 use super::peer_sampling::runtime_sampling_config;
 use super::prefill_execution::runtime_activation_frame;
 
-use super::socket::{
-    connect_downstream_socket, connect_downstream_socket_cancellable, downstream_source_ip,
-    resolve_downstream_endpoint, resolve_downstream_endpoint_cancellable,
-};
-
-const CLIENT_READY_HELLO_ENV: &str = "SKIPPY_STAGE_CLIENT_READY_HELLO";
-const CLIENT_READY_HELLO_OPT_IN_PEEK_MS: u64 = 500;
-const DOWNSTREAM_SHUTDOWN_POLL: Duration = Duration::from_millis(100);
-
-pub(in crate::binary_transport) fn warm_downstream_preconnect_enabled() -> bool {
-    warm_downstream_preconnect_enabled_from(
-        env::var("SKIPPY_BINARY_WARM_PRECONNECT").ok().as_deref(),
-    )
-}
-
-fn warm_downstream_preconnect_enabled_from(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
-#[cfg(test)]
-pub(in crate::binary_transport) fn take_warm_or_connect_downstream(
-    config: &StageConfig,
-    warm_downstream: &Arc<Mutex<Option<TcpStream>>>,
-    timeout: Duration,
-) -> Result<Option<TcpStream>> {
-    if config.downstream.is_none() {
-        return Ok(None);
-    }
-    let warm = warm_downstream
-        .lock()
-        .map_err(|_| anyhow!("warm downstream lock poisoned"))?
-        .take();
-    match warm {
-        Some(stream) if warm_downstream_is_healthy(&stream)? => Ok(Some(stream)),
-        Some(_) | None => connect_binary_downstream(config, timeout),
-    }
-}
-
-fn take_warm_or_connect_downstream_cancellable(
-    config: &StageConfig,
-    warm_downstream: &Arc<Mutex<Option<TcpStream>>>,
-    timeout: Duration,
-    shutdown: &AtomicBool,
-) -> Result<Option<TcpStream>> {
-    ensure_downstream_acquisition_active(shutdown)?;
-    let warm = warm_downstream
-        .lock()
-        .map_err(|_| anyhow!("warm downstream lock poisoned"))?
-        .take();
-    match warm {
-        Some(stream) if warm_downstream_is_healthy(&stream)? => Ok(Some(stream)),
-        Some(_) | None => connect_binary_downstream_cancellable(config, timeout, shutdown),
-    }
-}
-
-pub(in crate::binary_transport) fn take_ready_downstream(
-    config: &StageConfig,
-    warm_downstream: &Arc<Mutex<Option<TcpStream>>>,
-    timeout_secs: u64,
-    shutdown: &AtomicBool,
-) -> Result<Option<TcpStream>> {
-    if config.downstream.is_none() {
-        return Ok(None);
-    }
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
-    let mut last_error = None;
-    loop {
-        ensure_downstream_acquisition_active(shutdown)?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        match take_warm_or_connect_downstream_cancellable(
-            config,
-            warm_downstream,
-            remaining,
-            shutdown,
-        ) {
-            Ok(Some(mut stream)) => {
-                let handshake_remaining = deadline.saturating_duration_since(Instant::now());
-                if handshake_remaining.is_zero() {
-                    last_error = Some(anyhow!("downstream ready deadline expired after connect"));
-                    continue;
-                }
-                match complete_downstream_ready(&mut stream, deadline, shutdown) {
-                    Ok(()) => return Ok(Some(stream)),
-                    Err(error) => last_error = Some(error),
-                }
-            }
-            Ok(None) => return Ok(None),
-            Err(error) => last_error = Some(error),
-        }
-        ensure_downstream_acquisition_active(shutdown)?;
-        let retry_sleep = deadline
-            .saturating_duration_since(Instant::now())
-            .min(DOWNSTREAM_SHUTDOWN_POLL);
-        if !retry_sleep.is_zero() {
-            thread::sleep(retry_sleep);
-        }
-    }
-    Err(last_error
-        .unwrap_or_else(|| anyhow!("downstream ready deadline expired"))
-        .context(format!(
-            "downstream stage did not become ready within {}s",
-            timeout_secs.max(1)
-        )))
-}
-
-fn ensure_downstream_acquisition_active(shutdown: &AtomicBool) -> Result<()> {
-    if shutdown.load(Ordering::Acquire) {
-        bail!("downstream acquisition cancelled during shutdown");
-    }
-    Ok(())
-}
-
-fn complete_downstream_ready(
-    stream: &mut TcpStream,
-    deadline: Instant,
-    shutdown: &AtomicBool,
-) -> Result<()> {
-    ensure_downstream_acquisition_active(shutdown)?;
-    let timeout = deadline
-        .saturating_duration_since(Instant::now())
-        .min(DOWNSTREAM_SHUTDOWN_POLL);
-    if timeout.is_zero() {
-        bail!("downstream ready deadline expired before handshake");
-    }
-    stream
-        .set_write_timeout(Some(timeout))
-        .context("set downstream ready write timeout")?;
-    let hello_result =
-        send_client_ready_hello_if_enabled(stream).context("send downstream client ready hello");
-    stream
-        .set_write_timeout(None)
-        .context("clear downstream ready write timeout")?;
-    hello_result?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .context("set downstream ready timeout")?;
-    let result = (|| -> Result<()> {
-        let mut bytes = [0_u8; 4];
-        let mut offset = 0;
-        while offset < bytes.len() {
-            ensure_downstream_acquisition_active(shutdown)?;
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                bail!("downstream ready deadline expired during handshake");
-            }
-            stream
-                .set_read_timeout(Some(remaining.min(DOWNSTREAM_SHUTDOWN_POLL)))
-                .context("update downstream ready timeout")?;
-            match stream.read(&mut bytes[offset..]) {
-                Ok(0) => bail!("downstream binary stage closed before becoming ready"),
-                Ok(read) => offset += read,
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::Interrupted
-                            | io::ErrorKind::WouldBlock
-                            | io::ErrorKind::TimedOut
-                    ) => {}
-                Err(error) => {
-                    return Err(error).context("read downstream binary stage ready handshake");
-                }
-            }
-        }
-        if i32::from_le_bytes(bytes) != READY_MAGIC {
-            bail!("downstream binary stage ready magic mismatch");
-        }
-        Ok(())
-    })()
-    .context("downstream binary stage did not become ready");
-    stream
-        .set_read_timeout(None)
-        .context("clear downstream ready timeout")?;
-    result
-}
-
-pub(in crate::binary_transport) fn warm_downstream_is_healthy(stream: &TcpStream) -> Result<bool> {
-    let previous_timeout = stream
-        .read_timeout()
-        .context("read warm downstream timeout")?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(1)))
-        .context("set warm downstream health-check timeout")?;
-    let mut byte = [0_u8; 1];
-    let peek_result = stream.peek(&mut byte);
-    stream
-        .set_read_timeout(previous_timeout)
-        .context("restore warm downstream timeout")?;
-
-    Ok(match peek_result {
-        Ok(0) => false,
-        Ok(_) => true,
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) =>
-        {
-            true
-        }
-        Err(_) => false,
-    })
-}
-
-pub(in crate::binary_transport) fn prepare_binary_stage_connection(
-    stream: &TcpStream,
-) -> Result<()> {
-    stream
-        .set_nonblocking(false)
-        .context("set binary stage connection blocking")?;
-    stream.set_nodelay(true).ok();
-    Ok(())
-}
-
-pub(crate) fn send_client_ready_hello_if_enabled(stream: &mut TcpStream) -> Result<()> {
-    if !client_ready_hello_enabled() {
-        return Ok(());
-    }
-    send_ready(&mut *stream).context("send client ready hello")?;
-    stream.flush().ok();
-    Ok(())
-}
-
-pub(in crate::binary_transport) fn consume_optional_client_ready_hello(
-    stream: &mut TcpStream,
-) -> Result<()> {
-    if !client_ready_hello_enabled() {
-        return Ok(());
-    }
-    let previous_timeout = stream
-        .read_timeout()
-        .context("read stage connection timeout")?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(
-            CLIENT_READY_HELLO_OPT_IN_PEEK_MS,
-        )))
-        .context("set client ready hello peek timeout")?;
-    let mut bytes = [0_u8; 4];
-    let peek_result = stream.peek(&mut bytes);
-    stream
-        .set_read_timeout(previous_timeout)
-        .context("restore stage connection timeout")?;
-
-    match peek_result {
-        Ok(4) if i32::from_le_bytes(bytes) == READY_MAGIC => {
-            skippy_protocol::binary::recv_ready(&mut *stream)
-                .context("consume client ready hello")?;
-            tracing::debug!("binary consumed client ready hello");
-        }
-        Ok(_) => {}
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) => {}
-        Err(error) => return Err(error).context("peek optional client ready hello"),
-    }
-    Ok(())
-}
-
-fn client_ready_hello_enabled() -> bool {
-    env::var(CLIENT_READY_HELLO_ENV)
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(false)
-}
 pub(in crate::binary_transport) fn insert_optional_unix_nanos(
     attrs: &mut BTreeMap<String, Value>,
     key: &str,
@@ -458,91 +186,6 @@ pub(in crate::binary_transport) fn binary_message_request_id(message: &StageWire
         message.request_id.to_string()
     }
 }
-pub(crate) fn connect_binary_downstream(
-    config: &StageConfig,
-    timeout: Duration,
-) -> Result<Option<TcpStream>> {
-    connect_binary_downstream_inner(config, timeout, None)
-}
-
-pub(crate) fn connect_binary_downstream_cancellable(
-    config: &StageConfig,
-    timeout: Duration,
-    shutdown: &AtomicBool,
-) -> Result<Option<TcpStream>> {
-    connect_binary_downstream_inner(config, timeout, Some(shutdown))
-}
-
-fn connect_binary_downstream_inner(
-    config: &StageConfig,
-    timeout: Duration,
-    shutdown: Option<&AtomicBool>,
-) -> Result<Option<TcpStream>> {
-    if let Some(shutdown) = shutdown {
-        ensure_downstream_acquisition_active(shutdown)?;
-    }
-    let Some(peer) = config.downstream.as_ref() else {
-        return Ok(None);
-    };
-    let endpoint = peer
-        .endpoint
-        .strip_prefix("tcp://")
-        .unwrap_or(&peer.endpoint);
-    let source_ip = downstream_source_ip(config)?;
-    let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
-    let downstream_addr = match shutdown {
-        Some(shutdown) => {
-            resolve_downstream_endpoint_cancellable(endpoint, source_ip, deadline, shutdown)?
-        }
-        None => resolve_downstream_endpoint(endpoint, source_ip)?,
-    };
-    let mut last_error = None;
-    loop {
-        if let Some(shutdown) = shutdown {
-            ensure_downstream_acquisition_active(shutdown)?;
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        let connect_timeout = remaining.min(Duration::from_secs(2));
-        let result = match shutdown {
-            Some(shutdown) => connect_downstream_socket_cancellable(
-                downstream_addr,
-                source_ip,
-                connect_timeout,
-                shutdown,
-            ),
-            None => connect_downstream_socket(downstream_addr, source_ip, connect_timeout),
-        };
-        match result {
-            Ok(stream) => {
-                stream.set_nodelay(true).ok();
-                return Ok(Some(stream));
-            }
-            Err(error) => {
-                last_error = Some(anyhow!(error));
-                let retry_sleep =
-                    deadline
-                        .saturating_duration_since(Instant::now())
-                        .min(if shutdown.is_some() {
-                            DOWNSTREAM_SHUTDOWN_POLL
-                        } else {
-                            Duration::from_millis(500)
-                        });
-                if !retry_sleep.is_zero() {
-                    thread::sleep(retry_sleep);
-                }
-            }
-        }
-    }
-    Err(last_error
-        .unwrap_or_else(|| anyhow!("timed out"))
-        .context(format!(
-            "connect downstream binary stage at {endpoint} ({downstream_addr})"
-        )))
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BinaryStageExecutionOptions {
     pub(crate) sample_final_prefill: bool,
@@ -972,9 +615,10 @@ mod tests {
         token_sideband_or_fill, warm_downstream_is_healthy,
         warm_downstream_preconnect_enabled_from,
     };
+    use crate::stage_transport::{StageConnection, StageListener};
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
     use std::{
-        net::{Shutdown, TcpListener, TcpStream},
+        net::Shutdown,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
@@ -990,10 +634,10 @@ mod tests {
         use super::prepare_binary_stage_connection;
         use std::{io, os::fd::AsRawFd};
 
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
-        let client = thread::spawn(move || TcpStream::connect(addr).unwrap());
+        let client = thread::spawn(move || StageConnection::connect(addr).unwrap());
 
         let (stream, _) = loop {
             match listener.accept() {
@@ -1007,7 +651,7 @@ mod tests {
         stream.set_nonblocking(true).unwrap();
         prepare_binary_stage_connection(&stream).unwrap();
 
-        let flags = unsafe { libc::fcntl(stream.as_raw_fd(), libc::F_GETFL) };
+        let flags = unsafe { libc::fcntl(stream.tcp().unwrap().as_raw_fd(), libc::F_GETFL) };
         assert_ne!(flags, -1);
         assert_eq!(flags & libc::O_NONBLOCK, 0);
         drop(client.join().unwrap());
@@ -1036,13 +680,14 @@ mod tests {
 
     #[test]
     fn warm_downstream_connection_is_consumed_before_connecting() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
+        let client = StageConnection::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         let warm = std::sync::Arc::new(std::sync::Mutex::new(Some(server)));
 
         let result = take_warm_or_connect_downstream(
             &prefix_cache_test_config(),
+            None,
             &warm,
             Duration::from_secs(1),
         )
@@ -1055,9 +700,9 @@ mod tests {
 
     #[test]
     fn stale_warm_downstream_connection_is_replaced() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap().to_string();
-        let client = TcpStream::connect(&endpoint).unwrap();
+        let client = StageConnection::connect(&endpoint).unwrap();
         let (stale_server, _) = listener.accept().unwrap();
         client.shutdown(Shutdown::Both).unwrap();
 
@@ -1072,9 +717,10 @@ mod tests {
         let mut config = prefix_cache_test_config();
         config.downstream.as_mut().unwrap().endpoint = endpoint;
         let warm = std::sync::Arc::new(std::sync::Mutex::new(Some(stale_server)));
-        let replacement = take_warm_or_connect_downstream(&config, &warm, Duration::from_secs(1))
-            .unwrap()
-            .unwrap();
+        let replacement =
+            take_warm_or_connect_downstream(&config, None, &warm, Duration::from_secs(1))
+                .unwrap()
+                .unwrap();
         let (accepted, _) = listener.accept().unwrap();
 
         assert_eq!(
@@ -1085,7 +731,7 @@ mod tests {
     }
     #[test]
     fn downstream_ready_retries_after_failed_handshake() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap().to_string();
         let server = thread::spawn(move || {
             let (first, _) = listener.accept().unwrap();
@@ -1098,7 +744,7 @@ mod tests {
         let warm = std::sync::Arc::new(std::sync::Mutex::new(None));
 
         let shutdown = AtomicBool::new(false);
-        let ready = take_ready_downstream(&config, &warm, 2, &shutdown)
+        let ready = take_ready_downstream(&config, None, &warm, 2, &shutdown)
             .unwrap()
             .expect("downstream should be present");
 
@@ -1108,7 +754,7 @@ mod tests {
 
     #[test]
     fn downstream_ready_honors_absolute_deadline() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap().to_string();
         let server = thread::spawn(move || {
             let (_stream, _) = listener.accept().unwrap();
@@ -1120,7 +766,7 @@ mod tests {
 
         let started = Instant::now();
         let shutdown = AtomicBool::new(false);
-        let error = take_ready_downstream(&config, &warm, 1, &shutdown).unwrap_err();
+        let error = take_ready_downstream(&config, None, &warm, 1, &shutdown).unwrap_err();
         let elapsed = started.elapsed();
 
         assert!(error.to_string().contains("did not become ready"));
@@ -1131,7 +777,7 @@ mod tests {
 
     #[test]
     fn downstream_acquisition_stops_when_shutdown_is_requested() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap().to_string();
         let mut config = prefix_cache_test_config();
         config.downstream.as_mut().unwrap().endpoint = endpoint;
@@ -1140,7 +786,7 @@ mod tests {
         let task_shutdown = shutdown.clone();
         let (result_tx, result_rx) = mpsc::sync_channel(1);
         let task = thread::spawn(move || {
-            let result = take_ready_downstream(&config, &warm, 30, &task_shutdown);
+            let result = take_ready_downstream(&config, None, &warm, 30, &task_shutdown);
             let _ = result_tx.send(result);
         });
 

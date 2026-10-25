@@ -16,3 +16,23 @@ names owned by built-in mesh subprotocols; applications may not register them,
 and gossip filtering applies the same list. The host owns
 admission and dispatch; applications own framing and payload limits. See the
 [SDK example](../mesh-llm-sdk/README.md#application-protocols).
+
+Application protocols may supply a `protocol::StageTransportProvider` through
+`MeshProtocol::stage_transport`. The SDK owns registration and cancellation;
+`ProtocolContext::accept_stage` delegates stage admission and routing to the host.
+Providers return owned `ProtocolStream` values and must preserve ordered reliable
+bytes and half-close. See the
+[contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).
+
+Providers may implement `stage_link(peer) -> Option<StageLinkObservation>` to
+report acknowledgement latency, acknowledged payload goodput, sample count and
+age for an active outgoing channel. These are local SDK observations with
+`Duration` precision; they do not change the wire protocol. The host filters
+insufficient or stale samples before supplying directed latency costs to planning.
+
+`StageTransportPolicy::RequireProvider` disables default activation fallback and
+requires a registered provider on each split participant. The host advertises the
+reserved `stage-provider-required` feature on that provider's existing descriptor.
+`stage_available(peer)` supplies a cached readiness hint; actual setup is verified
+before stage loading and repeated for activation connections. The default
+`PreferProvider` preserves existing behavior. No wire formats or versions change.

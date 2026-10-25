@@ -190,6 +190,10 @@ pub(super) fn open_upstream_prediction_return(request: &EmbeddedStageZeroGenerat
     };
     match crate::binary_transport::direct_return::open_downstream_prediction_return_stream(
         request.config,
+        request
+            .lane_pool
+            .as_ref()
+            .and_then(|pool| pool.stage_transport.as_ref()),
         request.ids.request_id,
         request.ids.session_id,
     ) {

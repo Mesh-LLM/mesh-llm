@@ -3,6 +3,7 @@ use super::downstream_forward_error_attrs;
 use crate::binary_transport::WireCondition;
 use crate::binary_transport::stage_execution::elapsed_ms;
 use crate::binary_transport::write_stage_message_after_propagation;
+use crate::stage_transport::StageConnection;
 use crate::telemetry::Telemetry;
 use crate::telemetry::now_unix_nanos;
 use anyhow::Context;
@@ -14,7 +15,6 @@ use skippy_protocol::PeerConfig;
 use skippy_protocol::binary::StageWireMessage;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
-use std::net::TcpStream;
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::mpsc::TryRecvError;
@@ -60,7 +60,7 @@ struct AsyncForwardJob {
 
 impl AsyncForwarder {
     pub(crate) fn new(
-        downstream: &TcpStream,
+        downstream: &StageConnection,
         downstream_config: Option<PeerConfig>,
         telemetry: Telemetry,
         queue_capacity: usize,
@@ -143,7 +143,7 @@ impl AsyncForwarder {
 }
 
 fn run_forwarder(
-    writer: &mut TcpStream,
+    writer: &mut StageConnection,
     receiver: &mpsc::Receiver<AsyncForwardJob>,
     telemetry: &Telemetry,
     downstream_config: &Option<PeerConfig>,
@@ -163,7 +163,7 @@ fn time_until_ready(job: &AsyncForwardJob) -> std::time::Duration {
 }
 
 fn forward_job(
-    writer: &mut TcpStream,
+    writer: &mut StageConnection,
     telemetry: &Telemetry,
     job: AsyncForwardJob,
     downstream: Option<&PeerConfig>,
@@ -230,7 +230,7 @@ impl AsyncForwardReceipt {
 
 #[cfg(test)]
 mod tests {
-    use std::net::TcpListener;
+    use crate::stage_transport::StageListener;
 
     use skippy_protocol::binary::{StageStateHeader, WireMessageKind, read_stage_message};
 
@@ -267,9 +267,9 @@ mod tests {
     /// two frames interleave and poison a lane that is handed back for reuse.
     #[test]
     fn a_delayed_discard_lands_before_a_teardown_stop_on_another_clone() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let mut client = TcpStream::connect(address).unwrap();
+        let mut client = StageConnection::connect(address).unwrap();
         let (mut server, _) = listener.accept().unwrap();
         let telemetry = Telemetry::new(None, 1, prefix_cache_test_config(), TelemetryLevel::Off);
         let mut forwarder = AsyncForwarder::new(&client, None, telemetry, 8).unwrap();
@@ -310,9 +310,9 @@ mod tests {
     /// undisturbed on the same socket.
     #[test]
     fn a_reused_lane_carries_the_next_request_after_a_delayed_teardown() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let mut lane = TcpStream::connect(address).unwrap();
+        let mut lane = StageConnection::connect(address).unwrap();
         let (mut server, _) = listener.accept().unwrap();
         let telemetry = Telemetry::new(None, 1, prefix_cache_test_config(), TelemetryLevel::Off);
         let mut forwarder = AsyncForwarder::new(&lane, None, telemetry, 8).unwrap();
@@ -364,9 +364,9 @@ mod tests {
 
     #[test]
     fn retirement_receipt_orders_all_prior_verify_writes() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let client = TcpStream::connect(address).unwrap();
+        let client = StageConnection::connect(address).unwrap();
         let (mut server, _) = listener.accept().unwrap();
         let telemetry = Telemetry::new(None, 1, prefix_cache_test_config(), TelemetryLevel::Off);
         let mut forwarder = AsyncForwarder::new(&client, None, telemetry, 3).unwrap();
@@ -419,15 +419,15 @@ mod tests {
         assert!(error.to_string().contains("timed out"));
     }
 
-    fn failing_write_pair() -> TcpStream {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    fn failing_write_pair() -> StageConnection {
+        let listener = StageListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let mut client = TcpStream::connect(address).unwrap();
+        let mut client = StageConnection::connect(address).unwrap();
         let (server, _) = listener.accept().unwrap();
         // Linger-0 close sends a TCP RST immediately. std `tcp_linger` is
         // unstable on the pinned 1.98 toolchain, so this goes through
         // socket2 (already a dependency).
-        socket2::SockRef::from(&server)
+        socket2::SockRef::from(server.tcp().unwrap())
             .set_linger(Some(Duration::from_secs(0)))
             .unwrap();
         drop(server);
@@ -459,7 +459,7 @@ mod tests {
     }
 
     fn run_forward_job(
-        client: &mut TcpStream,
+        client: &mut StageConnection,
         telemetry: &Telemetry,
     ) -> std::result::Result<f64, String> {
         let frame = message(WireMessageKind::VerifyWindow, 7);

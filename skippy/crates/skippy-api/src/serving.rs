@@ -133,6 +133,7 @@ impl InferenceOptions {
         hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     ) -> EmbeddedOpenAiArgs {
         EmbeddedOpenAiArgs {
+            stage_transport: None,
             bind_addr,
             config,
             runtime,

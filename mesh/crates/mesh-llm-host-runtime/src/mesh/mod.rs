@@ -85,6 +85,7 @@ mod connections;
 mod connectivity;
 mod direct_path;
 mod direct_rescue;
+pub(crate) mod direct_stage_connections;
 mod gossip;
 mod heartbeat;
 mod host_role_claims;
@@ -107,7 +108,6 @@ mod signed_records;
 mod stage_artifacts;
 mod stage_proto;
 mod stage_transport;
-mod stage_transport_bridge;
 mod stun;
 mod weights_digest;
 
@@ -197,7 +197,6 @@ pub use stage_transport::{InflightRequestGuard, SplitStagePathSnapshot};
 pub use stage_transport::{
     StageAssignment, StageEndpoint, StageRuntimeStatus, StageTopologyInstance, TunnelChannels,
 };
-pub(crate) use stage_transport_bridge::{StageTransportBridge, StageTransportBridgeLabel};
 pub(crate) use weights_digest::{file_fingerprint, weights_digest_for_file};
 
 #[cfg(test)]
@@ -205,6 +204,7 @@ use mesh_llm_membership::announcements::{apply_transitive_ann, peer_meaningfully
 pub(crate) use mesh_llm_membership::peer_health::resolve_peer_down;
 use mesh_llm_membership::peer_health::{PeerDownReportDisposition, peer_down_report_disposition};
 pub(crate) use stage_proto::stage_status_from_load;
+#[cfg(test)]
 use stage_proto::*;
 
 #[cfg(test)]

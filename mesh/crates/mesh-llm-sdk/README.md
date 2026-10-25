@@ -148,12 +148,15 @@ authenticated connection in `incoming.peer`. Capabilities are hints, not proof o
 readiness. Handlers own framing, payload bounds and transaction timeouts.
 
 Registration accepts at most 16 protocols, rejects duplicate name/major pairs and reserves
-`skippy-stage`. Names use lowercase ASCII letters, digits, dots and hyphens (1–64 bytes), major
+the built-in protocol names (`BUILT_IN_PROTOCOL_NAMES`, currently `skippy-stage`). Names use
+lowercase ASCII letters, digits, dots and hyphens (1–64 bytes), major
 versions are positive, and features are at most 32 strings of 1–64 ASCII letters, digits, dots,
 hyphens or underscores. Keep `descriptor()` stable for the lifetime of the handler.
 
-The runtime allows at most 32 concurrent incoming application streams; once the cap is reached,
-additional incoming opens are rejected rather than queued. It cancels incoming
+The runtime limits concurrent incoming application streams to 32 per pool: protocols without a
+stage provider use the shared application-stream pool, while protocols with a stage provider use
+the dedicated stage pool. When the selected pool reaches its cap, additional incoming opens are
+rejected rather than queued. It cancels incoming
 handlers when the node stops and signals `context.cancelled()` to background work, allowing one
 second for cleanup before aborting remaining tasks. Await work inside `run`/`accept`; detached
 tasks created by a handler are the application's responsibility. Registrations cannot change
@@ -167,4 +170,90 @@ flowchart LR
     Iroh[Admitted iroh connection] --> Dispatch[Name / major dispatch]
     Dispatch --> Handler
     Handler --> Context[Scoped context and peer watch]
+```
+
+### Application stage transport
+
+A registered `MeshProtocol` can return a `StageTransportProvider` from its
+`stage_transport()` method. Its `open_stage(context, peer)` returns an owned
+`ProtocolStream`, or `None` to use the existing dedicated Iroh stage connection.
+The protocol's inbound handler calls `context.accept_stage(incoming.peer, stream)`
+using the identity established by its authenticated setup. Mesh then checks the
+stage header, topology, run, destination readiness and admission before handing
+the channel directly to stage execution. Admission loss, policy loss and shutdown
+cancel the channel after handoff. No local TCP stage bridge is used.
+
+```rust,ignore
+#[async_trait]
+impl StageTransportProvider for MyProtocol {
+    async fn open_stage(&self, context: ProtocolContext, peer: PeerId)
+        -> anyhow::Result<Option<ProtocolStream>> {
+        self.connect_stage_channel(context, peer).await
+    }
+}
+// In MeshProtocol's implementation:
+// fn stage_transport(&self) -> Option<&dyn StageTransportProvider> { Some(self) }
+// In its authenticated inbound channel handler:
+// context.accept_stage(incoming.peer, connected_stream).await?;
+```
+
+At most one stage provider may be registered. Protocols with a stage provider admit inbound
+streams from a dedicated 32-permit pool, so long-lived stage channels cannot exhaust the shared
+application-stream pool (and excess stage opens are rejected rather than queued, like the shared
+pool). The provider must supply reliable, ordered
+bytes, support half-close, and release its owned work when the stream is dropped. Errors fail the connection; Mesh never
+replays stage bytes over another transport. Stage control, artifacts and activation
+encoding retain their existing contracts. See the
+[application stage transport contract](../../docs/specs/APPLICATION_STAGE_TRANSPORT.md).
+
+`StageTransportProvider::stage_link(peer)` optionally supplies a
+`StageLinkObservation` for an active outgoing path: acknowledgement latency,
+payload goodput, sample count and age. Return `None` when the channel is closed,
+failed, unmeasured, or a new connection would decline to the default path. The
+default implementation returns `None`, preserving existing providers. Mesh uses
+fresh latency observations with at least three samples for local directed planning
+edges; it retains peer RTT estimates elsewhere. Goodput does not yet drive cuts.
+Observations remain in process and introduce no gossip or stage wire changes.
+
+To restrict splits to the registered provider, set the policy on every participant:
+
+```rust,ignore
+use mesh_llm_sdk::{MeshNode, protocol::StageTransportPolicy};
+
+let node = MeshNode::builder()
+    .protocol(provider)
+    .stage_transport_policy(StageTransportPolicy::RequireProvider)
+    .serve()
+    .model(model)
+    .start()
+    .await?;
+```
+
+`PreferProvider` is the default. Required mode rejects configuration without a
+provider, excludes peers without the same required-provider capability and consults
+the provider's nonblocking `stage_available(peer)` readiness hint. Before loading
+each stage, Mesh verifies its remote provider setup by opening and dropping a stream
+without stage bytes. Actual activation connections repeat setup; declines or failures
+never fall back. Incoming default activation streams are rejected too. Connections
+are not reserved by verification, so later capacity or link failures still return
+errors. Execution consumes supplied connections directly. Discovery, control and
+artifact transfers retain their existing behavior. Every participant must opt in; a coordinator cannot impose local
+configuration on another machine. The host advertises the policy through the
+existing feature list; wire formats and protocol versions do not change.
+
+```mermaid
+flowchart LR
+    Policy[Required provider policy] --> Cap[Matching peer policy and cached readiness]
+    Cap --> Verify[Verify provider setup before stage load]
+    Verify -->|Success| Load[Load stage; use provider activation streams]
+    Verify -->|Failure or decline| Fail[Fail stage loading]
+```
+
+```mermaid
+flowchart LR
+    SDK[SDK protocol registration] --> Provider[Application stage provider]
+    StageIO[Stage execution connection] --> Provider
+    Provider --> Channel[Provider-owned authenticated channel]
+    Channel --> Gate[Peer and topology authorization]
+    Gate --> Stage[Destination stage]
 ```

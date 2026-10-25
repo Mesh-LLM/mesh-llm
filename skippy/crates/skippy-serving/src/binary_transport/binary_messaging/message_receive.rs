@@ -1,10 +1,11 @@
+use crate::stage_transport::StageConnection;
 use anyhow::{Context, Result};
 use skippy_protocol::{
     StageActivationCodec, StageActivationCodecPolicy,
     binary::{StageWireMessage, read_stage_message_for_codec_policy},
 };
 use std::io;
-use std::net::{Shutdown, TcpStream};
+use std::net::Shutdown;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -27,7 +28,7 @@ static BINARY_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// slow still arrives whole. On Unix no timeout is armed and the shutdown
 /// wakes the read as before.
 struct StoppableRead<'a> {
-    stream: &'a TcpStream,
+    stream: &'a StageConnection,
     stopped: &'a AtomicBool,
     worker_control: &'a ConnectionWorkerControl,
 }
@@ -94,7 +95,7 @@ pub(super) const INBOUND_LOOKAHEAD_BYTES: usize = 32 * 1024 * 1024;
 /// handler that exits on a local error while the peer keeps its side open
 /// does not leak a blocked thread and its cloned descriptor.
 ///
-/// The reader thread and this handle share one `TcpStream` rather than
+/// The reader thread and this handle share one `StageConnection` rather than
 /// holding separate clones. Shutdown has to interrupt the read that is
 /// actually in flight: a peer can send a frame prefix and then stall, which
 /// leaves the reader inside `read_exact` past the readable check, and on
@@ -103,7 +104,7 @@ pub(super) const INBOUND_LOOKAHEAD_BYTES: usize = 32 * 1024 * 1024;
 /// the dropping handler rather than merely leak a thread.
 pub(super) struct InboundMessageReader {
     receiver: Option<mpsc::Receiver<io::Result<StageWireMessage>>>,
-    stream: Arc<TcpStream>,
+    stream: Arc<StageConnection>,
     thread: Option<thread::JoinHandle<()>>,
     queued_bytes: Arc<AtomicUsize>,
     stopped: Arc<AtomicBool>,
@@ -130,7 +131,7 @@ impl Drop for InboundMessageReader {
 }
 
 pub(super) fn spawn_message_reader(
-    upstream: &TcpStream,
+    upstream: &StageConnection,
     activation_width: i32,
     activation_codec: StageActivationCodec,
     activation_codec_policy: StageActivationCodecPolicy,
@@ -173,7 +174,7 @@ pub(super) fn spawn_message_reader(
                     return;
                 }
             }
-            // `&TcpStream` implements `Read`, so the framed read runs on the
+            // `&StageConnection` implements `Read`, so the framed read runs on the
             // shared handle that `Drop` can shut down. On Windows that shutdown
             // does not release a read already pending on the handle, so the
             // framed read keeps a short timeout and `StoppableRead` gives up
@@ -263,9 +264,9 @@ impl InboundMessageReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stage_transport::StageListener;
     use skippy_protocol::binary::{StageStateHeader, WireMessageKind, write_stage_message};
     use std::io::Write;
-    use std::net::TcpListener;
     use std::time::{Duration, Instant};
 
     /// A live worker control: reads stay interruptible by shutdown, and these
@@ -275,7 +276,7 @@ mod tests {
     }
 
     fn spawn_test_message_reader(
-        upstream: &TcpStream,
+        upstream: &StageConnection,
         capacity: usize,
         registry: Arc<StaleDiscardRegistry>,
     ) -> Result<InboundMessageReader> {
@@ -307,10 +308,10 @@ mod tests {
         }
     }
 
-    fn connected_pair() -> (TcpStream, TcpStream) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    fn connected_pair() -> (StageConnection, StageConnection) {
+        let listener = StageListener::bind("127.0.0.1:0").expect("bind");
         let address = listener.local_addr().expect("local addr");
-        let client = TcpStream::connect(address).expect("connect");
+        let client = StageConnection::connect(address).expect("connect");
         let (server, _) = listener.accept().expect("accept");
         (client, server)
     }
@@ -400,7 +401,7 @@ mod tests {
     /// prefix and then stalls, so the reader is past the readable check and
     /// blocked inside `read_exact` waiting for the rest of the frame. Only a
     /// shutdown of the handle the read is pending on releases it, which is
-    /// why the reader thread and `Drop` share one `TcpStream` (#1538).
+    /// why the reader thread and `Drop` share one `StageConnection` (#1538).
     #[test]
     fn dropping_the_reader_completes_while_a_read_is_stalled_mid_frame() {
         let (mut peer, upstream) = connected_pair();
@@ -449,7 +450,7 @@ mod tests {
         .expect("encode");
         peer.write_all(&frame[..4]).expect("write frame prefix");
         peer.flush().expect("flush");
-        thread::sleep(super::super::WORKER_SHUTDOWN_POLL * 3);
+        thread::sleep(super::super::connection_workers::WORKER_SHUTDOWN_POLL * 3);
         peer.write_all(&frame[4..]).expect("write frame rest");
         peer.flush().expect("flush");
 

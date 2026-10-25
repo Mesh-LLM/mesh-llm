@@ -82,6 +82,7 @@ pub async fn serve_openai_backend_with_shutdown(
 
 #[derive(Clone)]
 pub struct EmbeddedOpenAiArgs {
+    pub stage_transport: Option<Arc<dyn crate::stage_transport::StageTransport>>,
     pub bind_addr: SocketAddr,
     pub config: StageConfig,
     pub runtime: Arc<Mutex<RuntimeState>>,
@@ -296,6 +297,7 @@ fn embedded_openai_backend_with_scheduler(
     } else {
         let lane_pool = PersistentStageLanePool::new(
             &args.config,
+            args.stage_transport.clone(),
             args.generation_concurrency,
             args.downstream_connect_timeout_secs,
             args.telemetry.clone(),

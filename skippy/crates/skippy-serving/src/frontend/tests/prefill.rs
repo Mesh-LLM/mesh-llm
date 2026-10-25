@@ -193,6 +193,7 @@ fn prefill_adaptive_ramp_keeps_short_prompts_fixed() {
 fn prefill_transport_ewma_seeds_adaptive_ramp() {
     let config = prefix_cache_test_config();
     let pool = PersistentStageLanePool {
+        stage_transport: None,
         config: config.clone(),
         timeout_secs: 5,
         telemetry: Telemetry::new(None, 1, config, crate::telemetry::TelemetryLevel::Off),
@@ -227,6 +228,7 @@ fn prefill_transport_ewma_seeds_adaptive_ramp() {
 fn prefill_calibration_uses_slowest_downstream_stage() {
     let config = prefix_cache_test_config();
     let pool = PersistentStageLanePool {
+        stage_transport: None,
         config: config.clone(),
         timeout_secs: 5,
         telemetry: Telemetry::new(None, 1, config, crate::telemetry::TelemetryLevel::Off),
@@ -303,13 +305,13 @@ fn prefill_adaptive_ramp_never_exceeds_starvation_bound() {
 
 #[test]
 fn persistent_lane_ready_handshake_times_out_for_silent_downstream() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = crate::stage_transport::StageListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         let (_stream, _) = listener.accept().unwrap();
         std::thread::sleep(Duration::from_millis(200));
     });
-    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut client = crate::stage_transport::StageConnection::connect(address).unwrap();
 
     let error = receive_persistent_lane_ready(&mut client, Duration::from_millis(25)).unwrap_err();
 
@@ -329,10 +331,10 @@ fn steady_state_lane_reconnect_deadline_is_much_shorter_than_warmup() {
 
 #[test]
 fn persistent_lane_steady_state_io_is_bounded() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = crate::stage_transport::StageListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || listener.accept().unwrap().0);
-    let client = std::net::TcpStream::connect(address).unwrap();
+    let client = crate::stage_transport::StageConnection::connect(address).unwrap();
     let peer = server.join().unwrap();
 
     configure_persistent_lane_io_deadlines(&client).unwrap();
@@ -344,13 +346,13 @@ fn persistent_lane_steady_state_io_is_bounded() {
 
 #[test]
 fn steady_state_ready_handshake_times_out_fast_for_silent_downstream() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = crate::stage_transport::StageListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         let (_stream, _) = listener.accept().unwrap();
         std::thread::sleep(Duration::from_millis(200));
     });
-    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut client = crate::stage_transport::StageConnection::connect(address).unwrap();
 
     let start = std::time::Instant::now();
     let error = receive_persistent_lane_ready(&mut client, Duration::from_millis(25)).unwrap_err();

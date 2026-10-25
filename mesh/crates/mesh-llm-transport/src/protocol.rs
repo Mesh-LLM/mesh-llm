@@ -23,6 +23,36 @@ pub const OPEN_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// register these names; the host and gossip filtering apply the same list.
 pub const BUILT_IN_PROTOCOL_NAMES: &[&str] = &["skippy-stage"];
 
+/// Host-owned capability identifying nodes which enforce provider-only stage traffic.
+pub const REQUIRED_STAGE_PROVIDER_FEATURE: &str = "stage-provider-required";
+
+/// Select whether inter-node activation streams may use the default transport.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum StageTransportPolicy {
+    #[default]
+    PreferProvider,
+    RequireProvider,
+}
+
+impl StageTransportPolicy {
+    pub fn validate(self, protocols: &[Arc<dyn MeshProtocol>]) -> Result<()> {
+        validate_protocols(protocols)?;
+        if self == Self::RequireProvider {
+            let provider = protocols
+                .iter()
+                .find(|protocol| protocol.stage_transport().is_some())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("required stage transport provider is not registered")
+                })?;
+            ensure!(
+                provider.descriptor().features.len() < 32,
+                "required stage provider must leave room for the host capability feature"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtocolDescriptor {
     pub name: String,
@@ -161,6 +191,10 @@ impl AsyncWrite for IrohStream {
 #[async_trait]
 pub trait ProtocolNetwork: Debug + Send + Sync {
     async fn open(&self, peer: PeerId, protocol: &ProtocolDescriptor) -> Result<ProtocolStream>;
+
+    async fn accept_stage(&self, _peer: PeerId, _stream: ProtocolStream) -> Result<()> {
+        anyhow::bail!("stage transport is unavailable")
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -212,6 +246,19 @@ impl ProtocolContext {
         }
     }
 
+    /// Route a provider's authenticated stream to an authorized local stage.
+    /// `peer` must come from the authenticated setup channel, not payload metadata.
+    pub async fn accept_stage(&self, peer: PeerId, stream: ProtocolStream) -> Result<()> {
+        ensure!(
+            !*self.cancellation.borrow(),
+            "application protocol is stopped"
+        );
+        tokio::select! {
+            result = self.network.accept_stage(peer, stream) => result,
+            () = self.cancelled() => anyhow::bail!("application protocol stopped during stage transport"),
+        }
+    }
+
     pub async fn cancelled(&self) {
         let mut cancellation = self.cancellation.clone();
         if *cancellation.borrow() {
@@ -232,9 +279,51 @@ pub struct IncomingProtocolStream {
     pub stream: ProtocolStream,
 }
 
+/// Outgoing delivery measurements supplied locally by a stage transport provider.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StageLinkObservation {
+    /// Mean outgoing DATA-to-receive-acknowledgement time, including backpressure.
+    pub acknowledgement_latency: std::time::Duration,
+    /// Acknowledged payload bytes divided by active delivery time; not raw link speed.
+    pub payload_bytes_per_second: u64,
+    pub samples: u32,
+    /// Age of the newest sample. Providers must also exclude stale older samples.
+    pub age: std::time::Duration,
+}
+
+/// Supplies reliable, ordered duplex stage streams with half-close.
+#[async_trait]
+pub trait StageTransportProvider: Debug + Send + Sync {
+    /// Cached readiness hint for planning; no network I/O or native probes.
+    /// The default permits setup to be attempted. This does not prove reachability.
+    /// Keep peers with usable active channels eligible when new capacity is exhausted.
+    fn stage_available(&self, _peer: PeerId) -> bool {
+        true
+    }
+
+    /// Local observations of an active outgoing path. Return `None` when closed,
+    /// failed, unmeasured, or when a new open would decline to the default path.
+    /// This synchronous snapshot must not perform network I/O or native probes.
+    fn stage_link(&self, _peer: PeerId) -> Option<StageLinkObservation> {
+        None
+    }
+
+    /// Decline with `None` before sending stage bytes. Errors fail the connection;
+    /// they never trigger replay through the default transport.
+    async fn open_stage(
+        &self,
+        context: ProtocolContext,
+        peer: PeerId,
+    ) -> Result<Option<ProtocolStream>>;
+}
+
 #[async_trait]
 pub trait MeshProtocol: Debug + Send + Sync + 'static {
     fn descriptor(&self) -> ProtocolDescriptor;
+
+    fn stage_transport(&self) -> Option<&dyn StageTransportProvider> {
+        None
+    }
 
     /// Runs on the embedded node's runtime and is cancelled when that node stops.
     async fn run(&self, context: ProtocolContext) -> Result<()> {
@@ -254,10 +343,25 @@ pub fn validate_protocols(protocols: &[Arc<dyn MeshProtocol>]) -> Result<()> {
         protocols.len() <= 16,
         "at most 16 application protocols may be registered"
     );
+    ensure!(
+        protocols
+            .iter()
+            .filter(|p| p.stage_transport().is_some())
+            .count()
+            <= 1,
+        "at most one stage transport provider may be registered"
+    );
     let mut keys = std::collections::HashSet::new();
     for protocol in protocols {
         let descriptor = protocol.descriptor();
         descriptor.validate()?;
+        ensure!(
+            !descriptor
+                .features
+                .iter()
+                .any(|feature| feature == REQUIRED_STAGE_PROVIDER_FEATURE),
+            "stage-provider-required is a host-owned capability feature"
+        );
         ensure!(
             !BUILT_IN_PROTOCOL_NAMES.contains(&descriptor.name.as_str()),
             "built-in protocol name is reserved"

@@ -49,6 +49,7 @@ fn test_stage_status(
 
 fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
     crate::inference::skippy::StageLoadRequest {
+        stage_transport: None,
         topology_id: "topology-a".to_string(),
         run_id: "run-a".to_string(),
         model_id: "model-a".to_string(),

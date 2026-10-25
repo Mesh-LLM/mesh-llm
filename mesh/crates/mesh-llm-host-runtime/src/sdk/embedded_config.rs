@@ -173,6 +173,7 @@ impl Default for EmbeddedMeshStorageConfig {
 #[derive(Clone, Debug)]
 pub struct EmbeddedMeshNodeConfig {
     pub protocols: Vec<std::sync::Arc<dyn super::protocol::MeshProtocol>>,
+    pub stage_transport_policy: super::protocol::StageTransportPolicy,
     pub mode: EmbeddedMeshNodeMode,
     pub http: EmbeddedMeshHttpConfig,
     pub serving: EmbeddedMeshServingConfig,
@@ -187,6 +188,7 @@ impl Default for EmbeddedMeshNodeConfig {
     fn default() -> Self {
         Self {
             protocols: Vec::new(),
+            stage_transport_policy: Default::default(),
             mode: EmbeddedMeshNodeMode::Serve,
             http: EmbeddedMeshHttpConfig::default(),
             serving: EmbeddedMeshServingConfig::default(),
@@ -211,6 +213,12 @@ pub struct EmbeddedMeshNodeBuilder {
 }
 
 impl EmbeddedMeshNodeBuilder {
+    #[must_use]
+    pub fn stage_transport_policy(mut self, policy: super::protocol::StageTransportPolicy) -> Self {
+        self.config.stage_transport_policy = policy;
+        self
+    }
+
     #[must_use]
     pub fn protocol(mut self, handler: std::sync::Arc<dyn super::protocol::MeshProtocol>) -> Self {
         self.config.protocols.push(handler);
@@ -508,6 +516,7 @@ impl EmbeddedMeshNodeBuilder {
 #[derive(Clone, Debug)]
 pub struct EmbeddedServeConfig {
     pub protocols: Vec<std::sync::Arc<dyn super::protocol::MeshProtocol>>,
+    pub stage_transport_policy: super::protocol::StageTransportPolicy,
     pub mode: EmbeddedMeshNodeMode,
     pub models: Vec<String>,
     pub join: Vec<String>,
@@ -540,6 +549,7 @@ impl Default for EmbeddedServeConfig {
     fn default() -> Self {
         Self {
             protocols: Vec::new(),
+            stage_transport_policy: Default::default(),
             mode: EmbeddedMeshNodeMode::Serve,
             models: Vec::new(),
             join: Vec::new(),
@@ -574,6 +584,7 @@ impl From<EmbeddedServeConfig> for EmbeddedMeshNodeConfig {
     fn from(config: EmbeddedServeConfig) -> Self {
         Self {
             protocols: config.protocols,
+            stage_transport_policy: config.stage_transport_policy,
             mode: config.mode,
             http: EmbeddedMeshHttpConfig {
                 api_port: config.api_port,
@@ -616,6 +627,7 @@ impl From<EmbeddedMeshNodeConfig> for EmbeddedServeConfig {
     fn from(config: EmbeddedMeshNodeConfig) -> Self {
         Self {
             protocols: config.protocols,
+            stage_transport_policy: config.stage_transport_policy,
             mode: config.mode,
             models: config.serving.models,
             join: config.network.join_tokens,
@@ -643,5 +655,37 @@ impl From<EmbeddedMeshNodeConfig> for EmbeddedServeConfig {
             log_format: config.log_format,
             startup_timeout: config.startup_timeout,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sdk::protocol::StageTransportPolicy;
+
+    #[test]
+    fn stage_transport_policy_survives_legacy_conversion_and_runtime_handoff() {
+        assert_eq!(
+            EmbeddedMeshNodeConfig::default().stage_transport_policy,
+            StageTransportPolicy::PreferProvider
+        );
+        let config = EmbeddedMeshNodeConfig::builder()
+            .stage_transport_policy(StageTransportPolicy::RequireProvider)
+            .build();
+        let legacy: EmbeddedServeConfig = config.into();
+        assert_eq!(
+            legacy.stage_transport_policy,
+            StageTransportPolicy::RequireProvider
+        );
+        let restored: EmbeddedMeshNodeConfig = legacy.into();
+        assert_eq!(
+            restored.stage_transport_policy,
+            StageTransportPolicy::RequireProvider
+        );
+        let runtime = crate::sdk::embedded_runtime_options(&restored, None);
+        assert_eq!(
+            runtime.stage_transport_policy,
+            StageTransportPolicy::RequireProvider
+        );
     }
 }
