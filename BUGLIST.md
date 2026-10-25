@@ -243,7 +243,7 @@ release tags that will have moved.
 | Rank | Issue | Status | Branch | PR | Evidence |
 |---:|---|---|---|---|---|
 | 1 | [#2119](https://github.com/Mesh-LLM/mesh-llm/issues/2119) | NOT-REPRODUCIBLE | `fix/1-2119-value-taking-flags` | — | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2119#issuecomment-6402598950) |
-| 2 | [#1955](https://github.com/Mesh-LLM/mesh-llm/issues/1955) | IN-PROGRESS | `fix/2-1955-catalog-filters` | — | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1955#issuecomment-6403463791) |
+| 2 | [#1955](https://github.com/Mesh-LLM/mesh-llm/issues/1955) | FIXED | `fix/2-1955-catalog-filters` | [#2580](https://github.com/Mesh-LLM/mesh-llm/pull/2580) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1955#issuecomment-6403463791) |
 | 3 | [#2339](https://github.com/Mesh-LLM/mesh-llm/issues/2339) | TODO | — | — | — |
 | 4 | [#2210](https://github.com/Mesh-LLM/mesh-llm/issues/2210) | TODO | — | — | — |
 | 5 | [#2214](https://github.com/Mesh-LLM/mesh-llm/issues/2214) | TODO | — | — | — |
