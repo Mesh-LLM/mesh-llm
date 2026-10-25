@@ -790,6 +790,16 @@ stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
 Persistent macOS canary preflight, build, family and infrastructure-retry jobs
+require `self-hosted`, `macOS`, `ARM64`, `jy-managed` and `family-certify`.
+Preflight/build require `accelerator-memory-128plus`; workers retain the
+controller's `matrix.memory_tier`. JY attribute policies select macOS Apple M1
+Ultra 128 GiB and Apple M3 Ultra 256 GiB with mounted model storage; both carry
+128-plus, and only the M3 carries 256-plus. Runner groups allow only the two
+canary workflows at protected `main` references. The
+[companion JY/Fleet change](https://github.com/general-inference/monorepo/pull/244)
+must deploy, provision and register matching runners before this switch merges.
+Jobs queue if managed capacity is absent.
+These jobs
 run `setup-canary-runner` before `prepare-automation` with
 `runner-profile: preinstalled-macos`. Missing tools fail with their names and a
 runner-provisioning instruction. This profile skips Rust and Just installers,

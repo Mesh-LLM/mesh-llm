@@ -1791,6 +1791,23 @@ placeholder directory. Neither change expands runner or cache authority.
 
 ### Canary memory admission and Python SDK
 
+Persistent canary jobs require `self-hosted`, `macOS`, `ARM64`, `jy-managed`
+and `family-certify`. Preflight and build also require
+`accelerator-memory-128plus`; family and infrastructure-retry jobs use the
+controller's existing memory-tier label. JY selects macOS Apple M1 Ultra
+128 GiB and Apple M3 Ultra 256 GiB machines by attributes, with mounted storage,
+without embedding node names in workflows. Both advertise the 128-plus tier;
+only the M3 Ultra advertises 256-plus.
+
+Roll out [the JY runner policies and Fleet provisioning](https://github.com/general-inference/monorepo/pull/244)
+before merging this placement change. The runner groups restrict access to
+`llama-upstream-canary.yml@refs/heads/main` and
+`llama-canary-family-pass.yml@refs/heads/main` in this repository. Verify MDM
+readiness, the runner account's Goose provider authentication and readable
+offline model cache, then register both profiles. No matching managed runner
+means queued jobs; there is no legacy-pool fallback. Repository validation does
+not establish live MDM convergence or hardware certification.
+
 The controller projects each immutable source plan onto `family-certify` plus
 `accelerator-memory-128plus` (115.2 GiB) or `accelerator-memory-256plus`
 (230.4 GiB), reserving 10% of physical RAM. The source plan and its digest are

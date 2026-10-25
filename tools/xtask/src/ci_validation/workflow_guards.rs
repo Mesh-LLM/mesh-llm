@@ -13,6 +13,7 @@ mod cache_predicate;
 mod canary_build;
 mod canary_execution;
 mod canary_graph;
+mod canary_runners;
 mod canary_sdk;
 mod cancellation;
 mod claude_clients;
@@ -86,6 +87,7 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     crates_recovery::check(&workflows)?;
     registry_canary::check(&workflows)?;
     canary_graph::check(&workflows)?;
+    canary_runners::check(&workflows)?;
     canary_build::check(&workflows)?;
     laya::check(root, &workflows)?;
     let quality_jobs = workflows

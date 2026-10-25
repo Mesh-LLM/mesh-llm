@@ -8,6 +8,9 @@ self-hosted-runner:
     - gpu-amd
     - cuda
     - family-certify
+    - jy-managed
+    - accelerator-memory-128plus
+    - accelerator-memory-256plus
     - mesh-llm-amd64
     - mesh-llm-arm64
     - depot-ubuntu-24.04
