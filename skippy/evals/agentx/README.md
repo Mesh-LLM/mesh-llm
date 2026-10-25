@@ -163,10 +163,9 @@ llama-versus-Skippy ABBAAB qualification.
 To isolate hybrid-model KV layout, set `AGENTX_SKIPPY_KV_UNIFIED=false` on the
 native AgentX runner. The runner passes `--kv-cache-unified=false` only to the
 Skippy server and records the explicit layout in `launch.json`; unset keeps the
-normal automatic layout. Separate KV permits independent lane prefills to
-interleave; unified KV keeps the serialized prefill turn. Compare against a
-same-source, same-host default-layout run before treating the change as a
-throughput improvement.
+normal automatic layout. This is a diagnostic control only. Qualified
+production comparisons require observed unified KV; inspect the native
+runtime receipt rather than inferring the layout from an unset override.
 
 ## Contention diagnostic, smoke, and full profiles
 

@@ -409,13 +409,12 @@ struct SchedulerWorker {
 impl IterationScheduler {
     pub(in crate::frontend) fn acquire_prefill_turn(
         &self,
-        kv_unified: Option<bool>,
         deadline: Instant,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-    ) -> InferenceResult<Option<prefill_admission::PrefillTurn<'_>>> {
+    ) -> InferenceResult<prefill_admission::PrefillTurn<'_>> {
         self.shared
             .prefill_admission
-            .acquire_for_layout(kv_unified, deadline, cancellation)
+            .acquire(deadline, cancellation)
     }
     pub(in crate::frontend) fn service_estimator(&self) -> Arc<GenerationServiceEstimator> {
         self.shared.service_estimator.clone()
