@@ -59,6 +59,9 @@ enum DecisionInputPart {
 }
 
 impl DecisionInput {
+    /// Flatten user text messages and parts in arrival order, separated by blank lines.
+    /// Reject other roles, non-message items, and image parts rather than silently
+    /// discarding input that the local text-only backend cannot interpret.
     fn text(&self) -> Result<String, InferenceError> {
         match self {
             Self::Text(text) => Ok(text.clone()),
@@ -145,6 +148,8 @@ struct ScoreLevel {
     description: Option<String>,
 }
 
+/// Accept a string when the field is present, including an empty string, but reject null.
+/// The field's `serde(default)` handles omission separately by supplying `None`.
 fn optional_string_without_null<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -153,6 +158,8 @@ where
 }
 
 impl DecisionsQuestion {
+    /// Return the caller's optional response name; internal question IDs use positions
+    /// so omitted or repeated names do not overwrite independently scored questions.
     fn name(&self) -> Option<&str> {
         match self {
             Self::Predicate { name, .. } | Self::Choice { name, .. } | Self::Score { name, .. } => {
@@ -161,6 +168,9 @@ impl DecisionsQuestion {
         }
     }
 
+    /// Translate a predicate, choice, or score into the corresponding backend question.
+    /// Validate distinct choice values and score labels, preserving candidate order;
+    /// omitted descriptions fall back to the candidate's value or label.
     fn to_system_one(&self) -> Result<SystemOneQuestion, InferenceError> {
         match self {
             Self::Predicate { instructions, .. } => Ok(SystemOneQuestion::Noul {
@@ -207,6 +217,7 @@ impl DecisionsQuestion {
         }
     }
 
+    /// Borrow the question's instructions without interpreting or rewriting their text.
     fn instructions(&self) -> &str {
         match self {
             Self::Predicate { instructions, .. }
@@ -216,6 +227,9 @@ impl DecisionsQuestion {
     }
 }
 
+/// Assign backend string keys to a nonempty list of distinct typed choice values.
+/// Preserve caller strings and escape generated boolean keys on collision, keeping
+/// boolean values separate from strings such as "true" or "__boolean_true".
 fn choice_keys(choices: &[ChoiceOption]) -> Result<Vec<String>, InferenceError> {
     let mut values = HashSet::new();
     if choices.is_empty()
@@ -250,6 +264,9 @@ fn choice_keys(choices: &[ChoiceOption]) -> Result<Vec<String>, InferenceError> 
 }
 
 impl DecisionsRequest {
+    /// Validate request metadata and convert text input and questions for System One.
+    /// Assign positional question IDs for response reconstruction, independent of names.
+    /// Leave adapter-only execution options unset so the backend uses its defaults.
     pub(crate) fn to_system_one(&self) -> Result<SystemOneRequest, InferenceError> {
         if self.model.trim().is_empty() || self.questions.is_empty() {
             return Err(InferenceError::invalid_request(
