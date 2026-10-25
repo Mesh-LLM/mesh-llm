@@ -159,7 +159,9 @@ between readings, or after the sampler stopped, leaves both its energy and its
 tokens out of them. Board power
 covers the GPU only, not the CPU, memory or power supply, so the figures are
 estimates. A reading is the sum over every GPU of the node, so a round where
-a GPU misses its reading is a gap rather than a smaller reading. The field is
+a GPU misses its reading is skipped rather than read as a smaller value: the
+interval around it is integrated from the readings on each side, and only
+readings more than 10 s apart leave the requests between them out. The field is
 absent until a power reading exists, so nodes without an NVIDIA GPU never
 report it, and neither do nodes with a GPU that reports no board power, such as
 a Jetson's integrated GPU: the sampler stops after its first round if a GPU

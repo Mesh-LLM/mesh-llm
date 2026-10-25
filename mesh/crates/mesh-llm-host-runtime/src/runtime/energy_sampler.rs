@@ -3,7 +3,7 @@
 //! One `nvidia-smi` process streams a reading per GPU every second, and the
 //! sampler sums each round into one reading for the node. A round only counts
 //! when every GPU in it reports power: a partial sum would understate the
-//! node, so a round where a GPU misses its reading is a gap. A node without
+//! node, so a round where a GPU misses its reading is skipped. A node without
 //! `nvidia-smi` reports no energy at all, and neither does one whose first
 //! round misses a reading (Jetson's integrated GPU answers `[N/A]`): the
 //! sampler stops there.
@@ -59,8 +59,10 @@ impl PowerRound {
 /// Records each round's node total from `nvidia-smi` lines until the stream
 /// ends, or right after the first round when it misses a reading: a board
 /// that never reports power would otherwise be polled every second for
-/// nothing. A later round that misses one is only a gap, which the meter
-/// already leaves out.
+/// nothing. A later round that misses one is skipped: the meter integrates
+/// the longer interval from the full readings on each side, as it does any
+/// interval up to `MAX_SAMPLE_GAP_SECONDS`, and leaves the requests running
+/// through it out of the rates only past that.
 async fn read_rounds<R: AsyncBufRead + Unpin>(
     lines: &mut Lines<R>,
     gpus: usize,
@@ -214,7 +216,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_gpu_that_misses_a_later_reading_leaves_a_gap_and_sampling_goes_on() {
+    async fn a_round_where_a_gpu_misses_a_later_reading_is_skipped_and_sampling_goes_on() {
         let output = "0, 120.0\n1, 5.0\n0, 115.0\n1, [N/A]\n0, 110.0\n1, 20.0\n";
         let (totals, unread) = recorded(output, 2).await;
         assert_eq!(totals, [125.0, 130.0]);
