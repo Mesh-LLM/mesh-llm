@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 /// Wire value for the MCP revision that made list results cacheable.
 const PROTOCOL_2026_07_28: &str = "2026-07-28";
+const PROTOCOL_2025_11_25: &str = "2025-11-25";
 const NOTIFY_INITIALIZED: &str = "notifications/initialized";
 const CACHE_METADATA_FIELDS: [&str; 2] = ["ttlMs", "cacheScope"];
 
@@ -92,26 +93,33 @@ struct McpSession {
     client: reqwest::Client,
     url: String,
     session_id: String,
+    version: &'static str,
+    /// 2026-07-28 carries the negotiated version and client capabilities in every
+    /// request `_meta`; older revisions negotiate once in `initialize`.
+    inline_meta: bool,
 }
 
 impl McpSession {
-    async fn open(url: &str) -> Self {
+    async fn open(url: &str, version: &'static str, inline_meta: bool) -> Self {
         let client = reqwest::Client::new();
+        let mut params = json!({
+            "protocolVersion": version,
+            "capabilities": {},
+            "clientInfo": { "name": "mesh-llm-list-cache-test", "version": "1" },
+        });
+        if inline_meta {
+            params["_meta"] = request_meta();
+        }
         let response = client
             .post(url)
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
-            .header("mcp-protocol-version", PROTOCOL_2026_07_28)
+            .header("mcp-protocol-version", version)
             .json(&json!({
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "initialize",
-                "params": {
-                    "protocolVersion": PROTOCOL_2026_07_28,
-                    "capabilities": {},
-                    "clientInfo": { "name": "mesh-llm-list-cache-test", "version": "1" },
-                    "_meta": request_meta(),
-                }
+                "params": params,
             }))
             .send()
             .await
@@ -131,17 +139,17 @@ impl McpSession {
             client,
             url: url.to_string(),
             session_id,
+            version,
+            inline_meta,
         };
-        session
-            .post(
-                NOTIFY_INITIALIZED,
-                json!({
-                    "jsonrpc": "2.0",
-                    "method": NOTIFY_INITIALIZED,
-                    "params": { "_meta": request_meta() }
-                }),
-            )
-            .await;
+        let mut notification = json!({
+            "jsonrpc": "2.0",
+            "method": NOTIFY_INITIALIZED,
+        });
+        if inline_meta {
+            notification["params"] = json!({ "_meta": request_meta() });
+        }
+        session.post(NOTIFY_INITIALIZED, notification).await;
         session
     }
 
@@ -152,7 +160,7 @@ impl McpSession {
             .post(&self.url)
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
-            .header("mcp-protocol-version", PROTOCOL_2026_07_28)
+            .header("mcp-protocol-version", self.version)
             .header("mcp-method", method)
             .header("mcp-session-id", &self.session_id)
             .json(&payload)
@@ -166,17 +174,15 @@ impl McpSession {
 
     /// Send one request and return the decoded JSON-RPC `result` object.
     async fn result(&self, id: i64, method: &str) -> Value {
-        let body = self
-            .post(
-                method,
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "method": method,
-                    "params": { "_meta": request_meta() }
-                }),
-            )
-            .await;
+        let mut request = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+        });
+        if self.inline_meta {
+            request["params"] = json!({ "_meta": request_meta() });
+        }
+        let body = self.post(method, request).await;
         assert!(
             !body.contains("\"error\""),
             "{method} returned an error response: {body}"
@@ -202,7 +208,7 @@ impl McpSession {
 #[tokio::test]
 async fn mcp_list_results_carry_2026_07_28_cache_metadata() {
     let url = serve_loopback_endpoint().await;
-    let session = McpSession::open(&url).await;
+    let session = McpSession::open(&url, PROTOCOL_2026_07_28, true).await;
 
     for (id, method) in [
         (10_i64, "tools/list"),
@@ -224,6 +230,30 @@ async fn mcp_list_results_carry_2026_07_28_cache_metadata() {
                 result
                     .as_object()
                     .map(|map| map.keys().cloned().collect::<Vec<_>>()),
+            );
+        }
+    }
+}
+
+/// The gate must stay one-directional: a peer that negotiated an older revision
+/// keeps the wire shape it understands.
+#[tokio::test]
+async fn mcp_list_results_omit_cache_metadata_for_legacy_peer() {
+    let url = serve_loopback_endpoint().await;
+    let session = McpSession::open(&url, PROTOCOL_2025_11_25, false).await;
+
+    for (id, method) in [
+        (20_i64, "tools/list"),
+        (21, "resources/list"),
+        (22, "prompts/list"),
+        (23, "resources/templates/list"),
+    ] {
+        let result = session.result(id, method).await;
+        for field in CACHE_METADATA_FIELDS {
+            assert!(
+                result.get(field).is_none(),
+                "{method} result must not advertise 2026-07-28 cache metadata to a \
+                 {PROTOCOL_2025_11_25} peer; got {field} in {result}",
             );
         }
     }

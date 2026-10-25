@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::plugin::{self, stapler};
 
 use super::external_mcp::{ExternalMcpClient, ExternalMcpEndpoint};
+use super::result_cache;
 use super::{PluginMcpServer, internal_error, try_plugins};
 
 #[derive(Clone)]
@@ -364,12 +365,15 @@ impl ServerHandler for PluginMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         self.refresh_peer(context.peer.clone()).await;
-        Ok(ListToolsResult::with_all_items(
-            self.discover_tools()
-                .await?
-                .into_values()
-                .map(|entry| entry.tool)
-                .collect(),
+        Ok(result_cache::attach_if_supported(
+            ListToolsResult::with_all_items(
+                self.discover_tools()
+                    .await?
+                    .into_values()
+                    .map(|entry| entry.tool)
+                    .collect(),
+            ),
+            &context,
         ))
     }
 
@@ -464,7 +468,10 @@ impl ServerHandler for PluginMcpServer {
                 prompt
             }));
         }
-        Ok(ListPromptsResult::with_all_items(prompts))
+        Ok(result_cache::attach_if_supported(
+            ListPromptsResult::with_all_items(prompts),
+            &context,
+        ))
     }
 
     async fn get_prompt(
@@ -559,7 +566,10 @@ impl ServerHandler for PluginMcpServer {
                 resource
             }));
         }
-        Ok(ListResourcesResult::with_all_items(resources))
+        Ok(result_cache::attach_if_supported(
+            ListResourcesResult::with_all_items(resources),
+            &context,
+        ))
     }
 
     async fn list_resource_templates(
@@ -601,8 +611,9 @@ impl ServerHandler for PluginMcpServer {
                 template
             }));
         }
-        Ok(ListResourceTemplatesResult::with_all_items(
-            resource_templates,
+        Ok(result_cache::attach_if_supported(
+            ListResourceTemplatesResult::with_all_items(resource_templates),
+            &context,
         ))
     }
 
