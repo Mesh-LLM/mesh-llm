@@ -1,0 +1,221 @@
+{
+  "description": "native verify-host-dependencies cases; stdout/stderr/code/report_text are observed scripts/verify-host-dependencies.py (python3.13) output with only the listed stub tools on PATH. calls lists each stub invocation.",
+  "cases": [
+    {
+      "group": "happy",
+      "name": "elf host within the glibc floor writes a report",
+      "args": ["--report", "out/nested/report.json", "--max-glibc", "2.39", "host"],
+      "files": {"host": {"hex": "7f454c4602010100"}},
+      "tools": {
+        "readelf": {"output": " 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\nVersion definition section '.gnu.version_d' contains 1 entry:\n  Name: GLIBC_2.99\nVersion needs section '.gnu.version_r' contains 2 entries:\n  Name: GLIBC_2.17  Flags: none\n  Name: GLIBC_2.34  Flags: none\n", "code": 0}
+      },
+      "report": "out/nested/report.json",
+      "code": 0,
+      "stdout": "{\"binary\": \"host\", \"format\": \"elf\", \"glibc_floor\": \"2.34\", \"imports\": [\"libc.so.6\", \"libm.so.6\"], \"policy\": \"mesh-llm-dynamic-host-v2\", \"rejected_imports\": []}\n",
+      "stderr": "",
+      "report_text": "{\n  \"binary\": \"host\",\n  \"format\": \"elf\",\n  \"glibc_floor\": \"2.34\",\n  \"imports\": [\n    \"libc.so.6\",\n    \"libm.so.6\"\n  ],\n  \"policy\": \"mesh-llm-dynamic-host-v2\",\n  \"rejected_imports\": []\n}\n",
+      "calls": "readelf -d host\nreadelf -V host\n"
+    },
+    {
+      "group": "happy",
+      "name": "macho host detected from its header",
+      "args": ["bin/mesh-llm"],
+      "files": {"bin/mesh-llm": {"hex": "cffaedfe07000001"}},
+      "tools": {
+        "otool": {"output": "bin/mesh-llm:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1345.0.0)\n\t/System/Library/Frameworks/Security.framework/Versions/A/Security (compatibility version 1.0.0, current version 61439.0.0)\n", "code": 0}
+      },
+      "code": 0,
+      "stdout": "{\"binary\": \"mesh-llm\", \"format\": \"macho\", \"glibc_floor\": null, \"imports\": [\"/System/Library/Frameworks/Security.framework/Versions/A/Security\", \"/usr/lib/libSystem.B.dylib\"], \"policy\": \"mesh-llm-dynamic-host-v2\", \"rejected_imports\": []}\n",
+      "stderr": "",
+      "calls": "otool -L bin/mesh-llm\n"
+    },
+    {
+      "group": "happy",
+      "name": "pe host through objdump when llvm-readobj is absent",
+      "args": ["mesh-llm.exe"],
+      "files": {"mesh-llm.exe": {"hex": "4d5a900003000000"}},
+      "tools": {
+        "objdump": {"output": "\tDLL Name: KERNEL32.dll\n\tDLL Name: ws2_32.dll\n\tDLL Name: KERNEL32.dll\n", "code": 0}
+      },
+      "code": 0,
+      "stdout": "{\"binary\": \"mesh-llm.exe\", \"format\": \"pe\", \"glibc_floor\": null, \"imports\": [\"KERNEL32.dll\", \"ws2_32.dll\"], \"policy\": \"mesh-llm-dynamic-host-v2\", \"rejected_imports\": []}\n",
+      "stderr": "",
+      "calls": "objdump -p mesh-llm.exe\n"
+    },
+    {
+      "group": "happy",
+      "name": "pe host through llvm-readobj",
+      "args": ["--format", "pe", "mesh-llm.exe"],
+      "files": {"mesh-llm.exe": {"hex": "00000000"}},
+      "tools": {
+        "llvm-readobj": {"output": "Import {\n  Name: bcrypt.dll\n  Name: USERENV.dll\n}\n", "code": 0},
+        "objdump": {"output": "", "code": 1}
+      },
+      "code": 0,
+      "stdout": "{\"binary\": \"mesh-llm.exe\", \"format\": \"pe\", \"glibc_floor\": null, \"imports\": [\"USERENV.dll\", \"bcrypt.dll\"], \"policy\": \"mesh-llm-dynamic-host-v2\", \"rejected_imports\": []}\n",
+      "stderr": "",
+      "calls": "llvm-readobj --coff-imports mesh-llm.exe\n"
+    },
+    {
+      "group": "happy",
+      "name": "runtime library skips the import policy and meets the declared floor",
+      "args": ["--no-import-policy", "--max-glibc", "declared", "libskippy.so"],
+      "files": {"libskippy.so": {"hex": "7f454c46"}},
+      "tools": {
+        "readelf": {"output": " 0x1 (NEEDED) Shared library: [libcudart.so.12]\n 0x1 (NEEDED) Shared library: [libggml-cuda.so]\nVersion needs section '.gnu.version_r':\n  Name: GLIBC_2.35\n", "code": 0}
+      },
+      "code": 0,
+      "stdout": "{\"binary\": \"libskippy.so\", \"format\": \"elf\", \"glibc_floor\": \"2.35\", \"imports\": [\"libcudart.so.12\", \"libggml-cuda.so\"], \"policy\": \"none\", \"rejected_imports\": []}\n",
+      "stderr": "",
+      "calls": "readelf -d libskippy.so\nreadelf -V libskippy.so\n"
+    },
+    {
+      "group": "happy",
+      "name": "help",
+      "args": ["--help"],
+      "code": 0,
+      "stdout": "usage: verify-host-dependencies.py [-h] [--format {elf,macho,pe}]\n                                   [--report REPORT] [--no-import-policy]\n                                   [--max-glibc MAX_GLIBC]\n                                   binary\n\npositional arguments:\n  binary\n\noptions:\n  -h, --help            show this help message and exit\n  --format {elf,macho,pe}\n  --report REPORT\n  --no-import-policy    Report imports without enforcing the host policy.\n                        Native runtime libraries legitimately import each\n                        other, so only the glibc floor applies to them.\n  --max-glibc MAX_GLIBC\n                        Reject an ELF binary that needs a GLIBC symbol version\n                        above this one, or the literal 'declared' to read\n                        scripts/linux-glibc-floor.txt.\n",
+      "stderr": ""
+    },
+    {
+      "group": "rejected",
+      "name": "elf host importing backend libraries",
+      "args": ["host"],
+      "files": {"host": {"hex": "7f454c46"}},
+      "tools": {
+        "readelf": {"output": " 0x1 (NEEDED) Shared library: [libc.so.6]\n 0x1 (NEEDED) Shared library: [libcuda.so.1]\n 0x1 (NEEDED) Shared library: [libggml-base.so]\n 0x1 (NEEDED) Shared library: [libvulkan.so.1]\n", "code": 0}
+      },
+      "code": 1,
+      "stdout": "{\"binary\": \"host\", \"format\": \"elf\", \"glibc_floor\": null, \"imports\": [\"libc.so.6\", \"libcuda.so.1\", \"libggml-base.so\", \"libvulkan.so.1\"], \"policy\": \"mesh-llm-dynamic-host-v2\", \"rejected_imports\": [\"libcuda.so.1\", \"libggml-base.so\", \"libvulkan.so.1\"]}\n",
+      "stderr": "host dependency policy rejected: libcuda.so.1, libggml-base.so, libvulkan.so.1\n",
+      "calls": "readelf -d host\nreadelf -V host\n"
+    },
+    {
+      "group": "rejected",
+      "name": "macho host linking Metal",
+      "args": ["--format", "macho", "mesh-llm"],
+      "files": {"mesh-llm": "x"},
+      "tools": {
+        "otool": {"output": "mesh-llm:\n\t/System/Library/Frameworks/Metal.framework/Versions/A/Metal (compatibility version 1.0.0)\n\t@rpath/libllama.dylib (compatibility version 0.0.0)\n", "code": 0}
+      },
+      "code": 1,
+      "stdout": "{\"binary\": \"mesh-llm\", \"format\": \"macho\", \"glibc_floor\": null, \"imports\": [\"/System/Library/Frameworks/Metal.framework/Versions/A/Metal\", \"@rpath/libllama.dylib\"], \"policy\": \"mesh-llm-dynamic-host-v2\", \"rejected_imports\": [\"/System/Library/Frameworks/Metal.framework/Versions/A/Metal\", \"@rpath/libllama.dylib\"]}\n",
+      "stderr": "host dependency policy rejected: /System/Library/Frameworks/Metal.framework/Versions/A/Metal, @rpath/libllama.dylib\n",
+      "calls": "otool -L mesh-llm\n"
+    },
+    {
+      "group": "rejected",
+      "name": "pe host importing CUDA",
+      "args": ["--format=pe", "mesh-llm.exe"],
+      "files": {"mesh-llm.exe": "MZ"},
+      "tools": {
+        "objdump": {"output": "\tDLL Name: nvcuda.dll\n\tDLL Name: cublas64_12.dll\n\tDLL Name: KERNEL32.dll\n", "code": 0}
+      },
+      "code": 1,
+      "stdout": "{\"binary\": \"mesh-llm.exe\", \"format\": \"pe\", \"glibc_floor\": null, \"imports\": [\"KERNEL32.dll\", \"cublas64_12.dll\", \"nvcuda.dll\"], \"policy\": \"mesh-llm-dynamic-host-v2\", \"rejected_imports\": [\"cublas64_12.dll\", \"nvcuda.dll\"]}\n",
+      "stderr": "host dependency policy rejected: cublas64_12.dll, nvcuda.dll\n",
+      "calls": "objdump -p mesh-llm.exe\n"
+    },
+    {
+      "group": "rejected",
+      "name": "elf binary above the declared glibc floor",
+      "args": ["--max-glibc", "declared", "--no-import-policy", "host"],
+      "files": {"host": {"hex": "7f454c46"}},
+      "tools": {
+        "readelf": {"output": " 0x1 (NEEDED) Shared library: [libc.so.6]\nVersion needs section '.gnu.version_r':\n  Name: GLIBC_2.9\n  Name: GLIBC_2.40\n", "code": 0}
+      },
+      "code": 1,
+      "stdout": "{\"binary\": \"host\", \"format\": \"elf\", \"glibc_floor\": \"2.40\", \"imports\": [\"libc.so.6\"], \"policy\": \"none\", \"rejected_imports\": []}\n",
+      "stderr": "host needs GLIBC_2.40 but the declared floor is 2.39. Raising the floor drops Linux distributions that were supported before; see mesh-llm#1522.\n",
+      "calls": "readelf -d host\nreadelf -V host\n"
+    },
+    {
+      "group": "error",
+      "name": "unsupported header",
+      "args": ["notes.txt"],
+      "files": {"notes.txt": "hello"},
+      "code": 2,
+      "stdout": "",
+      "stderr": "unsupported host executable format: notes.txt\n"
+    },
+    {
+      "group": "error",
+      "name": "missing binary",
+      "args": ["./missing/host"],
+      "code": 2,
+      "stdout": "",
+      "stderr": "[Errno 2] No such file or directory: 'missing/host'\n"
+    },
+    {
+      "group": "error",
+      "name": "inspection tool absent",
+      "args": ["host"],
+      "files": {"host": {"hex": "7f454c46"}},
+      "code": 2,
+      "stdout": "",
+      "stderr": "readelf is required to inspect host dependencies\n"
+    },
+    {
+      "group": "error",
+      "name": "inspection tool fails",
+      "args": ["--format", "macho", "host"],
+      "files": {"host": "x"},
+      "tools": {"otool": {"output": "otool: bad file\n", "code": 3}},
+      "code": 2,
+      "stdout": "",
+      "stderr": "Command '('otool', '-L', 'host')' returned non-zero exit status 3.\n",
+      "calls": "otool -L host\n"
+    },
+    {
+      "group": "error",
+      "name": "invalid max glibc",
+      "args": ["--max-glibc", "2", "host"],
+      "files": {"host": {"hex": "7f454c46"}},
+      "tools": {"readelf": {"output": "", "code": 0}},
+      "code": 2,
+      "stdout": "",
+      "stderr": "invalid literal for int() with base 10: ''\n",
+      "calls": "readelf -d host\n"
+    },
+    {
+      "group": "usage",
+      "name": "no arguments",
+      "args": [],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: verify-host-dependencies.py [-h] [--format {elf,macho,pe}]\n                                   [--report REPORT] [--no-import-policy]\n                                   [--max-glibc MAX_GLIBC]\n                                   binary\nverify-host-dependencies.py: error: the following arguments are required: binary\n"
+    },
+    {
+      "group": "usage",
+      "name": "invalid format choice",
+      "args": ["--format", "coff", "host"],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: verify-host-dependencies.py [-h] [--format {elf,macho,pe}]\n                                   [--report REPORT] [--no-import-policy]\n                                   [--max-glibc MAX_GLIBC]\n                                   binary\nverify-host-dependencies.py: error: argument --format: invalid choice: 'coff' (choose from 'elf', 'macho', 'pe')\n"
+    },
+    {
+      "group": "usage",
+      "name": "second positional",
+      "args": ["host", "-x", "--", "other"],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: verify-host-dependencies.py [-h] [--format {elf,macho,pe}]\n                                   [--report REPORT] [--no-import-policy]\n                                   [--max-glibc MAX_GLIBC]\n                                   binary\nverify-host-dependencies.py: error: unrecognized arguments: -x -- other\n"
+    },
+    {
+      "group": "usage",
+      "name": "flag with explicit argument",
+      "args": ["--no-import=yes", "host"],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: verify-host-dependencies.py [-h] [--format {elf,macho,pe}]\n                                   [--report REPORT] [--no-import-policy]\n                                   [--max-glibc MAX_GLIBC]\n                                   binary\nverify-host-dependencies.py: error: argument --no-import-policy: ignored explicit argument 'yes'\n"
+    },
+    {
+      "group": "usage",
+      "name": "report without a value",
+      "args": ["host", "--report", "--format", "elf"],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: verify-host-dependencies.py [-h] [--format {elf,macho,pe}]\n                                   [--report REPORT] [--no-import-policy]\n                                   [--max-glibc MAX_GLIBC]\n                                   binary\nverify-host-dependencies.py: error: argument --report: expected one argument\n"
+    }
+  ]
+}

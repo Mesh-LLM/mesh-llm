@@ -28,23 +28,45 @@ impl ServiceCommand {
 
 pub(crate) trait ServiceCommandRunner {
     fn run(&mut self, command: &ServiceCommand) -> Result<()>;
+
+    /// Runs `command` and returns its standard output.
+    fn output(&mut self, command: &ServiceCommand) -> Result<String> {
+        self.run(command).map(|()| String::new())
+    }
 }
 
 pub(crate) struct CliServiceCommandRunner;
 
 impl ServiceCommandRunner for CliServiceCommandRunner {
     fn run(&mut self, command: &ServiceCommand) -> Result<()> {
-        let status = Command::new(&command.program)
+        self.output(command).map(|_| ())
+    }
+
+    // The tools' own output is captured rather than printed, so setup's summary
+    // stays the only output, and a failure carries what the tool said.
+    fn output(&mut self, command: &ServiceCommand) -> Result<String> {
+        let output = Command::new(&command.program)
             .args(&command.args)
-            .status()
+            .output()
             .with_context(|| format!("failed to run `{}`", command.display()))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(anyhow!(
-                "`{}` exited with status {status}",
-                command.display()
-            ))
+        if output.status.success() {
+            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        }
+        let said = [&output.stderr, &output.stdout]
+            .iter()
+            .map(|stream| String::from_utf8_lossy(stream).trim().to_string())
+            .find(|text| !text.is_empty());
+        match said {
+            Some(said) => Err(anyhow!(
+                "`{}` exited with status {}: {said}",
+                command.display(),
+                output.status
+            )),
+            None => Err(anyhow!(
+                "`{}` exited with status {}",
+                command.display(),
+                output.status
+            )),
         }
     }
 }

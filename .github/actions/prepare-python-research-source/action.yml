@@ -1,0 +1,21 @@
+name: Prepare immutable Python research source
+description: Restore and admit the fixed external research checkpoint before source-dependent Rust tests. This does not prepare or run research SDK environments.
+runs:
+  using: composite
+  steps:
+    - name: Restore immutable external Python research source
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        repository: Mesh-LLM/mesh-llm-research
+        ref: d280c63122350fb3f3d91734d61eb836f37a15ee
+        path: .sdk-source/research
+        persist-credentials: false
+    - name: Admit external Python research source
+      shell: bash
+      run: |
+        set -euo pipefail
+        export MESH_PYTHON_RESEARCH_SOURCE="$PWD/.sdk-source/research"
+        automation=(cargo xtool)
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then automation=("$MESH_LLM_AUTOMATION_BIN"); fi
+        research_root="$("${automation[@]}" automation smoke-observation research-source --kind root)"
+        printf 'MESH_PYTHON_RESEARCH_SOURCE=%s\n' "$research_root" >> "$GITHUB_ENV"

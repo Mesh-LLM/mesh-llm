@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, Response, header};
 use http_body_util::BodyExt;
 use serde_json::Value;
-use skippy_inference_api::OpenAiBackend;
+use skippy_inference_api::InferenceBackend;
 use tower::ServiceExt;
 
 use super::EmbeddedServingController;
@@ -131,7 +131,7 @@ impl EmbeddedServingController {
             .handle
             .clone()
             .context("model handle not available for embedded OpenAI request")?;
-        let backend: Arc<dyn OpenAiBackend> = handle;
+        let backend: Arc<dyn InferenceBackend> = handle;
         let request = Request::builder()
             .method("POST")
             .uri(path)

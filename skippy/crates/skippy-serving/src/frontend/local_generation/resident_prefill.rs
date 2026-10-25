@@ -1,5 +1,5 @@
 use crate::frontend::generation::StageOpenAiBackend;
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_runtime::{IterationBatchPhase, SamplingConfig};
 use std::time::Instant;
 
@@ -37,9 +37,9 @@ impl StageOpenAiBackend {
         sample_last: bool,
         deadline: Instant,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-    ) -> OpenAiResult<SuffixPrefillOutcome> {
+    ) -> InferenceResult<SuffixPrefillOutcome> {
         if suffix.is_empty() {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "deferred suffix prefill requires at least one token",
             ));
         }
@@ -87,14 +87,14 @@ impl StageOpenAiBackend {
 fn ensure_suffix_prefill_active(
     deadline: Instant,
     cancellation: Option<&skippy_inference_api::CancellationToken>,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
-        return Err(OpenAiError::cancelled(
+        return Err(InferenceError::cancelled(
             "request cancelled during deferred suffix prefill",
         ));
     }
     if Instant::now() >= deadline {
-        return Err(OpenAiError::timeout(
+        return Err(InferenceError::timeout(
             "cache operation deadline exceeded during deferred suffix prefill",
         ));
     }

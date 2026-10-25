@@ -539,43 +539,75 @@ the installed archive, extracted files, and local plugin metadata.
 
 ## Default Plugins
 
-A fresh node installs a short list of default plugins once, on first run
-(`mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`). The list starts empty;
-each entry is added by its own change. Payment and wallet plugins are never on
-it: a node pays or gets paid only through a plugin its operator chose. A
-default installs as an ordinary package, so it can serve a web UI like any
-installed plugin.
+The reviewed default list is `mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`.
+Today it contains `capsules` 0.1.4. Each entry pins a release version, the
+GitHub repository whose release publishes it, and an archive SHA-256 per
+supported platform. Payment and wallet plugins are excluded from the default
+list.
 
-Each entry is pinned in the list itself: an exact release version and the
-SHA-256 of that release's archive for each platform (macOS arm64, Linux x86_64,
-Linux arm64). The catalog says where the plugin lives; if its entry also pins
-this platform (`version` and `sha256`), the two pins must agree. The download
-must match the pin as well as GitHub's reported digest. A platform without a
-pin, a disagreement, a mismatch, or no network means the plugin is not
-installed and the node starts normally; the install is tried again on the next
-start, bounded to 30 seconds. Bumping a default is one entry in the list per
-release.
+**A node installs a default only from its release's bundled copy, never from
+a download.** The bundled copy is the plugin archive in a `plugins/` directory
+beside the `mesh-llm` binary; native packages keep it at
+`lib/mesh-llm/<version>/plugins` and the Homebrew formula under `libexec`.
+`MESH_LLM_BUNDLED_PLUGINS_DIR` names another directory.
+- **When it is installed:** when a node starts, and on `mesh-llm plugins
+  install-defaults`, the host installs each default from that bundled copy,
+  after checking the archive against the compiled pin. Both are local and
+  quick; neither makes a network call.
+- **No bundled copy:** a missing copy is reported. With no `plugins/`
+  directory at all ("this install bundles no plugins") it is an info line;
+  a `plugins/` directory without the archive is a warning. Nothing is
+  downloaded instead, and there is no fallback. A digest mismatch is refused.
+- **What a release bundles:** macOS and Linux release archives carry each
+  pinned default's release archive in `plugins/`. The release job downloads it
+  from the plugin's own GitHub release, checks it against the pin, and fails
+  unless the bundle's host installs it. `mesh-llm update` installs the new
+  release's `plugins/` with the host. A development build carries none, so it
+  reports the info line.
+- **Windows:** the list pins no Windows build, so the default reports "no
+  reviewed release for this platform".
 
-The node says what it did: one line when a default is installed, naming the
-version and how to remove it, and one warning when it couldn't be. After that a
-default is silent: later starts don't look it up, download it, or log about it.
+To turn the defaults off, pass `--no-default-plugins` to `mesh-llm update`, or
+run `mesh-llm plugins install-defaults --off`. Each records the choice in the plugin store:
+an installed default is disabled, and one that is not installed is recorded as
+turned off, so no later start installs it. The record is per plugin: it
+covers the defaults the build that wrote it lists, not a default a later
+release adds. `MESH_LLM_NO_DEFAULT_PLUGINS=1`, or `--no-default-plugins` on
+`serve` or `client`, skips defaults for the processes that see it. Provisioning prints one line for
+a default it leaves alone: one you run from your own `[[plugin]]` entry or
+install, one disabled or turned off, a platform with no reviewed release, or
+an install with no bundled copy.
 
-Opting out:
+`plugin-install.json` records whether an installation is default managed. A
+new release's bundled copy replaces an enabled default-managed install when
+the node starts. An operator-installed plugin with the same name is left
+alone; so is one the operator runs from a `[[plugin]]` entry that sets
+`command` or `url`. A `[[plugin]]` entry that only holds settings, as the
+console writes when an operator saves one, configures the installed default
+and leaves it default managed. `mesh-llm plugins update` reinstalls a
+default-managed plugin from the bundled copy too. Disabling a default
+preserves the installed record and keeps it at its installed version.
+Deleting a default removes it and records in the plugin store that it stays
+off, so no later start installs it again; `mesh-llm plugins disable <name>`
+records the same for a default that is not installed. `mesh-llm plugins enable
+<name>` undoes that, and the next start installs it from the bundled copy.
+There is no separate offered-defaults state file.
 
-| How | Effect |
-| --- | ------ |
-| `mesh-llm serve --no-default-plugins` | This start offers no defaults. |
-| `MESH_LLM_NO_DEFAULT_PLUGINS=1` | Same, from the environment. |
-| `[[plugin]]` with the plugin's `name` and `enabled = false` in the config | The operator has chosen: the default is recorded as offered and never installed. |
-| `mesh-llm plugins disable <name>` | Keeps it installed but not launched. |
-| `mesh-llm plugins delete <name>` | Removes it; it is not reinstalled. |
+A default plugin that fails to start is optional: its failure is reported as
+an inactive plugin and does not abort node startup. A default-managed plugin
+keeps only the surfaces its entry allows: before publishing routes, the host
+removes everything else from its initialization manifest and logs a warning
+naming each removed surface. No default entry allows inference endpoints or
+virtual models, so a default plugin cannot serve a model, nor the OpenAI
+exchange hook, which sees every OpenAI exchange the node handles. A
+default-managed plugin that is no longer on this build's list keeps everything
+but serving models and the exchange hook until it is reviewed again.
 
-Once installed, a default is an ordinary installed plugin. Each default is
-offered once (recorded in `defaults-offered.json` in the plugin store), so a
-removed default is never reinstalled, and a plugin the operator already
-installed or lists in their config is left alone. If that record exists but
-can't be read, no default is offered until it is fixed or removed, so a removed
-default never comes back through a damaged file.
+`capsules` keeps a signed record of each request this node serves, on
+the node's own disk. By default it keeps SHA-256 digests of the request and
+response, never their text; its default entry does not allow the OpenAI
+exchange hook, so mesh-llm passes it no exchange text.
+It makes no network calls unless the operator configures a witness URL.
 
 ## Hugging Face Plugin Catalog
 
@@ -1272,6 +1304,32 @@ Plugins may declare mesh channels for plugin-specific peer-to-peer coordination.
 These should use the generic plugin mesh transport rather than dedicated core stream types for individual plugins.
 
 Core should not embed plugin-specific wire protocols in the main mesh transport when the behavior can live behind the generic plugin channel mechanism.
+
+## Plugin Keys
+
+A plugin that signs records can have its host announce the public key it signs
+with, so peers' plugins can check what it signed without operators exchanging
+keys by hand. The plugin sends a `PluginKeyRequest`
+(`PluginContext::announce_plugin_key`) with a 32-byte Ed25519 public key; an
+empty key withdraws it, and a later request replaces it. The host announces the
+key under its own name for the plugin connection, never a name the plugin
+claims, so one plugin cannot set another's key. Nothing is announced for a
+plugin that does not ask.
+
+The host binds the key to itself with its node key (an Ed25519 signature over a
+domain-separated encoding of the node id, the plugin name and the key; see
+`PluginKey` in `node.proto`) and carries it on its own gossip entry
+(`PeerAnnouncement.plugin_keys`, at most 16). A node keeps a peer's plugin keys
+only from that directly-connected peer's own entry, and only when the binding
+verifies against that peer's node key, and drops them when that peer leaves;
+plugin keys are not relayed. `GET
+/api/plugin-keys` lists this node's announced keys and its peers' verified
+ones, hex-encoded, by plugin name and full 64-hex endpoint id.
+
+A published key tells peers that this node runs that plugin. The host
+advertises the `plugin_keys.v1` host capability in its `InitializeRequest`;
+against a host without it, `announce_plugin_key` fails at once. The example
+`mesh/crates/mesh-llm-plugin/examples/plugin_key_demo.rs` announces a key on start.
 
 ## Peer Routing Blocks
 

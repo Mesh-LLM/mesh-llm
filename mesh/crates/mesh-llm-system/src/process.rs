@@ -205,9 +205,10 @@ fn parse_lstart_naive(s: &str) -> Option<chrono::NaiveDateTime> {
 #[cfg(windows)]
 mod platform {
     //! Process facts through the Win32 process API. Every query opens the
-    //! process with the least right that answers it,
-    //! `PROCESS_QUERY_LIMITED_INFORMATION`, which the same user holds without
-    //! any privilege.
+    //! process with `PROCESS_QUERY_LIMITED_INFORMATION`, which the same user
+    //! holds without any privilege, plus `PROCESS_SYNCHRONIZE` to tell an
+    //! exited process apart; when that is refused, with the query right
+    //! alone.
     //!
     //! Same contract as the Unix modules: a PID that names no process is
     //! `Ok(None)`, and so is one we are not allowed to query, as a `/proc`
@@ -216,43 +217,82 @@ mod platform {
 
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, HANDLE,
+        WAIT_OBJECT_0,
     };
     use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
+        GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+        WaitForSingleObject,
     };
 
+    /// The exit code a process reports while it is still running, and also a
+    /// code a process may exit with, hence only a fallback.
+    const STILL_ACTIVE: u32 = 259;
+
     /// Owned process handle, closed on drop.
-    struct Process(HANDLE);
+    struct Process {
+        handle: HANDLE,
+        /// The handle carries `PROCESS_SYNCHRONIZE`, so it may be waited on.
+        waitable: bool,
+    }
 
     impl Drop for Process {
         fn drop(&mut self) {
             // SAFETY: the handle came from a successful `OpenProcess` and is
             // closed exactly once, here.
-            unsafe { CloseHandle(self.0) };
+            unsafe { CloseHandle(self.handle) };
         }
     }
 
     /// Open `pid` for querying: `Ok(None)` when no such process exists or it
     /// cannot be queried, `Err` for anything else.
     fn open(pid: u32) -> anyhow::Result<Option<Process>> {
-        // SAFETY: a plain Win32 call taking values; the null return is
-        // checked before the handle is used.
-        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if !handle.is_null() {
-            return Ok(Some(Process(handle)));
-        }
-        // SAFETY: reads the calling thread's last error and takes nothing.
-        match unsafe { GetLastError() } {
-            ERROR_INVALID_PARAMETER => Ok(None),
-            ERROR_ACCESS_DENIED => {
-                tracing::debug!(pid, "access denied opening process for query");
-                Ok(None)
+        // SYNCHRONIZE lets `has_exited` wait on the handle; a process that
+        // grants query rights only is still opened, without it.
+        for access in [
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        ] {
+            // SAFETY: a plain Win32 call taking values; the null return is
+            // checked before the handle is used.
+            let handle = unsafe { OpenProcess(access, 0, pid) };
+            if !handle.is_null() {
+                let process = Process {
+                    handle,
+                    waitable: access & PROCESS_SYNCHRONIZE != 0,
+                };
+                // An exited process stays openable while any handle still
+                // references it, but names no running process any more, and
+                // its image name query fails (Win32 error 31, measured).
+                return Ok((!has_exited(&process)).then_some(process));
             }
-            code => Err(anyhow::anyhow!(
-                "OpenProcess({pid}) failed with Win32 error {code}"
-            )),
+            // SAFETY: reads the calling thread's last error and takes nothing.
+            match unsafe { GetLastError() } {
+                ERROR_INVALID_PARAMETER => return Ok(None),
+                ERROR_ACCESS_DENIED => {}
+                code => {
+                    return Err(anyhow::anyhow!(
+                        "OpenProcess({pid}) failed with Win32 error {code}"
+                    ));
+                }
+            }
         }
+        tracing::debug!(pid, "access denied opening process for query");
+        Ok(None)
+    }
+
+    /// A process handle is signaled once the process has exited. Without the
+    /// right to wait, the exit code is the fallback, which a process that
+    /// exited with code 259 would pass as still running.
+    fn has_exited(process: &Process) -> bool {
+        if process.waitable {
+            // SAFETY: the handle carries SYNCHRONIZE; a zero timeout only polls.
+            return unsafe { WaitForSingleObject(process.handle, 0) } == WAIT_OBJECT_0;
+        }
+        let mut code = 0u32;
+        // SAFETY: the handle carries query rights and `code` outlives the call.
+        let ok = unsafe { GetExitCodeProcess(process.handle, &mut code) };
+        ok != 0 && code != STILL_ACTIVE
     }
 
     /// Full image path of the process, as the kernel reports it.
@@ -264,7 +304,7 @@ mod platform {
         // stores the written length back.
         let ok = unsafe {
             QueryFullProcessImageNameW(
-                process.0,
+                process.handle,
                 PROCESS_NAME_WIN32,
                 buffer.as_mut_ptr(),
                 &mut length,
@@ -308,8 +348,15 @@ mod platform {
         };
         let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
         // SAFETY: four valid out-pointers to stack values that outlive the call.
-        let ok =
-            unsafe { GetProcessTimes(process.0, &mut creation, &mut exit, &mut kernel, &mut user) };
+        let ok = unsafe {
+            GetProcessTimes(
+                process.handle,
+                &mut creation,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            )
+        };
         if ok == 0 {
             // SAFETY: as above.
             let code = unsafe { GetLastError() };
@@ -319,6 +366,25 @@ mod platform {
             creation.dwHighDateTime,
             creation.dwLowDateTime,
         )))
+    }
+
+    /// Whether this user is refused even the least query on `pid`, which
+    /// `open` reports as no process. A user can always query its own
+    /// processes, so such a process belongs to another account, such as a
+    /// service (measured on Windows 11: none of a user's 168 processes was
+    /// refused, all 191 refused ones ran under other accounts).
+    pub fn process_query_denied(pid: u32) -> bool {
+        // SAFETY: a plain Win32 call taking values; the null return is
+        // checked before the handle is used.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if !handle.is_null() {
+            // SAFETY: a handle just returned by `OpenProcess`, closed once.
+            unsafe { CloseHandle(handle) };
+            return false;
+        }
+        // SAFETY: reads the calling thread's last error and takes nothing.
+        let code = unsafe { GetLastError() };
+        code == ERROR_ACCESS_DENIED
     }
 }
 
@@ -415,6 +481,73 @@ pub fn validate_pid_matches(pid: u32, expected_comm: &str, expected_started_at_u
                 && (t - expected_started_at_unix).abs() <= START_TIME_TOLERANCE_SECS
         }
         _ => false,
+    }
+}
+
+/// What a pid is now, compared with a recorded process, for deciding whether
+/// stopping it is ours to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidIdentity {
+    /// The recorded process.
+    Recorded,
+    /// Another process now holds the id.
+    Other,
+    /// No process can be queried under the id.
+    Gone,
+    /// What the id names could not be read.
+    Unknown,
+}
+
+/// Compares the process under `pid` with a recorded name and, when given,
+/// start time. Unlike [`validate_pid_matches`], a lookup that fails is
+/// `Unknown`, not a mismatch, so a caller never mistakes a process it could
+/// not read for someone else's.
+pub fn pid_identity(
+    pid: u32,
+    expected_comm: &str,
+    expected_started_at_unix: Option<i64>,
+) -> PidIdentity {
+    let names = [process_executable_name(pid), process_comm(pid)];
+    let readable: Vec<&String> = names
+        .iter()
+        .filter_map(|name| name.as_ref().ok()?.as_ref())
+        .collect();
+    if !readable.iter().any(|name| names_match(name, expected_comm)) {
+        return if !readable.is_empty() {
+            PidIdentity::Other
+        } else if names.iter().any(Result::is_err) {
+            PidIdentity::Unknown
+        } else if query_denied(pid) {
+            // Still running, but under another account: not the user's node.
+            PidIdentity::Other
+        } else {
+            PidIdentity::Gone
+        };
+    }
+    let Some(expected) = expected_started_at_unix else {
+        return PidIdentity::Recorded;
+    };
+    match process_started_at_unix(pid) {
+        Ok(Some(started)) if (started - expected).abs() <= START_TIME_TOLERANCE_SECS => {
+            PidIdentity::Recorded
+        }
+        Ok(Some(_)) => PidIdentity::Other,
+        Ok(None) => PidIdentity::Gone,
+        Err(_) => PidIdentity::Unknown,
+    }
+}
+
+/// Whether the name lookups' "no process" for `pid` was a refusal instead,
+/// which only Windows reports that way.
+fn query_denied(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        platform::process_query_denied(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        false
     }
 }
 
@@ -535,6 +668,116 @@ mod tests {
             super::names_match("mesh-llm", "MESH-LLM"),
             cfg!(windows),
             "case folding must follow the platform's filesystem"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pid_identity_tests {
+    use super::*;
+
+    fn own_identity() -> (u32, String, i64) {
+        let pid = std::process::id();
+        let comm = process_comm(pid)
+            .expect("read own name")
+            .expect("own process is running");
+        let started = current_process_start_time_unix().expect("own start time");
+        (pid, comm, started)
+    }
+
+    #[test]
+    fn the_running_process_is_the_recorded_one() {
+        let (pid, comm, started) = own_identity();
+
+        assert_eq!(
+            pid_identity(pid, &comm, Some(started)),
+            PidIdentity::Recorded
+        );
+        assert_eq!(pid_identity(pid, &comm, None), PidIdentity::Recorded);
+    }
+
+    #[test]
+    fn another_name_or_start_time_is_another_process() {
+        let (pid, comm, started) = own_identity();
+
+        assert_eq!(
+            pid_identity(pid, &comm, Some(started - 3600)),
+            PidIdentity::Other
+        );
+        assert_eq!(
+            pid_identity(pid, "not-the-recorded-binary", Some(started)),
+            PidIdentity::Other
+        );
+    }
+
+    #[test]
+    fn an_exited_process_is_gone() {
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/d", "/c", "exit", "0"]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = std::process::Command::new("true");
+        let mut child = command.spawn().expect("spawn a short process");
+        let pid = child.id();
+        child.wait().expect("wait for it");
+        // The handle keeps an exited process queryable on Windows.
+        drop(child);
+
+        assert_eq!(pid_identity(pid, "anything", None), PidIdentity::Gone);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_exited_process_another_handle_still_references_is_gone() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/d", "/c", "exit", "0"])
+            .spawn()
+            .expect("spawn a short process");
+        child.wait().expect("wait for it");
+        // `child` still holds its handle, so the process object outlives the
+        // process, as it does while a parent keeps an exited child's handle.
+
+        assert_eq!(
+            process_comm(child.id()).expect("query the exited process"),
+            None
+        );
+        assert_eq!(pid_identity(child.id(), "cmd", None), PidIdentity::Gone);
+    }
+
+    // A normal session is refused even the least query on the services of
+    // other accounts; an elevated one may query them all, leaving nothing to
+    // check.
+    #[cfg(windows)]
+    #[test]
+    fn a_process_of_another_account_is_another_process() {
+        let Some(pid) = (4..65_536)
+            .step_by(4)
+            .find(|&pid| platform::process_query_denied(pid))
+        else {
+            eprintln!("no process refuses this session's queries; nothing to check");
+            return;
+        };
+
+        assert_eq!(pid_identity(pid, "mesh-llm", None), PidIdentity::Other);
+    }
+
+    // 259 is also STILL_ACTIVE, the code a running process reports, so only
+    // waiting on the handle tells this exit apart from a running process.
+    #[cfg(windows)]
+    #[test]
+    fn a_process_that_exited_with_code_259_is_gone() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/d", "/c", "exit", "259"])
+            .spawn()
+            .expect("spawn a short process");
+        assert_eq!(child.wait().expect("wait for it").code(), Some(259));
+
+        assert_eq!(
+            process_comm(child.id()).expect("query the exited process"),
+            None
         );
     }
 }

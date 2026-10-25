@@ -7,7 +7,7 @@ impl StageOpenAiBackend {
         session_key: &str,
         downstream: &mut TcpStream,
         prefill_tokens: &[i32],
-    ) -> OpenAiResult<Option<ChainPrefixRestore>> {
+    ) -> InferenceResult<Option<ChainPrefixRestore>> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(None);
         };
@@ -67,7 +67,7 @@ impl StageOpenAiBackend {
         .map_err(openai_io_error)?;
         let downstream_restore = recv_reply(&mut *downstream).map_err(openai_io_error)?;
         if downstream_restore.kind != WireReplyKind::Ack {
-            return Err(OpenAiError::backend(format!(
+            return Err(InferenceError::backend(format!(
                 "expected prefix try-restore ACK from downstream, got {:?}",
                 downstream_restore.kind
             )));

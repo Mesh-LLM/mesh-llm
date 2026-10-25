@@ -1,4 +1,4 @@
-name: llama.cpp Upstream Canary
+name: Llama Upgrade
 on:
   schedule:
     - cron: "47 3 * * *"
@@ -8,8 +8,15 @@ on:
         description: Trusted same-repository branch or full commit to certify as-is (no repair)
         type: string
         default: ''
+      mesh_action:
+        description: Certify only, or independently verify and publish the exact selected Mesh commit
+        type: choice
+        options:
+          - certify
+          - certify-and-publish
+        default: certify
       upstream_sha:
-        description: Optional exact upstream commit (defaults to upstream master)
+        description: Optional exact upstream commit (defaults to latest stable release)
         type: string
         default: ''
       force_certify:
@@ -35,24 +42,50 @@ jobs:
       changed: ${{ steps.resolve.outputs.changed }}
       certify: ${{ steps.resolve.outputs.certify }}
       mode: ${{ steps.resolve.outputs.mode }}
+      publish_selected: ${{ steps.resolve.outputs.publish_selected }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Prepare protected controller for trusted source resolution
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
+      - name: Select stable upstream release or explicit commit
+        id: upstream
+        if: ${{ inputs.mesh_ref == '' }}
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ inputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" repository llama-upstream-release \
+            --upstream "$UPSTREAM" --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
       - name: Freeze trusted source and requested upstream
         id: resolve
         env:
           UPSTREAM: ${{ inputs.upstream_sha }}
           FORCE: ${{ inputs.force_certify }}
           MESH_REF: ${{ inputs.mesh_ref }}
+          MESH_ACTION: ${{ inputs.mesh_action }}
+          SELECTED_UPSTREAM: ${{ steps.upstream.outputs.sha }}
         run: |
           set -euo pipefail
           echo "source=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          if [[ -n "$MESH_REF" ]]; then
-            python3 scripts/llama-canary-resolve-mesh-ref.py
+          if [[ -n "$MESH_REF" || "${MESH_ACTION:-certify}" != certify ]]; then
+            "$MESH_LLM_AUTOMATION_BIN" repository selected-ref \
+              --ref "$MESH_REF" --event "$GITHUB_EVENT_NAME" --upstream "$UPSTREAM" \
+              --action "${MESH_ACTION:-certify}" \
+              --expected-origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          echo 'publish_selected=false' >> "$GITHUB_OUTPUT"
           pins=()
           for pin in third_party/llama.cpp/upstream.txt skippy/llama_cpp/upstream.txt; do
             if [[ -f "$pin" ]]; then pins+=("$pin"); fi
@@ -62,10 +95,7 @@ jobs:
             exit 1
           fi
           old="$(tr -d '[:space:]' < "${pins[0]}")"
-          upstream="$UPSTREAM"
-          if [[ -z "$upstream" || "$upstream" == latest ]]; then
-            upstream="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
-          fi
+          upstream="$SELECTED_UPSTREAM"
           [[ "$upstream" =~ ^[0-9a-f]{40}$ ]]
           changed=false
           mode=pinned-build
@@ -104,12 +134,36 @@ jobs:
           ref: ${{ needs.resolve.outputs.mesh_source }}
           path: canary-source
           persist-credentials: false
+      - uses: ./.github/actions/setup-canary-runner
+      - name: Prepare protected controller automation
+        uses: ./.github/actions/prepare-automation
+        env:
+          SCCACHE_GHA_ENABLED: 'false'
+          SCCACHE_MULTILEVEL_CHAIN: disk
+        with:
+          runner-profile: preinstalled-macos
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache
       - name: Verify immutable family plan and pinned cache
+        env:
+          CANARY_CONTROLLER_REVISION: ${{ needs.resolve.outputs.source }}
+          CANARY_SELECTED_REVISION: ${{ needs.resolve.outputs.mesh_source || needs.resolve.outputs.source }}
         run: |
           set -euo pipefail
-          python3 scripts/llama-canary-family-evidence.py preflight \
-            --root "$CANARY_SOURCE_ROOT" --output "$RUNNER_TEMP/llama-canary-preflight/plan.json"
+          input="$RUNNER_TEMP/llama-canary-preflight-input.json"
+          jq -n \
+            --arg controller_root "$GITHUB_WORKSPACE" \
+            --arg source_root "$CANARY_SOURCE_ROOT" \
+            --arg controller_revision "$CANARY_CONTROLLER_REVISION" \
+            --arg selected_revision "$CANARY_SELECTED_REVISION" \
+            --arg output "$RUNNER_TEMP/llama-canary-preflight" \
+            --arg cache_root "$HF_CACHE" \
+            '{controller_root:$controller_root, source_root:$source_root,
+              controller_revision:$controller_revision, selected_revision:$selected_revision,
+              manifest:"ci/llama-canary/family-certified.json", output:$output,
+              cache:{mode:"gguf_metadata", root:$cache_root}}' > "$input"
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts preflight --input "$input"
       - name: Upload environment preflight evidence
         id: upload_evidence
         if: ${{ success() || failure() || cancelled() }}
@@ -126,7 +180,7 @@ jobs:
           EVIDENCE_UPLOADED: ${{ steps.upload_evidence.outcome == 'success' }}
         run: |
           set -euo pipefail
-          python3 scripts/cleanup-self-hosted.py --job canary-preflight \
+          "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job canary-preflight \
             --evidence-uploaded "$EVIDENCE_UPLOADED"
 
   repair_1:
@@ -142,13 +196,14 @@ jobs:
 
   verify_1:
     needs: [resolve, repair_1]
-    if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.repair_1.outputs.green == 'true' }}
+    if: ${{ !cancelled() && (needs.resolve.outputs.changed == 'true' || needs.resolve.outputs.publish_selected == 'true') && needs.repair_1.outputs.green == 'true' }}
     uses: ./.github/workflows/llama-canary-family-pass.yml
     with:
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
+      mesh_source: ${{ needs.resolve.outputs.mesh_source }}
       pass_id: verify-1
-      mode: verify-build
+      mode: ${{ needs.resolve.outputs.publish_selected == 'true' && 'pinned-build' || 'verify-build' }}
       previous_package: ${{ needs.repair_1.outputs.package }}
       previous_identity: ${{ needs.repair_1.outputs.identity }}
       previous_head: ${{ needs.repair_1.outputs.head }}
@@ -176,13 +231,24 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.source }}
           persist-credentials: false
+      - name: Prepare frozen controller automation for attempt 1 selection
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Select distributed repair attempt 1
         id: select
         env:
           CHANGED: ${{ needs.resolve.outputs.changed }}
+          PUBLISH_SELECTED: ${{ needs.resolve.outputs.publish_selected }}
           REPAIR_JSON: ${{ toJSON(needs.repair_1) }}
           VERIFY_JSON: ${{ toJSON(needs.verify_1) }}
-        run: python3 scripts/llama-canary-select-attempt.py attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+        run: |
+          set -euo pipefail
+          options=()
+          if [[ "$PUBLISH_SELECTED" == true ]]; then options+=(--publish-selected); fi
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON" "${options[@]}"
 
   repair_2:
     needs: [resolve, attempt_1]
@@ -221,13 +287,21 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.source }}
           persist-credentials: false
+      - name: Prepare frozen controller automation for attempt 2 selection
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Select distributed repair attempt 2
         id: select
         env:
           CHANGED: ${{ needs.resolve.outputs.changed }}
           REPAIR_JSON: ${{ toJSON(needs.repair_2) }}
           VERIFY_JSON: ${{ toJSON(needs.verify_2) }}
-        run: python3 scripts/llama-canary-select-attempt.py attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
 
   repair_3:
     needs: [resolve, attempt_2]
@@ -266,16 +340,24 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.source }}
           persist-credentials: false
+      - name: Prepare frozen controller automation for attempt 3 selection
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Select distributed repair attempt 3
         id: select
         env:
           CHANGED: ${{ needs.resolve.outputs.changed }}
           REPAIR_JSON: ${{ toJSON(needs.repair_3) }}
           VERIFY_JSON: ${{ toJSON(needs.verify_3) }}
-        run: python3 scripts/llama-canary-select-attempt.py attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-attempt --changed "$CHANGED" --repair-json "$REPAIR_JSON" --verification-json "$VERIFY_JSON"
 
   result:
-    needs: [resolve, preflight, attempt_1, attempt_2, attempt_3]
+    needs: [resolve, preflight, repair_1, verify_1, attempt_1, attempt_2, attempt_3]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     outputs:
@@ -285,27 +367,45 @@ jobs:
       branch: ${{ steps.result.outputs.branch }}
       publish: ${{ steps.result.outputs.publish }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Require successful protected source resolution before checkout
+        env:
+          RESOLVE_RESULT: ${{ needs.resolve.result }}
+        run: |
+          if [ "$RESOLVE_RESULT" != success ]; then
+            echo 'trusted source resolution failed' >&2
+            exit 1
+          fi
+      - name: Check out frozen result controller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.resolve.outputs.source }}
           persist-credentials: false
+      - name: Prepare frozen controller automation for final selection
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
       - name: Require complete certification and independent verification
         id: result
         env:
           CERTIFY: ${{ needs.resolve.outputs.certify }}
           CHANGED: ${{ needs.resolve.outputs.changed }}
           MESH_SOURCE: ${{ needs.resolve.outputs.mesh_source }}
+          PUBLISH_SELECTED: ${{ needs.resolve.outputs.publish_selected }}
           PREFLIGHT: ${{ needs.preflight.result }}
           ATTEMPTS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          python3 scripts/llama-canary-select-attempt.py final \
+          options=()
+          if [[ "$PUBLISH_SELECTED" == true ]]; then options+=(--publish-selected); fi
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts select-final \
             --certify "$CERTIFY" --changed "$CHANGED" --mesh-source "$MESH_SOURCE" \
-            --preflight "$PREFLIGHT" --attempts-json "$ATTEMPTS_JSON"
+            --preflight "$PREFLIGHT" --attempts-json "$ATTEMPTS_JSON" "${options[@]}"
 
   publish-certified-canary:
     needs: [resolve, result]
-    if: ${{ needs.result.outputs.publish == 'true' }}
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -314,6 +414,10 @@ jobs:
           ref: ${{ needs.resolve.outputs.source }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Prepare frozen controller automation for publication verification
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.result.outputs.package }}
@@ -322,14 +426,28 @@ jobs:
         env:
           IDENTITY: ${{ needs.result.outputs.identity }}
           CANARY_CONTROLLER_SHA: ${{ needs.resolve.outputs.source }}
+          CANARY_MESH_SOURCE: ${{ needs.resolve.outputs.mesh_source }}
         run: |
           set -euo pipefail
-          python3 scripts/llama-canary-family-evidence.py publication --package "$RUNNER_TEMP/certified-canary" --identity "$IDENTITY"
+          if [[ -n "$CANARY_MESH_SOURCE" ]]; then
+            git fetch --no-tags origin "$CANARY_MESH_SOURCE"
+          fi
+          input="$RUNNER_TEMP/canary-publication.json"
+          jq -n --arg package "$RUNNER_TEMP/certified-canary" --arg identity_sha256 "$IDENTITY" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg controller_revision "$CANARY_CONTROLLER_SHA" --arg selected_source "$CANARY_MESH_SOURCE" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg source_root "$GITHUB_WORKSPACE" \
+            '{package:$package,identity_sha256:$identity_sha256,run_id:$run_id,run_attempt:$run_attempt,
+              controller_revision:$controller_revision,selected_source:$selected_source,repository:$repository,
+              source_root:(if $selected_source == "" then null else $source_root end)}' > "$input"
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts publication --input "$input"
       - name: Publish ready pull request
         id: publish
         env:
           CANARY_BRANCH: ${{ needs.result.outputs.branch }}
           CANARY_CERTIFIED_SHA: ${{ needs.result.outputs.head }}
+          CANARY_UPSTREAM_SHA: ${{ needs.resolve.outputs.upstream }}
           CANARY_BUNDLE: ${{ runner.temp }}/certified-canary/candidate.bundle
           CANARY_PR_BODY: ${{ runner.temp }}/certified-canary/pr-body.md
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}

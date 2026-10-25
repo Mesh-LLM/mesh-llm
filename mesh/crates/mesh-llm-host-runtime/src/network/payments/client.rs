@@ -24,6 +24,7 @@ pub(crate) async fn call<Req: Serialize, Res: DeserializeOwned>(
         .available_provider_for_capability(CAPABILITY)
         .await?
         .ok_or_else(|| anyhow!("no provider for '{CAPABILITY}'"))?;
+    require_billing_contract(plugins, &provider.plugin_name).await?;
     invoke(plugins, &provider.plugin_name, operation, request).await
 }
 
@@ -48,7 +49,7 @@ pub(crate) async fn call_node<Req: Serialize, Res: DeserializeOwned>(
 /// Callers that only need "is this node a seller?" ask here, then let `call`
 /// report the provider's own health.
 pub(crate) async fn has_provider(plugins: &PluginManager) -> Result<bool> {
-    Ok(plugins.provider_for_capability(CAPABILITY).await?.is_some())
+    plugins.has_registered_capability(CAPABILITY)
 }
 
 /// Invokes `operation` on the named provider, applying the operation's bound.
@@ -61,7 +62,34 @@ async fn invoke<Req: Serialize, Res: DeserializeOwned>(
     operation: &str,
     request: &Req,
 ) -> Result<Res> {
+    let input = serde_json::to_value(request)?;
+    let result = invoke_raw(plugins, provider, operation, &input).await?;
+    Ok(serde_json::from_value(result)?)
+}
+
+async fn require_billing_contract(plugins: &PluginManager, provider: &str) -> Result<()> {
+    use mesh_llm_payments_types::contract::{BillingContract, ops};
+    let contract = invoke_raw(
+        plugins,
+        provider,
+        ops::BILLING_CONTRACT,
+        &serde_json::json!({}),
+    )
+    .await?;
+    // A required, closed revision enum rejects absent and unknown contracts.
+    serde_json::from_value::<BillingContract>(contract)
+        .map_err(|error| anyhow!("incompatible payments billing contract: {error}"))?;
+    Ok(())
+}
+
+async fn invoke_raw(
+    plugins: &PluginManager,
+    provider: &str,
+    operation: &str,
+    request: &serde_json::Value,
+) -> Result<serde_json::Value> {
     let input = serde_json::to_string(request)?;
+
     let call = plugins.invoke_operation_without_timeout(provider, operation, &input);
     let result = match deadline(operation) {
         Some(limit) => tokio::time::timeout(limit, call).await.map_err(|_| {
@@ -88,6 +116,8 @@ async fn invoke<Req: Serialize, Res: DeserializeOwned>(
 pub(crate) struct Payments {
     plugins: PluginManager,
     provider: Option<Arc<str>>,
+    // Shared across clones; a failed check also closes this exchange permanently.
+    contract: Arc<tokio::sync::OnceCell<Result<(), String>>>,
 }
 
 impl Payments {
@@ -99,7 +129,11 @@ impl Payments {
             .ok()
             .flatten()
             .map(|provider| Arc::from(provider.plugin_name.as_str()));
-        Self { plugins, provider }
+        Self {
+            plugins,
+            provider,
+            contract: Arc::new(tokio::sync::OnceCell::new()),
+        }
     }
 
     /// Serves `service` from `node` over an in-process `payments.v1`, as
@@ -140,25 +174,6 @@ impl Payments {
         Self::resolve(plugins).await
     }
 
-    /// A client with no `payments.v1` provider: every operation fails.
-    #[cfg(test)]
-    pub(crate) async fn unavailable_for_tests() -> Result<Self> {
-        let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(8);
-        let plugins = PluginManager::start_with_in_process(
-            &crate::plugin::ResolvedPlugins {
-                externals: Vec::new(),
-                inactive: Vec::new(),
-            },
-            crate::plugin::PluginHostMode {
-                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
-            },
-            mesh_tx,
-            crate::plugin::InProcessPlugins::default(),
-        )
-        .await?;
-        Ok(Self::resolve(plugins).await)
-    }
-
     /// Invokes `operation` on this exchange's pinned provider.
     pub(crate) async fn call<Req: Serialize, Res: DeserializeOwned>(
         &self,
@@ -169,6 +184,15 @@ impl Payments {
             .provider
             .as_deref()
             .ok_or_else(|| anyhow!("no provider for '{CAPABILITY}'"))?;
+        self.contract
+            .get_or_init(|| async {
+                require_billing_contract(&self.plugins, provider)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .as_ref()
+            .map_err(|error| anyhow!("{error}"))?;
         invoke(&self.plugins, provider, operation, request).await
     }
 }
@@ -195,6 +219,7 @@ mod tests {
         calls: Mutex<Vec<(String, String)>>,
         hang: Mutex<Vec<String>>,
         pricing: Mutex<AdvertisedPricing>,
+        contract: Mutex<Option<serde_json::Value>>,
     }
 
     impl FakePayments {
@@ -229,6 +254,12 @@ mod tests {
                 let body = match request.name.as_str() {
                     ops::PRICING => serde_json::to_value(this.pricing.lock().unwrap().clone())
                         .map_err(transport_error)?,
+                    ops::BILLING_CONTRACT => this
+                        .contract
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .unwrap_or_else(|| json!({"revision":"v3"})),
                     ops::RECONCILE => json!({"approved": []}),
                     _ => json!({}),
                 };
@@ -300,10 +331,79 @@ mod tests {
         mesh_llm_wallet::invoice::Invoice::parse(&bolt11).unwrap()
     }
 
+    #[tokio::test]
+    async fn incompatible_contract_never_invokes_financial_operations() {
+        for contract in [
+            json!({}),
+            json!({"revision":"v2"}),
+            json!({"revision":"v5"}),
+            json!({"revision":null}),
+        ] {
+            let fake = Arc::new(FakePayments::default());
+            *fake.contract.lock().unwrap() = Some(contract);
+            let payments = Payments::for_plugins(
+                manager(&[("old", &[CAPABILITY])], Arc::new(Arc::clone(&fake))).await,
+            )
+            .await;
+            for operation in [
+                ops::ACCEPT_ADMISSION,
+                ops::SERVE_ADMIT,
+                ops::PAY_DEPOSIT,
+                ops::SETTLE_FINAL,
+                ops::CONTROL,
+            ] {
+                assert!(
+                    payments
+                        .call::<_, Empty>(operation, &Empty {})
+                        .await
+                        .is_err()
+                );
+            }
+            assert_eq!(fake.calls(), [("old".into(), ops::BILLING_CONTRACT.into())]);
+        }
+    }
+
+    #[tokio::test]
+    async fn cloned_exchange_checks_contract_once() {
+        let fake = Arc::new(FakePayments::default());
+        let payments = Payments::for_plugins(
+            manager(&[("provider", &[CAPABILITY])], Arc::new(Arc::clone(&fake))).await,
+        )
+        .await;
+        let clone = payments.clone();
+        let (a, b) = tokio::join!(
+            payments.call::<_, Empty>(ops::SERVE_ADMIT, &Empty {}),
+            clone.call::<_, Empty>(ops::ACCEPT_ADMISSION, &Empty {})
+        );
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(fake.calls().len(), 3);
+        assert_eq!(fake.calls()[0].1, ops::BILLING_CONTRACT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hung_contract_check_cannot_admit() {
+        let fake = Arc::new(FakePayments::default());
+        fake.hang(ops::BILLING_CONTRACT);
+        let payments = Payments::for_plugins(
+            manager(&[("provider", &[CAPABILITY])], Arc::new(Arc::clone(&fake))).await,
+        )
+        .await;
+        let error = payments
+            .call::<_, Empty>(ops::SERVE_ADMIT, &Empty {})
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("did not answer"));
+        assert_eq!(
+            fake.calls(),
+            [("provider".into(), ops::BILLING_CONTRACT.into())]
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_bookkeeping_operation_is_bounded() {
         let fake = Arc::new(FakePayments::default());
-        fake.hang(ops::SERVE_FINISH);
+        fake.hang(ops::SERVE_ABANDON);
         let payments = Payments::for_plugins(
             manager(
                 &[("payments-fake", &[CAPABILITY])],
@@ -314,13 +414,19 @@ mod tests {
         .await;
 
         let error = payments
-            .call::<_, Empty>(ops::SERVE_FINISH, &Empty {})
+            .call::<_, Empty>(ops::SERVE_ABANDON, &Empty {})
             .await
             .expect_err("a hung bookkeeping operation must fail instead of hanging the caller");
         assert!(error.to_string().contains("did not answer"), "{error}");
         assert_eq!(
             fake.calls(),
-            [(String::from("payments-fake"), ops::SERVE_FINISH.to_owned())],
+            [
+                (
+                    String::from("payments-fake"),
+                    ops::BILLING_CONTRACT.to_owned()
+                ),
+                (String::from("payments-fake"), ops::SERVE_ABANDON.to_owned())
+            ],
             "the operation is attempted exactly once"
         );
     }
@@ -380,6 +486,7 @@ mod tests {
         assert_eq!(
             fake.calls(),
             [
+                (String::from("a-payments"), ops::BILLING_CONTRACT.to_owned()),
                 (String::from("a-payments"), ops::PAYMENT_INTENT.to_owned()),
                 (String::from("a-payments"), ops::PAYMENT_INTENT.to_owned()),
             ]
@@ -405,7 +512,7 @@ mod tests {
                 Pricing {
                     input_msat_per_million: 7,
                     output_msat_per_million: 9,
-                    minimum_invoice_msat: 1,
+                    cache_discount_percent: 0,
                 },
             )]),
         };
@@ -437,3 +544,6 @@ mod tests {
         node.endpoint.close().await;
     }
 }
+
+#[cfg(test)]
+mod admission_revision_tests;

@@ -16,6 +16,8 @@ predictions and the complete vocabulary logits against an ordinary unsplit
 reference with the same weights and configuration. The existing ordinary-stage
 reference also checks replay logits and owned state. Logit comparisons reject
 non-finite values and use `1e-5 * (1 + abs(reference))` tolerance.
+Prefill requests logits explicitly through the sampled-frame API without
+sampling a token; the unsampled prefill API intentionally omits them.
 
 Run the full native suite from the workspace root:
 
@@ -24,7 +26,7 @@ just skippy-native-tests cpu
 ```
 
 The regression is carried by the existing native replay and DSV4 test-owner
-patches (0027 and 0060), not a new terminal patch. It does not change the ABI.
+patch (0006), not a new terminal patch. It does not change the ABI.
 
 ## Limits
 

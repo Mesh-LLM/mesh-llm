@@ -1,0 +1,112 @@
+{
+  "abi_family_alias_mismatch": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: native runtime mesh-llm-native-cpu backend mismatch: found cpu, expected rocm for requested backend hip\n",
+    "stdout": ""
+  },
+  "absolute_bundle_relative_host": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: 'bundle/mesh-llm' is not in the subpath of '{scratch}/bundle'\n",
+    "stdout": ""
+  },
+  "build_backend_mismatch": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: native runtime rt build backend mismatch: found hip, expected runtime family cuda for requested backend cuda\n",
+    "stdout": ""
+  },
+  "build_backend_non_string": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: native runtime 7 build backend mismatch: found 3.0, expected runtime family cpu for requested backend cpu\n",
+    "stdout": ""
+  },
+  "host_is_directory": {
+    "code": 1,
+    "products": {},
+    "stderr": "IsADirectoryError: [Errno 21] Is a directory: 'bundle/native-runtimes'\n",
+    "stdout": ""
+  },
+  "host_outside_bundle": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: 'outside-host' is not in the subpath of 'bundle'\n",
+    "stdout": ""
+  },
+  "kind_non_string": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: native runtime ['a', 1] backend mismatch: found None, expected cpu for requested backend cpu\n",
+    "stdout": ""
+  },
+  "missing_bundle_directory": {
+    "code": 1,
+    "products": {},
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: 'absent/rt/manifest.json'\n",
+    "stdout": ""
+  },
+  "missing_host": {
+    "code": 1,
+    "products": {},
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: 'bundle/mesh-llm'\n",
+    "stdout": ""
+  },
+  "missing_runtime_directory": {
+    "code": 1,
+    "products": {},
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: 'bundle/native-runtimes/absent/manifest.json'\n",
+    "stdout": ""
+  },
+  "missing_runtime_manifest": {
+    "code": 1,
+    "products": {},
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: 'bundle/native-runtimes/rt/manifest.json'\n",
+    "stdout": ""
+  },
+  "output_is_directory": {
+    "code": 1,
+    "products": {},
+    "stderr": "IsADirectoryError: [Errno 21] Is a directory: 'bundle/product-manifest.json'\n",
+    "stdout": ""
+  },
+  "parent_segments_are_not_resolved": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"../bundle/mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "runtime_backend_mismatch": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: native runtime mesh-llm-native-cpu backend mismatch: found cpu, expected cuda for requested backend cuda\n",
+    "stdout": ""
+  },
+  "runtime_manifest_is_directory": {
+    "code": 1,
+    "products": {},
+    "stderr": "IsADirectoryError: [Errno 21] Is a directory: 'bundle/native-runtimes/rt/manifest.json'\n",
+    "stdout": ""
+  },
+  "runtime_outside_bundle": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: 'rt2' is not in the subpath of 'bundle'\n",
+    "stdout": ""
+  },
+  "version_mismatch": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: native runtime mesh-llm-native-cpu targets MeshLLM 0.70.0, expected 0.71.0\n",
+    "stdout": ""
+  },
+  "version_mismatch_structured_id": {
+    "code": 1,
+    "products": {},
+    "stderr": "ValueError: native runtime {'b': True, 'a': inf} targets MeshLLM v1, expected 1\n",
+    "stdout": ""
+  }
+}

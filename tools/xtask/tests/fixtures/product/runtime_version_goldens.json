@@ -1,0 +1,57 @@
+{
+  "malformed_json": {
+    "code": 1,
+    "json": {
+      "manifest.json": "{\"runtime\":"
+    },
+    "paths": [
+      "manifest.json"
+    ],
+    "stderr": "json.decoder.JSONDecodeError: Expecting value: line 1 column 12 (char 11)\n",
+    "stdout": ""
+  },
+  "missing_manifest": {
+    "code": 1,
+    "json": {
+      "manifest.json": "{\"runtime\": {\"mesh_version\": \"v0.70.1\"}}"
+    },
+    "paths": [
+      "manifest.json"
+    ],
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: 'absent.json'\n",
+    "stdout": ""
+  },
+  "missing_mesh_version": {
+    "code": 1,
+    "json": {
+      "manifest.json": "{\"runtime\": {\"id\": \"rt\"}}"
+    },
+    "paths": [
+      "manifest.json"
+    ],
+    "stderr": "KeyError: 'mesh_version'\n",
+    "stdout": ""
+  },
+  "numeric_version": {
+    "code": 0,
+    "json": {
+      "manifest.json": "{\"runtime\": {\"mesh_version\": 7}}"
+    },
+    "paths": [
+      "manifest.json"
+    ],
+    "stderr": "",
+    "stdout": "7\n"
+  },
+  "prints_mesh_version": {
+    "code": 0,
+    "json": {
+      "manifest.json": "{\"runtime\": {\"mesh_version\": \"v0.70.1\"}}"
+    },
+    "paths": [
+      "manifest.json"
+    ],
+    "stderr": "",
+    "stdout": "v0.70.1\n"
+  }
+}

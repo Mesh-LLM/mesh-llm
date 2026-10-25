@@ -1,0 +1,7 @@
+{
+  "code": 0,
+  "github_output": "stats_file={root}/evidence/sccache-stats.json\ncompile_requests=0\nrequests_executed=0\ncache_hits=0\ncache_misses=0\ncache_writes=0\ncache_read_errors=0\ncache_write_errors=0\nhit_rate=\ncache_classification=warm-pass\ncache_passed=true\n",
+  "stats": "{\n  \"assessment\": {\n    \"cache_requests\": 0,\n    \"classification\": \"warm-pass\",\n    \"expectation\": \"warm\",\n    \"hit_rate\": null,\n    \"minimum_hit_rate\": 0.0,\n    \"passed\": true\n  },\n  \"schema\": \"mesh-llm.sccache-stats\",\n  \"schema_version\": 2,\n  \"stats\": {\n    \"cache_errors\": {\n      \"counts\": {\n        \"total\": 0\n      }\n    },\n    \"cache_hits\": {\n      \"counts\": {\n        \"total\": 0\n      }\n    },\n    \"cache_misses\": {\n      \"counts\": {\n        \"total\": 0\n      }\n    },\n    \"cache_read_errors\": 0,\n    \"cache_write_errors\": 0,\n    \"cache_writes\": 0,\n    \"compilations\": 0,\n    \"compile_requests\": 0,\n    \"requests_executed\": 0\n  }\n}\n",
+  "stderr": "",
+  "stdout": "sccache evidence: requests=0 executed=0 hits=0 misses=0 writes=0\nsccache assessment: expectation=warm classification=warm-pass hit_rate=None\n::warning title=sccache reported zero compile requests::Check RUSTC_WRAPPER wiring unless this job fully reused its restored target cache.\n"
+}

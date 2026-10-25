@@ -13,13 +13,14 @@ use skippy_runtime::{
     IterationBatchPhase, IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame,
     ModelStateKind, ModelWorkload, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
     RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, SpeechAudio, SpeechSynthesisConfig,
-    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal, WorkloadInfo,
-    parse_cache_type,
+    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenLogprobs, TokenSignal,
+    WorkloadInfo, parse_cache_type,
 };
 
 mod frame_operations;
 mod lane_lifecycle;
 pub mod lifecycle;
+pub mod panic_recovery;
 mod restore_transaction;
 mod state_transfer;
 
@@ -67,6 +68,9 @@ pub struct RuntimeState {
     session_token_counts: BTreeMap<String, u64>,
     session_resident_prefixes: BTreeMap<String, ResidentLanePrefix>,
     session_lifecycle_observer: Option<Arc<dyn SessionLifecycleObserver>>,
+    /// Sessions discarded by panic recovery whose requests have not cleaned
+    /// up yet; see `panic_recovery`.
+    sessions_reset_by_panic: BTreeSet<String>,
     #[cfg(test)]
     modelless_for_test: bool,
 }
@@ -227,6 +231,7 @@ impl RuntimeState {
             idle_sessions: Vec::new(),
             max_idle_sessions: None,
             session_token_counts: BTreeMap::new(),
+            sessions_reset_by_panic: BTreeSet::new(),
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
@@ -310,23 +315,19 @@ pub fn loaded_model_state_kind(
     runtime: Option<&Arc<Mutex<RuntimeState>>>,
 ) -> Option<ModelStateKind> {
     runtime.and_then(|runtime| {
-        runtime
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        panic_recovery::lock_runtime(runtime)
             .model
             .capability()
             .map(|capability| capability.state_kind)
     })
 }
 
-/// Complete cache representations supported by the loaded native memory.
+/// Complete cache representations admitted by the loaded graph and native memory.
 pub fn loaded_memory_cache_capabilities(
     runtime: Option<&Arc<Mutex<RuntimeState>>>,
 ) -> Option<skippy_runtime::MemoryCacheCapabilities> {
     runtime.and_then(|runtime| {
-        runtime
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        panic_recovery::lock_runtime(runtime)
             .model
             .capability()
             .map(|capability| capability.cache_capabilities)
@@ -384,6 +385,7 @@ fn runtime_from_loaded_model(
         idle_sessions: Vec::new(),
         max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
+        sessions_reset_by_panic: BTreeSet::new(),
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),
@@ -428,8 +430,9 @@ pub fn load_runtime_with_overrides_and_open_events(
 
 /// Effective lane-admission bound for a loaded model.
 ///
-/// Mirrors the native encoder-decoder serialization (skippy/llama_cpp
-/// patches/0010: `lane_count = encoder_decoder ? 1 : configured_lane_count`):
+/// Mirrors the native encoder-decoder serialization (skippy/llama_cpp/patches/
+/// 0002-skippy-implement-graph-planning-realization-and-runt.patch:
+/// `lane_count = encoder_decoder ? 1 : configured_lane_count`):
 /// encoder output is context-global in llama.cpp, so native only ever serves
 /// lane 0 for encoder-decoder models. Admission must not assign lane indices
 /// that native will never serve. The load-bypass dummy has no native model,
@@ -701,10 +704,10 @@ mod tests {
     #[test]
     /// Rust admission must match the one native lane sharing encoder output.
     fn encoder_decoder_lane_admission_clamps_to_the_native_single_lane() {
-        // Native serializes encoder-decoder work onto one lane
-        // (skippy/llama_cpp patches/0010), so admission must not hand
-        // out lane indices native will never serve. Every other workload
-        // keeps the configured bound.
+        // Native serializes encoder-decoder work onto one lane (see
+        // `lane_count_for_workload`), so admission must not hand out lane
+        // indices native will never serve. Every other workload keeps the
+        // configured bound.
         assert_eq!(lane_count_for_workload(4, ModelWorkload::EncoderDecoder), 1);
         assert_eq!(lane_count_for_workload(1, ModelWorkload::EncoderDecoder), 1);
         assert_eq!(

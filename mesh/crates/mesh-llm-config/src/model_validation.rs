@@ -322,12 +322,6 @@ fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> DiagnosticRes
         config.kv_unified.as_ref(),
         &format!("{base_path}.kv_unified"),
     )?;
-    if matches!(config.kv_unified, Some(BoolOrAuto::Bool(false))) {
-        return Err(validation_diagnostic(
-            &format!("{base_path}.kv_unified"),
-            format!("{base_path}.kv_unified cannot be false: Skippy always uses unified KV"),
-        ));
-    }
     validate_bool_or_auto(
         config.prompt_cache.as_ref(),
         &format!("{base_path}.prompt_cache"),
@@ -415,11 +409,6 @@ fn validate_prefix_cache(config: &PrefixCacheConfig, base_path: &str) -> Diagnos
             10_000_000,
         )?;
     }
-    validate_optional_enum(
-        config.payload_mode.as_deref(),
-        &["resident-kv", "kv-recurrent", "full-state", "auto"],
-        &format!("{base_path}.payload_mode"),
-    )?;
     Ok(())
 }
 
@@ -1206,19 +1195,37 @@ mod tests {
     use crate::{DrySamplingConfig, MeshConfig, validate_config, validate_config_diagnostics};
 
     #[test]
-    fn model_fit_rejects_non_unified_kv() {
-        let config: MeshConfig = toml::from_str(
+    fn prefix_cache_accepts_budgets_but_rejects_state_claims() {
+        assert!(toml::from_str::<PrefixCacheConfig>("enabled = true\nmax_entries = 32").is_ok());
+        for payload in ["auto", "resident-kv", "kv-recurrent", "full-state"] {
+            let input = format!("payload_mode = {payload:?}");
+            assert!(toml::from_str::<PrefixCacheConfig>(&input).is_err());
+        }
+    }
+
+    #[test]
+    fn model_fit_accepts_non_unified_kv() {
+        for source in [
             r#"
 [defaults.model_fit]
 kv_unified = false
 "#,
-        )
-        .expect("config should parse before validation");
+            r#"
+[defaults.model_fit]
+kv_unified = true
 
-        let diagnostics = validate_config_diagnostics(&config);
-        let text = legacy_validation_error_text(&diagnostics);
-        assert!(text.contains("defaults.model_fit.kv_unified"), "{text}");
-        assert!(text.contains("Skippy always uses unified KV"), "{text}");
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+
+[models.model_fit]
+kv_unified = false
+"#,
+        ] {
+            let config: MeshConfig = toml::from_str(source).expect("config should parse");
+            let diagnostics = validate_config_diagnostics(&config);
+            let text = legacy_validation_error_text(&diagnostics);
+            assert!(diagnostics.is_empty(), "{text}");
+        }
     }
 
     #[test]

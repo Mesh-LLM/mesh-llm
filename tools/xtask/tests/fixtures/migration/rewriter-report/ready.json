@@ -1,0 +1,1 @@
+{"schema_version":1,"llama_cpp_commit":"cc83d7b4824f73cfdda4dfbb47ee39804f71b328","generator_version":"0.2.0","builders":[{"file":"src/models/llama.cpp","verdict":"already_transformed"}],"summary":{"already_transformed":1}}

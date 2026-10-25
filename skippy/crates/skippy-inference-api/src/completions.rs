@@ -9,7 +9,7 @@ use crate::{
         StopSequence, StreamOptions, Usage, agent_session_metadata, agent_session_source_metadata,
         completion_id, now_unix_secs, set_agent_session_metadata,
     },
-    errors::OpenAiError,
+    errors::InferenceError,
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -63,20 +63,22 @@ impl CompletionRequest {
             .unwrap_or(false)
     }
 
-    pub fn validate(&self) -> Result<(), OpenAiError> {
+    pub fn validate(&self) -> Result<(), InferenceError> {
         if self.model.trim().is_empty() {
-            return Err(OpenAiError::invalid_request("model is required"));
+            return Err(InferenceError::invalid_request("model is required"));
         }
         if matches!(self.max_tokens, Some(0)) {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "max_tokens must be greater than zero",
             ));
         }
         if self.n.is_some_and(|n| n == 0) {
-            return Err(OpenAiError::invalid_request("n must be greater than zero"));
+            return Err(InferenceError::invalid_request(
+                "n must be greater than zero",
+            ));
         }
         if self.n.is_some_and(|n| n > 1) || self.best_of.is_some_and(|best_of| best_of > 1) {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "multiple choices are parsed but not yet implemented",
             ));
         }
@@ -85,17 +87,17 @@ impl CompletionRequest {
             .as_ref()
             .is_some_and(|suffix| !suffix.is_empty())
         {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "suffix is parsed but not yet implemented",
             ));
         }
         if self.echo.unwrap_or(false) {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "echo is parsed but not yet implemented",
             ));
         }
         if self.prompt.is_empty() {
-            return Err(OpenAiError::invalid_request("prompt is required"));
+            return Err(InferenceError::invalid_request("prompt is required"));
         }
         Ok(())
     }

@@ -455,6 +455,8 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
 
     // All migrated streams must also reject gen=0 and gen=99 where gen is checked
     let bad_gen_gossip = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: 0,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
@@ -497,6 +499,8 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
 
     // Wrong gen (e.g. 2) also rejected
     let wrong_gen_gossip = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: 2,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
@@ -548,6 +552,8 @@ fn remote_model_scans_are_ignored_after_gossip() {
     model_sizes.insert("Llama-3.3-70B-Q4_K_M".to_string(), 42_000_000_000u64);
 
     let gossip_frame = GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: peer_id.as_bytes().to_vec(),
         peers: vec![ProtoPA {

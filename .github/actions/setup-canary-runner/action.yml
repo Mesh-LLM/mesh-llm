@@ -1,5 +1,5 @@
 name: Set up canary certification runner
-description: Verify preinstalled arm64 Metal tooling and read-only model cache; never install tools.
+description: Verify preinstalled arm64 Metal tooling; never install tools.
 inputs:
   require-agent:
     description: Verify the Goose executable for a changed-pin candidate build.
@@ -8,7 +8,6 @@ inputs:
 runs:
   using: composite
   steps:
-  - uses: ./.github/actions/use-canary-cache
   - name: Configure canary Git identity
     run: |
       git config --local user.name "mesh-llama-canary-bot"
@@ -17,10 +16,12 @@ runs:
   - name: Verify runner toolchain
     run: |
       set -euo pipefail
+      export RUSTUP_AUTO_INSTALL=0
+      echo "RUSTUP_AUTO_INSTALL=0" >> "$GITHUB_ENV"
       source scripts/lib/macos-deployment-target.sh
       echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
       missing=0
-      for cmd in cargo just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do
+      for cmd in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
           echo "missing on family-certify image: $cmd" >&2
           missing=1
@@ -90,6 +91,6 @@ runs:
         git -C "${CANARY_SOURCE_ROOT:-$PWD}" ls-files -s -- .cargo/config.toml scripts/build-llama.sh scripts/package-native-runtime.sh skippy/scripts/build-llama.sh skippy/scripts/package-native-runtime.sh skippy/llama_cpp/upstream.txt skippy/llama_cpp/patches
       } | shasum -a 256 | awk '{print $1}')"
       echo "SCCACHE_C_CUSTOM_CACHE_BUSTER=$cache_buster" >> "$GITHUB_ENV"
-      sccache --start-server >/dev/null 2>&1 || true
-      sccache --zero-stats
+      # prepare-automation's macOS accelerator setup starts the job-owned
+      # cache server before its first compiler probe.
     shell: bash

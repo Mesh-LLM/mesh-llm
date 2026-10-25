@@ -90,6 +90,11 @@ pub struct InventoryNode {
     pub global: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repeatable: Option<bool>,
+    /// Whether Clap only accepts this option's value via `--flag=value`.
+    /// Omitted for command nodes; always present (true or false) on option
+    /// and positional nodes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_equals: Option<bool>,
     /// Canonical spellings of arguments that conflict with this leaf.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conflicts: Option<Vec<String>>,
@@ -116,6 +121,7 @@ impl InventoryNode {
             required: None,
             global: None,
             repeatable: None,
+            require_equals: None,
             conflicts: None,
         }
     }
@@ -148,6 +154,7 @@ impl InventoryNode {
             required: Some(metadata.required),
             global: Some(metadata.global),
             repeatable: Some(metadata.repeatable),
+            require_equals: Some(metadata.require_equals),
             conflicts: Some(metadata.conflicts),
         }
     }
@@ -175,6 +182,7 @@ struct LeafMetadata {
     required: bool,
     global: bool,
     repeatable: bool,
+    require_equals: bool,
     conflicts: Vec<String>,
 }
 
@@ -436,6 +444,7 @@ fn build_leaf_node(command: &Command, parent_path: &str, arg: &Arg) -> Inventory
         required: arg.is_required_set(),
         global: arg.is_global_set(),
         repeatable: is_repeatable(arg),
+        require_equals: arg.is_require_equals_set(),
         conflicts: command
             .get_arg_conflicts_with(arg)
             .into_iter()
@@ -711,6 +720,19 @@ mod tests {
         let join = find_child(&inventory.root, "--join");
         assert_eq!(join.short.as_deref(), Some("j"));
         assert_eq!(join.repeatable, Some(true));
+        assert_eq!(join.require_equals, Some(false));
+
+        let discover = find_child(&inventory.root, "--discover");
+        assert_eq!(
+            discover.value_names.as_deref().unwrap(),
+            ["DISCOVER"],
+            "named discovery keeps its value name for the explorer label"
+        );
+        assert_eq!(
+            discover.require_equals,
+            Some(true),
+            "explorers must copy the equals form for named discovery"
+        );
 
         let auth = find_child(&inventory.root, "auth");
         let init = find_child(auth, "init");
@@ -728,6 +750,27 @@ mod tests {
         let run_benchmark = find_child(gpus, "run-benchmark");
         assert!(run_benchmark.hidden);
         assert!(!find_child(run_benchmark, "--backend").hidden);
+    }
+
+    #[test]
+    fn require_equals_flags_exactly_the_named_discovery_surfaces() {
+        let inventory = build_cli_inventory();
+        let mut all_nodes = Vec::new();
+        flatten(&inventory.root, &mut all_nodes);
+        let mut equals_required: Vec<String> = all_nodes
+            .iter()
+            .filter(|node| node.require_equals == Some(true))
+            .map(|node| node.path.clone())
+            .collect();
+        equals_required.sort();
+        assert_eq!(
+            equals_required,
+            vec![
+                "mesh-llm --discover".to_string(),
+                "mesh-llm client --discover".to_string(),
+                "mesh-llm serve --discover".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -501,6 +501,8 @@ pub(in crate::runtime) fn spawn_advisory_startup_task(task: impl FnOnce() + Send
     std::mem::drop(tokio::task::spawn_blocking(task));
 }
 
+/// Parses a CLI-style argv into `RuntimeOptions` for tests, mirroring real
+/// flag acceptance (`--discover` takes its name with `=` only).
 #[cfg(test)]
 pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
     let mut options = RuntimeOptions::default();
@@ -512,7 +514,9 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "--auto" => options.auto = true,
             "--publish" => options.publish = true,
             "--local-model-only" => options.local_model_only = true,
-            "--discover" => options.discover = Some(next_test_arg(&mut iter, arg).to_string()),
+            // Bare --discover mirrors clap's default_missing_value: an empty
+            // name means "discover and pick", same as the real CLI.
+            "--discover" => options.discover = Some(String::new()),
             "--split" => options.split = true,
             "--require-release-attestation" => options.require_release_attestation = true,
             "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
@@ -572,7 +576,14 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
                     .parse()
                     .expect("valid --console test value");
             }
-            other => panic!("unsupported runtime_options_for_test arg: {other}"),
+            other => {
+                // Mirrors the real CLI: --discover takes its value with `=`
+                // only, so the space form is unsupported here too.
+                let Some(name) = other.strip_prefix("--discover=") else {
+                    panic!("unsupported runtime_options_for_test arg: {other}");
+                };
+                options.discover = Some(name.to_string());
+            }
         }
     }
     options
@@ -942,26 +953,26 @@ pub(super) fn build_startup_model_specs(
         let (model_ref, fallback_declared_ref) =
             if let Some(configured_path) = configured_model_path {
                 let path = PathBuf::from(configured_path);
-                if !path.is_absolute() {
-                    anyhow::bail!(
+                // `mesh-llm config validate` runs the same check.
+                match mesh_llm_config::check_local_model_path(&path) {
+                    Ok(()) => {}
+                    Err(mesh_llm_config::LocalModelPathError::NotAbsolute) => anyhow::bail!(
                         "configured hardware.model_path for {} must be absolute: {}",
                         model.model,
                         path.display()
-                    );
-                }
-                let metadata = std::fs::symlink_metadata(&path).with_context(|| {
-                    format!(
-                        "configured hardware.model_path for {} is unavailable: {}",
-                        model.model,
-                        path.display()
-                    )
-                })?;
-                if metadata.file_type().is_symlink() || !metadata.is_file() {
-                    anyhow::bail!(
+                    ),
+                    Err(mesh_llm_config::LocalModelPathError::Unavailable(error)) => {
+                        return Err(anyhow::Error::new(error).context(format!(
+                            "configured hardware.model_path for {} is unavailable: {}",
+                            model.model,
+                            path.display()
+                        )));
+                    }
+                    Err(mesh_llm_config::LocalModelPathError::NotRegularFile) => anyhow::bail!(
                         "configured hardware.model_path for {} must be a non-symlink file: {}",
                         model.model,
                         path.display()
-                    );
+                    ),
                 }
                 (path, Some(model.model.clone()))
             } else {

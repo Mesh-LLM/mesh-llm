@@ -35,6 +35,17 @@ pub enum PluginMeshEvent {
         request: proto::PeerBlockRequest,
         response_tx: oneshot::Sender<Result<proto::PeerBlockResponse, proto::ErrorResponse>>,
     },
+    /// `plugin_id` is the host's name for the plugin connection, never an id
+    /// the plugin claimed in its envelope.
+    PluginKey {
+        plugin_id: String,
+        request: proto::PluginKeyRequest,
+        response_tx: oneshot::Sender<Result<proto::PluginKeyResponse, proto::ErrorResponse>>,
+    },
+    /// The plugin stopped for good (disabled, or shut down): the host
+    /// withdraws what it announced for it. Not sent when the plugin restarts
+    /// after a failure, so its key stays announced across a restart.
+    PluginStopped { plugin_id: String },
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

@@ -3,13 +3,13 @@ use super::generation::StageOpenAiBackend;
 use super::request::{
     apply_chat_request_defaults, chat_template_options, ensure_chat_runtime_features_supported,
 };
-use skippy_inference_api::{ChatCompletionRequest, OpenAiError, OpenAiResult};
+use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResult};
 
 impl StageOpenAiBackend {
     pub(super) async fn count_prompt_tokens(
         &self,
         mut request: ChatCompletionRequest,
-    ) -> OpenAiResult<u32> {
+    ) -> InferenceResult<u32> {
         self.ensure_model(&request.model)?;
         apply_chat_request_defaults(&mut request, &self.request_defaults)?;
         ensure_chat_runtime_features_supported(&request)?;
@@ -18,16 +18,17 @@ impl StageOpenAiBackend {
             .prepare_chat_prompt_offloaded(&request, options)
             .await?;
         if !prompt.media.is_empty() {
-            return Err(OpenAiError::unsupported(
+            return Err(InferenceError::unsupported(
                 "media token counting is unavailable",
             ));
         }
         let backend = self.clone();
         tokio::task::spawn_blocking(move || {
             let tokens = backend.tokenize(&prompt.text)?;
-            u32::try_from(tokens.len()).map_err(|_| OpenAiError::internal("token count overflow"))
+            u32::try_from(tokens.len())
+                .map_err(|_| InferenceError::internal("token count overflow"))
         })
         .await
-        .map_err(|error| OpenAiError::backend(error.to_string()))?
+        .map_err(|error| InferenceError::backend(error.to_string()))?
     }
 }

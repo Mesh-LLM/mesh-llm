@@ -118,7 +118,6 @@ pub(super) struct RunAutoRuntimeLifecycleContext<'a> {
     pub(super) presentation_subscriber: Option<tokio::task::JoinHandle<()>>,
     pub(super) runtime_event_driver: crate::runtime_events::driver::EngineDriverHandle,
     pub(super) startup_specs: &'a [StartupModelSpec],
-    pub(super) tunnel_mgr: &'a crate::network::tunnel::Manager,
     pub(super) skippy_telemetry: &'a crate::inference::skippy::SkippyTelemetryOptions,
     pub(super) api_port: u16,
     pub(super) console_port: Option<u16>,

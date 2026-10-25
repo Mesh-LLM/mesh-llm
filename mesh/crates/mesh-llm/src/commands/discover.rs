@@ -40,6 +40,8 @@ pub(crate) async fn run_discover(options: DiscoverOptions) -> Result<()> {
     }
 }
 
+/// Runs the Nostr discovery flow: lists matching meshes and joins when a
+/// name filter or `--auto` asks for one.
 async fn run_nostr_discover(
     filter: nostr::MeshFilter,
     auto_join: bool,
@@ -115,25 +117,27 @@ async fn run_nostr_discover(
         let best = &meshes[0];
         writeln!(err, "Auto-joining best match: {}", best)?;
         writeln!(err, "\nRun:")?;
-        writeln!(err, "  mesh-llm --join {}", best.listing.invite_token)?;
+        writeln!(err, "  mesh-llm serve --join {}", best.listing.invite_token)?;
         let mut out = mesh_llm_events::machine_out();
         writeln!(out, "{}", best.listing.invite_token)?;
     } else {
         writeln!(err, "To join a mesh:")?;
-        writeln!(err, "  mesh-llm --join <token>")?;
+        writeln!(err, "  mesh-llm serve --join <token>")?;
         writeln!(
             err,
-            "  mesh-llm --discover <name>       # join by mesh name"
+            "  mesh-llm serve --discover=<name>  # join by mesh name"
         )?;
         writeln!(
             err,
-            "  mesh-llm client --discover <name> # join as client by mesh name"
+            "  mesh-llm client --discover=<name> # join as client by mesh name"
         )?;
     }
 
     Ok(())
 }
 
+/// Runs the LAN (mDNS) discovery flow: lists local meshes and joins when a
+/// name filter, a supplied token, or `--auto` asks for one.
 async fn run_lan_discover(
     filter: nostr::MeshFilter,
     auto_join: bool,
@@ -218,10 +222,10 @@ async fn run_lan_discover(
         }
     } else {
         writeln!(err, "To join a LAN mesh:")?;
-        writeln!(err, "  mesh-llm --join <token>")?;
+        writeln!(err, "  mesh-llm serve --join <token>")?;
         writeln!(
             err,
-            "  mesh-llm --join <token> discover --mesh-discovery-mode mdns --auto"
+            "  mesh-llm serve --join <token> discover --mesh-discovery-mode mdns --auto"
         )?;
     }
 
@@ -240,44 +244,112 @@ pub(crate) fn run_stop() -> Result<()> {
     };
 
     let targets = discovery::collect_runtime_stop_targets(&root)?;
-    let mut killed = 0u32;
+    let mut tally = StopTally::default();
     for target in targets {
         let outcome = backend::terminate_process_blocking(
             target.pid,
             &target.expected_comm,
             target.expected_start_time,
         );
-        if outcome.is_success() {
-            match outcome {
-                backend::TerminationOutcome::Graceful => {
-                    writeln!(
-                        err,
-                        "  Terminated owner pid={} gracefully ({})",
-                        target.pid, target.label
-                    )?;
-                }
-                backend::TerminationOutcome::Killed => {
-                    writeln!(
-                        err,
-                        "  Force-killed owner pid={} ({})",
-                        target.pid, target.label
-                    )?;
-                }
-                backend::TerminationOutcome::NotRunning => {
-                    writeln!(
-                        err,
-                        "  Owner pid={} was already stopped ({})",
-                        target.pid, target.label
-                    )?;
-                }
-                backend::TerminationOutcome::Failed => unreachable!(),
+        writeln!(err, "{}", tally.record(target.pid, &target.label, outcome))?;
+    }
+    if let Some(line) = tally.finish()? {
+        writeln!(err, "{line}")?;
+    }
+    Ok(())
+}
+
+/// What `mesh-llm stop` says about each owner, counted for the closing line.
+#[derive(Default)]
+struct StopTally {
+    stopped: u32,
+    failed: u32,
+}
+
+impl StopTally {
+    fn record(&mut self, pid: u32, label: &str, outcome: backend::TerminationOutcome) -> String {
+        match outcome {
+            backend::TerminationOutcome::Graceful => {
+                self.stopped += 1;
+                format!("  Terminated owner pid={pid} gracefully ({label})")
             }
-            killed += 1;
+            backend::TerminationOutcome::Killed => {
+                self.stopped += 1;
+                format!("  Force-killed owner pid={pid} ({label})")
+            }
+            backend::TerminationOutcome::NotRunning => {
+                self.stopped += 1;
+                format!("  Owner pid={pid} was already stopped ({label})")
+            }
+            // A stale record whose id another process now holds: nothing of
+            // ours runs there, but say so, since a node whose start time
+            // drifted past the tolerance would otherwise vanish silently.
+            backend::TerminationOutcome::NotOurs => {
+                format!("  pid={pid} now belongs to another process, left alone ({label})")
+            }
+            backend::TerminationOutcome::Failed => {
+                self.failed += 1;
+                format!("  Could not stop owner pid={pid} ({label})")
+            }
         }
     }
 
-    if killed == 0 {
-        writeln!(err, "Nothing running.")?;
+    /// The closing line, or an error while an owner that would not stop is
+    /// still running: "Nothing running." would be false then.
+    fn finish(self) -> Result<Option<&'static str>> {
+        if self.failed > 0 {
+            anyhow::bail!("{} mesh-llm process(es) could not be stopped", self.failed);
+        }
+        Ok((self.stopped == 0).then_some("Nothing running."))
     }
-    Ok(())
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+    use backend::TerminationOutcome;
+
+    #[test]
+    fn an_owner_that_would_not_stop_is_reported_and_fails_the_command() {
+        let mut tally = StopTally::default();
+
+        assert_eq!(
+            tally.record(7, "mesh-llm", TerminationOutcome::Failed),
+            "  Could not stop owner pid=7 (mesh-llm)"
+        );
+        assert_eq!(
+            tally.record(8, "mesh-llm", TerminationOutcome::Killed),
+            "  Force-killed owner pid=8 (mesh-llm)"
+        );
+        let error = tally.finish().expect_err("an owner is still running");
+        assert_eq!(
+            error.to_string(),
+            "1 mesh-llm process(es) could not be stopped"
+        );
+    }
+
+    #[test]
+    fn a_record_naming_another_process_is_reported_and_nothing_runs() {
+        let mut tally = StopTally::default();
+
+        assert_eq!(
+            tally.record(7, "mesh-llm", TerminationOutcome::NotOurs),
+            "  pid=7 now belongs to another process, left alone (mesh-llm)"
+        );
+        assert_eq!(tally.finish().expect("exit 0"), Some("Nothing running."));
+    }
+
+    #[test]
+    fn stopped_owners_replace_the_nothing_running_line() {
+        let mut tally = StopTally::default();
+
+        tally.record(7, "mesh-llm", TerminationOutcome::Graceful);
+        tally.record(8, "mesh-llm", TerminationOutcome::NotRunning);
+
+        assert_eq!(tally.finish().expect("exit 0"), None);
+        assert_eq!(
+            StopTally::default().finish().expect("exit 0"),
+            Some("Nothing running.")
+        );
+    }
 }

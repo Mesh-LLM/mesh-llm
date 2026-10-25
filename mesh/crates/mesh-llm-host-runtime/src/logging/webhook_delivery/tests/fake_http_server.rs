@@ -2,7 +2,7 @@
 //!
 //! Extracted from `tests.rs` so the delivery test module stays within the
 //! logging module-boundary line budget enforced by
-//! `scripts/tests/test_logging_module_boundaries.py`.
+//! `tools/xtask/src/repo_consistency/logging_contracts/boundaries.rs`.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

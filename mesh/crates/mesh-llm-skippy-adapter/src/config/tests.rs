@@ -5,7 +5,7 @@ use mesh_llm_config::{
     MeshConfig, ModelConfigDefaults, ModelConfigEntry, ReasoningBudget, RequestDefaultsConfig,
 };
 use serde_json::Value;
-use skippy_protocol::{LoadMode, StageKvCacheMode, StageKvCachePayload};
+use skippy_protocol::{LoadMode, StageKvCacheMode};
 use skippy_serving::{EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat};
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -1375,6 +1375,7 @@ ignore_eos = true
 reasoning_format = "hidden"
 reasoning_budget = 384
 chat_template = "{{ messages }}"
+allow_request_chat_template = true
 jinja = true
 chat_template_kwargs = { custom_mode = 7 }
 skip_chat_parsing = true
@@ -1426,6 +1427,7 @@ threshold = 0.12
         Some(EmbeddedReasoningBudget::Tokens(384))
     );
     assert_eq!(defaults.chat_template.as_deref(), Some("{{ messages }}"));
+    assert_eq!(defaults.allow_request_chat_template, Some(true));
     assert_eq!(defaults.skip_chat_parsing, Some(true));
     assert_eq!(defaults.system_prompt.as_deref(), Some("configured system"));
     assert_eq!(defaults.grammar, Some(serde_json::json!("root ::= 'ok'")));
@@ -1601,7 +1603,6 @@ fn generic_policy_defers_default_prefix_payload_to_loaded_model() {
         .expect("generic policy should enable prefix cache by default");
 
     assert_eq!(kv_cache.mode, StageKvCacheMode::LookupRecord);
-    assert_eq!(kv_cache.payload, StageKvCachePayload::Auto);
     assert!(kv_cache.max_entries > 0);
     assert!(kv_cache.max_bytes > 0);
 }
@@ -1651,7 +1652,6 @@ max_entries = 9
 min_tokens = 96
 shared_stride_tokens = 48
 shared_record_limit = 3
-payload_mode = "resident-kv"
 
 [defaults.skippy]
 prefill_chunking = "schedule"
@@ -1690,7 +1690,6 @@ draft_max_tokens = 8
     assert_eq!(kv_cache.min_tokens, 96);
     assert_eq!(kv_cache.shared_prefix_stride_tokens, 48);
     assert_eq!(kv_cache.shared_prefix_record_limit, 3);
-    assert_eq!(kv_cache.payload, StageKvCachePayload::ResidentKv);
     assert_eq!(kv_cache.l2_max_bytes, 64 * 1024 * 1024);
 
     let openai = resolved
@@ -1740,7 +1739,6 @@ fn layer_package_translation_does_not_treat_hf_ref_as_direct_gguf() {
         .kv_cache
         .expect("packaged model should retain its automatic cache policy");
     assert_eq!(kv_cache.mode, StageKvCacheMode::LookupRecord);
-    assert_eq!(kv_cache.payload, StageKvCachePayload::Auto);
     assert_eq!(kv_cache.max_bytes, 0);
 }
 
@@ -1768,7 +1766,6 @@ fn inkling_layer_package_defers_cache_payload_until_model_load() {
         .expect("Inkling package should retain its automatic cache policy");
 
     assert_eq!(kv_cache.mode, StageKvCacheMode::LookupRecord);
-    assert_eq!(kv_cache.payload, StageKvCachePayload::Auto);
     assert!(kv_cache.max_entries > 0);
     assert_eq!(kv_cache.max_bytes, 0);
     assert_eq!(kv_cache.min_tokens, 256);

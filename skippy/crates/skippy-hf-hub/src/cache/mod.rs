@@ -2,7 +2,8 @@
 //!
 //! [`HFClient::scan_cache`] walks the cache directory and produces an
 //! [`HFCacheInfo`] tree: cached repositories, their revisions, and the
-//! individual files in each revision.
+//! individual files in each revision. [`scan_cache_dir`] does the same without
+//! a client.
 //!
 //! On disk, downloads are content-addressed — files in
 //! `<cache>/<repo_folder>/snapshots/<commit>/<filename>` are pointers (symlinks
@@ -119,7 +120,7 @@ impl HFClient {
     /// [`HFCacheInfo::warnings`] rather than failing the scan.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn scan_cache(&self) -> HFResult<HFCacheInfo> {
-        storage::scan_cache_dir(self.cache_dir()).await
+        scan_cache_dir(self.cache_dir()).await
     }
 }
 
@@ -131,4 +132,61 @@ impl crate::blocking::HFClientSync {
     pub fn scan_cache(&self) -> HFResult<HFCacheInfo> {
         self.runtime.block_on(self.inner.scan_cache().send())
     }
+}
+
+/// Scan the cache at `cache_dir`, as [`HFClient::scan_cache`] does, without a
+/// client. Building a client loads the system's TLS roots, which reading the
+/// local cache never needs.
+pub async fn scan_cache_dir(cache_dir: &std::path::Path) -> HFResult<HFCacheInfo> {
+    storage::scan_cache_dir(cache_dir).await
+}
+
+/// Scan one cached repository, without walking the rest of the cache.
+///
+/// Returns `None` when the repository has no folder under `cache_dir`. The
+/// folder layout, revisions, refs, and per-file accounting match
+/// [`HFClient::scan_cache`]; only the scope differs. Use this for a repository
+/// already known by id — a single-model lookup should not pay for every other
+/// cached repository, which matters when the cache is large or on network
+/// storage.
+pub fn scan_cached_repo(
+    cache_dir: &std::path::Path,
+    repo: &str,
+    repo_type: impl crate::RepoType,
+) -> Option<CachedRepoInfo> {
+    storage::scan_cached_repo_dir(cache_dir, repo, repo_type.plural())
+}
+
+/// Resolve only the exact local revision to a validated immutable commit.
+/// This reads cache metadata and never contacts the Hub or selects a latest snapshot.
+pub fn resolve_cached_revision(
+    cache_root: &std::path::Path,
+    repo: &str,
+    repo_type: impl crate::RepoType,
+    revision: &str,
+) -> HFResult<Option<String>> {
+    let parts: Vec<_> = repo.split('/').collect();
+    if !(1..=2).contains(&parts.len())
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || *part == "."
+                || *part == ".."
+                || part.contains("--")
+                || part
+                    .chars()
+                    .any(|ch| ch.is_control() || matches!(ch, '\\' | ':'))
+        })
+    {
+        return Err(crate::error::HFError::InvalidParameter(
+            "unsafe cached repository id".into(),
+        ));
+    }
+    if storage::is_commit_hash(revision) {
+        return Ok(Some(revision.to_owned()));
+    }
+    storage::read_ref_sync(
+        cache_root,
+        &storage::repo_folder_name(repo, repo_type.plural()),
+        revision,
+    )
 }

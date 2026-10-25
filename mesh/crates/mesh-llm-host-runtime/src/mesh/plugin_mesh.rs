@@ -238,7 +238,65 @@ impl Node {
                 let _ = response_tx.send(response);
                 Ok(())
             }
+            crate::plugin::PluginMeshEvent::PluginKey {
+                plugin_id,
+                request,
+                response_tx,
+            } => {
+                let _ = response_tx.send(self.apply_plugin_key_request(&plugin_id, request));
+                Ok(())
+            }
+            crate::plugin::PluginMeshEvent::PluginStopped { plugin_id } => {
+                // A disabled or removed plugin no longer runs here, so this
+                // node stops vouching for its key.
+                self.plugin_keys.remove_own(&plugin_id);
+                Ok(())
+            }
         }
+    }
+
+    /// Announce (or withdraw) `plugin_id`'s public key, bound to this node.
+    pub(crate) fn apply_plugin_key_request(
+        &self,
+        plugin_id: &str,
+        request: crate::plugin::proto::PluginKeyRequest,
+    ) -> Result<crate::plugin::proto::PluginKeyResponse, crate::plugin::proto::ErrorResponse> {
+        use crate::mesh::plugin_keys;
+        let invalid = |message: String| crate::plugin::proto::ErrorResponse {
+            code: rmcp::model::ErrorCode::INVALID_PARAMS.0,
+            message,
+            data_json: String::new(),
+        };
+        let node_id = hex::encode(self.endpoint.id().as_bytes());
+        if !plugin_keys::valid_plugin_name(plugin_id) {
+            return Err(invalid(format!(
+                "plugin `{plugin_id}` cannot announce a key: its name is not 1 to {} letters, digits, '-', '_' or '.'",
+                plugin_keys::MAX_PLUGIN_NAME_BYTES
+            )));
+        }
+        if request.public_key.is_empty() {
+            self.plugin_keys.remove_own(plugin_id);
+            return Ok(crate::plugin::proto::PluginKeyResponse {
+                node_id,
+                binding_signature: Vec::new(),
+            });
+        }
+        let Ok(public_key) = <[u8; 32]>::try_from(request.public_key.as_slice()) else {
+            return Err(invalid(
+                "public_key must be 32 bytes (Ed25519), or empty to withdraw".into(),
+            ));
+        };
+        if !plugin_keys::valid_public_key(&public_key) {
+            return Err(invalid(
+                "public_key is not a valid Ed25519 public key".into(),
+            ));
+        }
+        let bound = plugin_keys::bind(&self.endpoint_secret_key, plugin_id, public_key);
+        self.plugin_keys.set_own(bound.clone()).map_err(invalid)?;
+        Ok(crate::plugin::proto::PluginKeyResponse {
+            node_id,
+            binding_signature: bound.binding_signature.to_vec(),
+        })
     }
 
     pub(crate) async fn plugin_event_channel_declared(

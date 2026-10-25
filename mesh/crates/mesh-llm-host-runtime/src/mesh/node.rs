@@ -181,6 +181,9 @@ pub struct Node {
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     /// Peers this node's operator chose to stop routing to (local only).
     pub(crate) peer_blocks: crate::network::peer_blocks::PeerBlocks,
+    /// Plugin public keys this node announces, and the verified ones its
+    /// directly-connected peers announce (`mesh::plugin_keys`).
+    pub(crate) plugin_keys: crate::mesh::plugin_keys::PluginKeys,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
     #[cfg(feature = "payments")]
     pub(crate) payments: crate::network::payments::PaymentsSlot,
@@ -871,6 +874,7 @@ impl Node {
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(owner_runtime.owner_attestation)),
+            plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(
                 crate::ReleaseAttestationSummary::default(),
@@ -1055,6 +1059,7 @@ impl Node {
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(None)),
+            plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(
                 crate::ReleaseAttestationSummary::default(),

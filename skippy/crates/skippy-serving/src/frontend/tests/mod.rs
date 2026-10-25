@@ -24,13 +24,13 @@ pub(super) use skippy_inference_api::{
     AssistantMessage, ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionStream, ChatHookAction, ChatHookOutcome, CompactionConfig, CompletionRequest,
     CompletionResponse, CompletionStream, FinishReason, GuardrailMode, GuardrailPolicy,
-    MessageContent, ModelObject, OpenAiBackend, OpenAiError, OpenAiRequestContext, OpenAiResult,
-    Usage, apply_chat_hook_outcome,
+    InferenceBackend, InferenceError, InferenceRequestContext, InferenceResult, MessageContent,
+    ModelObject, Usage, apply_chat_hook_outcome,
 };
 pub(super) use skippy_metrics::attr as attr_key;
 pub(super) use skippy_protocol::{
     LoadMode, MessageBase, PeerConfig, SCHEMA_VERSION, StageConfig, StageDevice,
-    StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
+    StageKvCacheConfig, StageKvCacheMode,
     binary::{LLAMA_TOKEN_NULL, StageReplyStats, WireMessageKind, write_stage_message},
 };
 pub(super) use skippy_runtime::{
@@ -49,6 +49,7 @@ pub(super) use std::{
 };
 pub(super) use tokio::sync::Semaphore;
 
+mod cache_publication;
 mod chat_stream_deltas;
 mod draft_runtime;
 mod generation;
@@ -63,5 +64,3 @@ mod request;
 mod support;
 mod tts_oracle;
 mod wire_messages;
-
-mod payment_gate;

@@ -62,6 +62,9 @@ const ModelSelectImpl = ({ options, value, onChange, className }: ModelSelectPro
                 <Select.ItemText>
                   <span className="block max-w-[18rem] truncate whitespace-nowrap font-mono">{option.label}</span>
                 </Select.ItemText>
+                {option.meta ? (
+                  <span className="ml-auto shrink-0 whitespace-nowrap font-mono text-fg-dim">{option.meta}</span>
+                ) : null}
                 {option.status ? (
                   <StatusBadge className="shrink-0" dot tone={statusBadgeTone(option.status.tone)}>
                     {option.status.label}

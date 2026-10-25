@@ -1,6 +1,7 @@
 mod cache_runtime;
 mod detached_runtime;
 mod direct_batch;
+mod direct_reply;
 
 use self::cache_runtime::{
     CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
@@ -12,15 +13,17 @@ use self::direct_batch::{
     pipeline_group_batch_size, resolve_pipeline_decode_groups, scheduler_safe_mode_from_value,
     should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
 };
+use self::direct_reply::DirectReply;
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::generation_queue_full_error;
 use crate::frontend::util::openai_backend_error;
 use crate::kv_integration::StagePrefixCachePayload;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use crate::runtime_state::{RuntimeIterationBatchRequest, RuntimeSessionAlignStats, RuntimeState};
 use crate::telemetry::Telemetry;
 use serde_json::json;
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_protocol::StageConfig;
 use skippy_runtime::{ActivationFrame, IterationBatchPhase, SamplingConfig};
 use skippy_scheduler::{
@@ -93,8 +96,8 @@ pub(crate) struct SchedulerRuntimeOutcome<T> {
 }
 
 pub(crate) struct DirectIterationChannel {
-    reply: std_mpsc::SyncSender<OpenAiResult<SchedulerIterationOutcome>>,
-    result: std_mpsc::Receiver<OpenAiResult<SchedulerIterationOutcome>>,
+    reply: std_mpsc::SyncSender<InferenceResult<SchedulerIterationOutcome>>,
+    result: std_mpsc::Receiver<InferenceResult<SchedulerIterationOutcome>>,
 }
 
 pub(crate) struct CacheAwareRuntimeRequest<'a> {
@@ -138,11 +141,11 @@ struct DirectIteration {
     deadline: Option<Instant>,
     cancellation: Option<skippy_inference_api::CancellationToken>,
     enqueued_at: Instant,
-    reply: std_mpsc::SyncSender<OpenAiResult<SchedulerIterationOutcome>>,
+    reply: DirectReply,
 }
 
 impl DirectIteration {
-    fn ensure_active(&self) -> OpenAiResult<()> {
+    fn ensure_active(&self) -> InferenceResult<()> {
         ensure_direct_iteration_active(self.deadline, self.cancellation.as_ref())
     }
 }
@@ -150,14 +153,14 @@ impl DirectIteration {
 fn ensure_direct_iteration_active(
     deadline: Option<Instant>,
     cancellation: Option<&skippy_inference_api::CancellationToken>,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
-        return Err(OpenAiError::cancelled(
+        return Err(InferenceError::cancelled(
             "request cancelled during scheduler iteration",
         ));
     }
     if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-        return Err(OpenAiError::timeout(
+        return Err(InferenceError::timeout(
             "cache operation deadline exceeded during scheduler iteration",
         ));
     }
@@ -165,7 +168,7 @@ fn ensure_direct_iteration_active(
 }
 
 type RuntimeOperationFn = Box<dyn FnOnce(&Arc<Mutex<RuntimeState>>) -> Duration + Send>;
-type RuntimeSetupOutcome = (Vec<String>, Vec<(String, OpenAiError)>);
+type RuntimeSetupOutcome = (Vec<String>, Vec<(String, InferenceError)>);
 
 struct RuntimeOperation {
     label: &'static str,
@@ -199,7 +202,7 @@ impl CacheRuntimeContext {
         }
     }
 
-    pub(crate) fn ensure_active(&self) -> OpenAiResult<()> {
+    pub(crate) fn ensure_active(&self) -> InferenceResult<()> {
         if self
             .cancellation
             .as_ref()
@@ -211,15 +214,15 @@ impl CacheRuntimeContext {
         }
         match self.state.load(Ordering::Acquire) {
             CACHE_OPERATION_ACTIVE => Ok(()),
-            CACHE_OPERATION_CANCELLED => Err(OpenAiError::cancelled(format!(
+            CACHE_OPERATION_CANCELLED => Err(InferenceError::cancelled(format!(
                 "cache runtime operation {} was cancelled",
                 self.operation_id
             ))),
-            CACHE_OPERATION_DEADLINE_EXCEEDED => Err(OpenAiError::timeout(format!(
+            CACHE_OPERATION_DEADLINE_EXCEEDED => Err(InferenceError::timeout(format!(
                 "cache runtime operation {} exceeded its deadline",
                 self.operation_id
             ))),
-            _ => Err(OpenAiError::backend(format!(
+            _ => Err(InferenceError::backend(format!(
                 "cache runtime operation {} entered an invalid state",
                 self.operation_id
             ))),
@@ -238,10 +241,10 @@ impl CacheRuntimeContext {
 
 fn runtime_operation<T>(
     label: &'static str,
-    operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
+    operation: impl FnOnce(&mut RuntimeState) -> InferenceResult<T> + Send + 'static,
 ) -> (
     RuntimeOperation,
-    std_mpsc::Receiver<OpenAiResult<SchedulerRuntimeOutcome<T>>>,
+    std_mpsc::Receiver<InferenceResult<SchedulerRuntimeOutcome<T>>>,
 )
 where
     T: Send + 'static,
@@ -257,25 +260,21 @@ where
             // The compute meter covers lock-held work only: from guard
             // acquisition to the end of the runtime operation, so
             // scheduler-thread lock contention does not count as model time.
-            let mut metered = Duration::ZERO;
-            let outcome = runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))
-                .and_then(|mut runtime| {
-                    let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
-                    let hold_started = Instant::now();
-                    let result = operation(&mut runtime).map(|value| {
-                        let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
-                        SchedulerRuntimeOutcome {
-                            value,
-                            queue_wait_ms,
-                            runtime_lock_wait_ms,
-                            runtime_lock_hold_ms,
-                        }
-                    });
-                    metered = hold_started.elapsed();
-                    result
+            let (outcome, metered) = {
+                let mut runtime = lock_runtime(runtime);
+                let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
+                let hold_started = Instant::now();
+                let result = operation(&mut runtime).map(|value| {
+                    let runtime_lock_hold_ms = hold_started.elapsed().as_secs_f64() * 1_000.0;
+                    SchedulerRuntimeOutcome {
+                        value,
+                        queue_wait_ms,
+                        runtime_lock_wait_ms,
+                        runtime_lock_hold_ms,
+                    }
                 });
+                (result, hold_started.elapsed())
+            };
             let _ = reply.send(outcome);
             metered
         }),
@@ -288,10 +287,12 @@ fn cache_runtime_operation<T>(
     operation_id: String,
     deadline: Instant,
     cancellation: Option<&skippy_inference_api::CancellationToken>,
-    operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> OpenAiResult<T> + Send + 'static,
+    operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> InferenceResult<T>
+    + Send
+    + 'static,
 ) -> (
     RuntimeOperation,
-    std_mpsc::Receiver<OpenAiResult<SchedulerRuntimeOutcome<T>>>,
+    std_mpsc::Receiver<InferenceResult<SchedulerRuntimeOutcome<T>>>,
     CacheRuntimeContext,
 )
 where
@@ -309,11 +310,9 @@ where
             let lock_started = Instant::now();
             // Compute meter: lock-held work only, as in `runtime_operation`.
             let mut metered = Duration::ZERO;
-            let outcome = worker_control.ensure_active().and_then(|()| {
-                runtime
-                    .lock()
-                    .map_err(|_| OpenAiError::backend("runtime lock poisoned"))
-            });
+            let outcome = worker_control
+                .ensure_active()
+                .map(|()| lock_runtime(runtime));
             let outcome = outcome.and_then(|mut runtime| {
                 worker_control.ensure_active()?;
                 let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
@@ -358,7 +357,7 @@ enum SchedulerEvent {
         ack: std_mpsc::SyncSender<TokenControl>,
     },
     Complete,
-    Error(OpenAiError),
+    Error(InferenceError),
 }
 
 struct RequestState {
@@ -408,11 +407,9 @@ impl IterationScheduler {
         continuous_batching: bool,
         planned_pipeline_decode_groups: Option<usize>,
         telemetry: Telemetry,
-    ) -> OpenAiResult<Self> {
+    ) -> InferenceResult<Self> {
         let (lane_count, kv_pool_tokens, compute_meter) = {
-            let runtime = runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+            let runtime = lock_runtime(&runtime);
             (
                 runtime.lane_count() as usize,
                 runtime.kv_pool_tokens() as usize,
@@ -514,7 +511,7 @@ impl IterationScheduler {
                 .run();
             })
             .map_err(|error| {
-                OpenAiError::backend(format!("spawn iteration scheduler worker: {error}"))
+                InferenceError::backend(format!("spawn iteration scheduler worker: {error}"))
             })?;
         Ok(Self {
             shared: Arc::new(IterationSchedulerShared {
@@ -529,8 +526,8 @@ impl IterationScheduler {
     pub(super) fn generate(
         &self,
         request: ScheduledGenerationRequest<'_>,
-        mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<ScheduledGenerationStats> {
+        mut on_token: impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<ScheduledGenerationStats> {
         let started = Instant::now();
         let (reply, events) = std_mpsc::channel();
         self.enqueue_command(SchedulerCommand::Submit(ScheduledRequest {
@@ -558,8 +555,8 @@ impl IterationScheduler {
     pub(super) fn resume_generation(
         &self,
         request: ScheduledResumeRequest<'_>,
-        mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<ScheduledGenerationStats> {
+        mut on_token: impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<ScheduledGenerationStats> {
         let started = Instant::now();
         let (reply, events) = std_mpsc::channel();
         self.enqueue_command(SchedulerCommand::Submit(ScheduledRequest {
@@ -589,10 +586,10 @@ impl IterationScheduler {
         id: &str,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
         events: std_mpsc::Receiver<SchedulerEvent>,
-        on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
+        on_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
         started: Instant,
         resumed: bool,
-    ) -> OpenAiResult<ScheduledGenerationStats> {
+    ) -> InferenceResult<ScheduledGenerationStats> {
         let mut first_token_at = None;
         loop {
             if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
@@ -600,7 +597,7 @@ impl IterationScheduler {
                     .shared
                     .commands
                     .try_send(SchedulerCommand::Cancel(id.to_string()));
-                return Err(OpenAiError::backend("request cancelled"));
+                return Err(InferenceError::backend("request cancelled"));
             }
             match events.recv_timeout(CANCELLATION_POLL_INTERVAL) {
                 Ok(SchedulerEvent::Token { token, ack }) => {
@@ -636,7 +633,7 @@ impl IterationScheduler {
                 Ok(SchedulerEvent::Error(error)) => return Err(error),
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(OpenAiError::backend(
+                    return Err(InferenceError::backend(
                         "iteration scheduler stopped before generation completed",
                     ));
                 }
@@ -652,7 +649,7 @@ impl IterationScheduler {
         sampling: Option<&SamplingConfig>,
         sample_last: bool,
         phase: IterationBatchPhase,
-    ) -> OpenAiResult<SchedulerIterationOutcome> {
+    ) -> InferenceResult<SchedulerIterationOutcome> {
         let channel = self.direct_iteration_channel();
         self.execute_iteration_on(
             &channel,
@@ -679,7 +676,7 @@ impl IterationScheduler {
         phase: IterationBatchPhase,
         deadline: Option<Instant>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-    ) -> OpenAiResult<SchedulerIterationOutcome> {
+    ) -> InferenceResult<SchedulerIterationOutcome> {
         self.execute_direct_iteration(
             channel,
             session_id,
@@ -705,7 +702,7 @@ impl IterationScheduler {
         sampling: Option<&SamplingConfig>,
         input: Option<ActivationFrame>,
         sample_last: bool,
-    ) -> OpenAiResult<SchedulerIterationOutcome> {
+    ) -> InferenceResult<SchedulerIterationOutcome> {
         let channel = self.direct_iteration_channel();
         self.execute_direct_iteration(
             &channel,
@@ -736,7 +733,7 @@ impl IterationScheduler {
         phase: IterationBatchPhase,
         deadline: Option<Instant>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-    ) -> OpenAiResult<SchedulerIterationOutcome> {
+    ) -> InferenceResult<SchedulerIterationOutcome> {
         validate_direct_iteration(
             token_ids,
             positions,
@@ -756,11 +753,11 @@ impl IterationScheduler {
                 deadline,
                 cancellation: cancellation.cloned(),
                 enqueued_at: Instant::now(),
-                reply: channel.reply.clone(),
+                reply: channel.reply.clone().into(),
             },
         )))?;
         let result = channel.result.recv().map_err(|error| {
-            OpenAiError::backend(format!("iteration scheduler stopped: {error}"))
+            InferenceError::backend(format!("iteration scheduler stopped: {error}"))
         })?;
         ensure_direct_iteration_active(deadline, cancellation)?;
         result
@@ -772,8 +769,8 @@ impl IterationScheduler {
     pub(crate) fn execute_runtime<T>(
         &self,
         label: &'static str,
-        operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
-    ) -> OpenAiResult<T>
+        operation: impl FnOnce(&mut RuntimeState) -> InferenceResult<T> + Send + 'static,
+    ) -> InferenceResult<T>
     where
         T: Send + 'static,
     {
@@ -784,15 +781,15 @@ impl IterationScheduler {
     pub(crate) fn execute_runtime_timed<T>(
         &self,
         label: &'static str,
-        operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
-    ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
+        operation: impl FnOnce(&mut RuntimeState) -> InferenceResult<T> + Send + 'static,
+    ) -> InferenceResult<SchedulerRuntimeOutcome<T>>
     where
         T: Send + 'static,
     {
         let (operation, result) = runtime_operation(label, operation);
         self.enqueue_command(SchedulerCommand::ExecuteRuntime(operation))?;
         result.recv().map_err(|error| {
-            OpenAiError::backend(format!("iteration scheduler stopped: {error}"))
+            InferenceError::backend(format!("iteration scheduler stopped: {error}"))
         })?
     }
 
@@ -802,10 +799,10 @@ impl IterationScheduler {
         &self,
         label: &'static str,
         request: CacheAwareRuntimeRequest<'_>,
-        operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> OpenAiResult<T>
+        operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> InferenceResult<T>
         + Send
         + 'static,
-    ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
+    ) -> InferenceResult<SchedulerRuntimeOutcome<T>>
     where
         T: Send + 'static,
     {
@@ -826,23 +823,23 @@ impl IterationScheduler {
         wait_for_cache_runtime(result, &control)
     }
 
-    fn enqueue_command(&self, command: SchedulerCommand) -> OpenAiResult<()> {
+    fn enqueue_command(&self, command: SchedulerCommand) -> InferenceResult<()> {
         self.shared
             .commands
             .try_send(command)
             .map_err(|error| match error {
                 std_mpsc::TrySendError::Full(_) => generation_queue_full_error(),
                 std_mpsc::TrySendError::Disconnected(_) => {
-                    OpenAiError::backend("iteration scheduler stopped")
+                    InferenceError::backend("iteration scheduler stopped")
                 }
             })
     }
 }
 
 fn wait_for_cache_runtime<T>(
-    result: std_mpsc::Receiver<OpenAiResult<SchedulerRuntimeOutcome<T>>>,
+    result: std_mpsc::Receiver<InferenceResult<SchedulerRuntimeOutcome<T>>>,
     control: &CacheRuntimeContext,
-) -> OpenAiResult<SchedulerRuntimeOutcome<T>> {
+) -> InferenceResult<SchedulerRuntimeOutcome<T>> {
     loop {
         control.ensure_active()?;
         let remaining = control
@@ -853,7 +850,7 @@ fn wait_for_cache_runtime<T>(
             Ok(outcome) => return outcome,
             Err(std_mpsc::RecvTimeoutError::Timeout) => continue,
             Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(OpenAiError::backend("iteration scheduler stopped"));
+                return Err(InferenceError::backend("iteration scheduler stopped"));
             }
         }
     }
@@ -886,9 +883,11 @@ impl Drop for IterationScheduler {
 
 impl SchedulerWorker {
     fn run(mut self) {
-        let outcome = catch_unwind(AssertUnwindSafe(|| self.run_loop()));
-        if outcome.is_err() {
-            let error = OpenAiError::backend("iteration scheduler worker panicked");
+        // A panic must not end the worker: every later request would find a
+        // disconnected command channel and never reach the runtime lock's
+        // recovery. Fail the work that was in flight, then keep serving the
+        // commands the panic never touched.
+        while catch_unwind(AssertUnwindSafe(|| self.run_loop())).is_err() {
             if let Some(telemetry) = self.telemetry.as_ref() {
                 telemetry.emit(
                     "stage.scheduler_worker_panic",
@@ -898,8 +897,10 @@ impl SchedulerWorker {
                     )]),
                 );
             }
-            self.fail_all(error.clone());
-            self.fail_queued(error);
+            self.fail_all(InferenceError::backend(
+                "iteration scheduler worker panicked",
+            ));
+            self.cache_runtime_queue.clear();
         }
     }
 
@@ -917,7 +918,7 @@ impl SchedulerWorker {
             for _ in 0..self.max_commands_per_turn {
                 match self.commands.try_recv() {
                     Ok(SchedulerCommand::Shutdown) => {
-                        self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                        self.fail_all(InferenceError::backend("iteration scheduler stopped"));
                         return;
                     }
                     Ok(command) => self.handle_command(command),
@@ -954,7 +955,7 @@ impl SchedulerWorker {
             if !self.iteration_interval.is_zero() {
                 match self.commands.recv_timeout(self.iteration_interval) {
                     Ok(SchedulerCommand::Shutdown) => {
-                        self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                        self.fail_all(InferenceError::backend("iteration scheduler stopped"));
                         return;
                     }
                     Ok(command) => self.handle_command(command),
@@ -1006,7 +1007,7 @@ impl SchedulerWorker {
     fn wait_for_scheduler_command(&mut self, timeout: Duration) -> bool {
         match self.commands.recv_timeout(timeout) {
             Ok(SchedulerCommand::Shutdown) => {
-                self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                self.fail_all(InferenceError::backend("iteration scheduler stopped"));
                 false
             }
             Ok(command) => {
@@ -1078,16 +1079,14 @@ impl SchedulerWorker {
         // waits, including lock contention, are excluded from the meter.
         let compute = (operation.run)(&self.runtime);
         self.record_compute(compute);
-        if let Ok(runtime) = self.runtime.lock() {
-            self.active_runtime_sessions = runtime.active_session_count();
-            if self.active_runtime_sessions < self.max_direct_batch_size {
-                self.direct_wave_full = false;
-            } else if cache.as_ref().is_some_and(|cache| cache.wave_aware) {
-                // A cache restore may complete before its caller can enqueue
-                // the first direct iteration. Remember the saturated wave so
-                // another cache restore cannot slip in during that gap.
-                self.direct_wave_full = true;
-            }
+        self.active_runtime_sessions = lock_runtime(&self.runtime).active_session_count();
+        if self.active_runtime_sessions < self.max_direct_batch_size {
+            self.direct_wave_full = false;
+        } else if cache.as_ref().is_some_and(|cache| cache.wave_aware) {
+            // A cache restore may complete before its caller can enqueue
+            // the first direct iteration. Remember the saturated wave so
+            // another cache restore cannot slip in during that gap.
+            self.direct_wave_full = true;
         }
         if let Some(telemetry) = self.telemetry.as_ref() {
             let mut attrs = BTreeMap::from([
@@ -1159,7 +1158,7 @@ impl SchedulerWorker {
             };
             match self.commands.recv_timeout(remaining) {
                 Ok(SchedulerCommand::Shutdown) => {
-                    self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                    self.fail_all(InferenceError::backend("iteration scheduler stopped"));
                     return false;
                 }
                 Ok(command) => self.handle_command(command),
@@ -1195,7 +1194,7 @@ impl SchedulerWorker {
             let error = match error {
                 AdmissionError::QueueFull { .. } => generation_queue_full_error(),
                 AdmissionError::DuplicateSequence(_) | AdmissionError::EmptyPrompt => {
-                    OpenAiError::invalid_request(error.to_string())
+                    InferenceError::invalid_request(error.to_string())
                 }
             };
             let _ = request.reply.send(SchedulerEvent::Error(error));
@@ -1227,7 +1226,7 @@ impl SchedulerWorker {
         self.requests.remove(id);
     }
 
-    fn fail_request(&mut self, id: &str, error: OpenAiError) {
+    fn fail_request(&mut self, id: &str, error: InferenceError) {
         self.scheduler.cancel(id);
         let retain_runtime = self
             .requests
@@ -1362,7 +1361,7 @@ impl SchedulerWorker {
             match request.ensure_active() {
                 Ok(()) => active.push(request),
                 Err(error) => {
-                    let _ = request.reply.send(Err(error));
+                    request.reply.send(Err(error));
                 }
             }
         }
@@ -1371,23 +1370,13 @@ impl SchedulerWorker {
         }
 
         let lock_started = Instant::now();
-        let mut runtime = match self.runtime.lock() {
-            Ok(runtime) => runtime,
-            Err(_) => {
-                for request in active {
-                    let _ = request
-                        .reply
-                        .send(Err(OpenAiError::backend("runtime lock poisoned")));
-                }
-                return;
-            }
-        };
+        let mut runtime = lock_runtime(&self.runtime);
         let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
         let hold_started = Instant::now();
         let mut runnable = Vec::with_capacity(active.len());
         for request in active {
             if let Err(error) = request.ensure_active() {
-                let _ = request.reply.send(Err(error));
+                request.reply.send(Err(error));
                 continue;
             }
             let alignment = match request.target_token_count {
@@ -1398,7 +1387,7 @@ impl SchedulerWorker {
             match alignment {
                 Ok(alignment) => runnable.push((request, alignment)),
                 Err(error) => {
-                    let _ = request.reply.send(Err(openai_backend_error(error)));
+                    request.reply.send(Err(openai_backend_error(error)));
                 }
             }
         }
@@ -1430,6 +1419,13 @@ impl SchedulerWorker {
                 phase: request.phase,
             })
             .collect::<Vec<_>>();
+        #[cfg(test)]
+        if requests
+            .iter()
+            .any(|request| request.session_id == tests::PANICKING_DIRECT_SESSION)
+        {
+            panic!("direct iteration batch panicked");
+        }
         let result = runtime
             .iteration_batch_sampled(&requests)
             .map_err(openai_backend_error);
@@ -1466,36 +1462,36 @@ impl SchedulerWorker {
         match result {
             Ok(outputs) => {
                 if outputs.request_outputs.len() != runnable.len() {
-                    let error = OpenAiError::backend(format!(
+                    let error = InferenceError::backend(format!(
                         "scheduler iteration returned {} outputs for {} requests",
                         outputs.request_outputs.len(),
                         runnable.len()
                     ));
                     for (request, _) in runnable {
-                        let _ = request.reply.send(Err(error.clone()));
+                        request.reply.send(Err(error.clone()));
                     }
                     return;
                 }
                 let mut predicted = vec![None; runnable.len()];
                 for sample in outputs.samples {
                     let Some(slot) = predicted.get_mut(sample.request_index) else {
-                        let error = OpenAiError::backend(format!(
+                        let error = InferenceError::backend(format!(
                             "scheduler iteration sample references request {}, but only {} requests ran",
                             sample.request_index,
                             runnable.len()
                         ));
                         for (request, _) in runnable {
-                            let _ = request.reply.send(Err(error.clone()));
+                            request.reply.send(Err(error.clone()));
                         }
                         return;
                     };
                     if slot.replace(sample.predicted_token).is_some() {
-                        let error = OpenAiError::backend(format!(
+                        let error = InferenceError::backend(format!(
                             "scheduler iteration returned duplicate sample for request {}",
                             sample.request_index
                         ));
                         for (request, _) in runnable {
-                            let _ = request.reply.send(Err(error.clone()));
+                            request.reply.send(Err(error.clone()));
                         }
                         return;
                     }
@@ -1506,7 +1502,7 @@ impl SchedulerWorker {
                     .zip(predicted)
                     .zip(batch_wait_ms)
                 {
-                    let _ = request.reply.send(Ok(SchedulerIterationOutcome {
+                    request.reply.send(Ok(SchedulerIterationOutcome {
                         predicted: predicted.unwrap_or(-1),
                         output,
                         batch_size,
@@ -1519,7 +1515,7 @@ impl SchedulerWorker {
             }
             Err(error) => {
                 for (request, _) in runnable {
-                    let _ = request.reply.send(Err(error.clone()));
+                    request.reply.send(Err(error.clone()));
                 }
             }
         }
@@ -1565,7 +1561,7 @@ impl SchedulerWorker {
         for id in &missing_predictions {
             self.fail_request(
                 id,
-                OpenAiError::backend(format!(
+                InferenceError::backend(format!(
                     "scheduler iteration returned no prediction for {id}"
                 )),
             );
@@ -1719,11 +1715,8 @@ impl SchedulerWorker {
     fn prepare_runtime_sessions(
         &self,
         setup: &[(String, Option<String>, Option<SamplingConfig>, usize)],
-    ) -> OpenAiResult<RuntimeSetupOutcome> {
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+    ) -> InferenceResult<RuntimeSetupOutcome> {
+        let mut runtime = lock_runtime(&self.runtime);
         let mut configured = Vec::new();
         let mut failures = Vec::new();
         for (id, metadata, sampling, prompt_token_count) in setup {
@@ -1745,7 +1738,9 @@ impl SchedulerWorker {
                     let _ = runtime.drop_session_timed(id);
                     failures.push((
                         id.clone(),
-                        OpenAiError::backend(format!("prepare scheduler session {id}: {error:#}")),
+                        InferenceError::backend(format!(
+                            "prepare scheduler session {id}: {error:#}"
+                        )),
                     ));
                 }
             }
@@ -1760,11 +1755,8 @@ impl SchedulerWorker {
     fn execute_plan(
         &self,
         plan: &skippy_scheduler::IterationPlan,
-    ) -> OpenAiResult<Vec<IterationPrediction>> {
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+    ) -> InferenceResult<Vec<IterationPrediction>> {
+        let mut runtime = lock_runtime(&self.runtime);
         let hold_started = Instant::now();
         let requests = plan
             .work
@@ -1810,7 +1802,7 @@ impl SchedulerWorker {
             .map_err(openai_backend_error)
     }
 
-    fn fail_all(&mut self, error: OpenAiError) {
+    fn fail_all(&mut self, error: InferenceError) {
         let ids = self.requests.keys().cloned().collect::<Vec<_>>();
         for id in &ids {
             self.scheduler.cancel(id);
@@ -1831,41 +1823,21 @@ impl SchedulerWorker {
             }
         }
         for request in self.direct_iterations.drain(..) {
-            let _ = request.reply.send(Err(error.clone()));
-        }
-    }
-
-    fn fail_queued(&mut self, error: OpenAiError) {
-        while let Ok(command) = self.commands.try_recv() {
-            match command {
-                SchedulerCommand::Submit(request) => {
-                    let _ = request.reply.send(SchedulerEvent::Error(error.clone()));
-                }
-                SchedulerCommand::ExecuteIteration(request) => {
-                    let _ = request.reply.send(Err(error.clone()));
-                }
-                SchedulerCommand::ExecuteRuntime(_)
-                | SchedulerCommand::ExecuteCacheAwareRuntime(_, _, _, _, _)
-                | SchedulerCommand::Cancel(_)
-                | SchedulerCommand::Shutdown => {}
-            }
+            request.reply.send(Err(error.clone()));
         }
     }
 
     fn drop_runtime_sessions<'a>(&mut self, ids: impl IntoIterator<Item = &'a str>) {
-        let active_runtime_sessions = if let Ok(mut runtime) = self.runtime.lock() {
+        let active_runtime_sessions = {
+            let mut runtime = lock_runtime(&self.runtime);
             for id in ids {
                 let _ = runtime.drop_session_timed(id);
             }
-            Some(runtime.active_session_count())
-        } else {
-            None
+            runtime.active_session_count()
         };
-        if let Some(active_runtime_sessions) = active_runtime_sessions {
-            self.active_runtime_sessions = active_runtime_sessions;
-            if active_runtime_sessions < self.max_direct_batch_size {
-                self.direct_wave_full = false;
-            }
+        self.active_runtime_sessions = active_runtime_sessions;
+        if active_runtime_sessions < self.max_direct_batch_size {
+            self.direct_wave_full = false;
         }
     }
 }

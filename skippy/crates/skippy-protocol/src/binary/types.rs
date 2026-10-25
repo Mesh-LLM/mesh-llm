@@ -184,6 +184,17 @@ pub mod state_flags {
     pub const SAMPLING: i32 = 1 << 3;
     pub const FULL_STATE: i32 = 1 << 4;
     pub const CHAT_SAMPLING_METADATA: i32 = 1 << 5;
+    /// Bits 8..=11: how many native MTP draft tokens the final stage should
+    /// propose for a decode or verify message, valid when
+    /// `NATIVE_MTP_DRAFT_TOKENS_SET` is present. Senders that predate the field
+    /// leave both clear and get the final stage's configured depth.
+    pub const NATIVE_MTP_DRAFT_TOKENS_SHIFT: u32 = 8;
+    pub const NATIVE_MTP_DRAFT_TOKENS_MASK: i32 = 0xF << NATIVE_MTP_DRAFT_TOKENS_SHIFT;
+    pub const NATIVE_MTP_DRAFT_TOKENS_SET: i32 = 1 << 12;
+    /// On a verify message: the sender accepts a native MTP draft that
+    /// continues after the first rejected row's correction token (reply
+    /// marker 2). Without it a final stage drops drafts from rejected windows.
+    pub const NATIVE_MTP_DRAFT_AFTER_CORRECTION: i32 = 1 << 13;
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -365,6 +376,41 @@ impl StageStateHeader {
             header.flags |= state_flags::LIGHT_CONTEXT;
         }
         header
+    }
+
+    /// Native MTP draft depth requested of the final stage, if the sender set
+    /// one. `Some(0)` asks for no drafts.
+    pub fn native_mtp_draft_tokens(self) -> Option<usize> {
+        if self.flags & state_flags::NATIVE_MTP_DRAFT_TOKENS_SET == 0 {
+            return None;
+        }
+        let value = (self.flags & state_flags::NATIVE_MTP_DRAFT_TOKENS_MASK)
+            >> state_flags::NATIVE_MTP_DRAFT_TOKENS_SHIFT;
+        Some(value as usize)
+    }
+
+    /// Requests `tokens` native MTP drafts from the final stage, saturating at
+    /// the field's width.
+    pub fn set_native_mtp_draft_tokens(&mut self, tokens: usize) {
+        let max = (state_flags::NATIVE_MTP_DRAFT_TOKENS_MASK
+            >> state_flags::NATIVE_MTP_DRAFT_TOKENS_SHIFT) as usize;
+        let value = tokens.min(max) as i32;
+        self.flags = (self.flags & !state_flags::NATIVE_MTP_DRAFT_TOKENS_MASK)
+            | (value << state_flags::NATIVE_MTP_DRAFT_TOKENS_SHIFT)
+            | state_flags::NATIVE_MTP_DRAFT_TOKENS_SET;
+    }
+
+    /// Whether the sender accepts drafts that follow a rejected window's correction.
+    pub fn accepts_native_mtp_draft_after_correction(self) -> bool {
+        self.flags & state_flags::NATIVE_MTP_DRAFT_AFTER_CORRECTION != 0
+    }
+
+    pub fn set_accepts_native_mtp_draft_after_correction(&mut self, accepts: bool) {
+        if accepts {
+            self.flags |= state_flags::NATIVE_MTP_DRAFT_AFTER_CORRECTION;
+        } else {
+            self.flags &= !state_flags::NATIVE_MTP_DRAFT_AFTER_CORRECTION;
+        }
     }
 
     pub fn matches_kind(self, kind: WireMessageKind) -> bool {
@@ -614,6 +660,10 @@ pub struct StageReply {
 pub struct StageNativeMtpDraft {
     pub token_ids: Vec<i32>,
     pub proposal_compute_us: i64,
+    /// The verify window was rejected and this draft continues after the
+    /// first rejected row's predicted (correction) token. Otherwise it
+    /// continues after the window's last prediction.
+    pub follows_correction: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

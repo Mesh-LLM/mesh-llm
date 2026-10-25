@@ -1,3 +1,4 @@
+mod capability_registration;
 mod channel_broadcast;
 mod config;
 mod exchange_grants;
@@ -23,6 +24,7 @@ pub(crate) mod stapler;
 mod startup;
 #[cfg(test)]
 mod startup_tests;
+mod supervision;
 mod support;
 mod transport;
 mod types;
@@ -130,6 +132,7 @@ pub struct PluginManager {
 }
 
 pub(in crate::plugin) struct PluginManagerInner {
+    capability_registration: capability_registration::CapabilityRegistration,
     pub(in crate::plugin) identity_registry: Arc<Mutex<identity_registry::PluginIdentityRegistry>>,
     pub(in crate::plugin) exchange_grants: exchange_grants::ExchangeGrantRegistry,
     pub(in crate::plugin) exchange_observations: Arc<exchange_lifecycle::ObservationRegistry>,
@@ -226,6 +229,7 @@ impl PluginManager {
         .await?;
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
+                capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants,
                 exchange_observations: Arc::default(),
@@ -452,6 +456,7 @@ impl PluginManager {
     pub fn for_test_bridge(plugin_names: &[&str], bridge: Arc<dyn PluginRpcBridge>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants: Default::default(),
                 exchange_observations: Arc::default(),
@@ -478,6 +483,7 @@ impl PluginManager {
     pub(crate) fn for_test_summaries(summaries: Vec<PluginSummary>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants: Default::default(),
                 exchange_observations: Arc::default(),
@@ -550,6 +556,7 @@ impl PluginManager {
         plugin_name: &str,
         providers: Vec<PluginCapabilityProvider>,
     ) {
+        self.inner.capability_registration.record(&providers);
         self.plugin_summary_producer(plugin_name)
             .publish_plugin_providers(providers);
     }
@@ -1523,41 +1530,6 @@ impl PluginManager {
             )
         })?;
         connect_side_stream(endpoint, response.transport_kind).await
-    }
-
-    fn start_supervisor(&self) {
-        let manager = self.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(
-                health::HEALTH_CHECK_INTERVAL_SECS,
-            ));
-            loop {
-                ticker.tick().await;
-                if manager.inner.shutting_down.load(Ordering::SeqCst) {
-                    break;
-                }
-                let plugin_names = manager.inner.plugins.keys().cloned().collect::<Vec<_>>();
-                for plugin_name in plugin_names {
-                    let Some(plugin) = manager.inner.plugins.get(&plugin_name) else {
-                        continue;
-                    };
-                    if let Err(err) = plugin.supervise().await {
-                        tracing::warn!(
-                            plugin = %plugin.name(),
-                            error = %err,
-                            "Plugin supervision round failed"
-                        );
-                    }
-                    if let Err(err) = manager.refresh_plugin_endpoints(&plugin_name).await {
-                        tracing::warn!(
-                            plugin = %plugin_name,
-                            error = %err,
-                            "Endpoint supervision round failed"
-                        );
-                    }
-                }
-            }
-        });
     }
 }
 

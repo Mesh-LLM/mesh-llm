@@ -32,6 +32,10 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Prepare automation for runtime verification
+      if: runner.os != 'Linux' && env.MESH_LLM_AUTOMATION_BIN == ''
+      uses: ./.github/actions/prepare-automation
+
     - name: Package and verify native runtime
       id: prepare
       shell: bash

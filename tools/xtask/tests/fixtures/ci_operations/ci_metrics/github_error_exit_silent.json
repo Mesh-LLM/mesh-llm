@@ -1,0 +1,29 @@
+{
+  "args": [
+    "--workflow",
+    "PR Builds",
+    "--json-out",
+    "out/nested/metrics.json"
+  ],
+  "code": 2,
+  "gh_argv": [
+    [
+      "run",
+      "list",
+      "--repo",
+      "Mesh-LLM/mesh-llm",
+      "--workflow",
+      "PR Builds",
+      "--limit",
+      "20",
+      "--json",
+      "databaseId,attempt,workflowName,displayTitle,event,status,conclusion,createdAt,startedAt,updatedAt,url,headSha,headBranch",
+      "--status",
+      "success"
+    ]
+  ],
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: gh run list --repo Mesh-LLM/mesh-llm --workflow PR Builds --limit 20 --json databaseId,attempt,workflowName,displayTitle,event,status,conclusion,createdAt,startedAt,updatedAt,url,headSha,headBranch --status success failed: unknown error\n",
+  "stdout": ""
+}

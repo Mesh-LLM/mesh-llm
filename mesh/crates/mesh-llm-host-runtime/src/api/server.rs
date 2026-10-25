@@ -123,19 +123,33 @@ async fn spawn_inflight_watcher(state: MeshApi) {
 }
 
 fn spawn_latest_version_check(state: MeshApi) {
-    tokio::spawn(async move {
-        let Some(latest) = crate::system::autoupdate::latest_release_version().await else {
-            return;
-        };
-        if !crate::system::autoupdate::version_newer(&latest, crate::VERSION) {
-            return;
-        }
-        {
-            let mut inner = state.inner.lock().await;
-            inner.latest_version = Some(latest);
-        }
-        state.push_status().await;
-    });
+    tokio::spawn(record_latest_version(
+        state,
+        crate::system::autoupdate::latest_release_version,
+    ));
+}
+
+/// Runs `fetch` and shows a newer release in the console, unless
+/// `updates.check` turns the check off.
+pub(super) async fn record_latest_version<F, Fut>(state: MeshApi, fetch: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
+    if !state.inner.lock().await.update_check {
+        return;
+    }
+    let Some(latest) = fetch().await else {
+        return;
+    };
+    if !crate::system::autoupdate::version_newer(&latest, crate::VERSION) {
+        return;
+    }
+    {
+        let mut inner = state.inner.lock().await;
+        inner.latest_version = Some(latest);
+    }
+    state.push_status().await;
 }
 
 async fn bind_management_listener(
@@ -266,26 +280,24 @@ async fn dispatch_management_request(
         return Ok(());
     }
 
-    if requires_trusted_local_access(method, path_only) {
-        let trusted_local_request = match (request_origin(raw_request), request_host(raw_request)) {
-            (Ok(origin), Ok(host)) => is_trusted_local_request(source_addr, origin, host),
-            _ => false,
-        };
-        if !trusted_local_request {
-            if path_only == "/api/logs/events" {
-                super::routes::logs::LogsError::Forbidden
-                    .write(stream)
-                    .await?;
-                return Ok(());
-            }
-            respond_error(
-                stream,
-                403,
-                "This management route requires a trusted local caller",
-            )
-            .await?;
+    let trusted_local_request = match (request_origin(raw_request), request_host(raw_request)) {
+        (Ok(origin), Ok(host)) => is_trusted_local_request(source_addr, origin, host),
+        _ => false,
+    };
+    if requires_trusted_local_access(method, path_only) && !trusted_local_request {
+        if path_only == "/api/logs/events" {
+            super::routes::logs::LogsError::Forbidden
+                .write(stream)
+                .await?;
             return Ok(());
         }
+        respond_error(
+            stream,
+            403,
+            "This management route requires a trusted local caller",
+        )
+        .await?;
+        return Ok(());
     }
 
     match (method, path_only) {
@@ -312,6 +324,7 @@ async fn dispatch_management_request(
                 body,
                 req,
                 raw_request,
+                super::routes::chat::CallerTrust::from_trusted_local(trusted_local_request),
             )
             .await?
             {

@@ -2,7 +2,7 @@
 use super::protocol::{
     AnthropicContentBlock, AnthropicMessageContent, AnthropicMessagesRequest, AnthropicSystemPrompt,
 };
-use crate::OpenAiError;
+use crate::InferenceError;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -10,10 +10,10 @@ fn reject_fields(
     fields: &BTreeMap<String, Value>,
     allowed: &[&str],
     location: &str,
-) -> Result<(), OpenAiError> {
+) -> Result<(), InferenceError> {
     for key in fields.keys() {
         if !allowed.contains(&key.as_str()) {
-            return Err(OpenAiError::invalid_request(format!(
+            return Err(InferenceError::invalid_request(format!(
                 "{location}.{key} is not supported"
             )));
         }
@@ -21,9 +21,11 @@ fn reject_fields(
     Ok(())
 }
 
-pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(), OpenAiError> {
+pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(), InferenceError> {
     if request.max_tokens == 0 {
-        return Err(OpenAiError::invalid_request("max_tokens must be positive"));
+        return Err(InferenceError::invalid_request(
+            "max_tokens must be positive",
+        ));
     }
     // These are existing mesh extensions, retained through the shared chat path.
     reject_fields(
@@ -45,10 +47,10 @@ pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(),
     if let Some(config) = request.extra.get("output_config") {
         let object = config
             .as_object()
-            .ok_or_else(|| OpenAiError::invalid_request("output_config must be an object"))?;
+            .ok_or_else(|| InferenceError::invalid_request("output_config must be an object"))?;
         for key in object.keys() {
             if key != "effort" && key != "format" {
-                return Err(OpenAiError::invalid_request(format!(
+                return Err(InferenceError::invalid_request(format!(
                     "output_config.{key} is not supported"
                 )));
             }
@@ -66,7 +68,7 @@ pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(),
     if let Some(AnthropicSystemPrompt::Blocks(blocks)) = &request.system {
         for block in blocks {
             if block.kind != "text" || block.text.is_none() {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "system supports text blocks only",
                 ));
             }
@@ -81,7 +83,7 @@ pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(),
                 .as_ref()
                 .is_none_or(|schema| !schema.is_object())
             {
-                return Err(OpenAiError::invalid_request(format!(
+                return Err(InferenceError::invalid_request(format!(
                     "tools[{index}].input_schema must be an object"
                 )));
             }
@@ -94,7 +96,7 @@ pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(),
             .get("disable_parallel_tool_use")
             .is_some_and(|value| !value.is_boolean())
         {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "disable_parallel_tool_use must be a boolean",
             ));
         }
@@ -106,7 +108,9 @@ pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(),
                     AnthropicContentBlock::Text(text) => {
                         validate_cache_control_fields(&text.extra, "text")?;
                         if text.text.is_none() {
-                            return Err(OpenAiError::invalid_request("text block requires text"));
+                            return Err(InferenceError::invalid_request(
+                                "text block requires text",
+                            ));
                         }
                     }
                     AnthropicContentBlock::ToolUse(tool) => {
@@ -116,7 +120,7 @@ pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(),
                             || tool.name.is_empty()
                             || !tool.input.is_object()
                         {
-                            return Err(OpenAiError::invalid_request(
+                            return Err(InferenceError::invalid_request(
                                 "tool_use requires assistant role, id, name and object input",
                             ));
                         }
@@ -124,7 +128,7 @@ pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(),
                     AnthropicContentBlock::ToolResult(result) => {
                         validate_cache_control_fields(&result.extra, "tool_result")?;
                         if message.role != "user" || result.tool_use_id.is_empty() {
-                            return Err(OpenAiError::invalid_request(
+                            return Err(InferenceError::invalid_request(
                                 "tool_result requires user role and tool_use_id",
                             ));
                         }
@@ -143,7 +147,7 @@ pub(super) fn validate_request(request: &AnthropicMessagesRequest) -> Result<(),
 fn validate_cache_control_fields(
     fields: &BTreeMap<String, Value>,
     location: &str,
-) -> Result<(), OpenAiError> {
+) -> Result<(), InferenceError> {
     reject_fields(fields, &["cache_control"], location)?;
     if let Some(cache_control) = fields.get("cache_control") {
         validate_cache_control(cache_control, location)?;
@@ -151,19 +155,19 @@ fn validate_cache_control_fields(
     Ok(())
 }
 
-fn validate_cache_control(value: &Value, location: &str) -> Result<(), OpenAiError> {
+fn validate_cache_control(value: &Value, location: &str) -> Result<(), InferenceError> {
     let object = value.as_object().ok_or_else(|| {
-        OpenAiError::invalid_request(format!("{location}.cache_control must be an object"))
+        InferenceError::invalid_request(format!("{location}.cache_control must be an object"))
     })?;
     for key in object.keys() {
         if key != "type" && key != "ttl" {
-            return Err(OpenAiError::invalid_request(format!(
+            return Err(InferenceError::invalid_request(format!(
                 "{location}.cache_control.{key} is not supported"
             )));
         }
     }
     if object.get("type").and_then(Value::as_str) != Some("ephemeral") {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "{location}.cache_control.type must be `ephemeral`"
         )));
     }
@@ -171,24 +175,26 @@ fn validate_cache_control(value: &Value, location: &str) -> Result<(), OpenAiErr
         && ttl != "5m"
         && ttl != "1h"
     {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "{location}.cache_control.ttl must be `5m` or `1h`"
         )));
     }
     if object.get("ttl").is_some_and(|ttl| !ttl.is_string()) {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "{location}.cache_control.ttl must be a string"
         )));
     }
     Ok(())
 }
 
-fn validate_thinking(value: &Value) -> Result<(), OpenAiError> {
+fn validate_thinking(value: &Value) -> Result<(), InferenceError> {
     let object = value
         .as_object()
-        .ok_or_else(|| OpenAiError::invalid_request("thinking must be an object"))?;
+        .ok_or_else(|| InferenceError::invalid_request("thinking must be an object"))?;
     let kind = object.get("type").and_then(Value::as_str).ok_or_else(|| {
-        OpenAiError::invalid_request("thinking.type must be `adaptive`, `enabled`, or `disabled`")
+        InferenceError::invalid_request(
+            "thinking.type must be `adaptive`, `enabled`, or `disabled`",
+        )
     })?;
     match kind {
         "adaptive" => {
@@ -197,7 +203,7 @@ fn validate_thinking(value: &Value) -> Result<(), OpenAiError> {
                 && display != "omitted"
                 && display != "summarized"
             {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "thinking.display must be `omitted` or `summarized`",
                 ));
             }
@@ -205,7 +211,7 @@ fn validate_thinking(value: &Value) -> Result<(), OpenAiError> {
                 .get("display")
                 .is_some_and(|display| !display.is_string())
             {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "thinking.display must be a string",
                 ));
             }
@@ -216,19 +222,19 @@ fn validate_thinking(value: &Value) -> Result<(), OpenAiError> {
                 .get("budget_tokens")
                 .and_then(Value::as_u64)
                 .ok_or_else(|| {
-                    OpenAiError::invalid_request(
+                    InferenceError::invalid_request(
                         "thinking.budget_tokens must be a positive integer",
                     )
                 })?;
             if budget == 0 || budget > u32::MAX as u64 {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "thinking.budget_tokens must be a positive integer",
                 ));
             }
         }
         "disabled" => reject_json_fields(object, &["type"], "thinking")?,
         _ => {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "thinking.type must be `adaptive`, `enabled`, or `disabled`",
             ));
         }
@@ -236,18 +242,20 @@ fn validate_thinking(value: &Value) -> Result<(), OpenAiError> {
     Ok(())
 }
 
-fn validate_context_management(value: &Value) -> Result<(), OpenAiError> {
+fn validate_context_management(value: &Value) -> Result<(), InferenceError> {
     let object = value
         .as_object()
-        .ok_or_else(|| OpenAiError::invalid_request("context_management must be an object"))?;
+        .ok_or_else(|| InferenceError::invalid_request("context_management must be an object"))?;
     reject_json_fields(object, &["edits"], "context_management")?;
     let edits = object
         .get("edits")
         .and_then(Value::as_array)
-        .ok_or_else(|| OpenAiError::invalid_request("context_management.edits must be an array"))?;
+        .ok_or_else(|| {
+            InferenceError::invalid_request("context_management.edits must be an array")
+        })?;
     for (index, edit) in edits.iter().enumerate() {
         let edit = edit.as_object().ok_or_else(|| {
-            OpenAiError::invalid_request(format!(
+            InferenceError::invalid_request(format!(
                 "context_management.edits[{index}] must be an object"
             ))
         })?;
@@ -259,7 +267,7 @@ fn validate_context_management(value: &Value) -> Result<(), OpenAiError> {
         if edit.get("type").and_then(Value::as_str) != Some("clear_thinking_20251015")
             || edit.get("keep").and_then(Value::as_str) != Some("all")
         {
-            return Err(OpenAiError::invalid_request(format!(
+            return Err(InferenceError::invalid_request(format!(
                 "context_management.edits[{index}] must be clear_thinking_20251015 with keep `all`"
             )));
         }
@@ -267,17 +275,17 @@ fn validate_context_management(value: &Value) -> Result<(), OpenAiError> {
     Ok(())
 }
 
-fn validate_assistant_opaque_block(value: &Value) -> Result<(), OpenAiError> {
+fn validate_assistant_opaque_block(value: &Value) -> Result<(), InferenceError> {
     let object = value
         .as_object()
-        .ok_or_else(|| OpenAiError::invalid_request("unsupported assistant content block"))?;
+        .ok_or_else(|| InferenceError::invalid_request("unsupported assistant content block"))?;
     match object.get("type").and_then(Value::as_str) {
         Some("thinking") => {
             reject_json_fields(object, &["type", "thinking", "signature"], "thinking block")?;
             if !object.get("thinking").is_some_and(Value::is_string)
                 || !object.get("signature").is_some_and(Value::is_string)
             {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "thinking block requires thinking and signature strings",
                 ));
             }
@@ -285,13 +293,13 @@ fn validate_assistant_opaque_block(value: &Value) -> Result<(), OpenAiError> {
         Some("redacted_thinking") => {
             reject_json_fields(object, &["type", "data"], "redacted_thinking block")?;
             if !object.get("data").is_some_and(Value::is_string) {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "redacted_thinking block requires a data string",
                 ));
             }
         }
         _ => {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "unsupported assistant content block",
             ));
         }
@@ -303,10 +311,10 @@ fn reject_json_fields(
     fields: &serde_json::Map<String, Value>,
     allowed: &[&str],
     location: &str,
-) -> Result<(), OpenAiError> {
+) -> Result<(), InferenceError> {
     for key in fields.keys() {
         if !allowed.contains(&key.as_str()) {
-            return Err(OpenAiError::invalid_request(format!(
+            return Err(InferenceError::invalid_request(format!(
                 "{location}.{key} is not supported"
             )));
         }

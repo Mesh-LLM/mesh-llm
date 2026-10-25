@@ -201,7 +201,7 @@ async fn serve_binary_stage(mut args: ServeCommandArgs) -> Result<()> {
         .validate_cache_dependencies(&options.config, disk_cache.is_some())?;
     if args.print_effective_config {
         let frontend = options.openai.as_ref().map(|stage| {
-            let mut frontend = skippy_api::serving::OpenAiOptions::embedded_stage_defaults(
+            let mut frontend = skippy_api::serving::InferenceOptions::embedded_stage_defaults(
                 stage.model_id.clone(),
                 stage.default_max_tokens,
                 stage.generation_concurrency,

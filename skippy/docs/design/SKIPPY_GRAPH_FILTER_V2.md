@@ -2,6 +2,13 @@
 
 Status: complete. Graph Filter V2 is the only production stage-filter path.
 
+Stage execution now builds the ordinary graph at its actual runtime shape and
+passes it through the generic admitted-stage partitioner. Extracted stage
+programs and per-tensor geometry recipes are deleted, with no compatibility
+selector. See the [live slicing qualification ledger](SKIPPY_LIVE_SLICE_PROTOTYPE.md)
+for local evidence and the outstanding cross-backend canary; the historical
+completion record below does not certify untested models or backends.
+
 ## Completion Record
 
 The cutover is complete with these final scope decisions:
@@ -46,6 +53,26 @@ graph-derived stage plan:
    boundary, and state ownership from that partition.
 4. Load only the derived tensor set from a new skippy-model-package format.
 5. Validate the realized stage before topology publication.
+
+Metadata planning admits dependencies and typed frontiers; it does not encode
+runtime view offsets, strides, convolution windows, or rollback geometry.
+Whenever ordinary context reuse requires a new graph, the architecture builder
+computes that geometry from the real inputs, then `skippy_realize_stage_graph`
+checks the admitted contract and slices the fresh graph. There is no second
+geometry interpreter. Existing graph reuse preserves the validated graph only
+while its normal reuse identity remains valid. MTP validates its whole auxiliary
+graph without applying the decoder slice.
+
+Cache representation is admitted by the loaded context as well. Reserved graph
+profiles establish the state effects, native memory exporters establish which
+representations are complete, and the intersection selects the cache.
+Later graph builds must preserve that admitted coverage. A stateless phase adds
+no restriction. Full snapshots require explicit admission too: context-owned
+cross-attention inputs are not serialized by the memory exporter, so their
+presence disables prefix reuse without rejecting inference. RAM and disk tiers
+may only select admitted representations. Operator configuration cannot claim attention-only or
+recurrent state, or override the selected representation; planner diagnostics
+are observations, not serving authority.
 
 No model family names, architecture enums, tensor-name heuristics, or mutable
 filtering diagnostics may participate in stage selection.

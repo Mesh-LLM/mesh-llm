@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: linux-rocm: planner image drift\n",
+  "stdout": ""
+}

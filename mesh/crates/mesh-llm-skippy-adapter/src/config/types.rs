@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use skippy_protocol::{
-    FlashAttentionType, StageKvCacheCodec, StageKvCacheMode, StageKvCachePayload,
-};
+use skippy_protocol::{FlashAttentionType, StageKvCacheCodec, StageKvCacheMode};
 use skippy_runtime::package::PackageGenerationInfo;
 use skippy_serving::SpeculativeDecodeConfig;
 
@@ -159,7 +157,6 @@ pub enum ResolvedStageKvCache {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedStageKvCacheTemplate {
     pub mode: StageKvCacheMode,
-    pub payload: StageKvCachePayload,
     pub max_entries: Option<usize>,
     pub max_bytes: Option<u64>,
     pub min_tokens: Option<u64>,
@@ -199,6 +196,7 @@ pub struct ResolvedRequestDefaultsConfig {
     pub reasoning_budget: Option<ReasoningBudget>,
     pub chat_template: Option<String>,
     pub chat_template_file: Option<String>,
+    pub allow_request_chat_template: Option<bool>,
     pub jinja: Option<bool>,
     pub chat_template_kwargs: Option<toml::Value>,
     pub skip_chat_parsing: Option<bool>,
@@ -208,4 +206,4 @@ pub struct ResolvedRequestDefaultsConfig {
     pub json_schema: Option<toml::Value>,
 }
 
-pub use skippy_api::serving::OpenAiOptions as ResolvedEmbeddedOpenAiArgs;
+pub use skippy_api::serving::InferenceOptions as ResolvedEmbeddedOpenAiArgs;

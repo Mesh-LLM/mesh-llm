@@ -10,6 +10,14 @@ When the stage ABI changes, also read
 `.agents/skills/llama-stage-patch-changes/SKILL.md`. Their patch ownership,
 queue reconstruction, ABI, and validation rules are requirements.
 
+Do not write new Python tooling during repair, including temporary or inline
+helpers. Follow `.agents/skills/manage-ci/SKILL.md` for new repository
+automation in typed `tools/xtask` commands; from the repository root,
+`cargo xtool repo-consistency ci-crate-lists` is an existing alias example.
+The existing patch generator below is transitional and stays in use until an
+equivalent Rust command has passed parity checks. This does not grant permission
+to edit the trusted scripts or CI boundary listed below.
+
 Own the repair end to end:
 
 1. Run `scripts/prepare-llama.sh pinned` and inspect the first real failure. If
@@ -22,7 +30,8 @@ Own the repair end to end:
    the broken patches. Keep the queue ordered. Do not delete instrumentation or
    weaken a gate to get a build through.
 3. Generate model-builder stage controls through the Clang rewriter and
-   `scripts/generate-skippy-family-patch.py`. Do not hand-edit per-family stage
+   `cargo xtool automation native-generator generate` with absolute `--git`
+   and `--rewriter` paths and `--max-diff-bytes 16777216`. Do not hand-edit per-family stage
    filtering or `begin_block`/`end_block` patches. Extend general AST rules for
    conventional upstream shapes. Preserve an exact `unsupported_shape` refusal
    for irregular builders until a sound general rule exists.

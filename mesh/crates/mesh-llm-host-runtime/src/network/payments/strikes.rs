@@ -1,6 +1,6 @@
 //! Local payee blocklist for "paid but undelivered" exchanges.
 //!
-//! A strike is recorded only when this node's input payment settled, the
+//! A strike is recorded only when this node's deposit settled, the
 //! provider then ended the exchange without delivering any output and without
 //! completing it, and the payer did not cancel. Repeated strikes against one
 //! provider endpoint block it from paid routing for a while.
@@ -9,7 +9,7 @@
 //! because a shared blocklist would let any peer get an honest provider
 //! excluded by reporting fabricated strikes. It also does not stop a provider
 //! that returns under a fresh endpoint id; the per-strike loss is bounded by
-//! the input charge because output is paid for only after delivery.
+//! the 1-sat deposit because usage is paid for only after delivery.
 //!
 //! State lives next to the payments ledger (`payments/payee_strikes.json`) so a
 //! restart does not clear it. An operator clears a false positive by removing

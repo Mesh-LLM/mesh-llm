@@ -255,7 +255,13 @@ pub fn apply_transitive_ann(
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
     #[cfg(feature = "payments")]
     {
-        existing.lightning_offers = ann.lightning_offers.clone();
+        // Admission is established only by direct gossip. Once the seller
+        // has spoken for itself, a relay cannot change its economics (including
+        // erasing offers when an older relay drops the additive payment field).
+        // Direct updates remain authoritative, including an intentional clear.
+        if !existing.is_admitted() {
+            existing.lightning_offers = ann.lightning_offers.clone();
+        }
     }
     crate::merge_advertisement(
         &mut existing.cache_affinity,

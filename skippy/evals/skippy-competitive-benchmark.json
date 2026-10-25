@@ -117,8 +117,7 @@
       "layer_end": 16,
       "synthetic_context_size": 32768,
       "thoughtworks_context_size": 131072,
-      "thoughtworks_active_lanes": 16,
-      "cache_payload": "resident-kv"
+      "thoughtworks_active_lanes": 16
     },
     {
       "key": "deepseek-v2-moe",
@@ -148,8 +147,7 @@
       "layer_end": 27,
       "synthetic_context_size": 4096,
       "thoughtworks_context_size": 16384,
-      "thoughtworks_active_lanes": 8,
-      "cache_payload": "resident-kv"
+      "thoughtworks_active_lanes": 8
     },
     {
       "key": "falcon-h1-recurrent",
@@ -179,8 +177,7 @@
       "layer_end": 24,
       "synthetic_context_size": 32768,
       "thoughtworks_context_size": 16384,
-      "thoughtworks_active_lanes": 2,
-      "cache_payload": "kv-recurrent"
+      "thoughtworks_active_lanes": 2
     },
     {
       "key": "granite-h1-hybrid",
@@ -218,8 +215,7 @@
       "layer_end": 40,
       "synthetic_context_size": 32768,
       "thoughtworks_context_size": 131072,
-      "thoughtworks_active_lanes": 16,
-      "cache_payload": "kv-recurrent"
+      "thoughtworks_active_lanes": 16
     }
   ]
 }

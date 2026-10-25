@@ -1,0 +1,5 @@
+{
+  "code": 1,
+  "stderr": "runner image identity: ci-linux-runtime-slice.yml: seed guard image references are limited to the runtime consumer job\n",
+  "stdout": ""
+}

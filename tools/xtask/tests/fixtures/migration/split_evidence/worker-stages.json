@@ -1,0 +1,15 @@
+{
+  "topologies": [{
+    "topology_id": "topology-a", "run_id": "run-a", "model_id": "model-a",
+    "package_ref": "hf:test/model@revision",
+    "manifest_sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "stages": [
+      {"stage_id":"stage-0","stage_index":0,"node_id":"seed-node-0001","layer_start":0,"layer_end":12,"endpoint":{"bind_addr":"127.0.0.1:5501"}},
+      {"stage_id":"stage-1","stage_index":1,"node_id":"worker-node-0002","layer_start":12,"layer_end":24,"endpoint":{"bind_addr":"127.0.0.1:5502"}}
+    ]
+  }],
+  "statuses": [
+    {"topology_id":"topology-a","run_id":"run-a","model_id":"model-a","package_ref":"hf:test/model@revision","manifest_sha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","stage_id":"stage-0","stage_index":0,"node_id":"seed-node-0001","layer_start":0,"layer_end":12,"bind_addr":"127.0.0.1:5501","state":"ready"},
+    {"topology_id":"topology-a","run_id":"run-a","model_id":"model-a","package_ref":"hf:test/model@revision","manifest_sha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","stage_id":"stage-1","stage_index":1,"node_id":"worker-node-0002","layer_start":12,"layer_end":24,"bind_addr":"127.0.0.1:5502","state":"ready"}
+  ]
+}

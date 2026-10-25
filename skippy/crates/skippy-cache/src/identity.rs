@@ -651,7 +651,6 @@ mod identity_completeness_tests {
             activation_codec: Default::default(),
             activation_codec_policy: Default::default(),
             execution_contract: String::new(),
-            kv_graph_state: String::new(),
             activation_import_identities: Vec::new(),
             activation_import_bindings: Vec::new(),
             activation_export_identities: Vec::new(),
@@ -999,7 +998,6 @@ mod identity_stability_tests {
             activation_codec: Default::default(),
             activation_codec_policy: Default::default(),
             execution_contract: String::new(),
-            kv_graph_state: String::new(),
             activation_import_identities: Vec::new(),
             activation_import_bindings: Vec::new(),
             activation_export_identities: Vec::new(),
@@ -1063,7 +1061,6 @@ mod identity_stability_tests {
             kv_cache: Some(skippy_protocol::StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: skippy_protocol::StageKvCacheMode::LookupRecord,
-                payload: skippy_protocol::StageKvCachePayload::KvRecurrent,
                 max_entries: 64,
                 max_bytes: 0,
                 l2_max_bytes: 0,

@@ -10,11 +10,12 @@ use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::tool_emulation;
 use crate::frontend::util::openai_backend_error;
 use crate::kv_integration::StagePrefixCachePayload;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::GenerationHookSignals;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_inference_api::PrefillHookSignals;
 use skippy_inference_api::apply_chat_hook_outcome;
 use skippy_inference_api::chat_skippy_hooks_enabled;
@@ -47,13 +48,13 @@ impl StageOpenAiBackend {
         &self,
         request: &ChatCompletionRequest,
         options: ChatTemplateOptions,
-    ) -> OpenAiResult<PreparedGenerationPrompt> {
+    ) -> InferenceResult<PreparedGenerationPrompt> {
         let backend = self.clone();
         let request = request.clone();
         task::spawn_blocking(move || backend.prepare_chat_prompt(&request, options))
             .await
             .map_err(|error| {
-                OpenAiError::backend(format!("chat prompt preparation task failed: {error}"))
+                InferenceError::backend(format!("chat prompt preparation task failed: {error}"))
             })?
     }
 
@@ -61,12 +62,9 @@ impl StageOpenAiBackend {
         &self,
         request: &ChatCompletionRequest,
         options: ChatTemplateOptions,
-    ) -> OpenAiResult<PreparedGenerationPrompt> {
+    ) -> InferenceResult<PreparedGenerationPrompt> {
         let marker = {
-            let runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+            let runtime = lock_runtime(&self.runtime);
             runtime.media_marker()
         };
 
@@ -143,15 +141,15 @@ impl StageOpenAiBackend {
         marker: &str,
         messages: Option<&[skippy_inference_api::ChatMessage]>,
         include_tools: bool,
-    ) -> OpenAiResult<RenderedChatPrompt> {
+    ) -> InferenceResult<RenderedChatPrompt> {
         let source_messages = messages.unwrap_or(&request.messages);
         let mut media = Vec::new();
         let template_messages = source_messages
             .iter()
             .map(|message| chat_message_generation_value(message, marker, &mut media))
-            .collect::<OpenAiResult<Vec<_>>>()?;
+            .collect::<InferenceResult<Vec<_>>>()?;
         let messages_json = serde_json::to_string(&template_messages).map_err(|error| {
-            OpenAiError::invalid_request(format!("serialize messages: {error}"))
+            InferenceError::invalid_request(format!("serialize messages: {error}"))
         })?;
         let tools_json = if include_tools {
             request
@@ -160,7 +158,7 @@ impl StageOpenAiBackend {
                 .map(serde_json::to_string)
                 .transpose()
                 .map_err(|error| {
-                    OpenAiError::invalid_request(format!("serialize tools: {error}"))
+                    InferenceError::invalid_request(format!("serialize tools: {error}"))
                 })?
         } else {
             None
@@ -172,7 +170,7 @@ impl StageOpenAiBackend {
                 .map(serde_json::to_string)
                 .transpose()
                 .map_err(|error| {
-                    OpenAiError::invalid_request(format!("serialize tool_choice: {error}"))
+                    InferenceError::invalid_request(format!("serialize tool_choice: {error}"))
                 })?
         } else {
             None
@@ -180,12 +178,7 @@ impl StageOpenAiBackend {
         // Short-lock reader pattern: clone the immutable reader and run the
         // template FFI on it, so template rendering never waits behind
         // decode's hold of the runtime mutex (and vice versa).
-        let reader = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let reader = lock_runtime(&self.runtime).model.reader();
         let result = reader
             .apply_chat_template_json(
                 &messages_json,
@@ -205,6 +198,8 @@ impl StageOpenAiBackend {
                 },
             )
             .map_err(openai_backend_error)?;
+        crate::grammar_bounds::check_chat_metadata_grammar(&result.metadata_json)
+            .map_err(InferenceError::invalid_request)?;
         Ok(RenderedChatPrompt {
             prompt: result.prompt,
             media,
@@ -218,7 +213,7 @@ impl StageOpenAiBackend {
         request: &ChatCompletionRequest,
         metadata: Option<&str>,
         is_partial: bool,
-    ) -> OpenAiResult<Option<ParsedChatMessage>> {
+    ) -> InferenceResult<Option<ParsedChatMessage>> {
         let Some(metadata) = metadata else {
             return Ok(None);
         };
@@ -234,12 +229,7 @@ impl StageOpenAiBackend {
             }));
         }
 
-        let model = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let model = lock_runtime(&self.runtime).model.reader();
         self.parse_chat_output_with_reader(&model, text, request, metadata, is_partial)
     }
 
@@ -250,7 +240,7 @@ impl StageOpenAiBackend {
         request: &ChatCompletionRequest,
         metadata: &str,
         is_partial: bool,
-    ) -> OpenAiResult<Option<ParsedChatMessage>> {
+    ) -> InferenceResult<Option<ParsedChatMessage>> {
         // Emulation path: when tools were requested but the prompt was rendered
         // without native tool support, the model emitted TOOL_CALL text lines.
         // Parse those into OpenAI tool_calls instead of using the native parser.
@@ -266,11 +256,11 @@ impl StageOpenAiBackend {
         Ok(parsed_chat_message_from_json(&parsed_json, request))
     }
 
-    pub(super) fn tokenize(&self, prompt: &str) -> OpenAiResult<Vec<i32>> {
+    pub(super) fn tokenize(&self, prompt: &str) -> InferenceResult<Vec<i32>> {
         self.tokenize_with_options(prompt, true)
     }
 
-    pub(super) fn tokenize_continuation(&self, text: &str) -> OpenAiResult<Vec<i32>> {
+    pub(super) fn tokenize_continuation(&self, text: &str) -> InferenceResult<Vec<i32>> {
         self.tokenize_with_options(text, false)
     }
 
@@ -278,17 +268,12 @@ impl StageOpenAiBackend {
         &self,
         text: &str,
         add_special: bool,
-    ) -> OpenAiResult<Vec<i32>> {
+    ) -> InferenceResult<Vec<i32>> {
         // Hold the inference mutex only long enough to clone the immutable
         // reader; the tokenizer FFI runs on the reader, so decode can hold
         // the runtime lock concurrently without serializing tokenization
         // behind it (see render_chat_prompt for the same pattern).
-        let reader = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
-            .model
-            .reader();
+        let reader = lock_runtime(&self.runtime).model.reader();
         reader
             .tokenize(text, add_special)
             .map_err(openai_backend_error)
@@ -298,16 +283,13 @@ impl StageOpenAiBackend {
         &self,
         session_id: &str,
         text: &str,
-    ) -> OpenAiResult<Option<i32>> {
+    ) -> InferenceResult<Option<i32>> {
         let token_ids = self.tokenize_continuation(text)?;
         if token_ids.is_empty() {
             return Ok(None);
         }
         if token_ids.len() > 1 {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+            let mut runtime = lock_runtime(&self.runtime);
             runtime
                 .prefill(session_id, &token_ids[..token_ids.len() - 1])
                 .map_err(openai_backend_error)?;
@@ -326,7 +308,7 @@ impl StageOpenAiBackend {
         last_mid_generation_hook_at: &mut Option<usize>,
         token_signal: Option<TokenSignal>,
         signal_window: Option<GenerationSignalWindow>,
-    ) -> OpenAiResult<Option<i32>> {
+    ) -> InferenceResult<Option<i32>> {
         let Some(hooks) = self.hook_policy.as_ref() else {
             return Ok(None);
         };

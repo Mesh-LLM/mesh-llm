@@ -156,8 +156,8 @@ fn binary_frontend_defaults(
     args: &ServeBinaryArgs,
     config: &StageConfig,
     generation_concurrency: usize,
-) -> skippy_api::serving::OpenAiOptions {
-    let mut defaults = skippy_api::serving::OpenAiOptions::embedded_stage_defaults(
+) -> skippy_api::serving::InferenceOptions {
+    let mut defaults = skippy_api::serving::InferenceOptions::embedded_stage_defaults(
         args.openai_model_id.clone(),
         args.openai_default_max_tokens,
         generation_concurrency,
@@ -197,7 +197,7 @@ pub fn local_openai_options(
         .context("load speculative config")?;
     let mut tuning = args.settings.tuning(args.openai_guardrails)?;
     let speculative = if args.settings.has_speculative_overrides() {
-        let mut defaults = skippy_api::serving::OpenAiOptions::embedded_stage_defaults(
+        let mut defaults = skippy_api::serving::InferenceOptions::embedded_stage_defaults(
             args.model_id.clone(),
             args.default_max_tokens,
             config.lane_count as usize,
@@ -296,7 +296,9 @@ impl From<crate::cli::TelemetryLevel> for skippy_serving::telemetry::TelemetryLe
         }
     }
 }
-impl From<crate::cli::OpenAiGuardrailsCliMode> for skippy_serving::frontend::OpenAiGuardrailsMode {
+impl From<crate::cli::OpenAiGuardrailsCliMode>
+    for skippy_serving::frontend::InferenceGuardrailsMode
+{
     fn from(value: crate::cli::OpenAiGuardrailsCliMode) -> Self {
         match value {
             crate::cli::OpenAiGuardrailsCliMode::Disabled => Self::Disabled,

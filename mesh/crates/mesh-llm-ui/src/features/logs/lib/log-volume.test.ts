@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest'
 import { LogRequestId } from '@/features/logs/api/ids'
 import type { LogRequest } from '@/features/logs/api/schemas'
 import {
@@ -23,6 +23,16 @@ import {
 function utc(hours: number, minutes = 0, seconds = 0): number {
   return Date.UTC(2026, 7, 4, hours, minutes, seconds)
 }
+
+// formatClock/formatHour render in the host timezone by design; pin UTC so the
+// Date.UTC fixtures match the expected labels on any machine.
+beforeAll(() => {
+  vi.stubEnv('TZ', 'UTC')
+})
+
+afterAll(() => {
+  vi.unstubAllEnvs()
+})
 
 function requestAt(createdAt: string): LogRequest {
   return {

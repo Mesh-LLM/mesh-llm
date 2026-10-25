@@ -491,14 +491,6 @@ impl InstanceLifecycleRecord {
         self.state.is_terminal()
     }
 
-    /// Reset drain state (for testing).
-    #[cfg(test)]
-    #[expect(dead_code, reason = "retained for focused drain state tests")]
-    fn reset_drain(&mut self) {
-        self.draining_initiated = false;
-        self.drain_deadline = None;
-    }
-
     /// Set in-flight count directly (for testing).
     #[cfg(test)]
     fn set_in_flight(&self, value: u64) {

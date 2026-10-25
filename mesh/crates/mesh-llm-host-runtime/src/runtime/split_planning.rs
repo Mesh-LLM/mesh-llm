@@ -1321,26 +1321,28 @@ mod tests {
     }
 
     #[test]
-    fn an_override_rechecks_kv_for_every_planned_lane() {
+    fn an_override_that_exceeds_the_lane_scaled_kv_budget_is_rejected() {
         let (pkg, participants, stages) = overridden_stages();
+        let kv_bytes_per_token = 24 * 4096;
         validate_split_capacity(
             "model-a",
             &pkg,
             &participants,
             &stages,
             &[],
-            &capacity_model(50_000, Vec::new(), 65_536, 1),
+            &capacity_model(kv_bytes_per_token, Vec::new(), 65_536, 1),
         )
-        .expect("one lane fits the per-stage KV budget");
-        validate_split_capacity(
+        .expect("one lane of KV fits beside the weights");
+        let error = validate_split_capacity(
             "model-a",
             &pkg,
             &participants,
             &stages,
             &[],
-            &capacity_model(50_000, Vec::new(), 65_536, 4),
+            &capacity_model(kv_bytes_per_token, Vec::new(), 65_536, 4),
         )
-        .expect_err("four lanes must not be approved against a one-lane KV estimate");
+        .expect_err("four lanes of KV must exceed the same node budget");
+        assert!(error.to_string().contains("context-scaled KV"));
     }
 
     #[test]
@@ -1844,5 +1846,11 @@ mod tests {
         assert!(reason.contains("participants ["));
         assert!(reason.contains("max_layers=0"));
         assert!(reason.contains("missing_model_source"));
+    }
+
+    #[test]
+    fn topology_failure_diagnostic_prices_every_kv_lane() {
+        assert_eq!(split_candidate_bytes_per_layer(100, 85, 1, 1), 200);
+        assert_eq!(split_candidate_bytes_per_layer(100, 85, 1, 4), 500);
     }
 }

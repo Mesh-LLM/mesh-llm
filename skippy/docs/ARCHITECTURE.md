@@ -12,7 +12,7 @@ by both products.
 | Surface | Owner | Intended caller and contract |
 |---|---|---|
 | `skippy` CLI | `skippy-cli`, `skippy-commands` | Operators running model management, local OpenAI serving, or explicit stage workers. |
-| HTTP `/v1` frontend | `skippy-inference-api` | OpenAI-compatible request/response and backend contract shared by standalone Skippy and Mesh. Mesh adds discovery, routing, and proxy policy around it. |
+| HTTP inference frontend | `skippy-inference-api` | OpenAI-compatible, Anthropic Messages, and SystemOne routes share a backend and lifecycle contract between standalone Skippy and Mesh. Mesh adds discovery, routing, and proxy policy around it. |
 | Rust model lifecycle | `skippy-api::serving` | Embedding hosts load a model with `ModelLoadRequest` and retain `LoadedModelBackend` while serving. The options are currently a low-level integration contract, not a small stable SDK facade. |
 | Native runtime selection | `skippy-api::native_runtime` | The caller supplies bundle and cache locations. The API neither chooses a product home directory nor downloads implicitly. |
 | Package-v2 format | `skippy-package-format` | Producers and consumers share validated manifests and content identities. Format compatibility is separate from the native ABI. |
@@ -31,7 +31,7 @@ callers; do not duplicate the execution engine or add a crate merely to hide it.
 
 ```text
 operator/client -> Skippy CLI or Mesh ingress
-                -> shared OpenAI frontend / Skippy lifecycle API
+                -> shared inference frontend / Skippy lifecycle API
                 -> serving + scheduler + cache
                 -> Rust runtime -> Skippy C ABI -> patched llama.cpp
 

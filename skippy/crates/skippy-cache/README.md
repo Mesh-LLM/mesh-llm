@@ -264,17 +264,58 @@ README performance claims must be backed by correctness runs and comparable
 llama-server baselines. Rows marked `untested` are intentionally not promoted as
 default evidence yet.
 
-Reproduce the family evidence and README tables with:
+Reproduce the family evidence and README tables with the pinned operator JSON
+profile described in [the cache-family skill](../../../.agents/skills/skippy-cache-family-bench/SKILL.md).
+Preparation observes the model shards, binaries, native build and selected toolkit
+directories before launching the producer. Keep those inputs fixed across both arms:
 
 ```bash
-skippy/evals/skippy-cache-family-bench.sh /tmp/skippy-cache-family-bench
+SKIPPY_CACHE_OPERATOR_INPUT=/absolute/cache-operator.json \
+  skippy/evals/skippy-cache-family-bench.sh /tmp/skippy-cache-family-bench
 ```
 
 For a faster rerun after building locally:
 
 ```bash
-SKIPPY_CACHE_SKIP_BUILD=1 skippy/evals/skippy-cache-family-bench.sh /tmp/skippy-cache-family-bench
+SKIPPY_CACHE_OPERATOR_INPUT=/absolute/cache-operator.json SKIPPY_CACHE_SKIP_BUILD=1 \
+  skippy/evals/skippy-cache-family-bench.sh /tmp/skippy-cache-family-bench
 ```
+
+For an MoE tensor-presence/cache smoke, reuse an observed correctness profile from
+`cache-family-run prepare-full`. For example, with the current DeepSeek2 catalog
+model already present, select its 27-layer profile and the pinned native
+`skippy-package-builder` inspector from the same build:
+
+```bash
+jq --arg inspector "$SKIPPY_CACHE_MODEL_INSPECTOR" \
+   --arg sha "$SKIPPY_CACHE_MODEL_INSPECTOR_SHA256" \
+   --arg commit "$SKIPPY_CACHE_NATIVE_SOURCE_COMMIT" '
+  .profiles.deepseek2.correctness as $profile |
+  {schema_version:1, inspector:$inspector, inspector_sha256:$sha,
+   inspector_source_commit:$commit, execution_seconds:3600,
+   cases:[{layer_end:27, correctness:($profile + {
+     prefix_tokens:32, runtime_lane_count:4, cache_hit_repeats:3,
+     execution_seconds:900, cell_seconds:900,
+     topologies:["one-stage","split-middle","split-final"]})}]}
+' /absolute/preparation/cache-family-input.json > /tmp/moe-input.json
+just automation-run automation cache-family-moe \
+  --input /tmp/moe-input.json --output /tmp/moe-smoke-fresh
+```
+
+The inspector path is absolute; its SHA-256 binds the supplied executable, while
+the source commit is caller-declared provenance. Other current catalog profiles
+can be supplied explicitly with their actual layer count; `split-stage0` is also
+supported. Missing models, unknown catalog keys, changed pins and absent expert
+tensors refuse admission. The former `olmoe`/`qwen2moe`/`qwen3moe` default aliases
+are absent from the current catalog and do not select a substitute model.
+
+The command retains `moe-expert-smoke.json`, the flattened observation table
+`moe-expert-smoke-table.json`, and Markdown tables. Acceptance follows the final
+completed parent receipt. The table keeps tensor ranges/counts/bytes, suffix and
+cache-hit results, resident/cache storage and serialized bytes. Native sequence
+IDs remain unmeasured because the current correctness report does not expose
+them. These checks establish expert tensor presence plus cache correctness;
+real model/backend execution and performance claims require their own results.
 
 Local correctness evidence below was collected on the same machine with
 `n_predict = 1`, `n_gpu_layers = -1`, Skippy `--runtime-lane-count 1`, and

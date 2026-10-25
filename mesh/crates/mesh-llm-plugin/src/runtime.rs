@@ -677,6 +677,23 @@ struct RuntimeState<P> {
     pending_host_responses: PendingHostResponses,
     /// What the host listed in its `InitializeRequest`; empty until then.
     host_capabilities: std::sync::RwLock<Arc<[String]>>,
+    /// An error from `on_initialized`, which runs on its own task: it ends the
+    /// runtime, as an error from the read loop does.
+    fatal_tx: mpsc::Sender<anyhow::Error>,
+}
+
+fn panic_message(join_error: tokio::task::JoinError) -> String {
+    if !join_error.is_panic() {
+        return join_error.to_string();
+    }
+    let panic = join_error.into_panic();
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "a non-string panic payload".to_string()
+    }
 }
 
 struct OrderedPayload {
@@ -699,12 +716,14 @@ impl PluginRuntime {
         let (outbound_tx, outbound_rx) = mpsc::channel(256);
         let (ordered_tx, ordered_rx) = mpsc::channel(256);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (fatal_tx, mut fatal_rx) = mpsc::channel(1);
         let state = Arc::new(RuntimeState {
             plugin: Arc::new(RwLock::new(plugin)),
             plugin_id,
             outbound_tx,
             pending_host_responses: Arc::new(Mutex::new(HashMap::new())),
             host_capabilities: std::sync::RwLock::new(Arc::from([])),
+            fatal_tx,
         });
         let mut writer = tokio::spawn(Self::write_loop(
             write,
@@ -724,6 +743,7 @@ impl PluginRuntime {
 
         let result = tokio::select! {
             read_result = &mut read_result => read_result,
+            Some(err) = fatal_rx.recv() => Err(err),
             writer_result = &mut writer => match writer_result {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(err)) => Err(err),
@@ -985,7 +1005,7 @@ impl PluginRuntime {
         Ok(())
     }
 
-    async fn handle_initialize<P: Plugin + Clone + Sync>(
+    async fn handle_initialize<P: Plugin + Clone + Sync + 'static>(
         state: Arc<RuntimeState<P>>,
         request_id: u64,
         request: proto::InitializeRequest,
@@ -995,7 +1015,7 @@ impl PluginRuntime {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Arc::from(request.host_capabilities.clone());
-        let mut plugin = state.plugin.write().await;
+        let mut plugin = state.plugin.clone().write_owned().await;
         let mut context = Self::context(&state);
         if plugin
             .manifest()
@@ -1043,8 +1063,28 @@ impl PluginRuntime {
         )
         .await?;
 
-        let mut context = Self::context(&state);
-        plugin.on_initialized(&mut context).await?;
+        // `on_initialized` may wait for the host (to announce a plugin key, or
+        // ask for a peer block), and the host's reply arrives on this read loop.
+        // So it runs on its own task and the loop keeps reading. The task keeps
+        // the plugin locked, so no other handler runs before it finishes. An
+        // error or a panic in it still ends the runtime.
+        let task_state = state.clone();
+        let initialized = tokio::spawn(async move {
+            let mut context = Self::context(&task_state);
+            plugin.on_initialized(&mut context).await
+        });
+        let fatal_state = state.clone();
+        tokio::spawn(async move {
+            let err = match initialized.await {
+                Ok(Ok(())) => return,
+                Ok(Err(err)) => err,
+                Err(join_error) => anyhow::anyhow!(
+                    "plugin on_initialized panicked: {}",
+                    panic_message(join_error)
+                ),
+            };
+            let _ = fatal_state.fatal_tx.send(err).await;
+        });
         Ok(true)
     }
 
@@ -1817,5 +1857,160 @@ mod tests {
         );
 
         runtime.abort();
+    }
+
+    #[cfg(unix)]
+    async fn initialize(host_stream: &mut LocalStream, host_capabilities: Vec<String>) {
+        write_envelope(
+            host_stream,
+            &proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: "demo".into(),
+                request_id: 1,
+                payload: Some(proto::envelope::Payload::InitializeRequest(
+                    proto::InitializeRequest {
+                        host_protocol_version: PROTOCOL_VERSION,
+                        host_capabilities,
+                        ..Default::default()
+                    },
+                )),
+            },
+        )
+        .await
+        .unwrap();
+        let response = timeout(Duration::from_secs(1), read_envelope(host_stream))
+            .await
+            .expect("initialize response")
+            .unwrap();
+        assert!(matches!(
+            response.payload,
+            Some(proto::envelope::Payload::InitializeResponse(_))
+        ));
+    }
+
+    // A plugin announces its key from `on_initialized`, and the host's reply
+    // comes in on the same read loop that delivered `InitializeRequest`. The
+    // loop must keep reading while `on_initialized` waits, or the reply is
+    // never read and the announce times out.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_key_announced_from_on_initialized_gets_the_hosts_reply() {
+        let (announced_tx, announced_rx) = tokio::sync::oneshot::channel();
+        let announced_tx = Arc::new(Mutex::new(Some(announced_tx)));
+        let plugin = SimplePlugin::new(PluginMetadata::new(
+            "demo",
+            "1.0.0",
+            plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
+        ))
+        .on_initialized(move |context| {
+            let announced_tx = announced_tx.clone();
+            Box::pin(async move {
+                let response = context.announce_plugin_key(vec![7; 32]).await;
+                if let Some(tx) = announced_tx.lock().unwrap().take() {
+                    let _ = tx.send(response.map_err(|err| err.to_string()));
+                }
+                Ok(())
+            })
+        });
+
+        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
+        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+            plugin,
+            LocalStream::Unix(plugin_stream),
+        ));
+        let mut host_stream = LocalStream::Unix(host_stream);
+        initialize(
+            &mut host_stream,
+            vec![crate::host_capabilities::PLUGIN_KEYS.into()],
+        )
+        .await;
+
+        let request = timeout(Duration::from_secs(1), read_envelope(&mut host_stream))
+            .await
+            .expect("the plugin should ask the host to announce its key")
+            .unwrap();
+        let Some(proto::envelope::Payload::PluginKeyRequest(key_request)) = request.payload else {
+            panic!("expected a plugin key request, got {:?}", request.payload);
+        };
+        assert_eq!(key_request.public_key, vec![7; 32]);
+        write_envelope(
+            &mut host_stream,
+            &proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: "demo".into(),
+                request_id: request.request_id,
+                payload: Some(proto::envelope::Payload::PluginKeyResponse(
+                    proto::PluginKeyResponse {
+                        node_id: "a".repeat(64),
+                        binding_signature: vec![9; 64],
+                    },
+                )),
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = timeout(Duration::from_secs(1), announced_rx)
+            .await
+            .expect("the announce should get the reply, not time out")
+            .unwrap()
+            .expect("the announce should succeed");
+        assert_eq!(response.node_id, "a".repeat(64));
+        assert_eq!(response.binding_signature, vec![9; 64]);
+
+        runtime.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_panic_in_on_initialized_ends_the_runtime_with_an_error() {
+        let plugin = SimplePlugin::new(PluginMetadata::new(
+            "demo",
+            "1.0.0",
+            plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
+        ))
+        .on_initialized(|_context| Box::pin(async { panic!("startup panicked") }));
+
+        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
+        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+            plugin,
+            LocalStream::Unix(plugin_stream),
+        ));
+        let mut host_stream = LocalStream::Unix(host_stream);
+        initialize(&mut host_stream, Vec::new()).await;
+
+        let result = timeout(Duration::from_secs(1), runtime)
+            .await
+            .expect("the runtime should end")
+            .unwrap();
+        let err = result.expect_err("a panic in on_initialized should end the runtime");
+        assert!(err.to_string().contains("on_initialized panicked"), "{err}");
+        assert!(err.to_string().contains("startup panicked"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_error_from_on_initialized_still_ends_the_runtime() {
+        let plugin = SimplePlugin::new(PluginMetadata::new(
+            "demo",
+            "1.0.0",
+            plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
+        ))
+        .on_initialized(|_context| Box::pin(async { bail!("startup failed") }));
+
+        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
+        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+            plugin,
+            LocalStream::Unix(plugin_stream),
+        ));
+        let mut host_stream = LocalStream::Unix(host_stream);
+        initialize(&mut host_stream, Vec::new()).await;
+
+        let result = timeout(Duration::from_secs(1), runtime)
+            .await
+            .expect("the runtime should end")
+            .unwrap();
+        let err = result.expect_err("the error from on_initialized should end the runtime");
+        assert!(err.to_string().contains("startup failed"), "{err}");
     }
 }

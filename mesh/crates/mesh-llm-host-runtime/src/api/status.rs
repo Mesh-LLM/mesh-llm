@@ -19,7 +19,7 @@ pub(crate) use mesh_llm_control_api::status::metrics::{
 };
 pub(crate) use mesh_llm_control_api::status::runtime::*;
 use serde::Serialize;
-use skippy_serving::OpenAiGuardrailsStatus;
+use skippy_serving::InferenceGuardrailsStatus;
 
 pub(crate) fn current_runtime_events_summary() -> Option<RuntimeEventsStatusSummary> {
     let engine = crate::runtime_events::runtime_event_engine()?;
@@ -151,8 +151,8 @@ pub(crate) struct OpenAiGuardrailsPayload {
     pub(crate) max_structured_retries: u8,
 }
 
-impl From<OpenAiGuardrailsStatus> for OpenAiGuardrailsPayload {
-    fn from(value: OpenAiGuardrailsStatus) -> Self {
+impl From<InferenceGuardrailsStatus> for OpenAiGuardrailsPayload {
+    fn from(value: InferenceGuardrailsStatus) -> Self {
         Self {
             mode: value.mode,
             target: value.target,
@@ -1325,7 +1325,7 @@ mod tests {
         let payload = build_runtime_status_payload(
             "Qwen-Test",
             Some("skippy".to_string()),
-            Some(OpenAiGuardrailsPayload::from(OpenAiGuardrailsStatus {
+            Some(OpenAiGuardrailsPayload::from(InferenceGuardrailsStatus {
                 mode: "metrics",
                 target: "skippy",
                 streaming: "pass_through",
@@ -1392,7 +1392,7 @@ mod tests {
         let payload = build_runtime_status_payload(
             "Qwen-Test",
             Some("skippy".to_string()),
-            Some(OpenAiGuardrailsPayload::from(OpenAiGuardrailsStatus {
+            Some(OpenAiGuardrailsPayload::from(InferenceGuardrailsStatus {
                 mode: "disabled",
                 target: "skippy",
                 streaming: "pass_through",

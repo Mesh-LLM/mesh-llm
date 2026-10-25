@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--body",
+    "nope.md",
+    "--has"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "Traceback (most recent call last):\nFileNotFoundError: [Errno 2] No such file or directory: 'nope.md'\n",
+  "stdout": ""
+}

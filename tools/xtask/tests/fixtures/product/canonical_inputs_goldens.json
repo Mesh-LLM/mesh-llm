@@ -1,0 +1,213 @@
+{
+  "absolute_and_dotted_inputs": {
+    "code": 0,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "",
+    "stdout": "{scratch}/ws/host\n{scratch}/ws/runtime\n{scratch}/ws/out/product\n"
+  },
+  "dotdot_escape": {
+    "code": 1,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "CI artifact path escapes GITHUB_WORKSPACE: ../ws-other -> {scratch}/ws-other\n",
+    "stdout": ""
+  },
+  "host_input_is_file": {
+    "code": 1,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "CI producer input is not a directory: {scratch}/ws/host\n",
+    "stdout": ""
+  },
+  "missing_host_input": {
+    "code": 1,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "CI producer input is not a directory: {scratch}/ws/absent\n",
+    "stdout": ""
+  },
+  "missing_workspace": {
+    "code": 1,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: '{scratch}/nope'\n",
+    "stdout": ""
+  },
+  "output_contains_runtime": {
+    "code": 1,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "product output overlaps runtime producer input: {scratch}/ws/runtime and {scratch}/ws/runtime/rt\n",
+    "stdout": ""
+  },
+  "output_inside_host": {
+    "code": 1,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "product output overlaps host producer input: {scratch}/ws/host/out and {scratch}/ws/host\n",
+    "stdout": ""
+  },
+  "output_is_workspace": {
+    "code": 1,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "product output cannot be GITHUB_WORKSPACE: {scratch}/ws\n",
+    "stdout": ""
+  },
+  "output_sibling_prefix": {
+    "code": 0,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "",
+    "stdout": "{scratch}/ws/host\n{scratch}/ws/runtime\n{scratch}/ws/hostile\n"
+  },
+  "relative_inputs": {
+    "code": 0,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "",
+    "stdout": "{scratch}/ws/host\n{scratch}/ws/runtime\n{scratch}/ws/out/product\n"
+  },
+  "symlink_escape": {
+    "code": 1,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/escape-link",
+      "ws/host-link",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "CI artifact path escapes GITHUB_WORKSPACE: escape-link -> {scratch}/outside\n",
+    "stdout": ""
+  },
+  "symlinked_host_resolves": {
+    "code": 0,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/escape-link",
+      "ws/host-link",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "",
+    "stdout": "{scratch}/ws/host\n{scratch}/ws/runtime\n{scratch}/ws/out\n"
+  },
+  "too_few_arguments": {
+    "code": 1,
+    "json": {
+      "ws/runtime/rt/manifest.json": "{}"
+    },
+    "paths": [
+      "ws/",
+      "ws/host/",
+      "ws/host/mesh-llm",
+      "ws/runtime/",
+      "ws/runtime/rt/",
+      "ws/runtime/rt/manifest.json"
+    ],
+    "stderr": "IndexError: list index out of range\n",
+    "stdout": ""
+  }
+}

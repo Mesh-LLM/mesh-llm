@@ -31,6 +31,8 @@ built-in runtime default.
 |---|---|
 | `MESH_LLM_CONFIG` | Full path to the config file, instead of `~/.mesh-llm/config.toml` |
 | `MESH_LLM_LIFECYCLE_LOG_PARSER` | Overrides `runtime.lifecycle_log_parser`; accepts `auto`, `enabled`, or `disabled` |
+| `MESH_LLM_NO_UPDATE_CHECK` | Overrides `updates.check`; `1` turns the release checks off, `0` on |
+| `MESH_LLM_NO_RUNTIME_DOWNLOAD` | Overrides `runtime.native_runtime.download`; `1` turns runtime downloads at startup off, `0` on |
 | `MESH_LLM_JOIN` | Invite token for a private mesh; equivalent to one `--join` |
 | `MESH_LLM_JOIN_FILE` | Path to a file holding the invite token; equivalent to `--join-file`, and re-read on every rejoin attempt |
 
@@ -48,7 +50,13 @@ mesh-llm config validate --config-path ./mesh.toml
 mesh-llm config validate --config-path ./mesh.toml --json
 ```
 
-`config validate` checks the TOML file without starting a node.
+`config validate` checks the TOML file without starting a node. It also
+checks each `hardware.model_path` the way `serve` does at startup: an absolute
+path to a regular file, not a symlink. That check reads the disk of the machine
+running `config validate`, which is not always the node that will use the
+file: you can validate a config on your laptop and then apply it to a remote
+node through owner-control, where the model is. So a path that fails the check
+is reported as a warning, not an error.
 
 ## Group 1: file, schema, and reload
 
@@ -88,6 +96,7 @@ produces a clear startup error rather than a partial start.
 | `telemetry.prompt_shape_metrics` | boolean | `false` | node-level | process restart | wired; exports token-count histograms only when explicitly enabled | none |
 | `telemetry.metrics.endpoint` | URL | unset (falls back to `telemetry.endpoint`) | node-level | process restart | wired | none |
 | `analytics.enabled` | boolean | unset (anonymous usage reporting is on when an analytics key is available, compiled in or set at run time); `false` opts out permanently | node-level | process restart | wired | `mesh-llm analytics disable` |
+| `updates.check` | boolean | unset (mesh-llm checks for a newer release at startup and shows it as a notice and in the web console); `false` turns the checks off, e.g. for installs that a package manager updates | node-level | process restart | wired | none |
 | `logging.audit.enabled` | boolean | unset | node-level | process restart | wired | none |
 | `logging.audit.log_path` | path | unset | node-level | process restart | wired | none |
 | `logging.audit.log_format` | enum | `json_lines` | node-level | process restart | wired | none |
@@ -128,6 +137,7 @@ produces a clear startup error rather than a partial start.
 | `runtime.reconcile_model_targets` | boolean | `false` | node-level | process restart | wired | none |
 | `runtime.reconcile_model_target_demand_upgrades` | boolean | `false` | node-level | process restart | wired | none |
 | `runtime.native_runtime.mesh_version`<br>`runtime.native_runtime.skippy_abi`<br>`runtime.native_runtime.selection` | string | unset (auto-selected) | node-level | process restart | wired | none |
+| `runtime.native_runtime.download` | boolean | unset (startup fetches the release catalog and downloads a missing runtime); `false` uses only bundled and installed runtimes, e.g. when a package manager ships them. `mesh-llm runtime install` ignores it | node-level | process restart | wired | none |
 | `runtime.kv_cache.disk.mode` | enum | `off` (default), `auto`, `fixed` | node-level | process restart | wired | `--kv-cache-disk` |
 | `runtime.kv_cache.disk.directory` | absolute path | `$MESH_LLM_HOME/kv-cache` | node-level | process restart | wired | `--kv-cache-disk-dir` |
 | `runtime.kv_cache.disk.budget_mib` | integer | required and > 0 only for `fixed` | node-level | applies dynamically | wired | fixed size passed to `--kv-cache-disk` |
@@ -180,7 +190,7 @@ normal warnings in every mode.
 | `model_fit.ubatch` | integer | `0` = auto (`n_ubatch`); should not exceed `batch` | both | model reload | wired | none |
 | `model_fit.cache_type_k`<br>`model_fit.cache_type_v` | enum (dtype) | `auto` (default) follows package-validated publisher KV metadata, then publisher compute dtype, then F16; explicit schema values are `f16`, `f32`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, and `q5_1`, gated by runtime support | both | model reload | wired | none |
 | `model_fit.kv_offload` | bool-or-`auto` | `auto` | both | model reload | wired | none |
-| `model_fit.kv_unified` | legacy bool-or-`auto` | Unified KV is always used; `auto` and `true` are accepted, `false` is rejected | both | model reload | wired (hidden compatibility setting) | none |
+| `model_fit.kv_unified` | bool-or-`auto` | `auto` derives from lane count; `false` requests per-sequence KV (multi-lane activation exports require unified KV) | both | model reload | wired (hidden compatibility setting) | none |
 | `model_fit.cache_ram_mib` | integer | `0`/unset = host-RAM L2 disabled | both | model reload | wired; requires prefix caching and active L3 | none |
 | `model_fit.cache_idle_slots` | integer | unset uses the runtime lane count; `0` drops every reset lane, positive values cap retained idle sessions | both | model reload | wired | none |
 | `model_fit.prompt_cache` | bool-or-`auto` | `auto` | both | model reload | wired | none |
@@ -190,7 +200,6 @@ normal warnings in every mode.
 | `model_fit.prefix_cache.min_tokens` | integer | runtime default | both | model reload | wired | none |
 | `model_fit.prefix_cache.shared_stride_tokens` | integer | runtime default | both | model reload | wired | none |
 | `model_fit.prefix_cache.shared_record_limit` | integer | runtime default | both | model reload | wired | none |
-| `model_fit.prefix_cache.payload_mode` | enum | `resident-kv`, `kv-recurrent`, `full-state`, `auto` (default) | both | model reload | wired | none |
 | `model_fit.keep_tokens` | integer | unset | both | model reload | unwired | none |
 | `model_fit.context_shift` | bool-or-`auto` | `auto` | both | model reload | unwired | none |
 | `model_fit.swa_full` | boolean | unset | both | model reload | wired | none |
@@ -308,10 +317,10 @@ configuration should use typed per-model `topology`; explicit `--model` and
 | `speculative.ngram_proposer` | enum | `cache` (default), `suffix` | both | model reload | wired | none |
 | `speculative.ngram_max_proposal_tokens` | integer | N-gram maximum | both | model reload | wired | none |
 | `speculative.ngram_fallback` | string | `none` (default), `draft`; `draft` requires an N-gram proposer, a configured draft model, and pipeline depth greater than one | both | model reload | wired | `--speculative-ngram-fallback` |
-| `speculative.gate` | boolean or `auto` | `false` (default), `true`, `auto`; closed-loop gating that periodically measures whether speculation pays and stands it down when it does not. `auto` defers to the built-in default. Overridden by `SKIPPY_SPECULATION_GATE`, which decides on its own when set | both | model reload | wired | — |
+| `speculative.gate` | boolean or `auto` | **`true` (default)**, `false`, `auto`; closed-loop gating that periodically measures whether speculation pays and stands it down when it does not. On by default because a model package can declare speculation, so a deployment can be in a losing regime without having opted in; a governor is only created when the resolved plan actually speculates, so a non-speculating deployment pays nothing. `auto` defers to the built-in default. Overridden by `SKIPPY_SPECULATION_GATE`, which decides on its own when set | both | model reload | wired | — |
 | `speculative.gate_min_window_s` | integer | `60` (default); shortest measurement window a gate verdict may be drawn from. `0` restores the default | both | model reload | wired | — |
-| `speculative.gate_min_requests` | integer | `3` (default); matching requests a window needs before it can be judged, since one request's rate is noise. Clamped to at least `1` | both | model reload | wired | — |
-| `speculative.gate_decisive_margin` | float | `0.15` (default); fractional change in mean decode rate needed to call a trial decisive. Must sit in `(0, 1)` and above run-to-run noise, measured at roughly ±8% window to window | both | model reload | wired | — |
+| `speculative.gate_min_requests` | integer | `8` (default); matching requests a window needs before it can be judged, since one request's rate is noise. Eight rather than three because the decisive margin is small enough that the mean has to be tight: at the measured 0.49% per-request CV, three requests give a 0.28% standard error and eight give 0.17%. Clamped to at least `1` | both | model reload | wired | — |
+| `speculative.gate_decisive_margin` | float | `0.05` (default); fractional improvement in mean decode rate needed to call a trial decisive. Must sit in `(0, 1)`. Measured against the quantity the gate compares — a window mean of per-request rates within one process, where the per-request CV is 0.49%, so an 8-request window mean carries 0.34% at two sigma. Not the ±8% figure, which is cross-run spread on a wall-clock rate the gate no longer reads. At `0.15` the gate could not catch its own motivating regression | both | model reload | wired | — |
 | `speculative.gate_cooldown_s` | integer | `1800` (default); quiet period between trials, so the gate cannot oscillate. One window in every cooldown is spent measuring the setting not in use | both | model reload | wired | — |
 | `speculative.extension_max_tokens` | integer | N-gram output budget | both | model reload | wired (requires native MTP plus an N-gram proposer) | none |
 | `speculative.native_mtp_reject_cooldown_tokens`<br>`speculative.native_mtp_suppress_cooldown_drafts`<br>`speculative.native_mtp_suppress_cooldown_draft_limit` | integer / boolean | runtime defaults | both | model reload | wired | none |
@@ -325,6 +334,19 @@ Request precedence: request payload values still win. Config only supplies a
 fallback for fields the request body leaves absent or null. Sampling values
 are encoded into the stage protocol and native sampler chain; chat defaults
 are applied by the embedded OpenAI frontend before prompt rendering.
+
+The chat template is the exception. A template is code: the node renders it
+with a Jinja engine that has no recursion, loop, or memory limits, so a
+hostile template can crash the process or hold the model's template lock.
+A request that sets `chat_template` is rejected with a 400 unless the node
+that renders it enables `request_defaults.allow_request_chat_template`; when
+enabled, the request's template takes precedence over the configured one.
+Only the serving node's own configuration can enable it, and enabling it
+trusts every caller that can reach that node, including requests routed to
+it through the mesh. Template execution is not sandboxed. To migrate a
+client that sent `chat_template` with each request, set the template in
+`request_defaults.chat_template` on the serving node instead, or enable the
+opt-in on a node whose callers are all trusted.
 
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
@@ -352,6 +374,7 @@ are applied by the embedded OpenAI frontend before prompt rendering.
 | `request_defaults.reasoning_enabled` | bool-or-enum | `auto`, `off`, `on` | both | request-time | wired | none |
 | `request_defaults.reasoning_budget` | integer-or-enum | `auto`, `low`, `medium`, `high` | both | request-time | wired | none |
 | `request_defaults.chat_template`<br>`request_defaults.chat_template_file`<br>`request_defaults.jinja` | string / path / boolean | backend auto-detection default | both | request-time | wired | none |
+| `request_defaults.allow_request_chat_template` | boolean | `false`; when `true`, a request's `chat_template` is rendered and takes precedence over the configured template. Trusts every caller that can reach this node, including mesh-routed requests; template execution is not sandboxed | both | request-time | wired | none |
 | `request_defaults.chat_template_kwargs` | object | unset | both | request-time | wired | none |
 | `request_defaults.skip_chat_parsing` | boolean | `false` | both | request-time | wired | none |
 | `request_defaults.prefill_assistant` | string or object | unset | both | request-time | wired | none |

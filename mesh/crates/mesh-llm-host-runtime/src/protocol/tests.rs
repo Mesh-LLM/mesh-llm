@@ -14,6 +14,8 @@ const FULL_SURFACE_VALID_FIXTURE: &str =
 
 fn make_valid_gossip_frame() -> GossipFrame {
     GossipFrame {
+        signed_records: Vec::new(),
+        signed_cache_affinity: Vec::new(),
         r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
@@ -196,6 +198,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
 mod announcements;
 mod config;
 mod control_frames;
+mod frame_reading;
 mod mesh_timestamps;
 mod owner_control;
 

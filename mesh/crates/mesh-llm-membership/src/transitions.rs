@@ -37,8 +37,15 @@ impl MembershipState {
             .count()
     }
 
+    /// Stop holding (and so relaying) any signed record for `id`.
+    pub fn forget_signed_records(&mut self, id: &EndpointId) {
+        self.node_records.remove(id);
+        self.cache_affinity_records.remove(id);
+    }
+
     /// Remove only the announcement, retaining connection and rejection state.
     pub fn remove_disallowed_peer(&mut self, id: EndpointId) -> Option<usize> {
+        self.forget_signed_records(&id);
         self.peers.remove(&id)?;
         Some(self.admitted_peer_count())
     }
@@ -140,6 +147,7 @@ impl MembershipState {
         self.policy_rejected_peers.remove(&id);
         let had_connection = self.connections.contains_key(&id);
         self.requirement_rejected_peers.remove(&id);
+        self.forget_signed_records(&id);
         let peer = self.peers.remove(&id)?;
         Some(RemovedPeer {
             peer,
@@ -174,6 +182,10 @@ impl MembershipState {
             .retain(|_, ts| ts.elapsed().as_secs() < PEER_DOWN_REPORTER_COOLDOWN_SECS);
         self.direct_path_request_last_at
             .retain(|_, ts| ts.elapsed() < direct_path_cooldown);
+        let peers = &self.peers;
+        self.node_records.retain(|id| peers.contains_key(id));
+        self.cache_affinity_records
+            .retain(|id| peers.contains_key(id));
         expired
     }
 }

@@ -16,46 +16,21 @@ enough to promote.
 
 ## Workflow
 
-1. Join the pinned llama.cpp inventory with the candidate manifest:
+1. Prepare the source-admitted native inventory request described in [NATIVE_PARITY.md](NATIVE_PARITY.md). Inventory validates the complete source/manifest classification and runtime-slice admission before reporting local cache observations. Set `mode` to `inventory`, then run:
 
    ```bash
-   scripts/skippy-llama-parity.py inventory
+   cargo xtool automation replay-matrix parity-local --input /absolute/parity-local.json
    ```
 
-   The manifest must classify every pinned `src/models/*.cpp` implementation:
+2. Preview missing candidate acquisition with the existing native downloader wrapper:
 
    ```bash
-   scripts/skippy-llama-parity.py validate
+   scripts/download-skippy-parity-candidates.sh --dry-run
    ```
 
-   When `.deps/llama.cpp` is prepared, validation also rejects architecture-
-   named runtime-slice admission gates and requires the structural and realized
-   graph-boundary checks that make staged loading fail closed.
+   Set `HF_HOME` or `HF_HUB_CACHE` for the downloader and supply that resolved absolute cache directory as `cache_root` in the inventory/run request. Acquisition is manual and separate from certification.
 
-2. See which cheap representatives are not downloaded yet:
-
-   ```bash
-   scripts/skippy-llama-parity.py download-commands
-   ```
-
-   To use an external disk, set `HF_HOME` or `HF_HUB_CACHE` before downloading
-   and before running this script.
-
-3. Run local candidates through the existing certification harness:
-
-   ```bash
-   scripts/skippy-llama-parity.py run \
-     --limit 1 \
-     --prefix-token-count 8 \
-     --cache-hit-repeats 2 \
-     --borrow-resident-hits
-   ```
-
-   Supplying `--prefix-token-count` makes the wrapper select the production
-   cache lane for the family: `ResidentKv` for dense families and
-   `KvRecurrent` for recurrent/hybrid families. Omitting those cache flags runs
-   only the split/debug lane and does not reproduce the production cache
-   evidence below.
+3. Set `mode` to `run` and supply the retained settings described in [NATIVE_PARITY.md](NATIVE_PARITY.md). Use `limit: 1` and policy fields `prefix_token_count: 8`, `cache_hit_repeats: 2`, `borrow_resident_hits: true` for the former one-candidate production-cache example. Run the same native command above. Dense prefixes select resident KV; recurrent/hybrid prefixes select recurrent KV. Omitting those policy fields runs the split/debug lane, without claiming the cache evidence below. The source-bound harness, fresh evidence directory, binary/build and operator profile prerequisites remain explicit.
 
 4. Keep the Rust regression lane green. `skippy/crates/skippy-correctness/tests/parity_models.rs`
    has one module per P0/P1 family and a cheap coverage test that fails when a
@@ -263,15 +238,14 @@ Qwen3.5/Qwen3.6 MoE, Mistral, GLM, Phi, and related coder/VL variants.
 Use priority filters when working the active queue:
 
 ```bash
-python3 scripts/skippy-llama-parity.py inventory --priority p0
-python3 scripts/skippy-llama-parity.py inventory --priority p1
-python3 scripts/skippy-llama-parity.py download-commands --priority p0
-scripts/download-skippy-parity-candidates.sh --dry-run
+# Set priorities to ["p0"] or ["p1"] in the inventory JSON.
+cargo xtool automation replay-matrix parity-local --input /absolute/parity-local.json
+scripts/download-skippy-parity-candidates.sh --dry-run --priority p0
 ```
 
 ## Current Coverage Summary
 
-`scripts/skippy-llama-parity.py validate` now requires every pinned
+The source-admitted native parity inventory requires every pinned
 llama.cpp `src/models/*.cpp` implementation to have a manifest row, and it
 checks architecture-independent runtime-slice admission when the prepared
 llama.cpp checkout is available. Current classification:
@@ -502,22 +476,32 @@ Raw run directories:
 
 ## Cache Correctness Evidence
 
-The source/target native-sequence remap gate is reproducible with:
+The native cache correctness batch uses the same observed local tools, model
+roster, backend and toolkit profile as the cache producer. Prepare those inputs
+with the [cache operator](../../.agents/skills/skippy-cache-family-bench/SKILL.md),
+then run the [closed correctness batch request](CACHE_CORRECTNESS_GATE.md):
 
-```bash
-LLAMA_STAGE_BUILD_DIR=$PWD/.deps/llama-build/build-stage-abi-metal \
-  python3 skippy/evals/skippy-cache-correctness-gate.py \
-    --output-dir /tmp/skippy-cache-correctness-gate \
-    --llama-stage-build-dir $PWD/.deps/llama-build/build-stage-abi-metal \
-    --topology one-stage \
-    --topology split-middle \
-    --topology split-final \
-    --prefix-tokens 16 \
-    --suffix-token-count 3 \
-    --runtime-lane-count 4 \
-    --cache-hit-repeats 2 \
-    --n-gpu-layers 999
+```sh
+just automation-run automation cache-family-run prepare-full \
+  --input /absolute/operator.json --output /absolute/fresh-preparation
+just automation-run automation cache-family-correctness batch \
+  --input /absolute/gate.json --output /absolute/fresh-gate
 ```
+
+For the previous example's local gate settings, `gate.json` is:
+
+```json
+{"schema_version":1,"prepared_input":"/absolute/fresh-preparation/cache-family-input.json","cases":[],"topologies":["one-stage","split-middle","split-final"],"prefix_tokens":16,"runtime_lane_count":4,"cache_hit_repeats":2,"n_gpu_layers":999,"execution_seconds":900}
+```
+
+Use fresh absolute output paths and the matched native tool/build profile.
+Empty cases select the documented current catalog intersection; explicit cases
+select current catalog keys. Missing models stay unqualified. The old suffix
+option declared three tokens but was not forwarded to its child; the native
+batch reports the actual suffix observation. Sequence remap and payload fields
+remain null when the native child does not measure them. The table, raw rows and
+batch summary distinguish observed correctness from completed orchestration;
+local inert fixtures do not reproduce the historical model results below.
 
 Latest local result: `102/102` rows passed across tranche runs. Every row
 restored into a different native sequence (`0 -> 1`), suffix-prefill-then-decode

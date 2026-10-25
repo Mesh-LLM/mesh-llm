@@ -100,3 +100,15 @@ mod discovery {
 
     include!("gossip/discovery.rs");
 }
+
+mod owner_admission {
+    use super::*;
+
+    include!("gossip/owner_admission.rs");
+}
+
+mod signed_records {
+    use super::*;
+
+    include!("gossip/signed_records.rs");
+}

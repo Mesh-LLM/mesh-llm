@@ -273,7 +273,7 @@ impl NativeRuntimeCache {
         let target = self.runtime_dir(release_version, manifest.runtime.native_runtime_id());
         let collision = || {
             format!(
-                "refusing runtime cache collision: {} -> {}; preserve the existing entry and import legacy caches explicitly into a separate destination",
+                "refusing runtime cache collision: {} -> {}; preserve the existing entry and import into a separate destination",
                 source_dir.display(),
                 target.display()
             )
@@ -469,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn installation_preserves_legacy_target_bytes_and_requires_explicit_import() {
+    fn installation_reuses_valid_legacy_target_without_rewriting_it() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
         write_runtime(&source, "1.2.3", "runtime-a");
@@ -486,8 +486,12 @@ mod tests {
         let metadata = serde_json::to_vec(&legacy).unwrap();
         fs::write(&path, &metadata).unwrap();
         let payload = fs::read(target.join("lib/libmeshllm_ffi.so")).unwrap();
-        let error = cache.install_from_dir(&source).unwrap_err();
-        assert!(format!("{error:#}").contains("import legacy caches explicitly"));
+        let found = cache.find_installed("1.2.3", "runtime-a").unwrap().unwrap();
+        assert_eq!(found.release_version, "1.2.3");
+        assert_eq!(cache.installed_for_version("1.2.3").unwrap().len(), 1);
+        assert_eq!(cache.installed_lenient().unwrap().runtimes.len(), 1);
+        let reused = cache.install_from_dir(&source).unwrap();
+        assert_eq!(reused.path, target);
         assert_eq!(fs::read(&path).unwrap(), metadata);
         assert_eq!(
             fs::read(target.join("lib/libmeshllm_ffi.so")).unwrap(),
@@ -572,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn installed_lenient_skips_legacy_manifest_and_keeps_valid_runtime() {
+    fn installed_lenient_skips_legacy_manifest_without_checksums() {
         let temp = tempfile::tempdir().unwrap();
         let cache = NativeRuntimeCache::new(temp.path().join("cache"));
         write_runtime(
@@ -608,7 +612,7 @@ mod tests {
         assert!(
             scan.skipped[0]
                 .reason
-                .contains("unknown field `mesh_version`"),
+                .contains("does not declare file checksums"),
             "unexpected skip reason: {}",
             scan.skipped[0].reason
         );

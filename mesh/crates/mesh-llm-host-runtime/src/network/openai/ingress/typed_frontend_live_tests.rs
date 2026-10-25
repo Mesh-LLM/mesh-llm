@@ -5,8 +5,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use skippy_inference_api::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
-    CompletionRequest, CompletionResponse, CompletionStream, HookedOpenAiBackend, ModelObject,
-    OpenAiBackend, OpenAiHookPolicy, OpenAiRequestContext, OpenAiResult, Usage,
+    CompletionRequest, CompletionResponse, CompletionStream, HookedInferenceBackend,
+    InferenceBackend, InferenceHookPolicy, InferenceRequestContext, InferenceResult, ModelObject,
+    Usage,
 };
 use std::sync::{
     Arc,
@@ -15,18 +16,18 @@ use std::sync::{
 
 struct TypedBackend {
     calls: Arc<AtomicUsize>,
-    hooks: Arc<dyn OpenAiHookPolicy>,
+    hooks: Arc<dyn InferenceHookPolicy>,
 }
 
 #[async_trait]
-impl OpenAiBackend for TypedBackend {
-    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+impl InferenceBackend for TypedBackend {
+    async fn models(&self) -> InferenceResult<Vec<ModelObject>> {
         Ok(vec![ModelObject::new("allowed-model")])
     }
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
-    ) -> OpenAiResult<ChatCompletionResponse> {
+    ) -> InferenceResult<ChatCompletionResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ChatCompletionResponse::new(
             request.model,
@@ -37,15 +38,15 @@ impl OpenAiBackend for TypedBackend {
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<ChatCompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<ChatCompletionStream> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(Box::pin(futures_util::stream::iter(vec![
             Ok(ChatCompletionChunk::delta(request.model.clone(), "typed")),
             Ok(ChatCompletionChunk::done(request.model)),
         ])))
     }
-    async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+    async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         let id = uuid::Uuid::new_v4().to_string();
         self.hooks.admit_effective_completion(&request, &id).await?;
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -59,8 +60,8 @@ impl OpenAiBackend for TypedBackend {
     async fn completion_stream(
         &self,
         request: CompletionRequest,
-        _context: OpenAiRequestContext,
-    ) -> OpenAiResult<CompletionStream> {
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<CompletionStream> {
         // Mirror the native completion seam: admit the prepared request, then
         // publish backend failure before the frontend exposes the SSE error.
         let id = uuid::Uuid::new_v4().to_string();
@@ -69,7 +70,7 @@ impl OpenAiBackend for TypedBackend {
         let hooks = self.hooks.clone();
         Ok(Box::pin(futures_util::stream::once(async move {
             hooks.on_completion_terminal(&id, "backend_error").await;
-            Err(skippy_inference_api::OpenAiError::backend(
+            Err(skippy_inference_api::InferenceError::backend(
                 "fixture completion failure",
             ))
         })))
@@ -129,7 +130,7 @@ async fn installed_lifecycle_typed_router_denies_all_endpoints_and_commits_strea
     let host = LiveHost::start(true, true).await;
     let calls = Arc::new(AtomicUsize::new(0));
     let hooks = crate::plugin::exchange_policy::compose_node_hooks(host.node.clone());
-    let backend = Arc::new(HookedOpenAiBackend::new(
+    let backend = Arc::new(HookedInferenceBackend::new(
         Arc::new(TypedBackend {
             calls: calls.clone(),
             hooks: hooks.clone(),

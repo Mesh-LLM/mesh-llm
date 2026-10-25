@@ -40,6 +40,13 @@ pub struct EmbeddedOpenAiRequestDefaults {
     pub reasoning_enabled: Option<EmbeddedReasoningEnabled>,
     pub reasoning_budget: Option<EmbeddedReasoningBudget>,
     pub chat_template: Option<String>,
+    /// Lets requests on this node supply their own `chat_template`, which
+    /// then takes precedence over `chat_template`. Off unless set. The node
+    /// renders templates with an engine that has no recursion, loop, or
+    /// memory limits, so enabling this trusts every caller that can reach it,
+    /// including requests routed through the mesh. Only the serving node's
+    /// own configuration sets it; requests cannot.
+    pub allow_request_chat_template: Option<bool>,
     pub jinja: Option<bool>,
     pub chat_template_kwargs: Option<Value>,
     pub skip_chat_parsing: Option<bool>,

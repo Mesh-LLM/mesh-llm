@@ -5,8 +5,9 @@ import { DestructiveActionDialog } from '@/components/ui/DestructiveActionDialog
 import { TextInputDialog } from '@/components/ui/TextInputDialog'
 import { ChatLiveLoadingGhost } from '@/features/chat/components/ChatLiveLoadingGhost'
 import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
-import { Composer } from '@/features/chat/components/Composer'
+import { Composer, type ComposerPromptUpdate } from '@/features/chat/components/Composer'
 import { ChatTargetNotice } from '@/features/chat/components/ChatTargetNotice'
+import { cn } from '@/lib/cn'
 import { ModelSelect } from '@/features/chat/components/ModelSelect'
 import { TransparencyPane } from '@/features/chat/components/transparency/TransparencyPane'
 import type {
@@ -68,12 +69,18 @@ type ChatPageLayoutProps = {
   modelOptions: ModelSelectOption[]
   selectedModelValue: string
   onModelChange: (value: string) => void
+  freeOnly?: boolean
+  onFreeOnlyChange?: (value: boolean) => void
+  modelUnavailable?: boolean
   composerConversationId: string
   composerDraft: ConversationComposerDraft
-  onComposerPromptChange: (value: string) => void
+  onComposerPromptChange: (value: ComposerPromptUpdate) => void
   onComposerAttachmentsChange: (files: File[]) => void
-  composerAttachmentCount: number
+  onRemoveComposerAttachment: (index: number) => void
   composerDisabled: boolean
+  composerRequestDisabled?: boolean
+  composerPendingTypeDetection?: boolean
+  onComposerPendingTypeDetectionChange?: (delta: 1 | -1) => void
   composerIsPreparingAttachments: boolean
   attachmentProcessingStage: AttachmentProcessingStatus['stage'] | undefined
   attachmentProcessingCount: number
@@ -154,12 +161,18 @@ export function ChatPageLayout({
   modelOptions,
   selectedModelValue,
   onModelChange,
+  freeOnly = false,
+  onFreeOnlyChange,
+  modelUnavailable = false,
   composerConversationId,
   composerDraft,
   onComposerPromptChange,
   onComposerAttachmentsChange,
-  composerAttachmentCount,
+  onRemoveComposerAttachment,
   composerDisabled,
+  composerRequestDisabled,
+  composerPendingTypeDetection,
+  onComposerPendingTypeDetectionChange,
   composerIsPreparingAttachments,
   attachmentProcessingStage,
   attachmentProcessingCount,
@@ -221,6 +234,37 @@ export function ChatPageLayout({
           {modelLabel}
         </span>
         <ModelSelect options={modelOptions} value={selectedModelValue} onChange={onModelChange} />
+        {onFreeOnlyChange ? (
+          <div
+            role="group"
+            aria-label="Hosts"
+            className="ui-control flex shrink-0 overflow-hidden rounded-[var(--radius)] border font-mono text-[length:var(--density-type-control)]"
+          >
+            {[
+              { label: 'Free', value: true, title: 'Only free hosts will serve this chat' },
+              { label: 'Paid', value: false, title: 'Paid hosts may serve this chat, within your spending policy' }
+            ].map((option) => (
+              <button
+                key={option.label}
+                type="button"
+                aria-pressed={freeOnly === option.value}
+                title={option.title}
+                onClick={() => onFreeOnlyChange(option.value)}
+                className={cn(
+                  'px-2.5 py-[5px] whitespace-nowrap',
+                  freeOnly === option.value ? 'bg-accent/10 text-accent' : 'text-fg-dim hover:text-fg'
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {modelUnavailable ? (
+          <span role="status" className="shrink-0 whitespace-nowrap text-[length:var(--density-type-caption)] text-bad">
+            Picked model unavailable
+          </span>
+        ) : null}
       </div>
     </>
   )
@@ -284,8 +328,12 @@ export function ChatPageLayout({
               value={composerDraft.prompt}
               onChange={onComposerPromptChange}
               onAttach={onComposerAttachmentsChange}
-              attachmentCount={composerAttachmentCount}
+              attachments={composerDraft.attachments}
+              onRemoveAttachment={onRemoveComposerAttachment}
               disabled={composerDisabled}
+              requestDisabled={composerRequestDisabled}
+              pendingTypeDetection={composerPendingTypeDetection}
+              onPendingTypeDetectionChange={onComposerPendingTypeDetectionChange}
               isPreparingAttachments={composerIsPreparingAttachments}
               preparingStage={attachmentProcessingStage}
               preparingAttachmentCount={attachmentProcessingCount}

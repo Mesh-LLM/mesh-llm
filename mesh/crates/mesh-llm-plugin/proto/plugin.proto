@@ -32,6 +32,8 @@ message Envelope {
     OpenMeshStreamResponse open_mesh_stream_response = 31;
     PeerBlockRequest peer_block_request = 32;
     PeerBlockResponse peer_block_response = 33;
+    PluginKeyRequest plugin_key_request = 34;
+    PluginKeyResponse plugin_key_response = 35;
   }
 }
 
@@ -720,6 +722,25 @@ message PeerBlockRequest {
 message PeerBlockResponse {
   // The applied change, as published on `routing.choice.v1`.
   string choice_json = 1;
+}
+
+// A plugin asks this node to announce a public key the plugin signs with,
+// bound to this node by the node's own key (`PluginKey` in the node protocol),
+// so peers' plugins can check what this plugin signed. One key per plugin: a
+// later request replaces it, and an empty `public_key` withdraws it. The key is
+// announced under the host's own name for the plugin connection, never a name
+// the plugin claims. Handled only by a host listing the `plugin_keys.v1`
+// capability. Peers' verified keys are listed at `GET /api/plugin-keys`.
+message PluginKeyRequest {
+  // A 32-byte Ed25519 public key, or empty to withdraw.
+  bytes public_key = 1;
+}
+
+message PluginKeyResponse {
+  // This node's endpoint id, 64 hex characters.
+  string node_id = 1;
+  // The binding signature announced with the key; empty after a withdrawal.
+  bytes binding_signature = 2;
 }
 
 message ErrorResponse {

@@ -94,12 +94,55 @@ pub(crate) async fn read_ref(
     repo_folder: &str,
     revision: &str,
 ) -> crate::error::HFResult<Option<String>> {
-    let path = ref_path(cache_dir, repo_folder, revision);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => Ok(Some(content.trim().to_string())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
+    read_ref_sync(cache_dir, repo_folder, revision)
+}
+
+pub(crate) fn read_ref_sync(
+    cache_dir: &Path,
+    repo_folder: &str,
+    revision: &str,
+) -> crate::error::HFResult<Option<String>> {
+    use std::io::Read as _;
+    let safe = |value: &str| {
+        !value.is_empty()
+            && value != "."
+            && value != ".."
+            && !value
+                .chars()
+                .any(|ch| ch.is_control() || matches!(ch, '\\' | ':' | '/'))
+    };
+    if !safe(repo_folder) || !revision.split('/').all(safe) {
+        return Err(crate::error::HFError::InvalidParameter(
+            "unsafe cached reference path".into(),
+        ));
     }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = match options.open(ref_path(cache_dir, repo_folder, revision)) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > 128 {
+        return Err(crate::error::HFError::InvalidParameter(
+            "cached reference must be a bounded regular file".into(),
+        ));
+    }
+    let mut content = String::new();
+    file.take(129).read_to_string(&mut content)?;
+    let commit = content.trim();
+    if content.len() > 128 || !is_commit_hash(commit) {
+        return Err(crate::error::HFError::InvalidParameter(
+            "cached reference is not an immutable commit".into(),
+        ));
+    }
+    Ok(Some(commit.to_owned()))
 }
 
 pub(crate) async fn create_pointer_symlink(
@@ -333,79 +376,10 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
     for entry in entries {
         let entry = entry?;
         let folder_name = entry.file_name().to_string_lossy().to_string();
-        let (repo_type, repo_id) = match parse_repo_folder_name(&folder_name) {
-            Some(v) => v,
-            None => continue,
-        };
-
-        let repo_path = entry.path();
-        let commit_refs = read_commit_refs(&repo_path);
-
-        let mut revisions = Vec::new();
-        let mut repo_last_accessed = SystemTime::UNIX_EPOCH;
-        let mut repo_last_modified = SystemTime::UNIX_EPOCH;
-
-        let snapshots_dir = repo_path.join("snapshots");
-        if let Ok(snap_entries) = std::fs::read_dir(&snapshots_dir) {
-            for snap_entry in snap_entries.flatten() {
-                let snap_path = snap_entry.path();
-                if !snap_path.is_dir() {
-                    continue;
-                }
-
-                let commit_hash = snap_entry.file_name().to_string_lossy().to_string();
-                let files = scan_snapshot(&snap_path, &mut warnings);
-
-                let rev_size: u64 = files.iter().map(|f| f.size_on_disk).sum();
-                let rev_last_modified = files
-                    .iter()
-                    .map(|f| f.blob_last_modified)
-                    .max()
-                    .unwrap_or(SystemTime::UNIX_EPOCH);
-
-                for f in &files {
-                    if f.blob_last_accessed > repo_last_accessed {
-                        repo_last_accessed = f.blob_last_accessed;
-                    }
-                    if f.blob_last_modified > repo_last_modified {
-                        repo_last_modified = f.blob_last_modified;
-                    }
-                }
-
-                let refs = commit_refs.get(&commit_hash).cloned().unwrap_or_default();
-
-                revisions.push(CachedRevisionInfo {
-                    commit_hash,
-                    snapshot_path: snap_path,
-                    files,
-                    size_on_disk: rev_size,
-                    refs,
-                    last_modified: rev_last_modified,
-                });
-            }
+        if let Some(repo) = scan_repo_dir(&entry.path(), &folder_name, &mut warnings) {
+            total_size += repo.size_on_disk;
+            repos.push(repo);
         }
-
-        let mut unique_blobs: HashMap<PathBuf, u64> = HashMap::new();
-        for rev in &revisions {
-            for f in &rev.files {
-                unique_blobs
-                    .entry(f.blob_path.clone())
-                    .or_insert(f.size_on_disk);
-            }
-        }
-        let repo_size: u64 = unique_blobs.values().sum();
-
-        total_size += repo_size;
-        repos.push(CachedRepoInfo {
-            repo_id,
-            repo_type,
-            repo_path,
-            revisions,
-            nb_files: unique_blobs.len(),
-            size_on_disk: repo_size,
-            last_accessed: repo_last_accessed,
-            last_modified: repo_last_modified,
-        });
     }
 
     Ok(HFCacheInfo {
@@ -413,6 +387,101 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         repos,
         size_on_disk: total_size,
         warnings,
+    })
+}
+
+/// Scan the cache folder for one repository, without walking the rest of the cache.
+///
+/// Returns `None` when that repository has no folder under `cache_dir`. Blob
+/// warnings are dropped here; [`scan_cache_dir`] is the surface that reports them.
+pub(crate) fn scan_cached_repo_dir(
+    cache_dir: &Path,
+    repo: &str,
+    type_plural: &str,
+) -> Option<CachedRepoInfo> {
+    let folder_name = repo_folder_name(repo, type_plural);
+    let repo_path = cache_dir.join(&folder_name);
+    if !repo_path.is_dir() {
+        return None;
+    }
+    let mut warnings = Vec::new();
+    let cached = scan_repo_dir(&repo_path, &folder_name, &mut warnings)?;
+    // `repo_folder_name` folds `/` and `--` into one spelling, so a folder name
+    // can parse back to a different repository id than the requested one.
+    (cached.repo_id == repo).then_some(cached)
+}
+
+fn scan_repo_dir(
+    repo_path: &Path,
+    folder_name: &str,
+    warnings: &mut Vec<String>,
+) -> Option<CachedRepoInfo> {
+    let (repo_type, repo_id) = parse_repo_folder_name(folder_name)?;
+    let commit_refs = read_commit_refs(repo_path);
+
+    let mut revisions = Vec::new();
+    let mut repo_last_accessed = SystemTime::UNIX_EPOCH;
+    let mut repo_last_modified = SystemTime::UNIX_EPOCH;
+
+    let snapshots_dir = repo_path.join("snapshots");
+    if let Ok(snap_entries) = std::fs::read_dir(&snapshots_dir) {
+        for snap_entry in snap_entries.flatten() {
+            let snap_path = snap_entry.path();
+            if !snap_path.is_dir() {
+                continue;
+            }
+
+            let commit_hash = snap_entry.file_name().to_string_lossy().to_string();
+            let files = scan_snapshot(&snap_path, warnings);
+
+            let rev_size: u64 = files.iter().map(|f| f.size_on_disk).sum();
+            let rev_last_modified = files
+                .iter()
+                .map(|f| f.blob_last_modified)
+                .max()
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+
+            for f in &files {
+                if f.blob_last_accessed > repo_last_accessed {
+                    repo_last_accessed = f.blob_last_accessed;
+                }
+                if f.blob_last_modified > repo_last_modified {
+                    repo_last_modified = f.blob_last_modified;
+                }
+            }
+
+            let refs = commit_refs.get(&commit_hash).cloned().unwrap_or_default();
+
+            revisions.push(CachedRevisionInfo {
+                commit_hash,
+                snapshot_path: snap_path,
+                files,
+                size_on_disk: rev_size,
+                refs,
+                last_modified: rev_last_modified,
+            });
+        }
+    }
+
+    let mut unique_blobs: HashMap<PathBuf, u64> = HashMap::new();
+    for rev in &revisions {
+        for f in &rev.files {
+            unique_blobs
+                .entry(f.blob_path.clone())
+                .or_insert(f.size_on_disk);
+        }
+    }
+    let repo_size: u64 = unique_blobs.values().sum();
+
+    Some(CachedRepoInfo {
+        repo_id,
+        repo_type,
+        repo_path: repo_path.to_path_buf(),
+        revisions,
+        nb_files: unique_blobs.len(),
+        size_on_disk: repo_size,
+        last_accessed: repo_last_accessed,
+        last_modified: repo_last_modified,
     })
 }
 
@@ -424,7 +493,7 @@ mod tests {
         PartialDownloadState, PointerSource, acquire_lock, blob_path, create_pointer_symlink,
         create_pointer_without_symlink, is_commit_hash, lock_path, no_exist_path,
         parse_repo_folder_name, partial_download_state, read_commit_refs, read_ref, ref_path,
-        repo_folder_name, scan_cache_dir, snapshot_path, write_ref,
+        repo_folder_name, scan_cache_dir, scan_cached_repo_dir, snapshot_path, write_ref,
     };
 
     #[test]
@@ -538,6 +607,39 @@ mod tests {
         assert_eq!(
             hash,
             Some("abc123def456abc123def456abc123def456abcd".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_ref_rejects_malformed_commits_and_paths_before_join() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ref_path(dir.path(), "models--owner--repo", "main");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for value in ["../outside", "/absolute", "short", "", "aaaa\nbbbb"] {
+            std::fs::write(&path, value).unwrap();
+            assert!(
+                read_ref(dir.path(), "models--owner--repo", "main")
+                    .await
+                    .is_err()
+            );
+        }
+        std::fs::write(&path, "a".repeat(129)).unwrap();
+        assert!(
+            read_ref(dir.path(), "models--owner--repo", "main")
+                .await
+                .is_err()
+        );
+        assert!(
+            read_ref(dir.path(), "models--owner--repo", "../outside")
+                .await
+                .is_err()
+        );
+        std::fs::write(&path, format!("{}\n", "a".repeat(40))).unwrap();
+        assert_eq!(
+            read_ref(dir.path(), "models--owner--repo", "main")
+                .await
+                .unwrap(),
+            Some("a".repeat(40))
         );
     }
 
@@ -818,5 +920,46 @@ mod tests {
         assert!(rev_sizes.iter().all(|&s| s == 100));
         assert_eq!(result.repos[0].size_on_disk, 100);
         assert_eq!(result.size_on_disk, 100);
+    }
+
+    #[tokio::test]
+    async fn test_scan_cached_repo_dir_scopes_to_the_requested_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path();
+
+        for (repo_folder, commit, file) in [
+            ("models--unsloth--one", "c".repeat(40), "one-Q4_K_M.gguf"),
+            ("models--unsloth--two", "d".repeat(40), "two-Q4_K_M.gguf"),
+        ] {
+            let snapshot = snapshot_path(cache, repo_folder, &commit, file);
+            std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+            std::fs::write(&snapshot, b"gguf").unwrap();
+            write_ref(cache, repo_folder, "main", &commit)
+                .await
+                .unwrap();
+        }
+
+        let repo = scan_cached_repo_dir(cache, "unsloth/one", "models").expect("cached repository");
+        assert_eq!(repo.repo_id, "unsloth/one");
+        assert_eq!(repo.repo_type, "model");
+        assert_eq!(repo.revisions.len(), 1);
+        assert_eq!(repo.revisions[0].commit_hash, "c".repeat(40));
+        assert_eq!(repo.revisions[0].refs, vec!["main".to_string()]);
+        assert_eq!(
+            repo.revisions[0]
+                .files
+                .iter()
+                .map(|file| file.file_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one-Q4_K_M.gguf"]
+        );
+        assert_eq!(repo.nb_files, 1);
+
+        assert!(scan_cached_repo_dir(cache, "unsloth/two", "models").is_some());
+        assert!(scan_cached_repo_dir(cache, "unsloth/missing", "models").is_none());
+        // A folder name folds `/` and `--` together, so an id that parses back to
+        // a different repository must not resolve to that repository's folder.
+        assert!(scan_cached_repo_dir(cache, "unsloth--one", "models").is_none());
+        assert!(scan_cached_repo_dir(cache, "unsloth/one", "datasets").is_none());
     }
 }

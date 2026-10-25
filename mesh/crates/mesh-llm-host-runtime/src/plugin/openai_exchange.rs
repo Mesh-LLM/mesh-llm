@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use skippy_inference_api::{
     CapsuleMarker, ChatCompletionOutcome, ChatCompletionRequest, ChatCompletionResponse,
-    ChatExchangeRoute, OpenAiHookPolicy,
+    ChatExchangeRoute, InferenceHookPolicy,
 };
 
 use super::PluginManager;
@@ -24,7 +24,7 @@ pub const OPENAI_EXCHANGE_CHANNEL: &str = "openai.exchange.v1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenAiExchangeDispatchPath {
-    /// `skippy-inference-api`'s typed `OpenAiHookPolicy`/`HookedOpenAiBackend` seam.
+    /// `skippy-inference-api`'s typed `InferenceHookPolicy`/`HookedInferenceBackend` seam.
     TypedFrontend,
     /// The raw-proxy ingress (`network/openai/ingress.rs`), used for
     /// plugin-served models; never sees a typed `ChatCompletionRequest`.
@@ -38,8 +38,8 @@ pub enum OpenAiExchangeDispatchPath {
 }
 
 /// Which moment in an exchange's lifecycle an [`OpenAiExchangeEnvelope`]
-/// reports — the same two moments [`OpenAiHookPolicy::on_effective_chat_completion`]
-/// and [`OpenAiHookPolicy::on_chat_completion_terminal`] already observe for
+/// reports — the same two moments [`InferenceHookPolicy::on_effective_chat_completion`]
+/// and [`InferenceHookPolicy::on_chat_completion_terminal`] already observe for
 /// path 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -353,18 +353,20 @@ pub struct OpenAiExchangeEnvelope {
     /// exactly when `capsule_id` is `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capsule_id_provenance: Option<CapsuleIdProvenance>,
-    /// The nonce the marker is correlated against, so a plugin observing
-    /// this event knows what a later client ack must sign over.
+    /// The request's stabilized client nonce: what a minted marker is
+    /// correlated against, so a plugin observing this event knows what a
+    /// later client ack must sign over. A host-served `RawProxy` terminal
+    /// carries it with no marker (`capsule_id` absent).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
     /// Which side contributed `nonce` — see [`ClientNonceSource`]. `None`
-    /// exactly when `nonce` is `None` (no marker minted).
+    /// exactly when `nonce` is `None` (no nonce to report).
     ///
     /// **Asymmetry across routing-node pairs:** when node A minted the
     /// fallback nonce (the client sent none), A reads its own
     /// `x-capsule-nonce-origin` header and reports
     /// `SidecarGeneratedFallback`. Node B strips that header deliberately
-    /// (anti-smuggling, `request_parse.rs:582`) so it sees a
+    /// (anti-smuggling, `finalize_forwarded_request` in `request_parse.rs`) so it sees a
     /// well-formed nonce with no origin marker and reports `ClientSupplied`
     /// for the same nonce. Both are locally correct: A reports what it
     /// minted; B cannot trust the origin claim. A consumer joining both
@@ -623,7 +625,7 @@ impl OpenAiExchangeEnvelope {
     /// `serving_provenance`/`usage`/`request_digest`/the output digests are
     /// not set by this constructor. The routing node attaches, through the
     /// builders, only what it observed itself
-    /// (`network/openai/ingress.rs::remote_delivered_terminal`): the peer it
+    /// (`network/openai/ingress/exchange_events.rs::remote_delivered_terminal`): the peer it
     /// saw deliver as `serving_provenance.served_by_node_id` (every hardware
     /// and model field stays absent, since this node never touched them), the
     /// digest of the request body it forwarded, and the digests over the
@@ -667,7 +669,7 @@ use canonical_digest::{canonical_digest_bytes, checked_canonical_digest_bytes};
 /// Publishes [`OpenAiExchangeEnvelope`]s to whatever is subscribed on
 /// [`OPENAI_EXCHANGE_CHANNEL`] — an out-of-process plugin in production, a
 /// recording double in tests. Fire-and-forget by design, mirroring
-/// [`OpenAiHookPolicy`]'s own observer methods: exchange delivery to a
+/// [`InferenceHookPolicy`]'s own observer methods: exchange delivery to a
 /// plugin must never affect whether the client's own request succeeds.
 #[async_trait]
 pub trait OpenAiExchangeChannel: Send + Sync + 'static {
@@ -716,7 +718,7 @@ impl OpenAiExchangeChannel for PluginManager {
 /// Bridges path 1 (`skippy-inference-api`'s typed hook seam) to
 /// [`OpenAiExchangeChannel`], so an out-of-process plugin observes the same
 /// effective-request/terminal events this crate's `MeshAutoHookPolicy`
-/// already sees in-process. Compose alongside other [`OpenAiHookPolicy`]
+/// already sees in-process. Compose alongside other [`InferenceHookPolicy`]
 /// implementors rather than in place of them — this bridge only observes and
 /// mints capsule markers, it never mutates or denies a request.
 pub struct OpenAiExchangeHookBridge {
@@ -730,7 +732,7 @@ impl OpenAiExchangeHookBridge {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for OpenAiExchangeHookBridge {
+impl InferenceHookPolicy for OpenAiExchangeHookBridge {
     async fn on_effective_chat_completion(
         &self,
         _request: &ChatCompletionRequest,
@@ -863,7 +865,9 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use skippy_inference_api::{ChatCompletionOutcome, HookedOpenAiBackend, OpenAiBackend, Usage};
+    use skippy_inference_api::{
+        ChatCompletionOutcome, HookedInferenceBackend, InferenceBackend, Usage,
+    };
 
     use super::test_support::RecordingChannel;
     use super::*;
@@ -871,17 +875,17 @@ mod tests {
     struct EchoBackend;
 
     #[async_trait]
-    impl OpenAiBackend for EchoBackend {
+    impl InferenceBackend for EchoBackend {
         async fn models(
             &self,
-        ) -> skippy_inference_api::OpenAiResult<Vec<skippy_inference_api::ModelObject>> {
+        ) -> skippy_inference_api::InferenceResult<Vec<skippy_inference_api::ModelObject>> {
             Ok(Vec::new())
         }
 
         async fn chat_completion(
             &self,
             request: ChatCompletionRequest,
-        ) -> skippy_inference_api::OpenAiResult<ChatCompletionResponse> {
+        ) -> skippy_inference_api::InferenceResult<ChatCompletionResponse> {
             Ok(ChatCompletionResponse::new(
                 request.model,
                 "ok",
@@ -892,8 +896,8 @@ mod tests {
         async fn chat_completion_stream(
             &self,
             _request: ChatCompletionRequest,
-            _context: skippy_inference_api::OpenAiRequestContext,
-        ) -> skippy_inference_api::OpenAiResult<skippy_inference_api::ChatCompletionStream>
+            _context: skippy_inference_api::InferenceRequestContext,
+        ) -> skippy_inference_api::InferenceResult<skippy_inference_api::ChatCompletionStream>
         {
             Ok(Box::pin(futures_util::stream::empty()))
         }
@@ -907,7 +911,7 @@ mod tests {
         .unwrap()
     }
 
-    /// Reference: a full request through `HookedOpenAiBackend` wired with
+    /// Reference: a full request through `HookedInferenceBackend` wired with
     /// this bridge publishes both the effective-request and terminal events
     /// on the typed-frontend path, and the terminal event carries the same
     /// capsule marker that (per the `skippy-inference-api` tests) also became
@@ -917,7 +921,7 @@ mod tests {
     async fn typed_frontend_path_publishes_effective_and_terminal_with_capsule_marker() {
         let channel = Arc::new(RecordingChannel::default());
         let bridge = Arc::new(OpenAiExchangeHookBridge::new(channel.clone()));
-        let hooked = HookedOpenAiBackend::new(Arc::new(EchoBackend), bridge);
+        let hooked = HookedInferenceBackend::new(Arc::new(EchoBackend), bridge);
 
         let response = hooked
             .chat_completion(chat_request("gpt-mesh"))
@@ -956,7 +960,7 @@ mod tests {
     async fn client_supplied_nonce_survives_into_the_terminal_event() {
         let channel = Arc::new(RecordingChannel::default());
         let bridge = Arc::new(OpenAiExchangeHookBridge::new(channel.clone()));
-        let hooked = HookedOpenAiBackend::new(Arc::new(EchoBackend), bridge);
+        let hooked = HookedInferenceBackend::new(Arc::new(EchoBackend), bridge);
 
         let mut request = chat_request("gpt-mesh");
         request
@@ -984,7 +988,7 @@ mod tests {
     async fn absent_client_nonce_is_labeled_sidecar_generated_fallback() {
         let channel = Arc::new(RecordingChannel::default());
         let bridge = Arc::new(OpenAiExchangeHookBridge::new(channel.clone()));
-        let hooked = HookedOpenAiBackend::new(Arc::new(EchoBackend), bridge);
+        let hooked = HookedInferenceBackend::new(Arc::new(EchoBackend), bridge);
 
         hooked
             .chat_completion(chat_request("gpt-mesh"))
@@ -1031,7 +1035,7 @@ mod tests {
     }
 
     /// The exact scenario `TerminalGuard` (in `skippy-inference-api`) exists to
-    /// close: the backend future never returns, so `HookedOpenAiBackend`
+    /// close: the backend future never returns, so `HookedInferenceBackend`
     /// reports `ChatCompletionOutcome::Cancelled` instead of nothing — this
     /// bridge must still publish a terminal event for it, with no status,
     /// capsule id, nonce, or nonce_source to report.
@@ -1059,17 +1063,17 @@ mod tests {
     }
 
     #[async_trait]
-    impl OpenAiBackend for DelayedBackend {
+    impl InferenceBackend for DelayedBackend {
         async fn models(
             &self,
-        ) -> skippy_inference_api::OpenAiResult<Vec<skippy_inference_api::ModelObject>> {
+        ) -> skippy_inference_api::InferenceResult<Vec<skippy_inference_api::ModelObject>> {
             Ok(Vec::new())
         }
 
         async fn chat_completion(
             &self,
             request: ChatCompletionRequest,
-        ) -> skippy_inference_api::OpenAiResult<ChatCompletionResponse> {
+        ) -> skippy_inference_api::InferenceResult<ChatCompletionResponse> {
             tokio::time::sleep(self.delay).await;
             Ok(ChatCompletionResponse::new(
                 request.model,
@@ -1081,8 +1085,8 @@ mod tests {
         async fn chat_completion_stream(
             &self,
             _request: ChatCompletionRequest,
-            _context: skippy_inference_api::OpenAiRequestContext,
-        ) -> skippy_inference_api::OpenAiResult<skippy_inference_api::ChatCompletionStream>
+            _context: skippy_inference_api::InferenceRequestContext,
+        ) -> skippy_inference_api::InferenceResult<skippy_inference_api::ChatCompletionStream>
         {
             Ok(Box::pin(futures_util::stream::empty()))
         }
@@ -1097,13 +1101,13 @@ mod tests {
     async fn concurrent_exchanges_on_the_same_model_pair_by_exchange_id_not_by_arrival_order() {
         let channel = Arc::new(RecordingChannel::default());
         let bridge = Arc::new(OpenAiExchangeHookBridge::new(channel.clone()));
-        let slow = HookedOpenAiBackend::new(
+        let slow = HookedInferenceBackend::new(
             Arc::new(DelayedBackend {
                 delay: std::time::Duration::from_millis(50),
             }),
             bridge.clone(),
         );
-        let fast = HookedOpenAiBackend::new(
+        let fast = HookedInferenceBackend::new(
             Arc::new(DelayedBackend {
                 delay: std::time::Duration::from_millis(1),
             }),
@@ -1484,7 +1488,7 @@ mod tests {
     /// Verifies the envelope constructor shape for the RawProxy effective +
     /// terminal pair: both envelopes carry `RawProxy` dispatch path, and
     /// nonce/nonce_source/capsule_id are all absent (the raw-proxy path never
-    /// runs through `skippy-inference-api`'s `OpenAiHookPolicy`, so no marker is
+    /// runs through `skippy-inference-api`'s `InferenceHookPolicy`, so no marker is
     /// minted).
     ///
     /// // Shape test only — does not invoke the routing function.

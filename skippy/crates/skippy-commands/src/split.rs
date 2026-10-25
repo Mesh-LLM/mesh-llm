@@ -157,6 +157,10 @@ pub fn run(args: PlanSplitCommand) -> Result<()> {
         stage_index: index as u32,
         endpoint: args.workers[index].to_string(),
     };
+    // The final stage runs integrated NextN heads as its MTP sidecar; a stage
+    // without them ignores the flag.
+    let native_mtp_enabled =
+        skippy_model_artifact::gguf::supports_native_mtp(&identity.source_model_path);
     let mut configs = Vec::<StageConfig>::new();
     for (index, (stage, admission)) in topology.stages.iter().zip(&admissions).enumerate() {
         let names = stage_load::admitted_resident_tensor_names(admission, &manifest)?;
@@ -196,7 +200,7 @@ pub fn run(args: PlanSplitCommand) -> Result<()> {
             cache_type_v: "f16".into(),
             flash_attn_type: Default::default(),
             load_mode: skippy_protocol::LoadMode::RuntimeSlice,
-            native_mtp_enabled: false,
+            native_mtp_enabled,
             bind_addr: args.workers[index].to_string(),
             upstream: index.checked_sub(1).map(peer),
             downstream: (index + 1 < args.workers.len()).then(|| peer(index + 1)),
@@ -279,6 +283,7 @@ mod tests {
             activation_export_bindings: vec!["binding".into()],
         };
         let first = StageAdmissionDescriptor {
+            kv_graph_state: String::new(),
             version: skippy_protocol::STAGE_ADMISSION_DESCRIPTOR_VERSION,
             package_id: "package".into(),
             plan_id: "plan".into(),
@@ -288,7 +293,6 @@ mod tests {
             resident_tensor_ids: vec![],
             sidecars: vec![],
             profiles: vec![profile],
-            kv_graph_state: String::new(),
         };
         let mut second = first.clone();
         second.layer_start = 1;

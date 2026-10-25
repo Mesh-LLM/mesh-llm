@@ -17,21 +17,24 @@ use serde_json::{Value, json};
 use skippy_metrics::attr;
 #[cfg(test)]
 use skippy_protocol::{
-    LoadMode, PeerConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-    binary::StageStateHeader,
+    LoadMode, PeerConfig, StageKvCacheConfig, StageKvCacheMode, binary::StageStateHeader,
 };
 use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
-        READY_MAGIC, StageNativeMtpDraft, StageSamplingConfig, StageWireMessage, WireMessageKind,
-        WireReplyKind, sampling_flags, send_ready,
+        READY_MAGIC, StageNativeMtpDraft, StageWireMessage, WireMessageKind, WireReplyKind,
+        send_ready,
     },
 };
 use skippy_runtime::{
-    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame, LogitBias,
-    MAX_LOGIT_BIAS, NativeMtpDraft, SamplingConfig,
+    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame,
 };
 
+use super::native_mtp_reply::{
+    native_mtp_draft_tokens, native_mtp_prediction_tokens, stage_native_mtp_draft,
+    verify_reply_native_mtp_draft,
+};
+use super::peer_sampling::runtime_sampling_config;
 use super::prefill_execution::runtime_activation_frame;
 
 use super::socket::{
@@ -316,63 +319,6 @@ pub(in crate::binary_transport) fn insert_optional_unix_nanos(
     }
 }
 
-fn native_mtp_prediction_tokens(predicted: i32, draft: Option<NativeMtpDraft>) -> Vec<i32> {
-    let Some(draft) = draft else {
-        return vec![predicted];
-    };
-    let token_count = i32::try_from(draft.token_ids.len()).unwrap_or(i32::MAX);
-    let mut tokens = Vec::with_capacity(draft.token_ids.len() + 3);
-    tokens.push(predicted);
-    tokens.push(token_count);
-    tokens.extend(draft.token_ids);
-    tokens.push(draft.proposal_compute_us.clamp(0, i64::from(i32::MAX)) as i32);
-    tokens
-}
-
-/// Converts the temporary llama-stage sideband into the typed stage reply field.
-///
-/// The C ABI still returns the proposal as a trailer. The network boundary is
-/// authoritative: consumers receive only target predictions plus a separate
-/// native-MTP draft. A malformed trailer is rejected instead of being exposed
-/// as target-model output.
-pub(in crate::binary_transport) fn split_native_mtp_reply(
-    message: &StageWireMessage,
-    prediction_tokens: &mut Vec<i32>,
-) -> Result<Option<StageNativeMtpDraft>> {
-    let sideband_offset = match message.kind {
-        WireMessageKind::DecodeEmbd
-        | WireMessageKind::DecodeReadout
-        | WireMessageKind::DecodeLightCtx
-        | WireMessageKind::DecodeReplayEmbd
-        | WireMessageKind::DecodeReplayFinalEmbd => 1,
-        _ => return Ok(None),
-    };
-    if prediction_tokens.len() <= sideband_offset {
-        return Ok(None);
-    }
-    let draft_token_count = usize::try_from(prediction_tokens[sideband_offset])
-        .map_err(|_| anyhow!("negative native MTP draft token count"))?;
-    let draft_start = sideband_offset + 1;
-    let draft_end = draft_start
-        .checked_add(draft_token_count)
-        .ok_or_else(|| anyhow!("native MTP draft token count overflow"))?;
-    let compute_index = draft_end;
-    if prediction_tokens.len() != compute_index + 1 {
-        bail!(
-            "malformed native MTP sideband: expected {} values, got {}",
-            compute_index + 1,
-            prediction_tokens.len()
-        );
-    }
-    let proposal_compute_us = i64::from(prediction_tokens[compute_index].max(0));
-    let token_ids = prediction_tokens[draft_start..draft_end].to_vec();
-    prediction_tokens.truncate(sideband_offset);
-    Ok((!token_ids.is_empty()).then_some(StageNativeMtpDraft {
-        token_ids,
-        proposal_compute_us,
-    }))
-}
-
 pub(crate) fn stage_output_activation_capacity(
     has_downstream: bool,
     token_count: i32,
@@ -644,7 +590,8 @@ pub(crate) fn run_binary_stage_message(
             Ok((message.state.current_token, Vec::new(), output, None))
         }
         WireMessageKind::PrefillFinalEmbd if options.sample_final_prefill => {
-            let sampling = runtime_sampling_config(message.sampling.as_ref());
+            let sampling =
+                runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
             let (predicted, output) = runtime.prefill_final_frame_sampled(
                 session_id,
                 token_ids,
@@ -672,8 +619,10 @@ pub(crate) fn run_binary_stage_message(
                 .first()
                 .copied()
                 .unwrap_or(message.state.current_token);
-            let sampling = runtime_sampling_config(message.sampling.as_ref());
-            if !options.native_mtp_enabled {
+            let sampling =
+                runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
+            let draft_tokens = native_mtp_draft_tokens(message, options);
+            if !options.native_mtp_enabled || draft_tokens == 0 {
                 let (predicted, output) = runtime.decode_frame_sampled(
                     session_id,
                     token_id,
@@ -689,7 +638,7 @@ pub(crate) fn run_binary_stage_message(
                 sampling.as_ref(),
                 input,
                 options.output_capacity,
-                options.native_mtp_max_tokens,
+                draft_tokens,
             )?;
             Ok((
                 predicted,
@@ -699,22 +648,24 @@ pub(crate) fn run_binary_stage_message(
             ))
         }
         WireMessageKind::VerifyWindow => {
-            let sampling = runtime_sampling_config(message.sampling.as_ref());
+            let sampling =
+                runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
             let (predicted_tokens, native_mtp, output) = runtime.verify_frame_sampled(
                 session_id,
                 token_ids,
                 sampling.as_ref(),
                 input,
                 options.output_capacity,
-                options.native_mtp_max_tokens,
+                native_mtp_draft_tokens(message, options),
             )?;
             let predicted = predicted_tokens.first().copied().unwrap_or(0);
-            Ok((
-                predicted,
-                predicted_tokens,
-                output,
+            let draft = verify_reply_native_mtp_draft(
                 native_mtp.map(stage_native_mtp_draft),
-            ))
+                token_ids,
+                &predicted_tokens,
+                message.state.accepts_native_mtp_draft_after_correction(),
+            );
+            Ok((predicted, predicted_tokens, output, draft))
         }
         WireMessageKind::Stop
         | WireMessageKind::StateImport
@@ -730,13 +681,6 @@ pub(crate) fn run_binary_stage_message(
         | WireMessageKind::PredictionReturnOpen => {
             bail!("message kind is not executable")
         }
-    }
-}
-
-fn stage_native_mtp_draft(draft: NativeMtpDraft) -> StageNativeMtpDraft {
-    StageNativeMtpDraft {
-        token_ids: draft.token_ids,
-        proposal_compute_us: draft.proposal_compute_us,
     }
 }
 
@@ -801,58 +745,6 @@ pub(in crate::binary_transport) fn is_decode_frame_batch_candidate(
             | WireMessageKind::DecodeReplayFinalEmbd
     ) && message.token_count == 1
         && token_ids.len() == 1
-}
-
-pub(in crate::binary_transport) fn runtime_sampling_config(
-    sampling: Option<&StageSamplingConfig>,
-) -> Option<SamplingConfig> {
-    let sampling = sampling?;
-    let mut config = SamplingConfig {
-        enabled: true,
-        ignore_eos: sampling.ignore_eos || (sampling.flags & sampling_flags::IGNORE_EOS) != 0,
-        seed: sampling.seed,
-        temperature: sampling.temperature,
-        top_p: sampling.top_p,
-        top_k: sampling.top_k,
-        min_p: sampling.min_p,
-        presence_penalty: sampling.presence_penalty,
-        frequency_penalty: sampling.frequency_penalty,
-        repeat_penalty: sampling.repeat_penalty,
-        penalty_last_n: sampling.penalty_last_n,
-        typical_p: sampling.typical_p,
-        top_nsigma: sampling.top_nsigma,
-        dynatemp_range: sampling.dynatemp_range,
-        dynatemp_exponent: sampling.dynatemp_exponent,
-        dry: skippy_runtime::DrySamplingConfig {
-            multiplier: sampling.dry_multiplier,
-            base: sampling.dry_base,
-            allowed_length: sampling.dry_allowed_length,
-            penalty_last_n: sampling.dry_penalty_last_n,
-            sequence_breakers: sampling.dry_sequence_breakers.clone(),
-        },
-        xtc: skippy_runtime::XtcSamplingConfig {
-            probability: sampling.xtc_probability,
-            threshold: sampling.xtc_threshold,
-        },
-        mirostat_mode: sampling.mirostat_mode,
-        mirostat_entropy: sampling.mirostat_entropy,
-        mirostat_learning_rate: sampling.mirostat_learning_rate,
-        samplers: sampling.samplers.clone(),
-        reasoning_budget: skippy_runtime::ReasoningBudget::Resolved(
-            sampling.reasoning_budget_tokens,
-        ),
-        ..SamplingConfig::default()
-    };
-    config.logit_bias = sampling
-        .logit_bias
-        .iter()
-        .take(MAX_LOGIT_BIAS)
-        .map(|source| LogitBias {
-            token_id: source.token_id,
-            bias: source.bias,
-        })
-        .collect();
-    sampling.enabled().then_some(config)
 }
 
 pub(in crate::binary_transport) fn input_activation_frame(
@@ -924,6 +816,11 @@ pub(in crate::binary_transport) fn token_sideband_or_fill(
         .token_count
         .try_into()
         .context("negative token_count")?;
+    // The upstream peer chooses token_count, and a missing sideband is filled
+    // in below, so bound it by the sideband limit before allocating.
+    if token_count > skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES {
+        bail!("token_count {token_count} exceeds the stage message token limit");
+    }
     if let Some(token) = decode_execution_token(message, token_count) {
         return Ok(vec![token]);
     }
@@ -983,7 +880,6 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         run_id: "run".to_string(),
         topology_id: "topology".to_string(),
         model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
-        kv_graph_state: "dense".into(),
         package_ref: None,
         manifest_sha256: None,
         source_model_path: None,
@@ -1023,7 +919,6 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         kv_cache: Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::ResidentKv,
             max_entries: 8,
             max_bytes: 0,
             l2_max_bytes: 0,
@@ -1072,7 +967,7 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
 mod tests {
     use super::{
         decode_record_tokens_sideband, first_decode_message_with_full_prompt_sideband,
-        is_decode_frame_batch_candidate, prefix_cache_test_config, split_native_mtp_reply,
+        is_decode_frame_batch_candidate, prefix_cache_test_config,
         stage_output_activation_capacity, take_ready_downstream, take_warm_or_connect_downstream,
         token_sideband_or_fill, warm_downstream_is_healthy,
         warm_downstream_preconnect_enabled_from,
@@ -1285,45 +1180,6 @@ mod tests {
         assert_eq!(token_sideband_or_fill(&message).unwrap(), vec![201]);
     }
 
-    #[test]
-    fn native_mtp_sideband_is_removed_from_decode_predictions() {
-        let message = test_message(WireMessageKind::DecodeEmbd, 1);
-        let mut predictions = vec![11, 2, 14, 15, 123];
-
-        let draft = split_native_mtp_reply(&message, &mut predictions).unwrap();
-
-        assert_eq!(predictions, vec![11]);
-        assert_eq!(
-            draft,
-            Some(skippy_protocol::binary::StageNativeMtpDraft {
-                token_ids: vec![14, 15],
-                proposal_compute_us: 123,
-            })
-        );
-    }
-
-    #[test]
-    fn native_mtp_sideband_is_not_read_from_verify_predictions() {
-        let mut message = test_message(WireMessageKind::VerifyWindow, 3);
-        message.tokens = vec![10, 11, 12];
-        let mut predictions = vec![11, 12, 13, 2, 14, 15, 123];
-
-        let draft = split_native_mtp_reply(&message, &mut predictions).unwrap();
-
-        assert_eq!(predictions, vec![11, 12, 13, 2, 14, 15, 123]);
-        assert_eq!(draft, None);
-    }
-
-    #[test]
-    fn malformed_native_mtp_sideband_is_rejected() {
-        let message = test_message(WireMessageKind::DecodeEmbd, 1);
-        let mut predictions = vec![11, 2, 12];
-
-        let error = split_native_mtp_reply(&message, &mut predictions).unwrap_err();
-
-        assert!(error.to_string().contains("malformed native MTP sideband"));
-    }
-
     fn test_message(kind: WireMessageKind, token_count: i32) -> StageWireMessage {
         StageWireMessage {
             kind,
@@ -1339,6 +1195,22 @@ mod tests {
             activation: Vec::new(),
             raw_bytes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn token_fill_rejects_counts_beyond_the_sideband_limit() {
+        // An upstream peer chooses token_count. Without a sideband the
+        // tokens are filled in, so the count must be bounded first.
+        let limit = skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES;
+        let mut message = test_message(
+            WireMessageKind::PrefillEmbd,
+            i32::try_from(limit + 1).unwrap(),
+        );
+        message.state.current_token = 7;
+        assert!(token_sideband_or_fill(&message).is_err());
+
+        message.token_count = i32::try_from(limit).unwrap();
+        assert_eq!(token_sideband_or_fill(&message).unwrap().len(), limit);
     }
 
     #[test]

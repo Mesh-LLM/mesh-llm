@@ -1,6 +1,6 @@
 use std::net::TcpStream;
 
-use skippy_inference_api::{OpenAiError, OpenAiResult};
+use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_protocol::binary::{StageNativeMtpDraft, WireReplyKind};
 
 use crate::frontend::embedded_execution::VerifyRetirement;
@@ -66,8 +66,8 @@ impl StageOpenAiBackend {
         decode_forward_write_ms: &mut f64,
         decode_downstream_wait_ms: &mut f64,
         // Token emission callback
-        on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<NativeMtpVerifyWindowControl> {
+        on_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<NativeMtpVerifyWindowControl> {
         let verify_window_timer = self.telemetry.is_debug_enabled().then(PhaseTimer::start);
         let native_mtp_remaining = (request.max_tokens as usize).saturating_sub(*decoded_tokens);
         let native_mtp_draft_origin = pending_native_mtp_draft.as_ref().map(|draft| draft.origin);
@@ -139,6 +139,7 @@ impl StageOpenAiBackend {
             decode_step: *decoded_tokens,
             tokens: &verify_inputs,
             sampling: wire_sampling.clone(),
+            native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
         })?;
         let verify = self.execute_embedded_stage_message(
             request,
@@ -150,7 +151,7 @@ impl StageOpenAiBackend {
         )?;
         let completed = verify_window_scheduler.complete_next(verify.reply.window.window_id)?;
         if completed != window {
-            return Err(OpenAiError::backend(
+            return Err(InferenceError::backend(
                 "verify window scheduler lost FIFO state",
             ));
         }
@@ -162,6 +163,11 @@ impl StageOpenAiBackend {
             |token| token_is_eog_with_runtime(&self.runtime, token),
         )?;
         let target_token = verify.reply.predicted_tokens[0];
+        let verify_next_draft_follows_correction = verify
+            .reply
+            .native_mtp_draft
+            .as_ref()
+            .is_some_and(|draft| draft.follows_correction);
         let verify_next_mtp_draft = next_native_mtp_draft(
             request.native_mtp_enabled,
             verify.reply.native_mtp_draft.clone(),
@@ -270,11 +276,19 @@ impl StageOpenAiBackend {
             native_mtp.clear_pending_draft();
         }
         let verify_next_mtp_draft_available = verify_next_mtp_draft.is_some();
-        let verify_next_mtp_draft_adopted = buffer_exhausted
-            && fully_accepted_window
-            && !native_mtp_prefix_rejected
+        let verify_next_mtp_draft_adopted = verify_next_mtp_draft_available
             && *decoded_tokens < request.max_tokens as usize
-            && verify_next_mtp_draft.is_some();
+            && verify_next_draft_adoptable(VerifyNextDraft {
+                buffer_exhausted,
+                fully_accepted_window,
+                native_mtp_prefix_rejected,
+                follows_correction: verify_next_draft_follows_correction,
+                window_rejected: native_mtp_verify_decision.rejected,
+                committed_positions,
+                commit_count: native_mtp_verify_decision.commit_count,
+                reached_stop,
+                cooldown_armed: *native_mtp_reject_cooldown_remaining > 0,
+            });
         native_mtp_counters.observe_verify_next_draft(
             verify_next_mtp_draft_available,
             verify_next_mtp_draft_adopted,
@@ -453,6 +467,34 @@ impl StageOpenAiBackend {
     }
 }
 
+/// What a verify reply's draft can be checked against before it becomes the
+/// next proposal.
+#[derive(Clone, Copy)]
+struct VerifyNextDraft {
+    buffer_exhausted: bool,
+    fully_accepted_window: bool,
+    native_mtp_prefix_rejected: bool,
+    follows_correction: bool,
+    window_rejected: bool,
+    committed_positions: usize,
+    commit_count: usize,
+    reached_stop: bool,
+    cooldown_armed: bool,
+}
+
+/// A draft from a fully accepted window continues after its last prediction.
+/// A draft that follows a rejected window's correction is valid once exactly
+/// the accepted prefix and the correction were committed.
+fn verify_next_draft_adoptable(draft: VerifyNextDraft) -> bool {
+    let after_full_accept = draft.fully_accepted_window && !draft.native_mtp_prefix_rejected;
+    let after_correction = draft.follows_correction
+        && draft.window_rejected
+        && draft.committed_positions == draft.commit_count
+        && !draft.reached_stop
+        && !draft.cooldown_armed;
+    draft.buffer_exhausted && (after_full_accept || after_correction)
+}
+
 fn native_mtp_verify_window_inputs(current: i32, proposals: &[i32]) -> Vec<i32> {
     let mut tokens = Vec::with_capacity(proposals.len().saturating_add(1));
     tokens.push(current);
@@ -471,7 +513,72 @@ fn next_native_mtp_draft(
 
 #[cfg(test)]
 mod tests {
-    use super::{native_mtp_verify_window_inputs, next_native_mtp_draft};
+    use super::{
+        VerifyNextDraft, native_mtp_verify_window_inputs, next_native_mtp_draft,
+        verify_next_draft_adoptable,
+    };
+
+    fn rejected_window() -> VerifyNextDraft {
+        VerifyNextDraft {
+            buffer_exhausted: true,
+            fully_accepted_window: false,
+            native_mtp_prefix_rejected: true,
+            follows_correction: true,
+            window_rejected: true,
+            committed_positions: 2,
+            commit_count: 2,
+            reached_stop: false,
+            cooldown_armed: false,
+        }
+    }
+
+    #[test]
+    fn drafts_after_a_committed_correction_are_adopted() {
+        assert!(verify_next_draft_adoptable(rejected_window()));
+    }
+
+    #[test]
+    fn drafts_from_rejected_windows_need_the_correction_anchor() {
+        let legacy = VerifyNextDraft {
+            follows_correction: false,
+            ..rejected_window()
+        };
+        assert!(!verify_next_draft_adoptable(legacy));
+        let truncated = VerifyNextDraft {
+            committed_positions: 1,
+            ..rejected_window()
+        };
+        assert!(!verify_next_draft_adoptable(truncated));
+        let stopped = VerifyNextDraft {
+            reached_stop: true,
+            ..rejected_window()
+        };
+        assert!(!verify_next_draft_adoptable(stopped));
+        let cooling_down = VerifyNextDraft {
+            cooldown_armed: true,
+            ..rejected_window()
+        };
+        assert!(!verify_next_draft_adoptable(cooling_down));
+        let buffered = VerifyNextDraft {
+            buffer_exhausted: false,
+            ..rejected_window()
+        };
+        assert!(!verify_next_draft_adoptable(buffered));
+    }
+
+    #[test]
+    fn drafts_after_full_acceptance_are_adopted() {
+        let accepted = VerifyNextDraft {
+            fully_accepted_window: true,
+            native_mtp_prefix_rejected: false,
+            follows_correction: false,
+            window_rejected: false,
+            committed_positions: 4,
+            commit_count: 4,
+            ..rejected_window()
+        };
+        assert!(verify_next_draft_adoptable(accepted));
+    }
     use skippy_protocol::binary::StageNativeMtpDraft;
 
     #[test]
@@ -487,6 +594,7 @@ mod tests {
                 Some(StageNativeMtpDraft {
                     token_ids: vec![11],
                     proposal_compute_us: 12,
+                    follows_correction: false,
                 }),
             ),
             None
@@ -500,6 +608,7 @@ mod tests {
             Some(StageNativeMtpDraft {
                 token_ids: vec![11],
                 proposal_compute_us: 12,
+                follows_correction: false,
             }),
         )
         .expect("native MTP draft should be retained");

@@ -190,6 +190,8 @@ pub(super) struct ApiInner {
     pub(super) mesh_region: Option<String>,
     pub(super) mesh_max_clients: Option<usize>,
     pub(super) latest_version: Option<String>,
+    /// From `updates.check`.
+    pub(super) update_check: bool,
     pub(super) nostr_relays: Vec<String>,
     pub(super) mesh_discovery_mode: MeshDiscoveryMode,
     pub(super) nostr_discovery: bool,

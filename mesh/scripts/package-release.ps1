@@ -109,6 +109,13 @@ function Get-FlavorSuffix {
         return ""
     }
 
+    # When MESH_CUDA_VERSION is set (release matrix), include the CUDA major,
+    # as package-release.sh does: -cuda-12, -cuda-13.
+    if ($BinaryFlavor -eq "cuda" -and $env:MESH_CUDA_VERSION) {
+        $major = ("$env:MESH_CUDA_VERSION".Trim() -split '\.', 2)[0]
+        return "-$BinaryFlavor-$major"
+    }
+
     return "-$BinaryFlavor"
 }
 
@@ -221,14 +228,16 @@ function Assert-FileChecksum {
     }
 }
 
-function Get-PythonCommand {
-    foreach ($name in @("python3", "python")) {
-        $command = Get-Command $name -ErrorAction SilentlyContinue
-        if ($command) {
-            return $command.Source
-        }
+function Invoke-Automation {
+    if ($env:MESH_LLM_AUTOMATION_BIN) {
+        & $env:MESH_LLM_AUTOMATION_BIN @args
+    } else {
+        Push-Location $repoRoot
+        try { & cargo xtool @args } finally { Pop-Location }
     }
-    throw "python3 or python is required for release packaging"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release automation failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Assert-MeshBinaryVersion {
@@ -322,7 +331,7 @@ function Invoke-ReleaseAttestationStamp {
         } else {
             Push-Location $repoRoot
             try {
-                $inspectJson = & cargo run -q -p xtask -- release-attestation inspect `
+                $inspectJson = Invoke-Automation release-attestation inspect `
                     --binary $BinaryPath `
                     --public-key-file $attestationPublicKeyFile `
                     --json
@@ -358,14 +367,14 @@ function Invoke-ReleaseAttestationStamp {
 
     Push-Location $repoRoot
     try {
-        & cargo run -q -p xtask -- release-attestation stamp `
+        Invoke-Automation release-attestation stamp `
             --binary $BinaryPath `
             --signing-key-file $attestationSigningKeyFile | Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw "release-attestation stamp failed for $BinaryPath"
         }
 
-        $inspectJson = & cargo run -q -p xtask -- release-attestation inspect `
+        $inspectJson = Invoke-Automation release-attestation inspect `
             --binary $BinaryPath `
             --public-key-file $attestationPublicKeyFile `
             --json
@@ -407,8 +416,7 @@ function Copy-AndVerifyPrecomposedProduct {
     Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $ExpectedVersion
     Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
 
-    $python = Get-PythonCommand
-    & $python (Join-Path $scriptDir "verify-host-dependencies.py") `
+    Invoke-Automation native verify-host-dependencies `
         $bundleBinary `
         --report $VerificationReport
     if ($LASTEXITCODE -ne 0) {
@@ -426,12 +434,12 @@ function Copy-AndVerifyPrecomposedProduct {
     $runtimeDir = $runtimeDirs[0].FullName
     Require-File (Join-Path $runtimeDir "manifest.json")
 
-    & bash (Join-Path $scriptDir "verify-native-runtime-package.sh") $runtimeDir
+    Invoke-Automation native verify-runtime-package $runtimeDir
     if ($LASTEXITCODE -ne 0) {
         throw "native runtime verification failed"
     }
 
-    & $python (Join-Path $scriptDir "compose-product-bundle.py") `
+    Invoke-Automation product compose `
         --bundle $BundleDir `
         --host $bundleBinary `
         --runtime $runtimeDir `
@@ -489,9 +497,8 @@ try {
         Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $Version
 
         Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
-        $python = Get-PythonCommand
         $hostReport = Join-Path $bundleDir "host-imports.json"
-        & $python (Join-Path $scriptDir "verify-host-dependencies.py") $bundleBinary --report $hostReport
+        Invoke-Automation native verify-host-dependencies $bundleBinary --report $hostReport
         if ($LASTEXITCODE -ne 0) {
             throw "backend-neutral host dependency verification failed"
         }
@@ -504,7 +511,8 @@ try {
             ""
         }
         $selectorArgs = @(
-            (Join-Path $scriptDir "select-native-runtime.py")
+            "native"
+            "select-runtime"
             "--root"
             $nativeRuntimeRoot
             "--os"
@@ -517,7 +525,7 @@ try {
         if (Test-HasValue $cudaMajor) {
             $selectorArgs += @("--cuda-major", $cudaMajor)
         }
-        $selectorOutput = & $python @selectorArgs
+        $selectorOutput = Invoke-Automation @selectorArgs
         $selectorExitCode = $LASTEXITCODE
         if ($selectorExitCode -ne 0) {
             throw "failed to select the packaged Windows native runtime"
@@ -531,7 +539,7 @@ try {
         New-Item -ItemType Directory -Path $runtimeDestinationRoot -Force | Out-Null
         Copy-Item $runtimeDir -Destination $runtimeDestination -Recurse -Force
 
-        & $python (Join-Path $scriptDir "compose-product-bundle.py") `
+        Invoke-Automation product compose `
             --bundle $bundleDir `
             --host $bundleBinary `
             --runtime $runtimeDestination `

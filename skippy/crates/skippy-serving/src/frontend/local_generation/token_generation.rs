@@ -5,8 +5,8 @@ use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpVerifier;
 use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 use crate::frontend::generation::GenerationCacheStats;
+use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::LocalGeneration;
-use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TokenControl;
@@ -26,9 +26,9 @@ use crate::runtime_state::{RuntimeSessionStats, RuntimeState};
 use axum::http::StatusCode;
 use serde_json::json;
 use skippy_inference_api::ChatCompletionRequest;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiErrorKind;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceErrorKind;
+use skippy_inference_api::InferenceResult;
 use skippy_metrics::attr as attr_key;
 use skippy_runtime::NativeMtpDraft as RuntimeNativeMtpDraft;
 use skippy_runtime::SamplingConfig;
@@ -51,12 +51,29 @@ pub(crate) use exact_state_recording::CaptureTaskOutstandingGuard;
 pub(crate) mod capture_trace;
 mod kv_restore;
 
+/// A `NaN` logprob marks a token whose raw logits row was unavailable when it
+/// was sampled. OpenAI clients expect numbers, so the request fails instead of
+/// answering with a value that is not one.
+pub(super) fn ensure_readable_logprobs(
+    entries: &[skippy_runtime::TokenLogprobs],
+) -> InferenceResult<()> {
+    let unreadable = entries.iter().any(|entry| {
+        !entry.logprob.is_finite() || entry.top.iter().any(|(_, logprob)| !logprob.is_finite())
+    });
+    if unreadable {
+        return Err(InferenceError::backend(
+            "a sampled token's raw logits were unavailable, so its logprobs cannot be reported",
+        ));
+    }
+    Ok(())
+}
+
 pub(in crate::frontend) fn resident_capacity_admission_error(
     capacity: &crate::kv_integration::ResidentCapacityDecision,
-) -> OpenAiError {
-    OpenAiError::from_kind(
+) -> InferenceError {
+    InferenceError::from_kind(
         StatusCode::TOO_MANY_REQUESTS,
-        OpenAiErrorKind::RateLimit,
+        InferenceErrorKind::RateLimit,
         format!(
             "resident KV capacity admission rejected request: {} token deficit (capacity={}, active={}, pinned={}, request={}, minimum_free={})",
             capacity.admission_deficit_tokens,
@@ -93,7 +110,7 @@ fn ensure_cache_operation_active(
     runtime: &mut RuntimeState,
     session_id: &str,
     cache_operation: &CacheRuntimeContext,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if let Err(error) = cache_operation.ensure_active() {
         let _ = runtime.drop_session_timed(session_id);
         return Err(error);
@@ -107,7 +124,7 @@ fn prefill_cache_chunks(
     tokens: &[i32],
     chunk_tokens: usize,
     cache_operation: &CacheRuntimeContext,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     for chunk in tokens.chunks(chunk_tokens.max(1)) {
         ensure_cache_operation_active(runtime, session_id, cache_operation)?;
         runtime
@@ -367,9 +384,8 @@ impl StageOpenAiBackend {
     pub(in crate::frontend) fn generate_local_tokens(
         &self,
         mut request: LocalGeneration<'_>,
-        mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<GenerationCacheStats> {
-        let payment_gate = crate::frontend::generation_gate::find(request.ids.frontend_request_id)?;
+        mut on_token: impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<GenerationCacheStats> {
         let session_id = request.ids.session_label.clone();
         let receipt_request_id = request.ids.request_id;
         let receipt_session_id = request.ids.session_id;
@@ -406,20 +422,7 @@ impl StageOpenAiBackend {
             receipt_request_id,
             receipt_session_id,
         );
-        let paid_input_tokens = request.prompt_token_ids.len();
-        let paid_max_output_tokens = request.max_tokens;
-        let mut authorization_started = false;
         let mut emit_token = |token_id| {
-            if let Some(gate) = payment_gate.as_ref() {
-                // The first canonical token proves the native step that
-                // consumed the final prompt token succeeded, so the whole
-                // prompt is processed before authorization starts.
-                if !authorization_started {
-                    gate.after_prefill(paid_input_tokens, paid_max_output_tokens)?;
-                    authorization_started = true;
-                }
-                gate.before_token()?;
-            }
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
@@ -444,9 +447,9 @@ impl StageOpenAiBackend {
                 .cancellation
                 .is_some_and(skippy_inference_api::CancellationToken::is_cancelled)
             {
-                return Err(OpenAiError::backend("request cancelled"));
+                return Err(InferenceError::backend("request cancelled"));
             }
-            if payment_gate.is_none() && self.uses_scheduler_builtin_driver(&request) {
+            if self.uses_scheduler_builtin_driver(&request) {
                 let model_generation_elapsed = self.run_scheduled_generation(
                     &request,
                     &session_id,
@@ -481,6 +484,24 @@ impl StageOpenAiBackend {
         let receipt_observation = receipt_observation
             .as_ref()
             .and_then(|observation| observation.borrow_mut().take());
+        // A request that asked for logprobs fails rather than answering without them.
+        let result = result.and_then(|()| {
+            if request.sampling.top_logprobs.is_none() {
+                return Ok(());
+            }
+            let logprobs_session_id = session_id.clone();
+            let token_logprobs = self.iteration_scheduler.execute_runtime(
+                "take-token-logprobs",
+                move |runtime| {
+                    runtime
+                        .take_token_logprobs(&logprobs_session_id)
+                        .map_err(openai_backend_error)
+                },
+            )?;
+            ensure_readable_logprobs(&token_logprobs)?;
+            cache_stats.token_logprobs = Some(token_logprobs);
+            Ok(())
+        });
         let generation_succeeded = result.is_ok();
         if receipt_cancelled {
             lifecycle.mark_cancelled();
@@ -523,7 +544,10 @@ impl StageOpenAiBackend {
             request.native_mtp_enabled,
             &request.speculative.effective_strategy,
             hooks_enabled,
-        );
+        )
+            // The built-in driver drops (and resets) the session as the sequence
+            // ends, before the recorded logprobs can be taken.
+            && request.sampling.top_logprobs.is_none();
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert("skippy.scheduler.eligible".to_string(), json!(eligible));
         attrs.insert(
@@ -564,8 +588,8 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         cache_stats: &mut GenerationCacheStats,
-        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<Duration> {
+        emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<Duration> {
         let timer = PhaseTimer::start();
         let stats = self.iteration_scheduler.generate(
             ScheduledGenerationRequest {
@@ -612,7 +636,7 @@ impl StageOpenAiBackend {
         &self,
         request: &LocalGeneration<'_>,
         session_id: &str,
-    ) -> OpenAiResult<bool> {
+    ) -> InferenceResult<bool> {
         if request.max_tokens == 0 || request.prompt_token_ids.len() <= 1 || self.kv.is_some() {
             return Ok(false);
         }
@@ -639,7 +663,20 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         cache_stats: &mut GenerationCacheStats,
-    ) -> OpenAiResult<PromptPrefillResult> {
+    ) -> InferenceResult<PromptPrefillResult> {
+        // A logprobs request reads the raw logits row of every sampled token,
+        // the prefill's included. A backend (in-graph) sampler an earlier
+        // request left attached would hide that row, and only reconfiguring
+        // chat sampling detaches it, so a request without chat metadata gets
+        // plain chat sampling before its prefill decode.
+        if request.sampling.top_logprobs.is_some() && request.chat_sampling_metadata.is_none() {
+            self.configure_chat_sampling(
+                session_id,
+                r#"{"grammar":""}"#,
+                request.prompt_token_ids.len(),
+                request.sampling.enabled.then_some(request.sampling),
+            )?;
+        }
         if self.can_sample_whole_prompt_in_prefill(request, session_id)? {
             let chat_sampling_configured = if let Some(metadata) = request.chat_sampling_metadata {
                 self.configure_chat_sampling(
@@ -698,7 +735,7 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         cache_stats: &mut GenerationCacheStats,
-    ) -> OpenAiResult<Option<i32>> {
+    ) -> InferenceResult<Option<i32>> {
         let prefill_timer = PhaseTimer::start();
         let runtime_sessions_before = self
             .iteration_scheduler
@@ -762,7 +799,7 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         cache_stats: &mut GenerationCacheStats,
-    ) -> OpenAiResult<Option<i32>> {
+    ) -> InferenceResult<Option<i32>> {
         let prefill_timer = PhaseTimer::start();
         let prefill_tokens =
             Arc::<[i32]>::from(&request.prompt_token_ids[..request.prompt_token_ids.len() - 1]);
@@ -918,10 +955,9 @@ impl StageOpenAiBackend {
                 cache_operation_deadline,
                 request.cancellation,
             )?;
-            prompt_prefill_sample =
-                Some(suffix_outcome.predicted.ok_or_else(|| {
-                    OpenAiError::backend("deferred suffix prefill was not sampled")
-                })?);
+            prompt_prefill_sample = Some(suffix_outcome.predicted.ok_or_else(|| {
+                InferenceError::backend("deferred suffix prefill was not sampled")
+            })?);
             prefill_chunk_count = if prefill_chunk_count == 1 {
                 suffix_outcome.chunk_count
             } else {
@@ -1134,7 +1170,7 @@ impl StageOpenAiBackend {
         &self,
         runtime: &mut RuntimeState,
         cache_operation: &CacheRuntimeContext,
-        ids: &OpenAiGenerationIds,
+        ids: &InferenceGenerationIds,
         session_id: &str,
         prefill_tokens: &[i32],
         lookup_identities: &[PrefillKvIdentity],
@@ -1142,7 +1178,7 @@ impl StageOpenAiBackend {
         recurrent_cache_prefix_token_ids: Option<&[i32]>,
         max_tokens: u32,
         cache_stats: &mut GenerationCacheStats,
-    ) -> OpenAiResult<KvRestoreOutcome> {
+    ) -> InferenceResult<KvRestoreOutcome> {
         ensure_cache_operation_active(runtime, session_id, cache_operation)?;
         let emit_debug = self.telemetry.is_debug_enabled();
         let runtime_sessions_before = emit_debug.then(|| runtime.session_stats());
@@ -1356,7 +1392,7 @@ impl StageOpenAiBackend {
         metadata: &str,
         prompt_token_count: usize,
         sampling: Option<&SamplingConfig>,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         let scheduler_session_id = session_id.to_string();
         let scheduler_metadata = metadata.to_string();
         let scheduler_sampling = sampling.cloned();
@@ -1378,7 +1414,7 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         chat_sampling_configured: bool,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         if let Some(metadata) = (!chat_sampling_configured)
             .then_some(request.chat_sampling_metadata)
             .flatten()
@@ -1398,8 +1434,8 @@ impl StageOpenAiBackend {
         request: &mut LocalGeneration<'_>,
         session_id: &str,
         prompt_prefill_sample: Option<i32>,
-        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<DecodeState> {
+        emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<DecodeState> {
         let mut decoded_tokens = 0usize;
         let mut current = *request
             .prompt_token_ids
@@ -1413,7 +1449,7 @@ impl StageOpenAiBackend {
                 .cancellation
                 .is_some_and(skippy_inference_api::CancellationToken::is_cancelled)
             {
-                return Err(OpenAiError::backend("request cancelled"));
+                return Err(InferenceError::backend("request cancelled"));
             }
             current = predicted;
             decoded_tokens += 1;
@@ -1425,9 +1461,12 @@ impl StageOpenAiBackend {
         let hook_runtime = request.hook_runtime.take();
         let generation_hooks_active =
             self.generation_hooks_active(&hook_request, hook_runtime.as_ref());
+        // Verified proposal rows past a rejected token are sampled too, so their
+        // recorded logprobs would not line up with the emitted tokens.
         let linear_proposal_enabled = self.linear_proposal_ingress.is_some()
             && !request.native_mtp_enabled
             && !generation_hooks_active
+            && request.sampling.top_logprobs.is_none()
             && greedy_linear_proposal_admitted(request.sampling, request.chat_sampling_metadata);
         let linear_proposal_max_tokens = if linear_proposal_enabled {
             let scheduler_session_id = session_id.to_string();
@@ -1472,8 +1511,12 @@ impl StageOpenAiBackend {
             emit_token_debug: self.telemetry.is_debug_enabled(),
             native_mtp_options: NativeMtpDecodeOptions::from_config(request.speculative),
             native_mtp: NativeMtpVerifier::default(),
+            // A native MTP span samples every verified row, past a rejected
+            // draft too; text generation already stands MTP down for logprobs
+            // requests, and this keeps the span gate correct on its own.
             native_mtp_span_admitted: request.native_mtp_enabled
                 && !generation_hooks_active
+                && request.sampling.top_logprobs.is_none()
                 && greedy_linear_proposal_admitted(
                     request.sampling,
                     request.chat_sampling_metadata,
@@ -1495,8 +1538,8 @@ impl StageOpenAiBackend {
         prompt_prefill_sample: Option<i32>,
         cache_stats: &mut GenerationCacheStats,
         receipt_cancelled: &mut bool,
-        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
-    ) -> OpenAiResult<Duration> {
+        emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
+    ) -> InferenceResult<Duration> {
         let decode_timer = PhaseTimer::start();
         let mut state =
             self.prepare_decode_state(request, session_id, prompt_prefill_sample, emit_token)?;
@@ -1641,7 +1684,7 @@ pub(super) fn decode_native_mtp(
     token_id: i32,
     sampling: Option<&SamplingConfig>,
     max_draft_tokens: usize,
-) -> OpenAiResult<(i32, Option<NativeMtpDraft>)> {
+) -> InferenceResult<(i32, Option<NativeMtpDraft>)> {
     let (predicted, draft) = runtime
         .decode_sampled_mtp(session_id, token_id, sampling, max_draft_tokens)
         .map_err(openai_backend_error)?;

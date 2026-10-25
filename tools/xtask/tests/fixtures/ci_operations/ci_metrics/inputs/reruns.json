@@ -1,0 +1,92 @@
+[
+  {
+    "databaseId": 101,
+    "attempt": 1,
+    "workflowName": "PR Builds",
+    "displayTitle": "run 101",
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-07-01T00:00:00Z",
+    "startedAt": "2026-07-01T00:00:05Z",
+    "updatedAt": "2026-07-01T00:10:00Z",
+    "url": "https://example.test/runs/101",
+    "headSha": "sha-101",
+    "headBranch": "feature",
+    "jobs": [
+      {
+        "id": 1011,
+        "name": "build",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-07-01T00:00:10Z",
+        "started_at": "2026-07-01T00:00:20Z",
+        "completed_at": "2026-07-01T00:08:20Z",
+        "html_url": "https://example.test/jobs/build",
+        "labels": [
+          "ubuntu-24.04"
+        ],
+        "steps": []
+      },
+      {
+        "id": 1012,
+        "name": "smoke",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-07-01T00:08:20Z",
+        "started_at": "2026-07-01T00:08:25Z",
+        "completed_at": "2026-07-01T00:09:50Z",
+        "html_url": "https://example.test/jobs/smoke",
+        "labels": [
+          "ubuntu-24.04"
+        ],
+        "steps": []
+      },
+      {
+        "id": 1013,
+        "name": "unused",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-07-01T00:00:00Z",
+        "started_at": "2026-07-01T00:10:00Z",
+        "completed_at": "2026-07-01T00:10:00Z",
+        "html_url": "https://example.test/jobs/unused",
+        "labels": [
+          "ubuntu-24.04"
+        ],
+        "steps": []
+      }
+    ]
+  },
+  {
+    "databaseId": 103,
+    "attempt": 2,
+    "workflowName": "PR Builds",
+    "displayTitle": "run 103",
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-07-01T00:00:00Z",
+    "startedAt": "2026-07-02T00:00:05Z",
+    "updatedAt": "2026-07-02T00:10:00Z",
+    "url": "https://example.test/runs/103",
+    "headSha": "sha-103",
+    "headBranch": "feature",
+    "jobs": [
+      {
+        "id": 1031,
+        "name": "build",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-07-02T00:00:10Z",
+        "started_at": "2026-07-02T00:00:20Z",
+        "completed_at": "2026-07-02T00:08:20Z",
+        "html_url": "https://example.test/jobs/build",
+        "labels": [
+          "ubuntu-24.04"
+        ],
+        "steps": []
+      }
+    ]
+  }
+]

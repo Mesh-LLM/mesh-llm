@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use anyhow::Context;
+
 use mesh_llm_payments_types::contract::{AdvertisedPricing, Empty, ops};
 use mesh_llm_payments_types::engine::AdvertisedPrices;
 use mesh_llm_payments_types::pricing::Pricing;
@@ -100,6 +102,13 @@ impl Node {
                         PluginWalletFactory::new(Arc::clone(&self.plugin_manager), wallet);
                     let provider = super::engine::provider()
                         .ok_or_else(|| anyhow::anyhow!("no payments engine installed"))?;
+                    // The ledger and every wallet plugin's seed or credentials
+                    // live here, beside a config that can be anywhere, so the
+                    // directory is the current user's alone before the engine
+                    // writes into it.
+                    std::fs::create_dir_all(&directory)?;
+                    mesh_llm_config::restrict_private_directory(&directory)
+                        .with_context(|| format!("restricting {}", directory.display()))?;
                     provider.open(&directory, Arc::new(factory))
                 })
                 .await?;
@@ -268,6 +277,8 @@ mod tests {
             .await?;
         assert!(bad.is_error);
         manager.shutdown().await;
+        drop(node.take_plugin_manager().await);
+        node.endpoint.close().await;
         Ok(())
     }
 
@@ -400,6 +411,9 @@ mod tests {
             mesh_llm_payments::service::PaymentService::open(&directory).is_err(),
             "lock must be held while the engine is live"
         );
+        // Let supervision enter its idle interval before stopping the node.
+        // Shutdown before its first poll would conceal idle ownership retention.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         manager.shutdown().await;
         drop(manager);
         drop(node.take_plugin_manager().await);

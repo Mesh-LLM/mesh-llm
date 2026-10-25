@@ -3,7 +3,7 @@ use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::ADMISSION_STARVATION_BOUND_TURNS;
-use crate::frontend::generation::OpenAiBackendMode;
+use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::runtime_state::RuntimeState;
@@ -14,7 +14,7 @@ use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::ChatCompletionResponse;
 use skippy_inference_api::ChatHookOutcome;
 use skippy_inference_api::FinishReason;
-use skippy_inference_api::OpenAiHookPolicy;
+use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::Usage;
 use skippy_inference_api::set_chat_skippy_hooks_enabled;
 use tokio::runtime::Runtime;
@@ -41,8 +41,13 @@ fn test_telemetry() -> crate::telemetry::Telemetry {
     crate::telemetry::Telemetry::new(None, 1, config, crate::telemetry::TelemetryLevel::Off)
 }
 
-fn trusted_ids(session_id: &str) -> OpenAiGenerationIds {
-    OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), Some(session_id), true, None)
+fn trusted_ids(session_id: &str) -> InferenceGenerationIds {
+    InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some(session_id),
+        true,
+        None,
+    )
 }
 
 fn trusted_session_key(session_id: &str) -> String {
@@ -75,7 +80,7 @@ fn admission_controller_with_budget(
     }
 }
 
-fn result_error<T>(result: OpenAiResult<T>) -> OpenAiError {
+fn result_error<T>(result: InferenceResult<T>) -> InferenceError {
     match result {
         Ok(_) => panic!("expected generation admission to fail"),
         Err(error) => error,
@@ -857,7 +862,7 @@ async fn blocking_worker_holds_global_and_session_permits_until_work_finishes() 
         )
         .await
         .expect("worker admission");
-    let worker_context = OpenAiRequestContext::new();
+    let worker_context = InferenceRequestContext::new();
     let worker_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let release_worker = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let started = worker_started.clone();
@@ -913,8 +918,8 @@ async fn blocking_worker_holds_global_and_session_permits_until_work_finishes() 
 #[test]
 fn untrusted_conversation_affinity_bypasses_session_registry() {
     let registry = Arc::new(Mutex::new(BTreeMap::new()));
-    let untrusted = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let untrusted = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         Some("conversation-7"),
         false,
         None,
@@ -940,9 +945,9 @@ fn direct_backend_calls_ignore_spoofed_request_trust_metadata() {
         "mesh_internal_agent_session_trusted": true
     }))
     .expect("request with spoofed metadata");
-    let context = OpenAiRequestContext::new();
+    let context = InferenceRequestContext::new();
     let ids = generation_ids(
-        OpenAiCacheHints::from_chat_request(&request),
+        InferenceCacheHints::from_chat_request(&request),
         request.agent_session(),
         &context,
     );
@@ -954,11 +959,11 @@ fn direct_backend_calls_ignore_spoofed_request_trust_metadata() {
 
 #[test]
 fn internal_stream_usage_observation_preserves_client_wire_preference() {
-    let direct = OpenAiRequestContext::new();
+    let direct = InferenceRequestContext::new();
     assert!(!should_emit_stream_usage(false, &direct));
     assert!(should_emit_stream_usage(true, &direct));
 
-    let observed = OpenAiRequestContext::new().with_stream_usage_observation();
+    let observed = InferenceRequestContext::new().with_stream_usage_observation();
     assert!(should_emit_stream_usage(false, &observed));
 }
 
@@ -980,7 +985,7 @@ fn stalled_receiver_does_not_pin_the_generation_worker_forever() {
     let (tx, rx) = mpsc::channel(1);
     tx.try_send(Ok(GenerationStreamEvent::Delta("first".to_owned())))
         .expect("channel has room for the first event");
-    let context = OpenAiRequestContext::new();
+    let context = InferenceRequestContext::new();
     let rt = Runtime::new().expect("tokio runtime for stall test");
     let sender = StreamEventSender::new(
         tx,
@@ -1027,7 +1032,7 @@ fn stalled_receiver_self_cancels_after_the_stall_timeout_with_no_external_cancel
     let (tx, rx) = mpsc::channel(1);
     tx.try_send(Ok(GenerationStreamEvent::Delta("first".to_owned())))
         .expect("channel has room for the first event");
-    let context = OpenAiRequestContext::new();
+    let context = InferenceRequestContext::new();
     let rt = Runtime::new().expect("tokio runtime for stall test");
     let sender = StreamEventSender::new(
         tx,
@@ -1068,7 +1073,7 @@ fn stalled_receiver_self_cancels_after_the_stall_timeout_with_no_external_cancel
 #[test]
 fn terminal_frames_are_delivered_after_the_request_is_cancelled() {
     let (tx, mut rx) = mpsc::channel(4);
-    let context = OpenAiRequestContext::new();
+    let context = InferenceRequestContext::new();
     context.cancel();
     let rt = Runtime::new().expect("tokio runtime for terminal-delivery test");
     let sender = StreamEventSender::new(
@@ -1119,7 +1124,7 @@ fn backend_errors_are_delivered_as_terminal_stream_frames() {
     );
 
     sender
-        .send_terminal(Err(OpenAiError::backend(
+        .send_terminal(Err(InferenceError::backend(
             "native decode failed to find a memory slot",
         )))
         .expect("backend failure must reach a live stream receiver");
@@ -1145,7 +1150,7 @@ fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
     let (tx, rx) = mpsc::channel(1);
     tx.try_send(Ok(GenerationStreamEvent::Delta("first".to_owned())))
         .expect("channel has room for the first event");
-    let context = OpenAiRequestContext::new();
+    let context = InferenceRequestContext::new();
     let rt = Runtime::new().expect("tokio runtime for double-wait test");
     // Inject a generous stall timeout so the short-circuit assertion has a wide
     // margin on a loaded CI runner: a terminal send that (wrongly) waited out
@@ -1198,7 +1203,7 @@ fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
 // `self.hook_policy` — so it's fully exercisable on a modelless backend.
 
 pub(super) fn hooks_test_backend(
-    hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
 ) -> StageOpenAiBackend {
     let config: skippy_protocol::StageConfig = serde_json::from_value(json!({
         "run_id": "hooks-test",
@@ -1233,7 +1238,7 @@ pub(super) fn hooks_test_backend(
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         thinking: None,
         ctx_size: 128,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
@@ -1258,8 +1263,8 @@ pub(super) fn hooks_test_backend(
 }
 
 /// Construct a stage-zero embedded topology for non-chat admission tests.
-fn embedded_non_chat_test_mode(config: skippy_protocol::StageConfig) -> OpenAiBackendMode {
-    OpenAiBackendMode::EmbeddedStageZero {
+fn embedded_non_chat_test_mode(config: skippy_protocol::StageConfig) -> InferenceBackendMode {
+    InferenceBackendMode::EmbeddedStageZero {
         config,
         prefill_chunk_policy: PrefillChunkPolicy::Fixed { chunk_size: 64 },
         activation_width: 0,
@@ -1322,7 +1327,7 @@ fn non_chat_topology_guard_rejects_staged_and_filtered_models() {
     for config in cases {
         backend.mode = embedded_non_chat_test_mode(config.clone());
         assert!(!backend.has_unsplit_full_model_topology(), "{config:?}");
-        backend.mode = OpenAiBackendMode::LocalRuntime;
+        backend.mode = InferenceBackendMode::LocalRuntime;
         backend.config = config;
         assert!(!backend.has_unsplit_full_model_topology());
         backend.config = full_config.clone();
@@ -1357,16 +1362,16 @@ struct RecordingHookPolicy {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for RecordingHookPolicy {
+impl InferenceHookPolicy for RecordingHookPolicy {
     async fn before_chat_completion(
         &self,
         _request: &mut ChatCompletionRequest,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         if self.hang_before_dispatch {
             std::future::pending::<()>().await;
         }
         if self.deny {
-            return Err(OpenAiError::invalid_request("denied by policy"));
+            return Err(InferenceError::invalid_request("denied by policy"));
         }
         Ok(ChatHookOutcome::none())
     }
@@ -1515,7 +1520,7 @@ async fn stage_backend_dispatch_error_fires_terminal_exactly_once() {
 
     let error = backend
         .chat_completion_with_hooks(request, |_request| async move {
-            Err(OpenAiError::backend("upstream exploded"))
+            Err(InferenceError::backend("upstream exploded"))
         })
         .await
         .expect_err("fake dispatch fails");
@@ -1606,7 +1611,7 @@ async fn stage_backend_stream_that_ends_normally_fires_stream_completed_terminal
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
-    let context = OpenAiRequestContext::new();
+    let context = InferenceRequestContext::new();
 
     let mut stream = backend
         .chat_completion_stream_with_hooks(request, &context, |request| async move {
@@ -1644,7 +1649,7 @@ async fn stage_backend_stream_dropped_mid_stream_fires_exactly_one_cancelled_ter
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
-    let context = OpenAiRequestContext::new();
+    let context = InferenceRequestContext::new();
 
     let mut stream = backend
         .chat_completion_stream_with_hooks(request, &context, |request| async move {
@@ -1670,13 +1675,13 @@ async fn stage_backend_stream_error_chunk_fires_error_terminal_exactly_once() {
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
-    let context = OpenAiRequestContext::new();
+    let context = InferenceRequestContext::new();
 
     let mut stream = backend
         .chat_completion_stream_with_hooks(request, &context, |request| async move {
             Ok(Box::pin(futures_util::stream::iter(vec![
                 Ok(ChatCompletionChunk::delta(request.model, "hi")),
-                Err(OpenAiError::backend("upstream exploded")),
+                Err(InferenceError::backend("upstream exploded")),
             ])) as ChatCompletionStream)
         })
         .await
@@ -1703,7 +1708,7 @@ async fn stage_backend_stream_denied_never_dispatches_and_fires_terminal_exactly
     });
     let backend = hooks_test_backend(Some(policy.clone()));
     let request = mesh_hooks_request("hooks-test-model");
-    let context = OpenAiRequestContext::new();
+    let context = InferenceRequestContext::new();
 
     let error = match backend
         .chat_completion_stream_with_hooks(request, &context, |_request| async move {
@@ -1729,8 +1734,8 @@ async fn stage_backend_stream_denied_never_dispatches_and_fires_terminal_exactly
 fn generation_ids_carries_the_frontend_request_id_byte_equal_to_the_context() {
     let request_id = skippy_inference_api::parse_request_id("c0a801ef-2a39-4f52-99f5-bdc849127cde")
         .expect("test UUID should parse");
-    let context = OpenAiRequestContext::with_request_id(request_id);
-    let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+    let context = InferenceRequestContext::with_request_id(request_id);
+    let ids = generation_ids(InferenceCacheHints::default(), None, &context);
     assert_eq!(
         ids.frontend_request_id,
         Some(request_id.as_uuid().into_bytes())
@@ -1739,8 +1744,8 @@ fn generation_ids_carries_the_frontend_request_id_byte_equal_to_the_context() {
 
 #[test]
 fn generation_ids_leaves_frontend_request_id_absent_for_a_non_frontend_context() {
-    let context = OpenAiRequestContext::new();
-    let ids = generation_ids(OpenAiCacheHints::default(), None, &context);
+    let context = InferenceRequestContext::new();
+    let ids = generation_ids(InferenceCacheHints::default(), None, &context);
     assert_eq!(ids.frontend_request_id, None);
 }
 
@@ -1766,8 +1771,8 @@ fn identity_config() -> skippy_protocol::StageConfig {
 #[test]
 fn openai_identity_attrs_carry_the_frontend_request_uuid_when_present() {
     let expected = uuid::Uuid::new_v4();
-    let ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         None,
         false,
         Some(*expected.as_bytes()),
@@ -1790,7 +1795,8 @@ fn openai_identity_attrs_carry_the_frontend_request_uuid_when_present() {
 /// ones.
 #[test]
 fn openai_identity_attrs_omit_the_frontend_request_uuid_without_one() {
-    let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+    let ids =
+        InferenceGenerationIds::new_with_trust(InferenceCacheHints::default(), None, false, None);
 
     let attrs = openai_identity_attrs(&identity_config(), "test-backend", &ids);
 
@@ -1811,8 +1817,8 @@ fn embedded_forward_seam_emits_error_event_on_write_failure() {
         endpoint: "10.0.0.3:50052".to_string(),
     });
     let expected = uuid::Uuid::new_v4();
-    let ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         None,
         false,
         Some(*expected.as_bytes()),
@@ -1875,7 +1881,8 @@ fn embedded_forward_seam_emits_nothing_on_success() {
         stage_index: 2,
         endpoint: "10.0.0.3:50052".to_string(),
     });
-    let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+    let ids =
+        InferenceGenerationIds::new_with_trust(InferenceCacheHints::default(), None, false, None);
     let (telemetry, rx) = crate::telemetry::Telemetry::captured(
         config.clone(),
         crate::telemetry::TelemetryLevel::Summary,
@@ -1922,8 +1929,8 @@ fn lane_checkout_connect_failure_emits_connect_event() {
             .to_string(),
     });
     let expected = uuid::Uuid::new_v4();
-    let ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         None,
         false,
         Some(*expected.as_bytes()),

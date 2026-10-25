@@ -1,7 +1,7 @@
 use crate::{
     chat::{ChatCompletionRequest, ChatCompletionResponse},
     common::FinishReason,
-    errors::OpenAiError,
+    errors::InferenceError,
     hooks::inject_text_into_chat_messages,
 };
 
@@ -103,7 +103,7 @@ pub(crate) fn exhaustion_result(
     policy: &GuardrailPolicy,
     response: ChatCompletionResponse,
     classified: &ClassifiedGuardrailResponse,
-) -> Result<ChatCompletionResponse, OpenAiError> {
+) -> Result<ChatCompletionResponse, InferenceError> {
     match policy.retry_exhaustion_mode {
         RetryExhaustionMode::Error => Err(validation_failed_error()),
         RetryExhaustionMode::PassLastText => pass_last_text_response(policy, &response, classified)

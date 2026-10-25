@@ -1,6 +1,6 @@
 # CI measurement contract
 
-Use `scripts/collect-ci-metrics.py` for repeatable, read-only GitHub Actions
+Use `cargo xtool ci-ops collect-metrics` for repeatable, read-only GitHub Actions
 measurements. The collector emits schema version 3 reports and deterministic
 rollout signals; this document defines method, not a historical baseline.
 Store raw observations as workflow artifacts or in the owning tracking issue;
@@ -11,7 +11,7 @@ do not add dated run conclusions to authoritative CI documentation.
 Collect a bounded comparable cohort:
 
 ```bash
-python3 scripts/collect-ci-metrics.py \
+cargo xtool ci-ops collect-metrics \
   --repo Mesh-LLM/mesh-llm \
   --workflow pr_linux.yml \
   --event pull_request \
@@ -26,7 +26,7 @@ python3 scripts/collect-ci-metrics.py \
 Collect exact runs when validating a migration canary:
 
 ```bash
-python3 scripts/collect-ci-metrics.py \
+cargo xtool ci-ops collect-metrics \
   --run-id RUN_ID \
   --run-id RUN_ID \
   --raw-out /tmp/ci-canary-runs.json \
@@ -36,7 +36,7 @@ python3 scripts/collect-ci-metrics.py \
 Reprocess saved observations without another API request:
 
 ```bash
-python3 scripts/collect-ci-metrics.py \
+cargo xtool ci-ops collect-metrics \
   --input /tmp/ci-canary-runs.json \
   --json-out /tmp/ci-canary-recomputed.json \
   --markdown-out /tmp/ci-canary-recomputed.md
@@ -48,7 +48,7 @@ label for the report; the runner labels in the report remain the source of
 truth for the actual provider.
 
 ```bash
-python3 scripts/collect-ci-metrics.py \
+cargo xtool ci-ops collect-metrics \
   --repo Mesh-LLM/mesh-llm \
   --workflow pr_linux.yml \
   --event pull_request \
@@ -58,7 +58,7 @@ python3 scripts/collect-ci-metrics.py \
   --raw-out /tmp/pr-github-history.json \
   --json-out /tmp/pr-github-history.metrics.json
 
-python3 scripts/collect-ci-metrics.py \
+cargo xtool ci-ops collect-metrics \
   --input /tmp/pr-depot-candidate.json \
   --label cohort=depot-candidate \
   --label provider=depot \
@@ -174,7 +174,7 @@ sum(cache_hits) / (sum(cache_hits) + sum(cache_misses))
 Evaluate retained sccache artifacts offline:
 
 ```bash
-python3 scripts/summarize-sccache-stats.py \
+cargo xtool ci-ops sccache-summary \
   --minimum-hit-rate 0.80 \
   /tmp/sccache-evidence
 ```

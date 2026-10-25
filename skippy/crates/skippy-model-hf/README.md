@@ -75,6 +75,7 @@ unchanged.
   and available sidecars) while returning named snapshot paths to model loaders
 - locate the default Hugging Face cache directory
 - derive `HfModelIdentity` and `ModelIdentity` from cached snapshot paths
+- scan local GGUF inventory and cache compact metadata for both products
 - refresh and query the shared remote model catalog for both CLIs
 
 Keep artifact ranking in `skippy-model-artifact`, public reference parsing in

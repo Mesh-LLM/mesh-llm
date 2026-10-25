@@ -123,7 +123,9 @@ describe('VRAMBar', () => {
     )
 
     expect(screen.getByRole('button', { name: /17\.8 GB weights, 6\.4 GB context cache/i })).toBeInTheDocument()
-    expect(screen.getByText('17.8 GB · 262,144 ctx (6.4 GB)')).toBeInTheDocument()
+    // ctx digit grouping follows the host locale (e.g. en-IN renders 2,62,144),
+    // so mirror the component's toLocaleString instead of hardcoding en-US.
+    expect(screen.getByText(`17.8 GB · ${(262144).toLocaleString()} ctx (6.4 GB)`)).toBeInTheDocument()
   })
 
   it('does not allow models to be dropped onto reserved VRAM', () => {

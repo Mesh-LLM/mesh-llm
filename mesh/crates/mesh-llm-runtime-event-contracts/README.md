@@ -110,9 +110,9 @@ introduced it). It is pinned to a ratified spec by content hash:
 fails the suite if the two drift apart. `tests/inventory_contract/coverage.rs`
 cross-checks the inventory's 137 spec-bullet expansions against
 `inventory/spec_manifest.json` — itself produced from the same spec section
-(8.1-8.15) by `scripts/extract-runtime-event-spec-manifest.py` — and
+(8.1-8.15) by `cargo xtool automation native-generator contracts spec-manifest` — and
 `adversarial.rs` / `projection.rs` round out the contract with tampered-input
-and projection-key checks. `scripts/generate-runtime-event-inventory.py`
+and projection-key checks. `cargo xtool automation native-generator contracts inventory`
 mechanically regenerates the TypeScript mirror at
 `fixtures/runtime_event_inventory.ts` from the same TOML, so the amendment
 procedure recorded in the inventory itself ("change the inventory, generated

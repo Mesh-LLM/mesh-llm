@@ -83,6 +83,7 @@ pub(crate) enum LockClass {
 }
 
 impl LockClass {
+    #[cfg(any(debug_assertions, test))]
     const fn bit(self) -> u32 {
         1 << (self as u8)
     }
@@ -116,6 +117,7 @@ impl LockClass {
 #[repr(u8)]
 pub(crate) enum Context {
     /// Not inside any marked runtime-event operation.
+    #[cfg(any(debug_assertions, test))]
     Unmarked = 0,
     /// Inside `RuntimeEventEngine::submit`.
     Producer = 1,
@@ -138,6 +140,7 @@ pub(crate) enum Context {
 /// A gate, the progress lane, the reducer snapshot, the replay buffer, and
 /// the subscriber registry are all excluded, because a drain pass holds
 /// those for as long as its work takes.
+#[cfg(any(debug_assertions, test))]
 pub(crate) const RESERVE_ALLOWED: u32 = LockClass::ReservationSlot.bit()
     | LockClass::ReservationFreeList.bit()
     | LockClass::ChildrenByRoot.bit()
@@ -145,6 +148,7 @@ pub(crate) const RESERVE_ALLOWED: u32 = LockClass::ReservationSlot.bit()
 
 /// Classes a producer is permitted to take once the audit is enforcing:
 /// none. `try_submit` must reach the ingress structure through atomics.
+#[cfg(any(debug_assertions, test))]
 pub(crate) const PRODUCER_ALLOWED: u32 = 0;
 
 #[cfg(debug_assertions)]

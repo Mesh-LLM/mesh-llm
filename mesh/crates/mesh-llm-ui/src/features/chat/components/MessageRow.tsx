@@ -1,6 +1,8 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useMemo, type CSSProperties, type ReactNode } from 'react'
 import {
   BrainCircuit,
+  Check,
+  Copy,
   Eye,
   FileIcon,
   FileImage,
@@ -14,6 +16,8 @@ import {
 } from 'lucide-react'
 import type { MessageRole } from '@/features/app-tabs/types'
 import { cn } from '@/lib/cn'
+import { copyStateLabel } from '@/lib/copyStateLabel'
+import { useClipboardCopy } from '@/lib/useClipboardCopy'
 import { ResponseStatsBar } from '@/features/chat/components/ResponseStatsBar'
 import { ThinkingDisclosure } from '@/features/chat/components/ThinkingDisclosure'
 import { MarkdownMessage } from '@/features/chat/components/messages/MarkdownMessage'
@@ -76,6 +80,39 @@ function AttachmentIcon({ kind }: { kind: MessageAttachmentAction['kind'] }) {
   if (kind === 'pdf') return <FileText className="size-3.5" aria-hidden={true} />
   if (kind === 'audio') return <Music className="size-3.5" aria-hidden={true} />
   return <FileIcon className="size-3.5" aria-hidden={true} />
+}
+
+function CopyMessageButton({ text }: { text: string }) {
+  const { copyState, copyText } = useClipboardCopy()
+  const label = copyStateLabel(copyState, 'message')
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      className="ml-auto inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] p-0.5 text-fg-faint opacity-0 outline-none transition-[opacity,color] hover:text-fg-dim focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+      onClick={(event) => {
+        event.stopPropagation()
+        void copyText(text)
+      }}
+    >
+      {copyState === 'copied' ? (
+        <Check className="size-3" aria-hidden={true} />
+      ) : (
+        <Copy className="size-3" aria-hidden={true} />
+      )}
+    </button>
+  )
+}
+
+function copyableMessageText(isResponse: boolean, body: string): string {
+  if (!isResponse) return body
+  return splitAssistantThinking(body, { streaming: false })
+    .filter((segment) => segment.kind === 'response')
+    .map((segment) => segment.text.replace(/^\n+|\n+$/g, ''))
+    .filter((text) => text.trim().length > 0)
+    .join('\n\n')
 }
 
 function AssistantMarkdown({
@@ -210,7 +247,7 @@ export function MessageRow({
   const routeMetadata = showRouteMetadata && ((isUser && routeNode) || (isResponse && route))
   const displayModel = isQueued ? 'Queued' : model
   const rowClassName =
-    'relative -mx-2 mb-5 block w-[calc(100%+16px)] select-none rounded-[var(--radius-lg)] border-0 bg-transparent px-2 py-1 text-left transition-[background,box-shadow] duration-150'
+    'group relative -mx-2 mb-5 block w-[calc(100%+16px)] select-none rounded-[var(--radius-lg)] border-0 bg-transparent px-2 py-1 text-left transition-[background,box-shadow] duration-150'
   const rowStyle: CSSProperties = {
     ...(inspected ? { background: 'color-mix(in oklab, var(--color-accent) 4%, transparent)' } : {})
   }
@@ -229,6 +266,10 @@ export function MessageRow({
   }
   const accessibleInspectLabel = inspectLabel ?? `Inspect ${isUser ? 'user' : 'assistant'} message from ${timestamp}`
   const headerMetadata = displayModel ? [displayModel] : []
+  const copyableText = useMemo(
+    () => (isStreamingPlaceholder ? '' : copyableMessageText(isResponse, body)),
+    [isStreamingPlaceholder, isResponse, body]
+  )
   const messageContent = (
     <>
       <div className="mb-1.5 flex select-none items-center gap-2 text-[length:var(--density-type-caption)] text-fg-faint">
@@ -301,6 +342,7 @@ export function MessageRow({
             <span>Inspect</span>
           </button>
         ) : null}
+        {copyableText ? <CopyMessageButton text={copyableText} /> : null}
       </div>
       <div
         className="block select-text text-[length:var(--density-type-body-lg)] leading-[1.55]"

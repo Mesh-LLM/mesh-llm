@@ -198,7 +198,6 @@ mod tests {
     use skippy_cache::ExactStatePayload;
     use skippy_protocol::{
         LoadMode, SCHEMA_VERSION, StageConfig, StageKvCacheConfig, StageKvCacheMode,
-        StageKvCachePayload,
     };
 
     use super::*;
@@ -247,7 +246,6 @@ mod tests {
             kv_cache: Some(StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: StageKvCacheMode::LookupRecord,
-                payload: StageKvCachePayload::ResidentKv,
                 max_entries: 8,
                 max_bytes: 0,
                 l2_max_bytes: 0,
@@ -284,9 +282,10 @@ mod tests {
     #[test]
     fn kv_identities_use_one_full_radix_path() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("cache enabled");
         let tokens = (0..160).collect::<Vec<_>>();
 
         let lookup_counts = kv
@@ -315,9 +314,10 @@ mod tests {
             }),
             ..test_config()
         };
-        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("cache enabled");
+        let kv =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("cache enabled");
         let base = test_base();
         let recorded_tokens = (0..2214).collect::<Vec<_>>();
         let mut lookup_tokens = recorded_tokens.clone();
@@ -352,7 +352,6 @@ mod tests {
             ctx_size: 8192,
             model_id: "tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M".to_string(),
             kv_cache: Some(StageKvCacheConfig {
-                payload: StageKvCachePayload::KvRecurrent,
                 min_tokens: 256,
                 shared_prefix_stride_tokens: 128,
                 max_entries: 1,
@@ -361,7 +360,7 @@ mod tests {
             ..test_config()
         };
         let kv =
-            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Recurrent)
                 .unwrap()
                 .expect("cache enabled");
         let base = test_base();
@@ -403,7 +402,6 @@ mod tests {
         let config = StageConfig {
             model_id: "tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M".to_string(),
             kv_cache: Some(StageKvCacheConfig {
-                payload: StageKvCachePayload::KvRecurrent,
                 min_tokens: 0,
                 shared_prefix_stride_tokens: 128,
                 ..test_config().kv_cache.expect("test cache config")
@@ -411,7 +409,7 @@ mod tests {
             ..test_config()
         };
         let kv =
-            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Recurrent)
                 .unwrap()
                 .expect("cache enabled");
 
@@ -424,7 +422,6 @@ mod tests {
     #[test]
     fn exact_state_record_prefers_shared_checkpoint_over_request_tail() {
         let mut config = test_config();
-        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::KvRecurrent;
         config.kv_cache.as_mut().unwrap().min_tokens = 256;
         config
             .kv_cache
@@ -432,7 +429,7 @@ mod tests {
             .unwrap()
             .shared_prefix_stride_tokens = 128;
         let kv =
-            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Recurrent)
                 .unwrap()
                 .expect("cache enabled");
 

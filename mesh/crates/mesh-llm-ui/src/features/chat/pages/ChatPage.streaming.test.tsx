@@ -8,6 +8,11 @@ import {
   FeatureFlagProvider,
   chatMock,
   expectPartialAssistantReply,
+  paidRoutingMock,
+  modelPaymentsMock,
+  adaptModelsToSummary,
+  CHAT_HARNESS,
+  useModelsQuery,
   renderChatPage,
   renderPersistentChatRoute,
   saveChatState,
@@ -531,6 +536,202 @@ describe('ChatPage', () => {
       expect(chatMock.sendCalls[0]?.content).toBe('First live prompt')
     })
   })
+
+  it('restricts sends to free hosts while paid routing is not confirmed', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = false
+
+    renderChatPage({ mode: 'live' })
+
+    await user.type(screen.getByLabelText('Prompt'), 'Free prompt')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(1))
+    expect(chatMock.sendCalls[0]?.freeOnly).toBe(true)
+  })
+
+  it('falls back to Free when a later policy refetch fails after paid routing was allowed', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = true
+    renderChatPage({ mode: 'live' })
+    expect(screen.getByRole('button', { name: 'Paid' })).toBeVisible()
+
+    // React Query keeps the earlier `data: true` alongside the refetch error; any re-render picks it up.
+    paidRoutingMock.isError = true
+    await user.type(screen.getByLabelText('Prompt'), 'x')
+
+    expect(screen.queryByRole('button', { name: /^(Free|Paid)$/ })).not.toBeInTheDocument()
+  })
+
+  it('retries with the currently displayed free-only choice', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = true
+
+    renderChatPage({ mode: 'live' })
+
+    await user.type(screen.getByLabelText('Prompt'), 'Paid allowed prompt')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(1))
+    expect(chatMock.sendCalls[0]?.freeOnly).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Free' }))
+    await user.click(screen.getByRole('button', { name: 'Retry last' }))
+
+    await waitFor(() => expect(chatMock.reloadFreeOnly).toHaveLength(1))
+    expect(chatMock.reloadFreeOnly[0]).toBe(true)
+    window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
+  })
+
+  it('tightens a Paid queued Auto prompt to free-only when policy refetch fails', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = true
+    chatMock.sendAssistantText = ''
+    renderChatPage({ mode: 'live' })
+    await user.type(screen.getByLabelText('Prompt'), 'First')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByText('Streaming response...')
+    await user.type(screen.getByLabelText('Prompt'), 'Queued paid')
+    await user.click(screen.getByRole('button', { name: 'Queue' }))
+    paidRoutingMock.isError = true
+    // Trigger a render with stale allowed=true and the new error before draining.
+    await user.type(screen.getByLabelText('Prompt'), 'x')
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(2))
+    expect(chatMock.sendCalls[1]?.content).toBe('Queued paid')
+    expect(chatMock.sendCalls[1]?.freeOnly).toBe(true)
+  })
+
+  it('keeps the free-only setting a prompt was queued with', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = true
+    chatMock.sendAssistantText = ''
+
+    renderChatPage({ mode: 'live' })
+
+    await user.click(screen.getByRole('button', { name: 'Free' }))
+    await user.type(screen.getByLabelText('Prompt'), 'First live prompt')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('Streaming response...')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Prompt'), 'Queued while free only')
+    await user.click(screen.getByRole('button', { name: 'Queue' }))
+    await user.click(screen.getByRole('button', { name: 'Paid' }))
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(2))
+    expect(chatMock.sendCalls[1]?.content).toBe('Queued while free only')
+    expect(chatMock.sendCalls[1]?.freeOnly).toBe(true)
+    window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
+  })
+
+  it('holds a Free queued prompt when its selected model becomes paid-only, then resumes when free returns', async () => {
+    const user = userEvent.setup()
+    paidRoutingMock.allowed = true
+    const name = 'Qwen3.5-0.8B-UD'
+    window.localStorage.setItem('mesh-llm.chat.routing-preferences', JSON.stringify({ model: name, freeOnly: true }))
+    modelPaymentsMock.data = new Map([[name, { freeAvailable: true, paidAvailable: true }]])
+    const view = renderPersistentChatRoute(true)
+    await user.type(screen.getByLabelText('Prompt'), 'First')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByText('Partial assistant reply')
+    await user.type(screen.getByLabelText('Prompt'), 'Keep queued')
+    await user.click(screen.getByRole('button', { name: 'Queue' }))
+    await user.click(screen.getByRole('button', { name: 'Paid' }))
+    modelPaymentsMock.data = new Map([[name, { freeAvailable: false, paidAvailable: true }]])
+    view.rerender(
+      <FeatureFlagProvider>
+        <DataModeProvider initialMode="live" persist={false}>
+          <ChatSessionProvider>
+            <ChatPageContent />
+          </ChatSessionProvider>
+        </DataModeProvider>
+      </FeatureFlagProvider>
+    )
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(chatMock.sendCalls).toHaveLength(1)
+    expect(screen.getByText('Queued')).toBeInTheDocument()
+    modelPaymentsMock.data = new Map([[name, { freeAvailable: true, paidAvailable: true }]])
+    view.rerender(
+      <FeatureFlagProvider>
+        <DataModeProvider initialMode="live" persist={false}>
+          <ChatSessionProvider>
+            <ChatPageContent />
+          </ChatSessionProvider>
+        </DataModeProvider>
+      </FeatureFlagProvider>
+    )
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(2))
+    expect(chatMock.sendCalls[1]?.freeOnly).toBe(true)
+  })
+
+  it('holds a queued prompt when its model disappears, then resumes when it returns', async () => {
+    const user = userEvent.setup()
+    const name = 'Qwen3.5-0.8B-UD'
+    window.localStorage.setItem('mesh-llm.chat.routing-preferences', JSON.stringify({ model: name, freeOnly: true }))
+    const view = renderPersistentChatRoute(true)
+    await user.type(screen.getByLabelText('Prompt'), 'First')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByText('Partial assistant reply')
+    await user.type(screen.getByLabelText('Prompt'), 'Wait for model')
+    await user.click(screen.getByRole('button', { name: 'Queue' }))
+    vi.mocked(adaptModelsToSummary).mockReturnValue(CHAT_HARNESS.models.filter((item) => item.name !== name))
+    vi.mocked(useModelsQuery).mockReturnValue({
+      data: { mesh_models: [] },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useModelsQuery>)
+    view.rerender(
+      <FeatureFlagProvider>
+        <DataModeProvider initialMode="live" persist={false}>
+          <ChatSessionProvider>
+            <ChatPageContent />
+          </ChatSessionProvider>
+        </DataModeProvider>
+      </FeatureFlagProvider>
+    )
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(chatMock.sendCalls).toHaveLength(1)
+    expect(screen.getByText('Queued')).toBeInTheDocument()
+    vi.mocked(adaptModelsToSummary).mockReturnValue(CHAT_HARNESS.models)
+    vi.mocked(useModelsQuery).mockReturnValue({
+      data: { mesh_models: [] },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useModelsQuery>)
+    view.rerender(
+      <FeatureFlagProvider>
+        <DataModeProvider initialMode="live" persist={false}>
+          <ChatSessionProvider>
+            <ChatPageContent />
+          </ChatSessionProvider>
+        </DataModeProvider>
+      </FeatureFlagProvider>
+    )
+    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(2))
+  })
+
+  it.each(['Stop', 'Escape'])(
+    'keeps %s available after switching a streaming paid-only model to Free',
+    async (control) => {
+      const user = userEvent.setup()
+      paidRoutingMock.allowed = true
+      const name = 'Qwen3.5-0.8B-UD'
+      window.localStorage.setItem('mesh-llm.chat.routing-preferences', JSON.stringify({ model: name, freeOnly: false }))
+      modelPaymentsMock.data = new Map([[name, { freeAvailable: false, paidAvailable: true }]])
+      renderChatPage({ mode: 'live' })
+      await user.type(screen.getByLabelText('Prompt'), 'Paid stream')
+      await user.click(screen.getByRole('button', { name: 'Send' }))
+      await screen.findByText('Partial assistant reply')
+      await user.click(screen.getByRole('button', { name: 'Free' }))
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+      if (control === 'Stop') await user.click(screen.getByRole('button', { name: 'Stop' }))
+      else fireEvent.keyDown(screen.getByLabelText('Prompt'), { key: 'Escape' })
+      expect(chatMock.stopCalls).toHaveLength(1)
+      expect(chatMock.sendCalls).toHaveLength(1)
+    }
+  )
 
   it('keeps multiple queued prompts visible and removes only the selected queued item', async () => {
     const user = userEvent.setup()

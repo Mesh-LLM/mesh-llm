@@ -39,6 +39,33 @@ pub struct SamplingConfig {
     pub dry_sequence_breakers: [[u8; MAX_DRY_SEQUENCE_BREAKER_BYTES]; MAX_DRY_SEQUENCE_BREAKERS],
     pub logit_bias: [LogitBias; 256],
     pub reasoning_budget_tokens: i32,
+    /// Alternatives recorded per token with [`SAMPLING_FLAG_LOGPROBS`], up to [`MAX_TOP_LOGPROBS`].
+    pub top_logprobs: u32,
+}
+
+/// Mirrors `SKIPPY_SAMPLING_FLAG_LOGPROBS`: record each sampled token's log-probability.
+pub const SAMPLING_FLAG_LOGPROBS: u32 = 1 << 2;
+
+/// Mirrors `SKIPPY_MAX_TOP_LOGPROBS` (`skippy/logprobs.h`).
+pub const MAX_TOP_LOGPROBS: usize = 20;
+
+/// Mirrors `struct skippy_logprob_entry`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LogprobEntry {
+    pub token: i32,
+    pub logprob: f32,
+}
+
+/// Mirrors `struct skippy_token_logprobs`: one sampled token, its log-probability
+/// under the raw distribution and its most likely alternatives.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TokenLogprobs {
+    pub token: i32,
+    pub logprob: f32,
+    pub top_count: u32,
+    pub top: [LogprobEntry; MAX_TOP_LOGPROBS],
 }
 
 pub const NATIVE_MTP_MAX_DRAFT_TOKENS: usize = 8;

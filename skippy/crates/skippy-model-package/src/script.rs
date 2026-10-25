@@ -121,7 +121,6 @@ mod tests {
 
     #[test]
     fn embedded_script_prints_mesh_llm_repo_shorthand() {
-        assert!(EMBEDDED_SCRIPT.contains(r#"mesh-llm serve --model "{target_repo}" --split"#));
         assert!(EMBEDDED_SCRIPT.contains("mesh-llm serve --model ${TARGET_REPO} --split"));
         assert!(!EMBEDDED_SCRIPT.contains(r#"mesh-llm serve --model "hf://${TARGET_REPO}""#));
         assert!(!EMBEDDED_SCRIPT.contains("mesh-llm serve --model hf://${TARGET_REPO}"));
@@ -131,34 +130,22 @@ mod tests {
     fn embedded_script_writes_rich_model_card() {
         assert!(EMBEDDED_SCRIPT.contains("SOURCE_PIPELINE_TAG"));
         assert!(EMBEDDED_SCRIPT.contains("PACKAGE_EXPERIMENTAL"));
-        assert!(EMBEDDED_SCRIPT.contains("pipeline_tag: {yaml_quote(source_pipeline_tag)}"));
-        assert!(EMBEDDED_SCRIPT.contains("- experimental"));
-        assert!(EMBEDDED_SCRIPT.contains("Experimental package:"));
-        assert!(EMBEDDED_SCRIPT.contains("resolve_upstream_license"));
-        assert!(EMBEDDED_SCRIPT.contains("license_frontmatter"));
-        assert!(EMBEDDED_SCRIPT.contains("could not resolve upstream license metadata"));
-        assert!(EMBEDDED_SCRIPT.contains("- openai-compatible"));
-        assert!(EMBEDDED_SCRIPT.contains("## Model Overview"));
-        assert!(EMBEDDED_SCRIPT.contains("## Highlights"));
-        assert!(EMBEDDED_SCRIPT.contains("## Recommended Use"));
-        assert!(EMBEDDED_SCRIPT.contains("## Quickstart"));
-        assert!(EMBEDDED_SCRIPT.contains("## Package Variant"));
-        assert!(EMBEDDED_SCRIPT.contains("## What Is Included"));
-        assert!(EMBEDDED_SCRIPT.contains("## Validation"));
+        // Card content and license fallback are exercised by layer_job's renderer
+        // and source tests. This owner verifies the embedded job calls that path.
         assert!(
-            EMBEDDED_SCRIPT.contains("https://meshllm.cloud/assets/images/jelly-logo-wordmark.png")
+            EMBEDDED_SCRIPT.contains(
+                r#""$LAYER_JOB" prepare-card --manifest "$PACKAGE_DIR/model-package.json""#
+            )
         );
-        assert!(EMBEDDED_SCRIPT.contains("style=for-the-badge"));
-        assert!(EMBEDDED_SCRIPT.contains("https://www.meshllm.cloud"));
-        assert!(EMBEDDED_SCRIPT.contains("https://discord.gg/rs6fmc63eN"));
-        assert!(EMBEDDED_SCRIPT.contains("Distributed GGUF inference package for Mesh LLM"));
+        assert!(
+            EMBEDDED_SCRIPT.contains(r#"--pipeline-tag "${SOURCE_PIPELINE_TAG:-text-generation}""#)
+        );
+        assert!(EMBEDDED_SCRIPT.contains(r#"--mesh-llm-ref "${MESH_LLM_REF:-main}""#));
+        assert!(EMBEDDED_SCRIPT.contains(r#"CARD_EXPERIMENTAL_ARGS+=(--experimental)"#));
+        assert!(EMBEDDED_SCRIPT.contains(r#""${CARD_EXPERIMENTAL_ARGS[@]}""#));
         assert!(EMBEDDED_SCRIPT.contains(
-            "For upstream architecture details, chat template guidance, sampling recommendations"
+            r#"publish_layer_file "${LOCAL_WORK_DIR}/model-card/README.md" README.md main"#
         ));
-        assert!(EMBEDDED_SCRIPT.contains("Package manifest SHA-256"));
-        assert!(EMBEDDED_SCRIPT.contains("uploaded to this repository"));
-        assert!(EMBEDDED_SCRIPT.contains("speculative_decoding"));
-        assert!(EMBEDDED_SCRIPT.contains("Speculative decoding"));
     }
 
     #[test]
@@ -204,17 +191,16 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains("log_storage_snapshot"));
         assert!(EMBEDDED_SCRIPT.contains("start_heartbeat"));
         assert!(EMBEDDED_SCRIPT.contains("Starting write-package"));
-        assert!(EMBEDDED_SCRIPT.contains("upload-package-artifact.py"));
+        assert!(EMBEDDED_SCRIPT.contains(r#""${LAYER_JOB}" upload --confirm"#));
         assert!(EMBEDDED_SCRIPT.contains("SKIPPY_PACKAGE_ARTIFACT_PATH"));
         assert!(EMBEDDED_SCRIPT.contains("SKIPPY_PACKAGE_ARTIFACT_RELATIVE_PATH"));
         assert!(EMBEDDED_SCRIPT.contains("ARTIFACT_UPLOAD_ATTEMPTS"));
-        assert!(EMBEDDED_SCRIPT.contains("for attempt in range(1, max_attempts + 1)"));
-        assert!(EMBEDDED_SCRIPT.contains("Retrying in {delay}s"));
+        assert!(EMBEDDED_SCRIPT.contains(r#"--maximum-attempts "${ARTIFACT_UPLOAD_ATTEMPTS:-8}""#));
+        assert!(EMBEDDED_SCRIPT.contains("--unlink-after-success"));
         assert!(EMBEDDED_SCRIPT.contains(r#"--after-artifact-command "$ARTIFACT_UPLOAD_HOOK""#));
-        assert!(EMBEDDED_SCRIPT.contains("Uploaded and removed"));
         assert!(!EMBEDDED_SCRIPT.contains("api.upload_folder"));
         assert!(EMBEDDED_SCRIPT.contains("TARGET_UPLOAD_REVISION"));
-        assert!(EMBEDDED_SCRIPT.contains("promote_layer_package_snapshot.py"));
+        assert!(EMBEDDED_SCRIPT.contains("promote-layer-package-snapshot"));
         assert!(EMBEDDED_SCRIPT.contains("Atomically promoted replacement snapshot to main"));
         assert!(EMBEDDED_SCRIPT.contains(r#"MOUNTED_SOURCE_PATH="/source/${SOURCE_FILE}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"WRITE_PACKAGE_INPUT="$MOUNTED_SOURCE_PATH""#));
@@ -240,9 +226,13 @@ mod tests {
 
     #[test]
     fn embedded_script_preserves_catalog_source_revision() {
-        assert!(EMBEDDED_SCRIPT.contains(r#""source_revision": source_revision"#));
-        assert!(EMBEDDED_SCRIPT.contains(r#"variants[variant_name]["source"] = source_entry"#));
-        assert!(EMBEDDED_SCRIPT.contains(r#"existing_variant["source"] = source_entry"#));
+        // Native catalog projection tests cover dict/list variants and the
+        // retained immutable source revision; this verifies caller forwarding.
+        assert!(EMBEDDED_SCRIPT.contains(
+            r#""$LAYER_JOB" update-catalog --confirm --manifest "$PACKAGE_DIR/model-package.json""#
+        ));
+        assert!(EMBEDDED_SCRIPT.contains(r#"--source-repo "$SOURCE_REPO" --source-revision "$SOURCE_REVISION" --source-file "$SOURCE_FILE""#));
+        assert!(EMBEDDED_SCRIPT.contains(r#""${CATALOG_PR_ARGS[@]}""#));
     }
 
     #[test]

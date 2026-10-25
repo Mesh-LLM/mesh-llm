@@ -8,7 +8,7 @@ impl ServeSettings {
     pub fn report(
         &self,
         stage: &skippy_protocol::StageConfig,
-        frontend: Option<&skippy_api::serving::OpenAiOptions>,
+        frontend: Option<&skippy_api::serving::InferenceOptions>,
         tuning: &skippy_serving::settings::ServingTuning,
     ) -> serde_json::Value {
         let command = super::command();
@@ -55,7 +55,7 @@ impl ServeSettings {
             "stage": stage,
             "frontend": frontend,
             "execution": {"threads": tuning.n_threads, "threads_batch": tuning.n_threads_batch},
-            "guardrails": tuning.guardrails.as_ref().map(skippy_serving::OpenAiGuardrailsConfig::status),
+            "guardrails": tuning.guardrails.as_ref().map(skippy_serving::InferenceGuardrailsConfig::status),
             "compaction": compaction,
             "options": options,
             "overrides": self.values,

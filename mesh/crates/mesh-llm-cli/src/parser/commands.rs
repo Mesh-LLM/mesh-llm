@@ -508,6 +508,10 @@ pub struct Cli {
     pub help_advanced: bool,
 
     /// Join a mesh via invite token (can repeat).
+    ///
+    /// The value is a credential: the legacy-surface warning must never
+    /// echo it. `parser::suggestion_redaction` redacts every spelling, and
+    /// its staleness guards turn red on a rename or a new alias.
     #[arg(long, short)]
     pub join: Vec<String>,
 
@@ -519,7 +523,9 @@ pub struct Cli {
     pub join_file: Vec<PathBuf>,
 
     /// Discover a mesh and join it.
-    #[arg(long, default_missing_value = "", num_args = 0..=1)]
+    // require_equals: without it, `--discover status` swallows the `status`
+    // subcommand as the mesh name (optional values grab the next token).
+    #[arg(long, default_missing_value = "", num_args = 0..=1, require_equals = true)]
     pub discover: Option<String>,
 
     /// Auto-join the best mesh found via discovery.
@@ -815,6 +821,11 @@ pub struct Cli {
     ///
     /// Splits on the first `=` only, so tokens may contain `=` (base64
     /// padding, JWTs, etc.).
+    ///
+    /// The value is a credential: the legacy-surface warning must never
+    /// echo the token portion. `parser::suggestion_redaction` keeps the
+    /// URL and redacts the token in every spelling, and its staleness
+    /// guards turn red on a rename or a new alias.
     #[arg(long = "relay-auth", value_parser = parse_relay_auth_pair, hide = true)]
     pub relay_auth: Vec<(String, String)>,
 
@@ -894,9 +905,10 @@ pub struct Cli {
     #[arg(skip)]
     pub nostr_discovery: bool,
 
-    /// Don't install the default plugins on first run.
-    /// Same as MESH_LLM_NO_DEFAULT_PLUGINS=1.
-    #[arg(long)]
+    /// Don't install the default plugins when this node starts.
+    /// Same as MESH_LLM_NO_DEFAULT_PLUGINS=1. Hidden; kept so existing
+    /// `serve` and `client` invocations still parse.
+    #[arg(long, hide = true)]
     pub no_default_plugins: bool,
 }
 
@@ -937,6 +949,11 @@ pub enum Command {
         /// Re-detect the best host backend flavor before selecting the release bundle.
         #[arg(long, conflicts_with = "flavor")]
         detect_flavor: bool,
+        /// Turn off the default plugins this build lists: the updated node
+        /// does not install them from its release until `mesh-llm plugins
+        /// enable NAME`. Same as `mesh-llm plugins install-defaults --off`.
+        #[arg(long)]
+        no_default_plugins: bool,
     },
     /// Inspect local GPUs, stable IDs, and cached bandwidth.
     #[command(alias = "gpu")]
@@ -1085,6 +1102,9 @@ pub enum Command {
         /// API port for mesh-llm (default: 9337)
         #[arg(long, default_value = "9337")]
         port: u16,
+        /// Console port of the mesh-llm node, which serves the MCP tools the agent gets (default: 3131)
+        #[arg(long, default_value = "3131")]
+        console: u16,
     },
     /// Launch Claude Code with mesh-llm as the inference provider.
     ///
@@ -1097,6 +1117,9 @@ pub enum Command {
         /// API port for mesh-llm (default: 9337)
         #[arg(long, default_value = "9337")]
         port: u16,
+        /// Console port of the mesh-llm node, which serves the MCP tools the agent gets (default: 3131)
+        #[arg(long, default_value = "3131")]
+        console: u16,
     },
     /// Launch pi with mesh-llm as the inference provider.
     ///
@@ -1135,6 +1158,10 @@ pub enum Command {
     Openclaw(crate::agent_config::AgentConfigArgs),
     /// Stop running mesh-llm processes.
     Stop,
+    /// Run `serve` under the Windows background service: restart it on
+    /// failure, log its output, and stop it when the scheduled task ends.
+    #[command(name = "service-host", hide = true)]
+    ServiceHost,
     /// Plugin management.
     #[command(name = "plugins", alias = "plugin")]
     Plugin {
@@ -1317,6 +1344,14 @@ pub enum ConfigCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum PluginCommand {
+    /// Install the default plugins from this release's bundled copy (no download).
+    /// A node also does this when it starts.
+    InstallDefaults {
+        /// Turn every default plugin off instead: none is installed, and an
+        /// installed one is disabled, until `mesh-llm plugins enable NAME`.
+        #[arg(long)]
+        off: bool,
+    },
     /// Install a native plugin from the catalog, GitHub, or a local release archive.
     Install {
         /// Plugin catalog name, GitHub owner/repo, or GitHub URL.

@@ -28,10 +28,47 @@ pub(crate) fn push_tokenizer_metadata(
     )
     .with_context(|| format!("parse {}", tokenizer_path.display()))?;
     let tokenizer_config = read_optional_json(&source.join("tokenizer_config.json"))?;
-    let vocab = read_byte_level_bpe(&tokenizer, config)?;
+    push_bpe_fields(
+        metadata,
+        config,
+        &tokenizer,
+        &tokenizer_config,
+        tokenizer_pre(config)?,
+    )?;
+    push_chat_template(metadata, source, &tokenizer_config)?;
+    Ok(())
+}
+
+/// Decode explicit already-byte-bound tokenizer inputs without re-reading paths.
+pub(crate) fn push_bound_tokenizer_metadata(
+    metadata: &mut Vec<GgufKv>,
+    config: &Value,
+    tokenizer: &Value,
+    tokenizer_config: &Value,
+    pre: &'static str,
+    template: Option<&str>,
+) -> Result<()> {
+    push_bpe_fields(metadata, config, tokenizer, tokenizer_config, pre)?;
+    if let Some(template) = tokenizer_config
+        .get("chat_template")
+        .and_then(Value::as_str)
+        .or(template)
+    {
+        metadata.push(GgufKv::string("tokenizer.chat_template", template));
+    }
+    Ok(())
+}
+fn push_bpe_fields(
+    metadata: &mut Vec<GgufKv>,
+    config: &Value,
+    tokenizer: &Value,
+    tokenizer_config: &Value,
+    pre: &'static str,
+) -> Result<()> {
+    let vocab = read_byte_level_bpe(tokenizer, config)?;
 
     metadata.push(GgufKv::string("tokenizer.ggml.model", "gpt2"));
-    metadata.push(GgufKv::string("tokenizer.ggml.pre", tokenizer_pre(config)?));
+    metadata.push(GgufKv::string("tokenizer.ggml.pre", pre));
     metadata.push(GgufKv::array_string("tokenizer.ggml.tokens", vocab.tokens));
     metadata.push(GgufKv::array_i32(
         "tokenizer.ggml.token_type",
@@ -41,8 +78,7 @@ pub(crate) fn push_tokenizer_metadata(
     if !vocab.merges.is_empty() {
         metadata.push(GgufKv::array_string("tokenizer.ggml.merges", vocab.merges));
     }
-    push_special_token_ids(metadata, config, &tokenizer_config, &vocab.added_tokens);
-    push_chat_template(metadata, source, &tokenizer_config)?;
+    push_special_token_ids(metadata, config, tokenizer_config, &vocab.added_tokens);
     Ok(())
 }
 
@@ -52,11 +88,11 @@ pub fn ensure_native_tokenizer_metadata_supported(source: &Path) -> Result<()> {
     }
     if source.join("tokenizer.model").exists() {
         anyhow::bail!(
-            "native tokenizer metadata does not yet support SentencePiece tokenizer.model; use external convert_hf_to_gguf.py for this checkpoint"
+            "native tokenizer metadata does not yet support SentencePiece tokenizer.model; provide supported ByteLevel BPE tokenizer.json for native conversion"
         );
     }
     anyhow::bail!(
-        "native tokenizer metadata requires tokenizer.json; use external convert_hf_to_gguf.py for this checkpoint"
+        "native tokenizer metadata requires tokenizer.json; provide supported ByteLevel BPE tokenizer.json for native conversion"
     )
 }
 

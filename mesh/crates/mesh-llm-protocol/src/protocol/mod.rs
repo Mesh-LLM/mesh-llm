@@ -749,10 +749,26 @@ pub fn validate_peer_announcement(
             got: pa.endpoint_id.len(),
         });
     }
-    if pa.role == crate::proto::node::NodeRole::Host as i32 && pa.http_port.is_none() {
+    validate_role_and_subprotocols(pa.role, pa.http_port, &pa.subprotocols)
+}
+
+/// The same shape rules as [`validate_peer_announcement`], for the body of a
+/// signed node record. The signer's id lives in the record header.
+pub fn validate_node_record(
+    record: &crate::proto::node::NodeRecord,
+) -> Result<(), ControlFrameError> {
+    validate_role_and_subprotocols(record.role, record.http_port, &record.subprotocols)
+}
+
+fn validate_role_and_subprotocols(
+    role: i32,
+    http_port: Option<u32>,
+    subprotocols: &[crate::proto::node::MeshSubprotocol],
+) -> Result<(), ControlFrameError> {
+    if role == crate::proto::node::NodeRole::Host as i32 && http_port.is_none() {
         return Err(ControlFrameError::MissingHttpPort);
     }
-    for subprotocol in &pa.subprotocols {
+    for subprotocol in subprotocols {
         if subprotocol.name.trim().is_empty() || subprotocol.major == 0 {
             return Err(ControlFrameError::InvalidSubprotocol);
         }
@@ -845,15 +861,28 @@ pub fn ensure_control_frame_size(body: &[u8]) -> Result<(), ControlFrameError> {
     Ok(())
 }
 
+/// Reads one length-prefixed control frame.
+///
+/// The buffer grows as the body arrives instead of being sized from the
+/// length prefix, so a peer that claims a large frame and then stalls holds
+/// only as much memory as it actually sent.
 pub async fn read_len_prefixed(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
+    const READ_CHUNK_BYTES: usize = 64 * 1024;
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > MAX_CONTROL_FRAME_BYTES {
         anyhow::bail!("control frame too large: {} bytes", len);
     }
-    let mut buf = vec![0u8; len];
-    recv.read_exact(&mut buf).await?;
+    let mut buf = Vec::with_capacity(len.min(READ_CHUNK_BYTES));
+    let mut chunk = vec![0u8; len.min(READ_CHUNK_BYTES)];
+    while buf.len() < len {
+        let wanted = (len - buf.len()).min(chunk.len());
+        match recv.read(&mut chunk[..wanted]).await? {
+            Some(read) => buf.extend_from_slice(&chunk[..read]),
+            None => anyhow::bail!("control frame ended after {} of {} bytes", buf.len(), len),
+        }
+    }
     Ok(buf)
 }
 
@@ -1441,6 +1470,8 @@ mod tests {
         };
 
         let frame_with_state = GossipFrame {
+            signed_records: Vec::new(),
+            signed_cache_affinity: Vec::new(),
             r#gen: NODE_PROTOCOL_GENERATION,
             sender_id: vec![0x11; 32],
             peers: vec![peer.clone()],
@@ -1459,6 +1490,8 @@ mod tests {
 
         peer.inference_admission_state = None;
         let frame_without_state = GossipFrame {
+            signed_records: Vec::new(),
+            signed_cache_affinity: Vec::new(),
             peers: vec![peer],
             ..frame_with_state
         };

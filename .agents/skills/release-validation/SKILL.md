@@ -5,6 +5,15 @@ description: Use this skill when validating a MeshLLM release candidate or curre
 
 # Release Validation
 
+New release inventory and evidence automation follows `../manage-ci/SKILL.md`:
+no new Python tooling, including skill-local helpers. Use typed `tools/xtask`
+commands behind thin Just recipes. The raw inventory owner is
+`cargo xtool release inventory`. On Unix, use the positional Just façade
+`just release-inventory`; it preserves argument boundaries. On Windows, use
+the portable native command directly until a Windows Just façade is qualified.
+The inventory collects read-only evidence; it does not validate a product or
+classify release claims.
+
 Validate the candidate as a product, not merely as source code. Every claimed
 change must have a disposition and direct evidence. Do not publish a release,
 push a tag, alter production, or use a host the user did not put in scope.
@@ -68,10 +77,18 @@ Read each applicable skill completely before acting:
    tag-specific `<tag>: prepare release source`. Require the previous-release
    base to be an ancestor of the candidate base. Fail closed if `origin/main` is
    unavailable or any tag, subject, commit-count, or base ordering check fails.
-5. Run `scripts/collect-release-inventory.py` from this skill to capture a raw
-   JSON evidence manifest. If its exact release tag is missing locally, verify
-   the configured remote URL and fetch that tag before rerunning. The script
-   does not classify changes.
+5. From the repository root, run `just release-inventory --head <candidate>
+   --output <evidence-directory>/release-inventory.json` on Unix, or
+   `cargo xtool release inventory --head <candidate> --output <path>` on Windows.
+   Optional `--repo <owner/name>` and `--release-tag <tag>` select the repository
+   and previous release; without `--output`, the command writes JSON to stdout.
+   Missing local tags or `origin/main` stop collection. Verify the configured
+   remote before any separately authorized fetch and then rerun. The inventory
+   records the requested candidate separately from the observed working-tree
+   HEAD and dirty snapshot. Its versioned dirty digest identifies observed
+   evidence, not a validated build. PR range uncertainty and capped query scope
+   require reconciliation; the command does not classify changes or declare
+   release readiness.
 
 ### 2. Build The Canonical Delta Ledger
 

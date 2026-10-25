@@ -211,23 +211,25 @@ fn openai_error_body(status_code: u16, message: &str) -> Vec<u8> {
     let status =
         http::StatusCode::from_u16(status_code).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR);
     let kind = openai_error_kind_for_status(status_code);
-    let error = skippy_inference_api::OpenAiError::from_kind(status, kind, message)
+    let error = skippy_inference_api::InferenceError::from_kind(status, kind, message)
         .with_code(openai_error_code_for_status(status_code));
     serde_json::to_vec(&error.body()).expect("serializing JSON error response should not fail")
 }
 
-const fn openai_error_kind_for_status(status_code: u16) -> skippy_inference_api::OpenAiErrorKind {
+const fn openai_error_kind_for_status(
+    status_code: u16,
+) -> skippy_inference_api::InferenceErrorKind {
     match status_code {
-        401 => skippy_inference_api::OpenAiErrorKind::Authentication,
-        403 => skippy_inference_api::OpenAiErrorKind::Permission,
-        404 | 410 => skippy_inference_api::OpenAiErrorKind::NotFound,
-        413 => skippy_inference_api::OpenAiErrorKind::PayloadTooLarge,
-        429 => skippy_inference_api::OpenAiErrorKind::RateLimit,
-        500 => skippy_inference_api::OpenAiErrorKind::Internal,
-        502 => skippy_inference_api::OpenAiErrorKind::ServiceUnavailable,
-        503 => skippy_inference_api::OpenAiErrorKind::ServiceUnavailable,
-        504 => skippy_inference_api::OpenAiErrorKind::Timeout,
-        _ => skippy_inference_api::OpenAiErrorKind::InvalidRequest,
+        401 => skippy_inference_api::InferenceErrorKind::Authentication,
+        403 => skippy_inference_api::InferenceErrorKind::Permission,
+        404 | 410 => skippy_inference_api::InferenceErrorKind::NotFound,
+        413 => skippy_inference_api::InferenceErrorKind::PayloadTooLarge,
+        429 => skippy_inference_api::InferenceErrorKind::RateLimit,
+        500 => skippy_inference_api::InferenceErrorKind::Internal,
+        502 => skippy_inference_api::InferenceErrorKind::ServiceUnavailable,
+        503 => skippy_inference_api::InferenceErrorKind::ServiceUnavailable,
+        504 => skippy_inference_api::InferenceErrorKind::Timeout,
+        _ => skippy_inference_api::InferenceErrorKind::InvalidRequest,
     }
 }
 

@@ -190,13 +190,6 @@
       }
     },
     {
-      "canonical_path": "defaults.model_fit.prefix_cache.payload_mode",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.model_fit.prefix_cache.shared_record_limit",
       "support": "supported",
       "source": {
@@ -289,6 +282,13 @@
     },
     {
       "canonical_path": "defaults.multimodal.mmproj_url",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.allow_request_chat_template",
       "support": "supported",
       "source": {
         "kind": "built_in"

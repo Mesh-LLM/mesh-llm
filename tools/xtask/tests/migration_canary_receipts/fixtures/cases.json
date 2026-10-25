@@ -1,0 +1,23 @@
+[
+  {"case":"complete","green":true,"passed":["dense","hybrid"],"selected_dense":"2","errors":[]},
+  {"case":"rerun-success","green":true,"passed":["dense","hybrid"],"selected_dense":"3","errors":[]},
+  {"case":"rerun-failure","green":false,"passed":["hybrid"],"selected_dense":"3","errors":["worker_outcome"]},
+  {"case":"rerun-cancelled","green":false,"passed":["hybrid"],"selected_dense":"3","errors":["worker_outcome"]},
+  {"case":"rerun-skipped","green":false,"passed":["hybrid"],"selected_dense":"3","errors":["worker_outcome"]},
+  {"case":"rerun-corrupt-results","green":false,"passed":["hybrid"],"selected_dense":"3","errors":["results_digest"]},
+  {"case":"rerun-missing-results","green":false,"passed":["hybrid"],"selected_dense":"3","errors":["io"]},
+  {"case":"duplicate","green":false,"passed":["dense","hybrid"],"selected_dense":"2","errors":["duplicate_receipt"]},
+  {"case":"missing","green":false,"passed":["hybrid"],"selected_dense":null,"errors":["missing_receipts"]},
+  {"case":"foreign-run","green":false,"passed":["hybrid"],"selected_dense":null,"errors":["receipt_identity","missing_receipts"]},
+  {"case":"foreign-candidate","green":false,"passed":["hybrid"],"selected_dense":null,"errors":["receipt_identity","missing_receipts"]},
+  {"case":"foreign-pass","green":false,"passed":["hybrid"],"selected_dense":null,"errors":["receipt_identity","missing_receipts"]},
+  {"case":"stale-producer","green":false,"passed":["hybrid"],"selected_dense":null,"errors":["receipt_identity","missing_receipts"]},
+  {"case":"attempt-before-producer","green":false,"passed":["hybrid"],"selected_dense":null,"errors":["attempt_bounds","missing_receipts"]},
+  {"case":"attempt-after-current","green":false,"passed":["hybrid"],"selected_dense":null,"errors":["attempt_bounds","missing_receipts"]},
+  {"case":"malformed-attempt","green":false,"passed":["hybrid"],"selected_dense":null,"errors":["json","missing_receipts"]},
+  {"case":"unplanned-family","green":false,"passed":["hybrid"],"selected_dense":null,"errors":["unplanned_family","missing_receipts"]},
+  {"case":"all-failed","green":false,"passed":[],"selected_dense":"2","errors":["worker_outcome","worker_outcome"]},
+  {"case":"newer-malformed-receipt","green":false,"passed":["dense","hybrid"],"selected_dense":"2","errors":["json"]},
+  {"case":"old-corrupt-results","green":true,"passed":["dense","hybrid"],"selected_dense":"3","errors":[]},
+  {"case":"duplicate-old-attempt","green":false,"passed":["dense","hybrid"],"selected_dense":"3","errors":["duplicate_receipt"]}
+]

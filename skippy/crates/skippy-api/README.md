@@ -18,7 +18,7 @@ The opt-in `direct_graph_admission` test accepts `SKIPPY_TEST_GGUF_PATH` and exe
 
 `serving::ModelLoadRequest` owns native model loading, graph-bound activation
 widths, prediction-return listeners, tokenizer-bound hook construction and OpenAI
-backend composition. `serving::OpenAiOptions` is shared resolved configuration;
+backend composition. `serving::InferenceOptions` is shared resolved configuration;
 Mesh translates its product configuration and supplies observers/plugin hooks.
 Guardrail/compaction wrapping uses the serving library implementation, including
 an optional caller-owned telemetry sink. `ModelOpenEvents` preserves the native
@@ -45,7 +45,7 @@ no downstream peer; split configurations retain embedded stage-zero execution.
 
 `package::certification` owns two-stage package materialization checks and OpenAI model/chat/Responses smoke gates. The caller supplies the resolved package reference, acquisition policy and optional digest cache. Mesh retains catalog-name lookup. Missing runtime endpoints remain incomplete; package-only runs explicitly mark runtime gates not required.
 
-Shared serving defaults are defined by `SingleStageOptions` and `OpenAiOptions`,
+Shared serving defaults are defined by `SingleStageOptions` and `InferenceOptions`,
 using [`skippy-config`](../skippy-config/README.md). [`kv_cache`](src/kv_cache.rs)
 owns publisher-declared live-KV dtype selection and model compatibility fallback;
 [`speculative`](src/speculative.rs) owns installed sibling draft discovery and

@@ -1,7 +1,8 @@
 use mesh_llm_events::logging::identifiers::RequestId;
 use skippy_inference_api::{
-    OpenAiBackendOperation, OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent,
-    OpenAiRequestMethod, OpenAiTerminalResult, OpenAiUsage, Usage,
+    InferenceBackendOperation, InferenceFrontendRoute, InferenceLifecycleContext,
+    InferenceLifecycleEvent, InferenceRequestMethod, InferenceTerminalResult, InferenceUsage,
+    Usage,
 };
 
 use super::*;
@@ -36,30 +37,30 @@ fn runtime() -> (tempfile::TempDir, LoggingRuntimeState) {
 async fn cached_prefix_tokens_reach_durable_usage_dto() {
     let (_temp, state) = runtime();
     let request_id = RequestId::new();
-    let context = OpenAiLifecycleContext::new(
+    let context = InferenceLifecycleContext::new(
         request_id,
-        OpenAiRequestMethod::Post,
-        OpenAiFrontendRoute::ChatCompletions,
+        InferenceRequestMethod::Post,
+        InferenceFrontendRoute::ChatCompletions,
     );
-    let operation = OpenAiBackendOperation::ChatCompletionStream;
+    let operation = InferenceBackendOperation::ChatCompletionStream;
     let observer = state
         .openai_lifecycle_observer()
         .expect("OpenAI lifecycle observer");
 
-    observer.observe(&OpenAiLifecycleEvent::Admitted {
+    observer.observe(&InferenceLifecycleEvent::Admitted {
         context: context.clone(),
     });
     // Cached-prefix restoration is surfaced by the backend through the OpenAI
     // usage detail; exercise that production conversion before logging.
     let cached_prefix_usage = Usage::new(21, 8).with_cached_tokens(13);
-    observer.observe(&OpenAiLifecycleEvent::ResponseCompleted {
+    observer.observe(&InferenceLifecycleEvent::ResponseCompleted {
         context: context.clone(),
         operation,
-        usage: OpenAiUsage::from(&cached_prefix_usage),
+        usage: InferenceUsage::from(&cached_prefix_usage),
     });
-    observer.observe(&OpenAiLifecycleEvent::StreamTerminal {
+    observer.observe(&InferenceLifecycleEvent::StreamTerminal {
         context,
-        result: OpenAiTerminalResult::Completed { status_code: 200 },
+        result: InferenceTerminalResult::Completed { status_code: 200 },
     });
     assert!(state.pump_persistence_for_test().await > 0);
 
@@ -86,24 +87,24 @@ async fn cached_prefix_tokens_reach_durable_usage_dto() {
 async fn streamed_exchange_id_reaches_durable_request_detail() {
     let (_temp, state) = runtime();
     let request_id = RequestId::new();
-    let context = OpenAiLifecycleContext::new(
+    let context = InferenceLifecycleContext::new(
         request_id,
-        OpenAiRequestMethod::Post,
-        OpenAiFrontendRoute::ChatCompletions,
+        InferenceRequestMethod::Post,
+        InferenceFrontendRoute::ChatCompletions,
     );
     let observer = state
         .openai_lifecycle_observer()
         .expect("OpenAI lifecycle observer");
-    observer.observe(&OpenAiLifecycleEvent::Admitted {
+    observer.observe(&InferenceLifecycleEvent::Admitted {
         context: context.clone(),
     });
-    observer.observe(&OpenAiLifecycleEvent::ExchangeIdentified {
+    observer.observe(&InferenceLifecycleEvent::ExchangeIdentified {
         context: context.clone(),
         exchange_id: "exch-stream-durable".to_string(),
     });
-    observer.observe(&OpenAiLifecycleEvent::StreamTerminal {
+    observer.observe(&InferenceLifecycleEvent::StreamTerminal {
         context,
-        result: OpenAiTerminalResult::Completed { status_code: 200 },
+        result: InferenceTerminalResult::Completed { status_code: 200 },
     });
     assert!(state.pump_persistence_for_test().await > 0);
 

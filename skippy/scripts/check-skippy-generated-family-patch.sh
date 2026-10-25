@@ -24,6 +24,17 @@ GENERATED_PATCH_DIR="$ARTIFACT_ROOT/generated-family-shards"
 FIRST_REPORT="$ARTIFACT_ROOT/report.json"
 SECOND_REPORT="$ARTIFACT_ROOT/report-second.json"
 
+# Native validation scope begins.
+FULL_NATIVE_SUITE=0
+if (( $# > 0 )); then
+  if [[ $# != 1 || "$1" != --full-native-suite ]]; then
+    echo "usage: $0 [--full-native-suite]" >&2
+    exit 2
+  fi
+  FULL_NATIVE_SUITE=1
+fi
+# Native validation scope ends.
+
 if [[ ! -d "$SOURCE_ROOT/.git" && ! -f "$SOURCE_ROOT/.git" ]]; then
   echo "prepared llama.cpp checkout not found: $SOURCE_ROOT" >&2
   exit 1
@@ -115,12 +126,14 @@ cmake -S "$tool_source" -B "$TOOL_BUILD" -G Ninja \
 cmake --build "$TOOL_BUILD"
 ctest --test-dir "$TOOL_BUILD" --output-on-failure
 
-EXTRA_ARGS=(--extra-arg=-resource-dir --extra-arg="$("$LLVM_PREFIX"/bin/clang -print-resource-dir)")
+EXTRA_ARGS=(--extra-arg -resource-dir --extra-arg "$("$LLVM_PREFIX"/bin/clang -print-resource-dir)")
 if command -v xcrun >/dev/null 2>&1; then
-  EXTRA_ARGS+=(--extra-arg=-isysroot --extra-arg="$(xcrun --show-sdk-path)")
+  EXTRA_ARGS+=(--extra-arg -isysroot --extra-arg "$(xcrun --show-sdk-path)")
 fi
 
-python3 "$ROOT/scripts/generate-skippy-family-patch.py" \
+cargo xtool automation native-generator generate \
+  --git "$(command -v git)" \
+  --max-diff-bytes 16777216 \
   --source-root "$SOURCE_ROOT" \
   --build-dir "$LLAMA_BUILD_DIR" \
   --rewriter "$TOOL_BUILD/skippy-stage-rewriter" \
@@ -132,7 +145,7 @@ python3 "$ROOT/scripts/generate-skippy-family-patch.py" \
   --family-manifest "$FAMILY_MANIFEST" \
   "${EXTRA_ARGS[@]}"
 
-python3 "$ROOT/scripts/verify-skippy-family-generator-coverage.py" \
+cargo xtool automation native-generator contracts coverage \
   --manifest "$FAMILY_MANIFEST" \
   --family-map "$FAMILY_SOURCE_MAP" \
   --report "$FIRST_REPORT"
@@ -151,6 +164,23 @@ if ! rg -q '\bbegin_block[[:space:]]*\(' "$SOURCE_ROOT/src/models" ||
   exit 1
 fi
 
+if diff -qr "$CHECKED_PATCH_DIR" "$GENERATED_PATCH_DIR" >/dev/null; then
+  patch_result=pass
+else
+  patch_result=fail
+  diff -ru "$CHECKED_PATCH_DIR" "$GENERATED_PATCH_DIR" > "$ARTIFACT_ROOT/patch-drift.diff" || true
+  cargo xtool automation native-generator contracts select-shards \
+    --base "$CHECKED_PATCH_DIR/series.json" \
+    --current "$GENERATED_PATCH_DIR/series.json" \
+    --output "$ARTIFACT_ROOT/changed-family-selection.json"
+fi
+
+# Reject stale or non-idempotent annotations before the expensive native pass.
+cargo xtool automation rewriter-report \
+  --report "$FIRST_REPORT" --mode validate \
+  --patch-check "$patch_result" --patch-drift-gate fail
+cargo xtool automation rewriter-report --report "$SECOND_REPORT" --mode idempotence
+
 TRANSFORMED_TREE_TARGETS=(
   llama
   skippy-graph-build-inputs
@@ -159,6 +189,7 @@ TRANSFORMED_TREE_TARGETS=(
   skippy-model-loader-accounting
   skippy-noalloc-graph-planning
   skippy-renamed-multishard-planning
+  skippy-runtime-events-test
   skippy-stage-plan-header-c
   skippy-stage-plan-header-cpp
   skippy-stage-slice-plan
@@ -167,8 +198,19 @@ TRANSFORMED_TREE_TARGETS=(
 # private stage probes off. Reassert the checker contract after generation so
 # a stale probe binary cannot let the preflight pass while CMake omits the
 # transformed-tree targets below.
-cmake -S "$SOURCE_ROOT" -B "$LLAMA_BUILD_DIR" -DLLAMA_STAGE_BUILD_TESTS=ON
-if cmake --build "$LLAMA_BUILD_DIR" --target "${TRANSFORMED_TREE_TARGETS[@]}" 2>&1 \
+NATIVE_CONFIGURE_ARGS=(-DLLAMA_STAGE_BUILD_TESTS=ON)
+NATIVE_BUILD_ARGS=(--build "$LLAMA_BUILD_DIR" --config "${CMAKE_BUILD_TYPE:-Release}")
+NATIVE_TEST_ARGS=(--test-dir "$LLAMA_BUILD_DIR" --build-config "${CMAKE_BUILD_TYPE:-Release}" --output-on-failure --timeout 900)
+if [[ "$FULL_NATIVE_SUITE" == 1 ]]; then
+  # The canary deferred its initial test run. Rebuild every executable against
+  # the regenerated tree and own the complete, unfiltered native suite here.
+  NATIVE_CONFIGURE_ARGS+=(-DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_SERVER=ON)
+else
+  NATIVE_BUILD_ARGS+=(--target "${TRANSFORMED_TREE_TARGETS[@]}")
+  NATIVE_TEST_ARGS+=(-R '^skippy_')
+fi
+cmake -S "$SOURCE_ROOT" -B "$LLAMA_BUILD_DIR" "${NATIVE_CONFIGURE_ARGS[@]}"
+if cmake "${NATIVE_BUILD_ARGS[@]}" 2>&1 \
   | tee "$ARTIFACT_ROOT/transformed-tree-compile.log"; then
   compile_result=pass
 else
@@ -176,33 +218,18 @@ else
 fi
 
 if [[ "$compile_result" == pass ]] && \
-  ctest --test-dir "$LLAMA_BUILD_DIR" --output-on-failure -R '^skippy_' 2>&1 \
+  ctest "${NATIVE_TEST_ARGS[@]}" 2>&1 \
     | tee "$ARTIFACT_ROOT/noalloc-graph-verifier.log"; then
   graph_verify_result=pass
 else
   graph_verify_result=fail
 fi
 
-if diff -qr "$CHECKED_PATCH_DIR" "$GENERATED_PATCH_DIR" >/dev/null; then
-  patch_result=pass
-else
-  patch_result=fail
-  diff -ru "$CHECKED_PATCH_DIR" "$GENERATED_PATCH_DIR" > "$ARTIFACT_ROOT/patch-drift.diff" || true
-  python3 "$ROOT/scripts/select-skippy-family-shards.py" \
-    --base "$CHECKED_PATCH_DIR/series.json" \
-    --current "$GENERATED_PATCH_DIR/series.json" \
-    --output "$ARTIFACT_ROOT/changed-family-selection.json"
-fi
-
-python3 "$ROOT/scripts/skippy-rewriter-harness.py" \
+cargo xtool automation rewriter-report \
   --report "$FIRST_REPORT" \
   --mode validate \
   --patch-check "$patch_result" \
   --patch-drift-gate fail \
   --compile-result "$compile_result" \
   --graph-verify-result "$graph_verify_result"
-python3 "$ROOT/scripts/skippy-rewriter-harness.py" \
-  --report "$SECOND_REPORT" \
-  --mode idempotence
-
 echo "generated family patch series is deterministic and current: $CHECKED_PATCH_DIR"

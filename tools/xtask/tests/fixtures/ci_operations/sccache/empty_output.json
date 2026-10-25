@@ -1,0 +1,7 @@
+{
+  "code": 1,
+  "github_output": null,
+  "stats": null,
+  "stderr": "ERROR: sccache returned invalid JSON: Expecting value: line 1 column 1 (char 0)\n",
+  "stdout": ""
+}

@@ -1,0 +1,4 @@
+{
+  "repository": {"id": 42, "full_name": "Mesh-LLM/mesh-llm"},
+  "inputs": {"producer_run_id": "101", "product_row": "linux-cuda"}
+}
