@@ -1,10 +1,12 @@
 //! Feeds [`super::energy`] with GPU board power read from `nvidia-smi` (#2320).
 //!
 //! One `nvidia-smi` process streams a reading per GPU every second, and the
-//! sampler sums each round into one reading for the node. A GPU that does not
-//! report power is left out of the sum. A node without `nvidia-smi` reports no
-//! energy at all, and neither does one whose first round has no power reading
-//! (Jetson's integrated GPU answers `[N/A]`): the sampler stops there.
+//! sampler sums each round into one reading for the node. A round only counts
+//! when every GPU in it reports power: a partial sum would understate the
+//! node, so a round where a GPU misses its reading is a gap. A node without
+//! `nvidia-smi` reports no energy at all, and neither does one whose first
+//! round misses a reading (Jetson's integrated GPU answers `[N/A]`): the
+//! sampler stops there.
 
 use anyhow::Result;
 use std::sync::Once;
@@ -16,7 +18,7 @@ struct PowerRound {
     gpus: usize,
     seen: usize,
     watts: f64,
-    reported: bool,
+    missing: bool,
 }
 
 /// What one GPU's reading did to its round.
@@ -24,8 +26,8 @@ struct PowerRound {
 enum Pushed {
     /// Other GPUs of the round have not reported yet.
     Pending,
-    /// The round is complete: the node total, or `None` when no GPU in it
-    /// reported power.
+    /// The round is complete: the node total, or `None` when a GPU in it
+    /// did not report power.
     Complete(Option<f64>),
 }
 
@@ -35,29 +37,29 @@ impl PowerRound {
             gpus,
             seen: 0,
             watts: 0.0,
-            reported: false,
+            missing: false,
         }
     }
 
     fn push(&mut self, watts: Option<f64>) -> Pushed {
         self.seen += 1;
-        if let Some(watts) = watts {
-            self.watts += watts;
-            self.reported = true;
+        match watts {
+            Some(watts) => self.watts += watts,
+            None => self.missing = true,
         }
         if self.seen < self.gpus {
             return Pushed::Pending;
         }
-        let total = self.reported.then_some(self.watts);
+        let total = (!self.missing).then_some(self.watts);
         *self = Self::new(self.gpus);
         Pushed::Complete(total)
     }
 }
 
 /// Records each round's node total from `nvidia-smi` lines until the stream
-/// ends, or right after the first round when it has no power reading: a
-/// board that never reports power would otherwise be polled every second for
-/// nothing. A later round without a reading is only a gap, which the meter
+/// ends, or right after the first round when it misses a reading: a board
+/// that never reports power would otherwise be polled every second for
+/// nothing. A later round that misses one is only a gap, which the meter
 /// already leaves out.
 async fn read_rounds<R: AsyncBufRead + Unpin>(
     lines: &mut Lines<R>,
@@ -78,7 +80,7 @@ async fn read_rounds<R: AsyncBufRead + Unpin>(
             }
             Pushed::Complete(None) if !measured => {
                 tracing::info!(
-                    "GPU energy sampling stopped: nvidia-smi reports no power draw for any GPU, so /api/status has no energy"
+                    "GPU energy sampling stopped: nvidia-smi does not report power draw for every GPU, so /api/status has no energy"
                 );
                 return Ok(());
             }
@@ -91,7 +93,7 @@ async fn read_rounds<R: AsyncBufRead + Unpin>(
 /// Starts the sampler the first time this node serves a local model, so the
 /// idle draw it measures is the node's with a model loaded. Later calls do
 /// nothing. The sampler ends quietly when `nvidia-smi` is missing or stops,
-/// and with one log line when its GPUs report no power.
+/// and with one log line when a GPU reports no power.
 pub(crate) fn start_energy_sampler() {
     static STARTED: Once = Once::new();
     STARTED.call_once(|| {
@@ -169,19 +171,22 @@ mod tests {
     use tokio::io::AsyncBufReadExt;
 
     #[test]
-    fn a_round_sums_every_gpu_that_reports_power() {
+    fn a_round_sums_its_gpus_once_every_one_reports_power() {
         let mut round = PowerRound::new(2);
         assert_eq!(round.push(Some(100.0)), Pushed::Pending);
         assert_eq!(round.push(Some(50.0)), Pushed::Complete(Some(150.0)));
-        assert_eq!(round.push(None), Pushed::Pending);
-        assert_eq!(round.push(Some(40.0)), Pushed::Complete(Some(40.0)));
+        assert_eq!(round.push(Some(90.0)), Pushed::Pending);
+        assert_eq!(round.push(Some(40.0)), Pushed::Complete(Some(130.0)));
     }
 
     #[test]
-    fn a_round_where_no_gpu_reports_power_has_no_reading() {
-        let mut round = PowerRound::new(1);
-        assert_eq!(round.push(None), Pushed::Complete(None));
-        assert_eq!(round.push(Some(30.0)), Pushed::Complete(Some(30.0)));
+    fn a_round_where_a_gpu_misses_its_reading_has_no_reading() {
+        // A partial sum would understate the node, so it is not a reading.
+        let mut round = PowerRound::new(2);
+        assert_eq!(round.push(None), Pushed::Pending);
+        assert_eq!(round.push(Some(40.0)), Pushed::Complete(None));
+        assert_eq!(round.push(Some(30.0)), Pushed::Pending);
+        assert_eq!(round.push(Some(20.0)), Pushed::Complete(Some(50.0)));
     }
 
     async fn recorded(output: &str, gpus: usize) -> (Vec<f64>, Option<String>) {
@@ -202,10 +207,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_gpu_that_stops_reporting_later_leaves_a_gap_and_sampling_goes_on() {
-        let output = "0, 120.0\n1, [N/A]\n0, [N/A]\n1, [N/A]\n0, 110.0\n1, 15.0\n";
+    async fn a_gpu_that_never_reports_power_stops_the_sampler_too() {
+        let (totals, unread) = recorded("0, 120.0\n1, [N/A]\n0, 110.0\n1, [N/A]\n", 2).await;
+        assert!(totals.is_empty());
+        assert_eq!(unread.as_deref(), Some("0, 110.0"));
+    }
+
+    #[tokio::test]
+    async fn a_gpu_that_misses_a_later_reading_leaves_a_gap_and_sampling_goes_on() {
+        let output = "0, 120.0\n1, 5.0\n0, 115.0\n1, [N/A]\n0, 110.0\n1, 20.0\n";
         let (totals, unread) = recorded(output, 2).await;
-        assert_eq!(totals, [120.0, 125.0]);
+        assert_eq!(totals, [125.0, 130.0]);
         assert_eq!(unread, None);
     }
 }

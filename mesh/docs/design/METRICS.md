@@ -158,10 +158,12 @@ tokens and whose whole run was measured: a request that ran through a gap
 between readings, or after the sampler stopped, leaves both its energy and its
 tokens out of them. Board power
 covers the GPU only, not the CPU, memory or power supply, so the figures are
-estimates. The field is absent until a power reading
-exists, so nodes without an NVIDIA GPU never report it, and neither do NVIDIA
-GPUs that report no board power, such as a Jetson's integrated GPU: the sampler
-stops after its first round without a reading and logs why. Stages of a split model
+estimates. A reading is the sum over every GPU of the node, so a round where
+a GPU misses its reading is a gap rather than a smaller reading. The field is
+absent until a power reading exists, so nodes without an NVIDIA GPU never
+report it, and neither do nodes with a GPU that reports no board power, such as
+a Jetson's integrated GPU: the sampler stops after its first round if a GPU
+missed its reading, and logs why. Stages of a split model
 that have no front end of their own count their work as idle, and models served
 through a plugin endpoint are not counted.
 
