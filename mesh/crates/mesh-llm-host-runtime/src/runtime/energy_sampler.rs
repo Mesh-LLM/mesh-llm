@@ -3,9 +3,12 @@
 //! One `nvidia-smi` process streams a reading per GPU every second, and the
 //! sampler sums each round into one reading for the node. A GPU that does not
 //! report power is left out of the sum. A node without `nvidia-smi` reports no
-//! energy at all.
+//! energy at all, and neither does one whose first round has no power reading
+//! (Jetson's integrated GPU answers `[N/A]`): the sampler stops there.
 
+use anyhow::Result;
 use std::sync::Once;
+use tokio::io::{AsyncBufRead, Lines};
 
 /// One round of per-GPU readings, summed once every GPU has reported.
 #[derive(Debug)]
@@ -14,6 +17,16 @@ struct PowerRound {
     seen: usize,
     watts: f64,
     reported: bool,
+}
+
+/// What one GPU's reading did to its round.
+#[derive(Debug, PartialEq)]
+enum Pushed {
+    /// Other GPUs of the round have not reported yet.
+    Pending,
+    /// The round is complete: the node total, or `None` when no GPU in it
+    /// reported power.
+    Complete(Option<f64>),
 }
 
 impl PowerRound {
@@ -26,26 +39,59 @@ impl PowerRound {
         }
     }
 
-    /// Adds one GPU's reading; returns the node total when the round is
-    /// complete and at least one GPU in it reported power.
-    fn push(&mut self, watts: Option<f64>) -> Option<f64> {
+    fn push(&mut self, watts: Option<f64>) -> Pushed {
         self.seen += 1;
         if let Some(watts) = watts {
             self.watts += watts;
             self.reported = true;
         }
         if self.seen < self.gpus {
-            return None;
+            return Pushed::Pending;
         }
         let total = self.reported.then_some(self.watts);
         *self = Self::new(self.gpus);
-        total
+        Pushed::Complete(total)
     }
+}
+
+/// Records each round's node total from `nvidia-smi` lines until the stream
+/// ends, or right after the first round when it has no power reading: a
+/// board that never reports power would otherwise be polled every second for
+/// nothing. A later round without a reading is only a gap, which the meter
+/// already leaves out.
+async fn read_rounds<R: AsyncBufRead + Unpin>(
+    lines: &mut Lines<R>,
+    gpus: usize,
+    mut record: impl FnMut(f64),
+) -> Result<()> {
+    let mut round = PowerRound::new(gpus);
+    let mut measured = false;
+    while let Some(line) = lines.next_line().await? {
+        let Some((_, watts)) = crate::system::hardware::parse_nvidia_power_draw_line(&line) else {
+            continue;
+        };
+        match round.push(watts) {
+            Pushed::Pending => {}
+            Pushed::Complete(Some(total)) => {
+                measured = true;
+                record(total);
+            }
+            Pushed::Complete(None) if !measured => {
+                tracing::info!(
+                    "GPU energy sampling stopped: nvidia-smi reports no power draw for any GPU, so /api/status has no energy"
+                );
+                return Ok(());
+            }
+            Pushed::Complete(None) => {}
+        }
+    }
+    Ok(())
 }
 
 /// Starts the sampler the first time this node serves a local model, so the
 /// idle draw it measures is the node's with a model loaded. Later calls do
-/// nothing. The sampler ends quietly when `nvidia-smi` is missing or stops.
+/// nothing. The sampler ends quietly when `nvidia-smi` is missing or stops,
+/// and with one log line when its GPUs report no power.
 pub(crate) fn start_energy_sampler() {
     static STARTED: Once = Once::new();
     STARTED.call_once(|| {
@@ -61,7 +107,6 @@ pub(crate) fn start_energy_sampler() {
 }
 
 mod nvidia {
-    use super::PowerRound;
     use anyhow::{Context, Result};
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, BufReader};
@@ -110,37 +155,57 @@ mod nvidia {
             .take()
             .context("nvidia-smi power sampling has no stdout")?;
         let mut lines = BufReader::new(stdout).lines();
-        let mut round = PowerRound::new(gpus);
-        while let Some(line) = lines.next_line().await? {
-            let Some((_, watts)) = crate::system::hardware::parse_nvidia_power_draw_line(&line)
-            else {
-                continue;
-            };
-            if let Some(total) = round.push(watts) {
-                super::super::energy::record_power(SOURCE, total);
-            }
-        }
-        Ok(())
+        // Returning drops `child`, and `kill_on_drop` ends nvidia-smi with it.
+        super::read_rounds(&mut lines, gpus, |total| {
+            super::super::energy::record_power(SOURCE, total);
+        })
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::PowerRound;
+    use super::{PowerRound, Pushed, read_rounds};
+    use tokio::io::AsyncBufReadExt;
 
     #[test]
     fn a_round_sums_every_gpu_that_reports_power() {
         let mut round = PowerRound::new(2);
-        assert_eq!(round.push(Some(100.0)), None);
-        assert_eq!(round.push(Some(50.0)), Some(150.0));
-        assert_eq!(round.push(None), None);
-        assert_eq!(round.push(Some(40.0)), Some(40.0));
+        assert_eq!(round.push(Some(100.0)), Pushed::Pending);
+        assert_eq!(round.push(Some(50.0)), Pushed::Complete(Some(150.0)));
+        assert_eq!(round.push(None), Pushed::Pending);
+        assert_eq!(round.push(Some(40.0)), Pushed::Complete(Some(40.0)));
     }
 
     #[test]
     fn a_round_where_no_gpu_reports_power_has_no_reading() {
         let mut round = PowerRound::new(1);
-        assert_eq!(round.push(None), None);
-        assert_eq!(round.push(Some(30.0)), Some(30.0));
+        assert_eq!(round.push(None), Pushed::Complete(None));
+        assert_eq!(round.push(Some(30.0)), Pushed::Complete(Some(30.0)));
+    }
+
+    async fn recorded(output: &str, gpus: usize) -> (Vec<f64>, Option<String>) {
+        let mut lines = output.as_bytes().lines();
+        let mut totals = Vec::new();
+        read_rounds(&mut lines, gpus, |total| totals.push(total))
+            .await
+            .unwrap();
+        (totals, lines.next_line().await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_board_without_power_readings_stops_the_sampler_after_one_round() {
+        // What a Jetson Orin's nvidia-smi streams: `power.draw` is `[N/A]`.
+        let (totals, unread) = recorded("0, [N/A]\n0, [N/A]\n0, 30.0\n", 1).await;
+        assert!(totals.is_empty());
+        assert_eq!(unread.as_deref(), Some("0, [N/A]"));
+    }
+
+    #[tokio::test]
+    async fn a_gpu_that_stops_reporting_later_leaves_a_gap_and_sampling_goes_on() {
+        let output = "0, 120.0\n1, [N/A]\n0, [N/A]\n1, [N/A]\n0, 110.0\n1, 15.0\n";
+        let (totals, unread) = recorded(output, 2).await;
+        assert_eq!(totals, [120.0, 125.0]);
+        assert_eq!(unread, None);
     }
 }
