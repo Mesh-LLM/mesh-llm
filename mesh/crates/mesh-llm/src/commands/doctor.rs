@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mesh_llm_cli::{BinaryFlavor, DoctorCommand};
+use mesh_llm_host_runtime::command_support::network::local_http_client_builder;
 use mesh_llm_host_runtime::command_support::plugin::load_config;
 use mesh_llm_host_runtime::command_support::runtime_instances::{
     LocalInstanceSnapshot, runtime_root, scan_local_instances,
@@ -99,7 +100,7 @@ async fn run_split_doctor(
 }
 
 async fn fetch_split_readiness_report(model_ref: &str, port: u16) -> Result<serde_json::Value> {
-    let client = reqwest::Client::builder()
+    let client = local_http_client_builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let encoded = urlencoding::encode(model_ref);
@@ -292,7 +293,7 @@ fn write_json_file(output_dir: &Path, file_name: &str, value: &Value) -> Result<
 }
 
 async fn fetch_console_json(port: u16, path: &str) -> Result<Value> {
-    let client = reqwest::Client::builder()
+    let client = local_http_client_builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let url = format!("http://127.0.0.1:{port}{path}");

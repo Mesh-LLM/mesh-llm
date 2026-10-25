@@ -5,11 +5,18 @@
 /// systems without a CA bundle. Those endpoints never redirect, so it doesn't
 /// follow redirects either: requests stay on the address they were sent to.
 pub(crate) fn local_http_client() -> reqwest::Client {
+    local_http_client_builder()
+        .build()
+        .expect("a client without TLS roots builds without system certificates")
+}
+
+/// The builder of [`local_http_client`], for callers that add a timeout: the
+/// `mesh-llm` commands that call a running node's console
+/// (`command_support::network`).
+pub fn local_http_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .tls_certs_only([])
         .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("a client without TLS roots builds without system certificates")
 }
 
 #[cfg(test)]
