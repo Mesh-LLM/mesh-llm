@@ -210,8 +210,17 @@ fn load_config_through_production_wrapper_rejects_invalid_no_update_check_env_ov
 }
 
 #[test]
-#[serial_test::serial]
 fn load_config_through_production_wrapper_applies_no_runtime_download_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_applies_no_runtime_download_env_override"
+        ),
+        "MESH_LLM_NO_RUNTIME_DOWNLOAD",
+        "0",
+    ) {
+        return;
+    }
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(
@@ -220,25 +229,52 @@ fn load_config_through_production_wrapper_applies_no_runtime_download_env_overri
     )
     .unwrap();
 
-    let config = with_env_override_for_test("MESH_LLM_NO_RUNTIME_DOWNLOAD", "0", || {
-        load_config(Some(&config_path))
-    })
-    .expect("config should load through the production wrapper");
+    let config =
+        load_config(Some(&config_path)).expect("config should load through the production wrapper");
     assert!(
         config.runtime.native_runtime.download_enabled(),
         "MESH_LLM_NO_RUNTIME_DOWNLOAD=0 must override runtime.native_runtime.download = false"
     );
+}
 
-    let config = with_env_override_for_test("MESH_LLM_NO_RUNTIME_DOWNLOAD", "1", || {
-        load_config(Some(&temp.path().join("does-not-exist.toml")))
-    })
-    .expect("a default config must still honor the env override");
+#[test]
+fn load_config_through_production_wrapper_applies_no_runtime_download_env_override_without_a_file()
+{
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_applies_no_runtime_download_env_override_without_a_file"
+        ),
+        "MESH_LLM_NO_RUNTIME_DOWNLOAD",
+        "1",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+
+    let config = load_config(Some(&temp.path().join("does-not-exist.toml")))
+        .expect("a default config must still honor the env override");
     assert!(!config.runtime.native_runtime.download_enabled());
+}
 
-    let err = with_env_override_for_test("MESH_LLM_NO_RUNTIME_DOWNLOAD", "yes", || {
-        load_config(Some(&config_path))
-    })
-    .expect_err("an invalid MESH_LLM_NO_RUNTIME_DOWNLOAD value must fail, never be defaulted");
+#[test]
+fn load_config_through_production_wrapper_rejects_invalid_no_runtime_download_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_rejects_invalid_no_runtime_download_env_override"
+        ),
+        "MESH_LLM_NO_RUNTIME_DOWNLOAD",
+        "yes",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "version = 1\n").unwrap();
+
+    let err = load_config(Some(&config_path))
+        .expect_err("an invalid MESH_LLM_NO_RUNTIME_DOWNLOAD value must fail, never be defaulted");
     assert!(format!("{err:#}").contains("MESH_LLM_NO_RUNTIME_DOWNLOAD"));
 }
 
