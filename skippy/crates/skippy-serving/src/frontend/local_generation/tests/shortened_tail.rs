@@ -72,10 +72,29 @@ fn check_shortened_tail(demote: bool) -> Result<()> {
     // that tail (128) remains valid, so replaying the prefix is unnecessary.
     let mut changed = original[..176].to_vec();
     changed.extend_from_slice(&[501, 502, 503, 504]);
+    let kv = warm.kv.as_ref().unwrap();
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("shortened-tail"),
+        true,
+        None,
+    );
+    let base = warm.local_kv_message_base("shortened-tail", &ids);
+    let checkpoint = kv.prefill_identity(&warm.config, &base, 0, &original[..128]);
+    let retained_after_demotion =
+        kv.retained_exact_identity(&checkpoint.namespace, &checkpoint.token_ids);
     let (actual, cached) = generate_chat_tail(&warm, &changed)?;
     assert_eq!(
-        cached, 128,
-        "shortened chat tail discarded its nearby checkpoint"
+        cached,
+        128,
+        "shortened chat tail discarded its nearby checkpoint: \
+         retained_after_demotion={retained_after_demotion} queued={} dropped={} worker_panics={}",
+        kv.exact_state_records_queued
+            .load(std::sync::atomic::Ordering::Relaxed),
+        kv.exact_state_records_dropped
+            .load(std::sync::atomic::Ordering::Relaxed),
+        kv.exact_state_record_worker_panics
+            .load(std::sync::atomic::Ordering::Relaxed),
     );
     assert!(cached <= 176, "restored beyond the unchanged prefix");
 
@@ -85,7 +104,6 @@ fn check_shortened_tail(demote: bool) -> Result<()> {
         generate_chat_tail(&cold, &changed)?.0,
         "restoring a shortened tail must preserve generated tokens"
     );
-    let kv = warm.kv.as_ref().unwrap();
     let exports = kv
         .exact_state_records_queued
         .load(std::sync::atomic::Ordering::Relaxed);
