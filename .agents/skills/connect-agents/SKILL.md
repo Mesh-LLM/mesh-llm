@@ -28,7 +28,7 @@ mesh-llm node. Full reference: `mesh/docs/AGENTS.md`.
 mesh-llm launches the major agent CLIs with config injected for you:
 
 ```bash
-mesh-llm goose     [--model <id>]                 # writes ~/.config/goose/custom_providers/mesh.json
+mesh-llm goose     [--model <id>]                 # writes custom_providers/mesh.json in goose's config dir
 mesh-llm claude    [--model <id>]
 mesh-llm opencode  [--model <id>] [--host <h>]    # injects OPENCODE_CONFIG_CONTENT (no file edits)
 mesh-llm pi        [--model <id>] [--host <h>]    # writes ~/.pi/agent/models.json

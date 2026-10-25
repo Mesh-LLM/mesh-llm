@@ -17,14 +17,7 @@ impl Case {
         let state = location.join("state");
         std::fs::create_dir(&native).unwrap();
         std::fs::create_dir(&state).unwrap();
-        let profile = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let fixture = profile.join("examples").join(format!(
+        let fixture = crate::fixture_paths::examples_dir().join(format!(
             "migration_client_fixture{}",
             std::env::consts::EXE_SUFFIX
         ));

@@ -1,8 +1,7 @@
-//! `ci-ops runner-identity`: the Rust owner of
-//! `scripts/runner-image-identity.py`. Inspects checked-in runner image
+//! `ci-ops runner-identity` inspects checked-in runner image
 //! identities without changing CI execution; all inputs are local files and
 //! no network, build or cache operation is performed. Output, diagnostics
-//! and exit statuses match the legacy tool byte for byte.
+//! and command results use typed native validation.
 
 use crate::ci_operations::catalog_validation::validate;
 use crate::ci_operations::evidence_catalog::{BindRequest, bind};
@@ -23,7 +22,7 @@ use crate::repository::check_report::CheckReport;
 use crate::repository::text::repr;
 use std::path::{Path, PathBuf};
 
-/// `default_root` is the checkout the legacy script lived in.
+/// `default_root` supplies the checkout when `--root` is omitted.
 pub(crate) fn run(args: &[String], default_root: impl FnOnce() -> PathBuf) -> CheckReport {
     let args = match parse(args) {
         Parsed::Run(args) => args,

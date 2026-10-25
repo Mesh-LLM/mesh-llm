@@ -274,6 +274,23 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) detokenize_ms: f64,
     pub(in crate::frontend) text_emit_ms: f64,
     pub(in crate::frontend) eog_check_ms: f64,
+    /// One entry per completion token, when the request asked for logprobs.
+    pub(in crate::frontend) token_logprobs: Option<Vec<GeneratedTokenLogprob>>,
+}
+
+/// A completion token's log-probability and its alternatives, with their text.
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::frontend) struct GeneratedTokenLogprob {
+    pub(in crate::frontend) token: GeneratedLogprobCandidate,
+    pub(in crate::frontend) top: Vec<GeneratedLogprobCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::frontend) struct GeneratedLogprobCandidate {
+    pub(in crate::frontend) text: String,
+    pub(in crate::frontend) bytes: Vec<u8>,
+    /// `None` when the runtime could not read the logits row.
+    pub(in crate::frontend) logprob: Option<f32>,
 }
 
 impl GeneratedText {

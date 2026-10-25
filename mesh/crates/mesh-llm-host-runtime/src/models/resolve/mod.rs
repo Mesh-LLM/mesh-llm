@@ -672,6 +672,16 @@ fn resolve_hf_file_from_siblings(requested: &str, siblings: &[String]) -> Option
         .map(|file| file.path)
 }
 
+/// whisper.cpp model files (`ggml-large-v3-turbo-q5_0.bin`), which are not
+/// GGUF and are only ever named exactly. Legacy llama.cpp `ggml-model-*.bin`
+/// files share the prefix but are not loadable, so they are excluded.
+fn is_whisper_model_file_name(file: &str) -> bool {
+    let basename = file.rsplit('/').next().unwrap_or(file);
+    basename.starts_with("ggml-")
+        && !basename.starts_with("ggml-model-")
+        && basename.ends_with(".bin")
+}
+
 pub(super) fn is_known_gguf_sidecar(file: &str) -> bool {
     let basename = file.rsplit('/').next().unwrap_or(file);
     basename.to_ascii_lowercase().starts_with("mmproj")
@@ -995,6 +1005,14 @@ pub(crate) async fn resolve_huggingface_file_from_sibling_entries(
         || file.ends_with(".safetensors.index.json")
     {
         return Ok(file.to_string());
+    }
+    if is_whisper_model_file_name(file) {
+        // Named exactly, so it must exist; a typo should not become a
+        // failed download.
+        if sibling_entries.iter().any(|(sibling, _)| sibling == file) {
+            return Ok(file.to_string());
+        }
+        bail!("No file {file} in {repo}@{}.", revision.unwrap_or("main"));
     }
 
     let revision = revision.unwrap_or("main");

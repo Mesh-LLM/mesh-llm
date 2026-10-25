@@ -21,6 +21,10 @@ const REPLAY_SAFE_SAMPLER_CHAIN: [&str; 9] = [
 /// its own RNG-backed selection step, and a custom sampler chain may omit the
 /// temperature sampler that makes a non-positive temperature greedy.
 pub(super) fn sampling_replay_safe(sampling: &SamplingConfig) -> bool {
+    // A replayed token is never sampled, so it would have no logprobs entry.
+    if sampling.top_logprobs.is_some() {
+        return false;
+    }
     if !sampling.enabled {
         return true;
     }
@@ -99,6 +103,7 @@ pub(super) fn sampling_semantic_fingerprint(
         mirostat_learning_rate,
         samplers,
         reasoning_budget,
+        top_logprobs,
     } = sampling;
 
     let mut digest = Sha256::new();
@@ -111,6 +116,12 @@ pub(super) fn sampling_semantic_fingerprint(
         &format!("{reasoning_budget:?}"),
     );
     update_u32(&mut digest, b"seed", *seed);
+    // A logprobs request records per-token data a replayed prefix would skip.
+    update_u32(
+        &mut digest,
+        b"top_logprobs",
+        top_logprobs.unwrap_or(u32::MAX),
+    );
     update_f32(&mut digest, b"temperature", *temperature);
     update_f32(&mut digest, b"top_p", *top_p);
     update_i32(&mut digest, b"top_k", *top_k);
@@ -290,6 +301,9 @@ mod tests {
             .swap(0, 1));
         mutation!("reasoning_budget", |sampling: &mut SamplingConfig| {
             sampling.reasoning_budget = skippy_runtime::ReasoningBudget::Resolved(1024)
+        });
+        mutation!("top_logprobs", |sampling: &mut SamplingConfig| {
+            sampling.top_logprobs = Some(2)
         });
 
         for (field, sampling) in mutations {

@@ -12,6 +12,7 @@ use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceResult;
 use skippy_inference_api::MessageContent;
 use skippy_inference_api::MessageContentPart;
+use skippy_inference_api::chat_skippy_hooks_enabled;
 use skippy_package_format::{
     GenerationProfile, GenerationReasoningBudget, GenerationReasoningBudgetLevel,
     GenerationReasoningEnabled, GenerationReasoningFormat,
@@ -1044,13 +1045,32 @@ pub(super) fn chat_sampling_config(
     )?;
     sampling.reasoning_budget =
         request_reasoning_budget(request)?.unwrap_or_else(|| embedded_reasoning_budget(defaults));
-    Ok(sampling)
+    let top_logprobs = request
+        .logprobs
+        .unwrap_or(false)
+        .then(|| request.top_logprobs.unwrap_or(0));
+    Ok(with_logprobs(sampling, top_logprobs))
+}
+
+/// Asks the runtime to record each sampled token's logprob and `top` alternatives.
+fn with_logprobs(mut sampling: SamplingConfig, top: Option<u32>) -> SamplingConfig {
+    let Some(top) = top else {
+        return sampling;
+    };
+    sampling.top_logprobs = Some(top);
+    // Disabled sampling means greedy decoding, and every call site passes
+    // the config only when it is enabled. Keep greedy, but pass it.
+    if !sampling.enabled {
+        sampling.enabled = true;
+        sampling.temperature = 0.0;
+    }
+    sampling
 }
 
 pub(super) fn completion_sampling_config(
     request: &CompletionRequest,
 ) -> InferenceResult<SamplingConfig> {
-    sampling_config(
+    let sampling = sampling_config(
         request.temperature,
         request.top_p,
         request.presence_penalty,
@@ -1058,7 +1078,8 @@ pub(super) fn completion_sampling_config(
         request.seed,
         request.logit_bias.as_ref(),
         &request.extra,
-    )
+    )?;
+    Ok(with_logprobs(sampling, request.logprobs))
 }
 
 pub(super) fn chat_template_options(
@@ -1441,10 +1462,33 @@ fn chat_reasoning_format(value: Option<EmbeddedReasoningFormat>) -> ChatReasonin
 pub(super) fn ensure_chat_runtime_features_supported(
     request: &ChatCompletionRequest,
 ) -> InferenceResult<()> {
-    if request.logprobs.unwrap_or(false) || request.top_logprobs.is_some() {
-        return Err(InferenceError::unsupported(
-            "chat logprobs are parsed by skippy-inference-api but not yet implemented by skippy runtime",
+    if !request.logprobs.unwrap_or(false) && request.top_logprobs.is_some() {
+        return Err(InferenceError::invalid_request(
+            "top_logprobs requires logprobs to be true",
         ));
+    }
+    if request.logprobs.unwrap_or(false) {
+        if request.stream {
+            return Err(InferenceError::unsupported(
+                "streamed chat logprobs are not implemented yet; request them without stream",
+            ));
+        }
+        // A hook that injects text discards a sample whose entry was already
+        // recorded, so the entries would no longer line up with the tokens.
+        if chat_skippy_hooks_enabled(request) {
+            return Err(InferenceError::unsupported(
+                "logprobs are not implemented yet for requests with skippy_hooks",
+            ));
+        }
+        if request
+            .top_logprobs
+            .is_some_and(|count| count as usize > skippy_runtime::MAX_TOP_LOGPROBS)
+        {
+            return Err(InferenceError::invalid_request(format!(
+                "top_logprobs must be at most {}",
+                skippy_runtime::MAX_TOP_LOGPROBS
+            )));
+        }
     }
     validate_stop_sequences(request.stop.as_ref())
 }
@@ -1452,13 +1496,23 @@ pub(super) fn ensure_chat_runtime_features_supported(
 pub(super) fn ensure_completion_runtime_features_supported(
     request: &CompletionRequest,
 ) -> InferenceResult<()> {
-    if request.logprobs.is_some() {
-        return Err(InferenceError::unsupported(
-            "completion logprobs are parsed by skippy-inference-api but not yet implemented by skippy runtime",
-        ));
+    if let Some(count) = request.logprobs {
+        if request.stream {
+            return Err(InferenceError::unsupported(
+                "streamed completion logprobs are not implemented yet; request them without stream",
+            ));
+        }
+        if count > MAX_COMPLETION_LOGPROBS {
+            return Err(InferenceError::invalid_request(format!(
+                "logprobs must be at most {MAX_COMPLETION_LOGPROBS}"
+            )));
+        }
     }
     validate_stop_sequences(request.stop.as_ref())
 }
+
+/// The legacy completions API's bound on `logprobs` alternatives.
+const MAX_COMPLETION_LOGPROBS: u32 = 5;
 
 pub(super) fn has_requested_tools(value: &Value) -> bool {
     !matches!(value, Value::Array(items) if items.is_empty())
@@ -1594,6 +1648,7 @@ pub(super) fn sampling_config(
         mirostat_learning_rate,
         samplers,
         reasoning_budget: ReasoningBudget::Unrestricted,
+        top_logprobs: None,
     })
 }
 

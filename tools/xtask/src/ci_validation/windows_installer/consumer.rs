@@ -321,6 +321,11 @@ fn native_windows_consumer_stale_cleanup_failure_keeps_committed_new_product() {
         .unwrap();
     });
     result.rejected();
+    assert!(
+        result.stderr().contains("stale binary path is a directory"),
+        "{}",
+        result.stderr()
+    );
     assert!(result.path("bin/mesh-llm.exe").is_file());
     assert!(
         result

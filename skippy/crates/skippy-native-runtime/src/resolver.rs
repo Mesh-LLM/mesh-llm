@@ -33,6 +33,7 @@ pub enum CandidateRejection {
     CudaToolkitNotDetected { required: u32 },
     CudaGpuArchUnsupported { supported: Vec<String> },
     RocmProfileMissing,
+    RocmGpuArchUnknown,
     RocmGpuArchUnsupported { supported: Vec<String> },
     VulkanProfileMissing,
     SelectionMismatch { selection: String },
@@ -123,6 +124,12 @@ impl std::fmt::Display for CandidateRejection {
                     "ROCm runtime requires ROCm, but no ROCm profile was detected"
                 )
             }
+            Self::RocmGpuArchUnknown => write!(
+                f,
+                "ROCm GPU architecture unknown: no AMD GPU architecture was detected to match \
+                 the runtime's kernels against; set MESH_LLM_ROCM_GPU_ARCHES (for example \
+                 gfx1100) if the GPU is supported"
+            ),
             Self::RocmGpuArchUnsupported { supported } => write!(
                 f,
                 "ROCm GPU architecture unsupported: runtime supports {}",
@@ -704,6 +711,12 @@ fn evaluate_rocm_requirements(
     // HIP release artifacts contain architecture-specific code objects and do
     // not have a portable kernel fallback. Accepting a partial match can leave
     // an enumerated GPU with no launchable kernels, which faults at inference.
+    // With no detected architecture there is nothing to match, which proves
+    // nothing either.
+    if rocm.gpu_arches.is_empty() {
+        reasons.push(CandidateRejection::RocmGpuArchUnknown);
+        return;
+    }
     if rocm
         .gpu_arches
         .iter()
@@ -766,7 +779,7 @@ mod tests {
     use super::*;
     use crate::{
         CudaRuntimeRequirements, HostCudaProfile, HostRocmProfile, HostRuntimeProfile,
-        NativeRuntimeBackend, NativeRuntimeManifest, NativeRuntimePlatform,
+        HostVulkanProfile, NativeRuntimeBackend, NativeRuntimeManifest, NativeRuntimePlatform,
     };
     use std::path::Path;
 
@@ -1417,6 +1430,49 @@ mod tests {
             )
             .is_none(),
             "a partial match could expose the unsupported GPU to a kernel launch"
+        );
+    }
+
+    #[test]
+    fn rocm_runtime_is_not_selected_when_no_gpu_arch_is_known() {
+        let artifacts = vec![
+            artifact(
+                "meshllm-runtime-linux-x86_64-cpu",
+                NativeRuntimeBackend::cpu(),
+            ),
+            rocm_runtime(
+                "meshllm-runtime-linux-x86_64-rocm",
+                &["gfx1100", "gfx1103", "gfx1151"],
+            ),
+            artifact(
+                "meshllm-runtime-linux-x86_64-vulkan",
+                NativeRuntimeBackend::vulkan(),
+            ),
+        ];
+        let mut profile = rocm_profile(&[]);
+        profile
+            .available_flavors
+            .insert(NativeRuntimeBackendKind::Vulkan);
+        profile.vulkan = Some(HostVulkanProfile { api_version: None });
+
+        let evaluated = evaluate_candidates(
+            &artifacts,
+            &profile,
+            "0.68.0",
+            Some("0.1.25"),
+            &RuntimeSelection::Recommended,
+        );
+        let rocm = evaluated
+            .iter()
+            .find(|candidate| candidate.artifact.backend.kind == NativeRuntimeBackendKind::Rocm)
+            .unwrap();
+        assert_eq!(
+            rocm.rejection_reasons,
+            vec![CandidateRejection::RocmGpuArchUnknown]
+        );
+        assert_eq!(
+            best_candidate(&evaluated).unwrap().artifact.backend.kind,
+            NativeRuntimeBackendKind::Vulkan
         );
     }
 

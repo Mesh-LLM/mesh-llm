@@ -117,6 +117,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "runtime.native_runtime.selection",
             one_of([string_enum(["recommended"]), ConfigValueSchema::String]),
         ),
+        native_runtime_setting(
+            "runtime.native_runtime.download",
+            ConfigValueSchema::Boolean,
+        ),
         kv_disk_setting(
             "runtime.kv_cache.disk.mode",
             string_enum(["off", "auto", "fixed"]),

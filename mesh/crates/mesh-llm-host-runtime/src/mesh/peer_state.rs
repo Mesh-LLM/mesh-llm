@@ -48,6 +48,29 @@ pub(crate) fn load_or_refresh_owner_attestation(
     Ok(ownership)
 }
 
+/// A fresh attestation for the node `current` covers, signed once `current`
+/// enters its renewal window, with the same label and hostname hint. Peers
+/// check the expiry on every gossip exchange, so a node that outlives its
+/// certificate is dropped by those enforcing an owner policy.
+pub(crate) fn renewed_owner_attestation(
+    owner_keypair: &crate::crypto::OwnerKeypair,
+    endpoint_id: EndpointId,
+    current: &SignedNodeOwnership,
+    now_unix_ms: u64,
+) -> Result<Option<SignedNodeOwnership>> {
+    if !certificate_needs_renewal(current, DEFAULT_NODE_CERT_RENEW_WINDOW_SECS, now_unix_ms) {
+        return Ok(None);
+    }
+    let renewed = sign_node_ownership(
+        owner_keypair,
+        endpoint_id.as_bytes(),
+        now_unix_ms + DEFAULT_NODE_CERT_LIFETIME_SECS * 1000,
+        current.claim.node_label.clone(),
+        current.claim.hostname_hint.clone(),
+    )?;
+    Ok(Some(renewed))
+}
+
 pub(crate) fn model_descriptor_score(descriptor: &ServedModelDescriptor) -> u8 {
     let identity = &descriptor.identity;
     let capability_bonus = u8::from(descriptor.capabilities.multimodal)

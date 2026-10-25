@@ -9,6 +9,6 @@ repository = "https://github.com/Mesh-LLM/mesh-llm"
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
-iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
+iroh = { version = "1.4.1", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
 tokio = { version = "1", features = ["io-util", "net", "time", "rt", "macros", "sync"] }
 tracing = "0.1"

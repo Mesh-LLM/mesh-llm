@@ -303,7 +303,6 @@ impl Eq for CanonicalEnvelope {}
 
 impl CanonicalEnvelope {
     /// Create a new envelope with the given fields. Identity fields default to None.
-    #[allow(dead_code)]
     pub fn new(
         event_id: EventId,
         request_id: RequestId,
@@ -354,34 +353,6 @@ impl CanonicalEnvelope {
 
         Ok(serde_json::from_value(value)?)
     }
-
-    /// Set the tenant ID. Returns `&mut self` for chaining.
-    #[allow(dead_code)]
-    pub fn with_tenant(mut self, tenant_id: String) -> Self {
-        self.tenant_id = Some(tenant_id);
-        self
-    }
-
-    /// Set the account ID. Returns `&mut self` for chaining.
-    #[allow(dead_code)]
-    pub fn with_account(mut self, account_id: String) -> Self {
-        self.account_id = Some(account_id);
-        self
-    }
-
-    /// Set the user ID. Returns `&mut self` for chaining.
-    #[allow(dead_code)]
-    pub fn with_user(mut self, user_id: String) -> Self {
-        self.user_id = Some(user_id);
-        self
-    }
-
-    /// Set the role. Returns `&mut self` for chaining.
-    #[allow(dead_code)]
-    pub fn with_role(mut self, role: String) -> Self {
-        self.role = Some(role);
-        self
-    }
 }
 
 #[cfg(test)]
@@ -422,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_envelope_with_identity() {
-        let env = CanonicalEnvelope::new(
+        let mut env = CanonicalEnvelope::new(
             EventId::new(),
             RequestId::new(),
             ReplayChannel::Operations,
@@ -433,9 +404,9 @@ mod tests {
                 duration_ms: None,
                 usage: None,
             },
-        )
-        .with_tenant("t-abc".into())
-        .with_account("a-def".into());
+        );
+        env.tenant_id = Some("t-abc".into());
+        env.account_id = Some("a-def".into());
 
         assert_eq!(env.tenant_id, Some("t-abc".into()));
         assert_eq!(env.account_id, Some("a-def".into()));
@@ -485,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_envelope_identity_included_when_set() {
-        let env = CanonicalEnvelope::new(
+        let mut env = CanonicalEnvelope::new(
             EventId::new(),
             RequestId::new(),
             ReplayChannel::Requests,
@@ -495,9 +466,9 @@ mod tests {
                 model: None,
                 method: None,
             },
-        )
-        .with_user("u-xyz".into())
-        .with_role("admin".into());
+        );
+        env.user_id = Some("u-xyz".into());
+        env.role = Some("admin".into());
 
         let json = serde_json::to_string(&env).unwrap();
         assert!(json.contains("user_id"));

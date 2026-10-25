@@ -246,3 +246,41 @@ fn config_sync_state_apply_persists_integrated_fixture_sections_and_hashes_chang
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn config_sync_apply_does_not_persist_the_lifecycle_log_parser_env_override() {
+    if !mesh_llm_config::env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::config_sync_apply_does_not_persist_the_lifecycle_log_parser_env_override"
+        ),
+        "MESH_LLM_LIFECYCLE_LOG_PARSER",
+        "disabled",
+    ) {
+        return;
+    }
+    let dir = test_dir();
+    let config_path = dir.join("config.toml");
+    std::fs::write(&config_path, "version = 1\n").expect("write config");
+    let mut state = ConfigState::load(&config_path).expect("load");
+
+    // An owner fetches the snapshot, changes one setting and applies it.
+    let mut pushed = crate::protocol::convert::proto_config_to_mesh(
+        &crate::protocol::convert::mesh_config_to_proto(state.config()),
+    );
+    pushed.runtime.debug = true;
+    let revision = state.revision();
+    let result = state.apply(pushed, revision);
+    assert!(matches!(result, ApplyResult::Applied { .. }), "{result:?}");
+
+    let saved = std::fs::read_to_string(&config_path).expect("read config");
+    let saved = mesh_llm_config::parse_config_toml(&saved).expect("parse saved config");
+    assert!(saved.runtime.debug, "the owner's change must be saved");
+    assert_eq!(
+        saved.runtime.lifecycle_log_parser,
+        mesh_llm_config::LifecycleLogParserMode::Auto,
+        "the env override must not be written to config.toml"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

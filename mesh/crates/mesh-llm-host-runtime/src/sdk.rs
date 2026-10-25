@@ -352,7 +352,7 @@ async fn wait_for_embedded_status(
 }
 
 async fn fetch_json(url: &str) -> Result<serde_json::Value> {
-    let response = reqwest::Client::new()
+    let response = crate::network::local_http::local_http_client()
         .get(url)
         .send()
         .await
