@@ -166,6 +166,11 @@ Skippy server and records the explicit layout in `launch.json`; unset keeps the
 normal automatic layout. This is a diagnostic control only. Qualified
 production comparisons require observed unified KV; inspect the native
 runtime receipt rather than inferring the layout from an unset override.
+With `AGENTX_SKIPPY_DEBUG_TELEMETRY=1`, the prefill summary reports
+`skippy.scheduler.prefill_admission_wait_ms` and
+`skippy.scheduler.prefill_admission_yields`. These count waits and FIFO turns
+between native chunks; the non-debug paired run measures throughput without
+debug instrumentation.
 
 ## Contention diagnostic, smoke, and full profiles
 

@@ -37,11 +37,12 @@ between native chunks, including prefill-only requests. Direct feature-driven
 iterations obey the same recurrent phase limits as planned generation, while
 decode requests can still batch together.
 
-Deferred prefills acquire a FIFO turn for their prompt, including shared-prefix
-checkpoint boundaries. This avoids interleaving independent bulk prefills in
-the unified KV allocation. The turn does not hold the runtime or scheduler
-worker: decode continues between native chunks. Waiting respects the request's
-cancellation and cache-operation deadline; errors and unwinding release the turn.
+Deferred prefills acquire a FIFO turn for the unified KV allocation, including
+shared-prefix checkpoint boundaries. A waiting prompt takes the turn between
+bounded native chunks; without another waiter, the current prompt continues.
+The turn does not hold the runtime or scheduler worker, so decode continues
+between native chunks. Waiting respects cancellation and the cache-operation
+deadline; errors and unwinding release the turn.
 
 The service estimator learns from completed native execution, counts shared work
 once, and reduces outstanding work as tokens execute or cached prefixes restore.

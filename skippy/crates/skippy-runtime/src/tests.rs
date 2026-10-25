@@ -87,6 +87,16 @@ mod tests {
         ctx_size: u32,
         lane_count: u32,
     ) -> anyhow::Result<StageModel> {
+        open_correctness_model_with_layout(model_path, ctx_size, lane_count, None, 0)
+    }
+
+    fn open_correctness_model_with_layout(
+        model_path: &PathBuf,
+        ctx_size: u32,
+        lane_count: u32,
+        kv_unified: Option<bool>,
+        n_gpu_layers: i32,
+    ) -> anyhow::Result<StageModel> {
         let layer_end = infer_layer_end(model_path)?;
         let config = RuntimeConfig {
             stage_index: 0,
@@ -98,7 +108,7 @@ mod tests {
             n_ubatch: None,
             n_threads: None,
             n_threads_batch: None,
-            n_gpu_layers: 0,
+            n_gpu_layers,
             mmap: None,
             mlock: false,
             repack: false,
@@ -122,7 +132,7 @@ mod tests {
             mtp_source: MtpSource::Disabled,
             resident_tensor_names: Vec::new(),
             kv_offload: None,
-            kv_unified: None,
+            kv_unified,
             swa_full: None,
             op_offload: None,
             no_host_buffer: false,
@@ -135,6 +145,63 @@ mod tests {
             checkpoint_imatrix_sha256: None,
         };
         StageModel::open(model_path, &config)
+    }
+
+    #[test]
+    fn unified_kv_interleaved_prefills_match_serial_execution() -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        crate::test_support::require_native_runtime();
+        let n_gpu_layers = env::var("SKIPPY_CORRECTNESS_GPU_LAYERS")
+            .ok()
+            .map(|value| value.parse())
+            .transpose()?
+            .unwrap_or(0);
+        let model =
+            open_correctness_model_with_layout(&model_path, 512, 4, Some(true), n_gpu_layers)?;
+        let prompts = [
+            model.tokenize(&"The shared cache must preserve the first sequence. ".repeat(12), true)?,
+            model.tokenize(&"A second sequence enters between prefill chunks. ".repeat(10), true)?,
+        ];
+        assert!(prompts.iter().all(|prompt| prompt.len() > 32));
+        let mut interleaved = [model.create_session()?, model.create_session()?];
+        let mut serial = [model.create_session()?, model.create_session()?];
+        let mut interleaved_predictions = [0; 2];
+        let mut serial_predictions = [0; 2];
+        let chunk_tokens = 16;
+
+        for offset in (0..prompts.iter().map(Vec::len).max().unwrap()).step_by(chunk_tokens) {
+            for index in 0..2 {
+                let Some(chunk) = prompts[index].get(offset..prompts[index].len().min(offset + chunk_tokens)) else {
+                    continue;
+                };
+                if offset + chunk_tokens >= prompts[index].len() {
+                    interleaved_predictions[index] = interleaved[index]
+                        .prefill_chunk_frame_sampled(chunk, None, None, 0)?.0;
+                } else {
+                    interleaved[index].prefill_chunk(chunk)?;
+                }
+            }
+        }
+        for index in 0..2 {
+            let chunks = prompts[index].chunks(chunk_tokens);
+            for (offset, chunk) in chunks.enumerate() {
+                if (offset + 1) * chunk_tokens >= prompts[index].len() {
+                    serial_predictions[index] = serial[index]
+                        .prefill_chunk_frame_sampled(chunk, None, None, 0)?.0;
+                } else {
+                    serial[index].prefill_chunk(chunk)?;
+                }
+            }
+            assert_eq!(interleaved_predictions[index], serial_predictions[index]);
+            assert_eq!(
+                interleaved[index].decode_step(interleaved_predictions[index])?,
+                serial[index].decode_step(serial_predictions[index])?
+            );
+        }
+        Ok(())
     }
 
     #[test]

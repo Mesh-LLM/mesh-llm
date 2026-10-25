@@ -1,4 +1,5 @@
 use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::iteration_scheduler::PrefillTurn;
 use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_runtime::{IterationBatchPhase, SamplingConfig};
 use std::time::Instant;
@@ -42,23 +43,29 @@ pub(in crate::frontend) struct SuffixPrefillOutcome {
     pub(in crate::frontend) max_batch_size: usize,
     pub(in crate::frontend) runtime_lock_wait_ms: f64,
     pub(in crate::frontend) runtime_lock_hold_ms: f64,
+    pub(in crate::frontend) admission_wait_ms: f64,
+    pub(in crate::frontend) admission_yields: usize,
+}
+
+pub(super) struct SuffixPrefillRequest<'a> {
+    pub(super) session_id: &'a str,
+    pub(super) suffix: &'a [i32],
+    pub(super) sampling: Option<&'a SamplingConfig>,
+    pub(super) sample_last: bool,
+    pub(super) deadline: Instant,
+    pub(super) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
 }
 
 impl StageOpenAiBackend {
     /// Submit deferred suffix chunks as first-class native iterations.
-    /// Concurrent requests can therefore share a mixed batch instead of each
-    /// cache-aware restore closure monopolizing the runtime through its whole
-    /// suffix. Sampling is deliberately restricted to the final chunk.
+    /// Waiting prompts rotate through the shared allocator between chunks;
+    /// sampling is restricted to the final chunk.
     pub(super) fn prefill_suffix(
         &self,
-        session_id: &str,
-        suffix: &[i32],
-        sampling: Option<&SamplingConfig>,
-        sample_last: bool,
-        deadline: Instant,
-        cancellation: Option<&skippy_inference_api::CancellationToken>,
+        request: SuffixPrefillRequest<'_>,
+        prefill_turn: &mut PrefillTurn<'_>,
     ) -> InferenceResult<SuffixPrefillOutcome> {
-        if suffix.is_empty() {
+        if request.suffix.is_empty() {
             return Err(InferenceError::backend(
                 "deferred suffix prefill requires at least one token",
             ));
@@ -69,25 +76,34 @@ impl StageOpenAiBackend {
             self.config.n_batch,
             self.config.n_ubatch,
         );
-        let sample_flags = suffix_chunk_sample_flags(suffix.len(), chunk_tokens, sample_last);
+        let sample_flags =
+            suffix_chunk_sample_flags(request.suffix.len(), chunk_tokens, request.sample_last);
         let channel = self.iteration_scheduler.direct_iteration_channel();
         let mut predicted = None;
         let mut chunk_count = 0usize;
         let mut max_batch_size = 0usize;
         let mut runtime_lock_wait_ms = 0.0;
         let mut runtime_lock_hold_ms = 0.0;
-        for (chunk, should_sample) in suffix.chunks(chunk_tokens).zip(sample_flags) {
-            ensure_suffix_prefill_active(deadline, cancellation)?;
+        let mut admission_wait_ms = 0.0;
+        let mut admission_yields = 0usize;
+        for (chunk, should_sample) in request.suffix.chunks(chunk_tokens).zip(sample_flags) {
+            ensure_suffix_prefill_active(request.deadline, request.cancellation)?;
+            if let Some(waited) =
+                prefill_turn.yield_to_waiters(request.deadline, request.cancellation)?
+            {
+                admission_wait_ms += waited.as_secs_f64() * 1000.0;
+                admission_yields = admission_yields.saturating_add(1);
+            }
             let outcome = self.iteration_scheduler.execute_iteration_on(
                 &channel,
-                session_id,
+                request.session_id,
                 chunk,
                 &[],
-                sampling,
+                request.sampling,
                 should_sample,
                 IterationBatchPhase::Prefill,
-                Some(deadline),
-                cancellation,
+                Some(request.deadline),
+                request.cancellation,
             )?;
             chunk_count = chunk_count.saturating_add(1);
             max_batch_size = max_batch_size.max(outcome.batch_size);
@@ -103,6 +119,8 @@ impl StageOpenAiBackend {
             max_batch_size,
             runtime_lock_wait_ms,
             runtime_lock_hold_ms,
+            admission_wait_ms,
+            admission_yields,
         })
     }
 }

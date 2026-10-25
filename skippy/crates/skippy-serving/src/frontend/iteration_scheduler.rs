@@ -5,6 +5,7 @@ mod direct_reply;
 mod generation_events;
 mod native_execution;
 mod prefill_admission;
+pub(in crate::frontend) use prefill_admission::PrefillTurn;
 
 use self::cache_runtime::{
     CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
@@ -411,7 +412,7 @@ impl IterationScheduler {
         &self,
         deadline: Instant,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-    ) -> InferenceResult<prefill_admission::PrefillTurn<'_>> {
+    ) -> InferenceResult<PrefillTurn<'_>> {
         self.shared
             .prefill_admission
             .acquire(deadline, cancellation)

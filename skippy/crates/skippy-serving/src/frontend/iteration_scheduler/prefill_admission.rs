@@ -1,8 +1,8 @@
-//! Avoid interleaving independent bulk prefills in the unified KV allocator.
-//! Decode can still run between each prefill's bounded native chunks.
+//! Admit one prompt chunk at a time to the unified KV allocator.
+//! Waiting prompts take turns at native iteration boundaries.
 use skippy_inference_api::{CancellationToken, InferenceError, InferenceResult};
 use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
@@ -27,6 +27,17 @@ impl PrefillAdmission {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         waiting.push_back(turn.ticket.clone());
         self.changed.notify_all();
+        self.wait_for_ticket(&turn.ticket, waiting, deadline, cancellation)?;
+        Ok(turn)
+    }
+
+    fn wait_for_ticket(
+        &self,
+        ticket: &Arc<()>,
+        mut waiting: MutexGuard<'_, VecDeque<Arc<()>>>,
+        deadline: Instant,
+        cancellation: Option<&CancellationToken>,
+    ) -> InferenceResult<()> {
         loop {
             let error = if cancellation.is_some_and(CancellationToken::is_cancelled) {
                 Some(InferenceError::cancelled(
@@ -45,9 +56,9 @@ impl PrefillAdmission {
             }
             if waiting
                 .front()
-                .is_some_and(|first| Arc::ptr_eq(first, &turn.ticket))
+                .is_some_and(|first| Arc::ptr_eq(first, ticket))
             {
-                return Ok(turn);
+                return Ok(());
             }
             let wait = deadline
                 .saturating_duration_since(Instant::now())
@@ -63,6 +74,38 @@ impl PrefillAdmission {
 pub(in crate::frontend) struct PrefillTurn<'a> {
     admission: &'a PrefillAdmission,
     ticket: Arc<()>,
+}
+
+impl PrefillTurn<'_> {
+    /// Rotate only when another prompt is waiting. The scheduler owns every
+    /// native iteration, so allocator mutations remain serial while prompts
+    /// share the same KV stream.
+    pub(in crate::frontend) fn yield_to_waiters(
+        &mut self,
+        deadline: Instant,
+        cancellation: Option<&CancellationToken>,
+    ) -> InferenceResult<Option<Duration>> {
+        let mut waiting = self
+            .admission
+            .waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if waiting.len() <= 1 {
+            return Ok(None);
+        }
+        assert!(
+            waiting
+                .front()
+                .is_some_and(|first| Arc::ptr_eq(first, &self.ticket))
+        );
+        waiting.pop_front();
+        waiting.push_back(Arc::clone(&self.ticket));
+        self.admission.changed.notify_all();
+        let started = Instant::now();
+        self.admission
+            .wait_for_ticket(&self.ticket, waiting, deadline, cancellation)?;
+        Ok(Some(started.elapsed()))
+    }
 }
 
 impl Drop for PrefillTurn<'_> {
@@ -162,5 +205,61 @@ mod tests {
         });
         assert!(admission.waiting.lock().unwrap().is_empty());
         assert!(admission.acquire(deadline(), None).is_ok());
+    }
+
+    #[test]
+    fn waiting_prompt_runs_between_chunks_of_the_first_prompt() {
+        let admission = PrefillAdmission::default();
+        let mut first = admission.acquire(deadline(), None).unwrap();
+        let (entered, events) = mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _second = admission.acquire(deadline(), None).unwrap();
+                entered.send(()).unwrap();
+            });
+            wait_for_queue(&admission, 2);
+            assert!(first.yield_to_waiters(deadline(), None).unwrap().is_some());
+            events.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(
+                admission
+                    .waiting
+                    .lock()
+                    .unwrap()
+                    .front()
+                    .is_some_and(|front| Arc::ptr_eq(front, &first.ticket))
+            );
+        });
+        assert!(first.yield_to_waiters(deadline(), None).unwrap().is_none());
+    }
+
+    #[test]
+    fn cancellation_while_yielded_removes_the_rotated_ticket() {
+        let admission = PrefillAdmission::default();
+        let mut first = admission.acquire(deadline(), None).unwrap();
+        let cancellation = CancellationToken::new();
+        let (entered, events) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let second_admission = &admission;
+            scope.spawn(move || {
+                let _second = second_admission.acquire(deadline(), None).unwrap();
+                entered.send(()).unwrap();
+                released.recv_timeout(Duration::from_secs(5)).unwrap();
+            });
+            wait_for_queue(&admission, 2);
+            let cancellation = &cancellation;
+            scope.spawn(move || {
+                events.recv_timeout(Duration::from_secs(5)).unwrap();
+                cancellation.cancel();
+                release.send(()).unwrap();
+            });
+            assert!(
+                first
+                    .yield_to_waiters(deadline(), Some(cancellation))
+                    .is_err()
+            );
+            drop(first);
+        });
+        assert!(admission.waiting.lock().unwrap().is_empty());
     }
 }

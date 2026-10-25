@@ -38,6 +38,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::receipt_lifecycle::begin_generation_receipt;
+use super::resident_prefill::SuffixPrefillRequest;
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
 use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
 
@@ -842,12 +843,16 @@ impl StageOpenAiBackend {
         } = outcome;
         let mut prefill_chunk_count = 1usize;
         let mut scheduler_batch_size_max = 1usize;
+        let mut prefill_admission_wait_ms = 0.0;
+        let mut prefill_admission_yields = 0usize;
         let deferred_suffix_prefill =
             deferred_suffix_prefill_enabled(self.kv.as_ref().map(|kv| kv.payload), max_tokens);
         if deferred_suffix_prefill && capacity.admitted {
-            let _prefill_turn = self
+            let admission_started = Instant::now();
+            let mut prefill_turn = self
                 .iteration_scheduler
                 .acquire_prefill_turn(cache_operation_deadline, request.cancellation)?;
+            prefill_admission_wait_ms += admission_started.elapsed().as_secs_f64() * 1000.0;
             let exact_state = self
                 .kv
                 .as_ref()
@@ -861,12 +866,15 @@ impl StageOpenAiBackend {
             prefill_chunk_count = 0;
             for boundary in checkpoints {
                 let checkpoint_prefill = self.prefill_suffix(
-                    session_id,
-                    &request.prompt_token_ids[suffix_start..boundary],
-                    None,
-                    false,
-                    cache_operation_deadline,
-                    request.cancellation,
+                    SuffixPrefillRequest {
+                        session_id,
+                        suffix: &request.prompt_token_ids[suffix_start..boundary],
+                        sampling: None,
+                        sample_last: false,
+                        deadline: cache_operation_deadline,
+                        cancellation: request.cancellation,
+                    },
+                    &mut prefill_turn,
                 )?;
                 prefill_chunk_count =
                     prefill_chunk_count.saturating_add(checkpoint_prefill.chunk_count);
@@ -874,6 +882,9 @@ impl StageOpenAiBackend {
                     scheduler_batch_size_max.max(checkpoint_prefill.max_batch_size);
                 runtime_lock_wait_ms += checkpoint_prefill.runtime_lock_wait_ms;
                 runtime_lock_hold_ms += checkpoint_prefill.runtime_lock_hold_ms;
+                prefill_admission_wait_ms += checkpoint_prefill.admission_wait_ms;
+                prefill_admission_yields =
+                    prefill_admission_yields.saturating_add(checkpoint_prefill.admission_yields);
                 runtime_lock_acquires =
                     runtime_lock_acquires.saturating_add(checkpoint_prefill.chunk_count);
 
@@ -891,12 +902,15 @@ impl StageOpenAiBackend {
             }
 
             let suffix_outcome = self.prefill_suffix(
-                session_id,
-                &request.prompt_token_ids[suffix_start..],
-                request.sampling.enabled.then_some(request.sampling),
-                max_tokens > 0,
-                cache_operation_deadline,
-                request.cancellation,
+                SuffixPrefillRequest {
+                    session_id,
+                    suffix: &request.prompt_token_ids[suffix_start..],
+                    sampling: request.sampling.enabled.then_some(request.sampling),
+                    sample_last: max_tokens > 0,
+                    deadline: cache_operation_deadline,
+                    cancellation: request.cancellation,
+                },
+                &mut prefill_turn,
             )?;
             prompt_prefill_sample = suffix_outcome.predicted;
             if max_tokens > 0 && prompt_prefill_sample.is_none() {
@@ -909,6 +923,9 @@ impl StageOpenAiBackend {
             scheduler_batch_size_max = scheduler_batch_size_max.max(suffix_outcome.max_batch_size);
             runtime_lock_wait_ms += suffix_outcome.runtime_lock_wait_ms;
             runtime_lock_hold_ms += suffix_outcome.runtime_lock_hold_ms;
+            prefill_admission_wait_ms += suffix_outcome.admission_wait_ms;
+            prefill_admission_yields =
+                prefill_admission_yields.saturating_add(suffix_outcome.admission_yields);
             runtime_lock_acquires =
                 runtime_lock_acquires.saturating_add(suffix_outcome.chunk_count);
 
@@ -1020,6 +1037,14 @@ impl StageOpenAiBackend {
             attrs.insert(
                 "llama_stage.runtime_lock_wait_ms".to_string(),
                 json!(runtime_lock_wait_ms),
+            );
+            attrs.insert(
+                attr_key::PREFILL_ADMISSION_WAIT_MS.to_string(),
+                json!(prefill_admission_wait_ms),
+            );
+            attrs.insert(
+                attr_key::PREFILL_ADMISSION_YIELDS.to_string(),
+                json!(prefill_admission_yields),
             );
             attrs.insert(
                 "llama_stage.runtime_lock_hold_ms".to_string(),
