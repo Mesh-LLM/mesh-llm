@@ -1,21 +1,21 @@
-From d9740c5931ee51aca67d8a7734e9e00bb8d8dea6 Mon Sep 17 00:00:00 2001
+From cbad75704632cb433fc46fc41cc42f76376d455b Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Sat, 24 Oct 2026 21:47:12 +1100
 Subject: [PATCH] perf: test precise tensor probabilities for Q8 Turbo4 prefill
 
 ---
- ggml/src/ggml-metal/ggml-metal-device.cpp   | 13 ++++++-
- ggml/src/ggml-metal/ggml-metal-ops.cpp      |  6 ++--
- ggml/src/ggml-metal/kernels/fa_tensor.metal | 40 ++++++++++++++++++---
- tests/test-backend-ops-skippy-turbo4.h      | 22 ++++++++++++
+ ggml/src/ggml-metal/ggml-metal-device.cpp   | 19 +++++++-
+ ggml/src/ggml-metal/ggml-metal-ops.cpp      | 15 ++++--
+ ggml/src/ggml-metal/kernels/fa_tensor.metal | 53 +++++++++++++++++----
+ tests/test-backend-ops-skippy-turbo4.h      | 22 +++++++++
  tests/test-backend-ops.cpp                  |  1 +
- 5 files changed, 74 insertions(+), 8 deletions(-)
+ 5 files changed, 95 insertions(+), 15 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
-index e2025d377..7b4a653f6 100644
+index e2025d377..ec9747dbc 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
-@@ -1864,10 +1864,16 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_t
+@@ -1864,10 +1864,20 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_t
      const int32_t dk = (int32_t) op->src[1]->ne[0];
      const int32_t dv = (int32_t) op->src[2]->ne[0];
  
@@ -24,16 +24,21 @@ index e2025d377..7b4a653f6 100644
 +    const bool eager_rescale = turbo4_q8 && getenv("GGML_METAL_TURBO4_Q8_TENSOR_EAGER_RESCALE") != nullptr;
 +    const bool float_sum = turbo4_q8 && getenv("GGML_METAL_TURBO4_Q8_TENSOR_FLOAT_SUM") != nullptr;
 +    const bool split_p = turbo4_q8 && getenv("GGML_METAL_TURBO4_Q8_TENSOR_SPLIT_P") != nullptr;
++    const bool probe_shape = turbo4_q8 && dk == 128 && dv == 128;
++    const bool f32_p = probe_shape && getenv("GGML_METAL_TURBO4_Q8_TENSOR_F32_P") != nullptr;
++    const bool nsg4 = probe_shape && getenv("GGML_METAL_TURBO4_Q8_TENSOR_NSG4") != nullptr;
++    GGML_ASSERT(!(f32_p && split_p));
 +
      const char * type = op->src[1]->type == GGML_TYPE_BF16 ? "bf16" : "f16";
  
-     snprintf(base, 256, "kernel_flash_attn_ext_tensor_%s_dk%d_dv%d", type, dk, dv);
+-    snprintf(base, 256, "kernel_flash_attn_ext_tensor_%s_dk%d_dv%d", type, dk, dv);
 -    snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d", base, has_mask, has_sinks, has_bias, has_scap);
++    snprintf(base, 256, "kernel_flash_attn_ext_tensor_%s_dk%d_dv%d%s%s", type, dk, dv, f32_p ? "_p32" : "", nsg4 ? "_nsg4" : "");
 +    snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_post_scale=%d_eager_rescale=%d_float_sum=%d_split_p=%d", base, has_mask, has_sinks, has_bias, has_scap, post_scale, eager_rescale, float_sum, split_p);
  
      ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
      if (!res.pipeline) {
-@@ -1878,6 +1884,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_t
+@@ -1878,6 +1888,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_t
          ggml_metal_cv_set_bool(cv, has_bias,  FC_FLASH_ATTN_EXT_TENSOR + 2);
          ggml_metal_cv_set_bool(cv, has_scap,  FC_FLASH_ATTN_EXT_TENSOR + 3);
  
@@ -46,7 +51,7 @@ index e2025d377..7b4a653f6 100644
  
          ggml_metal_cv_free(cv);
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 7abf156a0..332cb6add 100644
+index 7abf156a0..183cc3112 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -3153,7 +3153,7 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
@@ -69,11 +74,36 @@ index 7abf156a0..332cb6add 100644
          return false;
      }
  
+@@ -3674,9 +3676,12 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+ 
+     if (!use_sparse && ggml_metal_op_flash_attn_ext_use_tensor(op, props_dev->has_tensor)) {
+         // tensor API kernel
++        const bool probe_shape = op->src[1]->type == GGML_TYPE_Q8_0 && op->src[2]->type == GGML_TYPE_TURBO4_0 && ne00 == 128 && ne20 == 128;
++        const bool f32_p = probe_shape && getenv("GGML_METAL_TURBO4_Q8_TENSOR_F32_P") != nullptr;
++        const bool nsg4 = probe_shape && getenv("GGML_METAL_TURBO4_Q8_TENSOR_NSG4") != nullptr;
+         const int nqptg = ne00 >= 512 ? OP_FLASH_ATTN_EXT_TENSOR_NQPSG_LARGE : OP_FLASH_ATTN_EXT_TENSOR_NQPSG; // queries per threadgroup
+         const int ncpsg = OP_FLASH_ATTN_EXT_TENSOR_NCPSG; // cache values per threadgroup
+-        const int nsg   = OP_FLASH_ATTN_EXT_TENSOR_NSG;
++        const int nsg   = nsg4 ? 4 : OP_FLASH_ATTN_EXT_TENSOR_NSG;
+ 
+         if (has_mask) {
+             assert(ggml_metal_op_flash_attn_ext_extra_blk(op) != 0);
+@@ -3745,8 +3750,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
+             /*.logit_softcap =*/ logit_softcap,
+         };
+ 
+-        // shared memory layout: queries (16-bit), scores (float), probabilities (16-bit), row scale (float), rescale flag (int)
+-        const size_t smem = GGML_PAD(nqptg*ne00*sizeof(ggml_fp16_t) + nqptg*ncpsg*(sizeof(float) + sizeof(ggml_fp16_t)) + nqptg*sizeof(float) + sizeof(int32_t), 16);
++        // F32 probabilities reuse scores; the default path keeps its separate 16-bit probability tile.
++        const size_t smem = GGML_PAD(nqptg*ne00*sizeof(ggml_fp16_t) + nqptg*ncpsg*(sizeof(float) + (f32_p ? 0 : sizeof(ggml_fp16_t))) + nqptg*sizeof(float) + sizeof(int32_t), 16);
+ 
+         auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_tensor(lib, op, has_mask, has_sinks, has_bias, has_scap);
+ 
 diff --git a/ggml/src/ggml-metal/kernels/fa_tensor.metal b/ggml/src/ggml-metal/kernels/fa_tensor.metal
-index 4a9ed30e3..68773b2ea 100644
+index 4a9ed30e3..7bd824436 100644
 --- a/ggml/src/ggml-metal/kernels/fa_tensor.metal
 +++ b/ggml/src/ggml-metal/kernels/fa_tensor.metal
-@@ -7,6 +7,12 @@ constant bool FC_flash_attn_ext_tensor_has_sinks [[function_constant(FC_FLASH_AT
+@@ -7,15 +7,22 @@ constant bool FC_flash_attn_ext_tensor_has_sinks [[function_constant(FC_FLASH_AT
  constant bool FC_flash_attn_ext_tensor_has_bias  [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 2)]];
  constant bool FC_flash_attn_ext_tensor_has_scap  [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 3)]];
  
@@ -85,8 +115,30 @@ index 4a9ed30e3..68773b2ea 100644
 +
  // ref: https://arxiv.org/pdf/2307.08691.pdf
  template<
-     typename T,                                 // Q, K, V and P types
-@@ -61,7 +67,7 @@ kernel void kernel_flash_attn_ext_tensor(
+-    typename T,                                 // Q, K, V and P types
++    typename T,                                 // Q, K and V types
+     typename T4,
+     short DK,                                   // K head size
+     short DV,                                   // V head size
+     short Q   = OP_FLASH_ATTN_EXT_TENSOR_NQPSG, // queries per threadgroup
+     short C   = OP_FLASH_ATTN_EXT_TENSOR_NCPSG, // cache items per threadgroup
+-    short NSG = OP_FLASH_ATTN_EXT_TENSOR_NSG>   // number of simd groups
++    short NSG = OP_FLASH_ATTN_EXT_TENSOR_NSG,   // number of simd groups
++    typename P = T>                             // probability type
+ kernel void kernel_flash_attn_ext_tensor(
+         constant ggml_metal_kargs_flash_attn_ext & args,
+         device const char * q,
+@@ -46,7 +53,8 @@ kernel void kernel_flash_attn_ext_tensor(
+ 
+     threadgroup T     * sq = (threadgroup T     *) shmem;       // [Q, DK] queries
+     threadgroup float * ss = (threadgroup float *) (sq + Q*DK); // [Q, C]  scores
+-    threadgroup T     * sp = (threadgroup T     *) (ss + Q*C);  // [Q, C]  probabilities
++    // F32 probabilities overwrite each lane's own scores after their last read.
++    threadgroup P     * sp = is_same<P, float>::value ? (threadgroup P *) ss : (threadgroup P *) (ss + Q*C);
+     threadgroup float * sr = (threadgroup float *) (sp + Q*C);  // [Q]     per-row scale of O
+     threadgroup int   * sf = (threadgroup int   *) (sr + Q);    // [1]     last iteration (ic0 + 1) that rescaled O
+ 
+@@ -61,7 +69,7 @@ kernel void kernel_flash_attn_ext_tensor(
      }
  
      // with softcap the scale is small (scale/softcap), so it is applied to the scores to keep the precision of Q
@@ -95,7 +147,7 @@ index 4a9ed30e3..68773b2ea 100644
  
      // load the queries, with the scale folded in
      for (int i = tiitg; i < Q*DK/4; i += NT) {
-@@ -163,6 +169,8 @@ kernel void kernel_flash_attn_ext_tensor(
+@@ -163,6 +171,8 @@ kernel void kernel_flash_attn_ext_tensor(
  
          threadgroup_barrier(mem_flags::mem_threadgroup);
  
@@ -104,7 +156,7 @@ index 4a9ed30e3..68773b2ea 100644
          // online softmax
          FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
              const short j = jj*NSG + sgitg;
-@@ -171,6 +179,9 @@ kernel void kernel_flash_attn_ext_tensor(
+@@ -171,6 +181,9 @@ kernel void kernel_flash_attn_ext_tensor(
  
              FOR_UNROLL (short ii = 0; ii < NC; ++ii) {
                  s[ii] = ss[j*C + ii*NW + tiisg];
@@ -114,7 +166,7 @@ index 4a9ed30e3..68773b2ea 100644
              }
  
              if (FC_flash_attn_ext_tensor_has_scap) {
-@@ -196,7 +207,7 @@ kernel void kernel_flash_attn_ext_tensor(
+@@ -196,7 +209,7 @@ kernel void kernel_flash_attn_ext_tensor(
              // lazy rescaling: move the running max only when it grows by more than 8 (e^8 fits in half)
              float ms = 1.0f;
  
@@ -123,14 +175,14 @@ index 4a9ed30e3..68773b2ea 100644
                  ms    = exp(M[jj] - m);
                  M[jj] = m;
  
-@@ -208,12 +219,16 @@ kernel void kernel_flash_attn_ext_tensor(
+@@ -208,12 +221,16 @@ kernel void kernel_flash_attn_ext_tensor(
              float sum = 0.0f;
  
              FOR_UNROLL (short ii = 0; ii < NC; ++ii) {
 -                // the sum uses the same rounded values as P*V
 -                const T p = (T) exp(s[ii] - M[jj]);
 +                const float pf = exp(s[ii] - M[jj]);
-+                const T p = (T) pf;
++                const P p = (P) pf;
  
                  sp[j*C + ii*NW + tiisg] = p;
 +                if (FC_flash_attn_ext_tensor_split_p) {
@@ -143,28 +195,40 @@ index 4a9ed30e3..68773b2ea 100644
              }
  
              S[jj] = S[jj]*ms + simd_sum(sum);
-@@ -238,6 +253,21 @@ kernel void kernel_flash_attn_ext_tensor(
+@@ -238,6 +255,23 @@ kernel void kernel_flash_attn_ext_tensor(
              auto tv = tensor((device T *) (v + (uint64_t) ic*args.nb21), dextents<int32_t, 2>(DV, C), array<int, 2>({1, sv}));
  
              mm_pv.run(tp, tv, co);
 +
-+            if (FC_flash_attn_ext_tensor_split_p) {
-+                // Scores are dead here; reuse their storage after every row has read them.
-+                threadgroup T * spl = (threadgroup T *) ss;
-+                FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
-+                    const short j = jj*NSG + sgitg;
-+                    FOR_UNROLL (short ii = 0; ii < NC; ++ii) {
-+                        spl[j*C + ii*NW + tiisg] = residuals[jj][ii];
++            if constexpr (!is_same<P, float>::value) {
++                if (FC_flash_attn_ext_tensor_split_p) {
++                    // Scores are dead here; reuse their storage after every row has read them.
++                    threadgroup T * spl = (threadgroup T *) ss;
++                    FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
++                        const short j = jj*NSG + sgitg;
++                        FOR_UNROLL (short ii = 0; ii < NC; ++ii) {
++                            spl[j*C + ii*NW + tiisg] = residuals[jj][ii];
++                        }
 +                    }
-+                }
-+                threadgroup_barrier(mem_flags::mem_threadgroup);
++                    threadgroup_barrier(mem_flags::mem_threadgroup);
 +
-+                auto tpl = tensor(spl, dextents<int32_t, 2>(C, Q));
-+                mm_pv.run(tpl, tv, co);
++                    auto tpl = tensor(spl, dextents<int32_t, 2>(C, Q));
++                    mm_pv.run(tpl, tv, co);
++                }
 +            }
          }
  
          threadgroup_barrier(mem_flags::mem_threadgroup);
+@@ -283,6 +317,9 @@ typedef decltype(kernel_flash_attn_ext_tensor<half, half4, 64, 64>) flash_attn_e
+ 
+ template [[host_name("kernel_flash_attn_ext_tensor_f16_dk64_dv64"  )]]  kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<half, half4, 64,  64>;
+ template [[host_name("kernel_flash_attn_ext_tensor_f16_dk128_dv128")]]  kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<half, half4, 128, 128>;
++template [[host_name("kernel_flash_attn_ext_tensor_f16_dk128_dv128_nsg4")]] kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<half, half4, 128, 128, OP_FLASH_ATTN_EXT_TENSOR_NQPSG, OP_FLASH_ATTN_EXT_TENSOR_NCPSG, 4>;
++template [[host_name("kernel_flash_attn_ext_tensor_f16_dk128_dv128_p32")]] kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<half, half4, 128, 128, OP_FLASH_ATTN_EXT_TENSOR_NQPSG, OP_FLASH_ATTN_EXT_TENSOR_NCPSG, OP_FLASH_ATTN_EXT_TENSOR_NSG, float>;
++template [[host_name("kernel_flash_attn_ext_tensor_f16_dk128_dv128_p32_nsg4")]] kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<half, half4, 128, 128, OP_FLASH_ATTN_EXT_TENSOR_NQPSG, OP_FLASH_ATTN_EXT_TENSOR_NCPSG, 4, float>;
+ template [[host_name("kernel_flash_attn_ext_tensor_f16_dk192_dv128")]]  kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<half, half4, 192, 128>;
+ template [[host_name("kernel_flash_attn_ext_tensor_f16_dk256_dv256")]]  kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<half, half4, 256, 256>;
+ template [[host_name("kernel_flash_attn_ext_tensor_f16_dk512_dv512")]]  kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<half, half4, 512, 512, OP_FLASH_ATTN_EXT_TENSOR_NQPSG_LARGE>;
 diff --git a/tests/test-backend-ops-skippy-turbo4.h b/tests/test-backend-ops-skippy-turbo4.h
 index 744741101..3b03a4e3a 100644
 --- a/tests/test-backend-ops-skippy-turbo4.h
