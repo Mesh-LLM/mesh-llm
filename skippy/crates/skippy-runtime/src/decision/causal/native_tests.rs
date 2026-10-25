@@ -17,7 +17,17 @@ fn open_model() -> Result<StageModel> {
 
 /// Open a CPU causal model with explicit cache precision and batching parameters.
 fn open_model_with_cache(cache_type: u32) -> Result<StageModel> {
+    open_model_on_device(cache_type, "CPU")
+}
+
+/// Select a real backend explicitly so GPU readback tests cannot silently use CPU.
+fn open_model_on_device(cache_type: u32, device: &str) -> Result<StageModel> {
     crate::test_support::require_native_runtime();
+    let devices = crate::backend_devices()?;
+    ensure!(
+        devices.iter().any(|found| found.name == device),
+        "required decision test device {device:?} is unavailable; available devices: {devices:?}"
+    );
     let path = std::env::var_os("SKIPPY_DECISION_MODEL")
         .ok_or_else(|| anyhow::anyhow!("SKIPPY_DECISION_MODEL is required"))?;
     let microbatch = std::env::var("SKIPPY_DECISION_TEST_MICROBATCH")
@@ -45,10 +55,46 @@ fn open_model_with_cache(cache_type: u32) -> Result<StageModel> {
             n_threads: Some(4),
             n_threads_batch: Some(4),
             kv_unified: Some(true),
-            selected_backend_device: Some("CPU".into()),
+            selected_backend_device: Some(device.into()),
+            n_gpu_layers: if device == "CPU" { 0 } else { 999 },
+            kv_offload: Some(device != "CPU"),
+            op_offload: Some(device != "CPU"),
             ..RuntimeConfig::default()
         },
     )
+}
+
+/// Alternating prompts must not inherit the previous decode's host-logit buffer.
+#[test]
+#[ignore = "requires SKIPPY_DECISION_MODEL and optionally SKIPPY_DECISION_TEST_DEVICE"]
+fn causal_readout_reused_host_rows_match_synchronized_reference() -> Result<()> {
+    let device = std::env::var("SKIPPY_DECISION_TEST_DEVICE").unwrap_or_else(|_| "CPU".into());
+    let model = open_model_on_device(crate::config::GGML_TYPE_F32, &device)?;
+    let prompts = [
+        model.tokenize("The capital of France is", true)?,
+        model.tokenize("The capital of Japan is", true)?,
+    ];
+    let selected = model.tokenize(" Paris", false)?;
+    ensure!(!selected.is_empty());
+    let candidates = vec![vec![selected[0]]];
+    let expected = prompts
+        .iter()
+        .map(|prompt| reference_score(&model, prompt, &candidates[0]))
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        (expected[0] - expected[1]).abs() > 1e-3,
+        "fixture must distinguish stale prompt scores on this model"
+    );
+    for iteration in 0..64 {
+        let index = iteration % prompts.len();
+        let actual = read(&model, &prompts[index], &candidates)?[0];
+        ensure!(
+            (f64::from(actual) - expected[index]).abs() < 5e-4,
+            "{device} iteration {iteration}: expected {}, got {actual}",
+            expected[index]
+        );
+    }
+    Ok(())
 }
 
 /// Construct independent single-token and multi-token questions over shared state.

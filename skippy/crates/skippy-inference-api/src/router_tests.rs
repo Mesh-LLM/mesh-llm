@@ -489,6 +489,7 @@ impl InferenceBackend for FakeBackend {
                 usage: crate::SystemOneUsage {
                     input_tokens: 12,
                     output_tokens: 0,
+                    cached_tokens: 0,
                 },
             });
         }
@@ -533,6 +534,7 @@ impl InferenceBackend for FakeBackend {
                 usage: crate::SystemOneUsage {
                     input_tokens: 12,
                     output_tokens: 0,
+                    cached_tokens: 0,
                 },
             });
         }
@@ -549,6 +551,7 @@ impl InferenceBackend for FakeBackend {
             usage: crate::SystemOneUsage {
                 input_tokens: 12,
                 output_tokens: 0,
+                cached_tokens: 0,
             },
         })
     }

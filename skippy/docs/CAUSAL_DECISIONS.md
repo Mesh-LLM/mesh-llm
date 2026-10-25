@@ -34,6 +34,14 @@ its conditional token log probabilities. There is no length normalization;
 longer labels can therefore be disadvantaged. Labels that change the prompt
 token boundary or tokenize identically are rejected.
 
+Prefer **single-token answer labels** such as `A` and `B`, with the full meaning
+in each option's description, especially when natural-language labels have
+different lengths. Check `candidate_token_counts` for the loaded tokenizer:
+even a short label is not guaranteed to be one token. Summed log probabilities
+include a non-positive term for every token, so a longer label can rank lower
+because of its length. Do not interpret a mixed-length ranking as a length-fair
+comparison of the described answers. No mean-per-token correction is applied.
+
 The causal prompt has a fixed shared-state instruction, JSON state, a JSON
 question with descriptions and ordered options, and an answer-label suffix.
 It does not reuse a conversational history or render a model-specific chat
@@ -69,12 +77,20 @@ once and reused. Multi-token branches also reuse their question prefix. Misses
 recompute; the final prompt row always runs because KV state does not include
 cached logits. An incomplete split restore resets the whole sequence before
 recomputation. Abandoned or failed requests release local sessions and discard
-incomplete downstream connections.
+incomplete downstream connections. A non-cancellation preparation failure is
+logged and scoring proceeds with fresh sessions, bypassing prefix lookup and
+recording for that request. Other requests retain their cache settings.
+Cancellation still drains admitted preparation and terminates the request.
 
 Top-level `readout_usage` reports physical `evaluated_tokens`, `cached_tokens`,
 and `cache_preparation_tokens`. Preparation is included in evaluated work;
-per-question counts exclude preparation. `usage.input_tokens` sums logical
-question prompts and `output_tokens` remains zero. Physical counts describe
+per-question counts exclude preparation. Completed preparation steps are counted
+even if a later preparation step fails. `usage.input_tokens` is evaluated plus
+cached inputs across preparation and all independent candidate branches;
+`/v1/decisions` reports the same reuse in `usage.input_tokens_details.cached_tokens`.
+It can exceed the sum of logical question prompts, since multi-token candidates
+have separate executions. `output_tokens` remains zero. Cache snapshot writes
+are not measured as tokens, so `cache_write_tokens` remains zero. Physical counts describe
 tokens at each stage, not tokens multiplied by the number of split workers.
 They are not elapsed-time, FLOP, energy or billing measurements.
 
@@ -85,7 +101,8 @@ at most 64 tokens per candidate, and at most 32,768 prompt tokens per question.
 The loaded context can impose a smaller limit and must fit the longest
 teacher-forced continuation. Images, thinking, sequential reads, and multiple
 samples or steps remain unsupported. Existing Laya and DiffusionGemma adapters
-retain their limits and response shape, without causal evidence fields.
+retain their limits and response shape, without causal evidence fields. The
+public Decisions usage reports zero cached inputs for those adapters.
 
 Only loaded causal decoders are admitted; encoder-only, encoder-decoder and
 diffusion models do not enter this path. The runtime validates execution
@@ -107,6 +124,23 @@ The runtime reference uses the existing constrained sampler's raw logprob
 reader; it does not reuse the selected-logit normalization implementation.
 Serving tests exercise the HTTP router and a real loopback binary stage chain.
 Missing model files fail these tests, rather than producing a passing skip.
+
+Native batch execution drains pending backend work unconditionally after decode,
+before reading host logits or copying activation exports. This includes terminal
+readout-only batches, with no sampler and no activation export. The fence is
+owned by `src/skippy/execution-batch.cpp` in core patch `0002`; the selected-logit
+read in patch `0011` relies on it. Reading raw host logits without that fence
+would be unsafe on asynchronous backends. CPU execution evidence does not
+replace a separate CUDA run.
+
+`causal_readout_reused_host_rows_match_synchronized_reference` alternates 64
+readout-only requests with distinct prompts and compares each result with the
+existing synchronized sampler's raw-logprob reader. It defaults to CPU. Set
+`SKIPPY_DECISION_TEST_DEVICE=CUDA0` (or the exact advertised device name, such
+as `MTL0` for Metal) and
+load a matching native bundle to exercise GPU readback; an unavailable device
+fails instead of falling back to CPU. Other parity fixtures retain their fixed
+CPU arithmetic configuration.
 
 ```sh
 just with-lld cargo test -p skippy-runtime \

@@ -220,6 +220,7 @@ fn response(
         usage: SystemOneUsage {
             input_tokens: u32::try_from(output.input_tokens).unwrap_or(u32::MAX),
             output_tokens: 0,
+            cached_tokens: 0,
         },
     })
 }

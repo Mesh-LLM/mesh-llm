@@ -101,6 +101,14 @@ not calibrated truth. Laya and DiffusionGemma responses retain their existing
 shape. See the [causal decision guide](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/CAUSAL_DECISIONS.md)
 for exact scoring, accounting and compatibility rules.
 
+Prefer single-token labels with descriptions explaining their meaning; check
+`candidate_token_counts` for the actual tokenizer. Summed scores penalize longer
+labels and are not length-normalized. For causal execution, `usage.input_tokens`
+counts evaluated and cached inputs across prefix preparation and all candidate
+branches. `input_tokens_details.cached_tokens` matches `readout_usage.cached_tokens`;
+`cache_write_tokens` remains zero because snapshot writes are not measured as
+token evaluation. This input count can exceed the sum of the question prompts.
+
 ## Ask one question
 
 Send a single predicate when you only need a yes/no probability:

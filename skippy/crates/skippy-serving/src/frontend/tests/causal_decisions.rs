@@ -249,6 +249,17 @@ async fn causal_decisions_openai_answers_keep_question_and_candidate_order() -> 
     assert_eq!(answers[0]["readout"]["method"], "selected_token_logits");
     assert_eq!(answers[1]["readout"]["method"], "candidate_log_likelihood");
     assert_eq!(response["usage"]["output_tokens"], 0);
+    let cached = response["readout_usage"]["cached_tokens"].as_u64().unwrap();
+    let evaluated = response["readout_usage"]["evaluated_tokens"]
+        .as_u64()
+        .unwrap();
+    assert!(cached > 0, "prepared question prefixes must be reused");
+    assert_eq!(
+        response["usage"]["input_tokens_details"]["cached_tokens"],
+        cached
+    );
+    assert_eq!(response["usage"]["input_tokens"], evaluated + cached);
+    assert_eq!(response["usage"]["total_tokens"], evaluated + cached);
     assert_eq!(
         backend
             .runtime

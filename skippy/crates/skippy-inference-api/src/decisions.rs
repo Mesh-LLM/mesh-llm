@@ -317,11 +317,19 @@ impl DecisionsRequest {
             answers: answers
                 .into_iter()
                 .enumerate()
-                .map(|(index, answer)| DecisionsAnswerEntry {
-                    answer,
-                    readout: result.readouts.get(&format!("question_{index}")).cloned(),
+                .map(|(index, answer)| {
+                    let key = format!("question_{index}");
+                    let readout = result.readouts.get(&key).cloned();
+                    if readout.is_none()
+                        && (result.readout_usage.is_some() || !result.readouts.is_empty())
+                    {
+                        return Err(InferenceError::backend(format!(
+                            "Decisions backend omitted readout {key:?}"
+                        )));
+                    }
+                    Ok(DecisionsAnswerEntry { answer, readout })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, InferenceError>>()?,
             usage: DecisionsUsage::from(result.usage),
             readout_usage: result.readout_usage,
         })
@@ -400,11 +408,14 @@ struct OutputTokensDetails {
 }
 
 impl From<SystemOneUsage> for DecisionsUsage {
+    /// Project backend usage without losing its measured prefix-cache reuse.
     fn from(usage: SystemOneUsage) -> Self {
         Self {
             input_tokens: usage.input_tokens,
             input_tokens_details: InputTokensDetails {
-                cached_tokens: 0,
+                cached_tokens: usage.cached_tokens,
+                // Snapshot persistence is not token evaluation; no write-token
+                // measurement is available from these adapters.
                 cache_write_tokens: 0,
             },
             output_tokens: usage.output_tokens,
@@ -420,6 +431,55 @@ impl From<SystemOneUsage> for DecisionsUsage {
 mod readout_tests {
     use super::*;
     use crate::system_one::{DecisionReadout, DecisionReadoutUsage};
+
+    /// Causal execution must report evidence for every answer, including an empty map.
+    #[test]
+    fn missing_causal_readout_is_a_backend_error() {
+        for partial in [false, true] {
+            let request: DecisionsRequest = serde_json::from_value(serde_json::json!({
+                "model": "test", "input": "state", "questions": [
+                    {"type": "predicate", "instructions": "first?"},
+                    {"type": "predicate", "instructions": "second?"}
+                ]
+            }))
+            .unwrap();
+            let result = SystemOneResponse {
+                model: "test".into(),
+                answers: (0..2)
+                    .map(|i| {
+                        (
+                            format!("question_{i}"),
+                            SystemOneAnswer::Noul { noul: 0.75 },
+                        )
+                    })
+                    .collect(),
+                usage: SystemOneUsage {
+                    input_tokens: 5,
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                },
+                readout_usage: Some(DecisionReadoutUsage::default()),
+                readouts: if partial {
+                    [("question_0".into(), DecisionReadout {
+                        method: "selected_token_logits", normalization: "sum_log_probabilities",
+                        probability_semantics: "relative_candidate_probability_not_calibrated_truth",
+                        candidate_log_probabilities: vec![-1.0, -2.0], candidate_token_counts: vec![1, 1],
+                        evaluated_tokens: 5, cached_tokens: 0,
+                    })].into()
+                } else {
+                    BTreeMap::new()
+                },
+            };
+            let error = request.response(result).unwrap_err();
+            assert_eq!(error.status(), axum::http::StatusCode::BAD_GATEWAY);
+            let missing = usize::from(partial);
+            assert!(
+                error
+                    .message()
+                    .contains(&format!("omitted readout \"question_{missing}\""))
+            );
+        }
+    }
 
     /// Answers and readout evidence retain question order even beyond ten questions.
     #[test]
@@ -437,7 +497,7 @@ mod readout_tests {
         let result = SystemOneResponse {
             model: "test".into(),
             answers: (0..12).map(|i| (format!("question_{i}"), SystemOneAnswer::Noul { noul: i as f32 / 12.0 })).collect(),
-            usage: SystemOneUsage { input_tokens: 180, output_tokens: 0 },
+            usage: SystemOneUsage { input_tokens: 180, output_tokens: 0, cached_tokens: 60 },
             readout_usage: Some(usage),
             readouts: (0..12).map(|i| (format!("question_{i}"), DecisionReadout {
                 method: "selected_token_logits", normalization: "sum_log_probabilities", probability_semantics: "relative_candidate_probability_not_calibrated_truth",
@@ -451,6 +511,7 @@ mod readout_tests {
         }
         assert_eq!(json["readout_usage"], serde_json::to_value(usage).unwrap());
         assert_eq!(json["usage"]["output_tokens"], 0);
+        assert_eq!(json["usage"]["input_tokens_details"]["cached_tokens"], 60);
     }
 
     /// Legacy decision responses omit evidence that only causal execution can produce.
@@ -465,6 +526,7 @@ mod readout_tests {
             usage: SystemOneUsage {
                 input_tokens: 5,
                 output_tokens: 0,
+                cached_tokens: 0,
             },
             readouts: BTreeMap::new(),
             readout_usage: None,

@@ -17,20 +17,43 @@ use crate::frontend::generation::{
 use crate::frontend::util::openai_backend_error;
 
 mod cache;
+mod preparation;
 mod sequence;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ReadoutJob {
     question: usize,
     candidate: Option<usize>,
     prompt: Arc<Vec<i32>>,
     candidates: Vec<Vec<i32>>,
+    /// None denotes cache preparation; scoring never infers its rule from cardinality.
+    method: Option<ReadoutMethod>,
 }
 
+#[derive(Debug)]
 struct ReadoutResult {
     scores: Vec<f64>,
     evaluated_tokens: usize,
     cached_tokens: usize,
+}
+
+#[derive(Debug)]
+struct ReadoutFailure {
+    error: Box<InferenceError>,
+    /// Completed local steps remain work even when a later exchange fails.
+    evaluated_tokens: usize,
+    cached_tokens: usize,
+}
+
+impl From<InferenceError> for ReadoutFailure {
+    /// Failures before execution have no completed work to report.
+    fn from(error: InferenceError) -> Self {
+        Self {
+            error: Box::new(error),
+            evaluated_tokens: 0,
+            cached_tokens: 0,
+        }
+    }
 }
 
 struct CancelOnDrop(CancellationToken);
@@ -78,8 +101,14 @@ impl StageOpenAiBackend {
         let guard = CancelOnDrop(CancellationToken::new());
         let preparation = self.warm_decision_prefixes(&plan, &guard.0).await?;
         let jobs = decision_jobs(&plan);
-        let results = self.run_readout_jobs(jobs, &guard.0).await?;
-        decision_response(request, &plan, results, preparation)
+        let mut executor = self.clone();
+        if !preparation.reuse_cache {
+            // Retry in fresh sequences without touching a cache that just failed.
+            // This affects only this request, not the shared backend or other users.
+            executor.kv = None;
+        }
+        let results = executor.run_readout_jobs(jobs, &guard.0).await?;
+        decision_response(request, &plan, results, preparation.usage)
     }
 
     /// Run a bounded set of readout jobs and drain admitted work after cancellation.
@@ -100,7 +129,7 @@ impl StageOpenAiBackend {
             match result {
                 Ok(result) => completed.push((job, result)),
                 Err(error) => {
-                    failure.get_or_insert(error);
+                    failure.get_or_insert(*error.error);
                     cancellation.cancel();
                 }
             }
@@ -113,7 +142,8 @@ impl StageOpenAiBackend {
         &self,
         job: ReadoutJob,
         cancellation: &CancellationToken,
-    ) -> InferenceResult<ReadoutResult> {
+    ) -> Result<ReadoutResult, ReadoutFailure> {
+        job.validate()?;
         let ids = InferenceGenerationIds::new_with_trust(
             InferenceCacheHints::default(),
             None,
@@ -138,43 +168,7 @@ impl StageOpenAiBackend {
             sequence::execute(&backend, &job, &ids, &cancellation)
         })
         .await
-        .map_err(|error| openai_backend_error(error.into()))?
-    }
-
-    /// Warm reusable state and question prefixes while accounting for preparation work.
-    async fn warm_decision_prefixes(
-        &self,
-        plan: &DecisionPlan,
-        cancellation: &CancellationToken,
-    ) -> InferenceResult<DecisionReadoutUsage> {
-        let mut usage = DecisionReadoutUsage::default();
-        if !self
-            .kv
-            .as_ref()
-            .is_some_and(|kv| kv.should_record() && kv.should_lookup())
-        {
-            return Ok(usage);
-        }
-        if plan.questions.len() > 1 && plan.shared_prefix_tokens > 0 {
-            let tokens = plan.questions[0].prompt[..plan.shared_prefix_tokens].to_vec();
-            let result = self
-                .run_readout_job(warmup_job(tokens), cancellation)
-                .await?;
-            usage.evaluated_tokens += result.evaluated_tokens;
-            usage.cached_tokens += result.cached_tokens;
-        }
-        let prompts = plan
-            .questions
-            .iter()
-            .filter(|q| q.method == ReadoutMethod::CandidateLogLikelihood && q.prompt.len() > 1)
-            .map(|q| warmup_job(q.prompt[..q.prompt.len() - 1].to_vec()))
-            .collect();
-        for (_, result) in self.run_readout_jobs(prompts, cancellation).await? {
-            usage.evaluated_tokens += result.evaluated_tokens;
-            usage.cached_tokens += result.cached_tokens;
-        }
-        usage.cache_preparation_tokens = usage.evaluated_tokens;
-        Ok(usage)
+        .map_err(|error| ReadoutFailure::from(openai_backend_error(error.into())))?
     }
 }
 
@@ -185,6 +179,7 @@ fn warmup_job(tokens: Vec<i32>) -> ReadoutJob {
         candidate: None,
         prompt: Arc::new(tokens),
         candidates: Vec::new(),
+        method: None,
     }
 }
 
@@ -215,6 +210,7 @@ fn decision_jobs(plan: &DecisionPlan) -> Vec<ReadoutJob> {
                     candidate: None,
                     prompt,
                     candidates: plan.candidates.clone(),
+                    method: Some(plan.method),
                 }]
             } else {
                 plan.candidates
@@ -225,6 +221,7 @@ fn decision_jobs(plan: &DecisionPlan) -> Vec<ReadoutJob> {
                         candidate: Some(index),
                         prompt: prompt.clone(),
                         candidates: vec![candidate.clone()],
+                        method: Some(plan.method),
                     })
                     .collect()
             }
@@ -264,11 +261,9 @@ fn decision_response(
                 .map_err(openai_backend_error)
         })
         .collect::<InferenceResult<Vec<_>>>()?;
-    let input_tokens = plan
-        .questions
-        .iter()
-        .map(|question| question.prompt.len())
-        .sum();
+    // Usage describes executed inputs, including independent candidate branches
+    // and preparation, so cached inputs are a subset of input_tokens.
+    let input_tokens = usage.evaluated_tokens.saturating_add(usage.cached_tokens);
     let mut response = super::response(
         request,
         DecisionOutput {
@@ -276,6 +271,7 @@ fn decision_response(
             input_tokens,
         },
     )?;
+    response.usage.cached_tokens = u32::try_from(usage.cached_tokens).unwrap_or(u32::MAX);
     response.readouts = plan
         .questions
         .iter()

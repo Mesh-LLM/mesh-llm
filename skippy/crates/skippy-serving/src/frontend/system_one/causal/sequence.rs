@@ -32,20 +32,23 @@ pub(super) fn execute(
     job: &ReadoutJob,
     ids: &InferenceGenerationIds,
     cancellation: &CancellationToken,
-) -> InferenceResult<ReadoutResult> {
+) -> Result<ReadoutResult, ReadoutFailure> {
     let mut sequence = DecisionSequence::new(backend, ids, cancellation)?;
-    let result = sequence.score(job);
-    match result {
-        Ok(scores) => {
-            sequence.close()?;
-            Ok(ReadoutResult {
-                scores,
-                evaluated_tokens: sequence.evaluated,
-                cached_tokens: sequence.cached,
-            })
-        }
-        Err(error) => Err(error),
-    }
+    let result = sequence.score(job).and_then(|scores| {
+        sequence.close()?;
+        Ok(scores)
+    });
+    result
+        .map(|scores| ReadoutResult {
+            scores,
+            evaluated_tokens: sequence.evaluated,
+            cached_tokens: sequence.cached,
+        })
+        .map_err(|error| ReadoutFailure {
+            error: Box::new(error),
+            evaluated_tokens: sequence.evaluated,
+            cached_tokens: sequence.cached,
+        })
 }
 
 impl<'a> DecisionSequence<'a> {
@@ -106,7 +109,7 @@ impl<'a> DecisionSequence<'a> {
         }
         self.backend
             .record_embedded_stage0_full_prefill(&self.session, self.ids, &job.prompt)?;
-        if job.candidates.len() == 1 {
+        if job.method == Some(ReadoutMethod::CandidateLogLikelihood) {
             let candidate = &job.candidates[0];
             for tokens in candidate.windows(2) {
                 scores[0] += self.step(&tokens[..1], &tokens[1..])?[0];
@@ -134,6 +137,8 @@ impl<'a> DecisionSequence<'a> {
         let output = outputs
             .pop()
             .ok_or_else(|| InferenceError::backend("missing decision iteration"))?;
+        // The local evaluation completed even if forwarding or validation fails.
+        self.evaluated += tokens.len();
         let scores = if self.lane.is_some() {
             self.forward(tokens, selected, &output.output)?
         } else {
@@ -147,7 +152,6 @@ impl<'a> DecisionSequence<'a> {
             return Err(InferenceError::backend("invalid decision score vector"));
         }
         self.position += tokens.len();
-        self.evaluated += tokens.len();
         Ok(scores.into_iter().map(f64::from).collect())
     }
 
@@ -228,6 +232,29 @@ impl<'a> DecisionSequence<'a> {
                     .map(|_| ())
                     .map_err(openai_backend_error)
             })
+    }
+}
+
+impl ReadoutJob {
+    /// Reject malformed internal jobs before indexing candidates or acquiring a lane.
+    pub(super) fn validate(&self) -> InferenceResult<()> {
+        let valid = !self.prompt.is_empty()
+            && match self.method {
+                None => self.candidates.is_empty(),
+                Some(ReadoutMethod::SelectedTokenLogits) => {
+                    !self.candidates.is_empty()
+                        && self.candidates.iter().all(|tokens| tokens.len() == 1)
+                }
+                Some(ReadoutMethod::CandidateLogLikelihood) => {
+                    self.candidates.len() == 1 && !self.candidates[0].is_empty()
+                }
+            };
+        if !valid {
+            return Err(InferenceError::backend(
+                "decision job does not match its scoring method",
+            ));
+        }
+        Ok(())
     }
 }
 

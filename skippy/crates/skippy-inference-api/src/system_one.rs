@@ -64,10 +64,14 @@ pub struct SystemOneResponse {
     pub readout_usage: Option<DecisionReadoutUsage>,
 }
 
+/// Measured input work across preparation and independent causal candidate branches.
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
 pub struct DecisionReadoutUsage {
+    /// Inputs evaluated by completed local steps, not multiplied by split stages.
     pub evaluated_tokens: usize,
+    /// Input positions restored from a reusable prefix rather than evaluated again.
     pub cached_tokens: usize,
+    /// The evaluated_tokens subset spent preparing prefixes, including failed warmups.
     pub cache_preparation_tokens: usize,
 }
 
@@ -106,8 +110,14 @@ pub enum SystemOneAnswer {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub struct SystemOneUsage {
+    /// Inputs consumed across all executions, including cached prefixes.
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Cache projection for Decisions; System One exposes reuse in readout_usage.
+    /// Zero for adapters without measured cache accounting. Keep the legacy
+    /// System One usage object unchanged when serializing this internal count.
+    #[serde(skip_serializing)]
+    pub cached_tokens: u32,
 }
 
 /// A JSON value that remembers the order its object keys arrived in.

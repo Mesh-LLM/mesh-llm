@@ -49,6 +49,9 @@ fn independent_jobs_preserve_candidates_and_share_only_their_question_prompt() {
     let jobs = decision_jobs(&plan);
     assert_eq!(jobs.len(), 3);
     assert_eq!(jobs[0].candidate, None);
+    assert_eq!(jobs[0].method, Some(ReadoutMethod::SelectedTokenLogits));
+    assert_eq!(jobs[1].method, Some(ReadoutMethod::CandidateLogLikelihood));
+    assert_eq!(jobs[2].method, Some(ReadoutMethod::CandidateLogLikelihood));
     assert_eq!(jobs[0].candidates, vec![vec![10], vec![20]]);
     assert_eq!(jobs[1].candidate, Some(0));
     assert_eq!(jobs[2].candidate, Some(1));
@@ -72,7 +75,8 @@ fn out_of_order_completions_keep_answer_order_and_account_for_cache_preparation(
         cache_preparation_tokens: 4,
     };
     let response = decision_response(request, &plan, results, preparation).unwrap();
-    assert_eq!(response.usage.input_tokens, 6);
+    assert_eq!(response.usage.input_tokens, 15);
+    assert_eq!(response.usage.cached_tokens, 5);
     assert_eq!(response.usage.output_tokens, 0);
     assert_eq!(
         response.readouts["second"].candidate_log_probabilities,
@@ -99,6 +103,41 @@ fn out_of_order_completions_keep_answer_order_and_account_for_cache_preparation(
     };
     assert_eq!(answers["first"]["choice"], "A");
     assert_eq!(answers["second"]["choice"], "C");
+}
+
+/// Method validation prevents candidate cardinality from silently changing scoring.
+#[test]
+fn scoring_methods_validate_their_own_job_shapes() {
+    let (_, plan) = fixture();
+    for job in decision_jobs(&plan) {
+        job.validate().unwrap();
+    }
+    let mut job = warmup_job(vec![1, 2]);
+    job.validate().unwrap();
+    job.candidates = vec![vec![3]];
+    assert!(
+        job.validate().is_err(),
+        "preparation cannot score candidates"
+    );
+    job.method = Some(ReadoutMethod::SelectedTokenLogits);
+    job.validate().unwrap(); // Even one selected token does not imply teacher forcing.
+    job.candidates = vec![vec![3, 4]];
+    assert!(
+        job.validate().is_err(),
+        "selected-token reads cannot truncate labels"
+    );
+    job.method = Some(ReadoutMethod::CandidateLogLikelihood);
+    job.validate().unwrap();
+    job.candidates.push(vec![5]);
+    assert!(
+        job.validate().is_err(),
+        "teacher forcing requires one independent branch"
+    );
+    job.candidates = vec![vec![]];
+    assert!(
+        job.validate().is_err(),
+        "empty labels must not reach indexing"
+    );
 }
 
 /// Malformed or duplicate backend results fail response assembly.
