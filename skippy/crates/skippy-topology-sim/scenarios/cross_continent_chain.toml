@@ -1,0 +1,53 @@
+# Scenario 4 from the design corpus: three nodes chained across long links.
+# The planner must either reject the 33 ms TPOT target honestly (estimate
+# above target) or find the fewest-hop layout; it must not claim the target
+# is met when per-hop latency alone exceeds it.
+[nodes.west]
+vram_bytes = 42949672960              # 40 GB
+sustained_mem_bandwidth_mib_per_s = 1858000
+sustained_compute_gflop_per_s = 312000
+
+[nodes.central]
+vram_bytes = 42949672960
+sustained_mem_bandwidth_mib_per_s = 1858000
+sustained_compute_gflop_per_s = 312000
+
+[nodes.east]
+vram_bytes = 42949672960
+sustained_mem_bandwidth_mib_per_s = 1858000
+sustained_compute_gflop_per_s = 312000
+
+[links."west -> central"]
+rtt_ms = 70
+large_frame_mib_per_s = 10
+
+[links."central -> west"]
+rtt_ms = 70
+large_frame_mib_per_s = 10
+
+[links."central -> east"]
+rtt_ms = 80
+large_frame_mib_per_s = 8
+
+[links."east -> central"]
+rtt_ms = 80
+large_frame_mib_per_s = 8
+
+[links."west -> east"]
+rtt_ms = 140
+large_frame_mib_per_s = 4
+
+[links."east -> west"]
+rtt_ms = 140
+large_frame_mib_per_s = 4
+
+[model]
+layer_count = 48
+weight_bytes_per_layer = 1610612736   # 72 GiB model
+kv_bytes_per_token = 4096
+native_context_length = 65536
+activation_frame_bytes = 8192
+
+[workload]
+minimum_nodes = 3
+target_decode_tpot_ms = 33

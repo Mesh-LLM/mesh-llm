@@ -1,0 +1,44 @@
+# Scenario 3 from the design corpus: A100 + RTX 4090 + laptop CPU. The laptop
+# is VRAM-rich relative to its bandwidth; perf-aware planning must give it few
+# layers (or effectively exclude it via span size) despite its memory.
+[nodes.datacenter]
+vram_bytes = 85899345920              # A100 80 GB
+sustained_mem_bandwidth_mib_per_s = 1858000   # ~1.9 TB/s, GB->MiB converted
+sustained_compute_gflop_per_s = 312000
+
+[nodes.prosumer]
+vram_bytes = 25769803776              # 4090 24 GB
+sustained_mem_bandwidth_mib_per_s = 962000
+sustained_compute_gflop_per_s = 83000
+
+[nodes.laptop]
+vram_bytes = 34359738368              # 32 GB unified, CPU-only inference
+sustained_mem_bandwidth_mib_per_s = 76000     # ~80 GB/s LPDDR5 prior
+sustained_compute_gflop_per_s = 300
+
+[links."datacenter -> prosumer"]
+rtt_ms = 1
+large_frame_mib_per_s = 900           # 10 GbE prior
+
+[links."prosumer -> datacenter"]
+rtt_ms = 1
+large_frame_mib_per_s = 900
+
+[links."prosumer -> laptop"]
+rtt_ms = 4
+large_frame_mib_per_s = 30            # Wi-Fi prior
+
+[links."laptop -> prosumer"]
+rtt_ms = 4
+large_frame_mib_per_s = 30
+
+[model]
+layer_count = 62
+weight_bytes_per_layer = 1610612736   # 1.5 GiB (~93 GiB model)
+kv_bytes_per_token = 8192
+native_context_length = 65536
+activation_frame_bytes = 4096
+
+[workload]
+minimum_nodes = 2
+target_decode_tpot_ms = 33

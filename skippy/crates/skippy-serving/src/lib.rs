@@ -38,7 +38,9 @@ mod legacy_scheduler_absence_tests {
 }
 pub mod serving_hooks;
 pub mod settings;
+mod stage_performance;
 pub mod telemetry;
+pub use stage_performance::{StageDecodeTimingHint, stage_decode_timing_hints};
 pub mod thinking_probe;
 pub mod tokenizer;
 
