@@ -9,6 +9,8 @@ mod json_adaptation;
 #[cfg(feature = "payments")]
 mod model_prices;
 mod models;
+#[cfg(feature = "payments")]
+mod payment_admission;
 mod pipeline;
 mod pipeline_adapter;
 pub(crate) mod prepared_dispatch;
