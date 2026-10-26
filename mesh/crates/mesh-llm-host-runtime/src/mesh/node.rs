@@ -1194,49 +1194,6 @@ impl Node {
         }
     }
 
-    pub(crate) async fn broadcast_existing_mesh_snapshot(
-        &self,
-        plugin_manager: &crate::plugin::PluginManager,
-        peers: Vec<PeerInfo>,
-    ) {
-        let _ = plugin_manager
-            .broadcast_mesh_event(
-                self.build_mesh_event(self.plugin_manager_local_kind(), None, String::new())
-                    .await,
-            )
-            .await;
-        if self.mesh_id().await.is_some() {
-            let _ = plugin_manager
-                .broadcast_mesh_event(
-                    self.build_mesh_event(
-                        crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
-                        None,
-                        String::new(),
-                    )
-                    .await,
-                )
-                .await;
-        }
-        for peer in peers {
-            if let Err(err) = plugin_manager
-                .broadcast_mesh_event(
-                    self.build_mesh_event(
-                        crate::plugin::proto::mesh_event::Kind::PeerUp,
-                        Some(peer_info_to_mesh_peer(&peer)),
-                        String::new(),
-                    )
-                    .await,
-                )
-                .await
-            {
-                tracing::debug!(
-                    "Failed to send existing peer snapshot to plugins for {}: {err}",
-                    peer.id.fmt_short()
-                );
-            }
-        }
-    }
-
     /// Insert a peer that models a *healthy* admitted peer: it is marked as
     /// showing signs of life so the issue #1756 routing gate admits it. Use
     /// [`Node::insert_test_peer_without_liveness`] to model a departed or

@@ -32,6 +32,9 @@ mod identity_artifact;
 mod lifecycle_readiness;
 mod shutdown;
 mod socket_auth;
+mod start_announce;
+#[cfg(test)]
+mod start_announce_tests;
 
 use self::default_plugin_policy::restrict_default_plugin;
 
@@ -55,6 +58,11 @@ pub(crate) struct ExternalPlugin {
     runtime_data_producer: RuntimeDataProducer,
     restart_lock: Arc<Mutex<()>>,
     stopping: AtomicBool,
+    /// Set once [`Self::spawn`] returns. The node sends every plugin its mesh
+    /// snapshot when the manager is installed, which covers the start inside
+    /// `spawn`; any later start (a restart, or a lazy plugin's first start)
+    /// tells the node, which sends that plugin the snapshot again.
+    announce_starts: AtomicBool,
     next_request_id: AtomicU64,
     next_generation: AtomicU64,
     /// Serves this plugin as a task in this process instead of a child.
@@ -142,20 +150,19 @@ impl ExternalPlugin {
             runtime_data_producer,
             restart_lock: Arc::new(Mutex::new(())),
             stopping: AtomicBool::new(false),
+            announce_starts: AtomicBool::new(false),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process,
         };
         if spec.startup.lazy_start {
             plugin.mark_deferred().await;
-            return Ok(plugin);
-        }
-        if let Err(err) = plugin.ensure_running().await {
-            if plugin.is_disabled().await {
-                return Ok(plugin);
-            }
+        } else if let Err(err) = plugin.ensure_running().await
+            && !plugin.is_disabled().await
+        {
             return Err(err);
         }
+        plugin.announce_starts.store(true, Ordering::Release);
         Ok(plugin)
     }
 
@@ -515,7 +522,14 @@ impl ExternalPlugin {
         if let Some(reason) = self.disabled_reason().await {
             bail!("Plugin '{}' is disabled: {}", self.spec.name, reason);
         }
-        if self.runtime.lock().await.is_some() {
+        // A start in progress holds the restart lock until its process has
+        // the mesh snapshot (`announce_started`): a caller that finds the
+        // lock taken waits for it rather than reach the process first. The
+        // guard is held while the runtime is checked, so no start can begin
+        // in between (the restart lock is always taken before the runtime's).
+        if let Ok(_no_start_in_progress) = self.restart_lock.try_lock()
+            && self.runtime.lock().await.is_some()
+        {
             return Ok(());
         }
         let _guard = self.restart_lock.lock().await;
@@ -576,7 +590,12 @@ impl ExternalPlugin {
             .finish_initialize(generation, outbound_tx, pending)
             .await
         {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                if self.announce_starts.load(Ordering::Acquire) {
+                    self.announce_started(generation).await;
+                }
+                Ok(())
+            }
             Err(error) => {
                 if self.is_disabled().await {
                     return Ok(());
@@ -1052,7 +1071,7 @@ pub(crate) mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
-    fn test_host_mode() -> PluginHostMode {
+    pub(super) fn test_host_mode() -> PluginHostMode {
         PluginHostMode {
             mesh_visibility: MeshVisibility::Private,
         }
@@ -1256,6 +1275,7 @@ pub(crate) mod tests {
             }),
             restart_lock: Arc::new(Mutex::new(())),
             stopping: AtomicBool::new(false),
+            announce_starts: AtomicBool::new(true),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process: None,

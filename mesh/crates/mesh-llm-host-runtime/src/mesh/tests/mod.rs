@@ -13,6 +13,7 @@ include!("protocol_compat.rs");
 include!("owner_control.rs");
 include!("stage_transport.rs");
 include!("peer_state.rs");
+include!("plugin_snapshot.rs");
 include!("protocol_frames.rs");
 include!("admission.rs");
 include!("requirements.rs");

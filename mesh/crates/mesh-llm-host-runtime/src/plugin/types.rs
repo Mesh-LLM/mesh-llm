@@ -46,6 +46,16 @@ pub enum PluginMeshEvent {
     /// withdraws what it announced for it. Not sent when the plugin restarts
     /// after a failure, so its key stays announced across a restart.
     PluginStopped { plugin_id: String },
+    /// The plugin process of `generation` started after the host's own
+    /// start: a restart after it exited or failed, or a lazy plugin's first
+    /// start. The node sends that process alone the mesh snapshot it would
+    /// otherwise only get from the next mesh change, then answers
+    /// `delivered`.
+    PluginStarted {
+        plugin_id: String,
+        generation: u64,
+        delivered: oneshot::Sender<()>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

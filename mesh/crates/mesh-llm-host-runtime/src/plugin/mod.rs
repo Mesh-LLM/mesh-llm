@@ -1464,6 +1464,28 @@ impl PluginManager {
         Ok(())
     }
 
+    /// [`Self::broadcast_mesh_event`] to the process of `generation` of
+    /// `plugin_name` alone, without starting it.
+    pub(crate) async fn send_mesh_event_to(
+        &self,
+        plugin_name: &str,
+        generation: u64,
+        event: proto::MeshEvent,
+    ) -> Result<()> {
+        let Some(plugin) = self.inner.plugins.get(plugin_name) else {
+            return Ok(());
+        };
+        if !self
+            .plugin_subscribes_mesh_event(plugin_name, event.kind)
+            .await
+        {
+            return Ok(());
+        }
+        plugin
+            .send_mesh_event_to_generation(generation, event)
+            .await
+    }
+
     /// Whether an already-running `plugin_name` subscribes to mesh event
     /// `kind`. Same non-starting contract as
     /// [`Self::plugin_declares_mesh_channel`], for [`Self::broadcast_mesh_event`].
