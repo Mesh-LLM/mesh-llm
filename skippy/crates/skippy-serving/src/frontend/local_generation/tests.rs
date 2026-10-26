@@ -26,7 +26,9 @@ use crate::runtime_state::{RuntimeState, load_runtime};
 use crate::telemetry::{Telemetry, TelemetryLevel};
 use anyhow::{Result, bail};
 use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
-use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
+use skippy_protocol::{
+    FlashAttentionType, LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode,
+};
 use skippy_runtime::SamplingConfig;
 
 mod active_kv_window;
@@ -48,6 +50,7 @@ mod shortened_tail;
 // SKIPPY_RECURRENT_CACHE_TEST_MODEL=/path/model.gguf \
 // SKIPPY_RECURRENT_CACHE_TEST_MODEL_LAYERS=40 \
 // just with-lld cargo test -p skippy-serving recurrent_ --lib -- --ignored --nocapture
+// Set SKIPPY_RECURRENT_CACHE_TEST_NO_FLASH=1 to exercise the unfused attention path.
 
 #[derive(Default)]
 struct RecordingReceiptSink {
@@ -237,6 +240,11 @@ fn recurrent_test_backend_with_lanes(
         .to_string_lossy()
         .parse::<u32>()
         .map_err(|error| anyhow::anyhow!("invalid recurrent cache test layer count: {error}"))?;
+    let flash_attn_type = match std::env::var("SKIPPY_RECURRENT_CACHE_TEST_NO_FLASH").as_deref() {
+        Ok("1") => FlashAttentionType::Disabled,
+        Ok("0") | Err(_) => FlashAttentionType::Auto,
+        Ok(value) => bail!("invalid SKIPPY_RECURRENT_CACHE_TEST_NO_FLASH={value}; expected 0 or 1"),
+    };
     let config = StageConfig {
         run_id: run_id.to_string(),
         topology_id: run_id.to_string(),
@@ -274,7 +282,7 @@ fn recurrent_test_backend_with_lanes(
         split_mode: skippy_protocol::SplitMode::Auto,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
-        flash_attn_type: Default::default(),
+        flash_attn_type,
         kv_offload: None,
         kv_unified: std::env::var("SKIPPY_RECURRENT_CACHE_TEST_KV_UNIFIED")
             .ok()
