@@ -392,6 +392,9 @@ pub(in crate::network::openai::response) const LOCAL_FIRST_BYTE_TIMEOUT_SECS_ENV
 /// Built-in local first-byte budget: 10 minutes.
 const DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
+/// Lets the frontend return its timeout response before the local proxy gives up.
+const LOCAL_FIRST_BYTE_TIMEOUT_GRACE: Duration = Duration::from_secs(1);
+
 /// Largest budget this deadline can represent, and what "removed" resolves to.
 /// `tokio::time::timeout` panics past its far-future limit, so the budget is
 /// clamped here instead of crashing the host on its first local request. At
@@ -403,10 +406,11 @@ const MAX_LOCAL_FIRST_BYTE_TIMEOUT: Duration = Duration::from_millis(u32::MAX as
 ///
 /// `MESH_LLM_OPENAI_FIRST_BYTE_TIMEOUT_SECS` names this layer directly and
 /// always wins; `0` removes the deadline. When only the inner Skippy frontend's
-/// `MESH_OPENAI_BACKEND_TIMEOUT_SECS` is configured, this budget never fires
-/// first: it is raised to cover that deadline, and removed together with it
-/// when the operator disables it. Otherwise the inner frontend's own
-/// OpenAI-shaped 504 would be unreachable and the operator's setting silently
+/// `MESH_OPENAI_BACKEND_TIMEOUT_SECS` is configured, this budget uses the
+/// 10-minute default or stays one second longer than the frontend deadline,
+/// whichever is longer. It is removed together with the frontend deadline
+/// when the operator disables that timeout. Otherwise the frontend's own
+/// OpenAI-shaped 504 could be unreachable and the operator's setting silently
 /// capped here (#2195).
 fn local_response_first_byte_timeout() -> Duration {
     #[cfg(test)]
@@ -435,7 +439,11 @@ fn resolve_local_first_byte_timeout(
     match inner_backend {
         None => DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT,
         Some(None) => MAX_LOCAL_FIRST_BYTE_TIMEOUT,
-        Some(Some(inner)) => DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT.max(inner),
+        Some(Some(inner)) => DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT.max(
+            inner
+                .saturating_add(LOCAL_FIRST_BYTE_TIMEOUT_GRACE)
+                .min(MAX_LOCAL_FIRST_BYTE_TIMEOUT),
+        ),
     }
 }
 
@@ -923,11 +931,15 @@ mod tests {
             DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT
         );
 
-        // Only the inner frontend's deadline is configured. The proxy in front
-        // of it must never fire first, or that 504 is unreachable.
+        // Only the inner frontend's deadline is configured. Give it a second
+        // to return its 504 before the proxy's own deadline fires.
         assert_eq!(
             resolve_local_first_byte_timeout(None, configured(1800)),
-            Duration::from_secs(1800)
+            Duration::from_secs(1801)
+        );
+        assert_eq!(
+            resolve_local_first_byte_timeout(None, configured(600)),
+            Duration::from_secs(601)
         );
         assert_eq!(
             resolve_local_first_byte_timeout(None, configured(60)),
