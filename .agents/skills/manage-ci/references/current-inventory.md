@@ -544,6 +544,12 @@ runner-contract update is active.
 | `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
 | `hf-download-smoke.yml` | Hugging Face download smoke |
 
+The `native-abi` domain selects `static-abi`, `runtime-product`,
+`product-smoke`, `rust-tests`, and `platform-checks`. In `ci/slices.yml`, its
+`domain_rows` are `linux-cpu`, `windows-cpu`, and `windows-vulkan`;
+`smoke_domain_rows` selects `core`; and `platform_domain_rows` selects
+`windows-skippy-probes`.
+
 Native Quality contracts use a 60-minute job with a 40-minute full-contract
 step and restore the pinned external SDK and research sources before the
 roster. Trusted runner-image work uses a 45-minute job (20-minute controller
