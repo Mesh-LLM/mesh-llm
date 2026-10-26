@@ -222,16 +222,16 @@ async fn mcp_list_results_carry_2026_07_28_cache_metadata() {
             Some("complete"),
             "{method} must be served as a complete 2026-07-28 result"
         );
-        for field in CACHE_METADATA_FIELDS {
-            assert!(
-                result.get(field).is_some(),
-                "{method} result is missing required 2026-07-28 cache metadata field \
-                 '{field}'; got keys {:?} in {result}",
-                result
-                    .as_object()
-                    .map(|map| map.keys().cloned().collect::<Vec<_>>()),
-            );
-        }
+        assert_eq!(
+            result.get("ttlMs").and_then(Value::as_u64),
+            Some(0),
+            "{method} result must advertise ttlMs: 0"
+        );
+        assert_eq!(
+            result.get("cacheScope").and_then(Value::as_str),
+            Some("private"),
+            "{method} result must advertise cacheScope: \"private\""
+        );
     }
 }
 
