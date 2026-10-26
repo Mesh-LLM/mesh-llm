@@ -23,7 +23,19 @@ pub(crate) fn checkpoint_root(source: &Path) -> &Path {
 }
 
 /// Return whether `source` belongs to a complete local SafeTensors checkpoint.
+///
+/// A path that names a GGUF file is served as named. `checkpoint_root` resolves any file to its
+/// parent directory, so without this the probe would claim a GGUF exported into the checkpoint
+/// directory it came from — the layout `mlx_lm.fuse --export-gguf` and `convert_hf_to_gguf.py`
+/// produce — and serve that checkpoint instead of the file the operator named (issue #2340).
 pub fn is_safetensors_checkpoint(source: &Path) -> bool {
+    if source.is_file()
+        && source
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+    {
+        return false;
+    }
     let root = checkpoint_root(source);
     root.join("config.json").is_file()
         && (root.join("model.safetensors").is_file()
