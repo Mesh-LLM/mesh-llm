@@ -5,12 +5,13 @@ use super::common::{
 };
 use super::probe::MESH_SERVED_BY_HEADER;
 use super::probe::{
-    ParsedResponseHeaders, ResponseProbe, append_capsule_nonce_headers, insert_header_before_body,
-    read_response_chunk, try_parse_response_headers,
+    ParsedResponseHeaders, REQUEST_ID_HEADER, ResponseProbe, append_capsule_nonce_headers,
+    insert_header_before_body, read_response_chunk, try_parse_response_headers,
 };
 use crate::logging::{ArtifactUnavailableReason, OpenAiRouteObserver};
 use crate::network::openai::client_stream::ClientStream;
 use anyhow::Result;
+use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 const MAX_ERROR_RESPONSE_BYTES: usize = 256 * 1024;
@@ -120,6 +121,24 @@ fn append_served_by_to_error_response(outgoing: &mut Vec<u8>, served_by: Option<
     insert_header_before_body(outgoing, header_end, MESH_SERVED_BY_HEADER, served_by);
 }
 
+/// Splice the canonical `x-request-id` into an already-built error response,
+/// so an error body carries the same trace correlation as a success body
+/// (issue #2352, papercut 4).
+fn append_request_id_to_error_response(outgoing: &mut Vec<u8>, request_id: RequestId) {
+    let Some(header_end) = response_header_end(outgoing) else {
+        tracing::debug!(
+            "no header terminator found while echoing x-request-id on an error response; skipping insert"
+        );
+        return;
+    };
+    insert_header_before_body(
+        outgoing,
+        header_end,
+        REQUEST_ID_HEADER,
+        &request_id.as_uuid().to_string(),
+    );
+}
+
 /// Relay a non-2xx upstream response, echoing `x-mesh-served-by` when set.
 pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncRead + Unpin>(
     tcp_stream: &mut ClientStream,
@@ -127,6 +146,7 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
     probe: ResponseProbe,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
+    request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
     let status_code = probe.status_code;
     let header_end = probe.header_end;
@@ -146,6 +166,7 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
         remap_error_http_response(status_code, header_end, &buffered).unwrap_or(buffered)
     };
     append_served_by_to_error_response(&mut outgoing, served_by);
+    append_request_id_to_error_response(&mut outgoing, request_id);
     tcp_stream.write_all(&outgoing).await?;
     let media_kind = try_parse_response_headers(&outgoing)
         .ok()
@@ -168,6 +189,7 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::network::openai::response) async fn relay_success_response<R: AsyncRead + Unpin>(
     tcp_stream: &mut ClientStream,
     reader: &mut R,
@@ -176,6 +198,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     retry_policy: ResponseRetryPolicy,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
+    request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
     if let Some(content_length) = parsed.content_length {
         const MAX_SUCCESS_METRICS_BODY_BYTES: usize = 1024 * 1024;
@@ -211,6 +234,15 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
                 );
                 outgoing_end = outgoing_end.saturating_add_signed(delta);
             }
+            // The canonical request id rides every relayed response head,
+            // bounded and unbounded alike (issue #2352, papercut 4).
+            let delta = insert_header_before_body(
+                &mut buffered,
+                parsed.header_end,
+                REQUEST_ID_HEADER,
+                &request_id.as_uuid().to_string(),
+            );
+            outgoing_end = outgoing_end.saturating_add_signed(delta);
             // Reads may include bytes beyond the declared HTTP body. Only the
             // declared response is client-visible and capturable.
             tcp_stream.write_all(&buffered[..outgoing_end]).await?;
@@ -237,6 +269,12 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
             served_by,
         );
     }
+    insert_header_before_body(
+        &mut buffered,
+        parsed.header_end,
+        REQUEST_ID_HEADER,
+        &request_id.as_uuid().to_string(),
+    );
     tcp_stream.write_all(&buffered).await?;
     route_observer.capture_response_unavailable(ArtifactUnavailableReason::ResponseBodyNotBounded);
     if let Err(err) = tokio::io::copy(reader, &mut *tcp_stream).await {
@@ -425,6 +463,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 None,
                 observer,
+                RequestId::new(),
             )
             .await
             .unwrap();
@@ -492,6 +531,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 Some("ab12cd34"),
                 OpenAiRouteObserver::default(),
+                RequestId::new(),
             )
             .await
             .unwrap();
@@ -509,12 +549,14 @@ mod tests {
         );
         assert!(with_target_response.ends_with(body));
 
-        // Absent `x-mesh-target`: today's response, byte-for-byte -- no
-        // `x-mesh-served-by` line added.
+        // Absent `x-mesh-target`: the upstream response byte-for-byte plus
+        // the canonical x-request-id head line -- no `x-mesh-served-by` line
+        // added.
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task_header = header.clone();
+        let request_id = RequestId::new();
         let task = tokio::spawn(async move {
             let (client, _) = listener.accept().await.unwrap();
             let mut client: ClientStream = client.into();
@@ -526,6 +568,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 None,
                 OpenAiRouteObserver::default(),
+                request_id,
             )
             .await
             .unwrap();
@@ -541,10 +584,13 @@ mod tests {
         task.await.unwrap();
         assert!(!String::from_utf8_lossy(&without_target_response).contains("x-mesh-served-by"));
         let mut expected = header.into_bytes();
+        let line = format!("x-request-id: {}\r\n", request_id.as_uuid()).into_bytes();
+        expected.splice(expected.len() - 2..expected.len() - 2, line);
         expected.extend_from_slice(body);
         assert_eq!(
             without_target_response, expected,
-            "absent x-mesh-target must relay today's response byte-for-byte"
+            "absent x-mesh-target must relay the upstream response plus the canonical \
+             x-request-id, nothing else"
         );
     }
 
@@ -577,6 +623,7 @@ mod tests {
                 probe_for(&header),
                 None,
                 OpenAiRouteObserver::default(),
+                RequestId::new(),
             )
             .await
             .unwrap()
@@ -624,6 +671,7 @@ mod tests {
                 probe_for(&html_header),
                 None,
                 OpenAiRouteObserver::default(),
+                RequestId::new(),
             )
             .await
             .unwrap()
@@ -675,6 +723,7 @@ mod tests {
                 probe_for(&task_header),
                 Some("ab12cd34"),
                 OpenAiRouteObserver::default(),
+                RequestId::new(),
             )
             .await
             .unwrap();
@@ -706,6 +755,7 @@ mod tests {
                 probe_for(&task_header),
                 None,
                 OpenAiRouteObserver::default(),
+                RequestId::new(),
             )
             .await
             .unwrap();
@@ -735,10 +785,11 @@ mod tests {
         let captured = Arc::new(Captures::default());
         let captures: Arc<dyn OpenAiArtifactCapture> = captured.clone();
         let task_header = header.clone();
+        let request_id = RequestId::new();
         let task = tokio::spawn(async move {
             let (client, _) = listener.accept().await.unwrap();
             let mut client: ClientStream = client.into();
-            let observer = OpenAiRouteObserver::capture_test_observer(RequestId::new(), &captures);
+            let observer = OpenAiRouteObserver::capture_test_observer(request_id, &captures);
             let mut empty_reader = tokio::io::empty();
             relay_success_response(
                 &mut client,
@@ -761,6 +812,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 None,
                 observer,
+                request_id,
             )
             .await
             .unwrap();
@@ -770,7 +822,11 @@ mod tests {
         socket.read_to_end(&mut client_response).await.unwrap();
         task.await.unwrap();
 
-        assert_eq!(client_response, [header.as_bytes(), body].concat());
+        let mut expected = header.as_bytes().to_vec();
+        let line = format!("x-request-id: {}\r\n", request_id.as_uuid()).into_bytes();
+        expected.splice(expected.len() - 2..expected.len() - 2, line);
+        expected.extend_from_slice(body);
+        assert_eq!(client_response, expected);
         let captures = captured.0.lock().unwrap();
         assert_eq!(captures[0].1, body);
         assert!(
@@ -778,6 +834,116 @@ mod tests {
                 .1
                 .windows(overread.len())
                 .any(|part| part == overread)
+        );
+    }
+
+    // issue #2352, papercut 4: the node assigns a canonical id to every
+    // request; the OpenAI response must echo it like the management API.
+    #[tokio::test]
+    async fn relay_error_response_echoes_the_canonical_request_id() {
+        use tokio::io::AsyncWriteExt;
+
+        let body = br#"{"error":{"message":"context overflow"}}"#;
+        let request_id = RequestId::new();
+        let header = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let probe = ResponseProbe {
+            buffered: header.as_bytes().to_vec(),
+            header_end: header.len(),
+            status_code: 400,
+            retryable_context_overflow: false,
+        };
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            relay_error_response(
+                &mut client,
+                &mut upstream_reader,
+                probe,
+                None,
+                OpenAiRouteObserver::default(),
+                request_id,
+            )
+            .await
+            .unwrap();
+        });
+
+        upstream_writer.write_all(body).await.unwrap();
+        drop(upstream_writer);
+        let mut socket = ClientStream::connect(address).await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        task.await.unwrap();
+
+        let response_text = String::from_utf8_lossy(&response);
+        assert!(
+            response_text.contains(&format!("x-request-id: {}", request_id.as_uuid())),
+            "an error response must echo the canonical request id: {response_text}"
+        );
+    }
+
+    // issue #2352, papercut 4: plain /v1/chat/completions answers take this
+    // passthrough path (streamed or not); the response head must carry the
+    // canonical request id.
+    #[tokio::test]
+    async fn relay_success_response_echoes_the_canonical_request_id() {
+        let body = br#"{"id":"chatcmpl-safe"}"#;
+        let request_id = RequestId::new();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let parsed = ParsedResponseHeaders {
+            header_end: header.len(),
+            status_code: 200,
+            content_length: Some(body.len()),
+            content_type: Some("application/json".to_owned()),
+            chunked: false,
+            client_nonce: None,
+            nonce_origin: None,
+        };
+        let probe = ResponseProbe {
+            buffered: header.as_bytes().to_vec(),
+            header_end: header.len(),
+            status_code: 200,
+            retryable_context_overflow: false,
+        };
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            relay_success_response(
+                &mut client,
+                &mut upstream_reader,
+                probe,
+                parsed,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+                request_id,
+            )
+            .await
+            .unwrap();
+        });
+        upstream_writer.write_all(body).await.unwrap();
+        drop(upstream_writer);
+        let mut socket = ClientStream::connect(address).await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        task.await.unwrap();
+
+        let response_text = String::from_utf8_lossy(&response);
+        assert!(
+            response_text.contains(&format!("x-request-id: {}", request_id.as_uuid())),
+            "the OpenAI response must echo the canonical request id: {response_text}"
         );
     }
 }
