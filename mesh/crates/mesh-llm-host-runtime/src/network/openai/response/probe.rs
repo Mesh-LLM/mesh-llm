@@ -353,6 +353,8 @@ pub(in crate::network::openai::response) async fn read_transformed_response_body
     }
 }
 
+/// Probes a remote OpenAI response using the configured remote first-byte
+/// budget and returns its parsed status and headers.
 pub(in crate::network::openai::response) async fn probe_http_response<R: AsyncRead + Unpin>(
     reader: &mut R,
 ) -> Result<ResponseProbe> {
@@ -471,6 +473,10 @@ fn parse_first_byte_timeout(
     }
 }
 
+/// Reads and parses an HTTP response under one overall deadline.
+///
+/// The same `timeout` bounds the first byte and all continuation reads, so a
+/// peer cannot extend the budget by sending partial headers or body chunks.
 pub(in crate::network::openai::response) async fn probe_http_response_with_timeout<
     R: AsyncRead + Unpin,
 >(

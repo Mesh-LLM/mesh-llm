@@ -1611,15 +1611,17 @@ fn should_retry_uncommitted_remote_attempt(result: RouteAttemptResult) -> bool {
     )
 }
 
-/// Route a request to a known inference target (local OpenAI surface or remote host).
-///
-/// Used by the API proxy after election has determined the target.
+/// Context passed when routing a request to one elected inference target.
 pub(crate) struct RouteTargetContext<'a> {
     pub(crate) request_id: RequestId,
     pub(crate) response_adapter: ResponseAdapter,
     pub(crate) route_observer: OpenAiRouteObserver<'a>,
 }
 
+/// Routes a request to its elected local or remote inference target.
+///
+/// A target timeout is reported as HTTP 504 so OpenAI clients can distinguish
+/// it from context overflow and other unavailable-target responses (HTTP 503).
 pub async fn route_to_target(
     node: mesh::Node,
     tcp_stream: ClientStream,
