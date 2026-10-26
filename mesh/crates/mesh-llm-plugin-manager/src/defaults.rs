@@ -59,7 +59,7 @@ pub enum Surface {
     /// The OpenAI exchange lifecycle hook: it sees every OpenAI exchange the
     /// node handles, prompts and answers included.
     OpenAiExchangeHook,
-    /// A snapshot of the plugin's own shown in `GET /api/status`.
+    /// The plugin's own snapshot, shown in `GET /api/status`.
     StatusContributions,
     /// The local inference observation feed: what this node executes and
     /// its token counts, never prompts or answers.
