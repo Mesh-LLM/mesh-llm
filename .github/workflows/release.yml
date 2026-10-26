@@ -1513,6 +1513,11 @@ jobs:
         uses: ./.github/actions/prepare-skippy-cli-input
         with:
           profile: release
+      # package-cli-release.sh runs mesh_automation; the just automation-run recipe is [unix]-only,
+      # so Windows needs the prebuilt automation binary.
+      - name: Prepare automation
+        if: env.MESH_LLM_AUTOMATION_BIN == ''
+        uses: ./.github/actions/prepare-automation
       - name: Package standalone Windows Skippy CLI
         shell: bash
         env:
