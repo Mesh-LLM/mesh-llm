@@ -115,20 +115,29 @@ pub fn messages_request_to_chat_request(
     let prompt_cache_retention = explicit_prompt_cache_retention
         .or_else(|| request_uses_cache_control(&request).then_some(PromptCacheRetention::InMemory));
     let mut messages = Vec::new();
+    let mut system_parts = Vec::new();
     if let Some(system) = request.system.as_ref() {
-        let text = system_text(system);
-        if !text.is_empty() {
-            messages.push(text_message("system", &text));
-        }
+        push_text_part(&mut system_parts, system_text(system));
     }
     for (turn_index, message) in request.messages.iter().enumerate() {
         let role = message.role.as_str();
-        if role != "user" && role != "assistant" && role != "system" {
+        if role == "system" {
+            // Claude Code sends mid-conversation system turns. Templates such as
+            // Qwen3.5/3.8 refuse a system message after the first turn, so fold
+            // the text into the leading system message in arrival order.
+            push_text_part(&mut system_parts, inline_system_text(&message.content));
+            continue;
+        }
+        if role != "user" && role != "assistant" {
             return Err(InferenceError::invalid_request(format!(
-                "messages[{turn_index}]: role must be `user`, `assistant`, or the Claude Code `system` extension, got `{role}`"
+                "messages[{turn_index}]: role must be `user` or `assistant`, got `{role}`"
             )));
         }
         expand_message(role, &message.content, &mut messages)?;
+    }
+    let system = system_parts.join("\n");
+    if !system.is_empty() {
+        messages.insert(0, text_message("system", &system));
     }
 
     let tools = match request.tools.as_ref() {
@@ -234,6 +243,31 @@ fn system_text(system: &AnthropicSystemPrompt) -> String {
         AnthropicSystemPrompt::Blocks(blocks) => blocks
             .iter()
             .filter_map(|block| block.text.clone())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+/// Append a non-empty system fragment so folded turns keep their order.
+fn push_text_part(parts: &mut Vec<String>, text: String) {
+    if !text.is_empty() {
+        parts.push(text);
+    }
+}
+
+/// Text of a mid-conversation `role: system` turn. Non-text blocks carry no
+/// prompt text for a system turn, so they are dropped the same way the
+/// top-level system prompt drops them.
+fn inline_system_text(content: &AnthropicMessageContent) -> String {
+    match content {
+        AnthropicMessageContent::Text(text) => text.clone(),
+        AnthropicMessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                AnthropicContentBlock::Text(text) => text.text.clone(),
+                _ => None,
+            })
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n"),
