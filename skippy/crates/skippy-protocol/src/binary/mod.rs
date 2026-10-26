@@ -10,11 +10,11 @@ pub use activation::{
 pub use activation_codec::f16_bits::{f16_bits_to_f32, f32_to_f16_bits};
 pub use codec::{
     read_stage_message, read_stage_message_for_codec, read_stage_message_for_codec_policy,
-    recv_ready, recv_reply, send_ready, send_reply_ack, send_reply_ack_with_stats,
-    send_reply_message, send_reply_predicted, send_reply_predicted_tokens_with_stats,
-    send_reply_predicted_tokens_with_window_and_stats, send_reply_predicted_with_stats,
-    send_reply_predicted_with_tokens_and_stats, send_reply_predicted_with_tokens_window_and_stats,
-    write_stage_message,
+    read_stage_message_for_codec_policy_with_frame_budget, recv_ready, recv_reply, send_ready,
+    send_reply_ack, send_reply_ack_with_stats, send_reply_message, send_reply_predicted,
+    send_reply_predicted_tokens_with_stats, send_reply_predicted_tokens_with_window_and_stats,
+    send_reply_predicted_with_stats, send_reply_predicted_with_tokens_and_stats,
+    send_reply_predicted_with_tokens_window_and_stats, write_stage_message,
 };
 pub use types::sampling_flags;
 pub use types::{
@@ -1233,5 +1233,101 @@ mod tests {
             ]
             .contains(&selected)
         );
+    }
+
+    // #2218 regression coverage: the documented stage frame budget must reject
+    // declared lengths before any frame buffer is committed.
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_state_import_before_payload() {
+        let state = StageStateHeader::new(WireMessageKind::StateImport);
+        let bytes = stage_frame_prefix(WireMessageKind::StateImport, 9 * 1024 * 1024, 0, 0, state);
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "state import byte count exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_activation_payload_before_payload() {
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        state.source_stage_index = 0;
+        let mut bytes = Vec::new();
+        push_i32(&mut bytes, WireMessageKind::VerifyWindow as i32);
+        push_i32(&mut bytes, 0);
+        push_i32(&mut bytes, 1);
+        push_i32(&mut bytes, 0);
+        push_i32(&mut bytes, 0);
+        push_state_header(&mut bytes, state);
+        push_i32(&mut bytes, 9 * 1024 * 1024); // declared activation wire bytes
+        push_u64(&mut bytes, 7);
+        push_u64(&mut bytes, 11);
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "activation payload byte count exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_sideband_counts_before_payload() {
+        // 1M + 1M sideband values declare exactly 8 MiB of sideband bytes on top
+        // of the fixed header: past the 8 MiB frame budget, inside the count caps.
+        let state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        let bytes = stage_frame_prefix(
+            WireMessageKind::VerifyWindow,
+            0,
+            MAX_STAGE_SIDEBAND_VALUES as i32,
+            MAX_STAGE_SIDEBAND_VALUES as i32,
+            state,
+        );
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "sideband value count exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_chat_metadata_before_payload() {
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        state.flags |= super::state_flags::CHAT_SAMPLING_METADATA;
+        let mut bytes = stage_frame_prefix(WireMessageKind::VerifyWindow, 0, 0, 0, state);
+        bytes.extend_from_slice(&(9 * 1024 * 1024u32).to_le_bytes());
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "chat sampling metadata length exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_round_trips_in_budget_frames() {
+        let frame = multipart_activation_frame(2);
+        let message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let decoded = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        )
+        .expect("an in-budget frame must decode through the budgeted entry point");
+        assert_eq!(decoded.request_id, 7);
     }
 }
