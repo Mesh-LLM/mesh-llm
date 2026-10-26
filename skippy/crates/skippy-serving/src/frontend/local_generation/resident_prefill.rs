@@ -9,6 +9,7 @@ const MAX_NATIVE_ITERATION_TOKENS: usize = 2_048;
 fn suffix_chunk_tokens(
     lane_count: u32,
     exports_activations: bool,
+    resident_recurrent: bool,
     n_batch: Option<u32>,
     n_ubatch: Option<u32>,
 ) -> usize {
@@ -21,9 +22,16 @@ fn suffix_chunk_tokens(
         // one microbatch at a time adds an unnecessary synchronization boundary.
         return batch;
     }
-    usize::try_from(n_ubatch.unwrap_or(256))
+    let microbatch = usize::try_from(n_ubatch.unwrap_or(256))
         .unwrap_or(batch)
-        .clamp(1, batch)
+        .clamp(1, batch);
+    if resident_recurrent && !exports_activations {
+        // A terminal recurrent stage can let native decode split two
+        // microbatches internally. This halves scheduler round trips for long
+        // prompts while still yielding to other prompts at a bounded quantum.
+        return microbatch.saturating_mul(2).min(batch);
+    }
+    microbatch
 }
 
 fn suffix_chunk_sample_flags(
@@ -73,6 +81,9 @@ impl StageOpenAiBackend {
         let chunk_tokens = suffix_chunk_tokens(
             self.config.lane_count,
             self.config.emits_activation_frame(),
+            self.kv.as_ref().is_some_and(|kv| {
+                kv.payload == crate::kv_integration::StagePrefixCachePayload::KvRecurrent
+            }),
             self.config.n_batch,
             self.config.n_ubatch,
         );
@@ -147,13 +158,36 @@ mod tests {
     use super::{suffix_chunk_sample_flags, suffix_chunk_tokens};
 
     #[test]
-    fn single_lane_prefill_batches_preserve_microbatch_export_and_fairness_limits() {
-        assert_eq!(suffix_chunk_tokens(1, false, Some(2048), Some(512)), 2048);
-        assert_eq!(suffix_chunk_tokens(1, true, Some(2048), Some(512)), 512);
-        assert_eq!(suffix_chunk_tokens(2, false, Some(2048), Some(512)), 512);
-        assert_eq!(suffix_chunk_tokens(1, false, Some(4096), Some(512)), 2048);
-        assert_eq!(suffix_chunk_tokens(2, false, Some(128), Some(512)), 128);
-        assert_eq!(suffix_chunk_tokens(1, false, Some(0), Some(0)), 1);
+    fn prefill_quantum_preserves_microbatch_export_and_fairness_limits() {
+        assert_eq!(
+            suffix_chunk_tokens(1, false, true, Some(2048), Some(512)),
+            2048
+        );
+        assert_eq!(
+            suffix_chunk_tokens(1, true, true, Some(2048), Some(512)),
+            512
+        );
+        assert_eq!(
+            suffix_chunk_tokens(2, false, false, Some(2048), Some(512)),
+            512
+        );
+        assert_eq!(
+            suffix_chunk_tokens(2, false, true, Some(2048), Some(512)),
+            1024
+        );
+        assert_eq!(
+            suffix_chunk_tokens(2, true, true, Some(2048), Some(512)),
+            512
+        );
+        assert_eq!(
+            suffix_chunk_tokens(1, false, true, Some(4096), Some(512)),
+            2048
+        );
+        assert_eq!(
+            suffix_chunk_tokens(2, false, true, Some(128), Some(512)),
+            128
+        );
+        assert_eq!(suffix_chunk_tokens(1, false, true, Some(0), Some(0)), 1);
     }
 
     #[test]
