@@ -366,12 +366,21 @@ pub fn find_layer_package(model_query: &str) -> Option<String> {
 /// existence.
 pub fn find_huggingface_layer_package(model_query: &str) -> Option<String> {
     let (repo, revision) = parse_exact_huggingface_repo(model_query)?;
-    let revision_ref = revision.as_deref().unwrap_or("main");
-    match hf_model_repo_has_file(&repo, revision_ref, "model-package.json") {
-        Ok(true) => Some(format_hf_package_ref(&repo, revision.as_deref())),
+    find_huggingface_layer_package_at_revision(&repo, revision.as_deref())
+}
+
+/// Probe a Hugging Face repo directly and treat it as a layer package only
+/// when the manifest exists at the requested revision.
+pub fn find_huggingface_layer_package_at_revision(
+    repo: &str,
+    revision: Option<&str>,
+) -> Option<String> {
+    let revision_ref = revision.unwrap_or("main");
+    match hf_model_repo_has_file(repo, revision_ref, "model-package.json") {
+        Ok(true) => Some(format_hf_package_ref(repo, revision)),
         Ok(false) => None,
         Err(err) => {
-            if repo_uses_layer_package_suffix(&repo) {
+            if repo_uses_layer_package_suffix(repo) {
                 tracing::warn!(
                     "Hugging Face layer package probe failed for {repo}@{revision_ref}: {err:#}"
                 );
