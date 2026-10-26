@@ -403,6 +403,7 @@ struct SchedulerWorker {
     direct_wave_full: bool,
     telemetry: Option<Telemetry>,
     last_served_direct: bool,
+    last_direct_phase: Option<IterationBatchPhase>,
     last_served_cache_runtime: bool,
     last_emitted_lifecycle_counters: (u64, u64, u64, u64),
 }
@@ -538,6 +539,7 @@ impl IterationScheduler {
                     telemetry: Some(telemetry),
                     compute_meter,
                     last_served_direct: false,
+                    last_direct_phase: None,
                     last_served_cache_runtime: false,
                     last_emitted_lifecycle_counters: (0, 0, 0, 0),
                 }

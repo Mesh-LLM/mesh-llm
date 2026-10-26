@@ -7,6 +7,7 @@ impl SchedulerWorker {
             self.direct_group_batch_size,
             self.max_direct_iteration_tokens,
             self.direct_batch_policy,
+            self.last_direct_phase,
         );
         debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
 
@@ -48,6 +49,7 @@ impl SchedulerWorker {
         if runnable.is_empty() {
             return;
         }
+        self.last_direct_phase = Some(runnable[0].0.phase);
         let batch_size = runnable.len();
         let decode_steps = runnable
             .iter()

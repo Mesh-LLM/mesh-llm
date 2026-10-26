@@ -4,7 +4,7 @@ use crate::frontend::local_generation::CaptureTaskOutstandingGuard;
 /// A direct iteration on this session panics inside the worker's batch run.
 pub(super) const PANICKING_DIRECT_SESSION: &str = "panicking-direct-iteration";
 
-fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
+pub(super) fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
     let (reply, _result) = std_mpsc::sync_channel(1);
     DirectIteration {
         session_id: session_id.to_string(),
@@ -101,6 +101,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
+            last_direct_phase: None,
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
@@ -277,6 +278,7 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
         direct_wave_full: false,
         telemetry: None,
         last_served_direct: false,
+        last_direct_phase: None,
         last_served_cache_runtime: false,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
@@ -498,6 +500,7 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
         direct_wave_full: false,
         telemetry: None,
         last_served_direct: false,
+        last_direct_phase: None,
         last_served_cache_runtime: false,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
@@ -559,6 +562,7 @@ fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
         direct_wave_full: false,
         telemetry: None,
         last_served_direct: false,
+        last_direct_phase: None,
         last_served_cache_runtime: false,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
@@ -618,6 +622,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
+            last_direct_phase: None,
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
@@ -668,6 +673,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
+            last_direct_phase: None,
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
@@ -815,6 +821,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
         direct_wave_full: true,
         telemetry: None,
         last_served_direct: true,
+        last_direct_phase: None,
         last_served_cache_runtime: false,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
@@ -865,6 +872,7 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
         direct_wave_full: true,
         telemetry: None,
         last_served_direct: true,
+        last_direct_phase: None,
         last_served_cache_runtime: false,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
@@ -964,6 +972,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
+            last_direct_phase: None,
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
@@ -1086,6 +1095,7 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
+            last_direct_phase: None,
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
@@ -1182,6 +1192,7 @@ fn scheduler_worker_keeps_serving_after_an_operation_panics() {
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
+            last_direct_phase: None,
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
@@ -1246,6 +1257,7 @@ fn direct_iterations_in_a_panicking_batch_get_an_error() {
             direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
+            last_direct_phase: None,
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
@@ -1284,7 +1296,7 @@ fn recurrent_direct_batches_preserve_phase_policy_and_fifo_progress() {
         direct_iteration("b", 512),
     ]);
     for expected in ["a", "decode", "b"] {
-        let batch = take_direct_iteration_batch_with_policy(&mut queue, 4, 2048, policy);
+        let batch = take_direct_iteration_batch_with_policy(&mut queue, 4, 2048, policy, None);
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].session_id, expected);
     }
