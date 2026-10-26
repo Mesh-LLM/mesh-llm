@@ -1,5 +1,6 @@
 use super::common::is_retryable_context_overflow_response;
 use anyhow::{Context, Result, anyhow, bail};
+use mesh_llm_events::logging::identifiers::RequestId;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -58,6 +59,23 @@ pub(in crate::network::openai::response) fn append_mesh_served_by_header(
     if let Some(served_by) = served_by {
         header.push_str(&format!("{MESH_SERVED_BY_HEADER}: {served_by}\r\n"));
     }
+}
+
+/// The request-id header every OpenAI-facing response echoes with the
+/// canonical request id, the way the management API already does
+/// (`api/management_lifecycle.rs`). A node that rebuilds a response head can
+/// no longer drop the client's trace correlation (issue #2352, papercut 4).
+pub(in crate::network::openai::response) const REQUEST_ID_HEADER: &str = "x-request-id";
+
+/// Echo the canonical request id on a hand-built response header string.
+pub(in crate::network::openai::response) fn append_mesh_request_id_header(
+    header: &mut String,
+    request_id: RequestId,
+) {
+    header.push_str(&format!(
+        "{REQUEST_ID_HEADER}: {}\r\n",
+        request_id.as_uuid()
+    ));
 }
 
 /// Remove an existing `name: ...` header line (case-insensitive) from the

@@ -7,6 +7,7 @@ mod control_listener;
 mod memberships;
 
 include!("connections.rs");
+include!("own_invite_token.rs");
 include!("admission/helpers.rs");
 include!("endpoint_shutdown.rs");
 include!("protocol_compat.rs");
