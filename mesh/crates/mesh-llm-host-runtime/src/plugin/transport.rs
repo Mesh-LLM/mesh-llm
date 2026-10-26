@@ -224,8 +224,12 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                         "Plugin connection closed"
                     );
                 }
+                // The plugin went away by itself (it crashed or exited), so the
+                // supervisor starts it again on its next round. A shutdown or a
+                // disable takes the runtime first and never gets here.
                 let mut summary = summary.lock().await;
-                summary.status = "stopped".into();
+                summary.status = "restarting".into();
+                summary.pid = None;
                 summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
             }
 
