@@ -11,9 +11,9 @@ pub(crate) struct PluginMessageHistory {
 impl PluginMessageHistory {
     pub(super) fn remember(&mut self, message_id: String, now: std::time::Instant) -> bool {
         /// How long to remember a message ID. Any duplicate arriving within
-        /// this window is suppressed. This must be longer than the worst-case
-        /// propagation delay across alternate mesh paths — 120s is generous.
-        const DEDUP_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+        /// this window is suppressed. Match the maximum accepted signed-frame
+        /// lifetime so an origin-signed message cannot be replayed after expiry.
+        const DEDUP_TTL: std::time::Duration = super::PLUGIN_MESSAGE_DEDUP_TTL;
         /// Hard cap to bound memory even if message volume is extreme.
         const DEDUP_HARD_CAP: usize = 100_000;
 
@@ -63,8 +63,8 @@ mod tests {
         let mut history = PluginMessageHistory::default();
         let now = Instant::now();
         assert!(history.remember("message".into(), now));
-        assert!(!history.remember("message".into(), now + Duration::from_secs(119)));
-        assert!(history.remember("message".into(), now + Duration::from_secs(120)));
+        assert!(!history.remember("message".into(), now + Duration::from_secs(149)));
+        assert!(history.remember("message".into(), now + Duration::from_secs(150)));
     }
 
     #[test]
