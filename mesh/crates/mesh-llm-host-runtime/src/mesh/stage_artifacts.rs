@@ -145,6 +145,7 @@ impl Node {
         control_tx: Option<
             tokio::sync::mpsc::UnboundedSender<crate::inference::skippy::StageControlCommand>,
         >,
+        requester: EndpointId,
         request: crate::inference::skippy::StageControlRequest,
     ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
         // Load can take minutes on large stages; use the same
@@ -156,6 +157,7 @@ impl Node {
                 let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                 tx.send(crate::inference::skippy::StageControlCommand::Execute {
                     request,
+                    requester,
                     resp: resp_tx,
                 })
                 .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
@@ -210,6 +212,13 @@ impl Node {
         );
 
         let request = stage_control_request_from_proto(frame)?;
+        // #2217: Claim/Load are already identity-bound by the conversion;
+        // Status/Inventory carry no coordinator identity in the command body,
+        // so the authenticated requester must be a participant of the
+        // topology the query targets. Stop is bound to the running stage's
+        // coordinator in the stage-control loop.
+        self.authorize_remote_stage_control_request(remote, &request)
+            .await?;
         let status_filter = match &request {
             crate::inference::skippy::StageControlRequest::Status(filter) => Some(filter.clone()),
             _ => None,
@@ -247,12 +256,16 @@ impl Node {
                 {
                     self.record_stage_load_topology(load).await;
                 }
-                match Self::execute_stage_control_request_with_sender(control_tx, request.clone())
-                    .await
+                match Self::execute_stage_control_request_with_sender(
+                    control_tx,
+                    remote,
+                    request.clone(),
+                )
+                .await
                 {
                     Ok(response) => response,
                     Err(error) => {
-                        Self::stage_control_load_failure_response(remote, request, error)?
+                        Self::stage_control_load_failure_response(remote, request.clone(), error)?
                     }
                 }
             }
@@ -261,10 +274,22 @@ impl Node {
                     "handle_stage_control: authorization or source resolution failed for {request_kind} from {}: {error}",
                     remote.fmt_short()
                 );
-                Self::stage_control_load_failure_response(remote, request, error)?
+                Self::stage_control_load_failure_response(remote, request.clone(), error)?
             }
         };
         drop(control_tx_guard);
+        // The stage-to-stage transport bridge is aborted only after the
+        // stage-control loop accepted the stop for this requester, so a
+        // rejected stop cannot interrupt a live generation (#2217).
+        if let (
+            crate::inference::skippy::StageControlRequest::Stop(stop),
+            crate::inference::skippy::StageControlResponse::Ready(ready),
+        ) = (&request, &response)
+            && ready.accepted
+        {
+            self.stop_stage_transport_bridge(&stop.topology_id, &stop.run_id, &stop.stage_id)
+                .await;
+        }
         Ok(response)
     }
 
@@ -294,6 +319,81 @@ impl Node {
         }
     }
 
+    /// Authorize the authenticated requester of a remote stage-control
+    /// command against the topology state this node owns (#2217). Claim and
+    /// Load carry their coordinator identity and are bound by the wire
+    /// conversion and again at the execution boundary; Stop is bound to the
+    /// running stage's coordinator in the stage-control loop. Status and
+    /// Inventory carry no identity in the command body, so the requester must
+    /// be a participant of the active topology the query targets.
+    async fn authorize_remote_stage_control_request(
+        &self,
+        remote: EndpointId,
+        request: &crate::inference::skippy::StageControlRequest,
+    ) -> anyhow::Result<()> {
+        let topologies = self
+            .stage_topologies
+            .lock()
+            .await
+            .topologies
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        match request {
+            crate::inference::skippy::StageControlRequest::Status(filter) => {
+                let (Some(topology_id), Some(run_id)) = (&filter.topology_id, &filter.run_id)
+                else {
+                    tracing::warn!(
+                        %remote,
+                        "rejecting remote stage status query without a topology and run target"
+                    );
+                    anyhow::bail!(
+                        "remote stage status query must name the target topology and run"
+                    );
+                };
+                let topology = topologies
+                    .iter()
+                    .find(|topology| {
+                        topology.topology_id == *topology_id && topology.run_id == *run_id
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("unknown stage topology"))?;
+                Self::ensure_stage_topology_participant(topology, remote)
+            }
+            crate::inference::skippy::StageControlRequest::Inventory(inventory) => {
+                let topology = topologies
+                    .iter()
+                    .find(|topology| {
+                        topology.model_id == inventory.model_id
+                            && topology.package_ref == inventory.package_ref
+                            && topology.manifest_sha256 == inventory.manifest_sha256
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("unknown stage topology"))?;
+                Self::ensure_stage_topology_participant(topology, remote)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn ensure_stage_topology_participant(
+        topology: &crate::mesh::StageTopologyInstance,
+        remote: EndpointId,
+    ) -> anyhow::Result<()> {
+        let participant = topology.stages.iter().any(|stage| stage.node_id == remote);
+        if participant {
+            Ok(())
+        } else {
+            tracing::warn!(
+                %remote,
+                topology_id = %topology.topology_id,
+                run_id = %topology.run_id,
+                "rejecting stage control query from a peer outside the stage topology"
+            );
+            anyhow::bail!(
+                "stage control requester is not a participant of the target stage topology"
+            )
+        }
+    }
+
     pub(crate) async fn resolve_stage_control_request(
         &self,
         control_tx: Option<
@@ -316,10 +416,10 @@ impl Node {
                 Self::authorize_stage_load(control_tx, load).await?;
                 self.resolve_stage_load_request(load).await?;
             }
-            crate::inference::skippy::StageControlRequest::Stop(stop) => {
-                self.stop_stage_transport_bridge(&stop.topology_id, &stop.run_id, &stop.stage_id)
-                    .await;
-            }
+            // The stop's stage-to-stage transport bridge is aborted only
+            // after the stage-control loop accepts the stop for the
+            // authenticated requester (#2217).
+            crate::inference::skippy::StageControlRequest::Stop(_) => {}
             crate::inference::skippy::StageControlRequest::Status(_)
             | crate::inference::skippy::StageControlRequest::Inventory(_) => {}
         }
