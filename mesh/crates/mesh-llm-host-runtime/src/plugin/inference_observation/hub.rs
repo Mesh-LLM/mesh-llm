@@ -159,6 +159,12 @@ impl ObservationHub {
         }
         let take = subscriber.queue.len().min(max);
         let events = subscriber.queue.drain(..take).collect();
+        // Events still queued are older than now: the watermark stops just
+        // before the first of them, which the next batch carries.
+        let watermark_unix_ns = subscriber
+            .queue
+            .front()
+            .map_or(watermark_unix_ns, |next| next.at_unix_ns.saturating_sub(1));
         Some(Drained {
             events,
             watermark_unix_ns,

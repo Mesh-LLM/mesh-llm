@@ -48,6 +48,9 @@ struct Summary {
     /// Events the host dropped because this plugin read too slowly; the
     /// figures around a loss undercount.
     lost_events: u64,
+    /// Times this plugin's SDK dropped batches it read too slowly, an unknown
+    /// number of events each; the figures around one undercount too.
+    feed_overflows: u64,
     /// Host time the figures are complete up to, Unix nanoseconds.
     as_of_unix_ns: u64,
 }
@@ -59,6 +62,7 @@ struct Activity {
     /// Finished in the window: (end time, output tokens).
     finished: VecDeque<(u64, u64)>,
     lost_events: u64,
+    feed_overflows: u64,
     watermark: u64,
 }
 
@@ -114,6 +118,7 @@ impl Activity {
             output_tokens,
             output_tokens_per_second: output_tokens as f64 / WINDOW.as_secs_f64(),
             lost_events: self.lost_events,
+            feed_overflows: self.feed_overflows,
             as_of_unix_ns: self.watermark,
         }
     }
@@ -142,6 +147,7 @@ async fn follow(mut context: PluginContext<'static>) {
                 Some(InferenceObservationItem::Batch(batch)) => activity.apply(batch),
                 Some(InferenceObservationItem::Overflowed) => {
                     // Batches were dropped here: start again from a snapshot.
+                    activity.feed_overflows += 1;
                     let Some(next) = subscribe(&mut context).await else { return };
                     feed = next;
                     activity.restart_from(feed.snapshot());

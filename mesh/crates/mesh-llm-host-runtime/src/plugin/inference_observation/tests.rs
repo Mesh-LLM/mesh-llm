@@ -301,6 +301,25 @@ fn a_watermark_covers_every_event_already_stamped() {
 }
 
 #[test]
+fn a_batch_cut_short_does_not_claim_the_events_still_queued() {
+    let frontend = Frontend::new("qwen");
+    let (subscriber, _, _) = frontend.hub.subscribe();
+    for _ in 0..3 {
+        frontend.dispatched(generate_request_id(), Op::ChatCompletion);
+    }
+    let first = frontend.hub.drain(subscriber, 2).unwrap();
+    assert_eq!(first.events.len(), 2);
+    let rest = frontend.hub.drain(subscriber, 2).unwrap();
+    let left_behind = &rest.events[0];
+    assert!(
+        first.watermark_unix_ns < left_behind.at_unix_ns,
+        "the first batch's watermark must not cover an event it did not carry"
+    );
+    assert!(first.watermark_unix_ns >= first.events[1].at_unix_ns);
+    assert!(rest.watermark_unix_ns >= left_behind.at_unix_ns);
+}
+
+#[test]
 fn a_model_is_ready_while_a_frontend_serves_it() {
     let hub = Arc::new(ObservationHub::new());
     let (subscriber, _, _) = hub.subscribe();
