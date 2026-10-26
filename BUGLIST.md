@@ -225,6 +225,45 @@ Each is listed with the reason it does not belong in a bug ranking.
 - **#2200** is excluded: the report itself says it does not establish a MeshLLM software defect
   (host NVMe completion-polled timeouts).
 
+## Progress
+
+Statuses and links were read live from GitHub on 2026-10-26 against `fix/megabugs` at `973ba7faf0`.
+`IN-REVIEW` means an open PR exists, `IN-PROGRESS` means a pushed branch with no PR yet.
+
+| Rank | Issue | Status | Branch | PR | Evidence |
+|---:|---|---|---|---|---|
+| 1 | [#2119](https://github.com/Mesh-LLM/mesh-llm/issues/2119) | NOT-REPRODUCIBLE | — | — | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2119#issuecomment-6402598950) |
+| 2 | [#1955](https://github.com/Mesh-LLM/mesh-llm/issues/1955) | IN-REVIEW | `fix/2-1955-catalog-filters` | [#2580](https://github.com/Mesh-LLM/mesh-llm/pull/2580) | — |
+| 3 | [#2339](https://github.com/Mesh-LLM/mesh-llm/issues/2339) | IN-REVIEW | `fix/3-2339-mcp-cache-metadata` | [#2583](https://github.com/Mesh-LLM/mesh-llm/pull/2583) | — |
+| 4 | [#2210](https://github.com/Mesh-LLM/mesh-llm/issues/2210) | IN-REVIEW | `fix/4-2210-external-endpoint-credentials` | [#2584](https://github.com/Mesh-LLM/mesh-llm/pull/2584) | — |
+| 5 | [#2214](https://github.com/Mesh-LLM/mesh-llm/issues/2214) | IN-REVIEW | `fix/5-2214-plugin-sender-identity` | [#2585](https://github.com/Mesh-LLM/mesh-llm/pull/2585) | — |
+| 6 | [#2212](https://github.com/Mesh-LLM/mesh-llm/issues/2212) | IN-REVIEW | `fix/6-2212-kv-cache-csrf` | [#2587](https://github.com/Mesh-LLM/mesh-llm/pull/2587) | — |
+| 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | IN-REVIEW | `fix/7-2344-console-chat-model-errors` | [#2588](https://github.com/Mesh-LLM/mesh-llm/pull/2588) | — |
+| 8 | [#2135](https://github.com/Mesh-LLM/mesh-llm/issues/2135) | IN-REVIEW | `fix/8-2135-peer-count-measurement` | [#2589](https://github.com/Mesh-LLM/mesh-llm/pull/2589) | — |
+| 9 | [#1954](https://github.com/Mesh-LLM/mesh-llm/issues/1954) | IN-REVIEW | `fix/9-1954-enc-dec-lane-clamp` | [#2590](https://github.com/Mesh-LLM/mesh-llm/pull/2590) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1954#issuecomment-6406117780) |
+| 10 | [#2029](https://github.com/Mesh-LLM/mesh-llm/issues/2029) | IN-REVIEW | `fix/10-2029-unresolved-layer-diagnostics` | [#2591](https://github.com/Mesh-LLM/mesh-llm/pull/2591) | [triage](https://github.com/Mesh-LLM/mesh-llm/issues/2029#issuecomment-6406444518) |
+| 11 | [#2385](https://github.com/Mesh-LLM/mesh-llm/issues/2385) | IN-REVIEW | `fix/11-2385-models-show-refs` | [#2592](https://github.com/Mesh-LLM/mesh-llm/pull/2592) | — |
+| 12 | [#2003](https://github.com/Mesh-LLM/mesh-llm/issues/2003) | IN-PROGRESS | `fix/12-2003-platform-checks-cache-mode` | — | — |
+| 13 | [#2384](https://github.com/Mesh-LLM/mesh-llm/issues/2384) | IN-REVIEW | `fix/13-2384-laya-gpu-capacity` | [#2593](https://github.com/Mesh-LLM/mesh-llm/pull/2593) | — |
+| 14 | [#2195](https://github.com/Mesh-LLM/mesh-llm/issues/2195) | IN-REVIEW | `fix/14-2195-long-prefill-timeout-budget` | [#2594](https://github.com/Mesh-LLM/mesh-llm/pull/2594) | — |
+| 15 | [#2563](https://github.com/Mesh-LLM/mesh-llm/issues/2563) | BLOCKED | `fix/15-2563-llama-canary-infra-blocked` | — | [triage](https://github.com/Mesh-LLM/mesh-llm/issues/2563#issuecomment-6408480561) |
+| 16 | [#2205](https://github.com/Mesh-LLM/mesh-llm/issues/2205) | IN-REVIEW | `fix/16-2205-native-runtime-id-validation` | [#2596](https://github.com/Mesh-LLM/mesh-llm/pull/2596) | [reproduction and fix evidence](https://github.com/Mesh-LLM/mesh-llm/issues/2205#issuecomment-6408703644) |
+| 17 | [#2246](https://github.com/Mesh-LLM/mesh-llm/issues/2246) | IN-REVIEW | `fix/17-2246-payment-admission-public-model-id` | [#2598](https://github.com/Mesh-LLM/mesh-llm/pull/2598) | [reproduction and fix evidence](https://github.com/Mesh-LLM/mesh-llm/issues/2246#issuecomment-6408776729) |
+
+#2246 reproduced on the unmodified base: `cargo test -p mesh-llm-host-runtime --lib
+priced_public_alias_still_requires_payment_after_ingress_alias_rewrite` exits 101. The test composes the real
+`rewrite_public_model_alias` in ingress order with the real `priced_model_requires_payment`, and fails on the
+payment assertion, not its precondition: ingress rewrites the advertised ID
+`tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe…:Q4_K_M` to the internal served name
+`Falcon-H1-1.5B-Instruct-Q4_K_M`, and the exact-key offer lookup then misses a price the operator recorded under
+the advertised ID, so a remote caller is served without payment. Admission now also checks the public identity of
+the same served model, derived with the `public_model_id` mapping the model listing already publishes, and keeps
+the exact-key path for a model with no distinct public alias. `cargo xtool repository affected-crates` limits CI to
+`mesh-llm-host-runtime` and `mesh-llm`; the crate suite, `cargo check --all-targets`, Clippy with `-D warnings`,
+`just no-console-print`, and `cargo fmt --check` pass locally.
+
+Next eligible rank: 18, [#2059](https://github.com/Mesh-LLM/mesh-llm/issues/2059).
+
 ## Regenerating this list
 
 ```sh
