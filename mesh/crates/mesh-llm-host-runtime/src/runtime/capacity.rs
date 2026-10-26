@@ -453,6 +453,26 @@ mod tests {
     }
 
     #[test]
+    fn cpu_laya_does_not_consume_pinned_gpu_capacity() {
+        let ledger = RuntimeCapacityLedger::default();
+        let _gpu_model = ledger
+            .reserve(pooled_request(
+                "runtime-gpu",
+                "Qwen",
+                RuntimeCapacityPool::PinnedGpu("gpu-a".to_string()),
+                1_000,
+                900,
+            ))
+            .expect("GPU model should reserve its device capacity");
+
+        let laya = ledger
+            .reserve(request("runtime-laya", "Laya", 900))
+            .expect("CPU Laya should use host memory, not GPU capacity");
+
+        assert_eq!(laya.capacity_budget_bytes(), 1_000);
+    }
+
+    #[test]
     fn runtime_capacity_reservation_budget_excludes_other_instances() {
         let ledger = RuntimeCapacityLedger::default();
         let _first = ledger
