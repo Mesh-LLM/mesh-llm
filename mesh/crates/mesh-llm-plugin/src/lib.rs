@@ -11,6 +11,7 @@ mod internal_rpc;
 mod io;
 mod manifest;
 pub mod openai_exchange;
+pub mod plugin_status;
 mod runtime;
 mod simple_plugin;
 mod virtual_model;
@@ -106,6 +107,35 @@ pub mod host_capabilities {
     pub const PEER_BLOCKS: &str = "peer_blocks.v1";
     /// The host accepts `PluginKeyRequest` and announces the key it binds.
     pub const PLUGIN_KEYS: &str = "plugin_keys.v1";
+    /// The host accepts `PublishPluginStatusRequest` and shows the snapshot in
+    /// `GET /api/status` (see [`crate::plugin_status`]).
+    pub const PLUGIN_STATUS: &str = "plugin_status.v1";
+
+    /// Why a plugin with `manifest` cannot run on this host: a capability its
+    /// manifest requires that the host does not list.
+    pub(crate) fn unsupported_requirement(
+        manifest: Option<&crate::proto::PluginManifest>,
+        host_supports: impl Fn(&str) -> bool,
+    ) -> Option<&'static str> {
+        let manifest = manifest?;
+        if manifest
+            .openai_exchange_hook
+            .as_ref()
+            .is_some_and(|hook| hook.required)
+            && !host_supports(OPENAI_EXCHANGE)
+        {
+            return Some("host does not support required openai_exchange.v1 contract");
+        }
+        if manifest
+            .plugin_status
+            .as_ref()
+            .is_some_and(|status| status.required)
+            && !host_supports(PLUGIN_STATUS)
+        {
+            return Some("host does not support required plugin_status.v1 contributions");
+        }
+        None
+    }
 }
 
 #[macro_export]

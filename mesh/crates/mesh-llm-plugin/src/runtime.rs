@@ -1017,20 +1017,15 @@ impl PluginRuntime {
             Arc::from(request.host_capabilities.clone());
         let mut plugin = state.plugin.clone().write_owned().await;
         let mut context = Self::context(&state);
-        if plugin
-            .manifest()
-            .and_then(|m| m.openai_exchange_hook)
-            .is_some_and(|h| h.required)
-            && !context.host_supports(crate::host_capabilities::OPENAI_EXCHANGE)
-        {
+        if let Some(message) = crate::host_capabilities::unsupported_requirement(
+            plugin.manifest().as_ref(),
+            |capability| context.host_supports(capability),
+        ) {
             Self::write_payload(
                 &state,
                 request_id,
                 proto::envelope::Payload::ErrorResponse(
-                    PluginError::invalid_request(
-                        "host does not support required openai_exchange.v1 contract",
-                    )
-                    .into_error_response(),
+                    PluginError::invalid_request(message).into_error_response(),
                 ),
             )
             .await?;

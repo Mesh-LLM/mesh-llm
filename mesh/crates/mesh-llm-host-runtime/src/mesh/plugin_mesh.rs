@@ -246,10 +246,38 @@ impl Node {
                 let _ = response_tx.send(self.apply_plugin_key_request(&plugin_id, request));
                 Ok(())
             }
+            crate::plugin::PluginMeshEvent::PluginStatus {
+                plugin_id,
+                generation,
+                schema_version,
+                request,
+                response_tx,
+            } => {
+                let response = self
+                    .runtime_data_collector()
+                    .publish_plugin_status(&plugin_id, generation, schema_version, &request)
+                    .map_err(|rejection| crate::plugin::proto::ErrorResponse {
+                        code: rmcp::model::ErrorCode::INVALID_PARAMS.0,
+                        message: rejection.message(&plugin_id),
+                        data_json: String::new(),
+                    });
+                let _ = response_tx.send(response);
+                Ok(())
+            }
+            crate::plugin::PluginMeshEvent::PluginDisconnected {
+                plugin_id,
+                generation,
+            } => {
+                self.runtime_data_collector()
+                    .mark_plugin_status_unavailable(&plugin_id, generation);
+                Ok(())
+            }
             crate::plugin::PluginMeshEvent::PluginStopped { plugin_id } => {
                 // A disabled or removed plugin no longer runs here, so this
-                // node stops vouching for its key.
+                // node stops vouching for its key and showing its status.
                 self.plugin_keys.remove_own(&plugin_id);
+                self.runtime_data_collector()
+                    .remove_plugin_status(&plugin_id);
                 Ok(())
             }
         }

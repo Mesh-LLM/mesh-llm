@@ -32,6 +32,8 @@ const PLUGIN_ENVELOPE_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const PLUGIN_ENVELOPE_TEST_READ_TIMEOUT: Duration = Duration::from_secs(1);
 const PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT: Duration =
     Duration::from_secs(super::REQUEST_TIMEOUT_SECS);
+/// Bounded: a node that is itself stopping may not read it.
+const PLUGIN_DISCONNECTED_SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn plugin_mesh_stream_error(message: impl Into<String>) -> super::proto::ErrorResponse {
     super::proto::ErrorResponse {
@@ -90,6 +92,8 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
         let authenticated_peer = peer_state.load(Ordering::Acquire);
         Box::pin(async move {
             let result: Result<()> = async {
+                // Started by the first status publication, if any.
+                let mut status_lane = None;
                 loop {
                     tokio::select! {
                         maybe_outbound = outbound_rx.recv() => {
@@ -163,6 +167,21 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         outbound_tx.clone(),
                                     );
                                 }
+                                Some(super::proto::envelope::Payload::PublishPluginStatusRequest(request)) => {
+                                    // Shown under the connection's own name,
+                                    // so one plugin cannot publish as another.
+                                    status_lane
+                                        .get_or_insert_with(|| {
+                                            super::runtime::status_publication::StatusLane::spawn(
+                                                plugin_name.clone(),
+                                                generation,
+                                                runtime.clone(),
+                                                mesh_tx.clone(),
+                                                outbound_tx.clone(),
+                                            )
+                                        })
+                                        .push(request_id, request);
+                                }
                                 Some(super::proto::envelope::Payload::RpcRequest(request)) => {
                                     forward_plugin_request(
                                         plugin_name.clone(),
@@ -227,6 +246,18 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                 let mut summary = summary.lock().await;
                 summary.status = "stopped".into();
                 summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
+                drop(summary);
+                // What this connection published to `/api/status` is now
+                // shown as unavailable.
+                let _ = mesh_tx
+                    .send_timeout(
+                        PluginMeshEvent::PluginDisconnected {
+                            plugin_id: plugin_name.clone(),
+                            generation,
+                        },
+                        PLUGIN_DISCONNECTED_SEND_TIMEOUT,
+                    )
+                    .await;
             }
 
             let mut pending = pending.lock().await;

@@ -332,6 +332,75 @@ impl<'a> PluginContext<'a> {
         }
     }
 
+    /// Publish `data`, a JSON object of at most
+    /// [`crate::plugin_status::MAX_DATA_BYTES`], as this plugin's snapshot in
+    /// `GET /api/status`; it replaces the previous one. The host shows it as
+    /// `ready` for `fresh_for` (0 for the default), then `stale`. See
+    /// [`crate::plugin_status`].
+    ///
+    /// Fails at once, without sending anything, if the host does not list
+    /// [`crate::host_capabilities::PLUGIN_STATUS`]. The host refuses a snapshot
+    /// from a plugin whose manifest does not declare `plugin_status`, one that
+    /// is too large or not an object, and one sent sooner than
+    /// [`crate::plugin_status::MIN_PUBLISH_INTERVAL`] after the last.
+    pub async fn publish_status<T: Serialize>(
+        &mut self,
+        data: &T,
+        fresh_for: std::time::Duration,
+    ) -> Result<proto::PublishPluginStatusResponse> {
+        let request = proto::PublishPluginStatusRequest {
+            data_json: serde_json::to_string(data)?,
+            fresh_for_ms: u64::try_from(fresh_for.as_millis()).unwrap_or(u64::MAX),
+        };
+        self.publish_status_within(request, PEER_BLOCK_REQUEST_TIMEOUT)
+            .await
+    }
+
+    /// Remove this plugin's snapshot from `GET /api/status`.
+    pub async fn withdraw_status(&mut self) -> Result<()> {
+        self.publish_status_within(
+            proto::PublishPluginStatusRequest::default(),
+            PEER_BLOCK_REQUEST_TIMEOUT,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn publish_status_within(
+        &mut self,
+        request: proto::PublishPluginStatusRequest,
+        timeout: std::time::Duration,
+    ) -> Result<proto::PublishPluginStatusResponse> {
+        if !self.host_supports(crate::host_capabilities::PLUGIN_STATUS) {
+            bail!(
+                "status contributions are unsupported by this host: it does not list the `{}` capability",
+                crate::host_capabilities::PLUGIN_STATUS
+            );
+        }
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut pending_guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
+
+        self.send_payload(
+            proto::envelope::Payload::PublishPluginStatusRequest(request),
+            request_id,
+        )
+        .await?;
+
+        let Ok(response) = tokio::time::timeout(timeout, rx).await else {
+            bail!("status publication: the host did not answer within {timeout:?}");
+        };
+        let response = response??;
+        pending_guard.disarm();
+        match response.payload {
+            Some(proto::envelope::Payload::PublishPluginStatusResponse(response)) => Ok(response),
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected status publication response"),
+        }
+    }
+
     pub async fn connect_mesh_stream(
         &mut self,
         request: proto::OpenMeshStreamRequest,
@@ -404,6 +473,7 @@ pub(crate) fn drain_pending_host_responses(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn context(
         host_capabilities: &[&str],
@@ -536,6 +606,101 @@ mod tests {
         let response = context.announce_plugin_key(vec![1; 32]).await.unwrap();
         assert_eq!(response.node_id, "ab".repeat(32));
         assert_eq!(response.binding_signature, vec![2; 64]);
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_status_publication_to_an_older_host_fails_at_once() {
+        let (mut context, mut outbound_rx, pending) = context(&[]);
+        let error = context
+            .publish_status(&serde_json::json!({"watts": 8.2}), Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("unsupported by this host"),
+            "{error}"
+        );
+        assert!(outbound_rx.try_recv().is_err(), "nothing was sent");
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_status_publication_the_host_never_answers_times_out() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::PLUGIN_STATUS]);
+        let error = context
+            .publish_status_within(
+                proto::PublishPluginStatusRequest {
+                    data_json: "{}".into(),
+                    fresh_for_ms: 0,
+                },
+                Duration::from_millis(20),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("did not answer"), "{error}");
+        assert!(outbound_rx.try_recv().is_ok(), "the publication was sent");
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_status_publication_sends_the_data_and_returns_the_host_answer() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::PLUGIN_STATUS]);
+        let host = tokio::spawn(async move {
+            let request = outbound_rx.recv().await.unwrap();
+            let Some(proto::envelope::Payload::PublishPluginStatusRequest(publication)) =
+                request.payload
+            else {
+                panic!("expected a status publication");
+            };
+            assert_eq!(publication.data_json, r#"{"watts":8.2}"#);
+            assert_eq!(publication.fresh_for_ms, 5_000);
+            let sender = remove_pending_host_response(&pending, request.request_id).unwrap();
+            sender
+                .send(Ok(proto::Envelope {
+                    request_id: request.request_id,
+                    payload: Some(proto::envelope::Payload::PublishPluginStatusResponse(
+                        proto::PublishPluginStatusResponse {
+                            received_at_unix_ms: 1_000,
+                            fresh_until_unix_ms: 6_000,
+                        },
+                    )),
+                    ..Default::default()
+                }))
+                .unwrap();
+        });
+        let response = context
+            .publish_status(&serde_json::json!({"watts": 8.2}), Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(response.fresh_until_unix_ms, 6_000);
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_withdrawal_sends_empty_data() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::PLUGIN_STATUS]);
+        let host = tokio::spawn(async move {
+            let request = outbound_rx.recv().await.unwrap();
+            assert!(matches!(
+                request.payload,
+                Some(proto::envelope::Payload::PublishPluginStatusRequest(ref publication))
+                    if publication.data_json.is_empty()
+            ));
+            let sender = remove_pending_host_response(&pending, request.request_id).unwrap();
+            sender
+                .send(Ok(proto::Envelope {
+                    request_id: request.request_id,
+                    payload: Some(proto::envelope::Payload::PublishPluginStatusResponse(
+                        proto::PublishPluginStatusResponse::default(),
+                    )),
+                    ..Default::default()
+                }))
+                .unwrap();
+        });
+        context.withdraw_status().await.unwrap();
         host.await.unwrap();
     }
 }

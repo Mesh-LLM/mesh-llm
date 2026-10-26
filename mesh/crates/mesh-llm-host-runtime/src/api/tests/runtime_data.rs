@@ -262,6 +262,119 @@ async fn runtime_data_sse_bridge_delivers_initial_and_incremental_updates() {
     handle.abort();
 }
 
+async fn publish_test_plugin_status(
+    node: &mesh::Node,
+    plugin_id: &str,
+    data_json: &str,
+) -> Result<plugin::proto::PublishPluginStatusResponse, plugin::proto::ErrorResponse> {
+    let (response_tx, response_rx) = oneshot::channel();
+    node.forward_plugin_event(plugin::PluginMeshEvent::PluginStatus {
+        plugin_id: plugin_id.into(),
+        generation: 1,
+        schema_version: 1,
+        request: plugin::proto::PublishPluginStatusRequest {
+            data_json: data_json.into(),
+            fresh_for_ms: 0,
+        },
+        response_tx,
+    })
+    .await
+    .unwrap();
+    response_rx.await.unwrap()
+}
+
+#[tokio::test]
+async fn status_shows_plugin_contributions_and_keeps_its_shape_without_them() {
+    let state = build_test_mesh_api().await;
+    let node = state.inner.lock().await.node.clone();
+    let (addr, handle) = spawn_management_test_server(state.clone()).await;
+
+    let status_body = request_management_json(state.clone(), "/api/status").await;
+    assert!(
+        status_body.get("plugin_status").is_none(),
+        "no contribution, no field"
+    );
+
+    let mut events = TcpStream::connect(addr).await.unwrap();
+    events
+        .write_all(b"GET /api/events HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    read_until_contains(&mut events, b"data: {", Duration::from_secs(2)).await;
+
+    publish_test_plugin_status(&node, "powermetrics", r#"{"idle_watts":8.2}"#)
+        .await
+        .expect("the snapshot is accepted");
+    publish_test_plugin_status(&node, "other", r#"{"ok":true}"#)
+        .await
+        .expect("the snapshot is accepted");
+    let pushed = read_until_contains(&mut events, b"\"idle_watts\":8.2", Duration::from_secs(2)).await;
+    assert!(String::from_utf8_lossy(&pushed).contains("\"plugin_status\""));
+
+    let status_body = request_management_json(state.clone(), "/api/status").await;
+    let contribution = &status_body["plugin_status"]["powermetrics"];
+    assert_eq!(contribution["schema_version"], json!(1));
+    assert_eq!(contribution["state"], json!("ready"));
+    assert_eq!(contribution["data"], json!({"idle_watts": 8.2}));
+    assert!(contribution["fresh_until_unix_ms"].as_u64() > contribution["received_at_unix_ms"].as_u64());
+    assert_eq!(status_body["plugin_status"]["other"]["data"], json!({"ok": true}));
+
+    node.forward_plugin_event(plugin::PluginMeshEvent::PluginDisconnected {
+        plugin_id: "powermetrics".into(),
+        generation: 1,
+    })
+    .await
+    .unwrap();
+    read_until_contains(&mut events, b"\"state\":\"unavailable\"", Duration::from_secs(2)).await;
+    let status_body = request_management_json(state.clone(), "/api/status").await;
+    assert_eq!(
+        status_body["plugin_status"]["powermetrics"]["state"],
+        json!("unavailable")
+    );
+    assert_eq!(
+        status_body["plugin_status"]["powermetrics"]["data"],
+        json!({"idle_watts": 8.2}),
+        "the last snapshot stays, shown as unavailable"
+    );
+
+    for plugin_id in ["powermetrics", "other"] {
+        node.forward_plugin_event(plugin::PluginMeshEvent::PluginStopped {
+            plugin_id: plugin_id.into(),
+        })
+        .await
+        .unwrap();
+    }
+    let status_body = request_management_json(state.clone(), "/api/status").await;
+    assert!(status_body.get("plugin_status").is_none());
+
+    drop(events);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn a_refused_plugin_status_says_why_and_changes_nothing() {
+    let state = build_test_mesh_api().await;
+    let node = state.inner.lock().await.node.clone();
+
+    let error = publish_test_plugin_status(&node, "powermetrics", "[1, 2]")
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS.0);
+    assert!(error.message.contains("must be a JSON object"), "{}", error.message);
+
+    let oversized = format!(
+        r#"{{"pad":"{}"}}"#,
+        "x".repeat(mesh_llm_plugin::plugin_status::MAX_DATA_BYTES)
+    );
+    let error = publish_test_plugin_status(&node, "powermetrics", &oversized)
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("the limit is 16384"), "{}", error.message);
+
+    let status_body = request_management_json(state, "/api/status").await;
+    assert!(status_body.get("plugin_status").is_none());
+}
+
 #[tokio::test]
 async fn api_runtime_reads_from_collector_snapshot() {
     let state = build_test_mesh_api().await;

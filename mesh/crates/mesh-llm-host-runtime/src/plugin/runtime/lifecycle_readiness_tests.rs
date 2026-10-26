@@ -30,6 +30,7 @@ async fn install_replacement(
         generation: 8,
         authenticated_peer: authenticated,
         initialized_lifecycle: None,
+        status_declaration: Default::default(),
         _child: None,
         connection_task: tokio::spawn(std::future::pending()),
         outbound_tx,
