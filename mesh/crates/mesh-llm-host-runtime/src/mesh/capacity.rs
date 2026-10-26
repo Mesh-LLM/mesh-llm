@@ -8,7 +8,7 @@
 pub use mesh_llm_system::capacity::AdvertisedMemory;
 pub(super) use mesh_llm_system::capacity::{
     advertised_capacity_bytes, advertised_memory, host_ram_offload_gain_bytes,
-    local_fit_capacity_bytes,
+    local_fit_capacity_bytes, mesh_capacity_bytes,
 };
 
 #[cfg(test)]
@@ -39,6 +39,7 @@ mod tests {
 
         assert_eq!(snapshot.vram_bytes, 39_000_000_000);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 491_000_000_000);
+        assert_eq!(snapshot.host_ram_capacity_bytes, 0);
     }
 
     #[test]
@@ -58,6 +59,7 @@ mod tests {
 
         assert_eq!(snapshot.vram_bytes, 39_000_000_000);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 39_000_000_000);
+        assert_eq!(snapshot.host_ram_capacity_bytes, 451_000_000_000);
         assert_eq!(snapshot.memory.ram_offload_bytes, 0);
         // What the fallback message can offer: opting in would add the rest.
         assert_eq!(snapshot.host_ram_offload_gain_bytes, 452_000_000_000);
@@ -78,6 +80,7 @@ mod tests {
 
         assert_eq!(snapshot.vram_bytes, 96_000_000_000);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 96_000_000_000);
+        assert_eq!(snapshot.host_ram_capacity_bytes, 0);
     }
 
     #[test]
@@ -92,6 +95,7 @@ mod tests {
 
         assert_eq!(snapshot.vram_bytes, 0);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 491_000_000_000);
+        assert_eq!(snapshot.host_ram_capacity_bytes, 0);
     }
 
     #[test]
@@ -106,6 +110,20 @@ mod tests {
 
         assert_eq!(snapshot.vram_bytes, 1_000_000_000);
         assert_eq!(snapshot.local_runtime_capacity_bytes, 1_000_000_000);
+    }
+
+    #[test]
+    fn cpu_only_host_uses_node_ram_without_a_separate_host_ram_pool() {
+        let hw = HardwareSurvey {
+            vram_bytes: 24_000_000_000,
+            ram_offload_bytes: 24_000_000_000,
+            ..HardwareSurvey::default()
+        };
+
+        let snapshot = hardware_snapshot_for_start(hw, &NodeRole::Worker, None, 0, false);
+
+        assert_eq!(snapshot.local_runtime_capacity_bytes, 24_000_000_000);
+        assert_eq!(snapshot.host_ram_capacity_bytes, 0);
     }
 
     #[test]
