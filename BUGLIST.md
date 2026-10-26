@@ -238,7 +238,7 @@ Statuses and links were read live from GitHub on 2026-10-26 against `fix/megabug
 | 4 | [#2210](https://github.com/Mesh-LLM/mesh-llm/issues/2210) | IN-REVIEW | `fix/4-2210-external-endpoint-credentials` | [#2584](https://github.com/Mesh-LLM/mesh-llm/pull/2584) | — |
 | 5 | [#2214](https://github.com/Mesh-LLM/mesh-llm/issues/2214) | IN-REVIEW | `fix/5-2214-plugin-sender-identity` | [#2585](https://github.com/Mesh-LLM/mesh-llm/pull/2585) | — |
 | 6 | [#2212](https://github.com/Mesh-LLM/mesh-llm/issues/2212) | IN-REVIEW | `fix/6-2212-kv-cache-csrf` | [#2587](https://github.com/Mesh-LLM/mesh-llm/pull/2587) | — |
-| 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | IN-REVIEW | `fix/7-2344-console-chat-model-errors` | [#2588](https://github.com/Mesh-LLM/mesh-llm/pull/2588) | — |
+| 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | IN-REVIEW | `fix/7-2344-console-chat-model-errors` | [#2623](https://github.com/Mesh-LLM/mesh-llm/pull/2623) | — |
 | 8 | [#2135](https://github.com/Mesh-LLM/mesh-llm/issues/2135) | IN-REVIEW | `fix/8-2135-peer-count-measurement` | [#2589](https://github.com/Mesh-LLM/mesh-llm/pull/2589) | — |
 | 9 | [#1954](https://github.com/Mesh-LLM/mesh-llm/issues/1954) | IN-REVIEW | `fix/9-1954-enc-dec-lane-clamp` | [#2590](https://github.com/Mesh-LLM/mesh-llm/pull/2590) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1954#issuecomment-6406117780) |
 | 10 | [#2029](https://github.com/Mesh-LLM/mesh-llm/issues/2029) | IN-REVIEW | `fix/10-2029-unresolved-layer-diagnostics` | [#2591](https://github.com/Mesh-LLM/mesh-llm/pull/2591) | [triage](https://github.com/Mesh-LLM/mesh-llm/issues/2029#issuecomment-6406444518) |
@@ -292,7 +292,7 @@ confirmation or disposition comment.
 | 4 | [#2210](https://github.com/Mesh-LLM/mesh-llm/issues/2210) | FIXED | `fix/4-2210-external-endpoint-credentials` | [#2584](https://github.com/Mesh-LLM/mesh-llm/pull/2584) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2210#issuecomment-6404684611) |
 | 5 | [#2214](https://github.com/Mesh-LLM/mesh-llm/issues/2214) | FIXED | `fix/5-2214-plugin-sender-identity` | [#2585](https://github.com/Mesh-LLM/mesh-llm/pull/2585) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2214#issuecomment-6404991047) |
 | 6 | [#2212](https://github.com/Mesh-LLM/mesh-llm/issues/2212) | CONFIRMED | `fix/6-2212-kv-cache-csrf` | [#2587](https://github.com/Mesh-LLM/mesh-llm/pull/2587) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2212#issuecomment-6405182670) |
-| 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | CONFIRMED | `fix/7-2344-console-chat-model-errors` | [#2588](https://github.com/Mesh-LLM/mesh-llm/pull/2588) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2344#issuecomment-6405487960) |
+| 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | CONFIRMED | `fix/7-2344-console-chat-model-errors` | [#2623](https://github.com/Mesh-LLM/mesh-llm/pull/2623) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2344#issuecomment-6405487960) |
 | 8 | [#2135](https://github.com/Mesh-LLM/mesh-llm/issues/2135) | CONFIRMED | `fix/8-2135-peer-count-measurement` | [#2589](https://github.com/Mesh-LLM/mesh-llm/pull/2589) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2135#issuecomment-6405671011) |
 | 9 | [#1954](https://github.com/Mesh-LLM/mesh-llm/issues/1954) | FIXED | `fix/9-1954-enc-dec-lane-clamp` | [#2590](https://github.com/Mesh-LLM/mesh-llm/pull/2590) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1954#issuecomment-6406117780) |
 | 10 | [#2029](https://github.com/Mesh-LLM/mesh-llm/issues/2029) | FIXED | `fix/10-2029-unresolved-layer-diagnostics` | [#2591](https://github.com/Mesh-LLM/mesh-llm/pull/2591) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2029#issuecomment-6406262501) |
@@ -317,7 +317,7 @@ confirmation or disposition comment.
 | 29 | [#2508](https://github.com/Mesh-LLM/mesh-llm/issues/2508) | NOT-REPRODUCIBLE | — | — | [disposition](https://github.com/Mesh-LLM/mesh-llm/issues/2508#issuecomment-6427982348) |
 | 30 | [#2217](https://github.com/Mesh-LLM/mesh-llm/issues/2217) | CONFIRMED | `fix/30-2217-stage-control-coordinator-auth` | [#2621](https://github.com/Mesh-LLM/mesh-llm/pull/2621) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2217#issuecomment-6428331830) |
 | 31 | [#2218](https://github.com/Mesh-LLM/mesh-llm/issues/2218) | CONFIRMED | `fix/31-2218-stage-transport-budgets` | [#2622](https://github.com/Mesh-LLM/mesh-llm/pull/2622) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2218#issuecomment-6428881530) |
-| 32 | [#2206](https://github.com/Mesh-LLM/mesh-llm/issues/2206) | TODO | — | — | — |
+| 32 | [#2206](https://github.com/Mesh-LLM/mesh-llm/issues/2206) | CONFIRMED | `fix/32-2206-inference-connection-bounds` | [#2624](https://github.com/Mesh-LLM/mesh-llm/pull/2624) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2206#issuecomment-6429715273) |
 | 33 | [#2207](https://github.com/Mesh-LLM/mesh-llm/issues/2207) | TODO | — | — | — |
 | 34 | [#2208](https://github.com/Mesh-LLM/mesh-llm/issues/2208) | TODO | — | — | — |
 | 35 | [#2193](https://github.com/Mesh-LLM/mesh-llm/issues/2193) | TODO | — | — | — |
