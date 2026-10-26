@@ -45,7 +45,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
     {
         if !super::paid::is_local_origin(tcp_stream) {
             match node.advertised_payment_offers().await {
-                Ok(prices) if priced_model_requires_payment(model, &prices) => {
+                Ok(prices) if admission_requires_payment(node, model, &prices).await => {
                     return super::paid::payment_error(
                         tcp_stream,
                         "this provider requires the Lightning payment protocol",
@@ -89,12 +89,63 @@ pub(in crate::network::openai) async fn route_local_attempt(
     .await
 }
 
+/// Whether a remote request for `model` must be paid for, consulting the
+/// node's served descriptors so an offer keyed by either published identity
+/// of the same model is enforced (#2246).
+#[cfg(feature = "payments")]
+async fn admission_requires_payment(
+    node: &mesh::Node,
+    model: Option<&str>,
+    prices: &std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
+) -> bool {
+    if prices.is_empty() {
+        return false;
+    }
+    let Some(model) = model else {
+        return false;
+    };
+    let descriptors = node.all_served_model_descriptors().await;
+    let aliases = public_identities_for_model(model, &descriptors);
+    priced_model_requires_payment(Some(model), prices, &aliases)
+}
+
+/// The public advertised IDs that ingress may have rewritten away. A request
+/// reaches payment admission under the internal served name, while
+/// `mesh-llm wallet pricing MODEL` records whichever spelling the operator
+/// typed, so the public identity of the same served model is an equally valid
+/// offer key. Returns nothing for a model with no distinct public alias, which
+/// keeps unaliased admission on the exact-key path it has always used.
+#[cfg(feature = "payments")]
+fn public_identities_for_model(
+    model: &str,
+    descriptors: &[mesh::ServedModelDescriptor],
+) -> Vec<String> {
+    use crate::network::openai::ingress::parse_model_with_profile;
+    use crate::network::openai::model_names::public_model_id;
+    use crate::network::openai::routing_rank::descriptor_for_model;
+
+    let (base, profile) = parse_model_with_profile(model);
+    let descriptor = descriptor_for_model(descriptors, base);
+    let public = public_model_id(base, descriptor, profile);
+    if public == model {
+        Vec::new()
+    } else {
+        vec![public]
+    }
+}
+
+/// An offer covers the request when it is keyed by the identity admission was
+/// handed or by any public alias that rewrite resolved away (#2246).
 #[cfg(feature = "payments")]
 fn priced_model_requires_payment(
     model: Option<&str>,
     prices: &std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
+    aliases: &[String],
 ) -> bool {
-    model.is_some_and(|model| prices.contains_key(model))
+    let Some(model) = model else {
+        return false;
+    };
+    prices.contains_key(model) || aliases.iter().any(|alias| prices.contains_key(alias))
 }
 
 async fn acquire_local_attempt_upstream(
@@ -998,7 +1049,7 @@ mod tests {
             },
         )]);
 
-        assert!(priced_model_requires_payment(Some(MODEL), &prices));
+        assert!(priced_model_requires_payment(Some(MODEL), &prices, &[]));
     }
 
     /// #2246: a seller that prices a model under the public ID it advertises
@@ -1085,8 +1136,10 @@ mod tests {
             },
         )]);
 
+        let aliases =
+            public_identities_for_model(request.model_name.as_deref().unwrap(), &descriptors);
         assert!(
-            priced_model_requires_payment(request.model_name.as_deref(), &prices),
+            priced_model_requires_payment(request.model_name.as_deref(), &prices, &aliases),
             "a model priced under its advertised public ID {public} must require payment even \
              though ingress rewrote the request to the internal served name {internal}"
         );
