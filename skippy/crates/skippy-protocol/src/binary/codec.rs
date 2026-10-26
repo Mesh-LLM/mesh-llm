@@ -6,12 +6,36 @@ use super::{
     MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
     MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
     MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES, MAX_STAGE_SIDEBAND_VALUES,
-    MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION, StageLogitBias,
-    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageSamplingConfig,
-    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_LOGIT_BIAS_WIRE_BYTES,
+    STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES,
+    StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow,
+    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
     activation::{decode_activation_frame, encode_raw_activation_frame},
     invalid_data, invalid_input,
 };
+
+/// Worst-case wire size of a declared sampling config: the fixed base fields
+/// plus every bounded string list at its count cap (#2218).
+const MAX_STAGE_SAMPLING_CONFIG_WIRE_BYTES: usize = STAGE_SAMPLING_CONFIG_BASE_BYTES
+    + MAX_STAGE_LOGIT_BIAS * STAGE_LOGIT_BIAS_WIRE_BYTES
+    + (MAX_STAGE_DRY_SEQUENCE_BREAKERS + MAX_STAGE_SAMPLERS)
+        * (std::mem::size_of::<u32>() + MAX_STAGE_SAMPLING_STRING_BYTES);
+
+/// Rejects `declared` additional frame bytes against the per-frame budget
+/// before any allocation, tracking the running declared frame size (#2218).
+fn admit_frame_bytes(
+    frame_budget: &Option<usize>,
+    frame_used: &mut usize,
+    declared: usize,
+    what: &'static str,
+) -> io::Result<()> {
+    let next = frame_used.saturating_add(declared);
+    if frame_budget.is_some_and(|budget| next > budget) {
+        return Err(invalid_data(what));
+    }
+    *frame_used = next;
+    Ok(())
+}
 
 pub fn send_ready(mut writer: impl Write) -> io::Result<()> {
     write_i32(&mut writer, READY_MAGIC)
@@ -339,7 +363,7 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
 }
 
 pub fn read_stage_message(reader: impl Read, _n_embd: i32) -> io::Result<StageWireMessage> {
-    read_stage_message_inner(reader, None)
+    read_stage_message_inner(reader, None, None)
 }
 
 pub fn read_stage_message_for_codec(
@@ -350,6 +374,7 @@ pub fn read_stage_message_for_codec(
     read_stage_message_inner(
         reader,
         Some((expected_codec, StageActivationCodecPolicy::Fixed)),
+        None,
     )
 }
 
@@ -359,12 +384,30 @@ pub fn read_stage_message_for_codec_policy(
     configured_codec: StageActivationCodec,
     policy: StageActivationCodecPolicy,
 ) -> io::Result<StageWireMessage> {
-    read_stage_message_inner(reader, Some((configured_codec, policy)))
+    read_stage_message_inner(reader, Some((configured_codec, policy)), None)
+}
+
+/// Decodes one wire message while enforcing a per-frame wire-byte budget on
+/// every declared length before any frame buffer is committed (#2218).
+///
+/// The transport layer passes the documented stage frame budget
+/// (`crate::MAX_STAGE_FRAME_BYTES`); a frame whose declared payload lengths
+/// cannot fit inside the budget is rejected on the declared lengths alone,
+/// before the payload is read or allocated.
+pub fn read_stage_message_for_codec_policy_with_frame_budget(
+    reader: impl Read,
+    _n_embd: i32,
+    configured_codec: StageActivationCodec,
+    policy: StageActivationCodecPolicy,
+    frame_budget: usize,
+) -> io::Result<StageWireMessage> {
+    read_stage_message_inner(reader, Some((configured_codec, policy)), Some(frame_budget))
 }
 
 fn read_stage_message_inner(
     mut reader: impl Read,
     expected_codec: Option<(StageActivationCodec, StageActivationCodecPolicy)>,
+    frame_budget: Option<usize>,
 ) -> io::Result<StageWireMessage> {
     let kind = WireMessageKind::try_from(read_i32(&mut reader)?)?;
     let pos_start = read_i32(&mut reader)?;
@@ -383,6 +426,7 @@ fn read_stage_message_inner(
     )?;
     let request_id = read_u64(&mut reader)?;
     let session_id = read_u64(&mut reader)?;
+    let mut frame_used = STAGE_WIRE_FIXED_HEADER_BYTES;
     let activation_bytes = if kind == WireMessageKind::StateImport
         || kind == WireMessageKind::Stop
         || state.source_stage_index < 0
@@ -402,15 +446,34 @@ fn read_stage_message_inner(
         }
         activation_wire_byte_count
     };
+    admit_frame_bytes(
+        &frame_budget,
+        &mut frame_used,
+        activation_bytes,
+        "activation payload byte count exceeds frame budget",
+    )?;
     let sampling = if (state.flags & super::state_flags::SAMPLING) != 0 {
+        admit_frame_bytes(
+            &frame_budget,
+            &mut frame_used,
+            MAX_STAGE_SAMPLING_CONFIG_WIRE_BYTES,
+            "sampling config exceeds frame budget",
+        )?;
         Some(read_sampling_config(&mut reader)?)
     } else {
         None
     };
     let chat_sampling_metadata = if (state.flags & super::state_flags::CHAT_SAMPLING_METADATA) != 0
     {
+        let declared_len = read_u32(&mut reader)?;
+        admit_frame_bytes(
+            &frame_budget,
+            &mut frame_used,
+            std::mem::size_of::<u32>() + declared_len as usize,
+            "chat sampling metadata length exceeds frame budget",
+        )?;
         let len = checked_u32_len(
-            read_u32(&mut reader)?,
+            declared_len,
             MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
             "chat sampling metadata length exceeds maximum",
         )?;
@@ -454,12 +517,25 @@ fn read_stage_message_inner(
         "negative wire count",
         "position sideband count exceeds maximum",
     )?;
+    admit_frame_bytes(
+        &frame_budget,
+        &mut frame_used,
+        token_sideband_count * std::mem::size_of::<i32>()
+            + position_sideband_count * std::mem::size_of::<i32>(),
+        "sideband value count exceeds frame budget",
+    )?;
     if kind == WireMessageKind::StateImport {
         let raw_byte_count = checked_i32_len(
             token_count,
             MAX_STAGE_STATE_IMPORT_BYTES,
             "negative wire count",
             "state import byte count exceeds maximum",
+        )?;
+        admit_frame_bytes(
+            &frame_budget,
+            &mut frame_used,
+            raw_byte_count,
+            "state import byte count exceeds frame budget",
         )?;
         let mut raw_bytes = vec![0; raw_byte_count];
         reader.read_exact(&mut raw_bytes)?;

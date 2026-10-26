@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use skippy_protocol::{
-    StageActivationCodec, StageActivationCodecPolicy,
-    binary::{StageWireMessage, read_stage_message_for_codec_policy},
+    MAX_STAGE_FRAME_BYTES, StageActivationCodec, StageActivationCodecPolicy,
+    binary::{StageWireMessage, read_stage_message_for_codec_policy_with_frame_budget},
 };
 use std::io;
 use std::net::{Shutdown, TcpStream};
@@ -68,11 +68,16 @@ pub(super) fn next_connection_session_id() -> u64 {
 ///
 /// A discard therefore usually overtakes the stale windows queued ahead of
 /// it. It is not guaranteed to: `INBOUND_LOOKAHEAD_BYTES` binds first for
-/// wide frames (a full 64-window backlog of `MAX_STAGE_FRAME_BYTES` frames is
-/// far past the byte ceiling), and the reader then parks with the discard
-/// still unread. That degrades to executing the stale tail — today's cost
-/// without this path — rather than deadlocking, because the executor keeps
-/// draining the queue.
+/// wide frames (a full 64-window backlog of `MAX_STAGE_FRAME_BYTES`-sized
+/// frames is far past the byte ceiling), and the reader then parks with the
+/// discard still unread. That degrades to executing the stale tail — today's
+/// cost without this path — rather than deadlocking, because the executor
+/// keeps draining the queue.
+///
+/// Every frame the reader accepts is bounded by the documented
+/// `MAX_STAGE_FRAME_BYTES` budget on its declared lengths before allocation
+/// (#2218), so a single peer cannot commit more than one frame's worth of
+/// userspace buffer on top of this backlog ceiling.
 pub(super) const INBOUND_LOOKAHEAD_MESSAGES: usize =
     2 * skippy_protocol::MAX_VERIFY_WINDOW_PIPELINE_DEPTH;
 
@@ -165,7 +170,7 @@ pub(super) fn spawn_message_reader(
             // an idle socket; a peer that sends a frame prefix and stalls
             // leaves the read below blocked mid-frame, which is why `Drop`
             // shuts down this exact handle.
-            match worker_control.wait_for_readable(&reader) {
+            match worker_control.wait_for_readable(&reader, None) {
                 Ok(true) => {}
                 Ok(false) => return,
                 Err(error) => {
@@ -185,11 +190,15 @@ pub(super) fn spawn_message_reader(
                 stopped: &reader_stopped,
                 worker_control: &worker_control,
             };
-            match read_stage_message_for_codec_policy(
+            // The declared frame lengths are checked against the documented
+            // frame budget before the reader commits a same-size buffer
+            // (#2218); the queue ceilings below still bound the backlog.
+            match read_stage_message_for_codec_policy_with_frame_budget(
                 &mut source,
                 activation_width,
                 activation_codec,
                 activation_codec_policy,
+                MAX_STAGE_FRAME_BYTES,
             ) {
                 Ok(message) => {
                     if message.kind.is_stale_window_discard() {
@@ -477,5 +486,68 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("drop must shut the socket down and join the blocked reader thread");
         drop(peer);
+    }
+
+    /// #2218: a peer that declares a frame past the documented
+    /// `MAX_STAGE_FRAME_BYTES` budget must be rejected on the declared length
+    /// before the reader commits a same-size buffer.
+    #[test]
+    fn reader_rejects_frames_over_the_stage_frame_budget() {
+        let (mut peer, upstream) = connected_pair();
+        let registry = Arc::new(StaleDiscardRegistry::default());
+        let reader = spawn_test_message_reader(&upstream, 1, registry).expect("spawn");
+
+        // A state import frame header declaring 16 MiB of raw bytes — past
+        // the 8 MiB frame budget, inside the 512 MiB protocol cap — with no
+        // payload bytes behind it.
+        let declared: i32 = 16 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        let push = |bytes: &mut Vec<u8>, value: i32| {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        };
+        push(&mut bytes, WireMessageKind::StateImport as i32);
+        push(&mut bytes, 0);
+        push(&mut bytes, declared); // raw byte count
+        push(&mut bytes, 0);
+        push(&mut bytes, 0);
+        let state = StageStateHeader::new(WireMessageKind::StateImport);
+        push(&mut bytes, state.version);
+        push(&mut bytes, state.seq_id);
+        push(&mut bytes, state.phase);
+        push(&mut bytes, state.flags);
+        push(&mut bytes, state.checkpoint_generation);
+        push(&mut bytes, state.prompt_token_count);
+        push(&mut bytes, state.decode_step);
+        push(&mut bytes, state.current_token);
+        push(&mut bytes, state.source_stage_index);
+        push(&mut bytes, 1); // RawF32V1 binary wire id
+        push(&mut bytes, 0); // activation wire byte count
+        bytes.extend_from_slice(&7u64.to_le_bytes());
+        bytes.extend_from_slice(&11u64.to_le_bytes());
+        peer.write_all(&bytes)
+            .expect("write the oversized frame header");
+        drop(peer); // close the peer so a (mis)read of the payload ends in EOF
+
+        let error = match reader.next(None, 0, 0) {
+            Ok(Some(message)) => {
+                panic!("a 16 MiB declared frame must be rejected, not delivered: {message:?}")
+            }
+            Ok(None) => {
+                panic!("a 16 MiB declared frame must produce a per-frame error, not a clean close")
+            }
+            Err(error) => error,
+        };
+        // The context message is opaque; the budget rejection must be the
+        // inner codec error in the chain, not a payload-read failure.
+        let chain = format!("{error:?}");
+        assert!(
+            chain.contains("frame budget"),
+            "the declared length must be rejected against the frame budget before allocation, got: {chain}"
+        );
+        assert!(
+            !chain.contains("failed to fill whole buffer"),
+            "the frame must be rejected on the declared length, not after a payload read: {chain}"
+        );
+        drop(reader);
     }
 }
