@@ -575,9 +575,9 @@ describe('createMeshConnectionAdapter', () => {
     { label: 'prefix-matching server reason', reason: 'HTTP 422: model is unavailable' },
     { label: 'server reason identical to the fallback', reason: 'HTTP 422: Unprocessable Entity' }
   ])('surfaces a $label', async ({ reason }) => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(reason, { status: 422, statusText: 'Unprocessable Entity' })
-    )
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(reason, { status: 422, statusText: 'Unprocessable Entity' }))
     vi.stubGlobal('fetch', fetchMock)
 
     const adapter = createMeshConnectionAdapter('model-a')
