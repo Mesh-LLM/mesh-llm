@@ -922,4 +922,91 @@ mod tests {
             assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
         }
     }
+
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::TcpListener,
+        thread,
+        time::Duration,
+    };
+
+    /// A catalog entry that pins `v1.0.0` and one platform digest.
+    const PINNED_CATALOG_LINE: &str = r#"{"name":"demo","description":"Demo","github_url":"https://github.com/mesh-llm/demo","author_email":"dev@example.com","author_name":"Mesh LLM","version":"v1.0.0","sha256":{"aarch64-apple-darwin":"abababababababababababababababababababababababababababababababab"}}"#;
+
+    /// Serve `body` as the plugin catalog from a one-shot local server, so a
+    /// resolution test never reaches the live dataset.
+    fn serve_catalog(body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/plugins.jsonl", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut request = BufReader::new(match socket.try_clone() {
+                    Ok(clone) => clone,
+                    Err(_) => return,
+                });
+                let mut line = String::new();
+                let _ = request.read_line(&mut line);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes());
+                let _ = socket.flush();
+            }
+        });
+        url
+    }
+
+    /// Resolve a bare catalog name against a catalog served from a local
+    /// one-shot server, and report what release the install would resolve.
+    /// The catalog fetch is the only network call this makes.
+    fn resolve_catalog_name(
+        name: &str,
+        catalog_body: &'static str,
+        root: &std::path::Path,
+    ) -> (String, Option<String>) {
+        let options = PluginInstallOptions {
+            store_root: root.join("store"),
+            install_root: root.join("installed"),
+            catalog_url: serve_catalog(catalog_body),
+            target: PluginTarget::from_os_arch("macos", "aarch64").unwrap(),
+            bundled_plugins_dir: None,
+        };
+        let parsed = parse_install_ref(name).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let resolved = runtime.block_on(async move {
+                resolve_install_source(parsed, &options, &mut |_event| {})
+                    .await
+                    .map(|resolved| {
+                        (
+                            resolved.plugin_name,
+                            resolved.version.map(|version| version.as_str().to_string()),
+                        )
+                    })
+            });
+            let _ = sender.send(resolved);
+        });
+        receiver
+            .recv_timeout(Duration::from_secs(30))
+            .expect("catalog resolution returned")
+            .expect("catalog resolution succeeded")
+    }
+
+    #[test]
+    fn a_named_install_binds_the_catalog_pinned_version_instead_of_latest() {
+        let temp = TempDir::new().unwrap();
+        let (plugin_name, version) = resolve_catalog_name("demo", PINNED_CATALOG_LINE, temp.path());
+
+        assert_eq!(plugin_name, "demo");
+        assert_eq!(
+            version,
+            Some("v1.0.0".to_string()),
+            "the catalog pin must resolve that tag; no version sends the install to GitHub's mutable releases/latest"
+        );
+    }
 }
