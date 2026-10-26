@@ -695,4 +695,106 @@ mod tests {
             chat
         );
     }
+
+    // issue #2352, papercut 4: the translated JSON head (Responses-API and
+    // Anthropic-Messages JSON) must echo the canonical request id.
+    #[tokio::test]
+    async fn relay_translated_json_echoes_the_canonical_request_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body = br#"{"id":"chatcmpl-a","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":4,"total_tokens":6}}"#;
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = format!(
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let header_end = header.len();
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let probe = ResponseProbe {
+                buffered: header.into_bytes(),
+                header_end,
+                status_code: 201,
+                retryable_context_overflow: false,
+            };
+            relay_translated_responses_json(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        upstream_writer.write_all(body).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut output))
+            .await
+            .expect("relay should not wait for upstream keep-alive close")
+            .unwrap();
+        drop(upstream_writer);
+        server_task.await.expect("server task");
+
+        let head = String::from_utf8_lossy(&output);
+        assert!(
+            head.contains("x-request-id: "),
+            "the translated JSON head must echo the canonical request id: {head}"
+        );
+    }
+
+    // issue #2352, papercut 4: the normalized chat-completions JSON head must
+    // echo the canonical request id.
+    #[tokio::test]
+    async fn relay_normalized_chat_completion_json_echoes_the_canonical_request_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body = br#"{"id":"chatcmpl-rid","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":4,"total_tokens":6}}"#;
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let probe = ResponseProbe {
+            buffered: header.as_bytes().to_vec(),
+            header_end: header.len(),
+            status_code: 200,
+            retryable_context_overflow: false,
+        };
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            relay_normalized_chat_completion_json(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        upstream_writer.write_all(body).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        drop(upstream_writer);
+        server_task.await.expect("server task");
+
+        let head = String::from_utf8_lossy(&output);
+        assert!(
+            head.contains("x-request-id: "),
+            "the normalized chat JSON head must echo the canonical request id: {head}"
+        );
+    }
 }

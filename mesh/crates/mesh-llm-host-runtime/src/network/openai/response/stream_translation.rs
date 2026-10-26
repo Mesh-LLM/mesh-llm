@@ -1590,4 +1590,114 @@ data: [DONE]\n\n";
         assert!(chat.response.is_some());
         assert_eq!(responses.response, chat.response);
     }
+
+    // issue #2352, papercut 4: the normalized chat-completions SSE head must
+    // echo the canonical request id.
+    #[tokio::test]
+    async fn relay_normalized_chat_completion_stream_echoes_the_canonical_request_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let probe = ResponseProbe {
+                buffered: header.to_vec(),
+                header_end: header.len(),
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            relay_normalized_chat_completion_stream(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        let chunk = r#"{"id":"chatcmpl-rid","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        upstream_writer
+            .write_all(format!("data: {chunk}\n\n").as_bytes())
+            .await
+            .unwrap();
+        upstream_writer
+            .write_all(b"data: [DONE]\n\n")
+            .await
+            .unwrap();
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        server_task.await.expect("server task");
+
+        let head = String::from_utf8_lossy(&output);
+        assert!(
+            head.contains("x-request-id: "),
+            "the normalized chat SSE head must echo the canonical request id: {head}"
+        );
+    }
+
+    // issue #2352, papercut 4: the Responses-API SSE head must echo the
+    // canonical request id.
+    #[tokio::test]
+    async fn relay_translated_responses_stream_echoes_the_canonical_request_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header =
+            b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let probe = ResponseProbe {
+                buffered: header.to_vec(),
+                header_end: header.len(),
+                status_code: 201,
+                retryable_context_overflow: false,
+            };
+            relay_translated_responses_stream(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        let finish = r#"{"id":"chatcmpl-rid","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        upstream_writer
+            .write_all(format!("data: {finish}\n\n").as_bytes())
+            .await
+            .unwrap();
+        upstream_writer
+            .write_all(b"data: [DONE]\n\n")
+            .await
+            .unwrap();
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        server_task.await.expect("server task");
+
+        let head = String::from_utf8_lossy(&output);
+        assert!(
+            head.contains("x-request-id: "),
+            "the Responses-API SSE head must echo the canonical request id: {head}"
+        );
+    }
 }

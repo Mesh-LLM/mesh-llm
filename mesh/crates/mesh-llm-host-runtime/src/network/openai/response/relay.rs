@@ -780,4 +780,110 @@ mod tests {
                 .any(|part| part == overread)
         );
     }
+
+    // issue #2352, papercut 4: the node assigns a canonical id to every
+    // request; the OpenAI response must echo it like the management API.
+    #[tokio::test]
+    async fn relay_error_response_echoes_the_canonical_request_id() {
+        use tokio::io::AsyncWriteExt;
+
+        let body = br#"{"error":{"message":"context overflow"}}"#;
+        let header = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let probe = ResponseProbe {
+            buffered: header.as_bytes().to_vec(),
+            header_end: header.len(),
+            status_code: 400,
+            retryable_context_overflow: false,
+        };
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            relay_error_response(
+                &mut client,
+                &mut upstream_reader,
+                probe,
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .unwrap();
+        });
+
+        upstream_writer.write_all(body).await.unwrap();
+        drop(upstream_writer);
+        let mut socket = ClientStream::connect(address).await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        task.await.unwrap();
+
+        let response_text = String::from_utf8_lossy(&response);
+        assert!(
+            response_text.contains("x-request-id: "),
+            "an error response must echo the canonical request id: {response_text}"
+        );
+    }
+
+    // issue #2352, papercut 4: plain /v1/chat/completions answers take this
+    // passthrough path (streamed or not); the response head must carry the
+    // canonical request id.
+    #[tokio::test]
+    async fn relay_success_response_echoes_the_canonical_request_id() {
+        let body = br#"{"id":"chatcmpl-safe"}"#;
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let parsed = ParsedResponseHeaders {
+            header_end: header.len(),
+            status_code: 200,
+            content_length: Some(body.len()),
+            content_type: Some("application/json".to_owned()),
+            chunked: false,
+            client_nonce: None,
+            nonce_origin: None,
+        };
+        let probe = ResponseProbe {
+            buffered: header.as_bytes().to_vec(),
+            header_end: header.len(),
+            status_code: 200,
+            retryable_context_overflow: false,
+        };
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            relay_success_response(
+                &mut client,
+                &mut upstream_reader,
+                probe,
+                parsed,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .unwrap();
+        });
+        upstream_writer.write_all(body).await.unwrap();
+        drop(upstream_writer);
+        let mut socket = ClientStream::connect(address).await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        task.await.unwrap();
+
+        let response_text = String::from_utf8_lossy(&response);
+        assert!(
+            response_text.contains("x-request-id: "),
+            "the OpenAI response must echo the canonical request id: {response_text}"
+        );
+    }
 }

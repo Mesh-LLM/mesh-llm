@@ -6,6 +6,7 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 mod control_listener;
 
 include!("connections.rs");
+include!("own_invite_token.rs");
 include!("admission/helpers.rs");
 include!("endpoint_shutdown.rs");
 include!("protocol_compat.rs");
