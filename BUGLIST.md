@@ -25,7 +25,7 @@ Issue bodies were read on the snapshot date. Re-check an issue before starting i
 | 5 | [#2214](https://github.com/Mesh-LLM/mesh-llm/issues/2214) | Inbound plugin frames compare `source_peer_id` with the QUIC sender but only log the mismatch, then dispatch and may forward the forged identity. | 2–4 h |
 | 6 | [#2212](https://github.com/Mesh-LLM/mesh-llm/issues/2212) | KV prune/clear routes are omitted from `requires_trusted_local_access` and accept JSON regardless of `Content-Type`, so a hostile page can evict caches. | 3–4 h |
 | 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | Console Chat lists decision-only System One models and shows only "Chat request failed: 422", never the server's reason. | 3–5 h |
-| 8 | [#2135](https://github.com/Mesh-LLM/mesh-llm/issues/2135) | `status()` returns `{connected: true, peerCount: 1}` from a boolean before any dial; `peer_count` is `usize::from(self.connected)`, not a measurement. | 4–6 h |
+| 8 | [#2135](https://github.com/Mesh-LLM/mesh-llm/issues/2135) | `status()` returns `{connected: true, peerCount: 1}` from a boolean before any dial; `peer_count` is `usize::from(self.connected)`, not a measurement. **IN-PROGRESS** — [PR #2589](https://github.com/Mesh-LLM/mesh-llm/pull/2589) on `fix/8-2135-peer-count-measurement`; [repro confirmed](https://github.com/Mesh-LLM/mesh-llm/issues/2135#issuecomment-6405671011). | 4–6 h |
 | 9 | [#1954](https://github.com/Mesh-LLM/mesh-llm/issues/1954) | The OpenAI concurrency guard and default still read unclamped `config.lane_count` for encoder-decoder models, so startup admits N while the runtime serves one lane. | 4–6 h |
 | 10 | [#2029](https://github.com/Mesh-LLM/mesh-llm/issues/2029) | Unresolvable `*-layers` refs log at `debug`, the resolved set comes up empty, and the coordinator reports only `missing_model_interest` — a diagnostic dead end. | 1 d |
 | 11 | [#2385](https://github.com/Mesh-LLM/mesh-llm/issues/2385) | `models show` rejects `hf://` layer-package refs and pinned MXFP4 refs that `serve --model` and `models download` accept. | 1 d |
@@ -41,7 +41,7 @@ Issue bodies were read on the snapshot date. Re-check an issue before starting i
 | 21 | [#2211](https://github.com/Mesh-LLM/mesh-llm/issues/2211) | Named plugin install passes no expected digest, does not bind the catalog version, and can execute a mutable `latest` release. | 1.5–2 d |
 | 22 | [#2340](https://github.com/Mesh-LLM/mesh-llm/issues/2340) | A path naming a `.gguf` is served from the SafeTensors checkpoint in the same directory, while the node still reports the GGUF's context length. | 1.5–2 d |
 | 23 | [#2343](https://github.com/Mesh-LLM/mesh-llm/issues/2343) | SafeTensors→GGUF conversion types Qwen's `<tool_call>`, `</tool_call>`, `<tool_response>`, `</tool_response>`, ` thinking`, `</think>` as `NORMAL`, so they split into byte-pair pieces. | 1.5–2 d |
-| 24 | [#2338](https://github.com/Mesh-LLM/mesh-llm/issues/2338) | Claude Code gets HTTP 502 on Qwen3.5/3.8: the inline `role: system` turn becomes a second system message and the chat template refuses it. | 1.5–2 d |
+| 24 | [#2338](https://github.com/Mesh-LLM/mesh-llm/issues/2338) | Claude Code gets HTTP 502 on Qwen3.5/3.8: the inline `role: system` turn becomes a second system message and the chat template refuses it. **CONFIRMED** — the Messages adapter now folds inline `role: system` turns into the leading system message, [PR #2612](https://github.com/Mesh-LLM/mesh-llm/pull/2612) on `fix/24-2338-inline-system-fold`; [repro confirmed](https://github.com/Mesh-LLM/mesh-llm/issues/2338#issuecomment-6422277779). | 1.5–2 d |
 | 25 | [#2342](https://github.com/Mesh-LLM/mesh-llm/issues/2342) | `config validate` says "Config valid" for a `model_path` that then stops the whole node, and accepts unknown keys and tables without a warning. **CONFIRMED** — the `model_path` half shipped via #2554; unknown keys/tables now warn, [PR #2615](https://github.com/Mesh-LLM/mesh-llm/pull/2615) on `fix/24b-2342-config-unknown-fields`; [repro confirmed](https://github.com/Mesh-LLM/mesh-llm/issues/2342#issuecomment-6422493389). | 2 d |
 | 26 | [#2348](https://github.com/Mesh-LLM/mesh-llm/issues/2348) | Named `tool_choice` is passed as `required`; if the model calls a different tool the call is dropped, yielding an empty `stop` reply that still bills the tokens. | 2 d |
 | 27 | [#1951](https://github.com/Mesh-LLM/mesh-llm/issues/1951) | `request_workload_class` ends in `_ => None`, so an unclassified inference path gets no workload admission; the only guard is a hand-written enumeration test. **CONFIRMED** — `/v1/messages` is now classified `CausalGeneration` and the workload map is gated against the router's inference surface, [PR #2618](https://github.com/Mesh-LLM/mesh-llm/pull/2618) on `fix/26-1951-workload-route-coverage`; [repro confirmed](https://github.com/Mesh-LLM/mesh-llm/issues/1951#issuecomment-6424609084). | 2 d |
@@ -227,14 +227,42 @@ Each is listed with the reason it does not belong in a bug ranking.
 
 ## Progress
 
-Status is `TODO`, `IN-PROGRESS`, `BLOCKED`, `DONE`, or `NOT-REPRODUCIBLE`. One row per ranked
-issue; add the row the first time an issue is picked up. Branch is the worker branch, PR the
-open pull request, and Evidence the confirmation or disposition comment.
+Statuses and links were read live from GitHub on 2026-10-26 against `fix/megabugs` at `973ba7faf0`.
+`IN-REVIEW` means an open PR exists, `IN-PROGRESS` means a pushed branch with no PR yet.
 
-| # | Status | Branch | PR | Evidence |
-|---|---|---|---|---|
-| 10 | IN-PROGRESS | `fix/10-2029-unresolved-layer-diagnostics` | [#2591](https://github.com/Mesh-LLM/mesh-llm/pull/2591) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2029#issuecomment-6406262501) |
-| 11 | IN-PROGRESS | `fix/11-2385-models-show-refs` | [#2592](https://github.com/Mesh-LLM/mesh-llm/pull/2592) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2385#issuecomment-6406651065) |
+| Rank | Issue | Status | Branch | PR | Evidence |
+|---:|---|---|---|---|---|
+| 1 | [#2119](https://github.com/Mesh-LLM/mesh-llm/issues/2119) | NOT-REPRODUCIBLE | — | — | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2119#issuecomment-6402598950) |
+| 2 | [#1955](https://github.com/Mesh-LLM/mesh-llm/issues/1955) | IN-REVIEW | `fix/2-1955-catalog-filters` | [#2580](https://github.com/Mesh-LLM/mesh-llm/pull/2580) | — |
+| 3 | [#2339](https://github.com/Mesh-LLM/mesh-llm/issues/2339) | IN-REVIEW | `fix/3-2339-mcp-cache-metadata` | [#2583](https://github.com/Mesh-LLM/mesh-llm/pull/2583) | — |
+| 4 | [#2210](https://github.com/Mesh-LLM/mesh-llm/issues/2210) | IN-REVIEW | `fix/4-2210-external-endpoint-credentials` | [#2584](https://github.com/Mesh-LLM/mesh-llm/pull/2584) | — |
+| 5 | [#2214](https://github.com/Mesh-LLM/mesh-llm/issues/2214) | IN-REVIEW | `fix/5-2214-plugin-sender-identity` | [#2585](https://github.com/Mesh-LLM/mesh-llm/pull/2585) | — |
+| 6 | [#2212](https://github.com/Mesh-LLM/mesh-llm/issues/2212) | IN-REVIEW | `fix/6-2212-kv-cache-csrf` | [#2587](https://github.com/Mesh-LLM/mesh-llm/pull/2587) | — |
+| 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | IN-REVIEW | `fix/7-2344-console-chat-model-errors` | [#2588](https://github.com/Mesh-LLM/mesh-llm/pull/2588) | — |
+| 8 | [#2135](https://github.com/Mesh-LLM/mesh-llm/issues/2135) | IN-REVIEW | `fix/8-2135-peer-count-measurement` | [#2589](https://github.com/Mesh-LLM/mesh-llm/pull/2589) | — |
+| 9 | [#1954](https://github.com/Mesh-LLM/mesh-llm/issues/1954) | IN-REVIEW | `fix/9-1954-enc-dec-lane-clamp` | [#2590](https://github.com/Mesh-LLM/mesh-llm/pull/2590) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1954#issuecomment-6406117780) |
+| 10 | [#2029](https://github.com/Mesh-LLM/mesh-llm/issues/2029) | IN-REVIEW | `fix/10-2029-unresolved-layer-diagnostics` | [#2591](https://github.com/Mesh-LLM/mesh-llm/pull/2591) | [triage](https://github.com/Mesh-LLM/mesh-llm/issues/2029#issuecomment-6406444518) |
+| 11 | [#2385](https://github.com/Mesh-LLM/mesh-llm/issues/2385) | IN-REVIEW | `fix/11-2385-models-show-refs` | [#2592](https://github.com/Mesh-LLM/mesh-llm/pull/2592) | — |
+| 12 | [#2003](https://github.com/Mesh-LLM/mesh-llm/issues/2003) | IN-PROGRESS | `fix/12-2003-platform-checks-cache-mode` | — | — |
+| 13 | [#2384](https://github.com/Mesh-LLM/mesh-llm/issues/2384) | IN-REVIEW | `fix/13-2384-laya-gpu-capacity` | [#2593](https://github.com/Mesh-LLM/mesh-llm/pull/2593) | — |
+| 14 | [#2195](https://github.com/Mesh-LLM/mesh-llm/issues/2195) | IN-REVIEW | `fix/14-2195-long-prefill-timeout-budget` | [#2594](https://github.com/Mesh-LLM/mesh-llm/pull/2594) | — |
+| 15 | [#2563](https://github.com/Mesh-LLM/mesh-llm/issues/2563) | BLOCKED | `fix/15-2563-llama-canary-infra-blocked` | — | [triage](https://github.com/Mesh-LLM/mesh-llm/issues/2563#issuecomment-6408480561) |
+| 16 | [#2205](https://github.com/Mesh-LLM/mesh-llm/issues/2205) | IN-REVIEW | `fix/16-2205-native-runtime-id-validation` | [#2596](https://github.com/Mesh-LLM/mesh-llm/pull/2596) | [reproduction and fix evidence](https://github.com/Mesh-LLM/mesh-llm/issues/2205#issuecomment-6408703644) |
+| 17 | [#2246](https://github.com/Mesh-LLM/mesh-llm/issues/2246) | IN-REVIEW | `fix/17-2246-payment-admission-public-model-id` | [#2598](https://github.com/Mesh-LLM/mesh-llm/pull/2598) | [reproduction and fix evidence](https://github.com/Mesh-LLM/mesh-llm/issues/2246#issuecomment-6408776729) |
+
+#2246 reproduced on the unmodified base: `cargo test -p mesh-llm-host-runtime --lib
+priced_public_alias_still_requires_payment_after_ingress_alias_rewrite` exits 101. The test composes the real
+`rewrite_public_model_alias` in ingress order with the real `priced_model_requires_payment`, and fails on the
+payment assertion, not its precondition: ingress rewrites the advertised ID
+`tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe…:Q4_K_M` to the internal served name
+`Falcon-H1-1.5B-Instruct-Q4_K_M`, and the exact-key offer lookup then misses a price the operator recorded under
+the advertised ID, so a remote caller is served without payment. Admission now also checks the public identity of
+the same served model, derived with the `public_model_id` mapping the model listing already publishes, and keeps
+the exact-key path for a model with no distinct public alias. `cargo xtool repository affected-crates` limits CI to
+`mesh-llm-host-runtime` and `mesh-llm`; the crate suite, `cargo check --all-targets`, Clippy with `-D warnings`,
+`just no-console-print`, and `cargo fmt --check` pass locally.
+
+Next eligible rank: 18, [#2059](https://github.com/Mesh-LLM/mesh-llm/issues/2059).
 
 ## Regenerating this list
 
@@ -251,37 +279,42 @@ release tags that will have moved.
 
 ## Progress
 
+Status is `TODO`, `IN-PROGRESS`, `CONFIRMED`, `FIXED`, `NOT-REPRODUCIBLE`, or `BLOCKED`;
+`FIXED` requires a merged PR. One row per ranked issue; add the row the first time an issue is
+picked up. Branch is the worker branch, PR the open or merged pull request, and Evidence the
+confirmation or disposition comment.
+
 | Rank | Issue | Status | Branch | PR | Evidence |
 |---:|---|---|---|---|---|
 | 1 | [#2119](https://github.com/Mesh-LLM/mesh-llm/issues/2119) | NOT-REPRODUCIBLE | `fix/1-2119-value-taking-flags` | — | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2119#issuecomment-6402598950) |
-| 2 | [#1955](https://github.com/Mesh-LLM/mesh-llm/issues/1955) | TODO | — | — | — |
-| 3 | [#2339](https://github.com/Mesh-LLM/mesh-llm/issues/2339) | TODO | — | — | — |
-| 4 | [#2210](https://github.com/Mesh-LLM/mesh-llm/issues/2210) | TODO | — | — | — |
-| 5 | [#2214](https://github.com/Mesh-LLM/mesh-llm/issues/2214) | IN-PROGRESS | `fix/5-2214-plugin-sender-identity` | [#2585](https://github.com/Mesh-LLM/mesh-llm/pull/2585) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2214#issuecomment-6404991047) |
-| 6 | [#2212](https://github.com/Mesh-LLM/mesh-llm/issues/2212) | TODO | — | — | — |
-| 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | TODO | — | — | — |
-| 8 | [#2135](https://github.com/Mesh-LLM/mesh-llm/issues/2135) | TODO | — | — | — |
-| 9 | [#1954](https://github.com/Mesh-LLM/mesh-llm/issues/1954) | TODO | — | — | — |
-| 10 | [#2029](https://github.com/Mesh-LLM/mesh-llm/issues/2029) | TODO | — | — | — |
-| 11 | [#2385](https://github.com/Mesh-LLM/mesh-llm/issues/2385) | TODO | — | — | — |
-| 12 | [#2003](https://github.com/Mesh-LLM/mesh-llm/issues/2003) | TODO | — | — | — |
-| 13 | [#2384](https://github.com/Mesh-LLM/mesh-llm/issues/2384) | TODO | — | — | — |
-| 14 | [#2195](https://github.com/Mesh-LLM/mesh-llm/issues/2195) | TODO | — | — | — |
-| 15 | [#2563](https://github.com/Mesh-LLM/mesh-llm/issues/2563) | TODO | — | — | — |
-| 16 | [#2205](https://github.com/Mesh-LLM/mesh-llm/issues/2205) | TODO | — | — | — |
-| 17 | [#2246](https://github.com/Mesh-LLM/mesh-llm/issues/2246) | TODO | — | — | — |
-| 18 | [#2059](https://github.com/Mesh-LLM/mesh-llm/issues/2059) | TODO | — | — | — |
-| 19 | [#2216](https://github.com/Mesh-LLM/mesh-llm/issues/2216) | TODO | — | — | — |
-| 20 | [#2213](https://github.com/Mesh-LLM/mesh-llm/issues/2213) | TODO | — | — | — |
-| 21 | [#2211](https://github.com/Mesh-LLM/mesh-llm/issues/2211) | TODO | — | — | — |
-| 22 | [#2340](https://github.com/Mesh-LLM/mesh-llm/issues/2340) | TODO | — | — | — |
-| 23 | [#2343](https://github.com/Mesh-LLM/mesh-llm/issues/2343) | TODO | — | — | — |
-| 24 | [#2338](https://github.com/Mesh-LLM/mesh-llm/issues/2338) | TODO | — | — | — |
-| 25 | [#2342](https://github.com/Mesh-LLM/mesh-llm/issues/2342) | TODO | — | — | — |
-| 26 | [#2348](https://github.com/Mesh-LLM/mesh-llm/issues/2348) | TODO | — | — | — |
-| 27 | [#1951](https://github.com/Mesh-LLM/mesh-llm/issues/1951) | TODO | — | — | — |
-| 28 | [#2352](https://github.com/Mesh-LLM/mesh-llm/issues/2352) | TODO | — | — | — |
-| 29 | [#2508](https://github.com/Mesh-LLM/mesh-llm/issues/2508) | TODO | — | — | — |
+| 2 | [#1955](https://github.com/Mesh-LLM/mesh-llm/issues/1955) | FIXED | `fix/2-1955-catalog-filters` | [#2580](https://github.com/Mesh-LLM/mesh-llm/pull/2580) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1955#issuecomment-6403463791) |
+| 3 | [#2339](https://github.com/Mesh-LLM/mesh-llm/issues/2339) | FIXED | `fix/3-2339-mcp-cache-metadata` | [#2583](https://github.com/Mesh-LLM/mesh-llm/pull/2583) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2339#issuecomment-6404315687) |
+| 4 | [#2210](https://github.com/Mesh-LLM/mesh-llm/issues/2210) | FIXED | `fix/4-2210-external-endpoint-credentials` | [#2584](https://github.com/Mesh-LLM/mesh-llm/pull/2584) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2210#issuecomment-6404684611) |
+| 5 | [#2214](https://github.com/Mesh-LLM/mesh-llm/issues/2214) | FIXED | `fix/5-2214-plugin-sender-identity` | [#2585](https://github.com/Mesh-LLM/mesh-llm/pull/2585) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2214#issuecomment-6404991047) |
+| 6 | [#2212](https://github.com/Mesh-LLM/mesh-llm/issues/2212) | CONFIRMED | `fix/6-2212-kv-cache-csrf` | [#2587](https://github.com/Mesh-LLM/mesh-llm/pull/2587) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2212#issuecomment-6405182670) |
+| 7 | [#2344](https://github.com/Mesh-LLM/mesh-llm/issues/2344) | CONFIRMED | `fix/7-2344-console-chat-model-errors` | [#2588](https://github.com/Mesh-LLM/mesh-llm/pull/2588) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2344#issuecomment-6405487960) |
+| 8 | [#2135](https://github.com/Mesh-LLM/mesh-llm/issues/2135) | CONFIRMED | `fix/8-2135-peer-count-measurement` | [#2589](https://github.com/Mesh-LLM/mesh-llm/pull/2589) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2135#issuecomment-6405671011) |
+| 9 | [#1954](https://github.com/Mesh-LLM/mesh-llm/issues/1954) | FIXED | `fix/9-1954-enc-dec-lane-clamp` | [#2590](https://github.com/Mesh-LLM/mesh-llm/pull/2590) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1954#issuecomment-6406117780) |
+| 10 | [#2029](https://github.com/Mesh-LLM/mesh-llm/issues/2029) | FIXED | `fix/10-2029-unresolved-layer-diagnostics` | [#2591](https://github.com/Mesh-LLM/mesh-llm/pull/2591) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2029#issuecomment-6406262501) |
+| 11 | [#2385](https://github.com/Mesh-LLM/mesh-llm/issues/2385) | CONFIRMED | `fix/11-2385-models-show-refs` | [#2592](https://github.com/Mesh-LLM/mesh-llm/pull/2592) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2385#issuecomment-6406651065) |
+| 12 | [#2003](https://github.com/Mesh-LLM/mesh-llm/issues/2003) | NOT-REPRODUCIBLE | `fix/12-2003-platform-checks-cache-mode` | — | [disposition](https://github.com/Mesh-LLM/mesh-llm/issues/2003#issuecomment-6406982137) |
+| 13 | [#2384](https://github.com/Mesh-LLM/mesh-llm/issues/2384) | CONFIRMED | `fix/13-2384-laya-gpu-capacity` | [#2593](https://github.com/Mesh-LLM/mesh-llm/pull/2593) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2384#issuecomment-6407177264) |
+| 14 | [#2195](https://github.com/Mesh-LLM/mesh-llm/issues/2195) | CONFIRMED | `fix/14-2195-long-prefill-timeout-budget` | [#2594](https://github.com/Mesh-LLM/mesh-llm/pull/2594) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2195#issuecomment-6407979111) |
+| 15 | [#2563](https://github.com/Mesh-LLM/mesh-llm/issues/2563) | BLOCKED | `fix/15-2563-llama-canary-infra-blocked` | — | [triage](https://github.com/Mesh-LLM/mesh-llm/issues/2563#issuecomment-6408480561) |
+| 16 | [#2205](https://github.com/Mesh-LLM/mesh-llm/issues/2205) | CONFIRMED | `fix/16-2205-native-runtime-id-validation` | [#2596](https://github.com/Mesh-LLM/mesh-llm/pull/2596) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2205#issuecomment-6408703644) |
+| 17 | [#2246](https://github.com/Mesh-LLM/mesh-llm/issues/2246) | CONFIRMED | `fix/17-2246-payment-admission-public-model-id` | [#2598](https://github.com/Mesh-LLM/mesh-llm/pull/2598) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2246#issuecomment-6408776729) |
+| 18 | [#2059](https://github.com/Mesh-LLM/mesh-llm/issues/2059) | CONFIRMED | `fix/18-2059-moa-paid-peer-402-failover` | [#2599](https://github.com/Mesh-LLM/mesh-llm/pull/2599) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2059#issuecomment-6409202060) |
+| 19 | [#2216](https://github.com/Mesh-LLM/mesh-llm/issues/2216) | CONFIRMED | `fix/19-2216-mcp-session-isolation` | [#2600](https://github.com/Mesh-LLM/mesh-llm/pull/2600) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2216#issuecomment-6409874506) |
+| 20 | [#2213](https://github.com/Mesh-LLM/mesh-llm/issues/2213) | CONFIRMED | `fix/20-2213-direct-peer-gossip-provenance` | [#2602](https://github.com/Mesh-LLM/mesh-llm/pull/2602) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2213#issuecomment-6412037644) |
+| 21 | [#2211](https://github.com/Mesh-LLM/mesh-llm/issues/2211) | CONFIRMED | `fix/21-2211-catalog-pin-plugin-install` | [#2603](https://github.com/Mesh-LLM/mesh-llm/pull/2603) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2211#issuecomment-6412946859) |
+| 22 | [#2340](https://github.com/Mesh-LLM/mesh-llm/issues/2340) | CONFIRMED | `fix/22-2340-gguf-path-served-checkpoint` | [#2606](https://github.com/Mesh-LLM/mesh-llm/pull/2606) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2340#issuecomment-6413856693) |
+| 23 | [#2343](https://github.com/Mesh-LLM/mesh-llm/issues/2343) | CONFIRMED | `fix/23-2343-qwen-special-token-types` | [#2611](https://github.com/Mesh-LLM/mesh-llm/pull/2611) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2343#issuecomment-6422044400) |
+| 24 | [#2338](https://github.com/Mesh-LLM/mesh-llm/issues/2338) | FIXED | `fix/24-2338-inline-system-fold` | [#2612](https://github.com/Mesh-LLM/mesh-llm/pull/2612) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2338#issuecomment-6422277779) |
+| 25 | [#2342](https://github.com/Mesh-LLM/mesh-llm/issues/2342) | FIXED | `fix/24b-2342-config-unknown-fields` | [#2615](https://github.com/Mesh-LLM/mesh-llm/pull/2615) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2342#issuecomment-6422493389) |
+| 26 | [#2348](https://github.com/Mesh-LLM/mesh-llm/issues/2348) | CONFIRMED | `fix/25-2348-named-tool-choice` | [#2616](https://github.com/Mesh-LLM/mesh-llm/pull/2616) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2348#issuecomment-6424434335) |
+| 27 | [#1951](https://github.com/Mesh-LLM/mesh-llm/issues/1951) | FIXED | `fix/26-1951-workload-route-coverage` | [#2618](https://github.com/Mesh-LLM/mesh-llm/pull/2618) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1951#issuecomment-6424609084) |
+| 28 | [#2352](https://github.com/Mesh-LLM/mesh-llm/issues/2352) | CONFIRMED | `fix/27-2352-papercuts` | [#2619](https://github.com/Mesh-LLM/mesh-llm/pull/2619) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2352#issuecomment-6425300831) |
+| 29 | [#2508](https://github.com/Mesh-LLM/mesh-llm/issues/2508) | NOT-REPRODUCIBLE | — | — | [disposition](https://github.com/Mesh-LLM/mesh-llm/issues/2508#issuecomment-6427982348) |
 | 30 | [#2217](https://github.com/Mesh-LLM/mesh-llm/issues/2217) | TODO | — | — | — |
 | 31 | [#2218](https://github.com/Mesh-LLM/mesh-llm/issues/2218) | TODO | — | — | — |
 | 32 | [#2206](https://github.com/Mesh-LLM/mesh-llm/issues/2206) | TODO | — | — | — |

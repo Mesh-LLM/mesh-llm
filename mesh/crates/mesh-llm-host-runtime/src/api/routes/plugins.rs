@@ -959,6 +959,7 @@ mod tests {
             last_protocol_version: Some(1),
             last_status: Some("running".to_string()),
             last_error: None,
+            verified_sha256: None,
         }
     }
 
