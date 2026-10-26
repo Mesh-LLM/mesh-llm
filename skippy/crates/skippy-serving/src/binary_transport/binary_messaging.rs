@@ -65,6 +65,53 @@ use self::session_tracker::ConnectionSessionOwnership;
 /// How often a waiting connection worker rechecks the shutdown flag, matching
 /// the downstream DOWNSTREAM_SHUTDOWN_POLL cadence in stage_execution.
 const WORKER_SHUTDOWN_POLL: Duration = Duration::from_millis(100);
+/// How long an accepted peer may stay silent before the connection worker
+/// gives up waiting for its first message (#2218).
+const STAGE_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Waits for the connection's first message to become readable.
+///
+/// The worker passes `STAGE_HANDSHAKE_DEADLINE` so a silent peer cannot hold
+/// the dedicated worker thread and its tracked socket past the deadline
+/// (#2218). Returns `Ok(false)` when the server is shutting down.
+fn wait_for_first_message(
+    control: &ConnectionWorkerControl,
+    stream: &TcpStream,
+    _deadline: Duration,
+) -> io::Result<bool> {
+    // #2218 (red): the deadline is not enforced yet; the fix commit enforces it.
+    control.wait_for_readable(stream)
+}
+
+/// Admits connection worker threads against the process-wide connection cap
+/// (#2218): a single admitted peer must not be able to spawn unbounded
+/// worker threads by accepting and stalling connections.
+#[derive(Default)]
+struct ConnectionAdmission {
+    live: usize,
+    limit: usize,
+}
+
+impl ConnectionAdmission {
+    fn new(limit: usize) -> Self {
+        Self { live: 0, limit }
+    }
+
+    fn live(&self) -> usize {
+        self.live
+    }
+
+    /// #2218 (red): the cap is not enforced yet; the fix commit makes a
+    /// connection beyond `limit` inadmissible.
+    fn try_acquire(&mut self) -> bool {
+        self.live += 1;
+        true
+    }
+
+    fn release(&mut self, count: usize) {
+        self.live = self.live.saturating_sub(count);
+    }
+}
 
 /// Darwin `recv`/`peek` error for an expired `SO_RCVTIMEO` (os error 22).
 const EINVAL: i32 = 22;
@@ -522,6 +569,12 @@ fn run_binary_stage(
         output_activation_width,
     );
 
+    // #2218: each accepted connection gets a dedicated worker thread plus a
+    // reader thread; admit them against a bounded permit so one peer cannot
+    // exhaust the process. Covers the main and the prediction-return
+    // connections of every in-flight request, plus headroom.
+    let connection_limit = 2 * max_inflight.max(1) + 8;
+    let mut connection_admission = ConnectionAdmission::new(connection_limit);
     let accept_result = (|| -> Result<()> {
         while !shutdown.load(Ordering::SeqCst) {
             if frontend_task
@@ -530,7 +583,9 @@ fn run_binary_stage(
             {
                 break;
             }
+            let live_before = connection_workers.0.len();
             let panicked_workers = connection_workers.reap_finished();
+            connection_admission.release(live_before.saturating_sub(connection_workers.0.len()));
             if panicked_workers > 0 {
                 telemetry.emit(
                     "stage.connection_worker_panic",
@@ -552,6 +607,12 @@ fn run_binary_stage(
                 Err(error) => return Err(error).context("accept binary stage connection"),
             };
             prepare_binary_stage_connection(&upstream)?;
+            if !connection_admission.try_acquire() {
+                // #2218 (red): the cap is not enforced yet, so this branch
+                // is unreachable today.
+                let _ = upstream.shutdown(std::net::Shutdown::Both);
+                continue;
+            }
             let peer_addr = upstream.peer_addr().ok();
             tracing::debug!(
                 "binary accepted connection: stage_id={} peer={peer_addr:?}",
@@ -586,8 +647,7 @@ fn run_binary_stage(
                         "binary sent ready: stage_id={} peer={peer_addr:?}",
                         config.stage_id
                     );
-                    if !task_control
-                        .wait_for_readable(&upstream)
+                    if !wait_for_first_message(&task_control, &upstream, STAGE_HANDSHAKE_DEADLINE)
                         .context("wait for the first binary stage message")?
                     {
                         return Ok(());
@@ -710,8 +770,8 @@ fn activation_width_from_graph(
 #[cfg(test)]
 mod shutdown_tests {
     use super::{
-        ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers, activation_width_from_graph,
-        finish_connection_workers,
+        ConnectionAdmission, ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers,
+        activation_width_from_graph, finish_connection_workers, wait_for_first_message,
     };
     use crate::test_activation::boundary_f32;
     use anyhow::anyhow;
@@ -948,6 +1008,54 @@ mod shutdown_tests {
         assert_eq!(workers.0.len(), 1, "a running worker must not be reaped");
         stop_tx.send(()).unwrap();
         workers.shutdown().unwrap();
+    }
+
+    /// #2218: a silent peer must not hold the first-message wait past the
+    /// handshake deadline; the wait must release the connection with an error
+    /// so the worker thread and its tracked socket are released.
+    #[test]
+    fn first_message_wait_releases_a_silent_peer_at_the_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _silent_peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let control = Arc::new(ConnectionWorkerControl::default());
+        control.track(&server).unwrap();
+        let wait_control = control.clone();
+        let (done, finished) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let result = wait_for_first_message(&wait_control, &server, Duration::from_millis(500));
+            let _ = done.send(result);
+        });
+        let result = finished.recv_timeout(Duration::from_secs(5)).expect(
+            "a silent peer must not hold the first-message wait past the handshake deadline",
+        );
+        let _ = waiter.join();
+        assert!(
+            result.is_err(),
+            "an expired handshake must end the connection with an error, got: {result:?}"
+        );
+    }
+
+    /// #2218: connections beyond the cap must not spawn more worker threads;
+    /// reaping a finished worker frees its permit.
+    #[test]
+    fn connection_admission_rejects_connections_beyond_the_cap() {
+        let mut admission = ConnectionAdmission::new(4);
+        for _ in 0..4 {
+            assert!(
+                admission.try_acquire(),
+                "a live connection under the cap must be admitted"
+            );
+        }
+        assert!(
+            !admission.try_acquire(),
+            "a connection beyond the cap must not spawn another worker thread"
+        );
+        admission.release(1);
+        assert!(
+            admission.try_acquire(),
+            "reaping a finished worker must free its permit"
+        );
     }
 }
 

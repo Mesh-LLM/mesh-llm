@@ -478,4 +478,60 @@ mod tests {
             .expect("drop must shut the socket down and join the blocked reader thread");
         drop(peer);
     }
+
+    /// #2218: a peer that declares a frame past the documented
+    /// `MAX_STAGE_FRAME_BYTES` budget must be rejected on the declared length
+    /// before the reader commits a same-size buffer.
+    #[test]
+    fn reader_rejects_frames_over_the_stage_frame_budget() {
+        let (mut peer, upstream) = connected_pair();
+        let registry = Arc::new(StaleDiscardRegistry::default());
+        let reader = spawn_test_message_reader(&upstream, 1, registry).expect("spawn");
+
+        // A state import frame header declaring 16 MiB of raw bytes — past
+        // the 8 MiB frame budget, inside the 512 MiB protocol cap — with no
+        // payload bytes behind it.
+        let declared = 16 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        let push = |bytes: &mut Vec<u8>, value: i32| {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        };
+        push(&mut bytes, WireMessageKind::StateImport as i32);
+        push(&mut bytes, 0);
+        push(&mut bytes, declared as i32); // raw byte count
+        push(&mut bytes, 0);
+        push(&mut bytes, 0);
+        let state = StageStateHeader::new(WireMessageKind::StateImport);
+        push(&mut bytes, state.version);
+        push(&mut bytes, state.seq_id);
+        push(&mut bytes, state.phase);
+        push(&mut bytes, state.flags);
+        push(&mut bytes, state.checkpoint_generation);
+        push(&mut bytes, state.prompt_token_count);
+        push(&mut bytes, state.decode_step);
+        push(&mut bytes, state.current_token);
+        push(&mut bytes, state.source_stage_index);
+        push(&mut bytes, 1); // RawF32V1 binary wire id
+        push(&mut bytes, 0); // activation wire byte count
+        bytes.extend_from_slice(&7u64.to_le_bytes());
+        bytes.extend_from_slice(&11u64.to_le_bytes());
+        peer.write_all(&bytes)
+            .expect("write the oversized frame header");
+        drop(peer); // close the peer so a (mis)read of the payload ends in EOF
+
+        let error = match reader.next(None, 0, 0) {
+            Ok(Some(message)) => {
+                panic!("a 16 MiB declared frame must be rejected, not delivered: {message:?}")
+            }
+            Ok(None) => {
+                panic!("a 16 MiB declared frame must produce a per-frame error, not a clean close")
+            }
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            error.contains("frame budget"),
+            "the declared length must be rejected against the frame budget before allocation, got: {error}"
+        );
+        drop(reader);
+    }
 }

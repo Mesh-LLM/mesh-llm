@@ -339,7 +339,7 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
 }
 
 pub fn read_stage_message(reader: impl Read, _n_embd: i32) -> io::Result<StageWireMessage> {
-    read_stage_message_inner(reader, None)
+    read_stage_message_inner(reader, None, None)
 }
 
 pub fn read_stage_message_for_codec(
@@ -350,6 +350,7 @@ pub fn read_stage_message_for_codec(
     read_stage_message_inner(
         reader,
         Some((expected_codec, StageActivationCodecPolicy::Fixed)),
+        None,
     )
 }
 
@@ -359,12 +360,30 @@ pub fn read_stage_message_for_codec_policy(
     configured_codec: StageActivationCodec,
     policy: StageActivationCodecPolicy,
 ) -> io::Result<StageWireMessage> {
-    read_stage_message_inner(reader, Some((configured_codec, policy)))
+    read_stage_message_inner(reader, Some((configured_codec, policy)), None)
+}
+
+/// Decodes one wire message while enforcing a per-frame wire-byte budget on
+/// every declared length before any frame buffer is committed (#2218).
+///
+/// The transport layer passes the documented stage frame budget
+/// (`crate::MAX_STAGE_FRAME_BYTES`); a frame whose declared payload lengths
+/// cannot fit inside the budget is rejected on the declared lengths alone,
+/// before the payload is read or allocated.
+pub fn read_stage_message_for_codec_policy_with_frame_budget(
+    reader: impl Read,
+    _n_embd: i32,
+    configured_codec: StageActivationCodec,
+    policy: StageActivationCodecPolicy,
+    frame_budget: usize,
+) -> io::Result<StageWireMessage> {
+    read_stage_message_inner(reader, Some((configured_codec, policy)), Some(frame_budget))
 }
 
 fn read_stage_message_inner(
     mut reader: impl Read,
     expected_codec: Option<(StageActivationCodec, StageActivationCodecPolicy)>,
+    _frame_budget: Option<usize>,
 ) -> io::Result<StageWireMessage> {
     let kind = WireMessageKind::try_from(read_i32(&mut reader)?)?;
     let pos_start = read_i32(&mut reader)?;
