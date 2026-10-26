@@ -24,6 +24,9 @@ use tokio::sync::Mutex;
 use crate::plugin::{self, PluginManager, PluginRpcBridge, RpcResult};
 
 mod external_mcp;
+#[cfg(test)]
+mod list_cache_metadata;
+mod result_cache;
 mod tool_dispatch;
 
 use external_mcp::ExternalMcpPool;
