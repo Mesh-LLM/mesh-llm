@@ -15,6 +15,12 @@ The cache is deliberately exact. It does not guess that two prompts are
 "similar enough"; it reuses runtime state only when the model, topology, stage,
 layer range, runtime layout, position, and token prefix all match.
 
+The `cachegen::paper` module is a CPU oracle for the paper's 8-bit anchors,
+layer-dependent original-anchor deltas, and profiled arithmetic streams. It
+accepts profiles trained on separate KV data and has byte-level fixtures from
+the Jianyang Python reference. The serving archive still uses its earlier
+codec; this oracle does not enable paper-faithful L3 storage or Metal decode.
+
 ## Boundaries
 
 ```mermaid

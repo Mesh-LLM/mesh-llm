@@ -516,6 +516,7 @@ impl Default for RuntimeConfig {
 pub fn parse_cache_type(value: &str) -> Result<u32> {
     let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
     match normalized.as_str() {
+        "f32" => Ok(GGML_TYPE_F32),
         "" | "f16" => Ok(GGML_TYPE_F16),
         "q4" | "q4_0" => Ok(GGML_TYPE_Q4_0),
         "q8" | "q8_0" => Ok(GGML_TYPE_Q8_0),
@@ -881,7 +882,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_cache_type_accepts_legacy_mesh_kv_defaults() -> anyhow::Result<()> {
+    fn parse_cache_type_accepts_supported_kv_formats() -> anyhow::Result<()> {
+        assert_eq!(parse_cache_type("f32")?, GGML_TYPE_F32);
         assert_eq!(parse_cache_type("f16")?, GGML_TYPE_F16);
         assert_eq!(parse_cache_type("q8_0")?, GGML_TYPE_Q8_0);
         assert_eq!(parse_cache_type("q4_0")?, GGML_TYPE_Q4_0);

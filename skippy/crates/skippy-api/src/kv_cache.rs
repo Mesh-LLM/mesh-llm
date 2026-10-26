@@ -71,8 +71,8 @@ impl KvCachePolicy {
                 v_type: KvCacheType::Q4_0,
             },
             // BF16 maps conservatively to F16 until BF16 live KV is qualified.
-            // FP8 and F32 declarations also fall back because the embedded
-            // runtime does not currently expose a qualified matching type.
+            // FP8 and F32 declarations also fall back because publisher-driven
+            // live-KV defaults are not yet qualified for those types.
             _ => Self::safe_default(),
         }
     }

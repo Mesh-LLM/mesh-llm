@@ -298,7 +298,7 @@ pub fn exact_state_identity_for_stage(config: &StageConfig, payload_kind: &str) 
         .as_ref()
         .is_some_and(|cache| cache.codec == StageKvCacheCodec::CacheGen)
     {
-        hasher.update(b"lossy-disk-codec:cachegen-kv-envelope-v1/cachegen-v1");
+        hasher.update(b"lossy-disk-codec:cachegen-kv-envelope-v1/anchor-delta-f32-v1");
     }
     format!("blake3:{}", hasher.finalize().to_hex())
 }

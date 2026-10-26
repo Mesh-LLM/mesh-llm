@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::binary::{f16_bits_to_f32, f32_to_f16_bits};
 
+use super::anchor_delta;
 use super::lmcache::{
     MAX_TOKENS_PER_CHUNK, bins_for_layer, decode_f16_segment, encode_f16_segment_packed,
     validate_f16_segment,
@@ -214,8 +215,8 @@ pub fn encode_page(layout: &PageLayout, raw: &[u8]) -> Result<CacheGenArchive> {
         bytes.extend_from_slice(&record.payload);
         if record.kind != RecordKind::Exact {
             tile_count += 1;
-            let segment = validate_f16_segment(&record.payload)?;
-            let values = segment.rows.saturating_mul(segment.channels);
+            let (rows, channels) = segment_shape(record.kind, &record.payload)?;
+            let values = rows.saturating_mul(channels);
             let codec_working = record
                 .decoded_len
                 .saturating_add(values.saturating_mul(5))
@@ -349,8 +350,7 @@ pub fn decode_page(archive: &[u8], expected_raw_len: usize) -> Result<Vec<u8>> {
                 let output = decoded
                     .get_mut(record.output_offset..output_end)
                     .ok_or_else(|| anyhow!("record output range exceeds KV payload"))?;
-                let f16 = decode_f16_segment(record.payload)?;
-                let tile = encode_native_rows_from_f16(value_type, &f16, record.token_count)?;
+                let tile = decode_native_segment(value_type, record.payload, record.token_count)?;
                 output.copy_from_slice(&tile);
             }
             None => {
@@ -361,9 +361,8 @@ pub fn decode_page(archive: &[u8], expected_raw_len: usize) -> Result<Vec<u8>> {
                 decoded[record.output_offset..output_end].copy_from_slice(record.payload);
             }
             Some((value_type, true)) => {
-                let f16 = decode_f16_segment(record.payload)?;
                 let token_major =
-                    encode_native_rows_from_f16(value_type, &f16, record.token_count)?;
+                    decode_native_segment(value_type, record.payload, record.token_count)?;
                 let dims = record.decoded_len / record.token_count / record.element_bytes;
                 let layer_bytes = record.total_tokens * dims * record.element_bytes;
                 let output_end = record.output_offset + layer_bytes;
@@ -472,8 +471,13 @@ fn encode_component(
 
     for layer in 0..layer_count {
         let layer_offset = layer * k_layer_bytes;
-        for row_start in (0..token_count).step_by(MAX_TOKENS_PER_CHUNK) {
-            let rows = (token_count - row_start).min(MAX_TOKENS_PER_CHUNK);
+        let chunk_rows = if component.k_type == ValueType::F32 {
+            anchor_delta::MAX_ROWS
+        } else {
+            MAX_TOKENS_PER_CHUNK
+        };
+        for row_start in (0..token_count).step_by(chunk_rows) {
+            let rows = (token_count - row_start).min(chunk_rows);
             let local_offset = layer_offset + row_start * k_row;
             let tile = &component_raw[local_offset..local_offset + rows * k_row];
             records.push(OwnedRecord {
@@ -484,8 +488,11 @@ fn encode_component(
                 token_count: rows as u64,
                 token_start: 0,
                 total_tokens: 0,
-                payload: encode_f16_segment_packed(
-                    &decode_native_rows_to_f16(component.k_type, tile, rows, k_row)?,
+                payload: encode_native_segment(
+                    component.k_type,
+                    tile,
+                    rows,
+                    k_row,
                     k_channels,
                     bins_for_layer(layer, layer_count, true),
                 )?,
@@ -498,36 +505,41 @@ fn encode_component(
     for layer in 0..v_layers {
         let layer_offset = v_base + layer * v_layer_bytes;
         let layer_tile = &component_raw[layer_offset..layer_offset + v_layer_bytes];
-        for row_start in (0..token_count).step_by(MAX_TOKENS_PER_CHUNK) {
-            let rows = (token_count - row_start).min(MAX_TOKENS_PER_CHUNK);
-            let (kind, output_offset, encoded_input, token_start, total_tokens) =
-                if component.v_transposed {
-                    let native = transpose_range_to_token_major(
-                        layer_tile,
-                        token_count,
-                        row_start,
-                        rows,
-                        v_channels,
-                        component.v_element_bytes as usize,
-                    )?;
-                    (
-                        component.v_type.record_kind(true)?,
-                        base + layer_offset,
-                        decode_native_rows_to_f16(component.v_type, &native, rows, v_row)?,
-                        row_start as u64,
-                        token_count as u64,
-                    )
-                } else {
-                    let local_offset = layer_offset + row_start * v_row;
-                    let native = &component_raw[local_offset..local_offset + rows * v_row];
-                    (
-                        component.v_type.record_kind(false)?,
-                        base + local_offset,
-                        decode_native_rows_to_f16(component.v_type, native, rows, v_row)?,
-                        0,
-                        0,
-                    )
-                };
+        let chunk_rows = if component.v_type == ValueType::F32 {
+            anchor_delta::MAX_ROWS
+        } else {
+            MAX_TOKENS_PER_CHUNK
+        };
+        for row_start in (0..token_count).step_by(chunk_rows) {
+            let rows = (token_count - row_start).min(chunk_rows);
+            let (kind, output_offset, native, token_start, total_tokens) = if component.v_transposed
+            {
+                let native = transpose_range_to_token_major(
+                    layer_tile,
+                    token_count,
+                    row_start,
+                    rows,
+                    v_channels,
+                    component.v_element_bytes as usize,
+                )?;
+                (
+                    component.v_type.record_kind(true)?,
+                    base + layer_offset,
+                    native,
+                    row_start as u64,
+                    token_count as u64,
+                )
+            } else {
+                let local_offset = layer_offset + row_start * v_row;
+                let native = &component_raw[local_offset..local_offset + rows * v_row];
+                (
+                    component.v_type.record_kind(false)?,
+                    base + local_offset,
+                    native.to_vec(),
+                    0,
+                    0,
+                )
+            };
             records.push(OwnedRecord {
                 kind,
                 element_bytes: component.v_type.element_bytes(),
@@ -536,8 +548,11 @@ fn encode_component(
                 token_count: rows as u64,
                 token_start,
                 total_tokens,
-                payload: encode_f16_segment_packed(
-                    &encoded_input,
+                payload: encode_native_segment(
+                    component.v_type,
+                    &native,
+                    rows,
+                    v_row,
                     v_channels,
                     bins_for_layer(layer, layer_count, false),
                 )?,
@@ -569,13 +584,12 @@ fn validate_record_geometry(record: Record<'_>) -> Result<()> {
             if record.element_bytes != value_type.element_bytes() as usize {
                 bail!("CacheGen record has an invalid element size");
             }
-            let segment = validate_f16_segment(record.payload)?;
-            let expected_row = native_row_bytes(value_type, segment.channels)?;
-            let expected = segment
-                .rows
+            let (rows, channels) = segment_shape(record.kind, record.payload)?;
+            let expected_row = native_row_bytes(value_type, channels)?;
+            let expected = rows
                 .checked_mul(expected_row)
                 .ok_or_else(|| anyhow!("CacheGen segment native decoded length overflow"))?;
-            if segment.rows != record.token_count || expected != record.decoded_len {
+            if rows != record.token_count || expected != record.decoded_len {
                 bail!("CacheGen segment geometry disagrees with its archive record");
             }
             if transposed {
@@ -690,6 +704,42 @@ fn validate_decoded_coverage(
         bail!("CacheGen archive records leave a gap in the KV payload");
     }
     Ok(())
+}
+
+fn segment_shape(kind: RecordKind, payload: &[u8]) -> Result<(usize, usize)> {
+    if matches!(
+        kind,
+        RecordKind::CacheGenF32 | RecordKind::CacheGenF32Transposed
+    ) && payload.starts_with(&anchor_delta::MAGIC)
+    {
+        let geometry = anchor_delta::validate(payload)?;
+        return Ok((geometry.rows, geometry.channels));
+    }
+    let geometry = validate_f16_segment(payload)?;
+    Ok((geometry.rows, geometry.channels))
+}
+
+fn encode_native_segment(
+    value_type: ValueType,
+    native: &[u8],
+    rows: usize,
+    row_bytes: usize,
+    channels: usize,
+    bins: u8,
+) -> Result<Vec<u8>> {
+    if value_type == ValueType::F32 {
+        return anchor_delta::encode(native, channels);
+    }
+    let f16 = decode_native_rows_to_f16(value_type, native, rows, row_bytes)?;
+    encode_f16_segment_packed(&f16, channels, bins)
+}
+
+fn decode_native_segment(value_type: ValueType, payload: &[u8], rows: usize) -> Result<Vec<u8>> {
+    if value_type == ValueType::F32 && payload.starts_with(&anchor_delta::MAGIC) {
+        return anchor_delta::decode(payload);
+    }
+    let f16 = decode_f16_segment(payload)?;
+    encode_native_rows_from_f16(value_type, &f16, rows)
 }
 
 fn native_row_bytes(value_type: ValueType, channels: usize) -> Result<usize> {
