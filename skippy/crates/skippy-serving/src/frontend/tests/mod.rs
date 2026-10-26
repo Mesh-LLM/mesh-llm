@@ -52,6 +52,7 @@ pub(super) use tokio::sync::Semaphore;
 mod cache_publication;
 mod chat_stream_deltas;
 mod draft_runtime;
+mod enc_dec_lane_admission;
 mod generation;
 mod guardrails;
 mod multimodal;
