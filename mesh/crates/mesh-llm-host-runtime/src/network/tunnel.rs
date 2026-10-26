@@ -14,6 +14,10 @@ use tokio::net::TcpStream;
 
 mod inbound_http;
 
+#[cfg(test)]
+#[path = "tunnel/admission_tests.rs"]
+mod admission_tests;
+
 fn quic_response_first_byte_timeout() -> Duration {
     Duration::from_secs(5 * 60)
 }
