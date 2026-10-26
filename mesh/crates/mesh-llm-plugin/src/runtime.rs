@@ -1059,7 +1059,17 @@ impl PluginRuntime {
                 plugin_protocol_version: PROTOCOL_VERSION,
                 plugin_version: plugin.plugin_version(),
                 server_info_json: serde_json::to_string(&plugin.server_info())?,
-                capabilities: plugin.capabilities(),
+                capabilities: {
+                    let mut capabilities = plugin.capabilities();
+                    if context.host_supports(crate::host_capabilities::INVOCATION_CALLBACKS)
+                        && !capabilities
+                            .iter()
+                            .any(|value| value == crate::host_capabilities::INVOCATION_CALLBACKS)
+                    {
+                        capabilities.push(crate::host_capabilities::INVOCATION_CALLBACKS.into());
+                    }
+                    capabilities
+                },
                 manifest: plugin.manifest(),
             }),
         )
@@ -1121,7 +1131,7 @@ impl PluginRuntime {
         request: proto::RpcRequest,
     ) -> proto::envelope::Payload {
         let mut plugin = Self::plugin_for_request(state).await;
-        let mut context = Self::context(state);
+        let mut context = Self::context(state).with_invocation_id(request.invocation_id);
         match plugin.handle_rpc(request, &mut context).await {
             Ok(payload) => payload,
             Err(err) => proto::envelope::Payload::ErrorResponse(err.into_error_response()),
@@ -1133,7 +1143,7 @@ impl PluginRuntime {
         request: proto::InvokeServiceRequest,
     ) -> proto::envelope::Payload {
         let mut plugin = Self::plugin_for_request(state).await;
-        let mut context = Self::context(state);
+        let mut context = Self::context(state).with_invocation_id(request.invocation_id);
         match plugin.invoke_service(request, &mut context).await {
             Ok(Some(response)) => proto::envelope::Payload::InvokeServiceResponse(response),
             Ok(None) => proto::envelope::Payload::ErrorResponse(
@@ -1165,7 +1175,7 @@ impl PluginRuntime {
         notification: proto::RpcNotification,
     ) -> Result<bool> {
         let mut plugin = Self::plugin_for_request(state).await;
-        let mut context = Self::context(state);
+        let mut context = Self::context(state).with_invocation_id(notification.invocation_id);
         plugin
             .on_rpc_notification(notification, &mut context)
             .await?;
@@ -1368,6 +1378,7 @@ mod tests {
         let response = plugin
             .handle_rpc(
                 proto::RpcRequest {
+                    invocation_id: None,
                     method: method.into(),
                     params_json: params.to_string(),
                 },
@@ -1454,6 +1465,7 @@ mod tests {
         let op = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Operation as i32,
                     service_name: "echo".into(),
                     input_json: json!({ "message": "hello" }).to_string(),
@@ -1471,6 +1483,7 @@ mod tests {
         let prompt = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Prompt as i32,
                     service_name: "brief".into(),
                     input_json: serde_json::to_string(&GetPromptRequestParams::new("brief"))
@@ -1487,6 +1500,7 @@ mod tests {
         let resource = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Resource as i32,
                     service_name: "demo://state".into(),
                     input_json: serde_json::to_string(&ReadResourceRequestParams::new(
@@ -1506,6 +1520,7 @@ mod tests {
         let completion = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Completion as i32,
                     service_name: "brief".into(),
                     input_json: serde_json::to_string(&CompleteRequestParams::new(
@@ -1560,6 +1575,7 @@ mod tests {
         let response = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::VirtualModel as i32,
                     service_name: "chat".into(),
                     input_json: json!({"request": {"model": "virtual-demo"}}).to_string(),
@@ -1619,6 +1635,7 @@ mod tests {
                 request_id: 1,
                 payload: Some(proto::envelope::Payload::InvokeServiceRequest(
                     proto::InvokeServiceRequest {
+                        invocation_id: None,
                         kind: proto::ServiceKind::Operation as i32,
                         service_name: "slow".into(),
                         input_json: "{}".into(),
@@ -1707,6 +1724,7 @@ mod tests {
                     request_id,
                     payload: Some(proto::envelope::Payload::InvokeServiceRequest(
                         proto::InvokeServiceRequest {
+                            invocation_id: None,
                             kind: proto::ServiceKind::Operation as i32,
                             service_name: "barrier".into(),
                             input_json: "{}".into(),

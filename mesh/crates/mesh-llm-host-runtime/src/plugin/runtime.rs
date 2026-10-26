@@ -355,6 +355,7 @@ impl ExternalPlugin {
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                     host_capabilities: vec![
+                        mesh_llm_plugin::host_capabilities::INVOCATION_CALLBACKS.to_string(),
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
                         mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
@@ -700,6 +701,7 @@ impl ExternalPlugin {
         let params_json = serialize_params(params)?;
         let response = self
             .request(proto::envelope::Payload::RpcRequest(proto::RpcRequest {
+                invocation_id: super::mcp::invocation::forwarded_id(),
                 method: method.to_string(),
                 params_json,
             }))
@@ -730,6 +732,7 @@ impl ExternalPlugin {
     {
         self.send_unsolicited(
             proto::envelope::Payload::RpcNotification(proto::RpcNotification {
+                invocation_id: None,
                 method: method.to_string(),
                 params_json: serialize_params(params)?,
             }),

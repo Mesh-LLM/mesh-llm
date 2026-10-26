@@ -128,6 +128,8 @@ message MeshEvent {
 message RpcRequest {
   string method = 1;
   string params_json = 2;
+  // Host-assigned parent call identity, echoed by invocation_callbacks.v1 plugins.
+  optional uint64 invocation_id = 3;
 }
 
 message RpcResponse {
@@ -137,6 +139,7 @@ message RpcResponse {
 message RpcNotification {
   string method = 1;
   string params_json = 2;
+  optional uint64 invocation_id = 3;
 }
 
 message ChannelMessage {
@@ -558,6 +561,7 @@ message InvokeServiceRequest {
   ServiceKind kind = 1;
   string service_name = 2;
   string input_json = 3;
+  optional uint64 invocation_id = 4;
 }
 
 message InvokeServiceResponse {

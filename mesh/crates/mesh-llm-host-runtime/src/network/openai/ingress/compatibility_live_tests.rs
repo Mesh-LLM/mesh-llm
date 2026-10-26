@@ -114,6 +114,7 @@ async fn installed_generation3_child_without_lifecycle_manifest_initializes_and_
         .exchange(
             2,
             proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
+                invocation_id: None,
                 kind: proto::ServiceKind::Operation as i32,
                 service_name: "legacy_echo".into(),
                 input_json: "{\"sentinel\":\"legacy-operated\"}".into(),

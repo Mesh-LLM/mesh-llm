@@ -24,16 +24,20 @@ use tokio::sync::Mutex;
 use crate::plugin::{self, PluginManager, PluginRpcBridge, RpcResult};
 
 mod external_mcp;
+pub(crate) mod invocation;
 #[cfg(test)]
 mod list_cache_metadata;
 mod result_cache;
 mod tool_dispatch;
 
+#[cfg(test)]
+mod session_isolation_tests;
+
 use external_mcp::ExternalMcpPool;
 
 #[derive(Clone, Default)]
 struct ActiveBridge {
-    peer: Arc<Mutex<Option<Peer<RoleServer>>>>,
+    invocations: invocation::Invocations,
 }
 
 #[derive(Clone)]
@@ -43,6 +47,28 @@ struct RoutedBridge {
 }
 
 impl PluginRpcBridge for RoutedBridge {
+    fn handle_invocation_request(
+        &self,
+        plugin_name: String,
+        request: plugin::proto::RpcRequest,
+    ) -> crate::plugin::BridgeFuture<Result<RpcResult, plugin::proto::ErrorResponse>> {
+        if request.method.starts_with("inference/")
+            && let Some(host) = &self.host
+        {
+            return host.handle_invocation_request(plugin_name, request);
+        }
+        self.mcp.handle_invocation_request(plugin_name, request)
+    }
+
+    fn handle_invocation_notification(
+        &self,
+        plugin_name: String,
+        notification: plugin::proto::RpcNotification,
+    ) -> crate::plugin::BridgeFuture<()> {
+        self.mcp
+            .handle_invocation_notification(plugin_name, notification)
+    }
+
     fn handle_request(
         &self,
         plugin_name: String,
@@ -69,16 +95,46 @@ impl PluginRpcBridge for RoutedBridge {
 }
 
 impl ActiveBridge {
-    async fn set_peer(&self, peer: Peer<RoleServer>) {
-        *self.peer.lock().await = Some(peer);
+    /// Record the MCP session that owns the plugin invocation now in flight.
+    ///
+    /// Only handlers that forward work to a plugin may bind. Connect-time and
+    /// read-only handlers must not, otherwise any client that merely completes a
+    /// handshake becomes the destination for callbacks another client caused.
+    #[cfg(test)]
+    async fn bind_invocation(
+        &self,
+        plugin_name: &str,
+        peer: Peer<RoleServer>,
+    ) -> invocation::InvocationGuard {
+        self.invocations.bind(plugin_name, peer).await
     }
 
-    async fn current_peer(&self) -> Result<Peer<RoleServer>, plugin::proto::ErrorResponse> {
-        self.peer
-            .lock()
-            .await
-            .clone()
-            .ok_or_else(|| proto_error::internal("No active MCP client session"))
+    /// Resolve the callback destination to the bound session, rejecting it once
+    /// that session is gone rather than falling through to another client.
+    #[cfg(test)]
+    fn current_peer(
+        &self,
+        plugin_name: &str,
+    ) -> Result<Arc<invocation::Invocation>, plugin::proto::ErrorResponse> {
+        self.invocation_peer(plugin_name, None)
+    }
+
+    fn invocation_peer(
+        &self,
+        plugin_name: &str,
+        id: Option<u64>,
+    ) -> Result<Arc<invocation::Invocation>, plugin::proto::ErrorResponse> {
+        let invocation = self.invocations.resolve(plugin_name, id).ok_or_else(|| {
+            proto_error::internal(
+                "No active MCP client session: unknown, finished, or missing invocation ID",
+            )
+        })?;
+        if invocation.peer.is_transport_closed() {
+            return Err(proto_error::internal(
+                "Originating MCP client session has closed",
+            ));
+        }
+        Ok(invocation)
     }
 }
 
@@ -86,13 +142,34 @@ impl PluginRpcBridge for ActiveBridge {
     #[allow(deprecated)]
     fn handle_request(
         &self,
-        _plugin_name: String,
+        plugin_name: String,
         method: String,
         params_json: String,
     ) -> crate::plugin::BridgeFuture<Result<RpcResult, plugin::proto::ErrorResponse>> {
-        let this = self.clone();
+        self.handle_invocation_request(
+            plugin_name,
+            plugin::proto::RpcRequest {
+                method,
+                params_json,
+                invocation_id: None,
+            },
+        )
+    }
+
+    fn handle_invocation_request(
+        &self,
+        plugin_name: String,
+        request: plugin::proto::RpcRequest,
+    ) -> crate::plugin::BridgeFuture<Result<RpcResult, plugin::proto::ErrorResponse>> {
+        let invocation = self.invocation_peer(&plugin_name, request.invocation_id);
+        let plugin::proto::RpcRequest {
+            method,
+            params_json,
+            ..
+        } = request;
         Box::pin(async move {
-            let peer: Peer<RoleServer> = this.current_peer().await?;
+            let invocation = invocation?;
+            let peer = &invocation.peer;
             let params = parse_optional_value(&params_json)?;
             let result_json = match method.as_str() {
                 "ping" => {
@@ -175,15 +252,36 @@ impl PluginRpcBridge for ActiveBridge {
     #[allow(deprecated)]
     fn handle_notification(
         &self,
-        _plugin_name: String,
+        plugin_name: String,
         method: String,
         params_json: String,
     ) -> crate::plugin::BridgeFuture<()> {
-        let this = self.clone();
+        self.handle_invocation_notification(
+            plugin_name,
+            plugin::proto::RpcNotification {
+                method,
+                params_json,
+                invocation_id: None,
+            },
+        )
+    }
+
+    fn handle_invocation_notification(
+        &self,
+        plugin_name: String,
+        notification: plugin::proto::RpcNotification,
+    ) -> crate::plugin::BridgeFuture<()> {
+        let invocation = self.invocation_peer(&plugin_name, notification.invocation_id);
+        let plugin::proto::RpcNotification {
+            method,
+            params_json,
+            ..
+        } = notification;
         Box::pin(async move {
-            let Ok(peer): Result<Peer<RoleServer>, _> = this.current_peer().await else {
+            let Ok(invocation) = invocation else {
                 return;
             };
+            let peer = &invocation.peer;
             let params = match parse_optional_value(&params_json) {
                 Ok(params) => params,
                 Err(_) => return,
@@ -262,8 +360,25 @@ impl PluginMcpServer {
         Ok(manifests)
     }
 
-    async fn refresh_peer(&self, peer: Peer<RoleServer>) {
-        self.bridge.set_peer(peer).await;
+    /// Bind `peer` as the owner of the plugin invocation this handler is serving.
+    async fn bind_invocation(
+        &self,
+        plugin_name: &str,
+        peer: Peer<RoleServer>,
+    ) -> invocation::InvocationGuard {
+        let correlated = self
+            .plugin_manager
+            .plugin_summary(plugin_name)
+            .await
+            .is_ok_and(|summary| {
+                summary.capabilities.iter().any(|capability| {
+                    capability == mesh_llm_plugin::host_capabilities::INVOCATION_CALLBACKS
+                })
+            });
+        self.bridge
+            .invocations
+            .bind_with_capability(plugin_name, peer, correlated)
+            .await
     }
 
     async fn broadcast_notification<P>(&self, method: &str, params: P)
@@ -353,7 +468,8 @@ fn deserialize_required<T: serde::de::DeserializeOwned>(
 }
 
 async fn try_plugins<T, P>(
-    plugin_manager: &PluginManager,
+    server: &PluginMcpServer,
+    peer: Peer<RoleServer>,
     method: &str,
     params: P,
 ) -> Result<T, ErrorData>
@@ -362,9 +478,14 @@ where
     P: Serialize + Clone,
 {
     let mut last_error = None;
-    for (plugin_name, _) in plugin_manager.list_server_infos().await {
-        match plugin_manager
-            .mcp_request::<T, _>(&plugin_name, method, params.clone())
+    for (plugin_name, _) in server.plugin_manager.list_server_infos().await {
+        let _invocation = server.bind_invocation(&plugin_name, peer.clone()).await;
+        match _invocation
+            .scope(
+                server
+                    .plugin_manager
+                    .mcp_request::<T, _>(&plugin_name, method, params.clone()),
+            )
             .await
         {
             Ok(value) => return Ok(value),

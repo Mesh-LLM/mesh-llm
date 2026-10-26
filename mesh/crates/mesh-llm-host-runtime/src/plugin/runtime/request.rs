@@ -57,6 +57,7 @@ impl ExternalPlugin {
         let response = self
             .request_with_replay(
                 proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
+                    invocation_id: super::super::mcp::invocation::forwarded_id(),
                     kind: kind as i32,
                     service_name: service_name.to_string(),
                     input_json: input_json.to_string(),
