@@ -946,8 +946,10 @@ model cadence, device gates and protected action references remain unchanged.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
   focused Windows log-store privacy ACL checks, and the Windows CPU native
   Skippy probes (`windows-skippy-probes`, #2222 item 2). That row is selected
-  by `native-abi` changes (the patch queue and the llama build scripts) and on
-  every main run. It replays the pinned patch queue, builds the static CPU ABI
+  by the `native-abi` platform domain and on every main run. The `native-abi`
+  domain also selects `linux-cpu`, `windows-cpu`, and `windows-vulkan` in
+  `domain_rows` for changes to the patch queue and llama build scripts. It
+  replays the pinned patch queue, builds the static CPU ABI
   with `LLAMA_STAGE_BUILD_TESTS=ON`, and lets `build-llama.sh` run every
   `^skippy_` test; nothing is skipped. The same row then runs the
   `skippy-runtime` and `skippy-serving` lib tests linked against that static
