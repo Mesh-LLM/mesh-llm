@@ -225,6 +225,17 @@ Each is listed with the reason it does not belong in a bug ranking.
 - **#2200** is excluded: the report itself says it does not establish a MeshLLM software defect
   (host NVMe completion-polled timeouts).
 
+## Progress
+
+Status is `TODO`, `IN-PROGRESS`, `BLOCKED`, `DONE`, or `NOT-REPRODUCIBLE`. One row per ranked
+issue; add the row the first time an issue is picked up. Branch is the worker branch, PR the
+open pull request, and Evidence the confirmation or disposition comment.
+
+| # | Status | Branch | PR | Evidence |
+|---|---|---|---|---|
+| 10 | [#2029](https://github.com/Mesh-LLM/mesh-llm/issues/2029) | IN-PROGRESS | `fix/10-2029-unresolved-layer-diagnostics` | [#2591](https://github.com/Mesh-LLM/mesh-llm/pull/2591) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2029#issuecomment-6406262501) |
+
+
 ## Regenerating this list
 
 ```sh
