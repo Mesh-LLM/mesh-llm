@@ -315,7 +315,7 @@ confirmation or disposition comment.
 | 27 | [#1951](https://github.com/Mesh-LLM/mesh-llm/issues/1951) | FIXED | `fix/26-1951-workload-route-coverage` | [#2618](https://github.com/Mesh-LLM/mesh-llm/pull/2618) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/1951#issuecomment-6424609084) |
 | 28 | [#2352](https://github.com/Mesh-LLM/mesh-llm/issues/2352) | CONFIRMED | `fix/27-2352-papercuts` | [#2619](https://github.com/Mesh-LLM/mesh-llm/pull/2619) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2352#issuecomment-6425300831) |
 | 29 | [#2508](https://github.com/Mesh-LLM/mesh-llm/issues/2508) | NOT-REPRODUCIBLE | — | — | [disposition](https://github.com/Mesh-LLM/mesh-llm/issues/2508#issuecomment-6427982348) |
-| 30 | [#2217](https://github.com/Mesh-LLM/mesh-llm/issues/2217) | TODO | — | — | — |
+| 30 | [#2217](https://github.com/Mesh-LLM/mesh-llm/issues/2217) | CONFIRMED | `fix/30-2217-stage-control-coordinator-auth` | [#2621](https://github.com/Mesh-LLM/mesh-llm/pull/2621) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2217#issuecomment-6428331830) |
 | 31 | [#2218](https://github.com/Mesh-LLM/mesh-llm/issues/2218) | TODO | — | — | — |
 | 32 | [#2206](https://github.com/Mesh-LLM/mesh-llm/issues/2206) | TODO | — | — | — |
 | 33 | [#2207](https://github.com/Mesh-LLM/mesh-llm/issues/2207) | TODO | — | — | — |
