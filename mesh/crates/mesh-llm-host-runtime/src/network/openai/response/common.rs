@@ -143,13 +143,27 @@ impl ResponseRetryPolicy {
             payment_required: available,
         }
     }
+
+    /// Aggregate payment refusals across multi-target model routes, including
+    /// the final attempt, so mixed failures keep their route-level status.
+    /// Single-target routes still relay a 402 directly to the caller.
+    pub(in crate::network::openai) fn model_route_attempt(
+        next_target_available: bool,
+        aggregate_payment_refusals: bool,
+    ) -> Self {
+        Self {
+            payment_required: next_target_available || aggregate_payment_refusals,
+            ..Self::next_target_available(next_target_available)
+        }
+    }
 }
 
-/// Withhold a peer's payment refusal while another replica is still available.
+/// Withhold one peer's payment refusal while the route aggregates replica results.
 ///
-/// A 402 refuses that one serving endpoint, not the request: a replica that does
-/// not charge for the model can still serve it. Deciding this here, before the
-/// response is relayed, is what keeps the retry uncommitted.
+/// A 402 refuses that serving endpoint, not necessarily the request. In a
+/// multi-target model route, deciding this before relay keeps the response
+/// uncommitted until every candidate has been tried. Single-target routes leave
+/// the response unmodified.
 pub(in crate::network::openai::response) fn withheld_payment_required_response(
     retry_policy: ResponseRetryPolicy,
     status_code: u16,
@@ -434,6 +448,27 @@ mod tests {
             route_attempt_result_label(&RouteAttemptResult::ClientDisconnected),
             "client_disconnected"
         );
+    }
+
+    #[test]
+    fn model_route_policy_aggregates_payment_refusals_only_for_multi_target_routes() {
+        let final_aggregated_attempt = ResponseRetryPolicy::model_route_attempt(false, true);
+        assert!(withheld_payment_required_response(
+            final_aggregated_attempt,
+            402
+        ));
+        assert!(!final_aggregated_attempt.context_overflow);
+        assert!(!final_aggregated_attempt.response_quality);
+        assert!(!withheld_payment_required_response(
+            final_aggregated_attempt,
+            503
+        ));
+
+        let single_target_attempt = ResponseRetryPolicy::model_route_attempt(false, false);
+        assert!(!withheld_payment_required_response(
+            single_target_attempt,
+            402
+        ));
     }
 
     #[test]

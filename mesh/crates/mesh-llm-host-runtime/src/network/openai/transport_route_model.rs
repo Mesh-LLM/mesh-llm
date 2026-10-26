@@ -342,7 +342,8 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         reservation.transfer_to(&target);
         state.attempts += 1;
         let attempt_started = Instant::now();
-        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
+        let retry_policy =
+            ResponseRetryPolicy::model_route_attempt(idx + 1 < total_targets, total_targets > 1);
         if let Some(outcome) = super::super::exchange_admission::admit_selected_route(
             &node,
             &mut tcp_stream,
