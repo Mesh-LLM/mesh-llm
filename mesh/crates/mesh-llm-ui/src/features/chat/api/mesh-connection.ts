@@ -3,7 +3,7 @@ import type { UIMessage, ModelMessage, StreamChunk } from '@tanstack/ai'
 import { EventType } from '@tanstack/ai'
 
 import { env } from '@/lib/env'
-import { apiErrorReason, ApiError, parseApiErrorBody } from '@/lib/api/errors'
+import { apiErrorReason, ApiError, parseApiErrorBody, type ParsedApiErrorBody } from '@/lib/api/errors'
 import { getClientId } from '@/lib/api/client-id'
 import { generateRequestId } from '@/lib/api/request-id'
 import type { ChatSSEEvent } from '@/lib/api/types'
@@ -93,9 +93,9 @@ const CONTEXT_COMPACTION_RETRY_BODY_BYTES = 14_000
  * renders this message. The status-only fallback is for a body that carried
  * nothing.
  */
-function chatRequestError(response: Response, errorBody: string): ApiError {
-  const message = apiErrorReason(errorBody, response.status) ?? `Chat request failed: ${response.status}`
-  return new ApiError(response.status, errorBody, message)
+function chatRequestError(response: Response, errorBody: ParsedApiErrorBody): ApiError {
+  const message = apiErrorReason(errorBody) ?? `Chat request failed: ${response.status}`
+  return new ApiError(response.status, errorBody.body, message)
 }
 
 function isModelRouteNotFound(status: number, body: string): boolean {
@@ -288,7 +288,7 @@ async function* runConnect(
       if (response.ok) break
 
       const errorBody = await parseApiErrorBody(response)
-      const shouldRetryModelRoute = attempt === 0 && isModelRouteNotFound(response.status, errorBody)
+      const shouldRetryModelRoute = attempt === 0 && isModelRouteNotFound(response.status, errorBody.body)
       if (shouldRetryModelRoute) {
         const retryAllowed = await waitForModelRouteRetry(abortSignal)
         if (abortSignal?.aborted) return
@@ -298,7 +298,7 @@ async function* runConnect(
         continue
       }
 
-      const shouldCompactContext = attempt === 0 && isContextRouteUnavailable(response.status, errorBody)
+      const shouldCompactContext = attempt === 0 && isContextRouteUnavailable(response.status, errorBody.body)
       if (shouldCompactContext) {
         const compactedBody = await compactResponsesInput(
           messages,
