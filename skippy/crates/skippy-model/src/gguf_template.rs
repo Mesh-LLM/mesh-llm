@@ -306,7 +306,7 @@ fn push_attention_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Valu
             value_len,
         ));
     }
-    if let Some(theta) = optional_f32(config, "rope_theta") {
+    if let Some(theta) = rope_theta(config) {
         metadata.push(GgufKv::f32(&format!("{arch}.rope.freq_base"), theta));
     }
     if arch == "glm-dsa" {
@@ -790,6 +790,18 @@ fn optional_f32(config: &Value, key: &str) -> Option<f32> {
         .map(|value| value as f32)
 }
 
+/// Transformers 5 moved the rope base under `rope_parameters`; older configs
+/// keep it top-level. Read either so a transformers-5 checkpoint does not fall
+/// back to llama.cpp's default base of 10000.
+fn rope_theta(config: &Value) -> Option<f32> {
+    optional_f32(config, "rope_theta").or_else(|| {
+        config
+            .pointer("/rope_parameters/rope_theta")
+            .and_then(Value::as_f64)
+            .map(|value| value as f32)
+    })
+}
+
 fn optional_bool(config: &Value, key: &str) -> Option<bool> {
     config.get(key).and_then(Value::as_bool)
 }
@@ -806,6 +818,26 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn reads_rope_theta_from_transformers_five_rope_parameters() {
+        let config: Value = serde_json::from_str(
+            r#"{"rope_parameters": {"rope_theta": 1000000.0, "rope_type": "default"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(rope_theta(&config), Some(1_000_000.0));
+    }
+
+    #[test]
+    fn prefers_top_level_rope_theta_over_rope_parameters() {
+        let config: Value = serde_json::from_str(
+            r#"{"rope_theta": 500000.0, "rope_parameters": {"rope_theta": 1000000.0}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(rope_theta(&config), Some(500_000.0));
+    }
 
     #[test]
     fn builds_glm_moe_lite_metadata_from_config() {
