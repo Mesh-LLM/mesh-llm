@@ -24,12 +24,13 @@ pub(crate) fn checkpoint_root(source: &Path) -> &Path {
 
 /// Return whether `source` belongs to a complete local SafeTensors checkpoint.
 ///
-/// A path that names a GGUF file is served as named. `checkpoint_root` resolves any file to its
-/// parent directory, so without this the probe would claim a GGUF exported into the checkpoint
-/// directory it came from — the layout `mlx_lm.fuse --export-gguf` and `convert_hf_to_gguf.py`
-/// produce — and serve that checkpoint instead of the file the operator named (issue #2340).
+/// A `.gguf` path is not attributed to a checkpoint beside it, even if that file is missing.
+/// `checkpoint_root` resolves non-directory paths to their parent, so without this the probe
+/// would claim a GGUF exported into the checkpoint directory it came from — the layout
+/// `mlx_lm.fuse --export-gguf` and `convert_hf_to_gguf.py` produce — and serve that checkpoint
+/// instead of the file the operator named (issue #2340).
 pub fn is_safetensors_checkpoint(source: &Path) -> bool {
-    if source.is_file()
+    if !source.is_dir()
         && source
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
@@ -512,6 +513,16 @@ mod tests {
     fn a_named_gguf_ignores_an_index_only_checkpoint_beside_it() {
         let dir = tempfile::tempdir().unwrap();
         let gguf = write_checkpoint_beside_a_named_gguf(dir.path(), true);
+
+        assert!(is_safetensors_checkpoint(dir.path()));
+        assert!(!is_safetensors_checkpoint(&gguf));
+    }
+
+    #[test]
+    fn a_missing_named_gguf_is_not_attributed_to_the_checkpoint_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let gguf = write_checkpoint_beside_a_named_gguf(dir.path(), false);
+        std::fs::remove_file(&gguf).unwrap();
 
         assert!(is_safetensors_checkpoint(dir.path()));
         assert!(!is_safetensors_checkpoint(&gguf));
