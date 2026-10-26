@@ -355,7 +355,6 @@ impl ServerHandler for PluginMcpServer {
         if context.peer.peer_info().is_none() {
             context.peer.set_peer_info(request);
         }
-        self.refresh_peer(context.peer.clone()).await;
         Ok(self.get_info())
     }
 
@@ -364,7 +363,6 @@ impl ServerHandler for PluginMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
         Ok(result_cache::attach_if_supported(
             ListToolsResult::with_all_items(
                 self.discover_tools()
@@ -382,7 +380,7 @@ impl ServerHandler for PluginMcpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         let tools = self.discover_tools().await?;
         let Some(tool_ref) = tools.get(request.name.as_ref()) else {
             return Err(ErrorData::invalid_params(
@@ -439,7 +437,6 @@ impl ServerHandler for PluginMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
         let mut prompts = Vec::new();
         for (plugin_name, manifest) in self.plugin_manifests().await? {
             if manifest.prompts.is_empty() {
@@ -479,7 +476,7 @@ impl ServerHandler for PluginMcpServer {
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         let prompts = self.discover_prompts().await?;
         let Some(entry) = prompts.get(request.name.as_str()) else {
             return Err(ErrorData::invalid_params(
@@ -538,7 +535,6 @@ impl ServerHandler for PluginMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
         let mut resources = Vec::new();
         for (_, manifest) in self.plugin_manifests().await? {
             if manifest.resources.is_empty() {
@@ -577,7 +573,6 @@ impl ServerHandler for PluginMcpServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
         let mut resource_templates = Vec::new();
         for (_, manifest) in self.plugin_manifests().await? {
             if manifest.resource_templates.is_empty() {
@@ -622,7 +617,7 @@ impl ServerHandler for PluginMcpServer {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         if let Some(resource_ref) = self.discover_resources().await?.get(&request.uri).cloned() {
             match resource_ref.target {
                 ResourceTarget::Plugin {
@@ -681,7 +676,7 @@ impl ServerHandler for PluginMcpServer {
         request: SubscribeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         if let Some(resource_ref) = self.discover_resources().await?.get(&request.uri).cloned() {
             match resource_ref.target {
                 ResourceTarget::Plugin { .. } => {}
@@ -706,7 +701,7 @@ impl ServerHandler for PluginMcpServer {
         request: UnsubscribeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         if let Some(resource_ref) = self.discover_resources().await?.get(&request.uri).cloned() {
             match resource_ref.target {
                 ResourceTarget::Plugin { .. } => {}
@@ -735,7 +730,7 @@ impl ServerHandler for PluginMcpServer {
         mut request: CompleteRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CompleteResult, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         if let Some(name) = request.r#ref.as_prompt_name() {
             let prompts = self.discover_prompts().await?;
             let Some(entry) = prompts.get(name) else {
@@ -778,7 +773,7 @@ impl ServerHandler for PluginMcpServer {
         request: SetLevelRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         let mut first_error = None;
         for (plugin_name, server_info) in self.plugin_manager.list_server_infos().await {
             if server_info.capabilities.logging.is_none() {
@@ -804,7 +799,7 @@ impl ServerHandler for PluginMcpServer {
         request: GetTaskParams,
         context: RequestContext<RoleServer>,
     ) -> Result<GetTaskResult, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         try_plugins(&self.plugin_manager, "tasks/get", request).await
     }
 
@@ -813,7 +808,7 @@ impl ServerHandler for PluginMcpServer {
         request: UpdateTaskParams,
         context: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         try_plugins(&self.plugin_manager, "tasks/update", request).await
     }
 
@@ -822,16 +817,15 @@ impl ServerHandler for PluginMcpServer {
         request: CancelTaskParams,
         context: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         try_plugins(&self.plugin_manager, "tasks/cancel", request).await
     }
 
     async fn on_cancelled(
         &self,
         notification: rmcp::model::CancelledNotificationParam,
-        context: NotificationContext<RoleServer>,
+        _context: NotificationContext<RoleServer>,
     ) {
-        self.refresh_peer(context.peer.clone()).await;
         self.broadcast_notification("notifications/cancelled", notification)
             .await;
     }
@@ -839,21 +833,18 @@ impl ServerHandler for PluginMcpServer {
     async fn on_progress(
         &self,
         notification: rmcp::model::ProgressNotificationParam,
-        context: NotificationContext<RoleServer>,
+        _context: NotificationContext<RoleServer>,
     ) {
-        self.refresh_peer(context.peer.clone()).await;
         self.broadcast_notification("notifications/progress", notification)
             .await;
     }
 
-    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
-        self.refresh_peer(context.peer.clone()).await;
+    async fn on_initialized(&self, _context: NotificationContext<RoleServer>) {
         self.broadcast_notification("notifications/initialized", serde_json::json!({}))
             .await;
     }
 
-    async fn on_roots_list_changed(&self, context: NotificationContext<RoleServer>) {
-        self.refresh_peer(context.peer.clone()).await;
+    async fn on_roots_list_changed(&self, _context: NotificationContext<RoleServer>) {
         self.broadcast_notification("notifications/roots/list_changed", serde_json::json!({}))
             .await;
     }
@@ -861,9 +852,8 @@ impl ServerHandler for PluginMcpServer {
     async fn on_custom_notification(
         &self,
         notification: CustomNotification,
-        context: NotificationContext<RoleServer>,
+        _context: NotificationContext<RoleServer>,
     ) {
-        self.refresh_peer(context.peer.clone()).await;
         self.broadcast_notification(
             &notification.method,
             notification.params.unwrap_or(serde_json::Value::Null),
@@ -876,7 +866,7 @@ impl ServerHandler for PluginMcpServer {
         request: CustomRequest,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CustomResult, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
+        self.bind_invocation(context.peer.clone()).await;
         try_plugins(
             &self.plugin_manager,
             &request.method,
