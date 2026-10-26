@@ -361,7 +361,9 @@ pub fn find_layer_package(model_query: &str) -> Option<String> {
 }
 
 /// Probes a Hugging Face model repo directly and treats it as a layer package
-/// only when the package manifest exists. Repo naming is intentionally ignored.
+/// only when the package manifest exists. The repo suffix only classifies
+/// probe failures as actionable warnings; it does not establish package
+/// existence.
 pub fn find_huggingface_layer_package(model_query: &str) -> Option<String> {
     let (repo, revision) = parse_exact_huggingface_repo(model_query)?;
     let revision_ref = revision.as_deref().unwrap_or("main");
@@ -369,12 +371,20 @@ pub fn find_huggingface_layer_package(model_query: &str) -> Option<String> {
         Ok(true) => Some(format_hf_package_ref(&repo, revision.as_deref())),
         Ok(false) => None,
         Err(err) => {
-            tracing::warn!(
-                "Hugging Face layer package probe failed for {repo}@{revision_ref}: {err:#}"
-            );
+            if repo_uses_layer_package_suffix(&repo) {
+                tracing::warn!(
+                    "Hugging Face layer package probe failed for {repo}@{revision_ref}: {err:#}"
+                );
+            }
             None
         }
     }
+}
+
+fn repo_uses_layer_package_suffix(repo: &str) -> bool {
+    repo.rsplit('/')
+        .next()
+        .is_some_and(|name| name.ends_with("-layers"))
 }
 
 /// Resolve the catalog package preferred by `models download` in either CLI.
