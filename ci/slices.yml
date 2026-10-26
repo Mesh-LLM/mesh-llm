@@ -167,7 +167,7 @@
     "skippy-qualification": ["linux-cpu", "linux-cuda", "linux-rocm", "linux-vulkan", "macos-metal", "windows-cpu", "windows-cuda", "windows-rocm", "windows-vulkan"],
     "runtime-product": ["linux-cpu"],
     "ui": ["linux-cpu"],
-    "native-abi": ["linux-cpu"],
+    "native-abi": ["linux-cpu", "windows-cpu", "windows-vulkan"],
     "protocol": ["linux-cpu"],
     "split-serving": ["linux-cpu"],
     "model-download": ["linux-cpu"],
