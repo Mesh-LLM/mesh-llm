@@ -33,6 +33,7 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
         last_error: None,
+        verified_sha256: None,
     };
     std::fs::create_dir_all(&metadata.install_path).expect("install dir");
     std::fs::write(metadata.executable_path(), b"").expect("plugin executable");
