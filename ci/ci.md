@@ -1791,6 +1791,23 @@ placeholder directory. Neither change expands runner or cache authority.
 
 ### Canary memory admission and Python SDK
 
+Persistent canary jobs require `self-hosted`, `macOS`, `ARM64`, `jy-managed`
+and `family-certify`. Preflight and build also require
+`accelerator-memory-128plus`; family and infrastructure-retry jobs use the
+controller's existing memory-tier label. JY selects macOS Apple M1 Ultra
+128 GiB and Apple M3 Ultra 256 GiB machines by attributes, with mounted storage,
+without embedding node names in workflows. Both advertise the 128-plus tier;
+only the M3 Ultra advertises 256-plus.
+
+Roll out [the JY runner policies and Fleet provisioning](https://github.com/general-inference/monorepo/pull/244)
+before merging this placement change. The runner groups restrict access to
+`llama-upstream-canary.yml@refs/heads/main` and
+`llama-canary-family-pass.yml@refs/heads/main` in this repository. Verify MDM
+readiness, the runner account's Goose provider authentication and readable
+offline model cache, then register both profiles. No matching managed runner
+means queued jobs; there is no legacy-pool fallback. Repository validation does
+not establish live MDM convergence or hardware certification.
+
 The controller projects each immutable source plan onto `family-certify` plus
 `accelerator-memory-128plus` (115.2 GiB) or `accelerator-memory-256plus`
 (230.4 GiB), reserving 10% of physical RAM. The source plan and its digest are
@@ -2082,3 +2099,13 @@ configuration or prescribe attention/recurrent cache representations. Loaded
 native graphs and memory exporters own cache admission. Split correctness still
 uses genuine planner output and binary stage servers. Cache-hit assertions run
 on immediate repeated requests without publication sleeps or retries.
+
+## Rolling preview distribution
+
+`rolling-preview.yml` is a main-only scheduled (Tuesday/Friday 03:23 UTC) and
+manual dispatcher of `release.yml` with `preview=true`, the full GPU matrix and
+hosted runners. Unique run/attempt preview versions leave main unchanged. Release
+producers check out the metadata source SHA; publication stages a draft before
+exposing the complete immutable prerelease, never marking it latest. Stable
+package channels are untouched; retention is currently indefinite and unchanged
+source is not skipped. No runner settings or secrets are added.

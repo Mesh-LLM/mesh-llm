@@ -58,6 +58,17 @@ pub enum RuntimeControlRequest {
         options: UnloadOptions,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeUnloadResponse>>,
     },
+    AddMembership {
+        config: crate::runtime::MeshMembershipConfig,
+        resp: tokio::sync::oneshot::Sender<anyhow::Result<crate::runtime::MeshMembershipStatus>>,
+    },
+    RemoveMembership {
+        name: String,
+        resp: tokio::sync::oneshot::Sender<bool>,
+    },
+    Memberships {
+        resp: tokio::sync::oneshot::Sender<Vec<crate::runtime::MeshMembershipStatus>>,
+    },
     SetOpenAiGuardrailMode {
         mode: GuardrailMode,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<OpenAiGuardrailModeUpdateResponse>>,
