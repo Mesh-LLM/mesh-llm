@@ -1,5 +1,6 @@
 use super::{DirectIteration, MAX_NATIVE_ITERATION_TOKENS};
 use skippy_inference_api::{InferenceError, InferenceResult};
+use skippy_runtime::IterationBatchPhase;
 use std::collections::{BTreeSet, VecDeque};
 
 pub(super) fn should_serve_direct(
@@ -115,14 +116,66 @@ pub(super) fn take_direct_iteration_batch(
         max_batch_size,
         token_budget,
         DirectBatchPolicy::default(),
+        None,
     )
 }
 
 pub(super) fn take_direct_iteration_batch_with_policy(
     queue: &mut VecDeque<DirectIteration>,
     max_batch_size: usize,
+    token_budget: usize,
+    policy: DirectBatchPolicy,
+    last_phase: Option<IterationBatchPhase>,
+) -> Vec<DirectIteration> {
+    let preferred_phase = preferred_direct_phase(queue, policy, last_phase);
+    let batch = take_direct_iteration_batch_for_phase(
+        queue,
+        max_batch_size,
+        token_budget,
+        policy,
+        preferred_phase,
+    );
+    if batch.is_empty() && preferred_phase.is_some() {
+        // A prior request from the same session may block every preferred
+        // row. Run the queue head instead; never let phase preference stall it.
+        return take_direct_iteration_batch_for_phase(
+            queue,
+            max_batch_size,
+            token_budget,
+            policy,
+            None,
+        );
+    }
+    batch
+}
+
+fn preferred_direct_phase(
+    queue: &VecDeque<DirectIteration>,
+    policy: DirectBatchPolicy,
+    last_phase: Option<IterationBatchPhase>,
+) -> Option<IterationBatchPhase> {
+    if policy.mixed_prefill_decode {
+        return None;
+    }
+    let last_phase = last_phase?;
+    let both_waiting = queue
+        .iter()
+        .any(|request| request.phase == IterationBatchPhase::Prefill)
+        && queue
+            .iter()
+            .any(|request| request.phase == IterationBatchPhase::Decode);
+    both_waiting.then_some(match last_phase {
+        IterationBatchPhase::Prefill => IterationBatchPhase::Decode,
+        IterationBatchPhase::Decode => IterationBatchPhase::Prefill,
+    })
+}
+
+fn take_direct_iteration_batch_for_phase(
+    queue: &mut VecDeque<DirectIteration>,
+    max_batch_size: usize,
     mut token_budget: usize,
     policy: DirectBatchPolicy,
+    preferred_phase: Option<IterationBatchPhase>,
 ) -> Vec<DirectIteration> {
     let mut batch: Vec<DirectIteration> = Vec::new();
     let mut prefill_sequences = 0;
@@ -147,12 +200,14 @@ pub(super) fn take_direct_iteration_batch_with_policy(
         // queued behind a large prefill chunk still join this wave. The
         // deferred chunk keeps its place ahead of later arrivals, and the
         // queue head always fits a fresh budget, so it cannot starve.
-        let prefill = request.phase == skippy_runtime::IterationBatchPhase::Prefill;
+        let prefill = request.phase == IterationBatchPhase::Prefill;
+        let preferred_phase_blocked = preferred_phase.is_some_and(|phase| request.phase != phase);
         let phase_blocked = !policy.mixed_prefill_decode
             && batch
                 .first()
                 .is_some_and(|first| first.phase != request.phase);
         if request.token_ids.len() > token_budget
+            || preferred_phase_blocked
             || phase_blocked
             || (prefill && prefill_sequences >= policy.max_prefill_sequences)
         {
@@ -276,5 +331,71 @@ mod pipeline_decode_group_tests {
         // Rounded up, so every lane still fits in one wave of groups.
         assert_eq!(pipeline_group_batch_size(5, 2), 3);
         assert_eq!(pipeline_group_batch_size(1, 4), 1);
+    }
+}
+
+#[cfg(test)]
+mod phase_fairness_tests {
+    use super::*;
+    use crate::frontend::iteration_scheduler::tests::direct_iteration;
+
+    fn recurrent_policy() -> DirectBatchPolicy {
+        DirectBatchPolicy {
+            max_prefill_sequences: 1,
+            mixed_prefill_decode: false,
+        }
+    }
+
+    fn decode(session: &str) -> DirectIteration {
+        let mut request = direct_iteration(session, 1);
+        request.phase = IterationBatchPhase::Decode;
+        request
+    }
+
+    #[test]
+    fn waiting_decode_runs_after_one_prefill_without_starving_prefill() {
+        let mut queue = VecDeque::from([
+            direct_iteration("prefill-a", 512),
+            direct_iteration("prefill-b", 512),
+            decode("decode-a"),
+            decode("decode-b"),
+        ]);
+        let decode_batch = take_direct_iteration_batch_with_policy(
+            &mut queue,
+            4,
+            2048,
+            recurrent_policy(),
+            Some(IterationBatchPhase::Prefill),
+        );
+        assert_eq!(
+            decode_batch
+                .iter()
+                .map(|request| request.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["decode-a", "decode-b"]
+        );
+        let prefill_batch = take_direct_iteration_batch_with_policy(
+            &mut queue,
+            4,
+            2048,
+            recurrent_policy(),
+            Some(IterationBatchPhase::Decode),
+        );
+        assert_eq!(prefill_batch[0].session_id, "prefill-a");
+        assert_eq!(queue[0].session_id, "prefill-b");
+    }
+
+    #[test]
+    fn phase_preference_cannot_overtake_an_earlier_same_session_request() {
+        let mut queue = VecDeque::from([direct_iteration("same", 512), decode("same")]);
+        let batch = take_direct_iteration_batch_with_policy(
+            &mut queue,
+            4,
+            2048,
+            recurrent_policy(),
+            Some(IterationBatchPhase::Prefill),
+        );
+        assert_eq!(batch[0].phase, IterationBatchPhase::Prefill);
+        assert_eq!(queue[0].phase, IterationBatchPhase::Decode);
     }
 }
