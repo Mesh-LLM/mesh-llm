@@ -380,7 +380,7 @@ pub fn find_huggingface_layer_package_at_revision(
         Ok(true) => Some(format_hf_package_ref(repo, revision)),
         Ok(false) => None,
         Err(err) => {
-            if repo_uses_layer_package_suffix(&repo) {
+            if repo_uses_layer_package_suffix(repo) {
                 tracing::warn!(
                     "Hugging Face layer package probe failed for {repo}@{revision_ref}: {err:#}"
                 );
