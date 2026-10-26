@@ -43,6 +43,7 @@ fn write(source: &Path, out: &Path, resume: bool) -> Result<()> {
             generation_defaults: None,
             resume_existing_artifacts: resume,
             max_artifact_bytes: None,
+            native_mtp_draft_depth: None,
         },
     )
 }
@@ -169,6 +170,7 @@ fn writer_embeds_reviewed_generation_defaults() {
             generation_defaults: Some(defaults),
             resume_existing_artifacts: false,
             max_artifact_bytes: None,
+            native_mtp_draft_depth: None,
         },
     )
     .unwrap();
@@ -217,6 +219,7 @@ fn writer_rejects_invalid_generation_defaults_before_creating_output() {
             generation_defaults: Some(defaults),
             resume_existing_artifacts: false,
             max_artifact_bytes: None,
+            native_mtp_draft_depth: None,
         },
     )
     .unwrap_err()
@@ -492,6 +495,7 @@ fn refuses_transform_hooks_and_existing_completion_marker() {
             generation_defaults: None,
             resume_existing_artifacts: false,
             max_artifact_bytes: None,
+            native_mtp_draft_depth: None,
         },
     );
     assert!(
@@ -530,6 +534,7 @@ fn verified_resume_and_projector_sidecar_round_trip() {
             generation_defaults: None,
             resume_existing_artifacts: true,
             max_artifact_bytes: None,
+            native_mtp_draft_depth: None,
         },
     )
     .unwrap();
@@ -580,6 +585,7 @@ fn publisher_metadata_is_copied_hashed_and_typed() {
             generation_defaults: None,
             resume_existing_artifacts: false,
             max_artifact_bytes: None,
+            native_mtp_draft_depth: None,
         },
     )
     .unwrap();
@@ -641,6 +647,7 @@ fn publisher_config_conflicting_with_gguf_geometry_is_rejected() {
             generation_defaults: None,
             resume_existing_artifacts: false,
             max_artifact_bytes: None,
+            native_mtp_draft_depth: None,
         },
     )
     .unwrap_err();
@@ -679,6 +686,7 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
             generation_defaults: None,
             resume_existing_artifacts: false,
             max_artifact_bytes: None,
+            native_mtp_draft_depth: None,
         },
     )
     .unwrap();
@@ -716,6 +724,7 @@ fn successful_artifact_hook_may_leave_verified_copies_for_rechecking() {
             generation_defaults: None,
             resume_existing_artifacts: false,
             max_artifact_bytes: None,
+            native_mtp_draft_depth: None,
         },
     )
     .unwrap();
@@ -800,6 +809,7 @@ fn oversized_layer_splits_into_verified_part_artifacts_end_to_end() {
             generation_defaults: None,
             resume_existing_artifacts: false,
             max_artifact_bytes: Some(17),
+            native_mtp_draft_depth: None,
         },
     )
     .unwrap();
@@ -883,6 +893,132 @@ fn writer_emits_mtp_generation_for_native_mtp_sources() {
     assert_eq!(*min_window, 1);
     assert_eq!(*max_window, 1);
     assert!(pipeline_depth.is_none());
+}
+
+fn write_mtp_package(
+    out: &Path,
+    source: &Path,
+    draft_depth: Option<u32>,
+    defaults: Option<PathBuf>,
+) -> Result<()> {
+    write_package(
+        source.display().to_string(),
+        out.to_path_buf(),
+        PackageSidecars::default(),
+        ArtifactHook { command: None },
+        ArtifactHook { command: None },
+        PackageWriteOptions {
+            explicit: explicit(source),
+            generation_defaults: defaults,
+            resume_existing_artifacts: false,
+            max_artifact_bytes: None,
+            native_mtp_draft_depth: draft_depth,
+        },
+    )
+}
+
+fn native_mtp_strategy(manifest: &PackageManifest) -> (Option<u32>, WindowPolicy) {
+    let speculative = manifest
+        .generation
+        .as_ref()
+        .and_then(|generation| generation.speculative_decoding.as_ref())
+        .expect("native MTP declaration");
+    let StrategyKind::NativeMtp {
+        prediction_depth,
+        window_policy,
+        ..
+    } = &speculative.strategies["mtp"].kind
+    else {
+        panic!("the mtp strategy must be native MTP");
+    };
+    (*prediction_depth, window_policy.clone().unwrap())
+}
+
+#[test]
+fn writer_declares_a_chained_native_mtp_draft_depth() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn(
+        &source,
+        2,
+        Some(1),
+        &[tensor("blk.0.embed", 0), tensor("blk.1.nextn.embed", 32)],
+        None,
+    );
+    let out = temp.path().join("package");
+    write_mtp_package(&out, &source, Some(3), None).unwrap();
+    let manifest = read_manifest(&out);
+    manifest.validate().unwrap();
+    let (depth, window) = native_mtp_strategy(&manifest);
+    assert_eq!(depth, Some(3));
+    assert_eq!(window.default, "adaptive");
+    assert_eq!(
+        (window.initial_window, window.min_window, window.max_window),
+        (2, 1, 3)
+    );
+}
+
+#[test]
+fn writer_rejects_a_draft_depth_without_one_nextn_block() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture(
+        &source,
+        &[tensor("blk.0.embed", 0), tensor("blk.1.embed", 32)],
+        None,
+    );
+    let error =
+        write_mtp_package(&temp.path().join("package"), &source, Some(3), None).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("exactly one NextN block"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn generation_defaults_keep_the_native_mtp_declaration() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("model.gguf");
+    fixture_with_nextn(
+        &source,
+        2,
+        Some(1),
+        &[tensor("blk.0.embed", 0), tensor("blk.1.nextn.embed", 32)],
+        None,
+    );
+    let defaults = temp.path().join("generation-defaults.json");
+    fs::write(
+        &defaults,
+        r#"{
+          "selection": {"default": "direct", "reasoning_enabled": "direct", "reasoning_disabled": "direct"},
+          "profiles": {
+            "direct": {
+              "temperature": 0.7,
+              "reasoning": {"enabled": "off", "budget": 0},
+              "provenance": {
+                "source_repo": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+                "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+                "file": "README.md",
+                "section": "Best Practices",
+                "url": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/README.md"
+              }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+    let out = temp.path().join("package");
+    write_mtp_package(&out, &source, Some(2), Some(defaults)).unwrap();
+    let manifest = read_manifest(&out);
+    assert!(
+        manifest
+            .generation
+            .as_ref()
+            .unwrap()
+            .request_defaults
+            .is_some()
+    );
+    assert_eq!(native_mtp_strategy(&manifest).0, Some(2));
 }
 
 #[test]

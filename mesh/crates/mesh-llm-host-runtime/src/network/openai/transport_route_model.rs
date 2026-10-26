@@ -32,8 +32,8 @@ pub(crate) struct RouteModelRequestContext<'a> {
 
 /// A delivered 2xx outcome: the routing-side test for "this attempt was
 /// served", which gates the `ServedByNodeIdSink` write. Mirrors
-/// `ingress::outcome_was_served`, kept here where the per-attempt target is in
-/// scope.
+/// `ingress::exchange_events::outcome_was_served`, kept here where the
+/// per-attempt target is in scope.
 fn route_outcome_was_served(outcome: &RouteDispatchOutcome) -> bool {
     matches!(
         outcome,
@@ -224,7 +224,6 @@ async fn prepare_model_candidates(
     let payment_ranked = crate::network::openai::payment_routing::rank(
         node,
         model,
-        (request.body_len_bytes as u64).div_ceil(4),
         u64::from(request.completion_tokens.unwrap_or(256)),
         &mut ranked,
         request.body_json.as_ref(),

@@ -4,7 +4,7 @@ use super::common::{
     retryable_quality_result,
 };
 use super::probe::{
-    ResponseBodyReadLimits, ResponseProbe, append_capsule_nonce_headers,
+    ParsedResponseHeaders, ResponseBodyReadLimits, ResponseProbe, append_capsule_nonce_headers,
     append_mesh_served_by_header, read_transformed_response_body, try_parse_response_headers,
 };
 use super::relay::relay_error_response;
@@ -22,6 +22,44 @@ const TRANSFORMED_RESPONSE_READ_LIMITS: ResponseBodyReadLimits = ResponseBodyRea
     max_body_bytes: MAX_TRANSFORMED_RESPONSE_BODY_BYTES,
     idle_timeout: TRANSFORMED_RESPONSE_BODY_IDLE_TIMEOUT,
 };
+
+/// Read the whole upstream body for a relay that rebuilds the response,
+/// decoding chunked transfer coding so only the payload is kept.
+async fn read_whole_response_body<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buffered: &mut Vec<u8>,
+    parsed: &ParsedResponseHeaders,
+) -> Result<Vec<u8>> {
+    if !parsed.chunked {
+        let body_end = read_transformed_response_body(
+            reader,
+            buffered,
+            parsed.header_end,
+            parsed.content_length,
+            TRANSFORMED_RESPONSE_READ_LIMITS,
+        )
+        .await?;
+        return Ok(buffered[parsed.header_end..body_end].to_vec());
+    }
+    let mut framed = super::body_reader::BodyReader::new(
+        reader,
+        buffered[parsed.header_end..].to_vec(),
+        true,
+        None,
+    );
+    let mut output = Vec::new();
+    while let Some(bytes) =
+        tokio::time::timeout(TRANSFORMED_RESPONSE_READ_LIMITS.idle_timeout, framed.next()).await??
+    {
+        if output.len().saturating_add(bytes.len())
+            > TRANSFORMED_RESPONSE_READ_LIMITS.max_body_bytes
+        {
+            return Err(anyhow!("upstream response exceeds body limit"));
+        }
+        output.extend(bytes);
+    }
+    Ok(output)
+}
 
 /// Relay a chat-completions upstream response translated into Responses-API JSON.
 pub(in crate::network::openai::response) async fn relay_translated_responses_json<
@@ -88,39 +126,8 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
     let mut buffered = probe.buffered;
     let parsed = try_parse_response_headers(&buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    let decoded;
-    let body = if parsed.chunked {
-        let mut framed = super::body_reader::BodyReader::new(
-            reader,
-            buffered[parsed.header_end..].to_vec(),
-            true,
-            None,
-        );
-        let mut output = Vec::new();
-        while let Some(bytes) =
-            tokio::time::timeout(TRANSFORMED_RESPONSE_READ_LIMITS.idle_timeout, framed.next())
-                .await??
-        {
-            if output.len().saturating_add(bytes.len())
-                > TRANSFORMED_RESPONSE_READ_LIMITS.max_body_bytes
-            {
-                return Err(anyhow!("upstream response exceeds body limit"));
-            }
-            output.extend(bytes);
-        }
-        decoded = output;
-        decoded.as_slice()
-    } else {
-        let body_end = read_transformed_response_body(
-            reader,
-            &mut buffered,
-            parsed.header_end,
-            parsed.content_length,
-            TRANSFORMED_RESPONSE_READ_LIMITS,
-        )
-        .await?;
-        &buffered[parsed.header_end..body_end]
-    };
+    let body = read_whole_response_body(reader, &mut buffered, &parsed).await?;
+    let body = body.as_slice();
     if let Some(result) = retryable_quality_result(body, retry_policy) {
         return Ok(result);
     }
@@ -201,15 +208,10 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     let mut buffered = probe.buffered;
     let parsed = try_parse_response_headers(&buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    let body_end = read_transformed_response_body(
-        reader,
-        &mut buffered,
-        parsed.header_end,
-        parsed.content_length,
-        TRANSFORMED_RESPONSE_READ_LIMITS,
-    )
-    .await?;
-    let body = &buffered[parsed.header_end..body_end];
+    // The response goes out with a fresh Content-Length, so a chunked
+    // upstream body must be decoded first or its framing reaches the client.
+    let body = read_whole_response_body(reader, &mut buffered, &parsed).await?;
+    let body = body.as_slice();
     let normalized_body =
         normalize_chat_completion_json_body(body).unwrap_or_else(|| body.to_vec());
     if let Some(result) = retryable_quality_result(&normalized_body, retry_policy) {
@@ -434,6 +436,92 @@ mod tests {
         assert!(
             output_text.contains("x-capsule-nonce-origin: frontend\r\n"),
             "public-proxy JSON response must echo the nonce origin marker: {output_text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_normalized_chat_completion_json_decodes_chunked_upstream_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // An OpenAI-compatible endpoint may answer a non-streamed completion
+        // with `Transfer-Encoding: chunked`. The relay sends the body on with
+        // its own Content-Length, so the chunk framing must not reach the client.
+        let body = br#"{"id":"chatcmpl-a","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        let (first, second) = body.split_at(body.len() / 2);
+        let mut chunked = Vec::new();
+        for part in [first, second] {
+            chunked.extend_from_slice(format!("{:x}\r\n", part.len()).as_bytes());
+            chunked.extend_from_slice(part);
+            chunked.extend_from_slice(b"\r\n");
+        }
+        chunked.extend_from_slice(b"0\r\n\r\n");
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n".to_string();
+        let header_end = header.len();
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let probe = ResponseProbe {
+                buffered: header.into_bytes(),
+                header_end,
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            relay_normalized_chat_completion_json(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        upstream_writer.write_all(&chunked).await.unwrap();
+        drop(upstream_writer);
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut output))
+            .await
+            .expect("relay should finish once the upstream body ends")
+            .unwrap();
+        let route_result = server_task.await.expect("server task");
+
+        let body_start = output
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+            .unwrap();
+        let headers = String::from_utf8_lossy(&output[..body_start]).to_ascii_lowercase();
+        let response_body = &output[body_start..];
+        assert!(
+            headers.contains(&format!("content-length: {}\r\n", response_body.len())),
+            "Content-Length must count the decoded body: {headers}"
+        );
+        assert!(!headers.contains("transfer-encoding"), "{headers}");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(response_body).unwrap_or_else(|error| {
+                panic!(
+                    "client must receive the JSON without chunk framing ({error}): {}",
+                    String::from_utf8_lossy(response_body)
+                )
+            });
+        assert_eq!(parsed["choices"][0]["message"]["content"], "hi");
+        let RouteAttemptResult::Delivered { usage, .. } = route_result else {
+            panic!("expected Delivered, got {route_result:?}");
+        };
+        assert_eq!(
+            usage,
+            Some(mesh_llm_events::logging::events::TokenUsage {
+                prompt_tokens: Some(1),
+                cached_prompt_tokens: None,
+                completion_tokens: Some(1),
+                total_tokens: Some(2),
+            })
         );
     }
 

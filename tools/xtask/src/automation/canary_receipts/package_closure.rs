@@ -35,6 +35,8 @@ mod restore_transaction;
 mod restoring;
 #[path = "package_closure/runtime_slice.rs"]
 mod runtime_slice;
+#[path = "package_closure/selected_publication.rs"]
+pub(crate) mod selected_publication;
 #[path = "package_closure/source.rs"]
 mod source;
 #[path = "package_closure/source_recovery.rs"]

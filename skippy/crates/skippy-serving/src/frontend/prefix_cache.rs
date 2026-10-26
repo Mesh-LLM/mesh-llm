@@ -983,6 +983,7 @@ impl StageOpenAiBackend {
             decode_step: 0,
             current,
             sampling: wire_sampling.clone(),
+            native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
         })?;
         let has_downstream = request.config.downstream.is_some();
         let scheduler_kv = Arc::clone(kv);
@@ -1067,6 +1068,7 @@ impl StageOpenAiBackend {
                 current,
                 sampling: wire_sampling,
                 chat_sampling_metadata: request.chat_sampling_metadata,
+                native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
             })?;
         let forwarded = forwarded_stage_message_timed(
             request.config,
@@ -1279,7 +1281,6 @@ mod tests {
             kv_cache: Some(skippy_protocol::StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: skippy_protocol::StageKvCacheMode::LookupRecord,
-                payload: skippy_protocol::StageKvCachePayload::ResidentKv,
                 max_entries: 8,
                 max_bytes: 0,
                 l2_max_bytes: 0,
@@ -1290,9 +1291,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let cache = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache");
+        let cache =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache");
         let identity = crate::kv_integration::PrefillKvIdentity {
             identity: crate::kv_proto::PageIdentity {
                 token_count: 4,
@@ -1326,6 +1328,14 @@ mod tests {
         assert!(sampling_replay_safe(&SamplingConfig::default()));
         assert!(sampling_replay_safe(&first_sampling));
         assert!(!sampling_replay_safe(&stochastic_sampling));
+        let logprobs_sampling = SamplingConfig {
+            top_logprobs: Some(0),
+            ..first_sampling.clone()
+        };
+        assert!(
+            !sampling_replay_safe(&logprobs_sampling),
+            "a replayed token would have no logprobs entry"
+        );
         assert!(cache.record_cached_first_token_with_key(&first_key, &identity, 123));
         assert_eq!(
             cache.lookup_cached_first_token_with_key(&first_key),
@@ -1359,7 +1369,6 @@ mod tests {
             kv_cache: Some(skippy_protocol::StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: skippy_protocol::StageKvCacheMode::LookupRecord,
-                payload: skippy_protocol::StageKvCachePayload::ResidentKv,
                 max_entries: 8,
                 max_bytes: 0,
                 l2_max_bytes: 0,
@@ -1370,9 +1379,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let cache = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
-            .unwrap()
-            .expect("resident cache");
+        let cache =
+            KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .expect("resident cache");
         let identity = crate::kv_integration::PrefillKvIdentity {
             identity: crate::kv_proto::PageIdentity {
                 token_count: 4,

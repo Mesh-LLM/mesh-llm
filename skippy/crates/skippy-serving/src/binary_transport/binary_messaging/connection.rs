@@ -34,6 +34,7 @@ use crate::binary_transport::direct_return::PredictionReturnSinks;
 use crate::binary_transport::forwarded_stage_message_timed;
 use crate::binary_transport::kv_eviction::binary_proactive_eviction_plan;
 use crate::binary_transport::kv_eviction::evict_binary_resident_prefix_for_decode;
+use crate::binary_transport::native_mtp_reply::split_native_mtp_reply;
 use crate::binary_transport::peer_sampling::runtime_sampling_config;
 use crate::binary_transport::prefill_execution::{
     executable_prefill_start, suffix_activation_frame,
@@ -46,7 +47,6 @@ use crate::binary_transport::stage_execution::elapsed_ms;
 use crate::binary_transport::stage_execution::empty_activation_frame;
 use crate::binary_transport::stage_execution::input_activation_frame;
 use crate::binary_transport::stage_execution::nanos_delta_ms;
-use crate::binary_transport::stage_execution::split_native_mtp_reply;
 use crate::binary_transport::stage_execution::stage_mask;
 use crate::binary_transport::stage_execution::token_sideband_or_fill;
 use crate::binary_transport::stage_execution::{

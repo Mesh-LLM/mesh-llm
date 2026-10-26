@@ -10,6 +10,7 @@ cd "$ROOT"
 
 BRANCH="${CANARY_BRANCH:?CANARY_BRANCH is required}"
 CERTIFIED_SHA="${CANARY_CERTIFIED_SHA:?CANARY_CERTIFIED_SHA is required}"
+UPSTREAM_SHA="${CANARY_UPSTREAM_SHA:?CANARY_UPSTREAM_SHA is required}"
 PR_BODY="${CANARY_PR_BODY:?CANARY_PR_BODY is required}"
 BUNDLE="${CANARY_BUNDLE:?CANARY_BUNDLE is required}"
 REPOSITORY="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
@@ -19,8 +20,8 @@ if [[ ! "$BRANCH" =~ ^llama-canary/repair-[0-9A-Za-z._-]+-[0-9]+-[0-9a-f]{10}$ ]
   echo "refusing to publish unexpected canary branch: $BRANCH" >&2
   exit 1
 fi
-if [[ ! "$CERTIFIED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "refusing to publish a non-40-hex certified SHA" >&2
+if [[ ! "$CERTIFIED_SHA" =~ ^[0-9a-f]{40}$ || ! "$UPSTREAM_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "refusing to publish a non-40-hex certified or upstream SHA" >&2
   exit 1
 fi
 if [[ ! "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
@@ -192,7 +193,7 @@ if [[ "$remote_head" != "$CERTIFIED_SHA" ]]; then
   exit 1
 fi
 
-title="fix(llama): certify upstream $(tr -d '[:space:]' < skippy/llama_cpp/upstream.txt | cut -c1-10)"
+title="fix(llama): certify upstream ${UPSTREAM_SHA:0:10}"
 create_ready_pr() {
   local create_status=0 redactor_pid=''
   start_publication_redactor || return 125

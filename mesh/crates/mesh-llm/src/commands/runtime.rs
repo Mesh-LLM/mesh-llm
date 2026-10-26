@@ -963,6 +963,7 @@ mod tests {
             owner_control: Default::default(),
             telemetry: Default::default(),
             analytics: Default::default(),
+            updates: Default::default(),
             logging: Default::default(),
             defaults: None,
             runtime: Default::default(),

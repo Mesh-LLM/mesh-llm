@@ -28,7 +28,10 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     result(h::job(document, "result")?)?;
     let publish = h::job(document, "publish-certified-canary")?;
     h::needs(publish, &["resolve", "result"])?;
-    h::condition(publish, "${{ needs.result.outputs.publish == 'true' }}")?;
+    h::condition(
+        publish,
+        "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}",
+    )?;
     super::canary_execution::publication(publish)?;
     let steps = h::steps(publish)?;
     h::checkout(steps, "${{ needs.resolve.outputs.source }}", None)?;
@@ -39,6 +42,11 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "CANARY_CERTIFIED_SHA",
         "${{ needs.result.outputs.head }}",
     )?;
+    h::binding(
+        env,
+        "CANARY_UPSTREAM_SHA",
+        "${{ needs.resolve.outputs.upstream }}",
+    )?;
     h::binding(env, "CANARY_BRANCH", "${{ needs.result.outputs.branch }}")
 }
 
@@ -48,6 +56,8 @@ fn result(job: &Node) -> DynResult<()> {
         &[
             "resolve",
             "preflight",
+            "repair_1",
+            "verify_1",
             "attempt_1",
             "attempt_2",
             "attempt_3",
@@ -81,6 +91,7 @@ fn result(job: &Node) -> DynResult<()> {
     h::command(guard, &["exit", "1"], &[])?;
     let controller = h::checkout(steps, "${{ needs.resolve.outputs.source }}", None)?;
     let (decision, command) = h::step(steps, "id", "result")?;
+    selected_publication_flag(command)?;
     let env = h::member(command, "env")?;
     for (key, value) in [
         ("CERTIFY", "${{ needs.resolve.outputs.certify }}"),
@@ -271,7 +282,7 @@ fn independent_pass(
     let verify = h::job(document, verify_name)?;
     h::needs(verify, &["resolve", repair_name])?;
     let changed = if number == 1 {
-        "needs.resolve.outputs.changed == 'true' && "
+        "(needs.resolve.outputs.changed == 'true' || needs.resolve.outputs.publish_selected == 'true') && "
     } else {
         ""
     };
@@ -281,7 +292,22 @@ fn independent_pass(
     )?;
     pass(verify, &format!("verify-{number}"))?;
     let inputs = h::member(verify, "with")?;
-    h::binding(inputs, "mode", "verify-build")?;
+    h::binding(
+        inputs,
+        "mode",
+        if number == 1 {
+            "${{ needs.resolve.outputs.publish_selected == 'true' && 'pinned-build' || 'verify-build' }}"
+        } else {
+            "verify-build"
+        },
+    )?;
+    if number == 1 {
+        h::binding(
+            inputs,
+            "mesh_source",
+            "${{ needs.resolve.outputs.mesh_source }}",
+        )?;
+    }
     for field in ["package", "identity", "head"] {
         h::binding(
             inputs,
@@ -295,6 +321,9 @@ fn select_attempt(attempt: &Node, repair_name: &str, verify_name: &str) -> DynRe
     let steps = h::steps(attempt)?;
     let checkout = h::checkout(steps, "${{ needs.resolve.outputs.source }}", None)?;
     let (select, command) = h::step(steps, "id", "select")?;
+    if repair_name == "repair_1" {
+        selected_publication_flag(command)?;
+    }
     selector_preparation(attempt, steps, checkout, select)?;
     let env = h::member(command, "env")?;
     h::binding(env, "CHANGED", "${{ needs.resolve.outputs.changed }}")?;
@@ -322,6 +351,21 @@ fn select_attempt(attempt: &Node, repair_name: &str, verify_name: &str) -> DynRe
             ("--verification-json", "\"$VERIFY_JSON\""),
         ],
     )?;
+    Ok(())
+}
+fn selected_publication_flag(command: &Node) -> DynResult<()> {
+    h::binding(
+        h::member(command, "env")?,
+        "PUBLISH_SELECTED",
+        "${{ needs.resolve.outputs.publish_selected }}",
+    )?;
+    let run = super::field(command, "run").ok_or("selected publication flag missing")?;
+    if !run
+        .contains("if [[ \"$PUBLISH_SELECTED\" == true ]]; then options+=(--publish-selected); fi")
+        || !run.contains("\"${options[@]}\"")
+    {
+        return Err("selected publication must explicitly reach both native selectors".into());
+    }
     Ok(())
 }
 fn selector_preparation(
@@ -385,6 +429,31 @@ mod tests {
     #[test]
     fn current_admission_graph_is_bound() {
         validate(document()).unwrap();
+    }
+
+    #[test]
+    fn publisher_requires_explicit_status_and_successful_selection() {
+        // Run #301 certified both passes but skipped publication because optional
+        // attempts were skipped and this condition inherited implicit success().
+        for condition in [
+            "${{ needs.result.outputs.publish == 'true' }}",
+            "${{ success() && needs.result.outputs.publish == 'true' }}",
+            "${{ !cancelled() && needs.result.outputs.publish == 'true' }}",
+            "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.outputs.publish == 'true' }}",
+            "${{ !cancelled() && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}",
+            "${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' }}",
+        ] {
+            let mut node = document();
+            h::replace(
+                &mut node,
+                &["jobs", "publish-certified-canary", "if"],
+                Node::Scalar(condition.into()),
+            );
+            assert!(
+                validate(node).is_err(),
+                "accepted unsafe publication: {condition}"
+            );
+        }
     }
 
     #[test]
@@ -600,6 +669,34 @@ mod tests {
             unreachable!()
         };
         steps
+    }
+
+    #[test]
+    fn selected_publication_requires_independent_mode_source_and_explicit_selector_flags() {
+        for key in ["mode", "mesh_source", "previous_identity"] {
+            let mut node = document();
+            h::replace(
+                &mut node,
+                &["jobs", "verify_1", "with", key],
+                Node::Scalar("unbound".into()),
+            );
+            assert!(validate(node).is_err(), "{key}");
+        }
+        for job in ["attempt_1", "result"] {
+            let mut node = document();
+            let command = selector_steps(&mut node, job)
+                .iter_mut()
+                .find(|step| {
+                    super::super::field(step, "id")
+                        == Some(if job == "result" { "result" } else { "select" })
+                })
+                .unwrap();
+            let run = super::super::field(command, "run")
+                .unwrap()
+                .replace("--publish-selected", "--unbound");
+            *h::mutable(command, "run") = Node::Scalar(run);
+            assert!(validate(node).is_err(), "{job}");
+        }
     }
 
     #[test]

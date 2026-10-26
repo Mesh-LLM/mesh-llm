@@ -81,15 +81,6 @@ metrics-server-build:
 metrics-server-build:
     @just with-lld cargo build -p metrics-server
 
-# Build the binaries copied into the Skippy WAN Docker lab image.
-[linux]
-skippy-wan-lab-build-bins:
-    just release-runtime-build cpu
-    just skippy-cli-release-build
-    cargo xtool native verify-host-dependencies target/release/skippy --report dist/skippy-host-imports.json
-    just with-lld cargo build --release --locked -p metrics-server
-    just with-lld cargo build --release --locked -p xtask --bin xtask
-
 # Build the resumable GGUF conversion/quantization replacement CLI.
 [unix]
 skippy-quantize-build:
@@ -132,6 +123,11 @@ skippy-workload-oracles-build output:
 skippy-native-tests backend="cpu":
     scripts/prepare-llama.sh pinned
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_BUILD_TESTS=ON scripts/build-llama.sh
+
+# Build the opt-in native MTP developer probes against the local runtime.
+[unix]
+skippy-native-mtp-probes-build:
+    bash skippy/evals/native-mtp-parity/build.sh
 
 # Replay every retained and current native Skippy gate without broad upstream tests.
 [unix]

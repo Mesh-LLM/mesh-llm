@@ -283,16 +283,18 @@ pub(super) fn structured_event_capabilities(
 /// Startup entry point: probes the loaded runtime, drops the reporter family
 /// when no reporter is installed, and applies the configured parser mode.
 pub(super) fn configure_startup_lifecycle_log_parser(
-    mode: mesh_llm_config::LifecycleLogParserMode,
-    source: &str,
+    selection: mesh_llm_config::LifecycleLogParserSelection,
 ) {
     let capabilities = structured_event_capabilities(
         skippy_runtime::probe_capabilities(),
         mesh_llm_config::event_system_off().unwrap_or(false),
         skippy_runtime::runtime_event_reporter_installed(),
     );
-    configure_lifecycle_log_parser(mode, &capabilities);
-    tracing::info!(source, "configured lifecycle native-log parser");
+    configure_lifecycle_log_parser(selection.mode, &capabilities);
+    tracing::info!(
+        source = selection.source.as_str(),
+        "configured lifecycle native-log parser"
+    );
 }
 
 /// Applies the parser policy and reports capability-probe health as normal
@@ -410,6 +412,7 @@ pub(super) fn runtime_tracing_subscriber()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("mesh_inference=info".parse()?)
+                .add_directive("mesh_wallet=info".parse()?)
                 .add_directive("nostr_relay_pool=off".parse()?)
                 .add_directive("nostr_sdk=warn".parse()?)
                 .add_directive("noq_proto::connection=warn".parse()?)

@@ -5,6 +5,7 @@ use std::sync::{
 use std::{thread, time::Duration};
 
 use super::token_generation::capture_trace;
+use super::token_generation::ensure_readable_logprobs;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::{
@@ -25,9 +26,7 @@ use crate::runtime_state::{RuntimeState, load_runtime};
 use crate::telemetry::{Telemetry, TelemetryLevel};
 use anyhow::{Result, bail};
 use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
-use skippy_protocol::{
-    LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-};
+use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
 // The real-model tests below are deliberately ignored by default. The
@@ -229,7 +228,6 @@ fn recurrent_test_backend(
         kv_cache: Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::KvRecurrent,
             max_entries: 8,
             max_bytes: 0,
             l2_max_bytes: 0,
@@ -247,9 +245,10 @@ fn recurrent_test_backend(
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
-    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)?
-        .map(Arc::new)
-        .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
+    let kv =
+        KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Recurrent)?
+            .map(Arc::new)
+            .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
     let iteration_scheduler =
@@ -918,4 +917,27 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     );
 
     Ok(())
+}
+
+#[test]
+fn unreadable_logprobs_fail_the_request() {
+    let readable = skippy_runtime::TokenLogprobs {
+        token: 7,
+        logprob: -0.25,
+        top: vec![(7, -0.25), (9, -1.5)],
+    };
+    assert!(ensure_readable_logprobs(std::slice::from_ref(&readable)).is_ok());
+
+    let unreadable_token = skippy_runtime::TokenLogprobs {
+        logprob: f32::NAN,
+        top: Vec::new(),
+        ..readable.clone()
+    };
+    assert!(ensure_readable_logprobs(&[readable.clone(), unreadable_token]).is_err());
+
+    let unreadable_alternative = skippy_runtime::TokenLogprobs {
+        top: vec![(7, -0.25), (9, f32::NAN)],
+        ..readable
+    };
+    assert!(ensure_readable_logprobs(&[unreadable_alternative]).is_err());
 }

@@ -45,6 +45,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
         telemetry_setting("telemetry.prompt_shape_metrics", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::Url),
         analytics_setting("analytics.enabled", ConfigValueSchema::Boolean),
+        updates_setting("updates.check", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.enabled", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.log_path", ConfigValueSchema::Path),
         logging_audit_setting("logging.audit.log_format", string_enum(["json_lines"])),
@@ -115,6 +116,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
         native_runtime_setting(
             "runtime.native_runtime.selection",
             one_of([string_enum(["recommended"]), ConfigValueSchema::String]),
+        ),
+        native_runtime_setting(
+            "runtime.native_runtime.download",
+            ConfigValueSchema::Boolean,
         ),
         kv_disk_setting(
             "runtime.kv_cache.disk.mode",
@@ -399,10 +404,6 @@ fn model_fit_settings(
         basic_setting(
             &format!("{prefix}.prefix_cache.shared_record_limit"),
             ConfigValueSchema::Integer,
-        ),
-        basic_setting(
-            &format!("{prefix}.prefix_cache.payload_mode"),
-            string_enum(["resident-kv", "kv-recurrent", "full-state", "auto"]),
         ),
         unwired_setting(&format!("{prefix}.keep_tokens"), ConfigValueSchema::Integer),
         unwired_setting(&format!("{prefix}.context_shift"), bool_or_auto_schema()),

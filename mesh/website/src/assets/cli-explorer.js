@@ -83,6 +83,7 @@
       defaultValues: asList(raw.defaultValues),
       possibleValues: asList(raw.possibleValues),
       conflicts: asList(raw.conflicts),
+      requireEquals: raw.requireEquals === true,
       children: [],
       originalChildren: [],
       parentNode: parent,
@@ -232,6 +233,9 @@
 
   function nodeLabel(node) {
     const base = node.kind === "option" ? optionToken(node) : node.name;
+    if (node.requireEquals && node.valueNames.length) {
+      return `${base}[=${node.valueNames.join(" |= ")}]`;
+    }
     const values = node.valueNames.length ? ` ${node.valueNames.join(" | ")}` : "";
     return `${base}${values}`;
   }
@@ -846,6 +850,7 @@
       ["Possible values", displayValue(node.possibleValues)],
       ["Conflicts", displayValue(node.conflicts)],
       ["Repeatable", displayValue(node.repeatable)],
+      ["Equals required", displayValue(node.requireEquals)],
       ["Required", displayValue(node.required)],
       ["Global", displayValue(node.global)],
       ["Inventory id", displayValue(node.inventoryId)]
@@ -892,7 +897,9 @@
         ? (node.long ? `--${String(node.long).replace(/^-+/, "")}` : optionToken(node))
         : node.name;
       invocation = `${invocation} ${token}`.trim();
-      if (node.valueNames.length) invocation += ` ${node.valueNames[0]}`;
+      if (node.valueNames.length) {
+        invocation += node.requireEquals ? `=${node.valueNames[0]}` : ` ${node.valueNames[0]}`;
+      }
     }
     return invocation;
   }

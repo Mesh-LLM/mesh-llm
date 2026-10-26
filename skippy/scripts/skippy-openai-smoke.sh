@@ -99,21 +99,6 @@ fi
 echo "building skippy-serving and skippy-package-builder"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" cargo build -p skippy-cli -p skippy-package-builder
 
-echo "inferring layer_end from $MODEL_PATH"
-LAYER_END="$(
-  LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" target/debug/skippy-package-builder inspect "$MODEL_PATH" \
-    | jq '[.tensors[] | select(.role == "layer") | .layer_index] | max + 1'
-)"
-if [[ -z "$LAYER_END" || "$LAYER_END" == "null" ]]; then
-  echo "failed to infer layer_end from model" >&2
-  exit 1
-fi
-
-CONFIG_PATH="${WORK_DIR}/stage-openai-smoke.json"
-"${automation[@]}" automation openai-smoke-config \
-  --output "$CONFIG_PATH" --model-id "$MODEL_ID" --model-path "$MODEL_PATH" \
-  --layer-end "$LAYER_END" --ctx-size "$CTX_SIZE"
-
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "port ${PORT} is already listening" >&2
   lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >&2 || true
@@ -124,7 +109,8 @@ SERVER_LOG="${WORK_DIR}/serve.log"
 echo "starting skippy serve on ${BASE_URL}"
 SKIPPY_TELEMETRY_STDERR=1 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
   target/debug/skippy serve \
-    --config "$CONFIG_PATH" \
+    --model-path "$MODEL_PATH" --model-id "$MODEL_ID" \
+    --ctx-size "$CTX_SIZE" --n-gpu-layers 0 \
     --bind-addr "${HOST}:${PORT}" \
     --default-max-tokens "$DEFAULT_MAX_TOKENS" \
     --telemetry-level debug \
@@ -193,6 +179,7 @@ sampling_request="$(jq -cn --arg model "$MODEL_ID" '{
   messages: [{role: "user", content: "Say hi"}],
   temperature: 0.7,
   top_p: 0.9,
+  typical_p: 0.9,
   seed: 42,
   logit_bias: {"0": -1.0},
   max_tokens: 2
@@ -218,7 +205,7 @@ echo "probing unsupported sampling rejection"
 unsupported_sampling_request="$(jq -cn --arg model "$MODEL_ID" '{
   model: $model,
   messages: [{role: "user", content: "Say hi"}],
-  typical_p: 0.9,
+  adaptive: true,
   max_tokens: 2
 }')"
 unsupported_sampling_response="${WORK_DIR}/unsupported-sampling-response.json"
@@ -238,11 +225,13 @@ fi
 unsupported_sampling_json="$(cat "$unsupported_sampling_response")"
 echo "$unsupported_sampling_json" | jq -e '.error.code == "unsupported_model_feature"' >/dev/null
 
-if ! grep -q '"event":"stage.scheduler_iteration"' "$SERVER_LOG"; then
-  echo "default OpenAI request path did not emit scheduler iteration telemetry" >&2
-  tail -80 "$SERVER_LOG" >&2 || true
-  exit 1
-fi
+for event in stage.openai_decode stage.openai_request_summary; do
+  if ! grep -q "\"event\":\"${event}\"" "$SERVER_LOG"; then
+    echo "default OpenAI request path did not emit ${event} telemetry" >&2
+    tail -80 "$SERVER_LOG" >&2 || true
+    exit 1
+  fi
+done
 
 if [[ "$RUN_BENCHY" == "1" ]]; then
   require_cmd uvx
@@ -260,7 +249,6 @@ if [[ "$RUN_BENCHY" == "1" ]]; then
 fi
 
 echo "OpenAI smoke passed"
-echo "  config: $CONFIG_PATH"
 echo "  server log: $SERVER_LOG"
 if [[ "$RUN_BENCHY" == "1" ]]; then
   echo "  benchy result: ${SAVE_RESULT:-$WORK_DIR/benchy-smoke.md}"

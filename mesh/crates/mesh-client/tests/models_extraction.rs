@@ -13,6 +13,12 @@ fn push_u32_kv(bytes: &mut Vec<u8>, key: &str, value: u32) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
+fn push_architecture(bytes: &mut Vec<u8>) {
+    push_gguf_string(bytes, "general.architecture");
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    push_gguf_string(bytes, "llama");
+}
+
 #[test]
 fn catalog_has_entries() {
     assert!(MODEL_CATALOG.iter().count() > 0);
@@ -29,12 +35,13 @@ fn capabilities_default_is_none() {
 fn gguf_parse_minimal_fixture() {
     use std::io::Write;
 
-    // Minimal valid GGUF: magic + version=3 + n_tensors=0 + n_kv=0
+    // Compact model metadata requires a declared architecture, even without tensors.
     let mut fixture = Vec::<u8>::new();
     fixture.extend_from_slice(b"GGUF"); // magic
     fixture.extend_from_slice(&3u32.to_le_bytes()); // version
     fixture.extend_from_slice(&0i64.to_le_bytes()); // n_tensors
-    fixture.extend_from_slice(&0i64.to_le_bytes()); // n_kv
+    fixture.extend_from_slice(&1i64.to_le_bytes()); // n_kv
+    push_architecture(&mut fixture);
 
     let tmp = std::env::temp_dir().join("mesh-client-models-extraction.gguf");
     std::fs::File::create(&tmp)
@@ -44,6 +51,7 @@ fn gguf_parse_minimal_fixture() {
     let meta = scan_gguf_compact_meta(&tmp);
     assert!(meta.is_some(), "should parse minimal GGUF fixture");
     let meta = meta.unwrap();
+    assert_eq!(meta.architecture, "llama");
     assert_eq!(meta.context_length, 0);
     assert_eq!(meta.expert_count, 0);
     let _ = std::fs::remove_file(&tmp);
@@ -57,9 +65,11 @@ fn gguf_public_api_derives_value_length_from_kv_heads() {
     fixture.extend_from_slice(b"GGUF");
     fixture.extend_from_slice(&3u32.to_le_bytes());
     fixture.extend_from_slice(&0i64.to_le_bytes());
-    fixture.extend_from_slice(&2i64.to_le_bytes());
+    fixture.extend_from_slice(&3i64.to_le_bytes());
     push_u32_kv(&mut fixture, "llama.embedding_length", 4096);
     push_u32_kv(&mut fixture, "llama.attention.head_count_kv", 8);
+    // Namespace selection must also work when the architecture follows its fields.
+    push_architecture(&mut fixture);
 
     let tmp = std::env::temp_dir().join("mesh-client-models-extraction-kv-heads.gguf");
     std::fs::File::create(&tmp)
@@ -67,9 +77,28 @@ fn gguf_public_api_derives_value_length_from_kv_heads() {
         .write_all(&fixture)
         .unwrap();
     let meta = scan_gguf_compact_meta(&tmp).expect("should parse GGUF fixture");
+    assert_eq!(meta.architecture, "llama");
     assert_eq!(meta.head_count, 0);
     assert_eq!(meta.kv_head_count, 8);
     assert_eq!(meta.key_length, 0);
     assert_eq!(meta.value_length, 512);
     let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn gguf_public_api_rejects_undeclared_architecture() {
+    let mut fixture = b"GGUF".to_vec();
+    fixture.extend_from_slice(&3u32.to_le_bytes());
+    fixture.extend_from_slice(&0i64.to_le_bytes());
+    fixture.extend_from_slice(&1i64.to_le_bytes());
+    push_u32_kv(&mut fixture, "llama.block_count", 32);
+
+    let tmp = std::env::temp_dir().join("mesh-client-models-extraction-undeclared.gguf");
+    std::fs::write(&tmp, fixture).unwrap();
+    let meta = scan_gguf_compact_meta(&tmp);
+    std::fs::remove_file(&tmp).unwrap();
+    assert!(
+        meta.is_none(),
+        "must not infer architecture from a field name"
+    );
 }

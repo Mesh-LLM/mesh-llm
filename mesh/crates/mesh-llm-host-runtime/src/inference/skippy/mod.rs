@@ -305,6 +305,40 @@ pub(crate) fn start_laya_http_on(
     }
 }
 
+pub(crate) fn load_speech_recognition_model(
+    path: &Path,
+    device: Option<&str>,
+) -> Result<Arc<skippy_runtime::SpeechRecognitionModel>> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
+    Ok(Arc::new(skippy_runtime::SpeechRecognitionModel::open(
+        path, device,
+    )?))
+}
+
+pub(crate) fn start_speech_recognition_http_on(
+    model_id: &str,
+    model: Arc<skippy_runtime::SpeechRecognitionModel>,
+    concurrency: usize,
+    bind_addr: std::net::SocketAddr,
+) -> SkippyHttpHandle {
+    let lifecycle_observer = crate::network::openai::runtime_events::compose_lifecycle_observer(
+        crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+    );
+    let server = skippy_serving::start_openai_backend_with_lifecycle_observer(
+        bind_addr,
+        Arc::new(skippy_serving::SpeechRecognitionBackend::new(
+            model_id,
+            model,
+            concurrency,
+        )),
+        lifecycle_observer,
+    );
+    SkippyHttpHandle {
+        port: bind_addr.port(),
+        server,
+    }
+}
+
 impl SkippyHttpHandle {
     pub(crate) fn port(&self) -> u16 {
         self.port
@@ -673,7 +707,8 @@ mod tests {
 
     fn thinking_fixture() -> ThinkingControls {
         ThinkingControls {
-            enabled: true,
+            toggle: skippy_inference_api::thinking::ThinkingToggle::Observed,
+            reasoning_parser: Some(true),
             efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
         }
     }
@@ -686,7 +721,8 @@ mod tests {
 
         register_local_thinking(model, Some(&thinking_fixture()));
         let value = local_thinking(model).expect("registered thinking");
-        assert_eq!(value["enabled"], true);
+        assert_eq!(value["toggle"], "observed");
+        assert_eq!(value["reasoning_parser"], true);
         assert_eq!(value["efforts"][2], "high");
 
         // A reload that produced no observations must not leave the previous

@@ -116,11 +116,12 @@ if [[ "$INERT_FAIL" == '{label}' ]]; then exit 17; fi
         self.tool(
             "tools/uv",
             "uv",
-            r#"if [[ ${9} == scripts/build-llama.sh ]]; then
+            r#"printf '%s\0' "$UV_PROJECT_ENVIRONMENT" > "$INERT_ROOT/uv-environment-$count"
+if [[ ${12} == scripts/build-llama.sh ]]; then
   printf '%s' "$LLAMA_STAGE_UPSTREAM_TESTS" > "$INERT_ROOT/upstream-tests"
 else
-  [[ ${9} == scripts/check-skippy-generated-family-patch.sh ]] || exit 92
-  /bin/bash "${@:9}"
+  [[ ${12} == scripts/check-skippy-generated-family-patch.sh ]] || exit 92
+  /bin/bash "${@:12}"
 fi"#,
         );
         self.tool("tools/lipo", "archive", "printf '%s\\n' \"$INERT_ARCHIVE\"");
@@ -163,6 +164,7 @@ fi"#,
                 r#"set -euo pipefail
 ROOT="$PWD"
 TRUSTED_ROOT="$PWD"
+JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 PIN_FILE="$ROOT/skippy/llama_cpp/upstream.txt"
 UPSTREAM_SHA={sha}
 LLAMA_STAGE_BUILD_DIR="$ROOT/native"

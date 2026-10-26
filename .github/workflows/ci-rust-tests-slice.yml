@@ -270,9 +270,6 @@ jobs:
         run: |
           npm install --global @anthropic-ai/claude-code@2.1.273
           test "$(claude --version | awk '{print $1}')" = "2.1.273"
-      - name: Prepare immutable research source for Skippy benchmark contracts
-        if: ${{ contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'skippy-bench') }}
-        uses: ./.github/actions/prepare-python-research-source
       - name: Run isolated Cargo tests for the batch
         env:
           BATCH_ID: ${{ matrix.batch.id }}

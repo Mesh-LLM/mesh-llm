@@ -53,6 +53,27 @@ impl PluginTarget {
     pub fn archive_ext(&self) -> ArchiveExt {
         self.archive_ext
     }
+
+    /// The suffix of a plugin executable built for `triple`: `.exe` on
+    /// Windows, nothing elsewhere. `None` for a triple this build does not
+    /// support.
+    pub fn executable_suffix_for(triple: &str) -> Option<&'static str> {
+        if !Self::is_supported_triple(triple) {
+            return None;
+        }
+        Some(if triple.contains("-windows-") {
+            ".exe"
+        } else {
+            ""
+        })
+    }
+
+    /// The suffix of a plugin executable built for this target. Follows the
+    /// target, not the host; only a deserialized target can name a triple
+    /// this build does not support, and that falls back to the host's suffix.
+    pub fn executable_suffix(&self) -> &'static str {
+        Self::executable_suffix_for(&self.triple).unwrap_or(std::env::consts::EXE_SUFFIX)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +141,27 @@ mod tests {
         assert!(!PluginTarget::is_supported_triple(
             "x86_64-unknown-linux-gun"
         ));
+    }
+
+    #[test]
+    fn executable_suffix_follows_the_target_not_the_host() {
+        for (os, arch, suffix) in [
+            ("windows", "x86_64", ".exe"),
+            ("windows", "aarch64", ".exe"),
+            ("linux", "x86_64", ""),
+            ("linux", "aarch64", ""),
+            ("macos", "aarch64", ""),
+            ("macos", "x86_64", ""),
+        ] {
+            let target = PluginTarget::from_os_arch(os, arch).unwrap();
+            assert_eq!(target.executable_suffix(), suffix, "{os}/{arch}");
+            assert_eq!(
+                PluginTarget::executable_suffix_for(target.triple()),
+                Some(suffix),
+                "{os}/{arch}"
+            );
+        }
+        assert_eq!(PluginTarget::executable_suffix_for("test-target"), None);
     }
 
     #[test]

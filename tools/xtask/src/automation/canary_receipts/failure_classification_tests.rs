@@ -3,6 +3,31 @@ fn family() -> Family {
     "dense".to_owned().try_into().unwrap()
 }
 #[test]
+fn failed_battery_after_memory_admission_remains_candidate_evidence() {
+    let admitted = serde_json::json!({
+        "status":"failed", "admission_status":"passed", "memory_guard_status":"passed",
+        "supervisor_outcome":"Exited", "cleanup_complete":true,
+        "output_capture_complete":true, "exit_code":1
+    });
+    assert!(admitted_memory(&admitted));
+    for (field, value) in [
+        ("admission_status", serde_json::json!("failed")),
+        ("memory_guard_status", serde_json::json!("failed")),
+        ("supervisor_outcome", serde_json::json!("Cancelled")),
+        ("cleanup_complete", serde_json::json!(false)),
+        ("output_capture_complete", serde_json::json!(false)),
+        ("exit_code", serde_json::json!(null)),
+    ] {
+        let mut failed = admitted.clone();
+        failed[field] = value;
+        assert!(
+            !admitted_memory(&failed),
+            "{field} must block candidate repair"
+        );
+    }
+    assert!(!admitted_memory(&serde_json::json!({"status":"failed"})));
+}
+#[test]
 fn candidate_rows_do_not_override_environment_failure_or_malformed_streams() {
     for (bytes, expected) in [
         (br#"{"family":"dense","exit_code":1}"#.as_slice(), FailureClass::Candidate),

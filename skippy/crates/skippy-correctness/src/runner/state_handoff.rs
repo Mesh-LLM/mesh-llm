@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs, process::Command, time::Instant};
+use std::{collections::HashSet, fs, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -542,9 +542,9 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
     )
     .with_context(|| format!("failed to write {}", restore_config_path.display()))?;
 
-    let mut source_command = Command::new(&args.stage_server_bin);
+    let mut source_command =
+        crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
     source_command.args([
-        "serve",
         "--stage-transport",
         "binary",
         "--worker-only",
@@ -592,9 +592,9 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
     drop(source_stream);
     drop(source);
 
-    let mut restore_command = Command::new(&args.stage_server_bin);
+    let mut restore_command =
+        crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
     restore_command.args([
-        "serve",
         "--stage-transport",
         "binary",
         "--worker-only",

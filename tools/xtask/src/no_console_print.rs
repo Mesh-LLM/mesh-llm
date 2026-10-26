@@ -697,7 +697,7 @@ fn f() {
                 "fn main() { println!(\"tool\"); }",
             ),
             (
-                "skippy/crates/skippy-bench/src/lib.rs",
+                "skippy/crates/metrics-server/src/lib.rs",
                 "fn f() { println!(\"bench\"); }",
             ),
         ]);
@@ -710,7 +710,7 @@ fn f() {
             "crates/demo/src/lib.rs:1",
             "crates/demo/tests/integration.rs",
             "crates/demo/src/bin/tool.rs",
-            "skippy/crates/skippy-bench/src/lib.rs",
+            "skippy/crates/metrics-server/src/lib.rs",
         ] {
             assert!(!error.contains(out_of_scope), "{out_of_scope}: {error}");
         }

@@ -42,6 +42,15 @@ fn analytics_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSetti
     setting
 }
 
+/// Release checks: a local decision, so config file only, like analytics.
+fn updates_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.control_surfaces = vec![ConfigControlSurface::ConfigFile];
+    setting.apply_mode = ConfigApplyMode::StaticOnLoad;
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
+    setting
+}
+
 fn logging_audit_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];

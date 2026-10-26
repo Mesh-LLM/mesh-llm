@@ -31,7 +31,7 @@ crates), verified end-to-end on loopback:
   `HandoffCostModel` break-even gate (per-token KV slope, fixed
   recurrent floor, link throughput, overlap fraction).
 - **Harness** — `skippy-correctness remote-handoff` roles
-  send/recv/restore/serve/fetch with EXPERIMENTS.md counters, TTFT
+  send/recv/restore/serve/fetch with handoff counters, TTFT
   baseline, per-connection reports, and a sweep script. See
   REMOTE_HANDOFF_RUNBOOK.md.
 
@@ -122,8 +122,7 @@ cost-gated: reject short prompts and poor links.
 
 ### Phase 0 — Falsifier benchmark (days, no product code)
 
-Measure the handoff cost before building anything, per the accounting already
-specified in `docs/skippy/EXPERIMENTS.md:323`:
+Measure the handoff cost before building anything:
 `state_export_bytes/seconds`, `state_import_bytes/seconds`,
 `kv_attach_seconds`, TTFT, TPOT.
 

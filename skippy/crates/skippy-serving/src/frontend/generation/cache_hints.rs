@@ -262,6 +262,9 @@ pub(in crate::frontend) struct GenerationCacheStats {
     pub(in crate::frontend) predicted_ms: f64,
     pub(in crate::frontend) queue_wait_ms: f64,
     pub(in crate::frontend) restore_ms: f64,
+    /// Per-token log-probabilities taken from the session before cleanup,
+    /// when the request asked for them.
+    pub(in crate::frontend) token_logprobs: Option<Vec<skippy_runtime::TokenLogprobs>>,
 }
 
 impl Default for GenerationCacheStats {
@@ -280,6 +283,7 @@ impl Default for GenerationCacheStats {
             predicted_ms: 0.0,
             queue_wait_ms: 0.0,
             restore_ms: 0.0,
+            token_logprobs: None,
         }
     }
 }

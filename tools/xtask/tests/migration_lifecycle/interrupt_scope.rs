@@ -155,13 +155,7 @@ fn retained_interrupt_after_admission_preserves_real_member_report() {
         return;
     }
     let root = tempfile::tempdir().unwrap();
-    let fixture = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples/migration_process_driver");
+    let fixture = crate::fixture_paths::examples_dir().join("migration_process_driver");
     assert!(fixture.is_file(), "build migration_process_driver first");
     let launch = Launch {
         member: MemberId::Seed,

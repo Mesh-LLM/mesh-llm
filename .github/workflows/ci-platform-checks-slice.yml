@@ -114,7 +114,7 @@ jobs:
     needs: runner_policy
     if: ${{ inputs.platform_checks_matrix != '[]' }}
     runs-on: ${{ fromJSON(needs.runner_policy.outputs.runner_by_platform)[matrix.check.platform] }}
-    timeout-minutes: 75
+    timeout-minutes: ${{ matrix.check.timeout_minutes || 75 }}
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
@@ -162,6 +162,78 @@ jobs:
           if ($env:CI_PROFILE -eq 'main' -or $env:CI_PROFILE -eq 'manual-full') {
             cargo build --release --locked -p mesh-llm-nodejs
           }
+      - name: Check the 64-bit ctest for Windows Skippy probes
+        if: ${{ matrix.check.kind == 'skippy-probes' }}
+        shell: pwsh
+        run: |
+          # msvc-dev-cmd puts Visual Studio's bundled CMake first on PATH, and
+          # its ctest.exe is a 32-bit build. ctest keeps each running test's
+          # output in memory, and the graph-contract probes write hundreds of
+          # MB, so that ctest runs out of address space and dies (#2222). The
+          # probe step uses the image's own 64-bit CMake instead.
+          $ctest = 'C:\Program Files\CMake\bin\ctest.exe'
+          if (-not (Test-Path $ctest)) { throw "64-bit CMake not found at $ctest" }
+          $bytes = [IO.File]::ReadAllBytes($ctest)
+          $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+          if ($machine -ne 0x8664) { throw ('{0} is not an x64 binary (PE machine 0x{1:X})' -f $ctest, $machine) }
+          & $ctest --version
+      - name: Log memory headroom for Windows Skippy probes
+        if: ${{ matrix.check.kind == 'skippy-probes' }}
+        shell: pwsh
+        run: |
+          # Windows charges every allocated byte against the commit limit (RAM
+          # plus page file), touched or not, and the largest graph contract
+          # commits about 13 GiB. Record what this runner offers before the
+          # probes run, so a memory failure can be read against it.
+          $os = Get-CimInstance Win32_OperatingSystem
+          $gib = 1GB
+          $commitLimit = $os.TotalVirtualMemorySize * 1KB / $gib
+          $headroom = $os.FreeVirtualMemory * 1KB / $gib
+          $lines = @(
+            ('Physical memory: {0:N1} GiB total, {1:N1} GiB free' -f ($os.TotalVisibleMemorySize * 1KB / $gib), ($os.FreePhysicalMemory * 1KB / $gib)),
+            ('Commit: {0:N1} GiB limit, {1:N1} GiB committed, {2:N1} GiB headroom' -f $commitLimit, ($commitLimit - $headroom), $headroom)
+          )
+          foreach ($pagefile in Get-CimInstance Win32_PageFileUsage) {
+            $lines += 'Page file {0}: {1} MiB allocated' -f $pagefile.Name, $pagefile.AllocatedBaseSize
+          }
+          $lines | ForEach-Object { Write-Host $_ }
+          $lines | ForEach-Object { "- $_" } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if ($headroom -lt 13) {
+            Write-Host "::warning::Only $([math]::Round($headroom, 1)) GiB of commit headroom; the largest graph contract commits about 13 GiB"
+          }
+      - name: Prepare patched llama.cpp for Windows Skippy probes
+        if: ${{ matrix.check.kind == 'skippy-probes' }}
+        shell: bash
+        run: scripts/prepare-llama.sh pinned
+      - name: Build and run Windows Skippy probes
+        if: ${{ matrix.check.kind == 'skippy-probes' }}
+        shell: bash
+        env:
+          LLAMA_STAGE_BACKEND: cpu
+          LLAMA_STAGE_LINK_MODE: static
+          LLAMA_STAGE_BUILD_TESTS: "ON"
+          LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-probes-cpu
+          CTEST_PARALLEL_LEVEL: ${{ matrix.check.ctest_parallel }}
+        run: |
+          set -euo pipefail
+          # build-llama.sh builds the probes and runs `ctest -R '^skippy_'`
+          # itself. Putting the 64-bit CMake first makes both the configure
+          # and that ctest call use it. Parallelism is bounded by memory, not
+          # cores: a graph contract commits up to 13 GiB on Windows.
+          PATH="/c/Program Files/CMake/bin:$PATH" scripts/build-llama.sh
+      - name: Test Skippy runtime and serving against the probe ABI
+        if: ${{ matrix.check.kind == 'skippy-probes' }}
+        shell: bash
+        env:
+          LLAMA_STAGE_BACKEND: cpu
+          LLAMA_STAGE_LINK_MODE: static
+          LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-probes-cpu
+        run: |
+          set -euo pipefail
+          # Both crates link the static CPU ABI the step above just built, so
+          # their lib tests run here without a runtime bundle (#2137).
+          cargo test --locked -p skippy-runtime --lib
+          cargo test --locked -p skippy-serving --lib
       - name: Test Windows log artifact privacy ACL
         if: ${{ matrix.check.kind == 'log-store' }}
         shell: pwsh

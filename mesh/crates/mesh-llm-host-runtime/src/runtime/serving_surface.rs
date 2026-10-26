@@ -900,6 +900,7 @@ pub(super) struct RunAutoConsoleStateContext<'a> {
     pub(super) affinity_router: &'a affinity::AffinityRouter,
     pub(super) control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
     pub(super) owner_key_path: &'a Option<PathBuf>,
+    pub(super) update_check: bool,
 }
 
 pub(super) struct RunAutoAdditionalModelsContext<'a> {
@@ -976,6 +977,7 @@ pub(super) async fn setup_run_auto_console_state(
         runtime_data_producer,
     });
     console_state.set_primary_backend("skippy".into()).await;
+    console_state.set_update_check(ctx.update_check).await;
     console_state
         .set_runtime_control(ctx.control_tx.clone())
         .await;

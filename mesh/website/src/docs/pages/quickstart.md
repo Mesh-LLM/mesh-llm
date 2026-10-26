@@ -63,13 +63,13 @@ The discovery name is not an access-control credential. See
 Use this model first on a 12GB+ machine:
 
 ```sh
-mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 On Windows PowerShell:
 
 ```powershell
-mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 Keep this terminal open. A ready node exposes:
@@ -117,7 +117,7 @@ The model-first command above remains the easiest first run. You can also start
 the daemon with no local model:
 
 ```sh
-mesh-llm serve --discover my-mesh
+mesh-llm serve --discover=my-mesh
 ```
 
 The console, API, mesh, plugins, and owner-control surfaces start independently
@@ -164,7 +164,7 @@ Traffic between the two Mesh nodes is end-to-end encrypted by QUIC, whether iroh
 connects them directly or forwards the encrypted packets through a relay:
 
 ```sh
-mesh-llm serve --discover my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
 
 Mesh nodes using the same mesh name find each other and advertise their models to the same local API.

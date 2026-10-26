@@ -138,6 +138,6 @@ impl Input {
             "stage_id":"stage-0","stage_index":0,"layer_start":0,"layer_end":self.layer_end,
             "ctx_size":self.ctx_size,"lane_count":self.lane_count,"n_gpu_layers":self.n_gpu_layers,
             "load_mode":"runtime-slice","execution_contract":"","bind_addr":"127.0.0.1:0",
-            "upstream":null,"downstream":null,"kv_server":null})
+            "upstream":null,"downstream":null})
     }
 }

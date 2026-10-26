@@ -3,6 +3,7 @@ mod multimodal;
 mod profile;
 mod runtime;
 mod schema_types;
+mod updates;
 
 pub use built_in_schema::{
     BuiltInConfigPathResolution, built_in_config_schema_descriptor, built_in_config_settings,
@@ -16,6 +17,7 @@ pub use runtime::{
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
 };
 pub use schema_types::*;
+pub use updates::UpdatesConfig;
 
 pub use mesh_llm_types::runtime::ModelRuntimeKind;
 use serde::ser::SerializeStruct;
@@ -40,6 +42,8 @@ pub struct MeshConfig {
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub analytics: AnalyticsConfig,
+    #[serde(default)]
+    pub updates: UpdatesConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -129,6 +133,11 @@ pub struct RuntimeConfig {
     pub lifecycle_log_parser: LifecycleLogParserMode,
     #[serde(skip)]
     pub lifecycle_log_parser_source: ConfigValueSource,
+    /// Set by `MESH_LLM_LIFECYCLE_LOG_PARSER` for this process only. Never
+    /// saved, so an applied config cannot write the variable into
+    /// `config.toml`.
+    #[serde(skip)]
+    pub lifecycle_log_parser_override: Option<LifecycleLogParserMode>,
     /// Seconds before forcibly unloading a draining instance (default 30).
     #[serde(default = "default_drain_timeout_secs")]
     pub drain_timeout_secs: u64,
@@ -162,6 +171,7 @@ impl Default for RuntimeConfig {
             startup_failure_policy: runtime::StartupFailurePolicy::default(),
             lifecycle_log_parser: LifecycleLogParserMode::default(),
             lifecycle_log_parser_source: ConfigValueSource::Default,
+            lifecycle_log_parser_override: None,
             drain_timeout_secs: runtime::DEFAULT_DRAIN_TIMEOUT_SECS,
             drain_timeout_max_secs: runtime::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
             activity: runtime::RuntimeActivityConfig::default(),
@@ -273,6 +283,21 @@ pub struct NativeRuntimeConfig {
     pub skippy_abi: Option<String>,
     #[serde(default)]
     pub selection: Option<String>,
+    /// Whether startup may fetch the release catalog and download a runtime.
+    /// Unset means yes; off, only bundled and installed runtimes load.
+    /// `mesh-llm runtime install` ignores it.
+    #[serde(default)]
+    pub download: Option<bool>,
+    /// Set by `MESH_LLM_NO_RUNTIME_DOWNLOAD` for this process only. Never
+    /// saved, so an applied config cannot write the variable into `config.toml`.
+    #[serde(skip)]
+    pub download_override: Option<bool>,
+}
+
+impl NativeRuntimeConfig {
+    pub fn download_enabled(&self) -> bool {
+        self.download_override.or(self.download) != Some(false)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -470,8 +495,6 @@ pub struct PrefixCacheConfig {
     pub shared_stride_tokens: Option<u32>,
     #[serde(default)]
     pub shared_record_limit: Option<u32>,
-    #[serde(default)]
-    pub payload_mode: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -1192,6 +1215,8 @@ struct RawMeshConfig {
     #[serde(default)]
     analytics: AnalyticsConfig,
     #[serde(default)]
+    updates: UpdatesConfig,
+    #[serde(default)]
     logging: LoggingConfig,
     #[serde(default)]
     defaults: Option<ModelConfigDefaults>,
@@ -1301,6 +1326,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             owner_control: raw.owner_control,
             telemetry: raw.telemetry,
             analytics: raw.analytics,
+            updates: raw.updates,
             logging: raw.logging,
             defaults: raw.defaults,
             runtime: raw.runtime,

@@ -4,3 +4,7 @@
 0004-skippy-add-diffusion-gemma-system-one-reads.patch
 0005-skippy-query-diffusion-canvas-length.patch
 0006-models-add-laya-decision-model-support.patch
+0007-fix-muse-glimmer-implicit-reasoning-continuations.patch
+0008-models-add-qwen3moe-native-mtp.patch
+0009-skippy-add-whisper-speech-recognition.patch
+0010-skippy-record-per-token-logprobs-while-sampling.patch

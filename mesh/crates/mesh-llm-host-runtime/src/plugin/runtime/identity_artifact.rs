@@ -45,6 +45,7 @@ mod tests {
             downloaded_asset_name: "observer.tar.gz".into(),
             install_path: root.into(),
             enabled: true,
+            default_managed: false,
             manifest: None,
             last_protocol_version: None,
             last_status: None,
@@ -93,6 +94,59 @@ mod tests {
         assert_eq!(capture_startup_digest(&spec).await.unwrap(), None);
         spec.command.clear();
         assert_eq!(capture_startup_digest(&spec).await.unwrap(), None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn explicit_installed_command_keeps_its_identity_artifact() {
+        use crate::plugin::config::{MeshConfig, PluginHostMode, resolve_plugins};
+        use mesh_llm_plugin::MeshVisibility;
+
+        let root = tempfile::tempdir().unwrap();
+        let original = installed_spec(&root.path().join("package"));
+        let metadata = original.installed_metadata.as_ref().unwrap();
+        std::fs::create_dir_all(&metadata.install_path).unwrap();
+        mesh_llm_plugin_manager::PluginStore::new(root.path())
+            .save(metadata)
+            .unwrap();
+        let executable = metadata.executable_path();
+        let bytes = b"installed identity executable";
+        std::fs::write(&executable, bytes).unwrap();
+        let mut config: MeshConfig = toml::from_str(&format!(
+            "[[plugin]]\nname = \"observer\"\ncommand = {:?}\n",
+            original.command
+        ))
+        .unwrap();
+        config.plugins[0].openai_exchange_grant =
+            original.openai_exchange_grant.as_deref().cloned();
+        let resolved = mesh_llm_config::with_env_override_for_test(
+            "MESH_LLM_PLUGIN_DIR",
+            root.path().to_str().unwrap(),
+            || {
+                resolve_plugins(
+                    &config,
+                    PluginHostMode {
+                        mesh_visibility: MeshVisibility::Private,
+                    },
+                )
+            },
+        )
+        .unwrap();
+        let spec = resolved
+            .externals
+            .iter()
+            .find(|spec| spec.name == "observer")
+            .unwrap();
+
+        assert_eq!(installed_executable(spec), Some(executable));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert_eq!(
+            runtime.block_on(capture_startup_digest(spec)).unwrap(),
+            Some(hex::encode(Sha256::digest(bytes)))
+        );
     }
 
     #[tokio::test]

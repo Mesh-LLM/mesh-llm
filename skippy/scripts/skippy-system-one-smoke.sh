@@ -168,10 +168,6 @@ verify_artifact_digest() {
     --verify-root "$2" >&2
 }
 
-write_stage_config() {
-  "${automation[@]}" automation system-one-smoke stage "$@"
-}
-
 # Both parts need a patched native build. Checked lazily so an unqualified
 # read part (or a skipped contract part) does not need one.
 require_smoke_binaries() {
@@ -195,11 +191,14 @@ stage_layer_end() {
 }
 
 start_stage_server() {
-  local label="$1" config="$2" port="$3" log="$4" deadline
+  local label="$1" model_path="$2" model_id="$3" port="$4" log="$5" n_batch="$6" gpu_layers="$7" deadline
   echo "system-one: starting ${label} on 127.0.0.1:${port}"
   LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     "$STAGE_SERVER_BIN" serve \
-      --config "$config" \
+      --model-path "$model_path" --model-id "$model_id" \
+      --ctx-size "$CTX_SIZE" --generation-concurrency 1 --n-gpu-layers "$gpu_layers" \
+      --batch-size "$n_batch" --microbatch-size "$n_batch" \
+      --kv-cache-type-k f16 --kv-cache-type-v f16 \
       --bind-addr "127.0.0.1:${port}" \
       >"$log" 2>&1 &
   SERVER_PID="$!"
@@ -226,7 +225,7 @@ start_stage_server() {
 run_cases_against_stage() {
   local label="$1" artifact_id="$2" model_path="$3" mode="$4" n_batch="$5" \
     request_timeout="$6"
-  local summary repo revision file model_id layer_end port config log rc gpu_layers
+  local summary repo revision file model_id layer_end port log rc gpu_layers
   require_smoke_binaries || return $?
   rc=0
   summary="$(artifact_summary "$artifact_id")" || rc=$?
@@ -262,16 +261,13 @@ run_cases_against_stage() {
   fi
 
   port="$(pick_port)" || return 2
-  config="$WORK_DIR/${mode}-stage.json"
   log="$WORK_DIR/${mode}-server.log"
   if [[ "$mode" == "full-read" ]]; then
     gpu_layers="${READ_N_GPU_LAYERS:-$layer_end}"
   else
     gpu_layers=0
   fi
-  write_stage_config "$config" "$model_id" "$model_path" "$(jq -r '.sha256' <<<"$summary")" \
-    "$layer_end" "127.0.0.1:${port}" 1 "$CTX_SIZE" "$n_batch" "$gpu_layers" || return 2
-  start_stage_server "$label" "$config" "$port" "$log" || return 1
+  start_stage_server "$label" "$model_path" "$model_id" "$port" "$log" "$n_batch" "$gpu_layers" || return 1
   rc=0
   local case_command=("${automation[@]}" automation system-one-cases)
   if [[ "${SYSTEMONE_SMOKE_DRIVER+set}" == set ]]; then

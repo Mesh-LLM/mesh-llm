@@ -36,6 +36,19 @@ fn first_reports_reason_when_decoder_is_refused() {
 }
 
 #[test]
+fn successful_producer_records_accept_null_refusal_reasons() {
+    let first = r#"{"builders":[{"file":"model.cpp","verdict":"transformable","unsupported_reason":null}]}"#;
+    let second = r#"{"builders":[{"file":"model.cpp","verdict":"already_transformed","unsupported_reason":null}]}"#;
+    assert!(report(first, Pass::First).is_ok());
+    assert!(report(second, Pass::Second).is_ok());
+    let refused = r#"{"builders":[{"file":"model.cpp","verdict":"unsupported_shape","unsupported_reason":null}]}"#;
+    assert!(matches!(
+        report(refused, Pass::First),
+        Err(Error::Refused(_))
+    ));
+}
+
+#[test]
 fn both_require_records_when_builders_are_empty() {
     for pass in [Pass::First, Pass::Second] {
         let result = report(r#"{"builders":[]}"#, pass);
@@ -49,6 +62,7 @@ fn consumed_types_and_duplicates_reject_when_producer_is_malformed() {
         r#"{"builders":[null]}"#,
         r#"{"builders":[],"builders":[]}"#,
         r#"{"builders":[{"file":12}]}"#,
+        r#"{"builders":[{"unsupported_reason":12}]}"#,
         r#"{"builders":[{"verdict":"future"}]}"#,
         r#"{"builders":[{}],"summary":{"error":true}}"#,
         r#"{"builders":[{}],"summary":{"error":9223372036854775808}}"#,

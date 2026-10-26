@@ -26,8 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh |
 ```
 
 The installer puts `mesh-llm` on your `PATH`. After install, run `mesh-llm setup`
-to finish runtime configuration and, on supported macOS and Linux machines,
-optionally install the background service.
+to finish runtime configuration and, on macOS, Linux, and Windows, optionally
+install the background service.
 
 Source builds must use `just`:
 
@@ -60,13 +60,18 @@ mesh-llm setup
 mesh-llm serve --auto
 mesh-llm serve --model Qwen2.5-32B
 mesh-llm serve --join <token>
-mesh-llm serve --discover "my-mesh"
+mesh-llm serve --discover=my-mesh
 mesh-llm serve --model MiniMax-M2.5-Q4_K_M --mesh-guardrails metrics
 mesh-llm client --auto
 mesh-llm gpus
 mesh-llm discover
 mesh-llm discover --name "my-mesh"
 ```
+
+To pin an inference request to a specific mesh provider, use the HTTP API's
+`x-mesh-target` header alongside the exact model ID. See
+[provider selection](PROVIDER_SELECTION.md) for discovery, curl and SDK examples,
+fail-closed behavior, and paid-provider requirements.
 
 Mesh workflow details live in [MESHES.md](MESHES.md). Big-model split serving
 lives in [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md).
@@ -104,7 +109,7 @@ Use `mesh-llm gpus detect` when you want to refresh the raw hardware fingerprint
 
 ## Setup
 
-Use `mesh-llm setup` after the executable is installed. It configures the native runtime and can install the background service on supported macOS and Linux machines.
+Use `mesh-llm setup` after the executable is installed. It configures the native runtime and can install the background service on macOS, Linux, and Windows.
 
 See [CLI.md](CLI.md) for the setup flags and the service options.
 
@@ -476,7 +481,6 @@ max_bytes            = 0         # 0 = no explicit byte cap
 min_tokens           = 64
 shared_stride_tokens = 32        # stride for shared-prefix record matching
 shared_record_limit  = 4         # max retained shared-prefix records
-payload_mode         = "auto"    # resident-kv kv-recurrent full-state auto
 
 # Schema-reserved fields (accepted but not yet wired to runtime):
 # keep_tokens          = 256     # session prompt retention
@@ -583,7 +587,7 @@ spec_default               = "auto"          # bool or "auto"
 # Native MTP strategy override
 # strategy = "mtp"  # force native model MTP when available
 # strategy = "disabled"       # disable package/model native MTP
-# draft_max_tokens = 1        # MTP/draft max draft-token window (native MTP defaults to 1)
+# draft_max_tokens = 1        # MTP/draft max draft-token window (native MTP defaults to the package's prediction_depth, else 1)
 # draft_min_tokens = 0        # MTP/draft min draft-token window
 
 # Draft hardware (leave unset to share host model's device)

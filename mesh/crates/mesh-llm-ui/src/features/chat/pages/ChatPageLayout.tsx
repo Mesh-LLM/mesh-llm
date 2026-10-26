@@ -5,7 +5,7 @@ import { DestructiveActionDialog } from '@/components/ui/DestructiveActionDialog
 import { TextInputDialog } from '@/components/ui/TextInputDialog'
 import { ChatLiveLoadingGhost } from '@/features/chat/components/ChatLiveLoadingGhost'
 import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
-import { Composer } from '@/features/chat/components/Composer'
+import { Composer, type ComposerPromptUpdate } from '@/features/chat/components/Composer'
 import { ChatTargetNotice } from '@/features/chat/components/ChatTargetNotice'
 import { cn } from '@/lib/cn'
 import { ModelSelect } from '@/features/chat/components/ModelSelect'
@@ -74,11 +74,13 @@ type ChatPageLayoutProps = {
   modelUnavailable?: boolean
   composerConversationId: string
   composerDraft: ConversationComposerDraft
-  onComposerPromptChange: (value: string) => void
+  onComposerPromptChange: (value: ComposerPromptUpdate) => void
   onComposerAttachmentsChange: (files: File[]) => void
   onRemoveComposerAttachment: (index: number) => void
   composerDisabled: boolean
   composerRequestDisabled?: boolean
+  composerPendingTypeDetection?: boolean
+  onComposerPendingTypeDetectionChange?: (delta: 1 | -1) => void
   composerIsPreparingAttachments: boolean
   attachmentProcessingStage: AttachmentProcessingStatus['stage'] | undefined
   attachmentProcessingCount: number
@@ -169,6 +171,8 @@ export function ChatPageLayout({
   onRemoveComposerAttachment,
   composerDisabled,
   composerRequestDisabled,
+  composerPendingTypeDetection,
+  onComposerPendingTypeDetectionChange,
   composerIsPreparingAttachments,
   attachmentProcessingStage,
   attachmentProcessingCount,
@@ -328,6 +332,8 @@ export function ChatPageLayout({
               onRemoveAttachment={onRemoveComposerAttachment}
               disabled={composerDisabled}
               requestDisabled={composerRequestDisabled}
+              pendingTypeDetection={composerPendingTypeDetection}
+              onPendingTypeDetectionChange={onComposerPendingTypeDetectionChange}
               isPreparingAttachments={composerIsPreparingAttachments}
               preparingStage={attachmentProcessingStage}
               preparingAttachmentCount={attachmentProcessingCount}

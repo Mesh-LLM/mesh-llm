@@ -16,8 +16,19 @@ mesh-llm serve --auto
 For a private mesh, restart with the same mesh name and model you used before:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+mesh-llm serve --discover=my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
 ```
+
+## Release checks
+
+At startup, mesh-llm checks for a newer release and shows it as a notice and in the web console. To turn these checks off, for example when a package manager updates mesh-llm, set this in `~/.mesh-llm/config.toml`:
+
+```toml
+[updates]
+check = false
+```
+
+`MESH_LLM_NO_UPDATE_CHECK=1` does the same for one process and overrides the setting; `0` turns the checks back on. `mesh-llm update` and `--auto-update` are not affected.
 
 ## Switch flavors
 

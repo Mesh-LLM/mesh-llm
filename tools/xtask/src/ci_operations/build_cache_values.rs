@@ -1,6 +1,4 @@
-//! Value semantics of `scripts/manage-build-cache.py`: `parse_size`,
-//! `parse_age` (Python `int()`), `human_size`, and non-strict
-//! `Path.resolve()`.
+//! Cache-size parsing, human-readable sizes, and non-strict path resolution.
 
 use crate::repository::text::{is_space, strip};
 use std::ffi::OsString;
@@ -8,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 pub(crate) const DEFAULT_MAX_AGE_DAYS: i128 = 14;
 
-/// A parsed `--max-age`, kept as Python's unbounded `int` would print it.
+/// A parsed maximum age in whole days.
 #[derive(Clone, Copy)]
 pub(crate) struct Age(pub(crate) i128);
 
@@ -63,43 +61,17 @@ fn size_parts(text: &str) -> Option<(&str, String)> {
     valid.then(|| (&text[..number_end], unit))
 }
 
-/// Returns the byte count, or argparse's `ArgumentTypeError` message.
+/// Returns the byte count or a deterministic size-validation message.
 pub(crate) fn parse_size(raw: &str) -> Result<i128, String> {
-    let value = raw.strip_prefix("max_size=").unwrap_or(raw);
-    let invalid = || format!("invalid size: {value}");
-    let (number, unit) = size_parts(strip(value)).ok_or_else(invalid)?;
-    // `[kmgt]?i?b` also admits `ib`, which the legacy table lacks (a
-    // KeyError traceback there); it is reported as an invalid size here.
+    let invalid = || format!("invalid size: {raw}");
+    let (number, unit) = size_parts(strip(raw)).ok_or_else(invalid)?;
     let multiplier = unit_bytes(&unit).ok_or_else(invalid)?;
     let amount: f64 = number.parse().map_err(|_| invalid())?;
     let bytes = (amount * multiplier as f64) as i128;
     Ok(bytes)
 }
 
-/// Python `int(text)` for decimal text: surrounding whitespace, a sign, and
-/// single underscores between digits.
-pub(crate) fn parse_age(raw: &str) -> Result<Age, String> {
-    let value = raw.strip_prefix("max_age=").unwrap_or(raw);
-    let invalid = || format!("invalid age in days: {value}");
-    let text = strip(value);
-    let (negative, digits) = match text.as_bytes().first() {
-        Some(b'-') => (true, &text[1..]),
-        Some(b'+') => (false, &text[1..]),
-        _ => (false, text),
-    };
-    let well_formed = !digits.is_empty()
-        && !digits.starts_with('_')
-        && !digits.ends_with('_')
-        && !digits.contains("__")
-        && digits.chars().all(|ch| ch.is_ascii_digit() || ch == '_');
-    if !well_formed {
-        return Err(invalid());
-    }
-    let magnitude: i128 = digits.replace('_', "").parse().map_err(|_| invalid())?;
-    Ok(Age(if negative { -magnitude } else { magnitude }))
-}
-
-/// `human_size`: `f"{amount:.1f} {unit}"` over binary units.
+/// Format a cache size with one decimal place and binary units.
 pub(crate) fn human_size(value: i128) -> String {
     let mut amount = value as f64;
     for unit in ["B", "KiB", "MiB", "GiB", "TiB"] {

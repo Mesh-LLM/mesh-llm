@@ -74,7 +74,6 @@ members = [
     "skippy/crates/skippy-model-package",
     "skippy/crates/skippy-correctness",
     "skippy/crates/llama-spec-bench",
-    "skippy/crates/skippy-bench",
     "mesh/crates/mesh-mixture-of-agents",
     "mesh/crates/mesh-llm-moa-plugin",
     "tools/xtask",
@@ -106,6 +105,7 @@ serde_json = "1"
 sha2 = "0.11"
 strum = { version = "0.28", features = ["derive"] }
 
+tokio-tungstenite = "0.29"
 [workspace.lints.clippy]
 cognitive_complexity = "warn"
 too_many_lines = "warn"

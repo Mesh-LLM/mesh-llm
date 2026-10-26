@@ -1,4 +1,4 @@
-use std::{fs, net::SocketAddr, process::Command, time::Instant};
+use std::{fs, net::SocketAddr, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -350,9 +350,9 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
     fs::write(&topology_path, serde_json::to_vec_pretty(&topology)?)
         .with_context(|| format!("failed to write {}", topology_path.display()))?;
 
-    let mut stage_command = Command::new(&args.stage_server_bin);
+    let mut stage_command =
+        crate::stage_process::command(&args.stage_server_bin, args.startup_timeout_secs);
     stage_command.args([
-        "serve",
         "--stage-transport",
         "binary",
         "--worker-only",

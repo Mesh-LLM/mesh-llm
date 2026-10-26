@@ -190,6 +190,7 @@ esac
             .env("RUNNER_TEMP", &self.runner)
             .env("CANARY_BRANCH", "llama-canary/repair-fixture-1-aaaaaaaaaa")
             .env("CANARY_CERTIFIED_SHA", HEAD)
+            .env("CANARY_UPSTREAM_SHA", HEAD)
             .env("CANARY_PR_BODY", self.root.join("body.md"))
             .env("CANARY_BUNDLE", self.root.join("candidate.bundle"))
             .env("GITHUB_REPOSITORY", "fixture/repository")

@@ -46,7 +46,7 @@ automation-contracts = []
 
 [dev-dependencies]
 rcgen = "=0.14.10"
-rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 regex = "=1.13.1"
 semver = "=1.0.28"
 

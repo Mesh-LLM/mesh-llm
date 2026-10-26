@@ -43,6 +43,12 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
+Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
+They check runner prerequisites before compiling automation or preparing SDK
+dependencies and fail if any are absent. Tool installation and upgrades belong
+to runner provisioning: never invoke Rust, Just, or Homebrew installers from
+this profile. Keep job-owned compiler-cache startup and linker verification.
+
 Automation is compiled at most once per run and platform for product-source
 work, never once per job. Each platform lane has one `product_automation_*`
 producer (`product-automation-artifact.yml` through `upload-automation` with
@@ -81,6 +87,27 @@ not templates for new tooling. Existing isolated compatibility or upstream
 fixtures may be retained only with an explicit maintainer decision; new Python
 tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
 Python-free or remove legacy validation before its Rust replacement passes.
+
+Retained external Python dependencies have bounded owners: the admitted external
+Python SDK and its locked client environments, llama.cpp's upstream Jinja tests
+using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
+an immutable default source commit. These interfaces do not authorize new
+repository Python implementations. The canary Jinja environment belongs to its
+run's state directory and must use a preinstalled interpreter; dependency
+restoration must not download an interpreter or skip upstream tests. Freeze the
+Jinja project before selecting historical source checkouts so older sources do
+not need to contain the dependency manifest.
+
+`just ci-crate-lists`, selected by the normal Quality validation gate, also
+checks repository Python tooling. Its typed policy is
+`ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
+and executable invocation exceptions must retain their documented owners and
+reviewed occurrence counts. The census includes tracked and new nonignored
+files, including hidden directories. Python sources, shebangs, unapproved
+package inputs and direct interpreter invocations fail validation. Archived
+receipts and documentation examples remain data. Literal process checks are
+bounded static analysis; native caller tests must continue to reject the
+retired parser behavior, and source review still owns semantic emulation.
 
 ## Required procedure
 
@@ -350,7 +377,9 @@ Python-free or remove legacy validation before its Rust replacement passes.
   Both variables are matched case-sensitively in a shell validation step,
   because a GitHub Actions `==` expression ignores case: `TRUE`/`True` would
   otherwise enable a row whose runner is not certified for that backend. The
-  GPU rows gate on the normalized result, never on the variable directly.
+  GPU rows gate on the normalized result, never on the variable directly, and
+  the gate job reports each planned row from that result in its step summary,
+  so a skipped GPU row is visible as skipped rather than read as covered.
 - Never route untrusted code to a persistent self-hosted runner. Public-repo
   self-hosted execution requires ephemeral runners, restricted credentials and
   network access, and a runner group limited to the repository and exact
@@ -427,7 +456,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
 ## Cache contract
 
 - macOS compiler-cache bootstrap must use a job-owned Unix socket before any
-  compiler probe. Never stop or restart the host-wide default sccache server:
+  compiler probe. Eagerly start its server in every cache mode; parallel compiler
+  clients must not race to initialize a newly allocated socket. Never stop or
+  restart the host-wide default sccache server:
   multiple runner accounts can share one physical host. Preserve the disk cache
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
@@ -604,11 +635,36 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+The final publisher must use an explicit `!cancelled()` status condition,
+require successful source resolution and final selection, and require
+`publish=true`. Optional repair and retry jobs may be skipped after a green
+pass; their skipped status must not suppress publication through GitHub's
+implicit `success()` condition.
+
+Default upstream selection uses GitHub's latest published stable release of
+`ggml-org/llama.cpp`, never an unqualified `master` tip or a `b*` prerelease.
+The hosted resolver validates the release and peels its tag to an exact commit
+before any hardware work. Missing releases, malformed metadata, moved tags or
+API failures stop resolution without a fallback. Record the release tag and
+commit in the run summary. An explicit full `upstream_sha` remains an operator
+override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and-publish`
+adds independent verification and publication of the unchanged selected commit. Upstream release
+qualification never replaces the complete candidate and independent family
+passes required before publishing an upgrade PR. Only the hosted upstream
+selection step may receive the read-only GitHub token for public upstream API
+reads; workers and repair agents remain credential-free.
+
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
 generation, patch equality and idempotence must pass before rebuilding and
 running the complete suite. Keep the generator's own unit tests separate.
 Ordinary native build invocations retain their requested test execution.
+
+Whole-source graph rewriting needs a separate bounded deadline from Git
+metadata operations. The native generator allows 600 seconds for each complete
+rewriter pass and 60 seconds per Git command by default; an explicit `--timeout`
+overrides both. Keep both generation and idempotence passes mandatory, and
+report deadline failures with readable retained diagnostics and cleanup status.
 
 Build evidence uploads must explicitly include the run-owned hidden `.deps`
 state and native CTest results before cleanup. A truncated live log is not a
@@ -629,7 +685,11 @@ Manual `mesh_ref` is an explicitly authorized trusted-code path, not a PR
 runner exception. Keep the workflow/controller on protected main, resolve only
 same-repository branch-reachable commits once, and bind the controller and
 selected source independently in every handoff. Certify the selected revision's
-existing pin and patches without repair or publication. Selected build scripts
+existing pin and patches without repair. Default `mesh_action=certify` does not
+publish. Explicit `mesh_action=certify-and-publish` requires a complete candidate
+pass and a fresh independent build and complete family pass on the same frozen
+selected commit before publishing that exact commit as a PR to main. It never
+changes the selected pin or invokes coding repair. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 

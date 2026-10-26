@@ -31,24 +31,23 @@ fn canonical_output(request_id: RequestId, sequence: u64, event: LifecycleEvent)
 }
 
 fn canonical_terminal_boundary_output() -> OutputEvent {
-    OutputEvent::CanonicalLog(Box::new(
-        CanonicalEnvelope::new(
-            EventId::new(),
-            RequestId::new(),
-            ReplayChannel::Requests,
-            17,
-            "2026-08-04T12:34:56.789Z".to_string(),
-            LifecycleEvent::Failed {
-                error: "Bearer terminal-boundary-bearer-secret prompt=terminal-boundary-prompt"
-                    .to_string(),
-                status_code: None,
-            },
-        )
-        .with_tenant("terminal-boundary-tenant".to_string())
-        .with_account("terminal-boundary-account".to_string())
-        .with_user("terminal-boundary-user".to_string())
-        .with_role("terminal-boundary-role".to_string()),
-    ))
+    let mut envelope = CanonicalEnvelope::new(
+        EventId::new(),
+        RequestId::new(),
+        ReplayChannel::Requests,
+        17,
+        "2026-08-04T12:34:56.789Z".to_string(),
+        LifecycleEvent::Failed {
+            error: "Bearer terminal-boundary-bearer-secret prompt=terminal-boundary-prompt"
+                .to_string(),
+            status_code: None,
+        },
+    );
+    envelope.tenant_id = Some("terminal-boundary-tenant".to_string());
+    envelope.account_id = Some("terminal-boundary-account".to_string());
+    envelope.user_id = Some("terminal-boundary-user".to_string());
+    envelope.role = Some("terminal-boundary-role".to_string());
+    OutputEvent::CanonicalLog(Box::new(envelope))
 }
 
 fn run_terminal_boundary_child(mode: &str) -> std::process::Output {

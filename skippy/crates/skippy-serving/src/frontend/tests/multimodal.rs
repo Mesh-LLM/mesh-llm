@@ -67,7 +67,7 @@ fn multimodal_smoke_fixture() -> Result<Option<MultimodalSmokeFixture>> {
         .map(Ok)
         .unwrap_or_else(|| infer_activation_width(&model_path))?;
     let ctx_size = env_u32(MM_CTX_SIZE_ENV)?.unwrap_or(2048);
-    let max_tokens = env_u32(MM_MAX_TOKENS_ENV)?.unwrap_or(16);
+    let max_tokens = env_u32(MM_MAX_TOKENS_ENV)?.unwrap_or(256);
     let n_gpu_layers = env_i32(MM_N_GPU_LAYERS_ENV)?.unwrap_or(0);
     Ok(Some(MultimodalSmokeFixture {
         model_path,
@@ -269,7 +269,10 @@ fn multimodal_chat_request_with_max_tokens(
                 ]
             }],
             "max_tokens": max_tokens,
-            "temperature": 0.0
+            "temperature": 0.0,
+            "reasoning_effort": "none",
+            "reasoning_format": "auto",
+            "chat_template_kwargs": {"reasoning_strength": "none"}
         }))
         .context("build multimodal smoke request")
 }
@@ -292,17 +295,78 @@ fn malformed_multimodal_chat_request() -> ChatCompletionRequest {
     .expect("malformed multimodal request should deserialize")
 }
 
-fn assert_nonempty_chat_response(response: &ChatCompletionResponse) {
-    let message = &response
+fn validate_image_response(response: &ChatCompletionResponse) -> Result<()> {
+    let choice = response
         .choices
         .first()
-        .expect("expected a multimodal response choice")
-        .message;
+        .context("expected a multimodal response choice")?;
+    let message = &choice.message;
     let content = message.content.as_deref().unwrap_or_default().trim();
-    assert!(
-        !content.is_empty(),
-        "expected non-empty image response content; response={response:?}"
+    anyhow::ensure!(
+        response.usage.completion_tokens > 0,
+        "image response generated no tokens"
     );
+    anyhow::ensure!(
+        message.tool_calls.is_none(),
+        "image response unexpectedly called a tool"
+    );
+    let valid = matches!(
+        choice.finish_reason,
+        Some(FinishReason::Length | FinishReason::Stop)
+    ) && !content.is_empty();
+    let has_visible_answer = !["<|start|>", "<|message|>", "<|eom|>", "<|eot|>"]
+        .iter()
+        .any(|marker| content.contains(marker));
+    anyhow::ensure!(
+        valid && has_visible_answer,
+        "expected image output (and a final answer on stop); response={response:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn image_response_validation_distinguishes_truncation_from_completion() {
+    for (content, reasoning, finish, tokens, valid) in [
+        (None, Some("Inspecting the grid"), "length", 16, false),
+        (Some("A red square"), None, "length", 16, true),
+        (Some("A red square"), Some("Inspecting"), "stop", 25, true),
+        (None, Some("Inspecting the grid"), "stop", 16, false),
+        (None, None, "length", 16, false),
+        (Some(" "), Some("\n"), "length", 16, false),
+        (Some("A red square"), None, "stop", 0, false),
+        (
+            Some(" to=self<|message|>Thinking"),
+            None,
+            "length",
+            16,
+            false,
+        ),
+        (
+            Some(
+                " to=self<|message|>Thinking<|eom|><|start|>assistant to=user<|message|>A red square",
+            ),
+            None,
+            "length",
+            32,
+            false,
+        ),
+        (Some("A red square"), None, "tool_calls", 16, false),
+    ] {
+        let finish_reason = serde_json::from_value(json!(finish)).expect("finish reason");
+        let mut response = ChatCompletionResponse::new_with_reason(
+            "fixture",
+            "",
+            Usage::new(10, tokens),
+            finish_reason,
+        );
+        response.choices[0].message.content = content.map(str::to_owned);
+        response.choices[0].message.reasoning_content = reasoning.map(str::to_owned);
+        assert_eq!(
+            validate_image_response(&response).is_ok(),
+            valid,
+            "{response:?}"
+        );
+    }
 }
 
 fn available_loopback_addr() -> Result<SocketAddr> {
@@ -339,11 +403,53 @@ async fn real_multimodal_local_smoke_when_fixture_is_set() -> Result<()> {
         available_loopback_addr()?,
     );
     let backend = support::local_openai_backend(config, "mm-smoke")?;
+    check_native_off_effort(&backend)?;
+    // Exercise the real template probe on every projector family. The parser
+    // may recognize reasoning even when the template ignores the off switch.
+    let probe = crate::thinking_probe::probe_loaded_model(
+        &backend.runtime,
+        &crate::thinking_probe::ThinkingProbeInputs {
+            defaults: &backend.request_defaults,
+            model_id: "mm-smoke",
+            artifact: None,
+            template_override: None,
+            renderer: &crate::thinking_probe::native_renderer_identity(),
+        },
+    );
     let response = backend
         .chat_completion(multimodal_chat_request(&fixture)?)
         .await?;
 
-    assert_nonempty_chat_response(&response);
+    validate_image_response(&response)?;
+    if response.choices[0].message.reasoning_content.is_some() {
+        assert_eq!(probe.controls().reasoning_parser, Some(true));
+    }
+    Ok(())
+}
+
+fn check_native_off_effort(backend: &StageOpenAiBackend) -> Result<()> {
+    let reader = crate::runtime_state::panic_recovery::lock_runtime(&backend.runtime)
+        .model
+        .reader();
+    // Exercise the actual C ABI, not an imitation of its kwarg merge. Explicit
+    // "none" must survive, absent effort must default to it, and a conflicting
+    // high effort must stay disabled. String-only templates reject numeric zero.
+    for effort in [None, Some("none"), Some("high")] {
+        let rendered = reader.apply_chat_template_json(
+            r#"[{"role":"user","content":"hello"}]"#,
+            skippy_runtime::ChatTemplateJsonOptions {
+                enable_thinking: Some(false),
+                chat_template_kwargs: effort.map(|value| json!({"reasoning_effort":value}).to_string()),
+                chat_template: Some("{% if reasoning_effort not in ['none', 'high'] %}{{ raise_exception('expected string effort') }}{% endif %}{% for message in messages %}{{ message['content'] }}{% endfor %} effort={{ reasoning_effort }}".into()),
+                ..Default::default()
+            },
+        )?;
+        anyhow::ensure!(
+            rendered.prompt.ends_with("effort=none"),
+            "native bridge lost the off effort: {}",
+            rendered.prompt
+        );
+    }
     Ok(())
 }
 
@@ -422,7 +528,7 @@ async fn real_multimodal_length_limit_then_next_image_uses_clean_lane_when_fixtu
     let next = backend
         .chat_completion(multimodal_chat_request(&fixture)?)
         .await?;
-    assert_nonempty_chat_response(&next);
+    validate_image_response(&next)?;
     Ok(())
 }
 
@@ -592,7 +698,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     stage1_handle.shutdown().await?;
 
     let response = response?;
-    assert_nonempty_chat_response(&response);
+    validate_image_response(&response)?;
     Ok(())
 }
 

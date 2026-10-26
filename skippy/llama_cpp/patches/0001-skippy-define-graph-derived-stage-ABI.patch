@@ -1,25 +1,26 @@
-From 1d0062b666a1fc6f89782486ad1782e3bdc5b477 Mon Sep 17 00:00:00 2001
-From: James Dumay <jameswdumay@gmail.com>
-Date: Sat, 19 Sep 2026 15:17:03 +1000
-Subject: [PATCH] skippy: define graph-derived stage ABI
+From c68f7f87c95675d47f6138f0d3b7e991c30de6c2 Mon Sep 17 00:00:00 2001
+From: James Dumay <james@generalinference.xyz>
+Date: Tue, 13 Oct 2026 22:06:42 +1100
+Subject: [PATCH 1/6] feat(skippy): define graph-derived native ABI
 
 ---
- include/skippy.h                      |  28 +++
- include/skippy/activation.h           |  66 +++++++
- include/skippy/common.h               | 142 +++++++++++++
+ include/skippy.h                      |  29 +++
+ include/skippy/activation.h           |  66 ++++++
+ include/skippy/common.h               | 146 ++++++++++++++
  include/skippy/devices.h              |  56 ++++++
  include/skippy/events.h               | 229 +++++++++++++++++++++
- include/skippy/execution.h            | 264 +++++++++++++++++++++++++
+ include/skippy/execution.h            | 264 ++++++++++++++++++++++++
  include/skippy/model_package.h        |  93 +++++++++
  include/skippy/model_source.h         |  84 ++++++++
- include/skippy/runtime.h              | 275 ++++++++++++++++++++++++++
- include/skippy/sampling.h             |  74 +++++++
+ include/skippy/runtime.h              | 277 ++++++++++++++++++++++++++
+ include/skippy/sampling.h             |  76 +++++++
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
- include/skippy/stage_plan.h           | 250 +++++++++++++++++++++++
- include/skippy/state.h                | 187 ++++++++++++++++++
+ include/skippy/stage_plan.h           | 252 +++++++++++++++++++++++
+ include/skippy/state.h                | 236 ++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
- 15 files changed, 1957 insertions(+)
+ include/skippy/workloads.h            |  93 +++++++++
+ 16 files changed, 2110 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -35,13 +36,14 @@ Subject: [PATCH] skippy: define graph-derived stage ABI
  create mode 100644 include/skippy/stage_plan.h
  create mode 100644 include/skippy/state.h
  create mode 100644 include/skippy/tokenization.h
+ create mode 100644 include/skippy/workloads.h
 
 diff --git a/include/skippy.h b/include/skippy.h
 new file mode 100644
-index 000000000..33a47b244
+index 000000000..dc8cbb431
 --- /dev/null
 +++ b/include/skippy.h
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,29 @@
 +#ifndef SKIPPY_H
 +#define SKIPPY_H
 +
@@ -68,6 +70,7 @@ index 000000000..33a47b244
 +#include "skippy/tokenization.h"
 +#include "skippy/model_package.h"
 +#include "skippy/signals.h"
++#include "skippy/workloads.h"
 +
 +#endif // SKIPPY_H
 diff --git a/include/skippy/activation.h b/include/skippy/activation.h
@@ -144,10 +147,10 @@ index 000000000..673c1d81c
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..5ac737396
+index 000000000..3f6aab137
 --- /dev/null
 +++ b/include/skippy/common.h
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,146 @@
 +#ifndef SKIPPY_COMMON_H
 +#define SKIPPY_COMMON_H
 +
@@ -196,7 +199,7 @@ index 000000000..5ac737396
 +
 +#define SKIPPY_ABI_VERSION_MAJOR 0
 +#define SKIPPY_ABI_VERSION_MINOR 1
-+#define SKIPPY_ABI_VERSION_PATCH 59
++#define SKIPPY_ABI_VERSION_PATCH 67
 +
 +#if defined(_MSC_VER)
 +#define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -253,6 +256,10 @@ index 000000000..5ac737396
 +#define SKIPPY_FEATURE_DEVICE_EVENTS          ((uint64_t)1 << 34)
 +#define SKIPPY_FEATURE_DIAGNOSTIC_EVENTS      ((uint64_t)1 << 35)
 +#define SKIPPY_FEATURE_UNLOAD_EVENTS          ((uint64_t)1 << 36)
++/** @brief Full-model embedding, reranking, and encoder-decoder execution. */
++#define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)
++
++#define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
 +
 +enum skippy_status {
 +    SKIPPY_STATUS_OK                      = 0,
@@ -1048,10 +1055,10 @@ index 000000000..5d77f4804
 +#endif // SKIPPY_MODEL_SOURCE_H
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 new file mode 100644
-index 000000000..78d3ec976
+index 000000000..799bdca2d
 --- /dev/null
 +++ b/include/skippy/runtime.h
-@@ -0,0 +1,275 @@
+@@ -0,0 +1,277 @@
 +#ifndef SKIPPY_RUNTIME_H
 +#define SKIPPY_RUNTIME_H
 +
@@ -1108,6 +1115,8 @@ index 000000000..78d3ec976
 +    bool has_mmap_override;
 +    bool use_mmap;
 +    bool use_mlock;
++    // Cache types: 0 selects F32, a positive value selects that ggml type,
++    // and a negative value keeps llama.cpp's derived default.
 +    int32_t cache_type_k;
 +    int32_t cache_type_v;
 +    int32_t flash_attn_type;
@@ -1121,6 +1130,8 @@ index 000000000..78d3ec976
 +    // an unsplit full-model load; there is no range-based loader fallback.
 +    const char * const * resident_tensor_names;
 +    size_t resident_tensor_name_count;
++    /** @brief Planner-produced execution dependency contract for shared residency. */
++    const char * execution_contract;
 +    const char * const * activation_import_identities;
 +    size_t activation_import_identity_count;
 +    const char * const * activation_import_bindings;
@@ -1144,11 +1155,9 @@ index 000000000..78d3ec976
 +    int32_t  glm_dsa_compact_flash_min_kv;
 +
 +    // Tri-state KV/session controls resolved from `model_fit` config.
-+    // SKIPPY_TRISTATE_AUTO preserves today's derived default; FALSE/TRUE
-+    // force the value.
 +    /** @brief Whether K/V tensors are offloaded to the compute backend (mirrors upstream `offload_kqv`). */
 +    int32_t kv_offload;
-+    /** @brief Whether the KV cache is unified across sequences/lanes instead of per-sequence (mirrors upstream `kv_unified`). Recurrent/hybrid architectures still force this true regardless of the requested value. */
++    /** @brief Whether the KV cache is unified across sequences/lanes (mirrors upstream `kv_unified`). AUTO derives the setting from lane count; recurrent and hybrid models force it true. */
 +    int32_t kv_unified;
 +    /** @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`). */
 +    int32_t swa_full;
@@ -1329,10 +1338,10 @@ index 000000000..78d3ec976
 +#endif // SKIPPY_RUNTIME_H
 diff --git a/include/skippy/sampling.h b/include/skippy/sampling.h
 new file mode 100644
-index 000000000..8b114e3e4
+index 000000000..1b42f32c0
 --- /dev/null
 +++ b/include/skippy/sampling.h
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,76 @@
 +#ifndef SKIPPY_SAMPLING_H
 +#define SKIPPY_SAMPLING_H
 +
@@ -1400,6 +1409,8 @@ index 000000000..8b114e3e4
 +    uint32_t dry_sequence_breaker_count;
 +    char dry_sequence_breakers[SKIPPY_MAX_DRY_SEQUENCE_BREAKERS][SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES];
 +    llama_logit_bias logit_bias[SKIPPY_MAX_LOGIT_BIAS];
++    /** -1 disables enforcement; 0 closes reasoning immediately; positive values cap reasoning tokens. */
++    int32_t reasoning_budget_tokens;
 +};
 +
 +#ifdef __cplusplus
@@ -1545,10 +1556,10 @@ index 000000000..0b5994482
 +#endif // SKIPPY_SPECULATIVE_DECODING_H
 diff --git a/include/skippy/stage_plan.h b/include/skippy/stage_plan.h
 new file mode 100644
-index 000000000..17dbba5ef
+index 000000000..962674190
 --- /dev/null
 +++ b/include/skippy/stage_plan.h
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,252 @@
 +#ifndef SKIPPY_STAGE_PLAN_H
 +#define SKIPPY_STAGE_PLAN_H
 +
@@ -1665,6 +1676,8 @@ index 000000000..17dbba5ef
 +    uint32_t reserved;
 +    uint64_t profile_count;
 +    uint64_t resident_tensor_count;
++    /** @brief Opaque native execution dependency contract; carry unchanged to runtime config. */
++    struct skippy_stage_plan_string_ref_v1 execution_contract;
 +};
 +
 +/** @brief Pointer-free guard and identity summary for one graph profile. */
@@ -1801,10 +1814,10 @@ index 000000000..17dbba5ef
 +#endif // SKIPPY_STAGE_PLAN_H
 diff --git a/include/skippy/state.h b/include/skippy/state.h
 new file mode 100644
-index 000000000..aa698c124
+index 000000000..1cfaaa5c6
 --- /dev/null
 +++ b/include/skippy/state.h
-@@ -0,0 +1,187 @@
+@@ -0,0 +1,236 @@
 +#ifndef SKIPPY_STATE_H
 +#define SKIPPY_STATE_H
 +
@@ -1819,6 +1832,20 @@ index 000000000..aa698c124
 +extern "C" {
 +#endif
 +
++/** @brief Complete cache representations supported by the loaded memory adapters. */
++enum skippy_memory_cache_capability {
++    SKIPPY_MEMORY_CACHE_RESIDENT = 1 << 0,
++    SKIPPY_MEMORY_CACHE_KV_RECURRENT = 1 << 1,
++    SKIPPY_MEMORY_CACHE_FULL_STATE = 1 << 2,
++};
++
++/** @brief Returns complete cache representations admitted by the built graph and loaded memory.
++ * Graph state effects restrict the loaded memory adapters' complete export capabilities.
++ * Full-state serialization is admitted explicitly too. Zero means no complete
++ * cache representation is available; callers cannot supply capability labels.
++ */
++LLAMA_API uint32_t skippy_model_memory_cache_capabilities(const struct skippy_model * model);
++
 +enum skippy_kv_page_flag {
 +    SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED      = 1 << 0,
 +    SKIPPY_KV_PAGE_FLAG_HAS_K_IDX         = 1 << 1,
@@ -1832,6 +1859,33 @@ index 000000000..aa698c124
 +enum skippy_kv_page_component_role {
 +    SKIPPY_KV_PAGE_COMPONENT_BASE = 1,
 +    SKIPPY_KV_PAGE_COMPONENT_SWA  = 2,
++};
++
++#define SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION 1
++
++enum skippy_cachegen_record_kind {
++    SKIPPY_CACHEGEN_RECORD_F16            = 0,
++    SKIPPY_CACHEGEN_RECORD_EXACT          = 1,
++    SKIPPY_CACHEGEN_RECORD_F16_TRANSPOSED = 2,
++    SKIPPY_CACHEGEN_RECORD_F32            = 3,
++    SKIPPY_CACHEGEN_RECORD_F32_TRANSPOSED = 4,
++    SKIPPY_CACHEGEN_RECORD_Q8_0           = 5,
++    SKIPPY_CACHEGEN_RECORD_Q4_0           = 6,
++};
++
++/** @brief Describes one validated CacheGen record and its logical page destination. */
++struct skippy_cachegen_record_v1 {
++    uint32_t abi_version;
++    uint32_t kind;
++    uint32_t element_bytes;
++    uint32_t reserved0;
++    uint64_t output_offset;
++    uint64_t decoded_bytes;
++    uint64_t token_count;
++    uint64_t token_start;
++    uint64_t total_tokens;
++    const void * payload;
++    size_t payload_bytes;
 +};
 +
 +/** @brief Describes one independently ranged cache in a composite KV page. */
@@ -1960,6 +2014,14 @@ index 000000000..aa698c124
 +        size_t input_bytes,
 +        struct skippy_error ** out_error);
 +
++/** @brief Imports validated CacheGen records directly into resident KV storage. */
++LLAMA_API enum skippy_status skippy_import_cachegen_kv_page_v1(
++        struct skippy_session * session,
++        const struct skippy_kv_page_desc * desc,
++        const struct skippy_cachegen_record_v1 * records,
++        size_t record_count,
++        struct skippy_error ** out_error);
++
 +/** @brief Saves a session prefix into a resident cache sequence. */
 +LLAMA_API enum skippy_status skippy_session_save_prefix(
 +        struct skippy_session * session,
@@ -2083,6 +2145,105 @@ index 000000000..c9697cf6c
 +#endif
 +
 +#endif // SKIPPY_TOKENIZATION_H
+diff --git a/include/skippy/workloads.h b/include/skippy/workloads.h
+new file mode 100644
+index 000000000..6aff32414
+--- /dev/null
++++ b/include/skippy/workloads.h
+@@ -0,0 +1,93 @@
++#ifndef SKIPPY_WORKLOADS_H
++#define SKIPPY_WORKLOADS_H
++
++/**
++ * @file skippy/workloads.h
++ * @brief Full-model embedding, reranking, and encoder-decoder execution.
++ *
++ * These operations deliberately reject filtered stage models. Their explicit
++ * workload descriptor lets callers fail closed instead of inferring support
++ * from a model name or architecture family.
++ */
++
++#include "common.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++struct skippy_model;
++struct skippy_session;
++
++#define SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION 1
++
++enum skippy_workload_kind {
++    SKIPPY_WORKLOAD_CAUSAL_GENERATION = 0,
++    SKIPPY_WORKLOAD_EMBEDDING         = 1,
++    SKIPPY_WORKLOAD_RERANK            = 2,
++    SKIPPY_WORKLOAD_ENCODER_DECODER   = 3,
++};
++
++enum skippy_workload_pooling {
++    SKIPPY_WORKLOAD_POOLING_UNSPECIFIED = -1,
++    SKIPPY_WORKLOAD_POOLING_NONE        = 0,
++    SKIPPY_WORKLOAD_POOLING_MEAN        = 1,
++    SKIPPY_WORKLOAD_POOLING_CLS         = 2,
++    SKIPPY_WORKLOAD_POOLING_LAST        = 3,
++    SKIPPY_WORKLOAD_POOLING_RANK        = 4,
++};
++
++/** @brief Runtime-probed workload properties for an opened model. */
++struct skippy_workload_info_v1 {
++    uint32_t                     abi_version;
++    uint32_t                     struct_size;
++    enum skippy_workload_kind    kind;
++    enum skippy_workload_pooling pooling;
++    uint32_t                     output_dimensions;
++    uint32_t                     classifier_outputs;
++    bool                         has_encoder;
++    bool                         has_decoder;
++    bool                         full_model_only;
++    uint8_t                      reserved0;
++};
++
++/**
++ * @brief Describes the workload implemented by an opened model.
++ *
++ * The caller must initialize out_info->abi_version to SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION
++ * and out_info->struct_size to sizeof(struct skippy_workload_info_v1).
++ * Incorrect values are rejected with SKIPPY_STATUS_INVALID_ARGUMENT.
++ */
++LLAMA_API enum skippy_status skippy_model_workload_info_v1(const struct skippy_model *      model,
++                                                           struct skippy_workload_info_v1 * out_info,
++                                                           struct skippy_error **           out_error);
++
++/** @brief Computes one normalized embedding for a tokenized input. */
++LLAMA_API enum skippy_status skippy_session_embed(struct skippy_session * session,
++                                                  const llama_token *     token_ids,
++                                                  size_t                  token_count,
++                                                  float *                 output,
++                                                  size_t                  output_capacity,
++                                                  size_t *                out_dimensions,
++                                                  struct skippy_error **  out_error);
++
++/** @brief Computes one scalar relevance score for a query-document pair. */
++LLAMA_API enum skippy_status skippy_session_rerank(struct skippy_session * session,
++                                                   const char *            query,
++                                                   const char *            document,
++                                                   float *                 out_score,
++                                                   size_t *                out_token_count,
++                                                   struct skippy_error **  out_error);
++
++/** @brief Encodes an encoder-decoder prompt and returns its first decoder token. */
++LLAMA_API enum skippy_status skippy_session_encode_prompt(struct skippy_session * session,
++                                                          const llama_token *     token_ids,
++                                                          size_t                  token_count,
++                                                          llama_token *           out_decoder_start_token,
++                                                          struct skippy_error **  out_error);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // SKIPPY_WORKLOADS_H
 -- 
-2.56.0
+2.55.0
 

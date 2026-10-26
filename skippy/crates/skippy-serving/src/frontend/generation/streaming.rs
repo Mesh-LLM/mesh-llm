@@ -1,4 +1,6 @@
+use crate::frontend::generation::GeneratedLogprobCandidate;
 use crate::frontend::generation::GeneratedText;
+use crate::frontend::generation::GeneratedTokenLogprob;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::GenerationMetrics;
 use crate::frontend::generation::ParsedChatMessage;
@@ -361,11 +363,12 @@ where
     stop_searched_len: usize,
     generated_text_bytes: Vec<u8>,
     completion_tokens: usize,
-    generation_gate: Option<Arc<dyn crate::frontend::generation_gate::GenerationGate>>,
     finish_reason: FinishReason,
     metrics: GenerationMetrics,
     emulation_active: bool,
     ignore_eos: bool,
+    /// Tokens counted as completion tokens, in order, to align logprobs.
+    emitted_tokens: Vec<i32>,
 }
 
 impl<'a, F> TextGenerationCollector<'a, F>
@@ -393,11 +396,11 @@ where
             stop_searched_len: 0,
             generated_text_bytes: Vec::new(),
             completion_tokens: 0,
-            generation_gate: None,
             finish_reason: finish_reason_for_generation(true),
             metrics: GenerationMetrics::default(),
             emulation_active: false,
             ignore_eos: false,
+            emitted_tokens: Vec::new(),
         })
     }
 
@@ -415,14 +418,6 @@ where
         self
     }
 
-    pub(in crate::frontend) fn with_generation_gate(
-        mut self,
-        gate: Option<Arc<dyn crate::frontend::generation_gate::GenerationGate>>,
-    ) -> Self {
-        self.generation_gate = gate;
-        self
-    }
-
     pub(in crate::frontend) fn push_token(&mut self, token: i32) -> InferenceResult<TokenControl> {
         let eog_timer = Instant::now();
         if !self.ignore_eos
@@ -437,9 +432,7 @@ where
         }
         self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
         self.completion_tokens += 1;
-        if let Some(gate) = self.generation_gate.as_ref() {
-            gate.committed_token()?;
-        }
+        self.emitted_tokens.push(token);
         let detokenize_timer = Instant::now();
         let piece = self
             .model
@@ -513,6 +506,10 @@ where
         cache_stats: GenerationCacheStats,
     ) -> InferenceResult<GeneratedText> {
         self.emit_safe_delta(true)?;
+        let token_logprobs = match cache_stats.token_logprobs {
+            Some(entries) => Some(self.aligned_logprobs(entries)?),
+            None => None,
+        };
         Ok(GeneratedText {
             prompt_tokens: saturating_u32(prompt_token_count),
             completion_tokens: saturating_u32(self.completion_tokens),
@@ -534,7 +531,52 @@ where
             detokenize_ms: self.metrics.detokenize_ms,
             text_emit_ms: self.metrics.text_emit_ms,
             eog_check_ms: self.metrics.eog_check_ms,
+            token_logprobs,
         })
+    }
+
+    /// The native session records an entry for every sampled token, including
+    /// the end-of-generation token that is never emitted; the emitted tokens
+    /// are therefore the leading entries, in order.
+    fn aligned_logprobs(
+        &self,
+        entries: Vec<skippy_runtime::TokenLogprobs>,
+    ) -> InferenceResult<Vec<GeneratedTokenLogprob>> {
+        if entries.len() < self.emitted_tokens.len()
+            || entries
+                .iter()
+                .zip(&self.emitted_tokens)
+                .any(|(entry, token)| entry.token != *token)
+        {
+            return Err(InferenceError::backend(
+                "recorded logprobs do not match the generated tokens",
+            ));
+        }
+        let candidate = |token: i32, logprob: f32| -> InferenceResult<GeneratedLogprobCandidate> {
+            let bytes = self
+                .model
+                .detokenize_bytes(&[token])
+                .map_err(openai_backend_error)?;
+            Ok(GeneratedLogprobCandidate {
+                text: String::from_utf8_lossy(&bytes).into_owned(),
+                bytes,
+                logprob: logprob.is_finite().then_some(logprob),
+            })
+        };
+        entries
+            .into_iter()
+            .take(self.emitted_tokens.len())
+            .map(|entry| {
+                Ok(GeneratedTokenLogprob {
+                    token: candidate(entry.token, entry.logprob)?,
+                    top: entry
+                        .top
+                        .iter()
+                        .map(|&(token, logprob)| candidate(token, logprob))
+                        .collect::<InferenceResult<_>>()?,
+                })
+            })
+            .collect()
     }
 }
 

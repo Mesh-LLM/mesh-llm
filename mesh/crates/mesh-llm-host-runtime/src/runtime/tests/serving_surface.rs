@@ -16,27 +16,24 @@ fn interactive_handler_spawns_once_across_startup_callbacks() {
 }
 
 #[test]
-fn initial_pretty_session_mode_allows_dashboard_for_explicit_surface() {
-    assert_eq!(
-        initial_console_session_mode_for_surface(
-            Some(RuntimeSurface::Serve),
-            ConsoleSessionMode::InteractiveDashboard
-        ),
-        ConsoleSessionMode::InteractiveDashboard
-    );
-
-    assert_eq!(
-        initial_console_session_mode_for_surface(
-            Some(RuntimeSurface::Client),
-            ConsoleSessionMode::InteractiveDashboard
-        ),
-        ConsoleSessionMode::InteractiveDashboard
-    );
-
-    assert_eq!(
-        initial_console_session_mode_for_surface(None, ConsoleSessionMode::InteractiveDashboard),
-        ConsoleSessionMode::None
-    );
+fn initial_pretty_session_mode_preserves_terminal_detection_for_all_runtime_spellings() {
+    for surface in [
+        None,
+        Some(RuntimeSurface::Serve),
+        Some(RuntimeSurface::Client),
+    ] {
+        for mode in [
+            ConsoleSessionMode::InteractiveDashboard,
+            ConsoleSessionMode::Fallback,
+            ConsoleSessionMode::None,
+        ] {
+            assert_eq!(
+                initial_console_session_mode_for_surface(surface, mode),
+                mode,
+                "runtime spelling {surface:?} must preserve terminal mode {mode:?}",
+            );
+        }
+    }
 }
 
 #[test]
@@ -138,11 +135,17 @@ fn test_console_session_mode_client_uses_interactive_mode() {
 }
 
 #[test]
-fn test_console_session_mode_no_explicit_surface_uses_none() {
-    // When explicit_surface is None, should use None mode
-    let result =
+fn bare_auto_runtime_uses_the_same_dashboard_as_explicit_serve() {
+    // `mesh-llm --auto` reaches runtime startup with no explicit surface.
+    // It must not lose the dashboard just because `serve` was omitted.
+    let bare =
         initial_console_session_mode_for_surface(None, ConsoleSessionMode::InteractiveDashboard);
-    assert_eq!(result, ConsoleSessionMode::None);
+    let explicit = initial_console_session_mode_for_surface(
+        Some(RuntimeSurface::Serve),
+        ConsoleSessionMode::InteractiveDashboard,
+    );
+    assert_eq!(bare, ConsoleSessionMode::InteractiveDashboard);
+    assert_eq!(bare, explicit);
 }
 
 // ── Bootstrap-proxy gate ────────────────────────────────────────────
@@ -189,6 +192,7 @@ async fn build_run_auto_console_state(
             affinity_router: &affinity_router,
             control_tx: &control_tx,
             owner_key_path: &None,
+            update_check: true,
         },
     )
     .await

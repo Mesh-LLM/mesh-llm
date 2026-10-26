@@ -105,6 +105,22 @@ const llvm::json::Object &builder(const llvm::json::Value &report) {
   return object(builders[0]);
 }
 
+// A translation unit may declare several graph constructors (a full builder
+// and a helper-only `no_build` variant). Select the record by identity.
+const llvm::json::Object &builderNamed(const llvm::json::Value &report,
+                                       llvm::StringRef needle,
+                                       llvm::StringRef without = {}) {
+  const auto &builders = array(object(report), "builders");
+  for (const auto &value : builders) {
+    const auto &record = object(value);
+    const std::string identity = text(record, "constructor");
+    const llvm::StringRef name(identity);
+    if (name.contains(needle) && (without.empty() || !name.contains(without))) return record;
+  }
+  require(false, "missing builder for " + needle.str());
+  return object(builders[0]);
+}
+
 void check(const fs::path &tool, const fs::path &root, const fs::path &reports,
            const std::string &name, const std::string &verdict,
            const std::vector<std::string> &edits = {}, const std::string &reason = "") {
@@ -177,6 +193,28 @@ int main(int argc, char **argv) {
                 text(object(field(builder(auxiliary), "proof")), "execution_scope") == "final_stage_sidecar" &&
                 editKinds(builder(auxiliary)).empty(), "auxiliary scope");
     std::cout << "PASS auxiliary.cpp\n";
+    auto auxiliary_shared = invoke(tool, root, temp / "auxiliary-shared-helpers.json", "auxiliary-shared-helpers.cpp");
+    require(text(builder(auxiliary_shared), "verdict") == "supported_auxiliary" &&
+                text(object(field(builder(auxiliary_shared), "proof")), "execution_scope") == "final_stage_sidecar" &&
+                contains(array(object(field(builder(auxiliary_shared), "proof")), "scope_evidence"), "inherited_decoder_body") &&
+                editKinds(builder(auxiliary_shared)).empty(), "auxiliary shared-helpers scope");
+    std::cout << "PASS auxiliary-shared-helpers.cpp\n";
+    // A helper-only graph variant has an empty body and a base initializer, so
+    // it must stay auxiliary: there is no statement to annotate here, and the
+    // initializer's builder is analysed where it is defined. Upstream ships
+    // this idiom (glm5-next `no_build`), and treating it as a decoder
+    // candidate fails generation with "cannot prove a unique token embedding
+    // producer".
+    auto helperOnly = invoke(tool, root, temp / "auxiliary-no-build.json", "auxiliary-no-build.cpp");
+    const auto &helperConstructor = builderNamed(helperOnly, "no_build");
+    require(text(helperConstructor, "verdict") == "supported_auxiliary" &&
+                text(object(field(helperConstructor, "proof")), "execution_scope") == "final_stage_sidecar" &&
+                contains(array(object(field(helperConstructor, "proof")), "scope_evidence"), "helper_construction_only") &&
+                editKinds(helperConstructor).empty(), "helper-only graph constructor scope");
+    const auto &fullConstructor = builderNamed(helperOnly, "llm_graph_params", "no_build");
+    require(text(fullConstructor, "verdict") == "transformable",
+            "full graph constructor next to a helper-only variant");
+    std::cout << "PASS auxiliary-no-build.cpp\n";
     check(tool, root, temp, "multiple-domains.cpp", "supported_whole_model");
     auto delegated = invoke(tool, root, temp / "delegated-stacks.json", "delegated-stacks.cpp");
     const auto &delegatedRecord = builder(delegated);

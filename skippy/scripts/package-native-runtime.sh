@@ -26,6 +26,7 @@ source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
 BUILD=0
 KEEP_RUNPATH=0
 MODEL_PACKAGE_TOOL=1
+ID_SUFFIX=""
 OUT_DIR="$REPO_ROOT/dist/native-runtimes"
 BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
 TARGET_TRIPLE="${MESH_NATIVE_RUNTIME_TARGET:-}"
@@ -46,6 +47,10 @@ Options:
   --keep-runpath      Linux: prepend $ORIGIN to existing runpaths, don't replace them.
   --no-model-package-tool
                       Leave out the offline skippy-package-builder.
+  --id-suffix NAME    Append -NAME to the runtime id, directory and archive
+                      (lowercase letters, digits, dashes), so a distribution's
+                      build is told apart from the release runtime of the same
+                      backend in `mesh-llm runtime list`.
   -h, --help          Show this help.
 
 Environment:
@@ -57,6 +62,8 @@ Environment:
   MESH_CUDA_VERSION / MESH_LLM_CUDA_TOOLKIT_MAJOR (validated against the selected compiler)
   MESH_LLM_CUDA_LICENSE_FILE (optional CUDA EULA/copyright file override)
   MESH_LLM_LLAMA_PIN_SHA
+  MESH_LLM_NATIVE_RUNTIME_RANK (manifest rank, default 0; among compatible
+                      runtimes the highest rank wins)
 EOF
 }
 
@@ -86,6 +93,10 @@ while [[ "$#" -gt 0 ]]; do
             MODEL_PACKAGE_TOOL=0
             shift
             ;;
+        --id-suffix)
+            ID_SUFFIX="${2:?missing id suffix}"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -105,6 +116,11 @@ case "$BACKEND" in
         exit 1
         ;;
 esac
+
+if [[ -n "$ID_SUFFIX" && ! "$ID_SUFFIX" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+    echo "invalid --id-suffix '$ID_SUFFIX': use lowercase letters, digits and dashes" >&2
+    exit 1
+fi
 
 host_os() {
     case "$(uname -s)" in
@@ -696,7 +712,7 @@ runtime_arch="$(target_runtime_arch "$TARGET_TRIPLE")"
 if ! flavor="$(backend_flavor)"; then
     exit 1
 fi
-artifact_id="meshllm-native-runtime-${platform}-${flavor}"
+artifact_id="meshllm-native-runtime-${platform}-${flavor}${ID_SUFFIX:+-$ID_SUFFIX}"
 stage_dir="$OUT_DIR/$artifact_id"
 
 runtime_libraries=()

@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/afmoe.cpp b/src/models/afmoe.cpp
-index 08c22b6ed8234b1288bdcda0083e0af13e3c0022..5daf21e4b3aa36a61ba38453b3e753748934d944 100644
+index 266597a3553a51fa1778fe671b28638047d6823f..8e02aa6a4e746e2dd443b7ad0aec4521adfe394b 100644
 --- a/src/models/afmoe.cpp
 +++ b/src/models/afmoe.cpp
 @@ -126,6 +126,8 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param

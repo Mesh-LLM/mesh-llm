@@ -31,6 +31,8 @@ built-in runtime default.
 |---|---|
 | `MESH_LLM_CONFIG` | Full path to the config file, instead of `~/.mesh-llm/config.toml` |
 | `MESH_LLM_LIFECYCLE_LOG_PARSER` | Overrides `runtime.lifecycle_log_parser`; accepts `auto`, `enabled`, or `disabled` |
+| `MESH_LLM_NO_UPDATE_CHECK` | Overrides `updates.check`; `1` turns the release checks off, `0` on |
+| `MESH_LLM_NO_RUNTIME_DOWNLOAD` | Overrides `runtime.native_runtime.download`; `1` turns runtime downloads at startup off, `0` on |
 | `MESH_LLM_JOIN` | Invite token for a private mesh; equivalent to one `--join` |
 | `MESH_LLM_JOIN_FILE` | Path to a file holding the invite token; equivalent to `--join-file`, and re-read on every rejoin attempt |
 
@@ -48,7 +50,13 @@ mesh-llm config validate --config-path ./mesh.toml
 mesh-llm config validate --config-path ./mesh.toml --json
 ```
 
-`config validate` checks the TOML file without starting a node.
+`config validate` checks the TOML file without starting a node. It also
+checks each `hardware.model_path` the way `serve` does at startup: an absolute
+path to a regular file, not a symlink. That check reads the disk of the machine
+running `config validate`, which is not always the node that will use the
+file: you can validate a config on your laptop and then apply it to a remote
+node through owner-control, where the model is. So a path that fails the check
+is reported as a warning, not an error.
 
 ## Group 1: file, schema, and reload
 
@@ -88,6 +96,7 @@ produces a clear startup error rather than a partial start.
 | `telemetry.prompt_shape_metrics` | boolean | `false` | node-level | process restart | wired; exports token-count histograms only when explicitly enabled | none |
 | `telemetry.metrics.endpoint` | URL | unset (falls back to `telemetry.endpoint`) | node-level | process restart | wired | none |
 | `analytics.enabled` | boolean | unset (anonymous usage reporting is on when an analytics key is available, compiled in or set at run time); `false` opts out permanently | node-level | process restart | wired | `mesh-llm analytics disable` |
+| `updates.check` | boolean | unset (mesh-llm checks for a newer release at startup and shows it as a notice and in the web console); `false` turns the checks off, e.g. for installs that a package manager updates | node-level | process restart | wired | none |
 | `logging.audit.enabled` | boolean | unset | node-level | process restart | wired | none |
 | `logging.audit.log_path` | path | unset | node-level | process restart | wired | none |
 | `logging.audit.log_format` | enum | `json_lines` | node-level | process restart | wired | none |
@@ -128,6 +137,7 @@ produces a clear startup error rather than a partial start.
 | `runtime.reconcile_model_targets` | boolean | `false` | node-level | process restart | wired | none |
 | `runtime.reconcile_model_target_demand_upgrades` | boolean | `false` | node-level | process restart | wired | none |
 | `runtime.native_runtime.mesh_version`<br>`runtime.native_runtime.skippy_abi`<br>`runtime.native_runtime.selection` | string | unset (auto-selected) | node-level | process restart | wired | none |
+| `runtime.native_runtime.download` | boolean | unset (startup fetches the release catalog and downloads a missing runtime); `false` uses only bundled and installed runtimes, e.g. when a package manager ships them. `mesh-llm runtime install` ignores it | node-level | process restart | wired | none |
 | `runtime.kv_cache.disk.mode` | enum | `off` (default), `auto`, `fixed` | node-level | process restart | wired | `--kv-cache-disk` |
 | `runtime.kv_cache.disk.directory` | absolute path | `$MESH_LLM_HOME/kv-cache` | node-level | process restart | wired | `--kv-cache-disk-dir` |
 | `runtime.kv_cache.disk.budget_mib` | integer | required and > 0 only for `fixed` | node-level | applies dynamically | wired | fixed size passed to `--kv-cache-disk` |
@@ -190,7 +200,6 @@ normal warnings in every mode.
 | `model_fit.prefix_cache.min_tokens` | integer | runtime default | both | model reload | wired | none |
 | `model_fit.prefix_cache.shared_stride_tokens` | integer | runtime default | both | model reload | wired | none |
 | `model_fit.prefix_cache.shared_record_limit` | integer | runtime default | both | model reload | wired | none |
-| `model_fit.prefix_cache.payload_mode` | enum | `resident-kv`, `kv-recurrent`, `full-state`, `auto` (default) | both | model reload | wired | none |
 | `model_fit.keep_tokens` | integer | unset | both | model reload | unwired | none |
 | `model_fit.context_shift` | bool-or-`auto` | `auto` | both | model reload | unwired | none |
 | `model_fit.swa_full` | boolean | unset | both | model reload | wired | none |

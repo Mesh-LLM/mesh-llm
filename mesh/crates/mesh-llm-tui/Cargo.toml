@@ -28,3 +28,8 @@ tracing = "0.1"
 # Safe wrappers for the dup/dup2/pipe plumbing behind console capture. Used in
 # preference to raw libc so this crate keeps `#![forbid(unsafe_code)]`.
 rustix = { version = "1", features = ["event", "stdio"] }
+
+[target.'cfg(windows)'.dependencies]
+# Safe wrappers for writing the dashboard to `CONOUT$` as UTF-16, so this crate
+# keeps `#![forbid(unsafe_code)]`. crossterm already depends on it on Windows.
+crossterm_winapi = "0.9.1"

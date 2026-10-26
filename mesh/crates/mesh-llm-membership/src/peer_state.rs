@@ -123,8 +123,7 @@ pub struct PeerAnnouncement {
     pub decode_batch_policy_supported: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     #[cfg(feature = "payments")]
-    pub lightning_offers:
-        std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
+    pub lightning_offers: mesh_llm_payments_types::offers::LightningOffers,
     pub cache_affinity: Option<CacheAffinityAdvertisement>,
     pub latency_ms: Option<u32>,
     pub latency_source: Option<proto_node::LatencySource>,
@@ -377,8 +376,7 @@ pub struct PeerInfo {
     pub decode_batch_policy_supported: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     #[cfg(feature = "payments")]
-    pub lightning_offers:
-        std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
+    pub lightning_offers: mesh_llm_payments_types::offers::LightningOffers,
     pub cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     /// Most recent direct RTT sample for display purposes (refreshed periodically).
     pub display_rtt: Option<DirectLatencyObservation>,

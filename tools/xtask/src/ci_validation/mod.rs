@@ -5,6 +5,7 @@ mod documentation;
 mod entrypoints;
 pub(crate) mod lane_results;
 mod producers;
+mod python_tooling;
 mod release_compilation;
 mod release_containers;
 mod release_dispatch;
@@ -21,6 +22,7 @@ pub(crate) use crate_coverage::{
 use documentation::check_documentation_invariants;
 use entrypoints::{check_orchestrator_invariants, check_workflow_invariants};
 use producers::{ProducerInvariantSources, check_producer_invariants};
+pub(crate) use python_tooling::check as check_python_tooling;
 use release_containers::check_release_container_contracts;
 use release_dispatch::check_release_dispatch_version_preparation;
 use windows_runtime::check_windows_dynamic_runtime_contract;

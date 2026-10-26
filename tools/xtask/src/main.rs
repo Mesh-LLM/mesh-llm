@@ -10,6 +10,8 @@ mod cli_output;
 mod command;
 #[path = "automation/command_interrupt/mod.rs"]
 pub(crate) mod command_interrupt;
+#[cfg(test)]
+mod fixture_paths;
 mod installer_fixtures;
 mod model_registry;
 mod native_policy;
@@ -85,8 +87,6 @@ fn run() -> DynResult<()> {
         cli::CliCommand::LocalPorts(rest) => automation::local_ports::run(rest),
         cli::CliCommand::ManualSmoke(rest) => automation::manual_smoke::run(rest),
         cli::CliCommand::OpenaiCacheMatrix(rest) => automation::cache_matrix::run(rest),
-        cli::CliCommand::OpenaiSmokeConfig(rest) => automation::openai_smoke_config::run(rest),
-        cli::CliCommand::WorkloadSmokeConfig(rest) => automation::workload_smoke_config::run(rest),
         cli::CliCommand::SplitProbe(rest) => automation::split_probe::run(rest),
         cli::CliCommand::SmokeObservation(rest) => automation::smoke_observation::run(rest),
         cli::CliCommand::HfXetSmoke(rest) => automation::hf_xet_smoke::run(rest),
@@ -98,7 +98,6 @@ fn run() -> DynResult<()> {
             rest,
         ),
         cli::CliCommand::WanObservation(rest) => automation::wan_observation::run(rest),
-        cli::CliCommand::WanStageDeployment(rest) => automation::wan_stage_deployment::run(rest),
         cli::CliCommand::SystemOneCases(rest) => automation::system_one_cases::run(rest),
         cli::CliCommand::SystemOneSmoke(rest) => automation::system_one_smoke::run(rest),
         cli::CliCommand::DecisionsSmoke(rest) => automation::decisions_smoke::run(rest),

@@ -148,7 +148,6 @@ fn generic_config_ports_identity_and_source_calls_use_selected_authority() {
             "agent-client-config",
             "local-ports",
             "family-model-identity",
-            "workload-smoke-config",
             "canary-receipts prepared-source",
             "workload-oracle-evidence",
         ] {

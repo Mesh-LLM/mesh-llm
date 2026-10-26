@@ -158,6 +158,9 @@ fn service_brief(plan: &SetupPlan, actions: &CliSetupActions<'_>) -> String {
         super::SetupServicePlan::Install => match actions.service_outcome {
             SetupServiceOutcome::Installed(ref report) => match report.status {
                 ServiceInstallStatus::Started => style_ok("running"),
+                ServiceInstallStatus::StartsAtLogon => {
+                    style_warn("installed; starts at next logon")
+                }
                 ServiceInstallStatus::NeedsManualStart => style_warn("installed; start manually"),
             },
             SetupServiceOutcome::NotRequested | SetupServiceOutcome::PrintedGuidance => {

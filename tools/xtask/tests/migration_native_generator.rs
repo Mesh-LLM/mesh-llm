@@ -5,6 +5,9 @@ use process::*;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+#[path = "../src/fixture_paths.rs"]
+mod fixture_paths;
+
 #[cfg(unix)]
 #[path = "migration_process/raw_capture_tree.rs"]
 mod raw_tree;
@@ -12,14 +15,7 @@ mod raw_tree;
 #[cfg(unix)]
 fn raw_tree_report(budget: &Limits, cancellation: &Cancellation) -> RawProcessReport {
     let root = tempfile::tempdir().unwrap();
-    let profile = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_owned();
-    let executable = profile.join("examples").join(format!(
+    let executable = crate::fixture_paths::examples_dir().join(format!(
         "migration_process_driver{}",
         std::env::consts::EXE_SUFFIX
     ));
@@ -65,9 +61,7 @@ fn raw_tree_report(budget: &Limits, cancellation: &Cancellation) -> RawProcessRe
     report
 }
 fn spec(root: &std::path::Path, mode: &str) -> ProcessSpec {
-    let executable = std::env::current_exe().unwrap();
-    let profile = executable.parent().unwrap().parent().unwrap();
-    let fixture = profile.join("examples").join(format!(
+    let fixture = crate::fixture_paths::examples_dir().join(format!(
         "migration_raw_capture_fixture{}",
         std::env::consts::EXE_SUFFIX
     ));

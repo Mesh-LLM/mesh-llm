@@ -4,20 +4,10 @@ use std::{
     fs,
     path::Path,
     process::{Command, Output, Stdio},
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
-fn finish(mut child: std::process::Child) -> Output {
-    let until = Instant::now() + Duration::from_secs(10);
-    while child.try_wait().unwrap().is_none() {
-        if Instant::now() >= until {
-            child.kill().unwrap();
-            let result = child.wait_with_output().unwrap();
-            panic!("owned layer CLI deadline: {}", result.status);
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    child.wait_with_output().unwrap()
+fn finish(child: std::process::Child) -> Output {
+    super::finish_fixture_child_with_deadline(child, Duration::from_secs(10))
 }
 fn inputs(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let manifest = root.join("model-package.json");

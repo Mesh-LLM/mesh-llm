@@ -194,7 +194,7 @@ start_stage_server() {{ : > native-launch; return 97; }}
 if run_cases_against_stage contract family-qwen3-dense "$PWD/{file}" contract 128 2; then exit 98; else exit "$?"; fi
 "#,
             function(&script, "artifact_summary", "cached_artifact_path"),
-            function(&script, "verify_artifact_digest", "write_stage_config"),
+            function(&script, "verify_artifact_digest", "require_smoke_binaries"),
             function(&script, "run_cases_against_stage", "prewarm_plan")
         );
         let report = shell(root, caller, environment(root));
@@ -230,7 +230,14 @@ fn assert_canary_pass_pair(jobs: &Node, attempt: u8) {
         format!("repair-{attempt}")
     );
     assert_eq!(text(inputs, "pass_id"), format!("verify-{attempt}"));
-    assert_eq!(text(inputs, "mode"), "verify-build");
+    assert_eq!(
+        text(inputs, "mode"),
+        if attempt == 1 {
+            "${{ needs.resolve.outputs.publish_selected == 'true' && 'pinned-build' || 'verify-build' }}"
+        } else {
+            "verify-build"
+        }
+    );
     assert!(
         verification
             .get("needs")
@@ -332,6 +339,7 @@ fn actual_canary_build_qualification_and_verification_relocation_preserve_requir
         r#"set -euo pipefail
 ROOT="$PWD"
 TRUSTED_ROOT="$PWD"
+JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 VERIFY_ROOT="$PWD/verification"
 CERTIFIED_SHA=fixture
 RUN_KEY=finite

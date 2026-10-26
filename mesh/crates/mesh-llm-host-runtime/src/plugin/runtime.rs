@@ -1,3 +1,4 @@
+mod default_plugin_policy;
 mod request;
 
 use super::config::{ExternalPluginSpec, PluginHostMode};
@@ -14,6 +15,7 @@ use super::{
 use crate::runtime_data::RuntimeDataProducer;
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::{MeshVisibility, STARTUP_DISABLED_ERROR_CODE};
+use mesh_llm_plugin_manager::defaults::{UNLISTED_DEFAULT_ALLOWS, default_plugin};
 use rmcp::model::{InitializeRequestParams, ServerConfig};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -28,7 +30,10 @@ mod exchange_request;
 mod exchange_request_tests;
 mod identity_artifact;
 mod lifecycle_readiness;
+mod shutdown;
 mod socket_auth;
+
+use self::default_plugin_policy::restrict_default_plugin;
 
 /// How long a stopping plugin waits to tell the node to withdraw its key.
 const PLUGIN_STOPPED_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -49,6 +54,7 @@ pub(crate) struct ExternalPlugin {
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     runtime_data_producer: RuntimeDataProducer,
     restart_lock: Arc<Mutex<()>>,
+    stopping: AtomicBool,
     next_request_id: AtomicU64,
     next_generation: AtomicU64,
     /// Serves this plugin as a task in this process instead of a child.
@@ -135,6 +141,7 @@ impl ExternalPlugin {
             rpc_bridge,
             runtime_data_producer,
             restart_lock: Arc::new(Mutex::new(())),
+            stopping: AtomicBool::new(false),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process,
@@ -353,7 +360,7 @@ impl ExternalPlugin {
         generation: u64,
         response: proto::Envelope,
     ) -> Result<proto::InitializeResponse> {
-        let init = match response.payload {
+        let mut init = match response.payload {
             Some(proto::envelope::Payload::InitializeResponse(resp)) => resp,
             Some(proto::envelope::Payload::ErrorResponse(err))
                 if err.code == STARTUP_DISABLED_ERROR_CODE =>
@@ -373,6 +380,25 @@ impl ExternalPlugin {
                 self.spec.name
             ),
         };
+        if self
+            .spec
+            .installed_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.default_managed)
+        {
+            let (allows, capabilities) = default_plugin(&self.spec.name)
+                .map_or((UNLISTED_DEFAULT_ALLOWS, &[][..]), |default| {
+                    (default.allows, default.capabilities)
+                });
+            let removed = restrict_default_plugin(&mut init, allows, capabilities);
+            if !removed.is_empty() {
+                tracing::warn!(
+                    plugin = %self.spec.name,
+                    removed = %removed.join(", "),
+                    "Removed what this default plugin is not allowed to use"
+                );
+            }
+        }
         self.validate_initialize_response(&init)?;
         Ok(init)
     }
@@ -485,6 +511,7 @@ impl ExternalPlugin {
     }
 
     async fn ensure_running(&self) -> Result<()> {
+        self.reject_shutdown()?;
         if let Some(reason) = self.disabled_reason().await {
             bail!("Plugin '{}' is disabled: {}", self.spec.name, reason);
         }
@@ -492,6 +519,7 @@ impl ExternalPlugin {
             return Ok(());
         }
         let _guard = self.restart_lock.lock().await;
+        self.reject_shutdown()?;
         if self.runtime.lock().await.is_some() {
             return Ok(());
         }
@@ -629,34 +657,6 @@ impl ExternalPlugin {
             .clone()
             .map(|manifest| manifest_tool_summaries(&manifest))
             .unwrap_or_default())
-    }
-
-    pub(crate) async fn shutdown(&self) {
-        self.authenticated_peer.store(false, Ordering::Release);
-        {
-            let mut summary = self.summary.lock().await;
-            summary.status = "shutting down".into();
-            summary.error = None;
-        }
-
-        let runtime = self.runtime.lock().await.take();
-        if let Some(runtime) = runtime {
-            stop_runtime(runtime, "plugin shutting down").await;
-        }
-
-        *self.server_info.lock().await = None;
-        *self.manifest.lock().await = None;
-
-        let mut summary = self.summary.lock().await;
-        summary.status = "stopped".into();
-        summary.pid = None;
-        summary.version = None;
-        summary.capabilities.clear();
-        summary.tools.clear();
-        summary.error = None;
-        drop(summary);
-        self.publish_summary().await;
-        self.announce_stopped().await;
     }
 
     pub(crate) async fn call_tool(
@@ -1035,6 +1035,7 @@ pub(crate) mod tests {
     use super::super::transport::{read_envelope, write_envelope};
     use super::super::{PluginCapabilityProvider, PluginEndpointSummary};
     use super::*;
+
     use crate::runtime_data::{
         PluginDataKey, PluginEndpointKey, RuntimeDataCollector, RuntimeDataSource,
     };
@@ -1073,6 +1074,7 @@ pub(crate) mod tests {
             downloaded_asset_name: "demo.tar.gz".into(),
             install_path,
             enabled: true,
+            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
                 config_schema: None,
@@ -1112,7 +1114,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn plugin_spec(
+    pub(super) fn plugin_spec(
         temp_dir: &TempDir,
         web_ui_enabled: Option<bool>,
         validation_status: InstalledPluginWebUiValidationStatus,
@@ -1253,6 +1255,7 @@ pub(crate) mod tests {
                 plugin_endpoint_key: None,
             }),
             restart_lock: Arc::new(Mutex::new(())),
+            stopping: AtomicBool::new(false),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process: None,

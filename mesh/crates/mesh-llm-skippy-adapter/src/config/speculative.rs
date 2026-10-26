@@ -118,8 +118,11 @@ pub(super) fn resolve_speculative_config(
     if mode == "disabled" && draft_model_path.is_some() {
         bail!("skippy speculative draft source cannot be set when speculative.mode = \"disabled\"");
     }
-    let effective_draft_max_tokens =
-        resolved_draft_max_tokens(native_mtp_enabled, draft_max_tokens);
+    let effective_draft_max_tokens = resolved_draft_max_tokens(
+        native_mtp_enabled,
+        draft_max_tokens,
+        package_native_mtp_draft_tokens(&strategy, package_generation),
+    );
     validate_draft_min_max(draft_min_tokens, effective_draft_max_tokens)
         .map_err(anyhow::Error::msg)?;
     let native_mtp_sidecar_disabled = if native_mtp_enabled && draft_model_path.is_some() {
@@ -723,17 +726,43 @@ fn native_proposer_config(
             )
         },
     );
-    if proposer_type != "native-mtp" || prediction_depth != Some(1) || layer_indices.is_empty() {
+    let Some(depth) = prediction_depth
+        .filter(|depth| native_mtp_depth_is_executable(*depth, layer_indices.len()))
+    else {
+        bail!("package native MTP proposer is not valid for the embedded runtime");
+    };
+    if proposer_type != "native-mtp" {
         bail!("package native MTP proposer is not valid for the embedded runtime");
     }
     Ok(NativeMtpProposalConfig {
         enabled: true,
-        max_draft_tokens: 1,
+        max_draft_tokens: depth as usize,
         min_draft_tokens: 0,
         reject_cooldown_tokens: 0,
         suppress_cooldown_drafts: false,
         suppress_cooldown_draft_limit: 0,
     })
+}
+
+/// The runtime chains a single NextN block to any depth up to its draft limit;
+/// multi-block heads draft at most one token per block.
+fn native_mtp_depth_is_executable(depth: u32, layer_count: usize) -> bool {
+    let max_depth = skippy_runtime::NativeMtpDraft::MAX_TOKENS;
+    depth >= 1
+        && depth as usize <= max_depth
+        && (layer_count == 1 || (layer_count > 1 && depth as usize <= layer_count))
+}
+
+/// Draft depth the package recommends for the requested strategy, if any.
+fn package_native_mtp_draft_tokens(
+    requested_strategy: &str,
+    package_generation: Option<&PackageGenerationInfo>,
+) -> Option<u32> {
+    package_decode_config(requested_strategy, package_generation)
+        .ok()
+        .flatten()
+        .filter(|config| config.native_mtp.enabled)
+        .and_then(|config| u32::try_from(config.native_mtp.max_draft_tokens).ok())
 }
 
 fn ngram_proposer_config(
@@ -815,7 +844,9 @@ fn strategy_uses_native_mtp(
             .as_deref()
             .and_then(|name| speculative.proposers.get(name))
             .map_or(
-                strategy.prediction_depth == Some(1) && !strategy.layer_indices.is_empty(),
+                strategy.prediction_depth.is_some_and(|depth| {
+                    native_mtp_depth_is_executable(depth, strategy.layer_indices.len())
+                }),
                 |proposer| proposer.proposer_type == "native-mtp",
             ),
         "composite" => strategy
@@ -827,9 +858,16 @@ fn strategy_uses_native_mtp(
     }
 }
 
-fn resolved_draft_max_tokens(native_mtp_enabled: bool, draft_max_tokens: u32) -> u32 {
+/// An explicit `draft_max_tokens` wins; otherwise native MTP drafts the depth
+/// the package declares, or the runtime default.
+fn resolved_draft_max_tokens(
+    native_mtp_enabled: bool,
+    draft_max_tokens: u32,
+    package_draft_tokens: Option<u32>,
+) -> u32 {
     if native_mtp_enabled && draft_max_tokens == 0 {
-        return skippy_config::local_serving::NATIVE_MTP_DRAFT_TOKENS as u32;
+        return package_draft_tokens
+            .unwrap_or(skippy_config::local_serving::NATIVE_MTP_DRAFT_TOKENS as u32);
     }
     draft_max_tokens
 }
