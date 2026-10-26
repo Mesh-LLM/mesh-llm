@@ -30,7 +30,7 @@ pub(in crate::network::openai::response) async fn relay_probed_response<R: Async
     tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
-    _request_id: RequestId,
+    request_id: RequestId,
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
     served_by: Option<&str>,
@@ -40,6 +40,7 @@ pub(in crate::network::openai::response) async fn relay_probed_response<R: Async
         tcp_stream,
         reader,
         probe.clone(),
+        request_id,
         retry_policy,
         response_adapter,
         served_by,
@@ -62,10 +63,19 @@ pub(in crate::network::openai::response) async fn relay_probed_response<R: Async
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await;
         }
-        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
+        return relay_error_response(
+            tcp_stream,
+            reader,
+            probe,
+            served_by,
+            route_observer,
+            request_id,
+        )
+        .await;
     }
 
     let parsed = try_parse_response_headers(&probe.buffered)?
@@ -78,14 +88,17 @@ pub(in crate::network::openai::response) async fn relay_probed_response<R: Async
         retry_policy,
         served_by,
         route_observer,
+        request_id,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn relay_adapted_response<R: AsyncRead + Unpin>(
     tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
+    request_id: RequestId,
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
     served_by: Option<&str>,
@@ -100,6 +113,7 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await?,
         )),
@@ -111,6 +125,7 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await?,
         )),
@@ -122,6 +137,7 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await?,
         )),
@@ -133,6 +149,7 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await?,
         )),
@@ -144,6 +161,7 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await?,
         )),
@@ -155,6 +173,7 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await?,
         )),
