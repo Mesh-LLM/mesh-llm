@@ -1187,6 +1187,10 @@ async fn clean_stop_still_demotes_then_evicts() {
     peer.serving_models = vec!["LiveModel-Q4_K_M".to_string()];
     peer.hosted_models = vec!["LiveModel-Q4_K_M".to_string()];
     peer.hosted_models_known = true;
+    // This guard describes a peer known only through bridges. The shared
+    // fixture defaults `admitted` to true, which would make it a directly
+    // admitted peer - a record a bridge may no longer rewrite (#2213).
+    peer.admitted = false;
     node.insert_test_peer(peer).await;
 
     let addr = EndpointAddr {

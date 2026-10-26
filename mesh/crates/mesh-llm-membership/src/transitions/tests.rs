@@ -159,14 +159,18 @@ fn direct_admission_promotes_transitive_peer_and_clears_policy_rejection() {
 }
 
 #[test]
-fn transitive_serving_update_reports_count_without_renewing_direct_proof() {
+fn transitive_serving_update_preserves_live_direct_state_and_proof() {
     let mut state = MembershipState::default();
     let mut ann = test_announcement(None);
     let (direct, count) = state.insert_new_direct_peer(
         ann.addr.id,
         ann.addr.clone(),
         &ann,
-        OwnershipSummary::default(),
+        OwnershipSummary {
+            owner_id: Some("direct-owner".into()),
+            verified: true,
+            ..Default::default()
+        },
     );
     assert_eq!(count, 1);
     ann.serving_models.push("model".into());
@@ -178,8 +182,10 @@ fn transitive_serving_update_reports_count_without_renewing_direct_proof() {
     else {
         panic!("expected update")
     };
-    assert!(changed);
-    assert_eq!(admitted_count, Some(1));
+    assert!(!changed);
+    assert_eq!(admitted_count, None);
+    assert_eq!(peer.serving_models, direct.serving_models);
+    assert_eq!(peer.owner_summary, direct.owner_summary);
     assert_eq!(peer.last_seen, direct.last_seen);
     assert!(peer.is_admitted());
 }
