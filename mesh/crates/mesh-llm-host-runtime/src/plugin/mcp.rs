@@ -29,6 +29,9 @@ mod list_cache_metadata;
 mod result_cache;
 mod tool_dispatch;
 
+#[cfg(test)]
+mod session_isolation_tests;
+
 use external_mcp::ExternalMcpPool;
 
 #[derive(Clone, Default)]
@@ -69,16 +72,30 @@ impl PluginRpcBridge for RoutedBridge {
 }
 
 impl ActiveBridge {
-    async fn set_peer(&self, peer: Peer<RoleServer>) {
+    /// Record the MCP session that owns the plugin invocation now in flight.
+    ///
+    /// Only handlers that forward work to a plugin may bind. Connect-time and
+    /// read-only handlers must not, otherwise any client that merely completes a
+    /// handshake becomes the destination for callbacks another client caused.
+    async fn bind_invocation(&self, peer: Peer<RoleServer>) {
         *self.peer.lock().await = Some(peer);
     }
 
+    /// Resolve the callback destination to the bound session, rejecting it once
+    /// that session is gone rather than falling through to another client.
     async fn current_peer(&self) -> Result<Peer<RoleServer>, plugin::proto::ErrorResponse> {
-        self.peer
+        let peer = self
+            .peer
             .lock()
             .await
             .clone()
-            .ok_or_else(|| proto_error::internal("No active MCP client session"))
+            .ok_or_else(|| proto_error::internal("No active MCP client session"))?;
+        if peer.is_transport_closed() {
+            return Err(proto_error::internal(
+                "Originating MCP client session has closed",
+            ));
+        }
+        Ok(peer)
     }
 }
 
@@ -262,8 +279,9 @@ impl PluginMcpServer {
         Ok(manifests)
     }
 
-    async fn refresh_peer(&self, peer: Peer<RoleServer>) {
-        self.bridge.set_peer(peer).await;
+    /// Bind `peer` as the owner of the plugin invocation this handler is serving.
+    async fn bind_invocation(&self, peer: Peer<RoleServer>) {
+        self.bridge.bind_invocation(peer).await;
     }
 
     async fn broadcast_notification<P>(&self, method: &str, params: P)
