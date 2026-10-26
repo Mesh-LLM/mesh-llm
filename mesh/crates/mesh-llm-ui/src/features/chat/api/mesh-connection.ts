@@ -3,7 +3,7 @@ import type { UIMessage, ModelMessage, StreamChunk } from '@tanstack/ai'
 import { EventType } from '@tanstack/ai'
 
 import { env } from '@/lib/env'
-import { ApiError, parseApiErrorBody } from '@/lib/api/errors'
+import { apiErrorReason, ApiError, parseApiErrorBody } from '@/lib/api/errors'
 import { getClientId } from '@/lib/api/client-id'
 import { generateRequestId } from '@/lib/api/request-id'
 import type { ChatSSEEvent } from '@/lib/api/types'
@@ -86,6 +86,17 @@ const MODEL_ROUTE_RETRY_DELAY_MS = 500
 // and adds a safety margin. Keep the compacted retry below 3.5K prompt tokens
 // so it can fit Apple's 4K context window with that margin.
 const CONTEXT_COMPACTION_RETRY_BODY_BYTES = 14_000
+
+/**
+ * A failed chat request keeps the node's own reason as its message: the
+ * management API already words `error.message` for an operator, and the page
+ * renders this message. The status-only fallback is for a body that carried
+ * nothing.
+ */
+function chatRequestError(response: Response, errorBody: string): ApiError {
+  const message = apiErrorReason(errorBody, response.status) ?? `Chat request failed: ${response.status}`
+  return new ApiError(response.status, errorBody, message)
+}
 
 function isModelRouteNotFound(status: number, body: string): boolean {
   if (status !== 404) return false
@@ -282,7 +293,7 @@ async function* runConnect(
         const retryAllowed = await waitForModelRouteRetry(abortSignal)
         if (abortSignal?.aborted) return
         if (!retryAllowed) {
-          throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+          throw chatRequestError(response, errorBody)
         }
         continue
       }
@@ -303,7 +314,7 @@ async function* runConnect(
         }
       }
 
-      throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+      throw chatRequestError(response, errorBody)
     }
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return
