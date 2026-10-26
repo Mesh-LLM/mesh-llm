@@ -164,9 +164,7 @@ fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMeta
         );
         tokens[index] = added.content.clone();
         scores[index] = -1000.0;
-        if added.special {
-            token_types[index] = TOKEN_TYPE_CONTROL;
-        }
+        token_types[index] = added_token_type(added);
     }
 
     if let Some(unpadded_vocab) = configured_unpadded_vocab {
@@ -200,6 +198,22 @@ fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMeta
             .map(|token| (token.content, token.id))
             .collect(),
     })
+}
+
+/// Type an added token the way llama.cpp's GGUF converter does. Explicitly
+/// special tokens and `<|...|>` sentinels are CONTROL; other added tokens are
+/// USER_DEFINED so llama.cpp matches them whole instead of splitting the text
+/// into byte-pair pieces.
+fn added_token_type(token: &AddedToken) -> i32 {
+    if token.special || is_sentinel_token(&token.content) {
+        TOKEN_TYPE_CONTROL
+    } else {
+        TOKEN_TYPE_USER_DEFINED
+    }
+}
+
+fn is_sentinel_token(content: &str) -> bool {
+    content.starts_with("<|") && content.ends_with("|>")
 }
 
 #[derive(Debug)]
@@ -557,7 +571,8 @@ mod tests {
                   "<tool_response>": 3,
                   "</tool_response>": 4,
                   "<think>": 5,
-                  "</think>": 6
+                  "</think>": 6,
+                  "<|fim_prefix|>": 7
                 },
                 "merges": []
               },
@@ -568,13 +583,14 @@ mod tests {
                 {"id": 3, "content": "<tool_response>", "special": false},
                 {"id": 4, "content": "</tool_response>", "special": false},
                 {"id": 5, "content": "<think>", "special": false},
-                {"id": 6, "content": "</think>", "special": false}
+                {"id": 6, "content": "</think>", "special": false},
+                {"id": 7, "content": "<|fim_prefix|>", "special": false}
               ]
             }"#,
         )
         .unwrap();
         let config: Value =
-            serde_json::from_str(r#"{"model_type":"qwen3","vocab_size":7}"#).unwrap();
+            serde_json::from_str(r#"{"model_type":"qwen3","vocab_size":8}"#).unwrap();
 
         let metadata = read_byte_level_bpe(&tokenizer, &config).unwrap();
 
@@ -586,9 +602,14 @@ mod tests {
         assert_eq!(metadata.tokens[4], "</tool_response>");
         assert_eq!(metadata.tokens[5], "<think>");
         assert_eq!(metadata.tokens[6], "</think>");
-        assert!(metadata.token_types[1..].iter().all(|token_type| {
-            *token_type == TOKEN_TYPE_USER_DEFINED
-        }));
+        assert!(
+            metadata.token_types[1..7]
+                .iter()
+                .all(|token_type| { *token_type == TOKEN_TYPE_USER_DEFINED })
+        );
+        // A non-special `<|...|>` sentinel stays CONTROL, matching the converter.
+        assert_eq!(metadata.tokens[7], "<|fim_prefix|>");
+        assert_eq!(metadata.token_types[7], TOKEN_TYPE_CONTROL);
     }
 
     #[test]
