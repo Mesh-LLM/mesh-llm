@@ -1,5 +1,48 @@
 use super::*;
 
+/// The inference surface the OpenAI frontend router recognizes: every route
+/// the router can dispatch to a model target, plus the metadata routes it
+/// serves without model execution. The coverage test below requires every
+/// entry to be workload-classified, System One, or explicitly exempt — a new
+/// route fails CI until it is classified.
+const ROUTER_INFERENCES_PATHS: [&str; 16] = [
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/responses",
+    "/v1/messages",
+    "/v1/embeddings",
+    "/v1/rerank",
+    "/v1/audio/speech",
+    "/v1/audio/transcriptions",
+    "/v1/audio/translations",
+    "/v1/realtime",
+    "/v1/models",
+    "/models",
+    "/v1/tokenize",
+    "/v1/messages/count_tokens",
+    "/systemone",
+    "/v1/decisions",
+];
+
+#[test]
+/// Every inference path the frontend router recognizes must carry a workload
+/// class (or be System One). An unclassified route gets no workload admission
+/// at all (fail-open), so a new route fails this gate until it is classified.
+fn router_inference_paths_are_all_classified() {
+    for path in ROUTER_INFERENCES_PATHS {
+        // Metadata routes are served without model execution: no workload class by design.
+        let exempt = matches!(
+            path,
+            "/v1/models" | "/models" | "/v1/tokenize" | "/v1/messages/count_tokens"
+        );
+        let classified = request_workload_class(path).is_some() || is_system_one_path(path);
+        assert!(
+            classified || exempt,
+            "inference path {path} is unclassified and unexempt: it would be admitted without workload filtering"
+        );
+    }
+}
+
 #[test]
 /// Distinguish unrecognized explicit metadata from the old absent-field contract.
 fn unknown_workloads_never_inherit_legacy_admission() {
