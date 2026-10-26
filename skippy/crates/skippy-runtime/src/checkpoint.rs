@@ -465,6 +465,46 @@ mod tests {
         file.write_all(&1.0_f32.to_le_bytes()).unwrap();
     }
 
+    fn write_checkpoint_beside_a_named_gguf(dir: &Path, index_only: bool) -> std::path::PathBuf {
+        std::fs::write(dir.join("config.json"), r#"{"model_type":"llama"}"#).unwrap();
+        if index_only {
+            std::fs::write(dir.join("model.safetensors.index.json"), "{}").unwrap();
+        } else {
+            std::fs::write(dir.join("model.safetensors"), b"weights").unwrap();
+        }
+        let gguf = dir.join("b.gguf");
+        std::fs::write(&gguf, b"GGUF").unwrap();
+        gguf
+    }
+
+    #[test]
+    fn a_named_gguf_is_not_attributed_to_the_checkpoint_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let gguf = write_checkpoint_beside_a_named_gguf(dir.path(), false);
+
+        assert!(
+            is_safetensors_checkpoint(dir.path()),
+            "a checkpoint directory still probes"
+        );
+        assert!(
+            is_safetensors_checkpoint(&dir.path().join("model.safetensors")),
+            "a SafeTensors file still probes its checkpoint"
+        );
+        assert!(
+            !is_safetensors_checkpoint(&gguf),
+            "a path naming a .gguf must be served from that file, not the checkpoint in its directory"
+        );
+    }
+
+    #[test]
+    fn a_named_gguf_ignores_an_index_only_checkpoint_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let gguf = write_checkpoint_beside_a_named_gguf(dir.path(), true);
+
+        assert!(is_safetensors_checkpoint(dir.path()));
+        assert!(!is_safetensors_checkpoint(&gguf));
+    }
+
     #[test]
     fn canonical_quantization_catalog_round_trips() {
         assert_eq!(CheckpointQuantization::VALID_NAMES.len(), 36);
