@@ -2,7 +2,9 @@ use super::*;
 
 /// The inference surface the OpenAI frontend router recognizes: every route
 /// the router can dispatch to a model target, plus the metadata routes it
-/// serves without model execution.
+/// serves without model execution. The coverage test below requires every
+/// entry to be workload-classified, System One, or explicitly exempt — a new
+/// route fails CI until it is classified.
 const ROUTER_INFERENCES_PATHS: [&str; 16] = [
     "/v1/chat/completions",
     "/v1/completions",
@@ -27,17 +29,15 @@ const ROUTER_INFERENCES_PATHS: [&str; 16] = [
 /// class (or be System One). An unclassified route gets no workload admission
 /// at all (fail-open), so a new route fails this gate until it is classified.
 fn router_inference_paths_are_all_classified() {
-    // Metadata routes served without model execution: no workload class by design.
-    let exempt_metadata = [
-        "/v1/models",
-        "/models",
-        "/v1/tokenize",
-        "/v1/messages/count_tokens",
-    ];
     for path in ROUTER_INFERENCES_PATHS {
+        // Metadata routes are served without model execution: no workload class by design.
+        let exempt = matches!(
+            path,
+            "/v1/models" | "/models" | "/v1/tokenize" | "/v1/messages/count_tokens"
+        );
         let classified = request_workload_class(path).is_some() || is_system_one_path(path);
         assert!(
-            classified || exempt_metadata.contains(&path),
+            classified || exempt,
             "inference path {path} is unclassified and unexempt: it would be admitted without workload filtering"
         );
     }
