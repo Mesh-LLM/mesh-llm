@@ -1,5 +1,8 @@
-use crate::{NativeRuntimeManifest, manifest::NATIVE_RUNTIME_MANIFEST_FILE};
-use anyhow::{Context, Result};
+use crate::{
+    NativeRuntimeManifest,
+    manifest::{NATIVE_RUNTIME_MANIFEST_FILE, validate_runtime_identity},
+};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -110,6 +113,38 @@ impl NativeRuntimeCache {
 
     pub fn runtime_dir(&self, release_version: &str, native_runtime_id: &str) -> PathBuf {
         self.root.join(release_version).join(native_runtime_id)
+    }
+
+    /// Resolve a cache entry that a destructive operation is about to create or
+    /// delete. Both identity fields must be a single path component, and an
+    /// existing entry must still resolve below the canonical cache root.
+    fn checked_runtime_dir(
+        &self,
+        release_version: &str,
+        native_runtime_id: &str,
+    ) -> Result<PathBuf> {
+        validate_runtime_identity(release_version)
+            .with_context(|| format!("native runtime cache release_version {release_version:?}"))?;
+        validate_runtime_identity(native_runtime_id)
+            .with_context(|| format!("native runtime cache identity {native_runtime_id:?}"))?;
+        let target = self.root.join(release_version).join(native_runtime_id);
+        let Ok(root) = self.root.canonicalize() else {
+            return Ok(target);
+        };
+        if target.symlink_metadata().is_ok() {
+            let canonical = target.canonicalize().with_context(|| {
+                format!(
+                    "canonicalize native runtime cache entry {}",
+                    target.display()
+                )
+            })?;
+            if !canonical.starts_with(&root) {
+                bail!(
+                    "native runtime cache entry escapes its root: {release_version}/{native_runtime_id}"
+                );
+            }
+        }
+        Ok(target)
     }
 
     pub fn installed(&self) -> Result<Vec<InstalledNativeRuntime>> {
@@ -270,7 +305,8 @@ impl NativeRuntimeCache {
             .release_version
             .as_deref()
             .unwrap_or("unknown");
-        let target = self.runtime_dir(release_version, manifest.runtime.native_runtime_id());
+        let target =
+            self.checked_runtime_dir(release_version, manifest.runtime.native_runtime_id())?;
         let collision = || {
             format!(
                 "refusing runtime cache collision: {} -> {}; preserve the existing entry and import into a separate destination",
@@ -306,7 +342,7 @@ impl NativeRuntimeCache {
     }
 
     pub fn remove(&self, release_version: &str, native_runtime_id: &str) -> Result<bool> {
-        let dir = self.runtime_dir(release_version, native_runtime_id);
+        let dir = self.checked_runtime_dir(release_version, native_runtime_id)?;
         if !dir.exists() {
             return Ok(false);
         }

@@ -153,9 +153,8 @@ impl NativeRuntimeReleaseManifest {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.release_version.trim().is_empty() {
-            bail!("native runtime release manifest release_version is empty");
-        }
+        validate_runtime_identity(&self.release_version)
+            .context("native runtime release manifest has an invalid release_version")?;
         if self.skippy_abi.trim().is_empty() {
             bail!("native runtime release manifest skippy_abi is empty");
         }
@@ -175,8 +174,15 @@ impl NativeRuntimeReleaseManifest {
 }
 
 fn validate_artifact(artifact: &NativeRuntimeArtifact) -> Result<()> {
-    if artifact.id.trim().is_empty() {
-        bail!("native runtime artifact id is empty");
+    validate_runtime_identity(&artifact.id)
+        .with_context(|| format!("native runtime artifact {} has an invalid id", artifact.id))?;
+    if let Some(release_version) = &artifact.release_version {
+        validate_runtime_identity(release_version).with_context(|| {
+            format!(
+                "native runtime artifact {} has an invalid release_version",
+                artifact.id
+            )
+        })?;
     }
     if artifact.skippy_abi.trim().is_empty() {
         bail!(
@@ -274,6 +280,25 @@ fn checked_runtime_path(root: &Path, relative: &str) -> Result<PathBuf> {
         bail!("native runtime path is not a file: {}", path.display());
     }
     Ok(path)
+}
+
+/// Validate an identity that becomes exactly one path component of an install
+/// or cache location, so it can never walk out of the root that holds it.
+pub fn validate_runtime_identity(value: &str) -> Result<()> {
+    if value.is_empty() {
+        bail!("must not be empty");
+    }
+    if value.trim() != value {
+        bail!("must not have surrounding whitespace: {value:?}");
+    }
+    if value.contains(['/', '\\', ':', '\0']) {
+        bail!("must not contain a path separator or drive prefix: {value:?}");
+    }
+    let mut components = Path::new(value).components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        bail!("must be exactly one path component: {value:?}");
+    }
+    Ok(())
 }
 
 fn validate_runtime_path(relative: &str) -> Result<()> {
@@ -666,7 +691,9 @@ mod tests {
         for identity in ["meshllm-native-linux-x86_64-cpu", "runtime.a-1"] {
             identity_artifact(identity)
                 .validate()
-                .unwrap_or_else(|error| panic!("native runtime id {identity:?} must be valid: {error}"));
+                .unwrap_or_else(|error| {
+                    panic!("native runtime id {identity:?} must be valid: {error}")
+                });
         }
     }
 
