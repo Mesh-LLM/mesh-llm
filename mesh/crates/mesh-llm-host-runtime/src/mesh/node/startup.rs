@@ -22,6 +22,17 @@ pub(super) async fn startup_secret_key(role: &NodeRole) -> Result<SecretKey> {
     }
 }
 
+/// Where the node saves a renewed ownership certificate. Renewal still works
+/// without one; the renewed certificate just is not written for `mesh-llm auth`
+/// to read, which is worth a warning.
+pub(super) fn saved_owner_attestation_path() -> Option<std::path::PathBuf> {
+    default_node_ownership_path()
+        .inspect_err(|error| {
+            tracing::warn!("renewed ownership certificates will not be saved to disk: {error:#}");
+        })
+        .ok()
+}
+
 pub(crate) fn startup_transport_config() -> iroh::endpoint::QuicTransportConfig {
     // We only raise the concurrent bidi-stream ceiling; everything else uses
     // iroh's tuned defaults.

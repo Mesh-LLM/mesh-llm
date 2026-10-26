@@ -27,11 +27,8 @@ const DIRECT_RESCUE_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 /// Writes a renewed ownership certificate where `mesh-llm auth` reads it. The
 /// running node already uses it, so a failed write is only logged.
-fn save_renewed_owner_attestation(renewed: &super::SignedNodeOwnership) {
-    let saved = super::default_node_ownership_path()
-        .map_err(anyhow::Error::from)
-        .and_then(|path| super::save_node_ownership(&path, renewed).map_err(anyhow::Error::from));
-    if let Err(error) = saved {
+fn save_renewed_owner_attestation(path: &std::path::Path, renewed: &super::SignedNodeOwnership) {
+    if let Err(error) = super::save_node_ownership(path, renewed) {
         tracing::warn!("could not save the renewed ownership certificate: {error:#}");
     }
 }
@@ -530,7 +527,9 @@ impl Node {
                     expires_at_unix_ms = renewed.claim.expires_at_unix_ms,
                     "renewed this node's ownership certificate"
                 );
-                save_renewed_owner_attestation(&renewed);
+                if let Some(path) = &self.owner_attestation_path {
+                    save_renewed_owner_attestation(path, &renewed);
+                }
             }
             Ok(None) => {}
             Err(error) => tracing::warn!(

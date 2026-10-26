@@ -4,15 +4,21 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 use serde_json::json;
 use std::net::SocketAddr;
 
+mod membership;
 mod routing_telemetry;
 mod startup;
+
+pub(crate) use membership::{
+    LocalEndpoints, MembershipEntry, MembershipNodeConfig, MeshMemberships,
+    membership_token_endpoint,
+};
 
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
 use startup::{
-    advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime, startup_secret_key,
-    wait_for_endpoint_online,
+    advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime,
+    saved_owner_attestation_path, startup_secret_key, wait_for_endpoint_online,
 };
 pub(crate) use startup::{stamp_plugin_event_source, startup_transport_config};
 
@@ -161,6 +167,10 @@ pub struct Node {
     pub(crate) plugin_manager: Arc<Mutex<Option<crate::plugin::PluginManager>>>,
     pub(crate) display_name: Arc<Mutex<Option<String>>>,
     pub(crate) owner_attestation: Arc<Mutex<Option<SignedNodeOwnership>>>,
+    /// Where a renewed ownership certificate is saved for `mesh-llm auth`.
+    /// `None` for a node whose certificate is not kept on disk: a mesh
+    /// membership's, since the file is the main node's, and a test node's.
+    pub(crate) owner_attestation_path: Option<std::path::PathBuf>,
     pub(crate) release_attestation: Arc<Mutex<Option<crate::ReleaseBuildAttestation>>>,
     pub(crate) release_attestation_summary: Arc<Mutex<crate::ReleaseAttestationSummary>>,
     pub(crate) owner_summary: Arc<Mutex<OwnershipSummary>>,
@@ -209,6 +219,13 @@ pub struct Node {
     /// Set during runtime initialization; None when running outside the control loop.
     pub(crate) model_intent_tx:
         Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<crate::runtime::ModelIntent>>>>,
+    /// Further meshes this node serves its models into (`node::membership`).
+    pub(crate) memberships: MeshMemberships,
+    /// This node's endpoint and its memberships', shared among them: none may
+    /// peer with another.
+    pub(crate) local_endpoints: LocalEndpoints,
+    /// A membership node: it keeps to the one mesh it was started for.
+    pub(crate) is_membership: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -913,6 +930,10 @@ impl Node {
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            memberships: MeshMemberships::default(),
+            owner_attestation_path: saved_owner_attestation_path(),
+            local_endpoints: LocalEndpoints::default(),
+            is_membership: false,
         };
 
         node.maybe_start_control_listener(
@@ -1099,6 +1120,10 @@ impl Node {
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            memberships: MeshMemberships::default(),
+            owner_attestation_path: None,
+            local_endpoints: LocalEndpoints::default(),
+            is_membership: false,
         }
     }
 
@@ -1753,9 +1778,14 @@ impl Node {
         }
     }
 
-    /// Re-gossip our state to all connected peers.
+    /// Re-gossip our state to all connected peers, in this mesh and in every
+    /// mesh this node is a member of.
     /// Call after changing assigned/hosted state, role, or configured models.
     pub async fn regossip(&self) {
+        self.regossip_with_memberships().await;
+    }
+
+    async fn regossip_connections(&self) {
         let conns: Vec<(EndpointId, Connection)> = {
             let state = self.state.lock().await;
             state

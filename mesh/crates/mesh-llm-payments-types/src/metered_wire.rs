@@ -1,4 +1,4 @@
-//! Explicitly negotiated token-metered billing: a flat 1-sat deposit, then one final invoice for the backend-reported usage.
+//! Explicitly negotiated token-metered billing: a flat deposit, then one final invoice for the backend-reported usage.
 //! Neither side may downgrade to a retired payment protocol.
 
 use anyhow::{Result, ensure};
@@ -21,10 +21,10 @@ pub const HTTP_UPGRADE: &[u8] =
 /// an unversioned (pre-v3) or different paid seller cannot be paid by it.
 pub const PAYMENT_PROTOCOL: u32 = 3;
 
-/// Admission terms are agreed before any backend work. The deposit is a
-/// flat 1 sat proving the buyer can pay; it is applied against the final bill,
-/// never an extra fee or a reservation. Output is
-/// always post-paid from the backend's reported usage.
+/// Admission terms are agreed before any backend work. The deposit is the
+/// seller's flat configured amount (default 1 sat) proving the buyer can pay;
+/// it is applied against the final bill, never an extra fee or a reservation.
+/// Output is always post-paid from the backend's reported usage.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AdmissionTerms {
@@ -32,9 +32,9 @@ pub struct AdmissionTerms {
     pub model: String,
     pub pricing: Pricing,
     pub deposit_msat: u64,
-    /// The seller's minimum payment: the deposit (when one is asked) and the
-    /// amount any smaller positive final remainder is raised to. Omitted at
-    /// the 1-sat default so older peers keep parsing these terms.
+    /// The seller's minimum payment: the amount any smaller positive final
+    /// remainder is raised to. Omitted at the 1-sat default so older peers
+    /// keep parsing these terms.
     #[serde(
         default = "default_payment_floor",
         skip_serializing_if = "is_default_payment_floor"

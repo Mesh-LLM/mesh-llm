@@ -2,7 +2,7 @@
 use super::*;
 const INTERNAL: &str = "Falcon-H1-1.5B-Instruct-Q4_K_M";
 const PUBLIC: &str = "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M";
-fn duplicate_descriptor(model: &str) -> mesh::ServedModelDescriptor {
+pub(super) fn duplicate_descriptor(model: &str) -> mesh::ServedModelDescriptor {
     mesh::ServedModelDescriptor {
         identity: mesh::ServedModelIdentity {
             model_name: model.to_owned(),
@@ -13,7 +13,7 @@ fn duplicate_descriptor(model: &str) -> mesh::ServedModelDescriptor {
         ..Default::default()
     }
 }
-fn duplicate_peer(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
+pub(super) fn duplicate_peer(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
     mesh::PeerInfo {
         id: peer_id,
         addr: iroh::EndpointAddr {
