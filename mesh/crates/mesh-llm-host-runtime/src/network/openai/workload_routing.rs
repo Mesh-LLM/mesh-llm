@@ -34,6 +34,7 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/chat/completions"
         | "/v1/completions"
         | "/v1/responses"
+        | "/v1/messages"
         | "/v1/audio/transcriptions"
         | "/v1/audio/translations" => Some(ModelWorkloadClass::CausalGeneration),
         "/v1/embeddings" => Some(ModelWorkloadClass::Embedding),
