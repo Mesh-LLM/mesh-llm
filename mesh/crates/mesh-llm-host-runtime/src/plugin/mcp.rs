@@ -29,6 +29,9 @@ mod list_cache_metadata;
 mod result_cache;
 mod tool_dispatch;
 
+#[cfg(test)]
+mod session_isolation_tests;
+
 use external_mcp::ExternalMcpPool;
 
 #[derive(Clone, Default)]
