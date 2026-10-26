@@ -826,6 +826,8 @@ async fn test_read_http_request_expect_100_continue() {
     assert!(!raw.contains("Expect: 100-continue"));
     assert!(raw.contains("Connection: close"));
 }
+/// Keeps only the first HTTP request when a client pipelines another request
+/// on the same connection, then closes the connection to reject the remainder.
 #[tokio::test]
 async fn test_read_http_request_truncates_pipelined_follow_up_bytes() {
     let request = read_request_from_parts(vec![
@@ -840,12 +842,8 @@ async fn test_read_http_request_truncates_pipelined_follow_up_bytes() {
     assert!(raw.contains("Connection: close\r\n\r\n"));
 }
 
-/// `probe_http_response_local` uses a much longer timeout (10 min)
-/// than `probe_http_response` (5 min), because local prefill can
-/// legitimately take minutes under load.
-///
-/// This test sends a response after a 2s delay and verifies that
-/// `probe_http_response_local` waits for it (well within its 10-min
+/// Enables both Mesh and Skippy hook flags in an OpenAI chat request while
+/// keeping the rewritten body and `Content-Length` consistent.
 #[test]
 fn test_inject_skippy_hooks_enabled() {
     let mut raw = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 25\r\n\r\n{\"model\":\"auto\",\"n\":1}".to_vec();
