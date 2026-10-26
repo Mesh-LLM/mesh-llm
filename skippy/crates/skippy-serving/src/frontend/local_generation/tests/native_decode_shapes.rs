@@ -4,6 +4,106 @@ use super::*;
 use crate::runtime_state::RuntimeIterationBatchRequest;
 use skippy_runtime::IterationBatchPhase;
 
+pub(super) fn prefill_without_intermediate_sampling(
+    runtime: &mut RuntimeState,
+    session: &str,
+    tokens: &[i32],
+    sample_last: bool,
+) -> Result<Option<i32>> {
+    let sampling = SamplingConfig::default();
+    let output = runtime.iteration_batch_sampled(&[RuntimeIterationBatchRequest {
+        session_id: session,
+        token_ids: tokens,
+        positions: &[],
+        sampling: sample_last.then_some(&sampling),
+        input: None,
+        sample_last,
+        phase: IterationBatchPhase::Prefill,
+    }])?;
+    Ok(output.samples.first().map(|sample| sample.predicted_token))
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_interleaved_prefills_preserve_concurrent_decode() -> Result<()> {
+    let prompts = [
+        (1..=64).collect::<Vec<_>>(),
+        (1..=64).rev().collect::<Vec<_>>(),
+    ];
+    let run = |interleaved: bool, batched_decode: bool| -> Result<Vec<Vec<i32>>> {
+        let (backend, _) = recurrent_test_backend_with_lanes(
+            "interleaved-prefill-shape",
+            "interleaved-prefill-shape",
+            256,
+            (32, 32, 2),
+            8,
+            512,
+            None,
+        )?;
+        let mut runtime = backend.runtime.lock().unwrap();
+        let sessions = ["interleaved-prefill-0", "interleaved-prefill-1"];
+        let mut first = [0; 2];
+        let chunks = if interleaved {
+            [
+                (0, 0, 32),
+                (0, 32, 30),
+                (1, 0, 32),
+                (0, 62, 2),
+                (1, 32, 30),
+                (1, 62, 2),
+            ]
+        } else {
+            [
+                (0, 0, 32),
+                (0, 32, 30),
+                (0, 62, 2),
+                (1, 0, 32),
+                (1, 32, 30),
+                (1, 62, 2),
+            ]
+        };
+        for (lane, offset, count) in chunks {
+            if let Some(token) = prefill_without_intermediate_sampling(
+                &mut runtime,
+                sessions[lane],
+                &prompts[lane][offset..offset + count],
+                offset == 62,
+            )? {
+                first[lane] = token;
+            }
+        }
+        if batched_decode {
+            return Ok(long_decode(&mut runtime, &sessions, &first, true)?.tokens);
+        }
+        let mut outputs = first.map(|token| vec![token]);
+        for lane in 0..2 {
+            for _ in 1..8 {
+                let input = [*outputs[lane].last().unwrap()];
+                outputs[lane].extend(iterate(
+                    &mut runtime,
+                    &[sessions[lane]],
+                    &[&input],
+                    IterationBatchPhase::Decode,
+                )?);
+            }
+        }
+        Ok(outputs.into_iter().collect())
+    };
+
+    let serial = run(false, false)?;
+    let interleaved = run(true, false)?;
+    let serial_batched = run(false, true)?;
+    let interleaved_batched = run(true, true)?;
+    assert_eq!(interleaved, serial, "prefill order changed serial decode");
+    assert_eq!(serial_batched[0], serial[0][..3], "batching changed lane 0");
+    assert_eq!(serial_batched[1], serial[1], "batching changed lane 1");
+    assert_eq!(
+        interleaved_batched, serial_batched,
+        "interleaved prefills changed batched decode"
+    );
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
 fn native_prefill_boundaries_preserve_decode_tokens() -> Result<()> {
@@ -11,18 +111,27 @@ fn native_prefill_boundaries_preserve_decode_tokens() -> Result<()> {
     // Every arm starts in a fresh context at physical KV position zero. Only
     // the final prefill chunk boundaries differ, as they can on cache replay.
     let expected = continuation_after_prefill_chunks(&[32, 32])?;
-    for chunks in [&[32, 28, 4][..], &[32, 31, 1][..]] {
+    for chunks in [&[32, 28, 4][..], &[32, 30, 2][..], &[32, 31, 1][..]] {
         let actual = continuation_after_prefill_chunks(chunks)?;
         assert_eq!(
             actual, expected,
             "fresh native contexts; prefill chunks {chunks:?} versus [32, 32]"
         );
     }
+    let expected_extended = continuation_after_prefill_chunks(&[32, 32, 4])?;
+    for chunks in [&[32, 32, 2, 2][..], &[32, 30, 2, 2, 2][..]] {
+        let actual = continuation_after_prefill_chunks(chunks)?;
+        assert_eq!(
+            actual, expected_extended,
+            "fresh native contexts; prefill chunks {chunks:?} versus [32, 32, 4]"
+        );
+    }
     Ok(())
 }
 
 fn continuation_after_prefill_chunks(chunks: &[usize]) -> Result<Vec<i32>> {
-    assert_eq!(chunks.iter().sum::<usize>(), 64);
+    let token_count = chunks.iter().sum::<usize>();
+    assert!(token_count == 64 || token_count == 68);
     let (backend, _) = recurrent_test_backend_with_lanes(
         "prefill-shapes",
         "prefill-shapes",
@@ -33,17 +142,19 @@ fn continuation_after_prefill_chunks(chunks: &[usize]) -> Result<Vec<i32>> {
         None,
     )?;
     let mut runtime = backend.runtime.lock().unwrap();
-    let prompt: Vec<i32> = (1..=64).collect();
+    let prompt: Vec<i32> = (1..=token_count as i32).collect();
     let mut offset = 0;
     let mut predicted = None;
     for &count in chunks {
-        let output = iterate(
+        let output = prefill_without_intermediate_sampling(
             &mut runtime,
-            &["prefill-shape"],
-            &[&prompt[offset..offset + count]],
-            IterationBatchPhase::Prefill,
+            "prefill-shape",
+            &prompt[offset..offset + count],
+            offset + count == prompt.len(),
         )?;
-        predicted = Some(output[0]);
+        if let Some(token) = output {
+            predicted = Some(token);
+        }
         offset += count;
     }
     let mut output = vec![predicted.expect("nonempty prefill")];
@@ -52,6 +163,60 @@ fn continuation_after_prefill_chunks(chunks: &[usize]) -> Result<Vec<i32>> {
         output.extend(iterate(
             &mut runtime,
             &["prefill-shape"],
+            &[&input],
+            IterationBatchPhase::Decode,
+        )?);
+    }
+    Ok(output)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_intermediate_sampling_preserves_prefill_state() -> Result<()> {
+    let sampled = continuation_after_intermediate_sampling(true)?;
+    let unsampled = continuation_after_intermediate_sampling(false)?;
+    assert_eq!(
+        sampled, unsampled,
+        "sampling at a 64-token prefill boundary changed the 68-token continuation"
+    );
+    Ok(())
+}
+
+fn continuation_after_intermediate_sampling(sample_at_64: bool) -> Result<Vec<i32>> {
+    let (backend, _) = recurrent_test_backend_with_lanes(
+        "intermediate-sampling",
+        "intermediate-sampling",
+        256,
+        (32, 32, 2),
+        8,
+        512,
+        None,
+    )?;
+    let mut runtime = backend.runtime.lock().unwrap();
+    let prompt: Vec<i32> = (1..=68).collect();
+    let mut first = None;
+    for (start, end, sample_last) in [
+        (0, 32, false),
+        (32, 62, false),
+        (62, 64, sample_at_64),
+        (64, 66, false),
+        (66, 68, true),
+    ] {
+        if let Some(token) = prefill_without_intermediate_sampling(
+            &mut runtime,
+            "intermediate-sampling",
+            &prompt[start..end],
+            sample_last,
+        )? {
+            first = Some(token);
+        }
+    }
+    let mut output = vec![first.expect("final chunk sampled")];
+    for _ in 0..2 {
+        let input = [*output.last().unwrap()];
+        output.extend(iterate(
+            &mut runtime,
+            &["intermediate-sampling"],
             &[&input],
             IterationBatchPhase::Decode,
         )?);
@@ -136,11 +301,11 @@ fn native_followup(
     let mut runtime = backend.runtime.lock().unwrap();
     let mut offset = 0;
     for &count in prefix_chunks {
-        iterate(
+        prefill_without_intermediate_sampling(
             &mut runtime,
-            &["followup"],
-            &[&prompt[offset..offset + count]],
-            IterationBatchPhase::Prefill,
+            "followup",
+            &prompt[offset..offset + count],
+            false,
         )?;
         offset += count;
     }
@@ -150,12 +315,7 @@ fn native_followup(
         FollowupLayout::OccupiedLane | FollowupLayout::RestoredPrefix
     ) {
         for chunk in (1..=64).rev().collect::<Vec<_>>().chunks(32) {
-            iterate(
-                &mut runtime,
-                &["other"],
-                &[chunk],
-                IterationBatchPhase::Prefill,
-            )?;
+            prefill_without_intermediate_sampling(&mut runtime, "other", chunk, false)?;
         }
     }
     if matches!(layout, FollowupLayout::RestoredPrefix) {

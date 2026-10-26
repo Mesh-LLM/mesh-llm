@@ -1,23 +1,23 @@
-From 75a9b1c7b0608aa74a82cd97f2b7fac3685f96f8 Mon Sep 17 00:00:00 2001
+From aa6285607a82eecddbdf9158ef131235f7878fc1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Tue, 20 Oct 2026 03:03:07 +1100
+Date: Mon, 26 Oct 2026 16:03:51 +1100
 Subject: [PATCH] perf(gpu): skip masked KV work in CUDA and Metal attention
 
 ---
  ggml/src/ggml-cpu/ops.cpp                     |  10 +-
- ggml/src/ggml-cuda/fattn-common.cuh           |  71 +------
+ ggml/src/ggml-cuda/fattn-common.cuh           |  71 +-----
  ggml/src/ggml-cuda/fattn-mask.cuh             |  62 ++++++
  ggml/src/ggml-cuda/fattn-mma-f16.cuh          |  18 +-
  ggml/src/ggml-cuda/fattn-tile.cuh             |   6 +-
- ggml/src/ggml-cuda/fattn-vec.cuh              |  26 ++-
- .../ggml-metal-attention-dispatch.h           |  22 +++
+ ggml/src/ggml-cuda/fattn-vec.cuh              |  40 +++-
+ .../ggml-metal-attention-dispatch.h           |  22 ++
  ggml/src/ggml-metal/ggml-metal-ops.cpp        |   6 +-
  ggml/src/ggml-metal/kernels/fa_aux.metal      |  11 +-
  tests/CMakeLists.txt                          |   6 +
  tests/test-backend-ops.cpp                    |   3 +
- tests/test-flash-attn-kv-bounds.h             | 180 ++++++++++++++++++
+ tests/test-flash-attn-kv-bounds.h             | 208 ++++++++++++++++++
  tests/test-metal-attention-dispatch.cpp       |  49 +++++
- 13 files changed, 387 insertions(+), 83 deletions(-)
+ 13 files changed, 428 insertions(+), 84 deletions(-)
  create mode 100644 ggml/src/ggml-cuda/fattn-mask.cuh
  create mode 100644 ggml/src/ggml-metal/ggml-metal-attention-dispatch.h
  create mode 100644 tests/test-flash-attn-kv-bounds.h
@@ -324,7 +324,7 @@ index b5ea915e1..8da1efe43 100644
              flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap, oob_check>
                  (Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp,
 diff --git a/ggml/src/ggml-cuda/fattn-vec.cuh b/ggml/src/ggml-cuda/fattn-vec.cuh
-index 57a285565..d06cfbc0f 100644
+index 57a285565..87a69eb2e 100644
 --- a/ggml/src/ggml-cuda/fattn-vec.cuh
 +++ b/ggml/src/ggml-cuda/fattn-vec.cuh
 @@ -248,13 +248,31 @@ static __global__ void flash_attn_ext_vec(
@@ -363,6 +363,34 @@ index 57a285565..d06cfbc0f 100644
          // Calculate KQ tile and keep track of new maximum KQ values:
          float KQ_reg[ncols]; // KQ in registers.
  
+@@ -278,7 +296,10 @@ static __global__ void flash_attn_ext_vec(
+                 }
+ 
+                 if (mask && (ncols == 1 || ic0 + j < int(ne01.z))) {
+-                    sum += slope*__half2float(maskh[j*ne11 + i_KQ]);
++                    const float mask_value = __half2float(maskh[j*ne11 + i_KQ]);
++                    // Masked cache cells may contain NaNs from previous owners.
++                    // Do not let NaN + -inf turn a masked logit into NaN.
++                    sum = mask_value == -INFINITY ? -INFINITY : sum + slope*mask_value;
+                 }
+ 
+                 KQ_max_new[j] = fmaxf(KQ_max_new[j], sum + FATTN_KQ_MAX_OFFSET);
+@@ -323,6 +344,15 @@ static __global__ void flash_attn_ext_vec(
+         for (int k0 = 0; k0 < WARP_SIZE; k0 += V_cols_per_iter) {
+             const int k = threadIdx.y*WARP_SIZE + k0 + (nthreads_V == WARP_SIZE ? 0 : threadIdx.x / nthreads_V);
+ 
++            bool contributes = false;
++#pragma unroll
++            for (int j = 0; j < ncols; ++j) {
++                contributes |= KQ[j*nthreads + k] != 0.0f;
++            }
++            if (!contributes) {
++                continue; // Never multiply a zero weight by stale or uninitialized V data.
++            }
++
+ #ifdef V_DOT2_F32_F16_AVAILABLE
+             half2 KQ_k[ncols];
+ #pragma unroll
 diff --git a/ggml/src/ggml-metal/ggml-metal-attention-dispatch.h b/ggml/src/ggml-metal/ggml-metal-attention-dispatch.h
 new file mode 100644
 index 000000000..49eab36da
@@ -511,10 +539,10 @@ index ba7f7eb4e..391d9a796 100644
      // note: same bytes either way, so a backend that indexes them differently shows it here
 diff --git a/tests/test-flash-attn-kv-bounds.h b/tests/test-flash-attn-kv-bounds.h
 new file mode 100644
-index 000000000..822f56f63
+index 000000000..c41dc26ad
 --- /dev/null
 +++ b/tests/test-flash-attn-kv-bounds.h
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,208 @@
 +#pragma once
 +
 +// Exercise physical KV layouts that arise from unified caches. Each query has
@@ -617,7 +645,35 @@ index 000000000..822f56f63
 +    }
 +};
 +
++// Vacant physical cells in a unified cache can retain non-finite payloads.
++// An invisible cell must not contribute even when K or V contains NaN.
++struct test_flash_attn_masked_nan : public test_flash_attn_kv_bounds {
++    test_flash_attn_masked_nan() :
++        test_flash_attn_kv_bounds(8, 1, 1, GGML_TYPE_F16, false, 1024, 256) {}
++
++    std::string vars() override {
++        return test_flash_attn_kv_bounds::vars() + ",masked_nan=1";
++    }
++
++    void initialize_tensors(ggml_context * ctx) override {
++        test_flash_attn_kv_bounds::initialize_tensors(ctx);
++        for (auto * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
++            if (strcmp(t->name, "k") != 0 && strcmp(t->name, "v") != 0) {
++                continue;
++            }
++            const std::vector<ggml_fp16_t> nan_row(t->ne[0], ggml_fp32_to_fp16(NAN));
++            for (int64_t head = 0; head < t->ne[2]; ++head) {
++                for (int64_t key = 129; key < kv - 515; ++key) {
++                    ggml_backend_tensor_set(t, nan_row.data(), head * t->nb[2] + key * t->nb[1],
++                                            nan_row.size() * sizeof(nan_row[0]));
++                }
++            }
++        }
++    }
++};
++
 +static void add_flash_attn_kv_bounds_tests(std::vector<std::unique_ptr<test_case>> & tests) {
++    tests.emplace_back(new test_flash_attn_masked_nan());
 +    // The one-query 256-wide vector path needs a long physical KV with live
 +    // endpoints to exercise skipping a fully masked interior tile.
 +    for (int pattern : { 2, 7, 8, 10 }) {

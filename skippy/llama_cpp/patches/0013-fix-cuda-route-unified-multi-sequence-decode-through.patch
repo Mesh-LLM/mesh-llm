@@ -1,0 +1,82 @@
+From 4b249aa9944b11e4af22c712329f3b4126b94da8 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 26 Oct 2026 13:37:46 +1100
+Subject: [PATCH] fix(cuda): route unified multi-sequence decode through
+ per-query attention
+
+---
+ ggml/include/ggml.h         | 5 +++++
+ ggml/src/ggml-cuda/fattn.cu | 7 +++++++
+ ggml/src/ggml.c             | 8 ++++++++
+ src/llama-graph.cpp         | 2 ++
+ 4 files changed, 22 insertions(+)
+
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index c37ba9471..7f57e22d5 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -2513,6 +2513,11 @@ extern "C" {
+             struct ggml_tensor * a,
+             int32_t              n_kv_max);
+ 
++    // Mark a decode batch whose query rows belong to independent sequences.
++    GGML_API void ggml_flash_attn_ext_set_multi_sequence_decode(
++            struct ggml_tensor * a,
++            bool                 multi_sequence_decode);
++
+     GGML_API void ggml_flash_attn_ext_add_sinks(
+             struct ggml_tensor * a,
+             struct ggml_tensor * sinks);
+diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
+index 5fa3e5308..5fda3162d 100644
+--- a/ggml/src/ggml-cuda/fattn.cu
++++ b/ggml/src/ggml-cuda/fattn.cu
+@@ -633,6 +633,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
+     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+ 
++    // The vector kernel evaluates each independent decode query against its
++    // own mask row. Keep the MMA path for multi-token prefills of one sequence.
++    if (cc == GGML_CUDA_CC_DGX_SPARK && Q->ne[1] == 2 && Q->ne[3] == 1 &&
++            ggml_get_op_params_i32(dst, 5) != 0 && can_use_vector_kernel) {
++        return BEST_FATTN_KERNEL_VEC;
++    }
++
+     // If Turing tensor cores are available, use them:
+     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+         if (can_use_vector_kernel) {
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index 01dc8d05c..f2acdd327 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -5589,6 +5589,14 @@ void ggml_flash_attn_ext_set_n_kv_max(
+     ggml_set_op_params_i32(a, 4, n_kv_max);
+ }
+ 
++void ggml_flash_attn_ext_set_multi_sequence_decode(
++        struct ggml_tensor * a,
++        bool                 multi_sequence_decode) {
++    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
++
++    ggml_set_op_params_i32(a, 5, multi_sequence_decode ? 1 : 0);
++}
++
+ void ggml_flash_attn_ext_add_sinks(
+         struct ggml_tensor * a,
+         struct ggml_tensor * sinks) {
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index b93a0ec14..e933919e9 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -3426,6 +3426,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+         ggml_flash_attn_ext_add_sinks(cur, sinks);
+         GGML_ASSERT(n_kv_max >= 0 && n_kv_max <= INT32_MAX);
+         ggml_flash_attn_ext_set_n_kv_max(cur, static_cast<int32_t>(n_kv_max));
++        ggml_flash_attn_ext_set_multi_sequence_decode(cur,
++                cparams.kv_unified && ubatch.n_seqs_unq > 1 && ubatch.n_tokens == ubatch.n_seqs);
+         ggml_prec_set_acc(cur, GGML_PREC_F32);
+ 
+         if (v_mla) {
+-- 
+2.56.0
+
