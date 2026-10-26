@@ -14,6 +14,9 @@ use tokio::net::TcpStream;
 use tokio::sync::Notify;
 
 mod openai_stream;
+mod peer_connections;
+
+use peer_connections::PeerConnections;
 
 type CancelFlagMap =
     Arc<Mutex<HashMap<String, (Arc<AtomicBool>, Arc<dyn crate::events::EventListener>)>>>;
@@ -64,6 +67,10 @@ pub struct ClientConfig {
     pub user_agent: String,
     pub connect_timeout: Duration,
     pub transport: ClientTransport,
+    /// Peer connections observed by requests made with this config. Shared by
+    /// every clone so `MeshClient::status()` reports measured peers instead of
+    /// the join flag. Not caller-supplied configuration.
+    pub(crate) peer_connections: PeerConnections,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -85,6 +92,7 @@ impl ClientBuilder {
                 user_agent: format!("mesh-client/{}", env!("CARGO_PKG_VERSION")),
                 connect_timeout: Duration::from_secs(30),
                 transport: default_client_transport(),
+                peer_connections: PeerConnections::default(),
             },
         }
     }
@@ -143,7 +151,11 @@ pub struct MeshClient {
 
 impl MeshClient {
     /// Join the mesh using the invite token.
+    ///
+    /// Joining performs no network I/O and admits no peer. Peers appear in
+    /// [`Self::status`] only once a request connects to one.
     pub async fn join(&mut self) -> Result<(), ClientError> {
+        self.config.peer_connections.clear();
         self.connected = true;
         self.emit_event(crate::events::Event::Connecting);
         self.emit_event(crate::events::Event::Joined {
@@ -402,10 +414,18 @@ impl MeshClient {
     }
 
     /// Return the current mesh connection status.
+    ///
+    /// `connected` is local lifecycle state: `join()` has run and no
+    /// `disconnect()` has followed. It is not a network observation.
+    ///
+    /// `peer_count` is measured: the mesh peers whose most recent dial from
+    /// this client established a connection. It is `0` until the first request
+    /// connects, and returns to `0` when a later dial to that peer fails or the
+    /// client disconnects or rejoins.
     pub async fn status(&self) -> Status {
         Status {
             connected: self.connected,
-            peer_count: usize::from(self.connected),
+            peer_count: self.config.peer_connections.count(),
         }
     }
 
@@ -413,6 +433,7 @@ impl MeshClient {
         self.cancel_openai_streams();
         self.user_disconnected = true;
         self.connected = false;
+        self.config.peer_connections.clear();
         self.emit_event(crate::events::Event::Disconnected {
             reason: "disconnect_requested".to_string(),
         });
@@ -493,7 +514,10 @@ pub struct Model {
 }
 
 pub struct Status {
+    /// Local lifecycle state: joined and not disconnected. Not a measurement.
     pub connected: bool,
+    /// Measured peers: mesh peers whose most recent dial from this client
+    /// established a connection. `0` before the first request connects.
     pub peer_count: usize,
 }
 
@@ -572,11 +596,11 @@ async fn request_get_bytes(config: &ClientConfig, path: &str) -> Result<Vec<u8>,
     match &config.transport {
         ClientTransport::DirectMesh => {
             let request = http_get_request(path, "mesh.local", &config.user_agent);
-            direct_mesh_request(&config.invite_token, config.connect_timeout, request).await
+            direct_mesh_request(config, request).await
         }
         ClientTransport::OpenAiHttp { api_base_url } => {
             let request = http_get_request(path, &host_header(api_base_url)?, &config.user_agent);
-            http_request(api_base_url, request).await
+            http_request(api_base_url, &config.peer_connections, request).await
         }
     }
 }
@@ -589,12 +613,12 @@ async fn request_post_bytes(
     match &config.transport {
         ClientTransport::DirectMesh => {
             let request = http_post_request(path, "mesh.local", &config.user_agent, body);
-            direct_mesh_request(&config.invite_token, config.connect_timeout, request).await
+            direct_mesh_request(config, request).await
         }
         ClientTransport::OpenAiHttp { api_base_url } => {
             let request =
                 http_post_request(path, &host_header(api_base_url)?, &config.user_agent, body);
-            http_request(api_base_url, request).await
+            http_request(api_base_url, &config.peer_connections, request).await
         }
     }
 }
@@ -613,12 +637,8 @@ fn http_post_request(path: &str, host: &str, user_agent: &str, body: String) -> 
     )
 }
 
-async fn direct_mesh_request(
-    invite_token: &InviteToken,
-    connect_timeout: Duration,
-    request: String,
-) -> Result<Vec<u8>, String> {
-    let addr = decode_invite_endpoint_addr(invite_token.as_str())?;
+async fn direct_mesh_request(config: &ClientConfig, request: String) -> Result<Vec<u8>, String> {
+    let addr = decode_invite_endpoint_addr(config.invite_token.as_str())?;
     let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
         .alpns(vec![ALPN_V1.to_vec()])
@@ -629,7 +649,14 @@ async fn direct_mesh_request(
         .bind()
         .await
         .map_err(|err| format!("bind mesh endpoint: {err}"))?;
-    let result = direct_mesh_request_with_endpoint(&endpoint, addr, connect_timeout, request).await;
+    let result = direct_mesh_request_with_endpoint(
+        &endpoint,
+        addr,
+        config.connect_timeout,
+        request,
+        &config.peer_connections,
+    )
+    .await;
     endpoint.close().await;
     result
 }
@@ -639,14 +666,9 @@ async fn direct_mesh_request_with_endpoint(
     addr: EndpointAddr,
     connect_timeout: Duration,
     request: String,
+    peer_connections: &PeerConnections,
 ) -> Result<Vec<u8>, String> {
-    if addr.relay_urls().next().is_some() {
-        let _ = tokio::time::timeout(connect_timeout, endpoint.online()).await;
-    }
-    let connection = tokio::time::timeout(connect_timeout, endpoint.connect(addr, ALPN_V1))
-        .await
-        .map_err(|_| "connect mesh endpoint: timed out".to_string())?
-        .map_err(|err| format!("connect mesh endpoint: {err}"))?;
+    let connection = connect_mesh_peer(endpoint, addr, connect_timeout, peer_connections).await?;
     let (mut send, mut recv) = connection
         .open_bi()
         .await
@@ -666,6 +688,32 @@ async fn direct_mesh_request_with_endpoint(
         .map_err(|err| format!("read mesh response: {err}"))?;
     connection.close(0u32.into(), b"mesh-client-request-complete");
     Ok(response)
+}
+
+/// Dial the invited mesh peer, recording whether the connection was
+/// established so `MeshClient::status()` reports measured peers.
+async fn connect_mesh_peer(
+    endpoint: &Endpoint,
+    addr: EndpointAddr,
+    connect_timeout: Duration,
+    peer_connections: &PeerConnections,
+) -> Result<iroh::endpoint::Connection, String> {
+    let peer = addr.id.to_string();
+    if addr.relay_urls().next().is_some() {
+        let _ = tokio::time::timeout(connect_timeout, endpoint.online()).await;
+    }
+    let connection = tokio::time::timeout(connect_timeout, endpoint.connect(addr, ALPN_V1))
+        .await
+        .map_err(|_| {
+            peer_connections.record_failure(&peer);
+            "connect mesh endpoint: timed out".to_string()
+        })?
+        .map_err(|err| {
+            peer_connections.record_failure(&peer);
+            format!("connect mesh endpoint: {err}")
+        })?;
+    peer_connections.record_established(&peer);
+    Ok(connection)
 }
 
 #[derive(Deserialize)]
@@ -712,11 +760,23 @@ fn relay_map_from_endpoint_addr(addr: &EndpointAddr) -> Option<iroh::RelayMap> {
     }
 }
 
-async fn http_request(base_url: &str, request: String) -> Result<Vec<u8>, String> {
+/// The peer identity an OpenAI-compatible HTTP request connects to.
+fn http_peer(address: &str) -> String {
+    format!("http:{address}")
+}
+
+async fn http_request(
+    base_url: &str,
+    peer_connections: &PeerConnections,
+    request: String,
+) -> Result<Vec<u8>, String> {
     let address = socket_addr(base_url)?;
-    let mut stream = TcpStream::connect(&address)
-        .await
-        .map_err(|err| format!("connect {address}: {err}"))?;
+    let peer = http_peer(&address);
+    let mut stream = TcpStream::connect(&address).await.map_err(|err| {
+        peer_connections.record_failure(&peer);
+        format!("connect {address}: {err}")
+    })?;
+    peer_connections.record_established(&peer);
     stream
         .write_all(request.as_bytes())
         .await
