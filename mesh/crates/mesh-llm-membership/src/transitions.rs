@@ -53,6 +53,13 @@ impl MembershipState {
             .count()
     }
 
+    /// Whether `id` still has fresh proof of direct admission.
+    pub fn has_fresh_direct_admission(&self, id: &EndpointId) -> bool {
+        self.peers
+            .get(id)
+            .is_some_and(|peer| !bridge_may_rewrite_peer_record(peer))
+    }
+
     /// Stop holding (and so relaying) any signed record for `id`.
     pub fn forget_signed_records(&mut self, id: &EndpointId) {
         self.node_records.remove(id);
