@@ -730,4 +730,54 @@ mod tests {
         fs::set_permissions(&tool, permissions).unwrap();
         assert_eq!(installed.gpu_benchmark_tool().unwrap(), tool);
     }
+
+    #[test]
+    fn install_from_dir_refuses_an_identity_that_escapes_the_cache_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        let good = temp.path().join("good");
+        write_runtime(&good, "1.2.3", "runtime-a");
+        cache.install_from_dir(&good).unwrap();
+
+        let source = temp.path().join("source");
+        write_runtime(&source, "1.2.3", "runtime-a");
+        let manifest_path = source.join(NATIVE_RUNTIME_MANIFEST_FILE);
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        metadata["runtime"]["id"] = serde_json::Value::String("../../victim".to_string());
+        fs::write(&manifest_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+        let escaped = temp.path().join("victim");
+        let outcome = cache.install_from_dir(&source);
+        assert!(
+            outcome.is_err(),
+            "a cache identity that escapes the root must be refused, got {outcome:?}"
+        );
+        assert!(
+            !escaped.exists(),
+            "installation created {} outside the canonical cache root",
+            escaped.display()
+        );
+    }
+
+    #[test]
+    fn remove_refuses_an_identity_that_escapes_the_cache_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        fs::create_dir_all(cache.root().join("1.2.3")).unwrap();
+        let victim = temp.path().join("victim");
+        fs::create_dir_all(&victim).unwrap();
+        fs::write(victim.join("keep.txt"), b"do not delete").unwrap();
+
+        let outcome = cache.remove("1.2.3", "../../victim");
+        assert!(
+            outcome.is_err(),
+            "a removal that escapes the root must be refused, got {outcome:?}"
+        );
+        assert!(
+            victim.join("keep.txt").is_file(),
+            "removal recursively deleted {} outside the canonical cache root",
+            victim.display()
+        );
+    }
 }

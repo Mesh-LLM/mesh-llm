@@ -615,4 +615,88 @@ mod tests {
 
         assert!(error.to_string().contains("for non-Linux OS"));
     }
+
+    fn identity_artifact(id: &str) -> super::NativeRuntimeManifest {
+        super::NativeRuntimeManifest {
+            runtime: super::NativeRuntimeArtifact {
+                id: id.to_string(),
+                release_version: Some("0.68.0".to_string()),
+                skippy_abi: "0.1.25".to_string(),
+                platform: super::NativeRuntimePlatform {
+                    os: "linux".to_string(),
+                    arch: "x86_64".to_string(),
+                    target: None,
+                    min_glibc: None,
+                },
+                backend: crate::NativeRuntimeBackend::cpu(),
+                rank: 0,
+                libraries: vec!["lib/libmeshllm_ffi.so".to_string()],
+                files: Default::default(),
+                tools: Default::default(),
+                url: None,
+                sha256: None,
+                signature: None,
+            },
+        }
+    }
+
+    #[test]
+    fn artifact_identity_must_be_exactly_one_normal_path_component() {
+        for identity in [
+            "",
+            " ",
+            " runtime-a",
+            "runtime-a ",
+            "/",
+            "/etc/passwd",
+            "../victim",
+            "../../victim",
+            "..",
+            ".",
+            "runtime/x86_64",
+            "runtime\\x86_64",
+            "C:\\mesh-llm",
+            "\\\\nas\\share\\runtime",
+        ] {
+            assert!(
+                identity_artifact(identity).validate().is_err(),
+                "native runtime id {identity:?} must be rejected"
+            );
+        }
+        for identity in ["meshllm-native-linux-x86_64-cpu", "runtime.a-1"] {
+            identity_artifact(identity)
+                .validate()
+                .unwrap_or_else(|error| panic!("native runtime id {identity:?} must be valid: {error}"));
+        }
+    }
+
+    #[test]
+    fn artifact_release_version_must_be_exactly_one_normal_path_component() {
+        for version in ["", " ", "/opt/versions", "1.2/3", "../victim", ".."] {
+            let mut manifest = identity_artifact("runtime-a");
+            manifest.runtime.release_version = Some(version.to_string());
+            assert!(
+                manifest.validate().is_err(),
+                "native runtime release_version {version:?} must be rejected"
+            );
+        }
+        let mut manifest = identity_artifact("runtime-a");
+        manifest.runtime.release_version = None;
+        manifest.validate().unwrap();
+    }
+
+    #[test]
+    fn release_manifest_version_must_be_exactly_one_normal_path_component() {
+        for version in ["", " ", "/opt/versions", "1.2/3", "../victim", ".."] {
+            let manifest = super::NativeRuntimeReleaseManifest {
+                release_version: version.to_string(),
+                skippy_abi: "0.1.25".to_string(),
+                artifacts: vec![identity_artifact("runtime-a").runtime],
+            };
+            assert!(
+                manifest.validate().is_err(),
+                "release manifest version {version:?} must be rejected"
+            );
+        }
+    }
 }
