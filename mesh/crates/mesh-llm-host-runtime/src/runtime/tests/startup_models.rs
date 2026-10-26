@@ -2437,3 +2437,42 @@ fn unresolved_layer_package_ref_surfaces_actionable_diagnostic() {
 
     clear_runtime_event_engine();
 }
+
+#[test]
+#[serial_test::serial(catalog_state, runtime_event_engine_state)]
+fn monolithic_hf_ref_without_layer_package_stays_silent() {
+    use crate::runtime_event_api::state_projection;
+    use crate::runtime_events::engine::RuntimeEventEngine;
+    use crate::runtime_events::{clear_runtime_event_engine, install_runtime_event_engine};
+
+    clear_runtime_event_engine();
+    let engine = RuntimeEventEngine::new();
+    install_runtime_event_engine(engine.clone());
+
+    let _catalog_guard = models::remote_catalog::set_catalog_entries_for_test(Vec::new());
+    let _probe_guard = models::remote_catalog::set_hf_model_file_probe_for_test(|_, _, _| false);
+
+    // Every healthy node starts monolithic Hugging Face models that have no
+    // layer package. That must not be reported as a fault.
+    let monolithic = "unsloth/Qwen3-8B-GGUF";
+    assert_eq!(
+        resolve_split_layer_package(monolithic, Path::new(monolithic)),
+        None
+    );
+    engine.drain();
+
+    let node =
+        serde_json::to_value(&state_projection::build(&engine).node).expect("serializable node");
+    let warnings = node["diagnostics"]["active_warnings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning["reason_code"] != serde_json::json!("model_ref_unresolvable")),
+        "a monolithic ref must not raise the unresolved-ref warning: {warnings:?}"
+    );
+
+    clear_runtime_event_engine();
+}
