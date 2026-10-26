@@ -3,6 +3,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -14,6 +15,8 @@
       "product_automation_linux_x64",
       "product_smoke",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ],
     "macos": [],
@@ -25,6 +28,8 @@
       "native_runtimes",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -32,6 +37,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -44,6 +50,8 @@
       "product_smoke",
       "runtime_product",
       "rust_tests",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -56,6 +64,8 @@
       "native_runtimes",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -63,6 +73,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -80,6 +91,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -94,6 +106,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -108,6 +122,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -121,6 +137,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -128,6 +146,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -147,6 +166,8 @@
       "runtime_product",
       "rust_tests",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -161,6 +182,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -174,6 +197,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -181,6 +206,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -200,6 +226,8 @@
       "runtime_product",
       "rust_tests",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -214,6 +242,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -227,6 +257,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -234,6 +266,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -253,6 +286,8 @@
       "runtime_product",
       "rust_tests",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -267,6 +302,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -280,6 +317,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -287,6 +326,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -307,6 +347,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -323,6 +364,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -342,6 +384,8 @@
       "runtime_product",
       "rust_tests",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -356,6 +400,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -369,6 +415,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -376,6 +424,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -395,6 +444,8 @@
       "runtime_product",
       "rust_tests",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -409,6 +460,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -422,6 +475,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -429,6 +484,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -448,6 +504,8 @@
       "runtime_product",
       "rust_tests",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -462,6 +520,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -475,6 +535,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -482,6 +544,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -501,6 +564,8 @@
       "runtime_product",
       "rust_tests",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -515,6 +580,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -528,6 +595,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -535,6 +604,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -554,6 +624,8 @@
       "runtime_product",
       "rust_tests",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -568,6 +640,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -581,6 +655,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -588,6 +664,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -600,6 +677,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -612,6 +690,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -624,6 +703,8 @@
       "product_smoke",
       "runtime_product",
       "rust_tests",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -637,6 +718,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -644,6 +727,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -656,6 +740,8 @@
       "product_smoke",
       "runtime_product",
       "rust_tests",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -673,6 +759,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -684,6 +771,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -695,6 +783,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -707,6 +796,8 @@
       "product_smoke",
       "runtime_product",
       "rust_tests",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -720,6 +811,8 @@
       "product_automation_macos_arm64",
       "product_smoke",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact",
       "validate_plan"
     ],
@@ -729,6 +822,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -741,6 +835,8 @@
       "product_smoke",
       "runtime_product",
       "rust_tests",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -754,6 +850,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -761,6 +859,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -772,6 +871,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -793,6 +893,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -810,6 +911,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -831,6 +933,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality",
       "runner_contract"
     ],
@@ -850,6 +953,8 @@
       "runtime_product",
       "rust_tests",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -864,6 +969,8 @@
       "product_smoke",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -877,6 +984,8 @@
       "platform_checks",
       "product_automation_windows_x64",
       "runtime_product",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ]
   },
@@ -884,6 +993,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -896,6 +1006,8 @@
       "product_smoke",
       "runtime_product",
       "rust_tests",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -906,6 +1018,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [
@@ -922,6 +1035,8 @@
       "product_smoke",
       "runtime_product",
       "rust_tests",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -939,6 +1054,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -950,6 +1066,8 @@
       "product_automation_linux_x64",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "ui_artifact"
     ],
     "macos": [
@@ -961,6 +1079,8 @@
       "product_automation_macos_arm64",
       "runtime_product",
       "sdk",
+      "skippy_cli",
+      "skippy_product",
       "swift_sdk_input",
       "ui_artifact",
       "validate_plan"
@@ -971,6 +1091,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],
@@ -983,6 +1104,8 @@
       "product_smoke",
       "runtime_product",
       "rust_tests",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -993,6 +1116,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [
@@ -1009,6 +1133,8 @@
       "product_smoke",
       "runtime_product",
       "rust_tests",
+      "skippy_cli",
+      "skippy_product",
       "static_abi",
       "ui_artifact"
     ],
@@ -1019,6 +1145,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [
@@ -1034,6 +1161,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [
@@ -1049,6 +1177,7 @@
     "quality": [
       "authority_linux_x64",
       "authority_source",
+      "product_automation_linux_x64",
       "quality"
     ],
     "website": [],

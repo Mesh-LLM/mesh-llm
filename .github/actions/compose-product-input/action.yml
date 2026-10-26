@@ -27,6 +27,10 @@ inputs:
     description: Run noninteractive client readiness against the composed bytes.
     required: false
     default: "true"
+  qualification_receipts:
+    description: Optional standalone Skippy qualification receipt record to bind into the product manifest.
+    required: false
+    default: ""
   attestation_public_key_file:
     description: Optional public key used with the producer's prebuilt attestation verifier.
     required: false
@@ -70,6 +74,7 @@ runs:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_BINARY_NAME: ${{ inputs.binary_name }}
         INPUT_READINESS_SMOKE: ${{ inputs.readiness_smoke }}
+        INPUT_QUALIFICATION_RECEIPTS: ${{ inputs.qualification_receipts }}
         INPUT_ATTESTATION_PUBLIC_KEY_FILE: ${{ inputs.attestation_public_key_file }}
         INPUT_ATTESTATION_VERIFIER: ${{ inputs.attestation_verifier }}
       run: |

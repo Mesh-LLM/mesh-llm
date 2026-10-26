@@ -20,8 +20,11 @@ options:
   --backend BACKEND
   --check            Validate the existing product manifest without rewriting
                      it.
+  --qualification-receipts QUALIFICATION_RECEIPTS
+                     Standalone Skippy qualification receipt record, inside the
+                     bundle, to bind into the product manifest.
 ";
-const OPTIONS: [&str; 8] = [
+const OPTIONS: [&str; 9] = [
     "-h",
     "--help",
     "--bundle",
@@ -30,6 +33,7 @@ const OPTIONS: [&str; 8] = [
     "--version",
     "--backend",
     "--check",
+    "--qualification-receipts",
 ];
 const REQUIRED: [&str; 5] = ["--bundle", "--host", "--runtime", "--version", "--backend"];
 
@@ -41,6 +45,7 @@ pub(super) struct Args {
     pub(super) version: String,
     pub(super) backend: String,
     pub(super) check: bool,
+    pub(super) qualification_receipts: Option<String>,
 }
 
 fn fail(message: &str) -> CheckReport {
@@ -55,6 +60,7 @@ fn fail(message: &str) -> CheckReport {
 pub(super) fn parse(args: &[String]) -> Result<Args, CheckReport> {
     let mut values: [Option<String>; 5] = Default::default();
     let mut check = false;
+    let mut qualification_receipts: Option<String> = None;
     let mut extras: Vec<&str> = Vec::new();
     let mut positional_only = false;
     let mut index = 0;
@@ -77,13 +83,15 @@ pub(super) fn parse(args: &[String]) -> Result<Args, CheckReport> {
             }
             Kind::Known(option, explicit, _) => {
                 let value = take_value(explicit, args, &mut index, option)?;
-                if let Some(slot) = REQUIRED.iter().position(|name| *name == option) {
+                if option == "--qualification-receipts" {
+                    qualification_receipts = Some(value);
+                } else if let Some(slot) = REQUIRED.iter().position(|name| *name == option) {
                     values[slot] = Some(value);
                 }
             }
         }
     }
-    finish(values, check, &extras)
+    finish(values, check, qualification_receipts, &extras)
 }
 
 fn take_value(
@@ -104,7 +112,12 @@ fn take_value(
     }
 }
 
-fn finish(values: [Option<String>; 5], check: bool, extras: &[&str]) -> Result<Args, CheckReport> {
+fn finish(
+    values: [Option<String>; 5],
+    check: bool,
+    qualification_receipts: Option<String>,
+    extras: &[&str],
+) -> Result<Args, CheckReport> {
     let missing: Vec<&str> = REQUIRED
         .iter()
         .zip(&values)
@@ -130,6 +143,7 @@ fn finish(values: [Option<String>; 5], check: bool, extras: &[&str]) -> Result<A
         version,
         backend,
         check,
+        qualification_receipts,
     })
 }
 

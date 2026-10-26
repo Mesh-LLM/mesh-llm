@@ -32,6 +32,9 @@
     },
     "runtime": {
       "$ref": "#/$defs/runtime_artifact"
+    },
+    "skippy_qualification": {
+      "$ref": "#/$defs/skippy_qualification"
     }
   },
   "$defs": {
@@ -97,6 +100,82 @@
         "skippy_abi": {
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "qualification_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row_id",
+        "status",
+        "receipt_sha256"
+      ],
+      "properties": {
+        "row_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "qualified",
+            "hardware-unavailable"
+          ]
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "skippy_qualification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "record_path",
+        "record_sha256",
+        "source_sha",
+        "plan_digest",
+        "platform",
+        "required_row",
+        "receipts"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "record_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:/|$))[^/\\\\]+)(?:/(?:(?!\\.{1,2}(?:/|$))[^/\\\\]+))*$"
+        },
+        "record_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "platform": {
+          "enum": [
+            "linux",
+            "macos",
+            "windows"
+          ]
+        },
+        "required_row": {
+          "type": "string",
+          "minLength": 1
+        },
+        "receipts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/qualification_receipt"
+          }
         }
       }
     }

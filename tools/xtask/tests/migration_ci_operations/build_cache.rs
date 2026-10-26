@@ -96,7 +96,7 @@ impl Tree {
     /// Backdates directories and the symlink itself (`touch -h`).
     fn age(&self, relatives: &[&str]) -> TestResult {
         let status = Command::new("touch")
-            // Match OLD's UTC epoch regardless of the developer's local zone.
+            // Match the UTC epoch used for fixture files in every host timezone.
             .env("TZ", "UTC")
             .args(["-h", "-t", "202001010000"])
             .args(relatives.iter().map(|relative| self.path(relative)))

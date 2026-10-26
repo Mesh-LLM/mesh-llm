@@ -8,6 +8,7 @@
 //! - `notes-classify` replaces `scripts/release-notes-classify.py`; its `git log`
 //!   goes through the same host.
 
+mod await_packaging;
 mod classify;
 mod classify_argv;
 mod classify_rules;
@@ -42,6 +43,7 @@ use std::io::Read as _;
 pub(crate) enum ReleaseCommand {
     PreviewVersion,
     Inventory,
+    AwaitPackaging,
     Base,
     Link,
     Classify,
@@ -58,6 +60,7 @@ impl ReleaseCommand {
         match name {
             "preview-version" => Some(Self::PreviewVersion),
             "inventory" => Some(Self::Inventory),
+            "await-packaging" => Some(Self::AwaitPackaging),
             "notes-base" => Some(Self::Base),
             "notes-link" => Some(Self::Link),
             "notes-classify" => Some(Self::Classify),
@@ -76,6 +79,7 @@ pub(crate) fn run(command: ReleaseCommand, args: &[String]) -> DynResult<()> {
     let report = match command {
         ReleaseCommand::PreviewVersion => preview_version::run(args),
         ReleaseCommand::Inventory => return inventory::run(args).map_err(Into::into),
+        ReleaseCommand::AwaitPackaging => await_packaging::run(args),
         ReleaseCommand::Base => notes_base::run(args, || {
             let mut bytes = Vec::new();
             std::io::stdin().read_to_end(&mut bytes).map(|_| bytes)

@@ -144,6 +144,8 @@ fi
     }
     pub fn run(&self) -> process::RawProcessReport {
         let environment: BTreeMap<_, _> = [
+            ("BATCH_ID", "fixture-batch".into()),
+            ("SOURCE_SHA", "a".repeat(40)),
             (
                 "PATH",
                 format!(
@@ -204,6 +206,16 @@ fi
                 other => panic!("unexpected build operation {other}"),
             }
         }
+        let census: serde_json::Value =
+            serde_json::from_slice(&fs::read(self.root.join("cargo-census.json")).unwrap())
+                .unwrap();
+        let mut executed = self.packages();
+        executed.sort();
+        executed.dedup();
+        assert_eq!(census["selected"], json!(executed));
+        assert_eq!(census["executed"], json!(executed));
+        assert_eq!(census["batch_id"], "fixture-batch");
+        assert_eq!(census["source_sha"], "a".repeat(40));
         report
     }
     pub fn calls(&self) -> Vec<Vec<String>> {

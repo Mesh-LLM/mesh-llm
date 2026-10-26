@@ -97,3 +97,28 @@ impl Archive {
         Ok(output)
     }
 }
+
+/// Read the only file member of a ZIP archive, requiring its exact name.
+pub(crate) fn read_single_file(data: Vec<u8>, expected: &str) -> Result<Vec<u8>, String> {
+    let archive = super::zip_directory::open(data).map_err(|error| format!("{error:?}"))?;
+    let names: Vec<&str> = archive
+        .infos
+        .iter()
+        .filter(|info| !info.is_dir())
+        .map(|info| info.filename.as_str())
+        .collect();
+    if names != [expected] {
+        return Err("packaging readiness archive has unexpected files".to_owned());
+    }
+    let info = archive
+        .infos
+        .iter()
+        .find(|info| info.filename == expected)
+        .ok_or_else(|| format!("missing ZIP member {expected}"))?;
+    let range = archive
+        .open_member(info)
+        .map_err(|error| format!("{error:?}"))?;
+    archive
+        .decode(info, range)
+        .map_err(|error| format!("{error:?}"))
+}

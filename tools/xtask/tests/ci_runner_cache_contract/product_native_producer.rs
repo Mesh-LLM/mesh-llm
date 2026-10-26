@@ -8,6 +8,8 @@ use std::{fs, process::Command};
 const PRODUCER: &str = ".github/workflows/product-automation-artifact.yml";
 const RUNNERS: &str = "${{ inputs.platform == 'macos-arm64' && 'macos-15' || inputs.platform == 'windows-x64' && 'windows-2022' || 'ubuntu-24.04' }}";
 const CONSUMERS: &[&str] = &[
+    "ci-skippy-cli-slice.yml",
+    "ci-skippy-product-slice.yml",
     "ci-linux-host-slice.yml",
     "ci-linux-runtime-slice.yml",
     "ci-linux-product-slice.yml",

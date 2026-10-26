@@ -90,10 +90,14 @@ pub(super) fn run(
 }
 
 /// `Path.name` of a displayed path.
+///
+/// Windows callers pass native paths, so both separators end a component:
+/// `Path.name`/`os.path.basename` split on `\` as well as `/`, and the
+/// standalone-CLI qualification reads this field as the bare executable name.
 fn file_name(shown: &str) -> &str {
     match shown {
-        "." | "/" => "",
-        _ => shown.rsplit('/').next().unwrap_or(shown),
+        "." | "/" | "\\" => "",
+        _ => shown.rsplit(['/', '\\']).next().unwrap_or(shown),
     }
 }
 

@@ -24,6 +24,7 @@ mod json_object;
 mod manifest_load;
 mod posix_path;
 mod pure_path;
+mod qualification_record;
 mod rc_ok;
 mod release_manifest;
 mod release_manifest_order;

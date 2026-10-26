@@ -73,7 +73,7 @@ fn migration_ci_graph_unplanned_skip_passes_and_missing_rows_default_to_empty() 
     // When: each is validated.
     let skipped = Call::lane(
         quality,
-        r#"{"quality":{"result":"success"},"runner_contract":{"result":"skipped"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"}}"#,
+        r#"{"quality":{"result":"success"},"runner_contract":{"result":"skipped"},"authority_source":{"result":"success"},"authority_linux_x64":{"result":"success"},"product_automation_linux_x64":{"result":"success"}}"#,
     )
     .run()?;
     let empty = Call::lane(windows, "{}").run()?;

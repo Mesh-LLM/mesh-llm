@@ -93,13 +93,26 @@ jobs:
       lane: quality
       protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
 
+  product_automation_linux_x64:
+    name: Product linux x64 automation
+    needs: authority_source
+    if: ${{ (contains(fromJson(inputs.lane_plan_json).required_slices, 'quality')) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/product-automation-artifact.yml
+    with:
+      platform: linux-x64
+      lane: quality
+      product_source_sha: ${{ inputs.source_sha }}
+
   quality:
-    needs: [authority_linux_x64]
+    needs: [authority_linux_x64, product_automation_linux_x64]
     name: Quality
-    if: ${{ (contains(fromJson(inputs.lane_plan_json).required_slices, 'quality')) && needs.authority_linux_x64.result == 'success' }}
+    if: ${{ (contains(fromJson(inputs.lane_plan_json).required_slices, 'quality')) && needs.authority_linux_x64.result == 'success' && needs.product_automation_linux_x64.result == 'success' }}
     uses: ./.github/workflows/ci-quality-slice.yml
     with:
       authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
+      product_automation: ${{ needs.product_automation_linux_x64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       clippy_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.clippy) }}
       rust_changed: ${{ fromJson(inputs.lane_plan_json).signals.rust_changed }}
@@ -123,7 +136,7 @@ jobs:
 
   summary:
     name: CI / Quality
-    needs: [quality, runner_contract, authority_source, authority_linux_x64]
+    needs: [quality, runner_contract, authority_source, authority_linux_x64, product_automation_linux_x64]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:
