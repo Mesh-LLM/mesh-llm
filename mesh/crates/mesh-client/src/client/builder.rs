@@ -16,7 +16,7 @@ use tokio::sync::Notify;
 mod openai_stream;
 mod peer_connections;
 
-use peer_connections::PeerConnections;
+use peer_connections::{PeerConnections, PeerObservation};
 
 type CancelFlagMap =
     Arc<Mutex<HashMap<String, (Arc<AtomicBool>, Arc<dyn crate::events::EventListener>)>>>;
@@ -67,10 +67,6 @@ pub struct ClientConfig {
     pub user_agent: String,
     pub connect_timeout: Duration,
     pub transport: ClientTransport,
-    /// Peer connections observed by requests made with this config. Shared by
-    /// every clone so `MeshClient::status()` reports measured peers instead of
-    /// the join flag. Not caller-supplied configuration.
-    pub(crate) peer_connections: PeerConnections,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,7 +88,6 @@ impl ClientBuilder {
                 user_agent: format!("mesh-client/{}", env!("CARGO_PKG_VERSION")),
                 connect_timeout: Duration::from_secs(30),
                 transport: default_client_transport(),
-                peer_connections: PeerConnections::default(),
             },
         }
     }
@@ -128,6 +123,7 @@ impl ClientBuilder {
         Ok(MeshClient {
             runtime,
             config: self.config,
+            peer_connections: PeerConnections::default(),
             connected: false,
             cancel_flags: Arc::new(Mutex::new(HashMap::new())),
             openai_streams: Arc::new(Mutex::new(HashMap::new())),
@@ -141,6 +137,7 @@ impl ClientBuilder {
 pub struct MeshClient {
     runtime: CoreRuntime,
     pub(crate) config: ClientConfig,
+    peer_connections: PeerConnections,
     pub(crate) connected: bool,
     pub(crate) cancel_flags: CancelFlagMap,
     openai_streams: OpenAiStreamMap,
@@ -155,7 +152,7 @@ impl MeshClient {
     /// Joining performs no network I/O and admits no peer. Peers appear in
     /// [`Self::status`] only once a request connects to one.
     pub async fn join(&mut self) -> Result<(), ClientError> {
-        self.config.peer_connections.clear();
+        self.peer_connections.advance_generation();
         self.connected = true;
         self.emit_event(crate::events::Event::Connecting);
         self.emit_event(crate::events::Event::Joined {
@@ -166,9 +163,13 @@ impl MeshClient {
 
     /// List available models on the mesh.
     pub async fn list_models(&self) -> Result<Vec<Model>, ClientError> {
-        let response = get_json::<ModelsResponse>(&self.config, "/v1/models")
-            .await
-            .map_err(ClientError::Endpoint)?;
+        let response = get_json::<ModelsResponse>(
+            &self.config,
+            self.peer_connections.observation(),
+            "/v1/models",
+        )
+        .await
+        .map_err(ClientError::Endpoint)?;
 
         Ok(response
             .data
@@ -195,9 +196,14 @@ impl MeshClient {
         let body_json =
             prepare_openai_request(path, &body_json, false).map_err(ClientError::Endpoint)?;
 
-        let response = request_post_bytes(&self.config, path, body_json)
-            .await
-            .map_err(ClientError::Endpoint)?;
+        let response = request_post_bytes(
+            &self.config,
+            self.peer_connections.observation(),
+            path,
+            body_json,
+        )
+        .await
+        .map_err(ClientError::Endpoint)?;
         parse_openai_response(&response).map_err(ClientError::Endpoint)
     }
 
@@ -229,9 +235,10 @@ impl MeshClient {
         let path = path.to_string();
         let id = request_id.0.clone();
         let streams = self.openai_streams.clone();
+        let observation = self.peer_connections.observation();
         self.runtime.handle().spawn(async move {
             let result = openai_stream::run(
-                &config,
+                openai_stream::StreamContext::new(&config, observation),
                 &path,
                 body_json,
                 &id,
@@ -286,6 +293,7 @@ impl MeshClient {
             .insert(id.0.clone(), (cancel_flag.clone(), listener.clone()));
         let id_clone = id.0.clone();
         let config = self.config.clone();
+        let observation = self.peer_connections.observation();
         self.runtime.handle().spawn(async move {
             let body = serde_json::json!({
                 "model": request.model,
@@ -299,6 +307,7 @@ impl MeshClient {
             });
             match post_json::<ChatCompletionResponse>(
                 &config,
+                observation,
                 "/v1/chat/completions",
                 body.to_string(),
             )
@@ -346,6 +355,7 @@ impl MeshClient {
             .insert(id.0.clone(), (cancel_flag.clone(), listener.clone()));
         let id_clone = id.0.clone();
         let config = self.config.clone();
+        let observation = self.peer_connections.observation();
         self.runtime.handle().spawn(async move {
             let body = serde_json::json!({
                 "model": request.model,
@@ -359,6 +369,7 @@ impl MeshClient {
             });
             match post_json::<ChatCompletionResponse>(
                 &config,
+                observation,
                 "/v1/chat/completions",
                 body.to_string(),
             )
@@ -425,7 +436,7 @@ impl MeshClient {
     pub async fn status(&self) -> Status {
         Status {
             connected: self.connected,
-            peer_count: self.config.peer_connections.count(),
+            peer_count: self.peer_connections.count(),
         }
     }
 
@@ -433,7 +444,7 @@ impl MeshClient {
         self.cancel_openai_streams();
         self.user_disconnected = true;
         self.connected = false;
-        self.config.peer_connections.clear();
+        self.peer_connections.advance_generation();
         self.emit_event(crate::events::Event::Disconnected {
             reason: "disconnect_requested".to_string(),
         });
@@ -577,48 +588,55 @@ struct ChatMessageResponse {
 
 async fn get_json<T: for<'de> Deserialize<'de>>(
     config: &ClientConfig,
+    observation: PeerObservation,
     path: &str,
 ) -> Result<T, String> {
-    let response = request_get_bytes(config, path).await?;
+    let response = request_get_bytes(config, observation, path).await?;
     parse_json_response(&response)
 }
 
 async fn post_json<T: for<'de> Deserialize<'de>>(
     config: &ClientConfig,
+    observation: PeerObservation,
     path: &str,
     body: String,
 ) -> Result<T, String> {
-    let response = request_post_bytes(config, path, body).await?;
+    let response = request_post_bytes(config, observation, path, body).await?;
     parse_json_response(&response)
 }
 
-async fn request_get_bytes(config: &ClientConfig, path: &str) -> Result<Vec<u8>, String> {
+async fn request_get_bytes(
+    config: &ClientConfig,
+    observation: PeerObservation,
+    path: &str,
+) -> Result<Vec<u8>, String> {
     match &config.transport {
         ClientTransport::DirectMesh => {
             let request = http_get_request(path, "mesh.local", &config.user_agent);
-            direct_mesh_request(config, request).await
+            direct_mesh_request(config, &observation, request).await
         }
         ClientTransport::OpenAiHttp { api_base_url } => {
             let request = http_get_request(path, &host_header(api_base_url)?, &config.user_agent);
-            http_request(api_base_url, &config.peer_connections, request).await
+            http_request(api_base_url, &observation, request).await
         }
     }
 }
 
 async fn request_post_bytes(
     config: &ClientConfig,
+    observation: PeerObservation,
     path: &str,
     body: String,
 ) -> Result<Vec<u8>, String> {
     match &config.transport {
         ClientTransport::DirectMesh => {
             let request = http_post_request(path, "mesh.local", &config.user_agent, body);
-            direct_mesh_request(config, request).await
+            direct_mesh_request(config, &observation, request).await
         }
         ClientTransport::OpenAiHttp { api_base_url } => {
             let request =
                 http_post_request(path, &host_header(api_base_url)?, &config.user_agent, body);
-            http_request(api_base_url, &config.peer_connections, request).await
+            http_request(api_base_url, &observation, request).await
         }
     }
 }
@@ -637,7 +655,11 @@ fn http_post_request(path: &str, host: &str, user_agent: &str, body: String) -> 
     )
 }
 
-async fn direct_mesh_request(config: &ClientConfig, request: String) -> Result<Vec<u8>, String> {
+async fn direct_mesh_request(
+    config: &ClientConfig,
+    observation: &PeerObservation,
+    request: String,
+) -> Result<Vec<u8>, String> {
     let addr = decode_invite_endpoint_addr(config.invite_token.as_str())?;
     let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
@@ -654,7 +676,7 @@ async fn direct_mesh_request(config: &ClientConfig, request: String) -> Result<V
         addr,
         config.connect_timeout,
         request,
-        &config.peer_connections,
+        observation,
     )
     .await;
     endpoint.close().await;
@@ -666,9 +688,9 @@ async fn direct_mesh_request_with_endpoint(
     addr: EndpointAddr,
     connect_timeout: Duration,
     request: String,
-    peer_connections: &PeerConnections,
+    observation: &PeerObservation,
 ) -> Result<Vec<u8>, String> {
-    let connection = connect_mesh_peer(endpoint, addr, connect_timeout, peer_connections).await?;
+    let connection = connect_mesh_peer(endpoint, addr, connect_timeout, observation).await?;
     let (mut send, mut recv) = connection
         .open_bi()
         .await
@@ -696,7 +718,7 @@ async fn connect_mesh_peer(
     endpoint: &Endpoint,
     addr: EndpointAddr,
     connect_timeout: Duration,
-    peer_connections: &PeerConnections,
+    observation: &PeerObservation,
 ) -> Result<iroh::endpoint::Connection, String> {
     let peer = addr.id.to_string();
     if addr.relay_urls().next().is_some() {
@@ -705,14 +727,14 @@ async fn connect_mesh_peer(
     let connection = tokio::time::timeout(connect_timeout, endpoint.connect(addr, ALPN_V1))
         .await
         .map_err(|_| {
-            peer_connections.record_failure(&peer);
+            observation.record_failure(&peer);
             "connect mesh endpoint: timed out".to_string()
         })?
         .map_err(|err| {
-            peer_connections.record_failure(&peer);
+            observation.record_failure(&peer);
             format!("connect mesh endpoint: {err}")
         })?;
-    peer_connections.record_established(&peer);
+    observation.record_established(&peer);
     Ok(connection)
 }
 
@@ -767,16 +789,16 @@ fn http_peer(address: &str) -> String {
 
 async fn http_request(
     base_url: &str,
-    peer_connections: &PeerConnections,
+    observation: &PeerObservation,
     request: String,
 ) -> Result<Vec<u8>, String> {
     let address = socket_addr(base_url)?;
     let peer = http_peer(&address);
     let mut stream = TcpStream::connect(&address).await.map_err(|err| {
-        peer_connections.record_failure(&peer);
+        observation.record_failure(&peer);
         format!("connect {address}: {err}")
     })?;
-    peer_connections.record_established(&peer);
+    observation.record_established(&peer);
     stream
         .write_all(request.as_bytes())
         .await

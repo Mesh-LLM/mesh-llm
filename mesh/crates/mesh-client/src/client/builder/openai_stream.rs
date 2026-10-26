@@ -1,6 +1,6 @@
 use super::{
     ALPN_V1, ClientConfig, ClientTransport, STREAM_TUNNEL_HTTP, http_post_request,
-    peer_connections::PeerConnections, relay_mode_from_endpoint_addr, socket_addr,
+    peer_connections::PeerObservation, relay_mode_from_endpoint_addr, socket_addr,
 };
 use crate::events::{OpenAiStreamEvent, OpenAiStreamListener};
 use iroh::Endpoint;
@@ -67,8 +67,22 @@ struct SseEvent {
     raw: String,
 }
 
+pub(super) struct StreamContext<'a> {
+    config: &'a ClientConfig,
+    observation: PeerObservation,
+}
+
+impl<'a> StreamContext<'a> {
+    pub(super) fn new(config: &'a ClientConfig, observation: PeerObservation) -> Self {
+        Self {
+            config,
+            observation,
+        }
+    }
+}
+
 pub(super) async fn run(
-    config: &ClientConfig,
+    context: StreamContext<'_>,
     path: &str,
     body_json: String,
     request_id: &str,
@@ -76,6 +90,10 @@ pub(super) async fn run(
     cancel_notify: Arc<Notify>,
     listener: Arc<dyn OpenAiStreamListener>,
 ) -> Result<(), StreamFailure> {
+    let StreamContext {
+        config,
+        observation,
+    } = context;
     let request = match &config.transport {
         ClientTransport::DirectMesh => {
             http_post_request(path, "mesh.local", &config.user_agent, body_json)
@@ -92,6 +110,7 @@ pub(super) async fn run(
         ClientTransport::DirectMesh => {
             stream_direct_mesh(
                 config,
+                observation,
                 request,
                 request_id,
                 cancelled,
@@ -103,7 +122,7 @@ pub(super) async fn run(
         ClientTransport::OpenAiHttp { api_base_url } => {
             stream_http(
                 api_base_url,
-                &config.peer_connections,
+                &observation,
                 request,
                 request_id,
                 cancelled,
@@ -117,6 +136,7 @@ pub(super) async fn run(
 
 async fn stream_direct_mesh(
     config: &ClientConfig,
+    observation: PeerObservation,
     request: String,
     request_id: &str,
     cancelled: Arc<AtomicBool>,
@@ -152,14 +172,14 @@ async fn stream_direct_mesh(
         )
         .await?
         .map_err(|_| {
-            config.peer_connections.record_failure(&peer);
+            observation.record_failure(&peer);
             StreamFailure::transport("connect mesh endpoint: timed out")
         })?
         .map_err(|error| {
-            config.peer_connections.record_failure(&peer);
+            observation.record_failure(&peer);
             StreamFailure::transport(format!("connect mesh endpoint: {error}"))
         })?;
-        config.peer_connections.record_established(&peer);
+        observation.record_established(&peer);
         let (mut send, mut recv) = race_cancel(
             connection.open_bi(),
             cancelled.as_ref(),
@@ -199,7 +219,7 @@ async fn stream_direct_mesh(
 
 async fn stream_http(
     api_base_url: &str,
-    peer_connections: &PeerConnections,
+    observation: &PeerObservation,
     request: String,
     request_id: &str,
     cancelled: Arc<AtomicBool>,
@@ -215,10 +235,10 @@ async fn stream_http(
     )
     .await?
     .map_err(|error| {
-        peer_connections.record_failure(&peer);
+        observation.record_failure(&peer);
         StreamFailure::transport(format!("connect {address}: {error}"))
     })?;
-    peer_connections.record_established(&peer);
+    observation.record_established(&peer);
     race_cancel(
         stream.write_all(request.as_bytes()),
         cancelled.as_ref(),
