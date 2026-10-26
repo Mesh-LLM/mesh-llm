@@ -16,13 +16,14 @@ use iroh::endpoint::RecvStream;
 const MAX_TUNNELED_PER_PEER: u64 = 32;
 /// How many stalled partial requests the peer opens, past the per-peer cap.
 const STALLED_STREAMS: usize = MAX_TUNNELED_PER_PEER as usize + 12;
-/// Sampling window during which every stalled handler must still be alive:
-/// shorter than the ingress' 5 s header-prefix deadline.
-const SAMPLE_WINDOW: Duration = Duration::from_secs(2);
-/// Refusals must land while the admitted streams are still stalled on their
-/// 5 s header-prefix deadline; the refused-stream read window below ends
-/// before it fires.
-const REFUSAL_WINDOW: Duration = Duration::from_secs(2);
+/// Sampling window after the last stream is open: the earliest admitted
+/// handler only dies at its 5 s header-prefix deadline, so the window stays
+/// well inside the stall.
+const SAMPLE_WINDOW: Duration = Duration::from_secs(1);
+/// Per-stream refusal read window, run concurrently: it ends before the
+/// earliest admitted handler's 5 s header deadline can fire, so a stream
+/// that closes inside it was refused, not stalled out.
+const REFUSAL_WINDOW: Duration = Duration::from_millis(2500);
 
 async fn start_node() -> (Node, TunnelChannels) {
     let relay_urls = Vec::new();
@@ -104,17 +105,24 @@ async fn tunneled_http_ingress_caps_concurrent_requests_per_peer() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    // The refused streams must be closed while the admitted ones are still
-    // stalled: an admitted stream only dies at its 5 s header deadline.
-    let mut closed_early = Vec::new();
-    for (_send, mut recv) in streams {
-        closed_early.push(
+    // Refused streams close almost immediately, while admitted streams only
+    // die at their 5 s header deadline: read every response concurrently
+    // inside the pre-deadline window.
+    let mut reads = Vec::new();
+    for (send, mut recv) in streams {
+        reads.push(tokio::spawn(async move {
+            let _send = send;
             tokio::time::timeout(REFUSAL_WINDOW, stream_closed_early(&mut recv))
                 .await
-                .is_ok(),
-        );
+                .is_ok()
+        }));
     }
-    let refused = closed_early.iter().filter(|closed| **closed).count();
+    let mut refused = 0;
+    for read in reads {
+        if read.await.expect("refusal read task finishes") {
+            refused += 1;
+        }
+    }
 
     assert!(
         peak_inflight >= MAX_TUNNELED_PER_PEER,
