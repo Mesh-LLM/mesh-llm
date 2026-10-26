@@ -38,17 +38,33 @@ pub(super) fn runtime_capacity_pool(
         .unwrap_or(RuntimeCapacityPool::Node)
 }
 
+pub(super) fn runtime_capacity_pool_for_model(
+    model_name: &str,
+    pinned_gpu: Option<&StartupPinnedGpuTarget>,
+    device_override: Option<&str>,
+) -> RuntimeCapacityPool {
+    if model_name.to_ascii_lowercase().contains("laya")
+        && pinned_gpu.is_none()
+        && device_override.is_none()
+    {
+        RuntimeCapacityPool::HostRam
+    } else {
+        runtime_capacity_pool(pinned_gpu)
+    }
+}
+
 pub(super) fn runtime_capacity_request_for_model(
     instance_id: &str,
     model_name: &str,
     pinned_gpu: Option<&StartupPinnedGpuTarget>,
+    device_override: Option<&str>,
     capacity_bytes: u64,
     model_bytes: u64,
 ) -> RuntimeCapacityRequest {
     RuntimeCapacityRequest {
         instance_id: instance_id.to_string(),
         model_name: model_name.to_string(),
-        pool: runtime_capacity_pool(pinned_gpu),
+        pool: runtime_capacity_pool_for_model(model_name, pinned_gpu, device_override),
         capacity_bytes,
         required_bytes: runtime_model_required_bytes(model_bytes),
     }
@@ -59,6 +75,7 @@ pub(super) fn reserve_runtime_capacity_for_model(
     instance_id: &str,
     model_name: &str,
     pinned_gpu: Option<&StartupPinnedGpuTarget>,
+    device_override: Option<&str>,
     capacity_bytes: u64,
     model_bytes: u64,
 ) -> Result<RuntimeCapacityReservation> {
@@ -67,6 +84,7 @@ pub(super) fn reserve_runtime_capacity_for_model(
             instance_id,
             model_name,
             pinned_gpu,
+            device_override,
             capacity_bytes,
             model_bytes,
         ))

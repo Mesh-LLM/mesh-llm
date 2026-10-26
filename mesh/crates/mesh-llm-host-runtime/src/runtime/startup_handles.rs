@@ -384,6 +384,7 @@ where
         instance_id,
         model_name,
         pinned_gpu,
+        None,
         local_capacity,
         model_bytes,
     ) {

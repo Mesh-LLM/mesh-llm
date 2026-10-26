@@ -226,6 +226,7 @@ pub(in crate::runtime) async fn startup_handle_local_fallback_event(
         ctx.instance_id,
         &old_loaded_name,
         ctx.pinned_gpu,
+        None,
         local_capacity,
         model_bytes,
     ) {

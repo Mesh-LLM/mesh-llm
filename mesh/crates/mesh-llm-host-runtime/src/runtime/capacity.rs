@@ -8,6 +8,7 @@ const RUNTIME_MODEL_FIT_HEADROOM_DENOMINATOR: u64 = 10;
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) enum RuntimeCapacityPool {
     Node,
+    HostRam,
     PinnedGpu(String),
 }
 
@@ -15,6 +16,7 @@ impl fmt::Display for RuntimeCapacityPool {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Node => f.write_str("node"),
+            Self::HostRam => f.write_str("host RAM"),
             Self::PinnedGpu(stable_id) => write!(f, "pinned GPU {stable_id}"),
         }
     }
@@ -24,8 +26,14 @@ impl RuntimeCapacityPool {
     fn overlaps(&self, other: &Self) -> bool {
         // Node-wide local loads are not pinned to a backend device, so they
         // share the physical placement domain with every pinned GPU pool.
+        // Host-RAM-backed CPU loads are independent from accelerator pools.
         // Pinned GPU pools remain independent from each other.
-        self == other || matches!((self, other), (Self::Node, _) | (_, Self::Node))
+        self == other
+            || (matches!((self, other), (Self::Node, _) | (_, Self::Node))
+                && !matches!(
+                    (self, other),
+                    (Self::Node, Self::HostRam) | (Self::HostRam, Self::Node)
+                ))
     }
 }
 
@@ -465,8 +473,16 @@ mod tests {
             ))
             .expect("GPU model should reserve its device capacity");
 
+        let laya_pool =
+            crate::runtime::runtime_registry::runtime_capacity_pool_for_model("Laya", None, None);
         let laya = ledger
-            .reserve(request("runtime-laya", "Laya", 900))
+            .reserve(pooled_request(
+                "runtime-laya",
+                "Laya",
+                laya_pool,
+                1_000,
+                900,
+            ))
             .expect("CPU Laya should use host memory, not GPU capacity");
 
         assert_eq!(laya.capacity_budget_bytes(), 1_000);
