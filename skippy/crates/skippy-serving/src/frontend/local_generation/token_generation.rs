@@ -55,6 +55,23 @@ pub(crate) use exact_state_recording::CaptureTaskOutstandingGuard;
 pub(crate) mod capture_trace;
 mod kv_restore;
 
+/// A `NaN` logprob marks a token whose raw logits row was unavailable when it
+/// was sampled. OpenAI clients expect numbers, so the request fails instead of
+/// answering with a value that is not one.
+pub(super) fn ensure_readable_logprobs(
+    entries: &[skippy_runtime::TokenLogprobs],
+) -> InferenceResult<()> {
+    let unreadable = entries.iter().any(|entry| {
+        !entry.logprob.is_finite() || entry.top.iter().any(|(_, logprob)| !logprob.is_finite())
+    });
+    if unreadable {
+        return Err(InferenceError::backend(
+            "a sampled token's raw logits were unavailable, so its logprobs cannot be reported",
+        ));
+    }
+    Ok(())
+}
+
 pub(in crate::frontend) fn resident_capacity_admission_error(
     capacity: &crate::kv_integration::ResidentCapacityDecision,
 ) -> InferenceError {
@@ -444,6 +461,24 @@ impl StageOpenAiBackend {
         let receipt_observation = receipt_observation
             .as_ref()
             .and_then(|observation| observation.borrow_mut().take());
+        // A request that asked for logprobs fails rather than answering without them.
+        let result = result.and_then(|()| {
+            if request.sampling.top_logprobs.is_none() {
+                return Ok(());
+            }
+            let logprobs_session_id = session_id.clone();
+            let token_logprobs = self.iteration_scheduler.execute_runtime(
+                "take-token-logprobs",
+                move |runtime| {
+                    runtime
+                        .take_token_logprobs(&logprobs_session_id)
+                        .map_err(openai_backend_error)
+                },
+            )?;
+            ensure_readable_logprobs(&token_logprobs)?;
+            cache_stats.token_logprobs = Some(token_logprobs);
+            Ok(())
+        });
         let generation_succeeded = result.is_ok();
         if receipt_cancelled {
             lifecycle.mark_cancelled();
@@ -492,7 +527,10 @@ impl StageOpenAiBackend {
             request.native_mtp_enabled,
             &request.speculative.effective_strategy,
             hooks_enabled,
-        );
+        )
+            // The built-in driver drops (and resets) the session as the sequence
+            // ends, before the recorded logprobs can be taken.
+            && request.sampling.top_logprobs.is_none();
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert("skippy.scheduler.eligible".to_string(), json!(eligible));
         attrs.insert(
@@ -609,6 +647,19 @@ impl StageOpenAiBackend {
         session_id: &str,
         cache_stats: &mut GenerationCacheStats,
     ) -> InferenceResult<PromptPrefillResult> {
+        // A logprobs request reads the raw logits row of every sampled token,
+        // the prefill's included. A backend (in-graph) sampler an earlier
+        // request left attached would hide that row, and only reconfiguring
+        // chat sampling detaches it, so a request without chat metadata gets
+        // plain chat sampling before its prefill decode.
+        if request.sampling.top_logprobs.is_some() && request.chat_sampling_metadata.is_none() {
+            self.configure_chat_sampling(
+                session_id,
+                r#"{"grammar":""}"#,
+                request.prompt_token_ids.len(),
+                request.sampling.enabled.then_some(request.sampling),
+            )?;
+        }
         if self.can_sample_whole_prompt_in_prefill(request, session_id)? {
             let chat_sampling_configured = if let Some(metadata) = request.chat_sampling_metadata {
                 self.configure_chat_sampling(
@@ -1168,9 +1219,12 @@ impl StageOpenAiBackend {
         let hook_runtime = request.hook_runtime.take();
         let generation_hooks_active =
             self.generation_hooks_active(&hook_request, hook_runtime.as_ref());
+        // Verified proposal rows past a rejected token are sampled too, so their
+        // recorded logprobs would not line up with the emitted tokens.
         let linear_proposal_enabled = self.linear_proposal_ingress.is_some()
             && !request.native_mtp_enabled
             && !generation_hooks_active
+            && request.sampling.top_logprobs.is_none()
             && greedy_linear_proposal_admitted(request.sampling, request.chat_sampling_metadata);
         let linear_proposal_max_tokens = if linear_proposal_enabled {
             let scheduler_session_id = session_id.to_string();
@@ -1215,8 +1269,12 @@ impl StageOpenAiBackend {
             emit_token_debug: self.telemetry.is_debug_enabled(),
             native_mtp_options: NativeMtpDecodeOptions::from_config(request.speculative),
             native_mtp: NativeMtpVerifier::default(),
+            // A native MTP span samples every verified row, past a rejected
+            // draft too; text generation already stands MTP down for logprobs
+            // requests, and this keeps the span gate correct on its own.
             native_mtp_span_admitted: request.native_mtp_enabled
                 && !generation_hooks_active
+                && request.sampling.top_logprobs.is_none()
                 && greedy_linear_proposal_admitted(
                     request.sampling,
                     request.chat_sampling_metadata,

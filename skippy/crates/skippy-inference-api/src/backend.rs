@@ -274,6 +274,17 @@ pub trait InferenceBackend: Send + Sync + 'static {
             "/v1/audio/translations is not supported by this backend",
         ))
     }
+
+    /// Open a live transcription session; unsupported backends fail explicitly.
+    async fn realtime_transcription(
+        &self,
+        _config: crate::realtime::RealtimeTranscriptionConfig,
+        _context: InferenceRequestContext,
+    ) -> InferenceResult<crate::realtime::RealtimeTranscriptionSession> {
+        Err(InferenceError::unsupported(
+            "/v1/realtime transcription is not supported by this backend",
+        ))
+    }
 }
 
 pub(crate) type SharedBackend = Arc<dyn InferenceBackend>;

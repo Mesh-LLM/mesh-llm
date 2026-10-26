@@ -10,6 +10,8 @@ mod cli_output;
 mod command;
 #[path = "automation/command_interrupt/mod.rs"]
 pub(crate) mod command_interrupt;
+#[cfg(test)]
+mod fixture_paths;
 mod installer_fixtures;
 mod model_registry;
 mod native_policy;

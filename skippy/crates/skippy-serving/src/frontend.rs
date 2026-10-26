@@ -26,6 +26,7 @@ pub mod runahead_search;
 mod sampling_cache_key;
 mod speculation_gate;
 mod speculative;
+mod speech_recognition;
 mod stop_sequences;
 mod system_one;
 mod token_counting;
@@ -76,6 +77,7 @@ pub use self::speculative::{
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
     SpeculativeDecodeConfig, VerifyWindowConfig,
 };
+pub use self::speech_recognition::{SpeechRecognitionBackend, SpeechTranscriber};
 pub use self::system_one::LayaSystemOneBackend;
 
 #[cfg(test)]

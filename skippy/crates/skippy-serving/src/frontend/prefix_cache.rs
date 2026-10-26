@@ -1328,6 +1328,14 @@ mod tests {
         assert!(sampling_replay_safe(&SamplingConfig::default()));
         assert!(sampling_replay_safe(&first_sampling));
         assert!(!sampling_replay_safe(&stochastic_sampling));
+        let logprobs_sampling = SamplingConfig {
+            top_logprobs: Some(0),
+            ..first_sampling.clone()
+        };
+        assert!(
+            !sampling_replay_safe(&logprobs_sampling),
+            "a replayed token would have no logprobs entry"
+        );
         assert!(cache.record_cached_first_token_with_key(&first_key, &identity, 123));
         assert_eq!(
             cache.lookup_cached_first_token_with_key(&first_key),

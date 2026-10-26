@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "dependency_inputs": [
+    {
+      "manifest_path": "ci/llama-canary/jinja/pyproject.toml",
+      "lock_path": "ci/llama-canary/jinja/uv.lock",
+      "consumer_path": "scripts/llama-canary-agent-repair.sh",
+      "consumer_assignment": "JINJA_PROJECT",
+      "purpose": "locked upstream llama.cpp Jinja CTest dependencies",
+      "project_name": "mesh-llama-canary-jinja-tests",
+      "project_version": "0.1.0",
+      "direct_dependencies": [
+        { "name": "jinja2", "version": "3.1.6" }
+      ],
+      "locked_packages": [
+        { "name": "jinja2", "version": "3.1.6" },
+        { "name": "markupsafe", "version": "3.0.4" }
+      ]
+    }
+  ],
+  "external_dependency_inputs": [
+    {
+      "manifest_path": "skippy/evals/agentx/pyproject.toml",
+      "lock_path": "skippy/evals/agentx/uv.lock",
+      "manifest_sha256": "fdb210ee85466c8365a4f5a41af1646383d8c0e6d47f9918bed4a39d696d9cbb",
+      "lock_sha256": "c45c0fae98e4593c16d9f7b081b71921819110f558a9a20d27273bae95b4c968",
+      "consumer_path": "just/skippy.just",
+      "consumer_line": "uv sync --locked --managed-python --python 3.12 --project skippy/evals/agentx",
+      "purpose": "locked upstream AgentX harness wheel and dependency closure; orchestration remains Rust-owned"
+    }
+  ],
+  "external_source_descriptors": [
+    {
+      "descriptor_path": "ci/required-sdk-python/sdk-source.json",
+      "repository": "Mesh-LLM/mesh-llm-python-sdk",
+      "revision": "d2a881612186b0626a153ee237dfa3df00ab6087",
+      "manifest_sha256": "2844313b33527d1745d7208b568bdbab7984a0459172f5cfa305eacb35e2b9c7",
+      "purpose": "required external SDK compatibility and embedding clients"
+    },
+    {
+      "descriptor_path": "ci/python-research-source.json",
+      "repository": "Mesh-LLM/mesh-llm-research",
+      "revision": "d280c63122350fb3f3d91734d61eb836f37a15ee",
+      "manifest_sha256": "7f7b0fb96583b9acd09b3150cc8f85c1ed502ea57734c46b2b8f1e54e9b94761",
+      "purpose": "optional external research tools retained outside generic CI"
+    }
+  ],
+  "external_script_pins": [
+    {
+      "path": "scripts/run-llama-benchy-openai.sh",
+      "repository": "https://github.com/eugr/llama-benchy",
+      "revision": "e9be344578cec17745066b220798b80a0d2686d3",
+      "assignment": "LLAMA_BENCHY_FROM",
+      "purpose": "default benchmark CLI source; caller overrides remain caller-owned"
+    }
+  ],
+  "allowed_invocations": [
+    {
+      "path": "just/skippy.just",
+      "line": "uv sync --locked --managed-python --python 3.12 --project skippy/evals/agentx",
+      "occurrences": 1,
+      "purpose": "restore the exact hash-bound external AgentX harness environment"
+    },
+    {
+      "path": ".github/actions/setup-canary-runner/action.yml",
+      "line": "for cmd in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do",
+      "occurrences": 1,
+      "purpose": "verify preinstalled canary runner prerequisites"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "host_python=\"$(command -v python3)\"",
+      "occurrences": 1,
+      "purpose": "select the runner-provisioned interpreter for external SDK dependencies"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "command -v uv >/dev/null 2>&1 || { echo \"preinstalled canonical canary uv is required\" >&2; exit 1; }",
+      "occurrences": 1,
+      "purpose": "require the runner-provisioned dependency manager"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "uv sync --locked --project \"$sdk_project\" --python \"$host_python\"",
+      "occurrences": 1,
+      "purpose": "restore the exact external SDK embedding lock"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "\"$sdk_python\" -I \"$sdk_root/scripts/import-embedding.py\"",
+      "occurrences": 1,
+      "purpose": "run the external SDK embedding import smoke"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "[[ \"$(\"$host_python\" --version)\" == 'Python 3.12.'* ]] || { echo \"required SDK lock needs existing CPython 3.12\" >&2; exit 1; }",
+      "occurrences": 1,
+      "purpose": "verify the installed interpreter required by the external SDK lock"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "\"$host_python\" -I -m venv \"$sdk_environment\"",
+      "occurrences": 1,
+      "purpose": "create the run-owned external SDK environment"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "\"$sdk_python\" -I -m pip --isolated install --disable-pip-version-check --no-input \\",
+      "occurrences": 1,
+      "purpose": "install the exact external SDK compatibility lock"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "\"$sdk_python\" -I -m pip --isolated check",
+      "occurrences": 1,
+      "purpose": "check the external SDK compatibility environment"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "\"$sdk_python\" -I \"$sdk_root/scripts/import-compatibility.py\"",
+      "occurrences": 1,
+      "purpose": "run the external SDK compatibility import smoke"
+    },
+    {
+      "path": ".github/actions/setup-canary-python/action.yml",
+      "line": "[[ \"$sdk_python\" == /* && -f \"$sdk_python\" && -x \"$sdk_python\" ]] || exit 1",
+      "occurrences": 1,
+      "purpose": "require the prepared external SDK interpreter path"
+    },
+    {
+      "path": "scripts/llama-canary-agent-repair.sh",
+      "line": "uv run --locked --no-python-downloads --python \"$jinja_python\" --project \"$JINJA_PROJECT\" -- \\",
+      "occurrences": 2,
+      "purpose": "run the upstream Jinja tests with locked dependencies and the installed interpreter"
+    },
+    {
+      "path": "scripts/run-llama-benchy-openai.sh",
+      "line": "uvx",
+      "occurrences": 1,
+      "purpose": "optional user-invoked upstream llama-benchy wrapper"
+    },
+    {
+      "path": "scripts/ci-compat-smoke.sh",
+      "line": "if [[ \"$SDK_PYTHON\" != /* || ! -f \"$SDK_PYTHON\" || ! -x \"$SDK_PYTHON\" ]]; then",
+      "occurrences": 1,
+      "purpose": "require the prepared external SDK interpreter for compatibility probes"
+    },
+    {
+      "path": "scripts/ci-compat-smoke.sh",
+      "line": "\"${automation[@]}\" automation smoke-observation sdk-client --client openai --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/openai-sdk.json\"",
+      "occurrences": 1,
+      "purpose": "forward the prepared external SDK interpreter to the OpenAI compatibility client"
+    },
+    {
+      "path": "scripts/ci-compat-smoke.sh",
+      "line": "\"${automation[@]}\" automation smoke-observation sdk-client --client litellm --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/litellm-sdk.json\"",
+      "occurrences": 1,
+      "purpose": "forward the prepared external SDK interpreter to the LiteLLM compatibility client"
+    },
+    {
+      "path": "scripts/ci-compat-smoke.sh",
+      "line": "\"${automation[@]}\" automation smoke-observation sdk-client --client langchain --python \"$SDK_PYTHON\" --base-url \"$BASE_URL\" --model \"$MODEL_ID\" --timeout-secs \"${MESH_COMPAT_SDK_TIMEOUT_SECS:-240}\" --receipt \"$SDK_EVIDENCE_DIR/langchain-sdk.json\"",
+      "occurrences": 1,
+      "purpose": "forward the prepared external SDK interpreter to the LangChain compatibility client"
+    },
+    {
+      "path": "skippy/scripts/skippy-workload-certify.sh",
+      "line": "if [[ \"$SDK_PYTHON\" != /* || ! -f \"$SDK_PYTHON\" || ! -x \"$SDK_PYTHON\" ]]; then",
+      "occurrences": 1,
+      "purpose": "require the prepared external SDK interpreter for embedding workload smoke"
+    },
+    {
+      "path": "skippy/scripts/skippy-workload-certify.sh",
+      "line": "--client embeddings --python \"$SDK_PYTHON\" \\",
+      "occurrences": 1,
+      "purpose": "forward the prepared external SDK interpreter to the native embedding workload"
+    },
+    {
+      "path": "skippy/scripts/skippy-openai-smoke.sh",
+      "line": "require_cmd uvx",
+      "occurrences": 1,
+      "purpose": "check the optional upstream llama-benchy command before its smoke wrapper"
+    }
+  ]
+}

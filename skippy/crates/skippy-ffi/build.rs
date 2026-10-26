@@ -88,6 +88,7 @@ fn main() {
         build_dir.join("vendor/hash"),
         build_dir.join("common"),
         build_dir.join("src"),
+        build_dir.join("whisper/src"),
         build_dir.join("ggml/src"),
         build_dir.join("ggml/src/ggml-cpu"),
         build_dir.join("ggml/src/ggml-blas"),
@@ -107,6 +108,7 @@ fn main() {
 
     for (unix_archive, msvc_archive) in [
         ("src/libllama.a", "src/llama.lib"),
+        ("whisper/src/libwhisper.a", "whisper/src/whisper.lib"),
         ("tools/mtmd/libmtmd.a", "tools/mtmd/mtmd.lib"),
         (
             "vendor/hash/libvendor-hash.a",
@@ -179,6 +181,15 @@ fn main() {
     println!("cargo:rustc-link-lib=static=llama-common");
     println!("cargo:rustc-link-lib=static=llama-common-base");
     println!("cargo:rustc-link-lib=static=llama");
+    // Speech recognition builds whisper.cpp into the tree and links it into
+    // libllama, which a static archive does not carry; follow llama with it.
+    if static_archive_exists(
+        &build_dir,
+        "whisper/src/libwhisper.a",
+        "whisper/src/whisper.lib",
+    ) {
+        println!("cargo:rustc-link-lib=static=whisper");
+    }
     println!("cargo:rustc-link-lib=static=ggml");
     let has_cuda = configured_backend_archive(
         &build_dir,

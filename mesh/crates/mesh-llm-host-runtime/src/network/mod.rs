@@ -2,6 +2,7 @@ pub(crate) mod affinity;
 pub(crate) mod discovery;
 pub(crate) mod lan_beacon;
 pub(crate) mod lan_bootstrap;
+pub(crate) mod local_http;
 pub(crate) mod management_origin;
 pub(crate) mod mdns_reverse_dial;
 pub(crate) mod metrics;

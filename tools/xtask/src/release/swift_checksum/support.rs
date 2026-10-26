@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub(super) fn fixture() -> PathBuf {
-    let executable = std::env::current_exe().unwrap();
-    let profile = executable.parent().unwrap().parent().unwrap();
-    let fixture = profile.join("examples").join(format!(
+    let fixture = crate::fixture_paths::examples_dir().join(format!(
         "migration_swift_checksum_fixture{}",
         std::env::consts::EXE_SUFFIX
     ));

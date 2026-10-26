@@ -5,13 +5,7 @@ use crate::process::{
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
 pub(super) fn invoke(root: &Path, options: &[String]) -> process::RawProcessReport {
-    let binary = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("xtask");
+    let binary = crate::fixture_paths::target_profile_dir().join("xtask");
     let executable = binary;
     let mut arguments = vec!["automation".into(), "split-evidence".into()];
     for name in super::NAMES {

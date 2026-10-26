@@ -48,6 +48,7 @@ mod tests {
 
     #[test]
     fn initialized_prompt_access_does_not_wait_for_inference_lock() {
+        skippy_runtime::test_support::require_native_runtime();
         let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(2)));
         let access = Arc::new(CachedPromptModel::default());
         access.initialize(&runtime);

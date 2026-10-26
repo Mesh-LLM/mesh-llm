@@ -32,8 +32,8 @@ pub(crate) struct RouteModelRequestContext<'a> {
 
 /// A delivered 2xx outcome: the routing-side test for "this attempt was
 /// served", which gates the `ServedByNodeIdSink` write. Mirrors
-/// `ingress::outcome_was_served`, kept here where the per-attempt target is in
-/// scope.
+/// `ingress::exchange_events::outcome_was_served`, kept here where the
+/// per-attempt target is in scope.
 fn route_outcome_was_served(outcome: &RouteDispatchOutcome) -> bool {
     matches!(
         outcome,

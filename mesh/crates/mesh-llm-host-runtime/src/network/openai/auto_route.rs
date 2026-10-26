@@ -6,6 +6,8 @@
 //! should use that model instead of spending an agent turn on a target we just
 //! proved unhealthy or too small.
 
+pub(crate) mod payment_admission;
+
 use super::workload_routing;
 use crate::inference::election;
 use crate::mesh;
@@ -74,6 +76,7 @@ pub(crate) async fn model_has_eligible_target(
 }
 
 /// Apply the same workload, context, and health admission to advertised remote hosts.
+#[cfg(test)]
 pub(crate) async fn model_has_eligible_remote_host(
     node: &mesh::Node,
     model: &str,
@@ -127,6 +130,7 @@ pub(crate) fn pool_for_ready_models<'a>(
 }
 
 /// Select model names with a ready remote host for this endpoint and context budget.
+#[cfg(test)]
 pub(crate) async fn ready_remote_models<'a>(
     node: &mesh::Node,
     required_tokens: Option<u32>,

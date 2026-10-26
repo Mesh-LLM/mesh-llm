@@ -1,4 +1,6 @@
+use crate::frontend::generation::GeneratedLogprobCandidate;
 use crate::frontend::generation::GeneratedText;
+use crate::frontend::generation::GeneratedTokenLogprob;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::GenerationMetrics;
 use crate::frontend::generation::ParsedChatMessage;
@@ -361,6 +363,8 @@ where
     metrics: GenerationMetrics,
     emulation_active: bool,
     ignore_eos: bool,
+    /// Tokens counted as completion tokens, in order, to align logprobs.
+    emitted_tokens: Vec<i32>,
 }
 
 impl<'a, F> TextGenerationCollector<'a, F>
@@ -391,6 +395,7 @@ where
             metrics: GenerationMetrics::default(),
             emulation_active: false,
             ignore_eos: false,
+            emitted_tokens: Vec::new(),
         })
     }
 
@@ -422,6 +427,7 @@ where
         }
         self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
         self.completion_tokens += 1;
+        self.emitted_tokens.push(token);
         let detokenize_timer = Instant::now();
         let piece = self
             .model
@@ -495,6 +501,10 @@ where
         cache_stats: GenerationCacheStats,
     ) -> InferenceResult<GeneratedText> {
         self.emit_safe_delta(true)?;
+        let token_logprobs = match cache_stats.token_logprobs {
+            Some(entries) => Some(self.aligned_logprobs(entries)?),
+            None => None,
+        };
         Ok(GeneratedText {
             prompt_tokens: saturating_u32(prompt_token_count),
             completion_tokens: saturating_u32(self.completion_tokens),
@@ -516,7 +526,52 @@ where
             detokenize_ms: self.metrics.detokenize_ms,
             text_emit_ms: self.metrics.text_emit_ms,
             eog_check_ms: self.metrics.eog_check_ms,
+            token_logprobs,
         })
+    }
+
+    /// The native session records an entry for every sampled token, including
+    /// the end-of-generation token that is never emitted; the emitted tokens
+    /// are therefore the leading entries, in order.
+    fn aligned_logprobs(
+        &self,
+        entries: Vec<skippy_runtime::TokenLogprobs>,
+    ) -> InferenceResult<Vec<GeneratedTokenLogprob>> {
+        if entries.len() < self.emitted_tokens.len()
+            || entries
+                .iter()
+                .zip(&self.emitted_tokens)
+                .any(|(entry, token)| entry.token != *token)
+        {
+            return Err(InferenceError::backend(
+                "recorded logprobs do not match the generated tokens",
+            ));
+        }
+        let candidate = |token: i32, logprob: f32| -> InferenceResult<GeneratedLogprobCandidate> {
+            let bytes = self
+                .model
+                .detokenize_bytes(&[token])
+                .map_err(openai_backend_error)?;
+            Ok(GeneratedLogprobCandidate {
+                text: String::from_utf8_lossy(&bytes).into_owned(),
+                bytes,
+                logprob: logprob.is_finite().then_some(logprob),
+            })
+        };
+        entries
+            .into_iter()
+            .take(self.emitted_tokens.len())
+            .map(|entry| {
+                Ok(GeneratedTokenLogprob {
+                    token: candidate(entry.token, entry.logprob)?,
+                    top: entry
+                        .top
+                        .iter()
+                        .map(|&(token, logprob)| candidate(token, logprob))
+                        .collect::<InferenceResult<_>>()?,
+                })
+            })
+            .collect()
     }
 }
 

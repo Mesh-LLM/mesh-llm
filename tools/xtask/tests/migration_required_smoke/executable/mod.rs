@@ -5,17 +5,10 @@ mod overlap_tests;
 
 pub(super) fn options(directory: &std::path::Path, scenario: &str) -> args::Options {
     std::fs::write(directory.join("scenario"), scenario).unwrap();
-    let fixture = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(format!(
-            "migration_smoke_fixture{}",
-            std::env::consts::EXE_SUFFIX
-        ));
+    let fixture = crate::fixture_paths::examples_dir().join(format!(
+        "migration_smoke_fixture{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     args::Options {
         binary: fixture,
         native: directory.to_owned(),

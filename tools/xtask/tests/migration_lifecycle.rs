@@ -1,6 +1,8 @@
 #![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
+#[path = "../src/fixture_paths.rs"]
+mod fixture_paths;
 #[path = "migration_lifecycle/two_node_split/mod.rs"]
 mod two_node_split;
 

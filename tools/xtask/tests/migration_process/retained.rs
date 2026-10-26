@@ -83,17 +83,10 @@ fn observer(launches: Vec<Launch>) -> Observer {
 }
 fn launch(root: &std::path::Path, member: MemberId, mode: &str) -> Launch {
     let mut spec = spec(root, mode);
-    let example = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(format!(
-            "migration_process_driver{}",
-            std::env::consts::EXE_SUFFIX
-        ));
+    let example = crate::fixture_paths::examples_dir().join(format!(
+        "migration_process_driver{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     spec.executable = example;
     spec.arguments.clear();
     spec.environment

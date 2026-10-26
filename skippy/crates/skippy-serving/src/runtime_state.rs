@@ -13,8 +13,8 @@ use skippy_runtime::{
     IterationBatchPhase, IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame,
     ModelStateKind, ModelWorkload, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
     RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, SpeechAudio, SpeechSynthesisConfig,
-    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal, WorkloadInfo,
-    parse_cache_type,
+    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenLogprobs, TokenSignal,
+    WorkloadInfo, parse_cache_type,
 };
 
 mod context_capacity;

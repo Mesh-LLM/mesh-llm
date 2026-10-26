@@ -259,12 +259,6 @@ impl LifecycleGuard {
         mesh_llm_events::logging::identifiers::AttemptId::new()
     }
 
-    /// Clone the internal state flag for external observation (drop counters etc.).
-    #[allow(dead_code)]
-    pub fn state_flag_clone(&self) -> Arc<AtomicU8> {
-        Arc::clone(&self.inner.state_flag)
-    }
-
     /// Whether two guards share the same terminal track.
     #[allow(dead_code)]
     pub fn shares_track_with(&self, other: &Self) -> bool {

@@ -43,7 +43,7 @@ Use a specific model:
 mesh-llm goose --model MiniMax-M2.5-Q4_K_M
 ```
 
-This writes or updates `~/.config/goose/custom_providers/mesh.json` and launches Goose.
+This writes or updates `custom_providers/mesh.json` in Goose's config directory and launches Goose.
 
 Manual OpenAI-provider setup, if you do not want to use the launcher:
 
@@ -54,8 +54,11 @@ export OPENAI_HOST="http://127.0.0.1:9337"
 export OPENAI_API_KEY="mesh"
 ```
 
-Goose custom providers live under `~/.config/goose/custom_providers/` on
-macOS/Linux.
+Goose reads its config directory, with custom providers under
+`custom_providers/`, from `~/.config/goose/` on macOS/Linux
+(`$XDG_CONFIG_HOME/goose/` when that variable is an absolute path) and from
+`%APPDATA%\Block\goose\config\` on Windows. An absolute `GOOSE_PATH_ROOT` moves
+it to `<root>/config/` everywhere.
 
 ## Claude Code
 

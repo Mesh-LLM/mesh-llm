@@ -1,9 +1,8 @@
-//! `ci-ops sccache-stats`: the Rust owner of
-//! `.github/actions/capture-sccache-stats/capture.py`. Runs
+//! `ci-ops sccache-stats` runs
 //! `sccache --show-stats --stats-format json`, keeps only the required
 //! counters (paths, URLs and raw sccache stderr never reach the logs or the
 //! evidence), classifies the cache observation, writes the evidence JSON and
-//! optional step outputs, and matches the legacy streams and statuses.
+//! optional step outputs while preserving the consumed evidence and step-output shapes.
 
 use crate::ci_operations::build_cache_tree::io_text;
 use crate::ci_operations::build_cache_values::resolve;
@@ -119,7 +118,7 @@ fn capture(args: &Args) -> Result<String, Failure> {
     }
     let payload = decode(run_sccache()?)?;
     let counters = sanitize(&payload)?;
-    let assessment = assess(args.expectation, args.minimum_hit_rate, &counters)?;
+    let assessment = assess(args.expectation.as_str(), args.minimum_hit_rate, &counters)?;
 
     let output = pure_path(&args.output);
     if let Some(parent) = output

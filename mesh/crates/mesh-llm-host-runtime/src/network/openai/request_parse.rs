@@ -103,6 +103,10 @@ struct ParsedHeaders {
     content_type: Option<String>,
     is_chunked: bool,
     expects_continue: bool,
+    /// A live transcription handshake (`GET /v1/realtime` with an upgrade):
+    /// bytes after the head are its first websocket frames, not a body, and
+    /// are kept for the relay. Every other request drops them.
+    is_realtime_upgrade: bool,
     correlation_id: Option<String>,
 }
 
@@ -543,7 +547,11 @@ where
         )
         .await;
     }
-    raw.truncate(header_end);
+    // A client may send its first websocket frames together with the
+    // handshake; they stay in `raw` behind the head for the relay.
+    if !parsed.is_realtime_upgrade {
+        raw.truncate(header_end);
+    }
     Ok(Vec::new())
 }
 
@@ -792,6 +800,8 @@ where
                 let mut content_length = None;
                 let mut is_chunked = false;
                 let mut expects_continue = false;
+                let mut upgrade_requested = false;
+                let mut connection_upgrade = false;
                 let mut correlation_id = None;
                 let mut content_type = None;
 
@@ -809,6 +819,13 @@ where
                         is_chunked = val
                             .split(',')
                             .any(|part| part.trim().eq_ignore_ascii_case("chunked"));
+                    } else if header.name.eq_ignore_ascii_case("upgrade") {
+                        upgrade_requested = !header.value.trim_ascii().is_empty();
+                    } else if header.name.eq_ignore_ascii_case("connection") {
+                        let val = std::str::from_utf8(header.value).unwrap_or("");
+                        connection_upgrade |= val
+                            .split(',')
+                            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"));
                     } else if header.name.eq_ignore_ascii_case("expect") {
                         let val = std::str::from_utf8(header.value).unwrap_or("");
                         expects_continue = val
@@ -838,6 +855,10 @@ where
                     content_length = None;
                 }
 
+                let is_realtime_upgrade = upgrade_requested
+                    && connection_upgrade
+                    && method.eq_ignore_ascii_case("GET")
+                    && path.split('?').next() == Some("/v1/realtime");
                 return Ok(ParsedHeaders {
                     header_end,
                     method,
@@ -847,6 +868,7 @@ where
                     content_type,
                     is_chunked,
                     expects_continue,
+                    is_realtime_upgrade,
                     correlation_id,
                 });
             }
@@ -1013,7 +1035,7 @@ fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>
 /// wire order; duplicates are returned as separate entries. `Err(())` means
 /// at least one occurrence of `name` had non-UTF-8 bytes -- the caller must
 /// reject the request rather than silently drop that occurrence.
-fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
+pub(crate) fn header_values_from_raw(raw: &[u8], name: &str) -> Result<Vec<String>, ()> {
     untrimmed_header_values_from_raw(raw, name).map(|values| {
         values
             .iter()

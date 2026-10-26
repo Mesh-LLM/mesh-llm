@@ -195,6 +195,12 @@ impl RuntimeState {
         self.session(session_id)?.last_token_signal()
     }
 
+    /// Moves out the per-token log-probabilities the session recorded for a
+    /// request that asked for them, oldest first.
+    pub fn take_token_logprobs(&mut self, session_id: &str) -> Result<Vec<TokenLogprobs>> {
+        self.session(session_id)?.take_token_logprobs()
+    }
+
     pub fn signal_window(
         &mut self,
         session_id: &str,

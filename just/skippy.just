@@ -166,6 +166,11 @@ skippy-attention-tests backend="cuda" *ARGS="": (skippy-attention-tests-build ba
     build_dir=$(just --quiet skippy-attention-tests-dir "{{ backend }}")
     "$build_dir/bin/test-backend-ops" -o FLASH_ATTN_EXT {{ ARGS }}
 
+# Build the opt-in native MTP developer probes against the local runtime.
+[unix]
+skippy-native-mtp-probes-build:
+    bash skippy/evals/native-mtp-parity/build.sh
+
 # Replay every retained and current native Skippy gate without broad upstream tests.
 [unix]
 skippy-native-full-replay backend="cpu":
