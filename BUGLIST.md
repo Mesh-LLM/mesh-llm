@@ -242,15 +242,20 @@ release tags that will have moved.
 
 | Rank | Issue | Status | Branch | PR | Evidence |
 |---:|---|---|---|---|---|
-| 12 | [#2003](https://github.com/Mesh-LLM/mesh-llm/issues/2003) | NOT-REPRODUCIBLE | `fix/12-2003-platform-checks-cache-mode` | — | [evidence](https://github.com/Mesh-LLM/mesh-llm/issues/2003#issuecomment-6406982137) |
+| 12 | [#2003](https://github.com/Mesh-LLM/mesh-llm/issues/2003) | NOT-REPRODUCIBLE (Windows half; macOS half open) | `fix/12-2003-platform-checks-cache-mode` | - | [evidence](https://github.com/Mesh-LLM/mesh-llm/issues/2003#issuecomment-6407002792) |
 
-#2003: the reported cold `platform-checks` compile on `main` does not occur. `main_windows.yml`
-run [40248201661](https://github.com/Mesh-LLM/mesh-llm/actions/runs/40248201661) job
+#2003: the `cache_mode: none` causal premise is falsified, and the Windows cold-build condition no
+longer occurs on `main`. `main_windows.yml` run
+[40248201661](https://github.com/Mesh-LLM/mesh-llm/actions/runs/40248201661) job
 `Platform checks (windows-unit)` logs `Baked sccache is using job-local disk with a read_write
 GitHub Actions cache.` with `Cache hits rate 80.88 %` (1438 hits / 340 misses), not the reported
-0.25%. The cited cause is also disconnected: `plan.cache_modes` is planner metadata whose only
-consumer is the pull-request-profile assertion in
-`.github/workflows/ci-runner-contract-slice.yml`, while the lane's cache behavior comes from
-`.github/actions/configure-sccache-gha` (event name plus `select-ci-runners` trust outputs). The
-catalog inconsistency the issue names is real but inert, so no catalog, workflow, or policy change
-was made.
+0.25%; #2374 added the missing `configure-sccache-gha` wiring on Oct 12. The cited mechanism is
+disconnected too: `plan.cache_modes` is planner metadata whose only consumer is the
+pull-request-profile assertion in `.github/workflows/ci-runner-contract-slice.yml`, so the catalog
+entry could not have caused the original cold build either.
+
+Scope of this row: it does not close the duration report. Measured `windows-unit` time is still
+22.9-28.4 min (24-41 min over the last 12 runs) and `Run macOS unit tests` about 22 min on `main`.
+That time is now test execution rather than a cold build, and the macOS cache decision stays open
+with the maintainer, who has declined to guess its gain. No catalog, workflow, or policy change was
+made.
