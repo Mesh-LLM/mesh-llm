@@ -234,7 +234,7 @@ open pull request, and Evidence the confirmation or disposition comment.
 | # | Status | Branch | PR | Evidence |
 |---|---|---|---|---|
 | 10 | IN-PROGRESS | `fix/10-2029-unresolved-layer-diagnostics` | [#2591](https://github.com/Mesh-LLM/mesh-llm/pull/2591) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2029#issuecomment-6406262501) |
-
+| 11 | IN-PROGRESS | `fix/11-2385-models-show-refs` | [#2592](https://github.com/Mesh-LLM/mesh-llm/pull/2592) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2385#issuecomment-6406651065) |
 
 ## Regenerating this list
 
