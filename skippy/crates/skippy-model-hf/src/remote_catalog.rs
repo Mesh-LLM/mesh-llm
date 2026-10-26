@@ -369,7 +369,7 @@ pub fn find_huggingface_layer_package(model_query: &str) -> Option<String> {
         Ok(true) => Some(format_hf_package_ref(&repo, revision.as_deref())),
         Ok(false) => None,
         Err(err) => {
-            tracing::debug!(
+            tracing::warn!(
                 "Hugging Face layer package probe failed for {repo}@{revision_ref}: {err:#}"
             );
             None
@@ -381,6 +381,11 @@ pub fn find_huggingface_layer_package(model_query: &str) -> Option<String> {
 pub fn resolve_layer_package_download(model_query: &str) -> Option<String> {
     let _ = ensure_catalog();
     find_layer_package(model_query).or_else(|| find_huggingface_layer_package(model_query))
+}
+
+/// The exact Hugging Face model repository named by `input`, when `input` names one.
+pub fn huggingface_repo_ref(input: &str) -> Option<String> {
+    parse_exact_huggingface_repo(input).map(|(repo, _revision)| repo)
 }
 
 fn parse_exact_huggingface_repo(input: &str) -> Option<(String, Option<String>)> {
