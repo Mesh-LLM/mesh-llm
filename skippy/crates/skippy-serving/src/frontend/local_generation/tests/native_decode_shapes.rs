@@ -2,6 +2,7 @@
 //! or prefix-cache lookup. Keep exact token assertions.
 use super::*;
 use crate::runtime_state::RuntimeIterationBatchRequest;
+use anyhow::Context;
 use skippy_runtime::IterationBatchPhase;
 
 pub(super) fn prefill_without_intermediate_sampling(
@@ -26,82 +27,169 @@ pub(super) fn prefill_without_intermediate_sampling(
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
 fn native_interleaved_prefills_preserve_concurrent_decode() -> Result<()> {
+    let serial = interleaved_prefill_continuation(false, false, None)?;
+    let interleaved = interleaved_prefill_continuation(true, false, None)?;
+    let serial_batched = interleaved_prefill_continuation(false, true, None)?;
+    let interleaved_batched = interleaved_prefill_continuation(true, true, None)?;
+    assert_eq!(
+        interleaved.0, serial.0,
+        "prefill order changed serial decode"
+    );
+    assert_eq!(
+        serial_batched.0[0],
+        serial.0[0][..3],
+        "batching changed lane 0"
+    );
+    assert_eq!(serial_batched.0[1], serial.0[1], "batching changed lane 1");
+    assert_eq!(
+        interleaved_batched.0, serial_batched.0,
+        "interleaved prefills changed batched decode"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_interleaved_prefills_preserve_matched_decode_after_near_tie() -> Result<()> {
+    // With quantized CUDA, physical KV placement can change reduction order
+    // enough to swap a near-tied top two. Feed the same continuation after the
+    // first step so one swapped sample does not turn into an unrelated trace.
+    let baseline = interleaved_prefill_continuation(false, false, None)?;
+    let fixed = Some([baseline.0[0][1], baseline.0[1][1]]);
+    let serial = interleaved_prefill_continuation(false, false, fixed)?;
+    let interleaved = interleaved_prefill_continuation(true, false, fixed)?;
+    let serial_batched = interleaved_prefill_continuation(false, true, fixed)?;
+    let interleaved_batched = interleaved_prefill_continuation(true, true, fixed)?;
+
+    assert_eq!(
+        interleaved.0, serial.0,
+        "prefill order changed serial decode"
+    );
+    assert_eq!(
+        serial_batched.0[0],
+        serial.0[0][..3],
+        "batching changed lane 0"
+    );
+    assert_eq!(serial_batched.0[1], serial.0[1], "batching changed lane 1");
+    assert_eq!(interleaved_batched.0[0], serial_batched.0[0]);
+    assert_eq!(
+        interleaved_batched.0[1][2..],
+        serial_batched.0[1][2..],
+        "matched continuation changed lane 1 after the first shared decode"
+    );
+    assert_near_tie_or_match(
+        serial_batched.0[1][1],
+        interleaved_batched.0[1][1],
+        serial_batched
+            .1
+            .context("serial batched first signal missing")?,
+        interleaved_batched
+            .1
+            .context("interleaved batched first signal missing")?,
+    );
+    Ok(())
+}
+
+fn assert_near_tie_or_match(
+    expected: i32,
+    actual: i32,
+    serial: skippy_runtime::TokenSignal,
+    interleaved: skippy_runtime::TokenSignal,
+) {
+    if expected == actual {
+        return;
+    }
+    assert_eq!((serial.top_token, serial.second_token), (expected, actual));
+    assert_eq!(
+        (interleaved.top_token, interleaved.second_token),
+        (actual, expected)
+    );
+    assert!(
+        serial.margin <= 0.05 && interleaved.margin <= 0.05,
+        "first decode was not a near tie: serial={serial:?}, interleaved={interleaved:?}"
+    );
+    assert!(
+        (serial.top_logprob - interleaved.top_logprob).abs() <= 0.05
+            && (serial.entropy - interleaved.entropy).abs() <= 0.05,
+        "first decode distributions changed beyond near-tie tolerance: serial={serial:?}, interleaved={interleaved:?}"
+    );
+}
+
+fn interleaved_prefill_continuation(
+    interleaved: bool,
+    batched_decode: bool,
+    fixed_after_first: Option<[i32; 2]>,
+) -> Result<(Vec<Vec<i32>>, Option<skippy_runtime::TokenSignal>)> {
     let prompts = [
         (1..=64).collect::<Vec<_>>(),
         (1..=64).rev().collect::<Vec<_>>(),
     ];
-    let run = |interleaved: bool, batched_decode: bool| -> Result<Vec<Vec<i32>>> {
-        let (backend, _) = recurrent_test_backend_with_lanes(
-            "interleaved-prefill-shape",
-            "interleaved-prefill-shape",
-            256,
-            (32, 32, 2),
-            8,
-            512,
-            None,
-        )?;
-        let mut runtime = backend.runtime.lock().unwrap();
-        let sessions = ["interleaved-prefill-0", "interleaved-prefill-1"];
-        let mut first = [0; 2];
-        let chunks = if interleaved {
-            [
-                (0, 0, 32),
-                (0, 32, 30),
-                (1, 0, 32),
-                (0, 62, 2),
-                (1, 32, 30),
-                (1, 62, 2),
-            ]
-        } else {
-            [
-                (0, 0, 32),
-                (0, 32, 30),
-                (0, 62, 2),
-                (1, 0, 32),
-                (1, 32, 30),
-                (1, 62, 2),
-            ]
-        };
-        for (lane, offset, count) in chunks {
-            if let Some(token) = prefill_without_intermediate_sampling(
-                &mut runtime,
-                sessions[lane],
-                &prompts[lane][offset..offset + count],
-                offset == 62,
-            )? {
-                first[lane] = token;
-            }
-        }
-        if batched_decode {
-            return Ok(long_decode(&mut runtime, &sessions, &first, true)?.tokens);
-        }
-        let mut outputs = first.map(|token| vec![token]);
-        for lane in 0..2 {
-            for _ in 1..8 {
-                let input = [*outputs[lane].last().unwrap()];
-                outputs[lane].extend(iterate(
-                    &mut runtime,
-                    &[sessions[lane]],
-                    &[&input],
-                    IterationBatchPhase::Decode,
-                )?);
-            }
-        }
-        Ok(outputs.into_iter().collect())
+    let (backend, _) = recurrent_test_backend_with_lanes(
+        "interleaved-prefill-shape",
+        "interleaved-prefill-shape",
+        256,
+        (32, 32, 2),
+        8,
+        512,
+        None,
+    )?;
+    let mut runtime = backend.runtime.lock().unwrap();
+    let sessions = ["interleaved-prefill-0", "interleaved-prefill-1"];
+    let mut first = [0; 2];
+    let chunks = if interleaved {
+        [
+            (0, 0, 32),
+            (0, 32, 30),
+            (1, 0, 32),
+            (0, 62, 2),
+            (1, 32, 30),
+            (1, 62, 2),
+        ]
+    } else {
+        [
+            (0, 0, 32),
+            (0, 32, 30),
+            (0, 62, 2),
+            (1, 0, 32),
+            (1, 32, 30),
+            (1, 62, 2),
+        ]
     };
-
-    let serial = run(false, false)?;
-    let interleaved = run(true, false)?;
-    let serial_batched = run(false, true)?;
-    let interleaved_batched = run(true, true)?;
-    assert_eq!(interleaved, serial, "prefill order changed serial decode");
-    assert_eq!(serial_batched[0], serial[0][..3], "batching changed lane 0");
-    assert_eq!(serial_batched[1], serial[1], "batching changed lane 1");
-    assert_eq!(
-        interleaved_batched, serial_batched,
-        "interleaved prefills changed batched decode"
-    );
-    Ok(())
+    for (lane, offset, count) in chunks {
+        if let Some(token) = prefill_without_intermediate_sampling(
+            &mut runtime,
+            sessions[lane],
+            &prompts[lane][offset..offset + count],
+            offset == 62,
+        )? {
+            first[lane] = token;
+        }
+    }
+    if batched_decode {
+        let decoded = long_decode(&mut runtime, &sessions, &first, true, fixed_after_first)?;
+        return Ok((decoded.tokens, Some(decoded.first_signal)));
+    }
+    let mut outputs = first.map(|token| vec![token]);
+    let mut first_signal = None;
+    for lane in 0..2 {
+        for _ in 1..8 {
+            let input = [if outputs[lane].len() == 1 {
+                *outputs[lane].last().unwrap()
+            } else {
+                fixed_after_first.map_or(*outputs[lane].last().unwrap(), |fixed| fixed[lane])
+            }];
+            outputs[lane].extend(iterate(
+                &mut runtime,
+                &[sessions[lane]],
+                &[&input],
+                IterationBatchPhase::Decode,
+            )?);
+            if lane == 1 && outputs[lane].len() == 2 {
+                first_signal = Some(runtime.last_token_signal(sessions[1])?);
+            }
+        }
+    }
+    Ok((outputs.into_iter().collect(), first_signal))
 }
 
 #[test]
@@ -522,15 +610,15 @@ fn compare_long_decode_prompts(microbatch: u32, prompts: [Vec<i32>; 2]) -> Resul
     // Match the serving regression: the first lane stops at three tokens while
     // the second continues to eight. Comparing only the first decode step
     // misses accumulated recurrent-state differences near the end of a turn.
-    let together = long_decode(&mut runtime, &sessions, &starts, true)?;
+    let together = long_decode(&mut runtime, &sessions, &starts, true, None)?;
     restore(&mut runtime, &sessions, &prompts, &checkpoints)?;
-    let replay = long_decode(&mut runtime, &sessions, &starts, true)?;
+    let replay = long_decode(&mut runtime, &sessions, &starts, true, None)?;
     assert_eq!(
         together.tokens, replay.tokens,
         "same-shape checkpoint replay, ubatch={microbatch}"
     );
     restore(&mut runtime, &sessions, &prompts, &checkpoints)?;
-    let separate = long_decode(&mut runtime, &sessions, &starts, false)?;
+    let separate = long_decode(&mut runtime, &sessions, &starts, false, None)?;
     assert_eq!(
         together.tokens,
         separate.tokens,
@@ -561,6 +649,7 @@ fn long_decode(
     sessions: &[&str; 2],
     starts: &[i32],
     together: bool,
+    fixed_after_first: Option<[i32; 2]>,
 ) -> Result<LongDecode> {
     let mut outputs: Vec<_> = starts.iter().map(|&token| vec![token]).collect();
     let mut first_signal = None;
@@ -569,7 +658,13 @@ fn long_decode(
         let names: Vec<_> = active.iter().map(|&index| sessions[index]).collect();
         let inputs: Vec<_> = active
             .iter()
-            .map(|&index| [*outputs[index].last().unwrap()])
+            .map(|&index| {
+                [if step == 1 {
+                    *outputs[index].last().unwrap()
+                } else {
+                    fixed_after_first.map_or(*outputs[index].last().unwrap(), |fixed| fixed[index])
+                }]
+            })
             .collect();
         let tokens: Vec<_> = inputs.iter().map(|input| input.as_slice()).collect();
         let next = if together {
