@@ -112,12 +112,17 @@ struct RouteModelState {
     attempts: usize,
     timeout_attempts: usize,
     refreshed: bool,
+    /// Every attempt so far refused to serve without payment.
+    payment_required: bool,
 }
 
 enum RouteModelDisposition {
     Continue,
     Return(RouteDispatchOutcome),
 }
+
+/// A peer's refusal to serve an unpaid request.
+const PAYMENT_REQUIRED_STATUS: u16 = 402;
 
 fn no_context_eligible_target_reason(model: &str, required_tokens: Option<u32>) -> String {
     match required_tokens {
@@ -319,6 +324,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         attempts: 0,
         timeout_attempts: 0,
         refreshed: false,
+        payment_required: false,
     };
     // `request.raw` was already stabilized at ingress (finalize_forwarded_request
     // resolves the capsule client nonce once, before target selection), so every
@@ -548,6 +554,9 @@ fn handle_route_model_attempt_result(
         RouteAttemptResult::RetryableUnavailable => {
             handle_retryable_route_model_unavailable(node, target, state)
         }
+        RouteAttemptResult::RetryablePaymentRequired => {
+            handle_retryable_route_model_payment_required(node, target, state)
+        }
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
             RouteModelDisposition::Return(RouteDispatchOutcome::FailedWithStatus {
                 status_code,
@@ -691,6 +700,18 @@ fn handle_retryable_route_model_timeout(
     spawn_mesh_refresh_once(node, &mut state.refreshed);
     tracing::warn!("Target {target:?} timed out, trying next");
     RouteModelDisposition::Continue
+}
+
+/// A replica declined to serve without payment. Record the refusal so a model
+/// whose every replica charges still reports 402 rather than an unavailable-mesh
+/// error, then move on to a replica that will serve (#2059).
+fn handle_retryable_route_model_payment_required(
+    node: &mesh::Node,
+    target: &election::InferenceTarget,
+    state: &mut RouteModelState,
+) -> RouteModelDisposition {
+    state.payment_required = true;
+    handle_retryable_route_model_unavailable(node, target, state)
 }
 
 fn handle_retryable_route_model_unavailable(
@@ -924,6 +945,7 @@ mod tests {
             attempts: 1,
             timeout_attempts: 0,
             refreshed: false,
+            payment_required: false,
         };
         (node, affinity, target, selection, state)
     }
@@ -1309,10 +1331,7 @@ mod tests {
         async fn drain_request_headers(stream: &mut tokio::net::TcpStream) {
             let mut buffer = [0u8; 4096];
             let mut accumulated = Vec::new();
-            loop {
-                let Ok(read) = stream.read(&mut buffer).await else {
-                    break;
-                };
+            while let Ok(read) = stream.read(&mut buffer).await {
                 if read == 0 {
                     break;
                 }

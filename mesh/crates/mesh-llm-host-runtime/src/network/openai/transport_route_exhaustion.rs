@@ -4,6 +4,11 @@ use super::*;
 
 impl RouteModelState {
     fn exhausted_status(&self) -> u16 {
+        // Every replica refused to serve without payment. That is the caller's
+        // to settle, not an unavailable mesh (#2059).
+        if self.payment_required {
+            return PAYMENT_REQUIRED_STATUS;
+        }
         // Keep unavailable/mixed failures as 503. A route whose every attempt
         // exceeded its deadline is a gateway timeout, after all normal retries.
         if self.attempts > 0 && self.timeout_attempts == self.attempts {
@@ -23,13 +28,12 @@ pub(super) async fn finish_exhausted_route_model_request(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteDispatchOutcome {
     let status = state.exhausted_status();
-    let result = send_error_observed(
-        tcp_stream,
-        status,
-        &format!("all {} target(s) for model '{model}' failed", total_targets),
-        route_observer,
-    )
-    .await;
+    let reason = if state.payment_required {
+        format!("every target for model '{model}' requires the Lightning payment protocol")
+    } else {
+        format!("all {} target(s) for model '{model}' failed", total_targets)
+    };
+    let result = send_error_observed(tcp_stream, status, &reason, route_observer).await;
     record_route_model_unavailable(node, model, state.attempts);
     tracing::warn!(
         model = model,
@@ -58,6 +62,7 @@ mod tests {
                 attempts,
                 timeout_attempts,
                 refreshed: false,
+                payment_required: false,
             };
             let status = state.exhausted_status();
             assert_eq!(status, expected);
