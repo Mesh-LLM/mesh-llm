@@ -98,6 +98,11 @@ const FIXTURE_ROWS = [
 
 renderRows(FIXTURE_ROWS.map((row) => ({ row })));
 
+/**
+ * Reads the decoded value of one rendered data attribute per fixture row.
+ * @param {string} name
+ * @returns {string[]}
+ */
 function renderedAttributes(name) {
   const values = [...catalogRows.innerHTML.matchAll(new RegExp(`\\b${name}="([^"]*)"`, "g"))].map(
     (match) => attributeValue(match[1]),
@@ -110,6 +115,7 @@ function renderedAttributes(name) {
   return values;
 }
 
+/** Returns decoded, non-empty option values for one filter. */
 function optionValues(source, selectId, surface) {
   const select = source.match(new RegExp(`<select id="${selectId}"[\\s\\S]*?</select>`));
   assert.ok(select, `${surface} must render <select id="${selectId}">`);
@@ -141,6 +147,7 @@ for (const bucket of renderedHardware) {
 //    leaves 8.1–10.9 GB unnameable, which is why four 9.0 GB models showed up
 //    under "11–20 GB"; "40 GB+" above a 20 GB ceiling is why the 22.5 GB
 //    Llama-4-Scout showed up under "40 GB+".
+/** Parses a hardware label into lower and upper size bounds. */
 function bucketBounds(label) {
   const text = label.trim();
   const atMost = text.match(/^(?:≤|<=)\s*([\d.]+)\s*GB$/i);
