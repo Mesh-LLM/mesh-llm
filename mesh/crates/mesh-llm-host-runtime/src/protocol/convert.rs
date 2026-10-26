@@ -924,12 +924,22 @@ pub(crate) fn local_ann_to_proto_ann(
             .iter()
             .map(local_throughput_hint_to_proto)
             .collect(),
-        subprotocols: skippy_stage_subprotocols(
-            ann.artifact_transfer_supported,
-            ann.stage_protocol_generation_supported,
-            ann.stage_status_list_supported,
-            ann.local_gguf_content_id_supported,
-        ),
+        subprotocols: {
+            let mut subprotocols = skippy_stage_subprotocols(
+                ann.artifact_transfer_supported,
+                ann.stage_protocol_generation_supported,
+                ann.stage_status_list_supported,
+                ann.local_gguf_content_id_supported,
+            );
+            if ann.plugin_origin_signature_supported {
+                subprotocols.push(crate::proto::node::MeshSubprotocol {
+                    name: mesh_llm_protocol::PLUGIN_MESH_SUBPROTOCOL.into(),
+                    major: 1,
+                    features: vec![mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE.into()],
+                });
+            }
+            subprotocols
+        },
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
         lightning_offers: {
             #[cfg(feature = "payments")]
@@ -1197,6 +1207,14 @@ pub(crate) fn proto_ann_to_local(
         stage_status_list_supported: supports_skippy_status_list(&pa.subprotocols),
         local_gguf_content_id_supported: supports_local_gguf_content_id(&pa.subprotocols),
         decode_batch_policy_supported: supports_decode_batch_policy(&pa.subprotocols),
+        plugin_origin_signature_supported: pa.subprotocols.iter().any(|subprotocol| {
+            subprotocol.name == mesh_llm_protocol::PLUGIN_MESH_SUBPROTOCOL
+                && subprotocol.major == 1
+                && subprotocol
+                    .features
+                    .iter()
+                    .any(|feature| feature == mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE)
+        }),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()

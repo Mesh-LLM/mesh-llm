@@ -1509,6 +1509,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn configured_plugin_url_is_normalized_before_child_env_export() {
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {

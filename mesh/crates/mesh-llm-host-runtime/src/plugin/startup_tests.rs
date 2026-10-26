@@ -8,6 +8,7 @@ fn private_host_mode() -> PluginHostMode {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_startup_policy_is_resolved() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -47,6 +48,7 @@ fn external_plugin_startup_policy_is_resolved() {
 }
 
 #[test]
+#[serial_test::serial]
 fn optional_missing_installed_plugin_becomes_inactive_summary() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {

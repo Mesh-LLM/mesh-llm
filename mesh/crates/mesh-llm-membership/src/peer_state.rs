@@ -121,6 +121,7 @@ pub struct PeerAnnouncement {
     pub stage_status_list_supported: bool,
     pub local_gguf_content_id_supported: bool,
     pub decode_batch_policy_supported: bool,
+    pub plugin_origin_signature_supported: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     #[cfg(feature = "payments")]
     pub lightning_offers: mesh_llm_payments_types::offers::LightningOffers,
@@ -374,6 +375,7 @@ pub struct PeerInfo {
     pub stage_status_list_supported: bool,
     pub local_gguf_content_id_supported: bool,
     pub decode_batch_policy_supported: bool,
+    pub plugin_origin_signature_supported: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     #[cfg(feature = "payments")]
     pub lightning_offers: mesh_llm_payments_types::offers::LightningOffers,
@@ -441,6 +443,7 @@ impl PeerInfo {
             stage_status_list_supported: ann.stage_status_list_supported,
             local_gguf_content_id_supported: ann.local_gguf_content_id_supported,
             decode_batch_policy_supported: ann.decode_batch_policy_supported,
+            plugin_origin_signature_supported: ann.plugin_origin_signature_supported,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
             #[cfg(feature = "payments")]
             lightning_offers: ann.lightning_offers.clone(),

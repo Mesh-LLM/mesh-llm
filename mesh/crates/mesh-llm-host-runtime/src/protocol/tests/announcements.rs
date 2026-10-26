@@ -60,6 +60,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
+        plugin_origin_signature_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -72,6 +73,14 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         claimed_log_head: None,
     };
     let proto_pa = local_ann_to_proto_ann(&ann);
+    assert!(proto_pa.subprotocols.iter().any(|subprotocol| {
+        subprotocol.name == "plugin-mesh"
+            && subprotocol.major == 1
+            && subprotocol
+                .features
+                .iter()
+                .any(|feature| feature == "plugin-origin-signature")
+    }));
     let skippy = proto_pa
         .subprotocols
         .iter()
@@ -104,6 +113,19 @@ fn owner_fields_roundtrip_through_proto_announcement() {
     assert!(roundtripped.artifact_transfer_supported);
     assert!(roundtripped.stage_status_list_supported);
     assert!(roundtripped.stage_protocol_generation_supported);
+    assert!(roundtripped.plugin_origin_signature_supported);
+    let mut legacy = proto_pa.clone();
+    for subprotocol in &mut legacy.subprotocols {
+        subprotocol
+            .features
+            .retain(|feature| feature != "plugin-origin-signature");
+    }
+    assert!(
+        !proto_ann_to_local(&legacy)
+            .unwrap()
+            .1
+            .plugin_origin_signature_supported
+    );
     let roundtripped = roundtripped
         .owner_attestation
         .expect("owner attestation must round-trip");
@@ -194,6 +216,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
         advertised_model_throughput: vec![
             expected_hints[0].clone(),
             crate::network::metrics::ModelThroughputHint {
@@ -409,6 +432,7 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -672,6 +696,7 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
+        plugin_origin_signature_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1081,6 +1106,7 @@ fn claimed_log_head_test_announcement(
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -1196,6 +1222,7 @@ fn proto_announcement_without_claimed_log_head_decodes_as_absent() {
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
