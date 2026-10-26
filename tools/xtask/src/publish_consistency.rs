@@ -390,6 +390,28 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         "cargo run -p xtask -- repo-consistency publish-crates",
         "release workflow publish-chain consistency check",
     )?;
+    let preflight_job = workflow_job_section(&release_workflow, "publish_crates_preflight")
+        .ok_or("release workflow: missing `publish_crates_preflight` job")?;
+    ensure_contains(
+        preflight_job,
+        "needs: [metadata, compose_cpu_products]",
+        "release workflow preflight must precede publication and reuse the same-run product",
+    )?;
+    ensure_contains(
+        preflight_job,
+        "ref: ${{ needs.metadata.outputs.source_sha }}",
+        "release workflow preflight checks out the immutable source revision",
+    )?;
+    ensure_contains(
+        preflight_job,
+        "name: release-linux",
+        "release workflow preflight downloads the same-run release-linux artifact",
+    )?;
+    ensure_not_contains(
+        preflight_job,
+        "releases/download",
+        "release workflow preflight must not read published release assets",
+    )?;
     ensure_contains(
         &release_workflow,
         "scripts/publish-crates.sh --dry-run --allow-dirty --sleep-seconds 0",
@@ -397,6 +419,11 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     let publish_job = workflow_job_section(&release_workflow, "publish")
         .ok_or("release workflow: missing `publish` job for release tag staging check")?;
+    ensure_contains(
+        publish_job,
+        "needs.publish_crates_preflight.result == 'success'",
+        "release workflow publish requires preflight success",
+    )?;
     ensure_contains(
         publish_job,
         "git add --update",
@@ -430,42 +457,6 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         &release_script,
         "scripts/release-version.sh",
         "local release must not maintain a second version mutation path",
-    )?;
-    ensure_contains_normalized(
-        &release_workflow,
-        "publish_crates_preflight:
-          name: Preflight crates.io packages
-          needs: [metadata, publish]
-          if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
-          runs-on: ubuntu-24.04
-          container:
-            image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
-          env:
-            SCCACHE_GHA_ENABLED: \"false\"
-            SCCACHE_MULTILEVEL_CHAIN: disk
-          steps:
-            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-              with:
-                ref: ${{ needs.metadata.outputs.tag }}
-                persist-credentials: false
-            - name: Trust checkout directory
-              run: git config --global --add safe.directory \"$GITHUB_WORKSPACE\"
-            - uses: ./.github/actions/configure-sccache-gha
-              with:
-                allow_depot_remote_cache: \"false\"
-                allow_native_github_cache: \"false\"
-            - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
-            - name: Prepare dispatched release version
-              if: github.event_name == 'workflow_dispatch'
-              env:
-                RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-              run: scripts/release-version.sh \"$RELEASE_TAG\"",
-        "release workflow publish preflight dispatched version preparation",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "needs: [metadata, publish, publish_crates_preflight]",
-        "release workflow real publish preflight dependency",
     )?;
     ensure_contains(
         &quality_workflow,

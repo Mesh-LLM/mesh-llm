@@ -16,6 +16,7 @@ mod zip_read;
 mod zip_text;
 
 pub(crate) use zip_extract::os_error_line;
+pub(crate) use zip_read::read_single_file as zip_read_single_file;
 
 use crate::command::DynResult;
 

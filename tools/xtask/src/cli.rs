@@ -72,6 +72,13 @@ pub(crate) fn print_usage() {
         crate::automation::native_generator::USAGE
     );
     println!(
+        "  cargo xtool repository cargo-census --kind {{test|clippy}} --batch-id <id> --source-sha <sha> --selected <json> --executed <json> --out <file>"
+    );
+    println!("  {}", crate::qualification::USAGE);
+    println!(
+        "  cargo xtool release await-packaging --repository <owner/name> --correlation-id <id> --upstream-repository <owner/name> --upstream-ref <ref> --upstream-sha <sha> --manifest-sha256 <digest> --out <file> [--timeout-seconds <n>]"
+    );
+    println!(
         "  cargo xtool repository cargo-packages --generation {{legacy|current}} --crates <JSON> [--batches <JSON>] {{--cargo <absolute-executable> [--timeout <seconds>] | --metadata <fixture-path>}}"
     );
     println!("  {}", crate::automation::split_evidence::USAGE);
@@ -179,6 +186,7 @@ pub(crate) enum CliCommand<'a> {
     CanaryReceipts(&'a [String]),
     RewriterReport(&'a [String]),
     Models(crate::model_registry::ModelsCommand, &'a [String]),
+    Qualify(crate::qualification::QualifyCommand, &'a [String]),
     Artifact(crate::artifact::ArtifactCommand, &'a [String]),
     CiOperations(crate::ci_operations::CiOperationsCommand, &'a [String]),
     Native(crate::native_policy::NativeCommand, &'a [String]),
@@ -193,6 +201,7 @@ pub(crate) enum CliCommand<'a> {
 #[derive(Clone, Copy)]
 pub(crate) enum RepositoryCheck {
     AffectedCrates,
+    CargoCensus,
     CargoPackages,
     CargoTargetDirectory,
     PublishOrder,
@@ -543,6 +552,12 @@ impl<'a> Cli<'a> {
                     None => return Err(USAGE.into()),
                 }
             }
+            [domain, scope, rest @ ..] if domain == "qualify" => {
+                match crate::qualification::QualifyCommand::parse(scope) {
+                    Some(command) => CliCommand::Qualify(command, rest),
+                    None => return Err(crate::qualification::USAGE.into()),
+                }
+            }
             [domain, scope, rest @ ..] if domain == "native" => {
                 match crate::native_policy::NativeCommand::parse(scope) {
                     Some(command) => CliCommand::Native(command, rest),
@@ -570,6 +585,7 @@ impl<'a> Cli<'a> {
             [domain, scope, rest @ ..] if domain == "repository" => {
                 let check = match scope.as_str() {
                     "affected-crates" => RepositoryCheck::AffectedCrates,
+                    "cargo-census" => RepositoryCheck::CargoCensus,
                     "cargo-packages" => RepositoryCheck::CargoPackages,
                     "cargo-target-directory" => RepositoryCheck::CargoTargetDirectory,
                     "publish-order" => RepositoryCheck::PublishOrder,

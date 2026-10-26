@@ -152,7 +152,7 @@ fn model_registry_every_artifact_admits_its_executable_suite_cadences() {
 }
 
 #[test]
-fn model_registry_product_smoke_is_the_exact_pinned_dense_recurrent_laya_set() {
+fn model_registry_product_smoke_is_the_exact_pinned_dense_recurrent_moe_laya_set() {
     let rows = members("product-smoke");
     let expected = [
         (
@@ -163,6 +163,7 @@ fn model_registry_product_smoke_is_the_exact_pinned_dense_recurrent_laya_set() {
             "family-granite-hybrid",
             "ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M",
         ),
+        ("family-granite-moe", "sinatras/granite-moe-1b-split:Q4_K_M"),
         (
             "family-laya-multilingual",
             "meshllm/laya-multilingual-F16-GGUF:F16",

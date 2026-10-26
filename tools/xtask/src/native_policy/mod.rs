@@ -46,6 +46,14 @@ pub(crate) fn rejected_host_imports(imports: &[String]) -> Vec<String> {
     forbidden::forbidden(imports)
 }
 
+/// Run runtime-package verification in-process, returning the report instead
+/// of emitting it, for the qualification composer.
+pub(crate) fn verify_runtime_package(
+    args: &[String],
+) -> crate::repository::check_report::CheckReport {
+    runtime_package::run(args, &toolchain::HostToolchain)
+}
+
 /// A `native` subcommand.
 #[derive(Clone, Copy)]
 pub(crate) enum NativeCommand {

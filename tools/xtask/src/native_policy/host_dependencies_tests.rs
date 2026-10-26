@@ -270,3 +270,18 @@ fn bound_host_refuses_binary_changed_by_inspection_before_publishing_report() {
     );
     assert!(!report_path.exists());
 }
+
+#[test]
+fn displayed_file_name_splits_posix_and_windows_separators() {
+    assert_eq!(file_name("skippy"), "skippy");
+    assert_eq!(file_name("./skippy"), "skippy");
+    assert_eq!(file_name("skippy-cli-input/skippy"), "skippy");
+    assert_eq!(file_name("skippy-cli-input\\skippy.exe"), "skippy.exe");
+    assert_eq!(
+        file_name("D:\\a\\mesh-llm\\mesh-llm\\skippy-cli-input\\skippy.exe"),
+        "skippy.exe"
+    );
+    assert_eq!(file_name("."), "");
+    assert_eq!(file_name("/"), "");
+    assert_eq!(file_name("\\"), "");
+}

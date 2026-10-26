@@ -64,7 +64,8 @@ fn migration_models_frozen_manifests_match_the_checkout() -> TestResult {
     for path in &OUTPUTS[1..] {
         let name = path.rsplit('/').next().ok_or("manifest name")?;
         // Then: frozen artifact payloads remain unchanged apart from the
-        // registry digest and Qwen's added System One membership.
+        // registry digest, Qwen's System One membership, and the new Laya/MoE
+        // product-smoke members, whose pinned identities are asserted below.
         if name == "skippy-system-one-smoke.json" {
             continue;
         }
@@ -75,7 +76,9 @@ fn migration_models_frozen_manifests_match_the_checkout() -> TestResult {
             current["artifacts"]
                 .as_array_mut()
                 .ok_or("product artifacts")?
-                .retain(|row| row["id"] != "family-laya-multilingual");
+                .retain(|row| {
+                    row["id"] != "family-laya-multilingual" && row["id"] != "family-granite-moe"
+                });
         }
         if let Some(rows) = frozen["artifacts"].as_array_mut() {
             for row in rows {
@@ -123,6 +126,12 @@ fn migration_models_required_smoke_identities_are_unchanged() -> TestResult {
             "ibm-granite/granite-4.0-h-350m-GGUF",
             "a864f823cce6e6048b5752e2816fe7a23987d790",
             "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb",
+        ),
+        (
+            "family-granite-moe",
+            "sinatras/granite-moe-1b-split",
+            "3beccd31cf6d51f94c93007e56a21e0df41a101a",
+            "3a2ec1c2a78cb29d901e29bbf5162dcd03381e13803d2cbdcff838d4d08142eb",
         ),
         (
             "family-laya-multilingual",

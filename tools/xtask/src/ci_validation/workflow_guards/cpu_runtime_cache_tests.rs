@@ -71,6 +71,7 @@ fn cpu_cache_restore_requires_cpu_authority_hosted_placement_and_exact_key() {
         assert!(check(&mutated(before, after)).is_err(), "accepted: {after}");
     }
     for component in [
+        "${{ inputs.source_sha }}-",
         "${{ matrix.runtime.target }}-",
         "${{ matrix.runtime.toolchain_epoch }}-",
         "'skippy/**', ",

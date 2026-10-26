@@ -137,10 +137,10 @@ fn nonzero_or_timeout_tool_failure_leaves_swift_unchanged() {
     fs::write(&library, b"archive").unwrap();
     let swift = dir.path().join("generated.swift");
     fs::write(&swift, SWIFT).unwrap();
+    // The exit-status case tests nonzero termination, not scheduler latency.
+    // Keep the short deadline only for the deliberately sleeping child.
     for (body, expected, timeout) in [
-        // The exit-status case needs time to start even on a loaded runner;
-        // only the sleeping fixture is intended to exercise the deadline.
-        ("exit 7", "Exited", Duration::from_secs(2)),
+        ("exit 7", "Exited", Duration::from_secs(5)),
         ("sleep 10", "Deadline", Duration::from_millis(100)),
     ] {
         let tool = fixture_tool(dir.path(), body);

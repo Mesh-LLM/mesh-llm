@@ -1,5 +1,6 @@
 mod affected_crates;
 mod bundled_plugins;
+mod cargo_census;
 pub(crate) mod cargo_packages;
 mod cargo_projection;
 pub(crate) mod check_args;
@@ -39,6 +40,7 @@ pub(crate) fn run_check(
         Ok(root.0)
     };
     match check {
+        RepositoryCheck::CargoCensus => cargo_census::run(args),
         RepositoryCheck::CargoTargetDirectory => cargo_projection::run(args),
         RepositoryCheck::PublishOrder => publish_order::run(args),
         RepositoryCheck::AffectedCrates => affected_crates::run(&cwd, args),
