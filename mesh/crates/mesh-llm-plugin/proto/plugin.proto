@@ -149,6 +149,10 @@ message MeshChannelFrame {
   string plugin_id = 1;
   string message_id = 2;
   ChannelMessage message = 3;
+  // Signed with the source endpoint key; the signature covers this expiry and
+  // every other frame field except `origin_signature`.
+  uint64 expires_at_unix_ms = 4;
+  bytes origin_signature = 5;
 }
 
 message BulkTransferMessage {
@@ -181,6 +185,10 @@ message MeshBulkFrame {
   string plugin_id = 1;
   string message_id = 2;
   BulkTransferMessage message = 3;
+  // Signed with the source endpoint key; the signature covers this expiry and
+  // every other frame field except `origin_signature`.
+  uint64 expires_at_unix_ms = 4;
+  bytes origin_signature = 5;
 }
 
 message PluginManifest {
