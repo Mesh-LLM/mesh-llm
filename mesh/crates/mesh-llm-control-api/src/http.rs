@@ -119,6 +119,7 @@ pub async fn respond_error(stream: &mut TcpStream, code: u16, msg: &str) -> anyh
         422 => "Unprocessable Content",
         405 => "Method Not Allowed",
         406 => "Not Acceptable",
+        415 => "Unsupported Media Type",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
         503 => "Service Unavailable",
