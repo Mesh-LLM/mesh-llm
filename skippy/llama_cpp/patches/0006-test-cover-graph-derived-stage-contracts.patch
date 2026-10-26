@@ -1,9 +1,11 @@
-From 0c00238fea1bbd7f27fb14f9e98c5d9f5f45d6f3 Mon Sep 17 00:00:00 2001
+From d1ae47ed57efac149c59194990fde0c80ec741c2 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
 
+Co-authored-by: sol <6e6f9f687497a486f887a40f1270381aaca718090781f25867159edd4f553f49@generalinference.communities.buzz.xyz>
 ---
+ src/CMakeLists.txt                            |    9 +
  src/skippy/tests/embedding_input_regression.h |   91 +
  src/skippy/tests/graph_build_inputs.cpp       |  946 ++++++++++
  src/skippy/tests/graph_contract_cases.cmake   |  120 ++
@@ -12,12 +14,12 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  .../tests/hardware_application_probe.cpp      |   76 +
  src/skippy/tests/input_capabilities.cpp       |   78 +
  .../tests/input_leaf_state_regression.h       |   49 +
- src/skippy/tests/live_graph_reference.h       |  194 ++
+ src/skippy/tests/live_graph_reference.h       |  221 +++
  src/skippy/tests/noalloc_graph_planning.cpp   | 1107 +++++++++++
  src/skippy/tests/profile_residency.cpp        |  258 +++
- .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
+ .../tests/renamed_multishard_planning.cpp     | 1667 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
- src/skippy/tests/runtime_events.cpp           |  624 +++++++
+ src/skippy/tests/runtime_events.cpp           |  624 ++++++
  src/skippy/tests/sampling_history.cpp         |  400 ++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
@@ -38,7 +40,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9778 insertions(+), 32 deletions(-)
+ 35 files changed, 9822 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -69,6 +71,26 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  create mode 100644 tests/test-skippy-sampling-suppress.cpp
  create mode 100644 tests/test-skippy-verify-checkpoint-retirement.cpp
 
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 528edfa99..ca16059d2 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -590,6 +590,15 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     set_tests_properties(skippy_stage_fused_ops_auto_deepseek4 PROPERTIES
+         FIXTURES_REQUIRED skippy-noalloc-deepseek4-fixture)
+ 
++    foreach(cut 1 2 3)
++        add_test(NAME skippy_deepseek4_package_stage_replay_${cut}
++            COMMAND skippy-renamed-multishard-planning
++                "${SKIPPY_MODEL_FIXTURE_DIR}/deepseek4-moe.gguf"
++                "${SKIPPY_MODEL_FIXTURE_DIR}/deepseek4-package-replay-${cut}" 0 ${cut})
++        set_tests_properties(skippy_deepseek4_package_stage_replay_${cut} PROPERTIES
++            FIXTURES_REQUIRED skippy-noalloc-deepseek4-fixture TIMEOUT 900)
++    endforeach()
++
+     add_test(
+         NAME skippy_noalloc_graph_planning_granite_hybrid
+         COMMAND skippy-noalloc-graph-planning
 diff --git a/src/skippy/tests/embedding_input_regression.h b/src/skippy/tests/embedding_input_regression.h
 new file mode 100644
 index 000000000..803489be0
@@ -1838,10 +1860,10 @@ index 000000000..33d3faca9
 +}
 diff --git a/src/skippy/tests/live_graph_reference.h b/src/skippy/tests/live_graph_reference.h
 new file mode 100644
-index 000000000..73129bf07
+index 000000000..dca9e6d7d
 --- /dev/null
 +++ b/src/skippy/tests/live_graph_reference.h
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,221 @@
 +#pragma once
 +
 +#include "llama-context.h"
@@ -1922,6 +1944,16 @@ index 000000000..73129bf07
 +        return finished(status, error);
 +    }
 +
++    // Request logits without sampling a token or advancing sampler state.
++    bool prefill_logits(const llama_token * tokens, size_t count,
++            const live_graph_reference * source = nullptr) {
++        skippy_error * error = nullptr;
++        const auto status = skippy_prefill_chunk_frame_sampled(session, tokens, count, nullptr,
++                source ? &source->desc : nullptr, source ? source->payload.data() : nullptr,
++                &desc, payload.data(), payload.size(), &bytes, nullptr, &error);
++        return finished(status, error);
++    }
++
 +    bool step(llama_token token, const skippy_sampling_config * sampling,
 +            llama_token expected, const live_graph_reference * source = nullptr) {
 +        skippy_error * error = nullptr;
@@ -1930,6 +1962,23 @@ index 000000000..73129bf07
 +                source ? &source->desc : nullptr, source ? source->payload.data() : nullptr,
 +                &desc, payload.data(), payload.size(), &bytes, &prediction, &error);
 +        return finished(status, error) && (expected < 0 || prediction == expected);
++    }
++
++    bool compare_logits(skippy_model * actual) const {
++        llama_synchronize(actual->ctx);
++        llama_synchronize(model->ctx);
++        const auto count = llama_vocab_n_tokens(llama_model_get_vocab(model->model));
++        const float * left = llama_get_logits_ith(actual->ctx, -1);
++        const float * right = llama_get_logits_ith(model->ctx, -1);
++        if (!left || !right) return false;
++        for (int32_t index = 0; index < count; ++index) {
++            if (!std::isfinite(left[index]) || !std::isfinite(right[index]) ||
++                    std::abs(left[index] - right[index]) > 1e-5f * (1 + std::abs(right[index]))) {
++                std::fprintf(stderr, "split vs whole logit mismatch at %d\n", index);
++                return false;
++            }
++        }
++        return true;
 +    }
 +
 +    bool compare(skippy_model * actual, bool logits) const {
@@ -3415,10 +3464,10 @@ index 000000000..17650efda
 +}
 diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
 new file mode 100644
-index 000000000..5335c1599
+index 000000000..90d780214
 --- /dev/null
 +++ b/src/skippy/tests/renamed_multishard_planning.cpp
-@@ -0,0 +1,1659 @@
+@@ -0,0 +1,1667 @@
 +#include "embedding_input_regression.h"
 +#include "live_graph_reference.h"
 +#include "ggml-backend.h"
@@ -4297,7 +4346,9 @@ index 000000000..5335c1599
 +        const package_inventory & inventory,
 +        const std::vector<std::string> & paths,
 +        int32_t layer_count,
-+        runtime_stage_plan * runtime_stage = nullptr) {
++        runtime_stage_plan * runtime_stage = nullptr,
++        int32_t execution_cut = 1) {
++    if (execution_cut < 1 || execution_cut >= layer_count) return false;
 +    std::vector<const char *> shard_paths;
 +    for (const auto & path : paths) {
 +        shard_paths.push_back(path.c_str());
@@ -4360,7 +4411,7 @@ index 000000000..5335c1599
 +            skippy_stage_plan_free(cut_final);
 +            return false;
 +        }
-+        if (cut == 1) {
++        if (cut == execution_cut) {
 +            source = cut_source;
 +            final = cut_final;
 +        } else {
@@ -4465,7 +4516,7 @@ index 000000000..5335c1599
 +            return false;
 +        }
 +        runtime_stage->full_execution_contract = plan_string(full, full_descriptor.execution_contract);
-+        runtime_stage->layer_start = 1;
++        runtime_stage->layer_start = execution_cut;
 +        runtime_stage->layer_end = layer_count;
 +        for (size_t index = 0; index < full_descriptor.resident_tensor_count; ++index) {
 +            skippy_stage_plan_value_desc_v1 resident_value{};
@@ -4569,7 +4620,7 @@ index 000000000..5335c1599
 +        }
 +    }
 +    skippy_stage_plan * repeated = nullptr;
-+    if (skippy_stage_planner_realize_v1(planner, 0, 1, &repeated, &error) != SKIPPY_STATUS_OK) {
++    if (skippy_stage_planner_realize_v1(planner, 0, execution_cut, &repeated, &error) != SKIPPY_STATUS_OK) {
 +        skippy_error_free(error);
 +        return false;
 +    }
@@ -4589,7 +4640,7 @@ index 000000000..5335c1599
 +        skippy_error * identity_error = nullptr;
 +        if (skippy_stage_planner_create_v1(&identity_config, &identity_planner, &identity_error) != SKIPPY_STATUS_OK ||
 +                identity_planner == nullptr ||
-+                skippy_stage_planner_realize_v1(identity_planner, 0, 1, &identity_plan, &identity_error) !=
++                skippy_stage_planner_realize_v1(identity_planner, 0, execution_cut, &identity_plan, &identity_error) !=
 +                        SKIPPY_STATUS_OK ||
 +                identity_plan == nullptr ||
 +                skippy_stage_plan_describe_v1(identity_plan, &identity_descriptor, &identity_error) !=
@@ -4685,7 +4736,7 @@ index 000000000..5335c1599
 +    return true;
 +}
 +
-+int run_proof(const char * source_path, const char * output_directory, bool expect_recurrent) {
++int run_proof(const char * source_path, const char * output_directory, bool expect_recurrent, int32_t execution_cut) {
 +    std::string error;
 +    std::vector<std::string> generated_paths;
 +    if (!write_two_renamed_splits(source_path, output_directory, generated_paths, error)) {
@@ -4787,7 +4838,7 @@ index 000000000..5335c1599
 +                carrier,
 +                carrier.ordered_paths,
 +                llama_model_n_layer(model.get()),
-+                &terminal_stage)) {
++                &terminal_stage, execution_cut)) {
 +        std::fprintf(stderr, "metadata carrier stage-plan ABI proof failed: %s\n", error.c_str());
 +        return 10;
 +    }
@@ -4831,6 +4882,8 @@ index 000000000..5335c1599
 +        skippy_error_free(runtime_error);
 +        return 11;
 +    }
++    live_graph_reference full_reference;
++    if (!full_reference.open(carrier_part_ptrs, runtime_config)) return 51;
 +    skippy_model_free(carrier_model, &runtime_error);
 +    if (runtime_error != nullptr) {
 +        std::fprintf(stderr, "metadata carrier runtime free failed: %s\n", runtime_error->message);
@@ -4919,7 +4972,7 @@ index 000000000..5335c1599
 +    };
 +    runtime_config.stage_index = 0;
 +    runtime_config.layer_start = 0;
-+    runtime_config.layer_end = 1;
++    runtime_config.layer_end = execution_cut;
 +    runtime_config.execution_contract = terminal_stage.source_execution_contract.c_str();
 +    runtime_config.resident_tensor_names = source_resident_ptrs.data();
 +    runtime_config.resident_tensor_name_count = source_resident_ptrs.size();
@@ -4978,20 +5031,22 @@ index 000000000..5335c1599
 +    skippy_activation_desc terminal_output_desc{};
 +    std::vector<uint8_t> terminal_output_payload(1024 * 1024);
 +    size_t terminal_output_bytes = 0;
-+    if (skippy_prefill_chunk_frame(
-+                terminal_session, tokens, 2, &output_desc, output_payload.data(),
++    if (skippy_prefill_chunk_frame_sampled(
++                terminal_session, tokens, 2, nullptr, &output_desc, output_payload.data(),
 +                &terminal_output_desc, terminal_output_payload.data(), terminal_output_payload.size(),
-+                &terminal_output_bytes, &runtime_error) != SKIPPY_STATUS_OK) {
++                &terminal_output_bytes, nullptr, &runtime_error) != SKIPPY_STATUS_OK) {
 +        std::fprintf(stderr, "terminal stage prefill failed: %s\n",
 +                runtime_error == nullptr ? "" : runtime_error->message);
 +        skippy_error_free(runtime_error);
 +        return 22;
 +    }
 +
-+    if (!source_reference.prefill(tokens, 2) ||
-+            !terminal_reference.prefill(tokens, 2, &source_reference) ||
++    if (!full_reference.prefill_logits(tokens, 2) ||
++            !source_reference.prefill(tokens, 2) ||
++            !terminal_reference.prefill_logits(tokens, 2, &source_reference) ||
 +            !source_reference.compare(carrier_model, false) ||
-+            !terminal_reference.compare(terminal_model, false)) return 45;
++            !terminal_reference.compare(terminal_model, true) ||
++            !full_reference.compare_logits(terminal_model)) return 45;
 +
 +    skippy_sampling_config sampling{};
 +    sampling.version = 1;
@@ -5024,7 +5079,9 @@ index 000000000..5335c1599
 +            skippy_error_free(runtime_error);
 +            return 24;
 +        }
-+        if (!source_reference.step(next_token, nullptr, -1) ||
++        if (!full_reference.step(next_token, &sampling, predicted_token) ||
++                !full_reference.compare_logits(terminal_model) ||
++                !source_reference.step(next_token, nullptr, -1) ||
 +                !terminal_reference.step(next_token, &sampling, predicted_token, &source_reference) ||
 +                !source_reference.compare(carrier_model, false) ||
 +                !terminal_reference.compare(terminal_model, true)) return 46;
@@ -5069,12 +5126,12 @@ index 000000000..5335c1599
 +}
 +
 +int main(int argc, char ** argv) {
-+    if (argc != 4) {
-+        std::fprintf(stderr, "usage: %s MODEL_PATH OUTPUT_DIRECTORY EXPECT_RECURRENT\n", argv[0]);
++    if (argc != 4 && argc != 5) {
++        std::fprintf(stderr, "usage: %s MODEL_PATH OUTPUT_DIRECTORY EXPECT_RECURRENT [EXECUTION_CUT]\n", argv[0]);
 +        return 64;
 +    }
 +    llama_backend_init();
-+    const int result = run_proof(argv[1], argv[2], std::string(argv[3]) == "1");
++    const int result = run_proof(argv[1], argv[2], std::string(argv[3]) == "1", argc == 5 ? std::stoi(argv[4]) : 1);
 +    llama_backend_free();
 +    return result;
 +}
@@ -10379,5 +10436,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 
