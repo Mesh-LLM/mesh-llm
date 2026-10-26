@@ -223,3 +223,105 @@ async fn show_model_variants_accepts_selected_quant_ref() {
             .any(|variant| { variant.exact_ref == "unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL" })
     );
 }
+
+#[tokio::test]
+#[serial]
+async fn show_exact_model_accepts_hf_layer_package_ref() {
+    let _catalog = empty_catalog_guard();
+    let _probe = skippy_model_hf::remote_catalog::set_hf_model_file_probe_for_test(
+        |repo, revision, file| {
+            repo == "meshllm/gemma-4-E4B-it-Q4_K_M-layers"
+                && revision == "main"
+                && file == "model-package.json"
+        },
+    );
+
+    let details = show_exact_model("hf://meshllm/gemma-4-E4B-it-Q4_K_M-layers")
+        .await
+        .expect("models show must accept the hf:// ref that serve and models download accept");
+
+    assert_eq!(
+        details.exact_ref,
+        "hf://meshllm/gemma-4-E4B-it-Q4_K_M-layers"
+    );
+    assert_eq!(
+        crate::models::formatters::model_kind_code(details.kind), "layer_package");
+}
+
+#[tokio::test]
+#[serial]
+async fn show_exact_model_accepts_pinned_hf_layer_package_ref() {
+    let _catalog = empty_catalog_guard();
+    let _probe = skippy_model_hf::remote_catalog::set_hf_model_file_probe_for_test(
+        |repo, revision, file| {
+            repo == "meshllm/gemma-4-E4B-it-Q4_K_M-layers"
+                && revision == "d7a5df3d3a142d44e1e5d65b205812e0c8f1deac"
+                && file == "model-package.json"
+        },
+    );
+
+    let details = show_exact_model(
+        "hf://meshllm/gemma-4-E4B-it-Q4_K_M-layers@d7a5df3d3a142d44e1e5d65b205812e0c8f1deac",
+    )
+    .await
+    .expect("models show must accept a pinned hf:// layer-package ref");
+
+    assert_eq!(
+        details.exact_ref,
+        "hf://meshllm/gemma-4-E4B-it-Q4_K_M-layers@d7a5df3d3a142d44e1e5d65b205812e0c8f1deac"
+    );
+    assert_eq!(
+        crate::models::formatters::model_kind_code(details.kind), "layer_package");
+}
+
+#[tokio::test]
+#[serial]
+async fn show_exact_model_rejects_hf_ref_without_a_package_manifest() {
+    let _catalog = empty_catalog_guard();
+    let _probe = skippy_model_hf::remote_catalog::set_hf_model_file_probe_for_test(|_, _, _| false);
+
+    assert!(show_exact_model("hf://meshllm/not-a-layer-package").await.is_err());
+}
+
+#[tokio::test]
+#[serial]
+async fn show_model_variants_requests_the_pinned_revision_for_an_unrecognized_quant_file() {
+    let _catalog = empty_catalog_guard();
+    const REVISION: &str = "ef9b12f2ff56c69cf32153a02784e7a3c88bf524";
+    let requested: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let siblings = vec![
+        ("gpt-oss-20b-MXFP4.gguf".to_string(), Some(11_000_000_000)),
+        ("gpt-oss-20b-Q4_K_M.gguf".to_string(), Some(12_000_000_000)),
+    ];
+    let _siblings_guard = RepoSiblingEntriesOverrideGuard::set({
+        let requested = Arc::clone(&requested);
+        let siblings = siblings.clone();
+        Arc::new(move |repo: &str, revision: &str| {
+            requested
+                .lock()
+                .unwrap()
+                .push((repo.to_string(), revision.to_string()));
+            Some(siblings.clone())
+        })
+    });
+
+    // `show_exact_model` renders a pinned ref whose file name carries no known
+    // quant marker (`MXFP4`) in the `org/repo@rev/file.gguf` form.
+    let variants = show_model_variants_with_progress(
+        &format!("ggml-org/gpt-oss-20b-GGUF@{REVISION}/gpt-oss-20b-MXFP4.gguf"),
+        |_| {},
+    )
+    .await
+    .expect("the variants step must resolve the pinned revision, not revision/file")
+    .expect("repo-backed GGUF refs should enumerate variants");
+
+    assert_eq!(
+        *requested.lock().unwrap(),
+        vec![("ggml-org/gpt-oss-20b-GGUF".to_string(), REVISION.to_string())]
+    );
+    assert!(
+        variants
+            .iter()
+            .any(|variant| { variant.exact_ref == format!("ggml-org/gpt-oss-20b-GGUF@{REVISION}:Q4_K_M") })
+    );
+}
