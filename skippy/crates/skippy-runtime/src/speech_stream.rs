@@ -34,6 +34,10 @@ const SPEECH_START_FRAMES: usize = 3;
 const MAX_NO_SPEECH_PROB: f32 = 0.6;
 /// Confirmed text kept as the prompt once its audio is trimmed away.
 const PROMPT_TAIL_CHARS: usize = 200;
+/// Audio a turn needs before any of its words are confirmed. With less,
+/// Whisper may miss or mishear the first word in two passes alike, and a word
+/// confirmed wrongly stays wrong; a pass a second becomes the default's two.
+const MIN_CONFIRM_MS: u64 = 2_000;
 
 /// Server-side turn detection, in the shape of OpenAI's `server_vad`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -353,11 +357,17 @@ impl SpeechStream {
             self.pending.clear();
         }
         let tail = &words[self.confirmed_in_buffer..];
-        let agreed = tail
-            .iter()
-            .zip(&self.pending)
-            .take_while(|(now, before)| same_word(now, before))
-            .count();
+        // Only a turn's start is held back; later words have the earlier ones
+        // as context.
+        let heard_ms = self.buffer.len() as u64 / SAMPLES_PER_MS;
+        let agreed = if self.confirmed.is_empty() && heard_ms < MIN_CONFIRM_MS {
+            0
+        } else {
+            tail.iter()
+                .zip(&self.pending)
+                .take_while(|(now, before)| same_word(now, before))
+                .count()
+        };
         let (newly_confirmed, pending) = tail.split_at(agreed);
         self.pending = pending.to_vec();
         self.confirm(newly_confirmed.to_vec(), events);

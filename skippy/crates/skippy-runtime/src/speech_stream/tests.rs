@@ -141,6 +141,30 @@ fn tentative_text_shows_what_a_pass_heard_before_it_is_confirmed() {
 }
 
 #[test]
+fn fast_passes_confirm_nothing_until_a_turn_has_two_seconds_of_audio() {
+    // Passes this short can agree on a misheard first word; it must not stick.
+    let mut script = Script::new(vec![
+        vec![(400, " pull")],
+        vec![(800, " pull")],
+        vec![(1_200, " What pull requests")],
+        vec![(1_600, " What pull requests do")],
+        vec![(2_000, " What pull requests do I")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        step_ms: 400,
+        ..manual()
+    });
+    let mut confirmed = Vec::new();
+    for _ in 0..4 {
+        confirmed.extend(deltas(&stream.push(&loud(400), &mut transcribe).unwrap()));
+    }
+    assert!(confirmed.is_empty(), "{confirmed:?}");
+    confirmed.extend(deltas(&stream.push(&loud(400), &mut transcribe).unwrap()));
+    assert_eq!(confirmed, ["What pull requests do"]);
+}
+
+#[test]
 fn tentative_text_is_off_by_default() {
     let mut script = Script::new(vec![vec![(900, " Hello")]]);
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
