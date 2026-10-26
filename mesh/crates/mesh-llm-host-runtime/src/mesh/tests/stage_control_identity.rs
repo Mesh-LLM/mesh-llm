@@ -224,3 +224,42 @@ fn unbound_legacy_load_still_converts_from_the_authenticated_requester() {
         "an unbound legacy load must keep converting at the wire boundary"
     );
 }
+
+// Regression guard for the #2217 authorization follow-up: the split
+// coordinator probes a peer's stage inventory during eligibility planning
+// and before that peer records the topology being planned (the target only
+// registers the topology once it accepts a load). Requiring a registered
+// topology for Inventory dropped the peer out of split membership as
+// `stage_control_unreachable` before the coordinator could claim the lease.
+fn identity_test_inventory_request() -> crate::inference::skippy::StageInventoryRequest {
+    crate::inference::skippy::StageInventoryRequest {
+        model_id: "model-a".to_string(),
+        runtime_profile: Some(String::new()),
+        package_ref: "gguf:///model.gguf".to_string(),
+        manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
+        expected_source_model_sha256: None,
+        local_source_required: true,
+    }
+}
+
+#[tokio::test]
+async fn pre_topology_inventory_query_is_admitted_for_authenticated_mesh_peer() -> Result<()> {
+    let node = Node::new_for_tests(super::NodeRole::Worker).await?;
+    let requester = make_test_endpoint_id(0xC1);
+
+    node.authorize_remote_stage_control_request(
+        requester,
+        &crate::inference::skippy::StageControlRequest::Inventory(
+            identity_test_inventory_request(),
+        ),
+    )
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "pre-topology inventory probe must be admitted before the target records the planned topology: {error}"
+        )
+    })?;
+
+    Ok(())
+}
+

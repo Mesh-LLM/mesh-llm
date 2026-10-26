@@ -326,7 +326,7 @@ impl Node {
     /// running stage's coordinator in the stage-control loop. Status and
     /// Inventory carry no identity in the command body, so the requester must
     /// be a participant of the active topology the query targets.
-    async fn authorize_remote_stage_control_request(
+    pub(crate) async fn authorize_remote_stage_control_request(
         &self,
         remote: EndpointId,
         request: &crate::inference::skippy::StageControlRequest,
