@@ -2364,7 +2364,7 @@ parallel = 6
 }
 
 #[test]
-#[serial_test::serial(catalog_state, runtime_event_engine_state)]
+#[serial_test::serial]
 fn unresolved_layer_package_ref_surfaces_actionable_diagnostic() {
     use crate::runtime_event_api::state_projection;
     use crate::runtime_events::engine::RuntimeEventEngine;
@@ -2439,7 +2439,7 @@ fn unresolved_layer_package_ref_surfaces_actionable_diagnostic() {
 }
 
 #[test]
-#[serial_test::serial(catalog_state, runtime_event_engine_state)]
+#[serial_test::serial]
 fn monolithic_hf_ref_without_layer_package_stays_silent() {
     use crate::runtime_event_api::state_projection;
     use crate::runtime_events::engine::RuntimeEventEngine;
