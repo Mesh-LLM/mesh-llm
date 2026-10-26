@@ -40,10 +40,12 @@ use crate::{
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 use skippy_config::validate_config;
+use skippy_protocol::MAX_STAGE_FRAME_BYTES;
 use skippy_protocol::PeerConfig;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::{
-    StageWireMessage, WireMessageKind, read_stage_message_for_codec_policy, send_ready,
+    StageWireMessage, WireMessageKind, read_stage_message_for_codec_policy_with_frame_budget,
+    send_ready,
 };
 use skippy_runtime::ActivationBoundaryDesc;
 
@@ -73,14 +75,14 @@ const STAGE_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
 ///
 /// The worker passes `STAGE_HANDSHAKE_DEADLINE` so a silent peer cannot hold
 /// the dedicated worker thread and its tracked socket past the deadline
-/// (#2218). Returns `Ok(false)` when the server is shutting down.
+/// (#2218). Returns `Ok(false)` when the server is shutting down and
+/// `Err(TimedOut)` when the handshake deadline expires.
 fn wait_for_first_message(
     control: &ConnectionWorkerControl,
     stream: &TcpStream,
-    _deadline: Duration,
+    deadline: Duration,
 ) -> io::Result<bool> {
-    // #2218 (red): the deadline is not enforced yet; the fix commit enforces it.
-    control.wait_for_readable(stream)
+    control.wait_for_readable(stream, Some(deadline))
 }
 
 /// Admits connection worker threads against the process-wide connection cap
@@ -101,9 +103,11 @@ impl ConnectionAdmission {
         self.live
     }
 
-    /// #2218 (red): the cap is not enforced yet; the fix commit makes a
-    /// connection beyond `limit` inadmissible.
+    /// Admits one connection while fewer than `limit` are live.
     fn try_acquire(&mut self) -> bool {
+        if self.live >= self.limit {
+            return false;
+        }
         self.live += 1;
         true
     }
@@ -295,7 +299,11 @@ impl ConnectionWorkerControl {
     /// connection error. For the same teardown window, if even arming the
     /// timeout fails with EINVAL while shutdown is in progress, report
     /// `Ok(false)` — the worker is winding down either way.
-    fn wait_for_readable(&self, stream: &TcpStream) -> io::Result<bool> {
+    fn wait_for_readable(
+        &self,
+        stream: &TcpStream,
+        deadline: Option<Duration>,
+    ) -> io::Result<bool> {
         let timeout_armed = match stream.set_read_timeout(Some(WORKER_SHUTDOWN_POLL)) {
             Ok(()) => true,
             // Darwin rejects SO_RCVTIMEO operations with EINVAL (os error 22)
@@ -305,6 +313,7 @@ impl ConnectionWorkerControl {
             Err(error) => return Err(error),
         };
         let mut probe = [0u8; 1];
+        let deadline_at = deadline.map(|limit| Instant::now() + limit);
         let ready = loop {
             if self.is_shutting_down() {
                 break false;
@@ -327,6 +336,13 @@ impl ConnectionWorkerControl {
                     let _ = stream.set_read_timeout(None);
                     return Err(error);
                 }
+            }
+            if deadline_at.is_some_and(|limit| Instant::now() >= limit) {
+                let _ = stream.set_read_timeout(None);
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "stage connection handshake timed out waiting for the first message",
+                ));
             }
         };
         // Best-effort cleanup: on Darwin, clearing SO_RCVTIMEO during
@@ -608,8 +624,19 @@ fn run_binary_stage(
             };
             prepare_binary_stage_connection(&upstream)?;
             if !connection_admission.try_acquire() {
-                // #2218 (red): the cap is not enforced yet, so this branch
-                // is unreachable today.
+                telemetry.emit(
+                    "stage.connection_admission_rejected",
+                    BTreeMap::from([
+                        (
+                            "llama_stage.live_connections".to_string(),
+                            json!(connection_admission.live()),
+                        ),
+                        (
+                            "llama_stage.connection_limit".to_string(),
+                            json!(connection_limit),
+                        ),
+                    ]),
+                );
                 let _ = upstream.shutdown(std::net::Shutdown::Both);
                 continue;
             }
@@ -652,11 +679,12 @@ fn run_binary_stage(
                     {
                         return Ok(());
                     }
-                    let first_message = match read_stage_message_for_codec_policy(
+                    let first_message = match read_stage_message_for_codec_policy_with_frame_budget(
                         &mut upstream,
                         input_activation_width,
                         config.activation_codec,
                         config.activation_codec_policy,
+                        MAX_STAGE_FRAME_BYTES,
                     ) {
                         Ok(message) => message,
                         Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
@@ -853,7 +881,7 @@ mod shutdown_tests {
             let started = Instant::now();
             let mut ready = false;
             while !ready {
-                match task_control.wait_for_readable(&server) {
+                match task_control.wait_for_readable(&server, None) {
                     Ok(became_ready) => ready = became_ready,
                     Err(error) => panic!("idle poll must not fail: {error}"),
                 }
@@ -894,7 +922,7 @@ mod shutdown_tests {
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
         control.shutdown();
-        let result = control.wait_for_readable(&server);
+        let result = control.wait_for_readable(&server, None);
         assert!(
             result.is_ok(),
             "poll after shutdown must not fail: {:?}",
@@ -911,7 +939,7 @@ mod shutdown_tests {
         control.track(&server).unwrap();
         let task_control = control.clone();
         let task = thread::spawn(move || {
-            if let Ok(true) = task_control.wait_for_readable(&server) {
+            if let Ok(true) = task_control.wait_for_readable(&server, None) {
                 let mut byte = [0u8; 1];
                 let _ = server.read(&mut byte);
             }
@@ -942,7 +970,7 @@ mod shutdown_tests {
         let finished = Arc::new(AtomicBool::new(false));
         let task_finished = finished.clone();
         let task = thread::spawn(move || {
-            if let Ok(true) = task_control.wait_for_readable(&server) {
+            if let Ok(true) = task_control.wait_for_readable(&server, None) {
                 let mut byte = [0u8; 1];
                 let _ = server.read(&mut byte);
             }

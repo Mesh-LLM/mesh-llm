@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use skippy_protocol::{
-    StageActivationCodec, StageActivationCodecPolicy,
-    binary::{StageWireMessage, read_stage_message_for_codec_policy},
+    MAX_STAGE_FRAME_BYTES, StageActivationCodec, StageActivationCodecPolicy,
+    binary::{StageWireMessage, read_stage_message_for_codec_policy_with_frame_budget},
 };
 use std::io;
 use std::net::{Shutdown, TcpStream};
@@ -68,11 +68,16 @@ pub(super) fn next_connection_session_id() -> u64 {
 ///
 /// A discard therefore usually overtakes the stale windows queued ahead of
 /// it. It is not guaranteed to: `INBOUND_LOOKAHEAD_BYTES` binds first for
-/// wide frames (a full 64-window backlog of `MAX_STAGE_FRAME_BYTES` frames is
-/// far past the byte ceiling), and the reader then parks with the discard
-/// still unread. That degrades to executing the stale tail — today's cost
-/// without this path — rather than deadlocking, because the executor keeps
-/// draining the queue.
+/// wide frames (a full 64-window backlog of `MAX_STAGE_FRAME_BYTES`-sized
+/// frames is far past the byte ceiling), and the reader then parks with the
+/// discard still unread. That degrades to executing the stale tail — today's
+/// cost without this path — rather than deadlocking, because the executor
+/// keeps draining the queue.
+///
+/// Every frame the reader accepts is bounded by the documented
+/// `MAX_STAGE_FRAME_BYTES` budget on its declared lengths before allocation
+/// (#2218), so a single peer cannot commit more than one frame's worth of
+/// userspace buffer on top of this backlog ceiling.
 pub(super) const INBOUND_LOOKAHEAD_MESSAGES: usize =
     2 * skippy_protocol::MAX_VERIFY_WINDOW_PIPELINE_DEPTH;
 
@@ -165,7 +170,7 @@ pub(super) fn spawn_message_reader(
             // an idle socket; a peer that sends a frame prefix and stalls
             // leaves the read below blocked mid-frame, which is why `Drop`
             // shuts down this exact handle.
-            match worker_control.wait_for_readable(&reader) {
+            match worker_control.wait_for_readable(&reader, None) {
                 Ok(true) => {}
                 Ok(false) => return,
                 Err(error) => {
@@ -185,11 +190,15 @@ pub(super) fn spawn_message_reader(
                 stopped: &reader_stopped,
                 worker_control: &worker_control,
             };
-            match read_stage_message_for_codec_policy(
+            // The declared frame lengths are checked against the documented
+            // frame budget before the reader commits a same-size buffer
+            // (#2218); the queue ceilings below still bound the backlog.
+            match read_stage_message_for_codec_policy_with_frame_budget(
                 &mut source,
                 activation_width,
                 activation_codec,
                 activation_codec_policy,
+                MAX_STAGE_FRAME_BYTES,
             ) {
                 Ok(message) => {
                     if message.kind.is_stale_window_discard() {
@@ -491,14 +500,14 @@ mod tests {
         // A state import frame header declaring 16 MiB of raw bytes — past
         // the 8 MiB frame budget, inside the 512 MiB protocol cap — with no
         // payload bytes behind it.
-        let declared = 16 * 1024 * 1024;
+        let declared: i32 = 16 * 1024 * 1024;
         let mut bytes = Vec::new();
         let push = |bytes: &mut Vec<u8>, value: i32| {
             bytes.extend_from_slice(&value.to_le_bytes());
         };
         push(&mut bytes, WireMessageKind::StateImport as i32);
         push(&mut bytes, 0);
-        push(&mut bytes, declared as i32); // raw byte count
+        push(&mut bytes, declared); // raw byte count
         push(&mut bytes, 0);
         push(&mut bytes, 0);
         let state = StageStateHeader::new(WireMessageKind::StateImport);
@@ -526,11 +535,18 @@ mod tests {
             Ok(None) => {
                 panic!("a 16 MiB declared frame must produce a per-frame error, not a clean close")
             }
-            Err(error) => error.to_string(),
+            Err(error) => error,
         };
+        // The context message is opaque; the budget rejection must be the
+        // inner codec error in the chain, not a payload-read failure.
+        let chain = format!("{error:?}");
         assert!(
-            error.contains("frame budget"),
-            "the declared length must be rejected against the frame budget before allocation, got: {error}"
+            chain.contains("frame budget"),
+            "the declared length must be rejected against the frame budget before allocation, got: {chain}"
+        );
+        assert!(
+            !chain.contains("failed to fill whole buffer"),
+            "the frame must be rejected on the declared length, not after a payload read: {chain}"
         );
         drop(reader);
     }
