@@ -1290,4 +1290,214 @@ mod tests {
             "a local target delivered, so no peer is named as the server"
         );
     }
+
+    /// Drive one `route_model_request` across one mock backend per entry in
+    /// `backends` and return the router's outcome together with the raw
+    /// response bytes the downstream client actually received.
+    ///
+    /// Backends are dialed in the order the router ranks them. Backend tasks
+    /// are deliberately not awaited: a router that stops at the first target
+    /// leaves the later backends parked in `accept`, and awaiting them would
+    /// hang instead of reporting the missing failover.
+    async fn route_across_mock_backends(
+        backends: &[(u16, &str)],
+    ) -> (RouteDispatchOutcome, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        const MODEL: &str = "qwen";
+
+        async fn drain_request_headers(stream: &mut tokio::net::TcpStream) {
+            let mut buffer = [0u8; 4096];
+            let mut accumulated = Vec::new();
+            loop {
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    break;
+                };
+                if read == 0 {
+                    break;
+                }
+                accumulated.extend_from_slice(&buffer[..read]);
+                if accumulated.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+        }
+
+        let mut ports = Vec::new();
+        for (status, body) in backends {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("mock backend must bind");
+            ports.push(listener.local_addr().expect("mock backend address").port());
+            let status = *status;
+            let body = (*body).to_owned();
+            let reason = match status {
+                200 => "OK",
+                402 => "Payment Required",
+                _ => "Internal Server Error",
+            };
+            tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("mock backend accept");
+                drain_request_headers(&mut stream).await;
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len(),
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("mock backend write");
+                stream.shutdown().await.expect("mock backend shutdown");
+            });
+        }
+
+        let downstream = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("downstream must bind");
+        let downstream_address = downstream.local_addr().expect("downstream address");
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(downstream_address)
+                .await
+                .expect("client must connect");
+            let mut response = Vec::new();
+            stream
+                .read_to_end(&mut response)
+                .await
+                .expect("client must read the response");
+            response
+        });
+        let (downstream_stream, _) = downstream.accept().await.expect("downstream accept");
+
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .expect("test node must start");
+        let affinity = AffinityRouter::new();
+
+        let mut targets = election::ModelTargets::default();
+        targets.targets.insert(
+            MODEL.to_string(),
+            ports
+                .iter()
+                .map(|port| election::InferenceTarget::Local(*port))
+                .collect(),
+        );
+
+        let request_body = r#"{"model":"qwen","messages":[{"role":"user","content":"hi"}]}"#;
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            request_body.len(),
+            request_body
+        )
+        .into_bytes();
+        let request = BufferedHttpRequest {
+            raw,
+            method: "POST".to_owned(),
+            path: "/v1/chat/completions".to_owned(),
+            client_path: "/v1/chat/completions".to_owned(),
+            request_id: RequestId::default(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: request_body.len(),
+            completion_tokens: None,
+            stream: None,
+            model_name: Some(MODEL.to_owned()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+            correlation_id: None,
+            exchange_observation_id: None,
+        };
+
+        let outcome = route_model_request(
+            node,
+            downstream_stream.into(),
+            &targets,
+            MODEL,
+            &request,
+            RouteModelRequestContext {
+                local_execution_only: false,
+                exchange_id: None,
+                required_tokens: None,
+                affinity: &affinity,
+                route_observer: OpenAiRouteObserver::default(),
+                served_by_header: None,
+                peer_capsule_id: None,
+                served_by_node_id: None,
+            },
+        )
+        .await;
+
+        let raw_response = tokio::time::timeout(std::time::Duration::from_secs(20), client)
+            .await
+            .expect("the client must receive a response")
+            .expect("the client task must not panic");
+        (outcome, String::from_utf8_lossy(&raw_response).into_owned())
+    }
+
+    fn paid_replica_body() -> &'static str {
+        r#"{"error":{"message":"this provider requires the Lightning payment protocol","type":"payment_required"}}"#
+    }
+
+    fn served_completion_body() -> &'static str {
+        r#"{"id":"c1","model":"qwen","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#
+    }
+
+    /// #2059, the failover half. A replica that answers an unpaid nested MoA
+    /// call with 402 is refusing *this* serving endpoint, not the request: a
+    /// free replica of the same model can still serve it. The route loop treats
+    /// a peer timeout, unavailability and context-overflow 400 as
+    /// "try the next target", but a delivered 402 was returned to the caller
+    /// directly, so the committee silently lost the worker.
+    #[tokio::test]
+    async fn a_replica_that_requires_payment_fails_over_to_the_free_standby() {
+        let (outcome, raw_response) = route_across_mock_backends(&[
+            (402, paid_replica_body()),
+            (200, served_completion_body()),
+        ])
+        .await;
+
+        assert!(
+            raw_response.starts_with("HTTP/1.1 200"),
+            "the free standby must have served the request, client saw: {raw_response}"
+        );
+        assert!(
+            matches!(
+                outcome,
+                RouteDispatchOutcome::RespondedWithUsage {
+                    status_code: 200,
+                    ..
+                }
+            ),
+            "expected the surviving replica to deliver 200, got {outcome:?}"
+        );
+    }
+
+    /// The other half of the same decision: when no unpaid replica exists the
+    /// client must still be told the model requires payment. Failing over must
+    /// not launder a genuine 402 into an unavailable-model error.
+    #[tokio::test]
+    async fn a_model_served_only_by_a_paying_replica_still_reports_402() {
+        let (outcome, raw_response) =
+            route_across_mock_backends(&[(402, paid_replica_body())]).await;
+
+        assert!(
+            raw_response.starts_with("HTTP/1.1 402"),
+            "the payment requirement must reach the client, client saw: {raw_response}"
+        );
+        assert!(
+            matches!(
+                outcome,
+                RouteDispatchOutcome::Responded(402)
+                    | RouteDispatchOutcome::RespondedWithUsage {
+                        status_code: 402,
+                        ..
+                    }
+                    | RouteDispatchOutcome::RespondedWithDigests {
+                        status_code: 402,
+                        ..
+                    }
+            ),
+            "expected a terminal 402, got {outcome:?}"
+        );
+    }
 }
