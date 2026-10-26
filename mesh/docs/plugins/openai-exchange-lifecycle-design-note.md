@@ -21,11 +21,11 @@ why the M1 seam alone could not do either.
 
 ## What #1331 assumed vs. what's actually there
 
-#1331's framing (`OpenAiHookPolicy` only fires before-chat; `MeshEvent` is
+Issue #1331's framing (`InferenceHookPolicy` only fires before-chat; `MeshEvent` is
 topology-only; the real path is somewhere in `inference::provider()`) is close but
 imprecise about the codebase, and the imprecision matters for design:
 
-- `OpenAiHookPolicy` (`skippy/crates/skippy-inference-api/src/hooks.rs`) is correct: today it has
+- `InferenceHookPolicy` (`skippy/crates/skippy-inference-api/src/hooks.rs`) is correct: today it has
   `before_chat_completion`, `after_prefill`, `mid_generation` — no terminal hook.
 - `MeshEvent` doesn't exist as a single type. There are two distinct things this could
   mean:
@@ -42,22 +42,22 @@ imprecise about the codebase, and the imprecision matters for design:
   ingress proxy** (`mesh/crates/mesh-llm-host-runtime/src/network/openai/ingress.rs:582`).
 
 That last point is the important correction: **there are two disjoint real dispatch
-paths for an OpenAI-shaped request, and only one of them is `OpenAiHookPolicy`.**
+paths for an OpenAI-shaped request, and only one of them is `InferenceHookPolicy`.**
 
 1. **The `skippy-inference-api` crate path** — a typed Rust API
-   (`ChatCompletionRequest`/`ChatCompletionResponse`, `OpenAiBackend` trait). This is
+   (`ChatCompletionRequest`/`ChatCompletionResponse`, `InferenceBackend` trait). This is
    what `#1331` names and what this milestone extends. It's used when a model is served
    in-process (e.g. the embedded/skippy backend, see
    `mesh/crates/mesh-llm-host-runtime/src/inference/skippy/hooks.rs`'s `MeshAutoHookPolicy`,
-   a real, shipping `OpenAiHookPolicy` implementor).
+   a real, shipping `InferenceHookPolicy` implementor).
 2. **The raw-proxy ingress path** (`network/openai/ingress.rs`) — used when a model is
    served by a plugin's inference endpoint. This path never deserializes the body into
    `ChatCompletionRequest`; it forwards HTTP bytes directly to
    `endpoint.address` after resolving `plugin_manager.inference_endpoint_for_model(model)`.
-   `OpenAiHookPolicy` is never invoked on this path, and it doesn't share a request type
+   `InferenceHookPolicy` is never invoked on this path, and it doesn't share a request type
    with the frontend crate.
 
-**Any #1331 design that extends only `OpenAiHookPolicy` covers path 1 and misses path 2
+**Any #1331 design that extends only `InferenceHookPolicy` covers path 1 and misses path 2
 entirely.** Plugin-served models — the case #1331 most plausibly cares about, since
 that's who the "out-of-process plugin" observer would usually be — are dispatched by a
 completely different, byte-oriented code path that has no typed request/response hook
@@ -69,12 +69,12 @@ than what's here.
 
 ## What this milestone implements
 
-In `skippy/crates/skippy-inference-api/src/hooks.rs`, `OpenAiHookPolicy` gained two new default
+In `skippy/crates/skippy-inference-api/src/hooks.rs`, `InferenceHookPolicy` gained two new default
 no-op async methods (additive, so `MeshAutoHookPolicy` and any other existing
 implementor keep compiling unchanged):
 
 - `on_effective_chat_completion(&self, request: &ChatCompletionRequest, route: &ChatExchangeRoute)`
-  — fires once, immediately before `HookedOpenAiBackend` dispatches to the real
+  — fires once, immediately before `HookedInferenceBackend` dispatches to the real
   backend, with the **post-mutation** request (i.e. after `before_chat_completion`'s
   outcome has been applied) and a `ChatExchangeRoute { model }`.
 - `on_chat_completion_terminal(&self, request: &ChatCompletionRequest, outcome: &ChatCompletionOutcome<'_>)`
@@ -82,7 +82,7 @@ implementor keep compiling unchanged):
   `Error { status, message }` (the backend failed), or `Denied { status, reason }`
   (`before_chat_completion` itself returned `Err`, so the backend was never called).
 
-Both are wired into `HookedOpenAiBackend::chat_completion_with_context` — the one real
+Both are wired into `HookedInferenceBackend::chat_completion_with_context` — the one real
 call site the live router (`router.rs`'s `chat_completions` handler) actually dispatches
 non-streaming chat completions through. `chat_completion` already delegates to
 `chat_completion_with_context`, so it's covered for free. `chat_completion_stream` is
@@ -90,9 +90,9 @@ untouched, per this milestone's scope.
 
 ### Why `route` is just a model string
 
-`OpenAiRequestContext` (`skippy/crates/skippy-inference-api/src/backend.rs:66`) carries no
-backend/route identity, and `HookedOpenAiBackend` wraps exactly one already-chosen
-`Arc<dyn OpenAiBackend>` — there is no per-request backend selection inside
+`InferenceRequestContext` (`skippy/crates/skippy-inference-api/src/backend.rs:66`) carries no
+backend/route identity, and `HookedInferenceBackend` wraps exactly one already-chosen
+`Arc<dyn InferenceBackend>` — there is no per-request backend selection inside
 `skippy-inference-api` to report. `request.model` is the only route-relevant fact available
 at this layer. Route/provider selection (which plugin, which endpoint) happens entirely
 on path 2 above, outside this crate.
@@ -105,9 +105,9 @@ on path 2 above, outside this crate.
 transport (`PluginMeshEvent`/`plugin/transport.rs`) — that bridging necessarily happens
 one layer up, in `mesh-llm-host-runtime`, exactly the way
 `OpenAiLifecycleLoggingAdapter` (`mesh/crates/mesh-llm-host-runtime/src/logging/openai_lifecycle.rs:388`)
-already bridges the existing metadata-only `OpenAiLifecycleObserver` events to the
+already bridges the existing metadata-only `InferenceLifecycleObserver` events to the
 logging service today. A production implementation of these two new hook methods would
-follow that same pattern: implement `OpenAiHookPolicy` in `mesh-llm-host-runtime`,
+follow that same pattern: implement `InferenceHookPolicy` in `mesh-llm-host-runtime`,
 serialize `(request, route)` / `(request, outcome)` into a
 `proto::ChannelMessage { channel: "openai.exchange.v1", body, content_type:
 "application/json", .. }`, and send it via the existing `PluginMeshEvent::Channel`
@@ -140,10 +140,10 @@ two independent reasons.**
    the same way `x-request-id` does — and that header is attached by
    `frontend_lifecycle_middleware` (`router.rs:849-866`), an axum middleware layer that
    wraps the *entire* `Response` **after** the handler (and therefore after
-   `HookedOpenAiBackend` and every `OpenAiHookPolicy` call) has already run
+   `HookedInferenceBackend` and every `InferenceHookPolicy` call) has already run
    (`json_response_with_usage`, `router.rs:774`, is what turns the typed
-   `ChatCompletionResponse` into that `Response`, with no hook in between). `OpenAiBackend`
-   and `OpenAiHookPolicy` never see an `axum::http::Response` or its headers at all — that
+   `ChatCompletionResponse` into that `Response`, with no hook in between). `InferenceBackend`
+   and `InferenceHookPolicy` never see an `axum::http::Response` or its headers at all — that
    capability lives one layer up, at the same place `x-request-id` is set, not inside this
    milestone's hook surface.
 
@@ -154,16 +154,16 @@ non-streaming request with `Success`/`Error`/`Denied`, so a bridged plugin would
 for two reasons that are architectural, not just unimplemented: no capsule id exists to
 correlate against (per (a)), and — separately — the client's ack is necessarily a
 **different, later HTTP request** (there is no wire mechanism, in this exchange's
-response, for the client to attach anything to *this* call). `OpenAiHookPolicy` and
-`HookedOpenAiBackend` are scoped to one request's lifecycle; nothing in `skippy-inference-api`
+response, for the client to attach anything to *this* call). `InferenceHookPolicy` and
+`HookedInferenceBackend` are scoped to one request's lifecycle; nothing in `skippy-inference-api`
 threads state from one request to a later, unrelated one. Observing the ack would need a
 new endpoint (or a recognized field on an existing one) plus a correlation store, neither
 of which exists.
 
-**Verdict: can't, today, on the `OpenAiHookPolicy`/`HookedOpenAiBackend` seam this
+**Verdict: can't, today, on the `InferenceHookPolicy`/`HookedInferenceBackend` seam this
 milestone extends.** Both halves of the response leg need capability that lives outside
 it: (a) needs a seam at the HTTP middleware/response-header layer (the
-`frontend_lifecycle_middleware` layer, not `OpenAiBackend`), and (b) needs cross-request
+`frontend_lifecycle_middleware` layer, not `InferenceBackend`), and (b) needs cross-request
 correlation that no part of this crate provides. A future design for the response leg is
 closer to "add a second, header-capable hook point next to
 `frontend_lifecycle_middleware`, and give `ChatCompletionResponse` an extensible field the
@@ -183,13 +183,13 @@ question for whoever picks up the rung-ladder work.
 
 ## M2: the rung-ladder response leg, built
 
-M1's verdict was "can't, today, on the `OpenAiHookPolicy`/`HookedOpenAiBackend` seam" for
+M1's verdict was "can't, today, on the `InferenceHookPolicy`/`HookedInferenceBackend` seam" for
 two independent reasons: no write access to the response, and no extensible field on
 `ChatCompletionResponse`. M2 closes both, following the exact shape M1's own verdict
 named as the way out ("give `ChatCompletionResponse` an extensible field... add a
 second, header-capable hook point next to `frontend_lifecycle_middleware`"):
 
-- `OpenAiHookPolicy` gained a fourth hook, `capsule_marker_for_response(&self, request,
+- `InferenceHookPolicy` gained a fourth hook, `capsule_marker_for_response(&self, request,
   response) -> Option<CapsuleMarker>` (`skippy/crates/skippy-inference-api/src/hooks.rs`), fired once
   after the backend returns a successful response and before the terminal hook. Unlike
   the three observer methods, this one returns a value — the write-capable half a plain
@@ -207,7 +207,7 @@ second, header-capable hook point next to `frontend_lifecycle_middleware`"):
   `x-request-id` already uses.
 - Verified end-to-end through the real axum router (not just the Rust-level hook call):
   `router_tests.rs::hook_minted_capsule_marker_is_exposed_as_x_capsule_id_response_header`
-  drives a `POST /v1/chat/completions` through `HookedOpenAiBackend` wrapped in
+  drives a `POST /v1/chat/completions` through `HookedInferenceBackend` wrapped in
   `router_for(...)` and asserts the literal `x-capsule-id` response header. A sibling test
   asserts the header is absent when no hook mints a marker (`no_capsule_marker_means_no_x_capsule_id_header`).
 
@@ -223,8 +223,8 @@ mesh-llm needing to build a second endpoint for it.
 ## M2: covering path 2
 
 M1 named the raw-proxy ingress path (`network/openai/ingress.rs`'s
-`try_route_plugin_model`) as a real, disjoint dispatch path that `OpenAiHookPolicy` never
-touches, and left open whether it should "reuse `OpenAiHookPolicy`'s shape or need its
+`try_route_plugin_model`) as a real, disjoint dispatch path that `InferenceHookPolicy` never
+touches, and left open whether it should "reuse `InferenceHookPolicy`'s shape or need its
 own (it can't share `ChatCompletionRequest`...)". M2 answers that concretely: path 2 gets
 its own lightweight call sites (it has no typed request to hand a policy trait), but both
 paths publish onto the **same** out-of-process channel in the **same** wire shape, so a
@@ -239,7 +239,7 @@ onto the other.
   production, a `RecordingChannel` double stands in for the out-of-process plugin in
   tests — the same "recording double as the out-of-process party" pattern
   `RecordingPolicy` already uses for the in-process hook in M1's own tests);
-  `OpenAiExchangeHookBridge` implements `OpenAiHookPolicy` and bridges path 1's
+  `OpenAiExchangeHookBridge` implements `InferenceHookPolicy` and bridges path 1's
   `on_effective_chat_completion`/`on_chat_completion_terminal`/
   `capsule_marker_for_response` onto it.
 - `PluginManager::broadcast_channel_message` (`mesh/crates/mesh-llm-host-runtime/src/plugin/mod.rs`)
@@ -253,7 +253,7 @@ onto the other.
   plugin endpoint is resolved (the effective-request analogue — the model is the only
   route fact available, same narrowness as path 1's `ChatExchangeRoute`), one right after
   the dispatch outcome is known (terminal, status mapped by the new `plugin_route_status`
-  helper; always `capsule_id: None`, since path 2 never runs through `OpenAiHookPolicy`,
+  helper; always `capsule_id: None`, since path 2 never runs through `InferenceHookPolicy`,
   the only place a marker is minted).
 
 **Scope boundary, stated plainly:** `broadcast_channel_message`'s manifest-based
@@ -271,11 +271,11 @@ dispatch, but are not behaviorally covered beyond that.
 
 ## Deliberately deferred
 
-- Composing `OpenAiExchangeHookBridge` into the real server's `OpenAiHookPolicy`
+- Composing `OpenAiExchangeHookBridge` into the real server's `InferenceHookPolicy`
   composition alongside `MeshAutoHookPolicy` (main-wiring) — this milestone, like M1,
   stays a reference implementation proven by tests, not a change to what the running
   server does. There is also no multi-policy composition helper in this crate today (each
-  `HookedOpenAiBackend` takes one `Arc<dyn OpenAiHookPolicy>`); wiring both hooks into one
+  `HookedInferenceBackend` takes one `Arc<dyn InferenceHookPolicy>`); wiring both hooks into one
   running server needs that first.
 - A client-ack-receiving endpoint in mesh-llm itself — not needed per the M2 rung-ladder
   section above, since that side of the exchange is terminated by the plugin/sidecar, not

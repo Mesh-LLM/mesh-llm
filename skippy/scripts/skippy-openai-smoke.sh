@@ -2,13 +2,24 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Frozen automation selection begins.
+# Standalone fallback follows the existing Just bootstrap/build policy.
+automation=(just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo "MESH_LLM_AUTOMATION_BIN must be an absolute executable" >&2
+    exit 1
+  fi
+  automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+# Frozen automation selection ends.
 LLAMA_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-.deps/llama-build/build-stage-abi-static}"
 MODEL_MANIFEST="${MODEL_MANIFEST:-$ROOT/ci/model-artifacts/manifests/openai-smoke.json}"
 MODEL_IDENTITY_OVERRIDDEN=0
 if [[ -n "${MODEL_REPO:-}" || -n "${MODEL_FILE:-}" || -n "${MODEL_SELECTOR:-}" || -n "${MODEL_REVISION:-}" || -n "${MODEL_PATH:-}" ]]; then
   MODEL_IDENTITY_OVERRIDDEN=1
 fi
-MODEL_FIXTURE="$(python3 "$ROOT/scripts/resolve-test-model-manifest.py" "$MODEL_MANIFEST" --cadence manual)"
+MODEL_FIXTURE="$("${automation[@]}" models resolve "$MODEL_MANIFEST" --cadence manual)"
 MODEL_REPO="${MODEL_REPO:-$(jq -r '.repo' <<<"$MODEL_FIXTURE")}"
 MODEL_FILE="${MODEL_FILE:-$(jq -r '.file' <<<"$MODEL_FIXTURE")}"
 MODEL_SELECTOR="${MODEL_SELECTOR:-$(jq -r '.selector' <<<"$MODEL_FIXTURE")}"
@@ -50,7 +61,7 @@ trap cleanup EXIT
 require_cmd curl
 require_cmd jq
 require_cmd lsof
-require_cmd python3
+
 
 if [[ ! -d "$LLAMA_BUILD_DIR" ]]; then
   echo "llama build dir not found: $LLAMA_BUILD_DIR" >&2
@@ -79,7 +90,7 @@ if [[ ! -f "$MODEL_PATH" ]]; then
   exit 1
 fi
 if [[ "$MODEL_IDENTITY_OVERRIDDEN" == "0" ]]; then
-  python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
+  "${automation[@]}" models resolve \
     "$MODEL_MANIFEST" \
     --cadence manual \
     --verify-root "$(dirname "$MODEL_PATH")"
@@ -87,51 +98,6 @@ fi
 
 echo "building skippy-serving and skippy-package-builder"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" cargo build -p skippy-cli -p skippy-package-builder
-
-echo "inferring layer_end from $MODEL_PATH"
-LAYER_END="$(
-  LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" target/debug/skippy-package-builder inspect "$MODEL_PATH" \
-    | jq '[.tensors[] | select(.role == "layer") | .layer_index] | max + 1'
-)"
-if [[ -z "$LAYER_END" || "$LAYER_END" == "null" ]]; then
-  echo "failed to infer layer_end from model" >&2
-  exit 1
-fi
-
-CONFIG_PATH="${WORK_DIR}/stage-openai-smoke.json"
-python3 - "$CONFIG_PATH" "$MODEL_ID" "$MODEL_PATH" "$LAYER_END" "$CTX_SIZE" <<'PY'
-import json
-import hashlib
-import sys
-
-config_path, model_id, model_path, layer_end, ctx_size = sys.argv[1:]
-model_digest = hashlib.sha256()
-with open(model_path, "rb") as model_file:
-    for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
-        model_digest.update(chunk)
-config = {
-    "run_id": "openai-smoke",
-    "topology_id": "openai-smoke-single-stage",
-    "model_id": model_id,
-    "model_path": model_path,
-    "source_model_sha256": model_digest.hexdigest(),
-    "stage_id": "stage-0",
-    "stage_index": 0,
-    "layer_start": 0,
-    "layer_end": int(layer_end),
-    "ctx_size": int(ctx_size),
-    "n_gpu_layers": 0,
-    "load_mode": "runtime-slice",
-    "execution_contract": "",
-    "bind_addr": "127.0.0.1:19000",
-    "upstream": None,
-    "downstream": None,
-    "kv_server": None,
-}
-with open(config_path, "w", encoding="utf-8") as handle:
-    json.dump(config, handle, indent=2)
-    handle.write("\n")
-PY
 
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "port ${PORT} is already listening" >&2
@@ -143,7 +109,8 @@ SERVER_LOG="${WORK_DIR}/serve.log"
 echo "starting skippy serve on ${BASE_URL}"
 SKIPPY_TELEMETRY_STDERR=1 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
   target/debug/skippy serve \
-    --config "$CONFIG_PATH" \
+    --model-path "$MODEL_PATH" --model-id "$MODEL_ID" \
+    --ctx-size "$CTX_SIZE" --n-gpu-layers 0 \
     --bind-addr "${HOST}:${PORT}" \
     --default-max-tokens "$DEFAULT_MAX_TOKENS" \
     --telemetry-level debug \
@@ -212,6 +179,7 @@ sampling_request="$(jq -cn --arg model "$MODEL_ID" '{
   messages: [{role: "user", content: "Say hi"}],
   temperature: 0.7,
   top_p: 0.9,
+  typical_p: 0.9,
   seed: 42,
   logit_bias: {"0": -1.0},
   max_tokens: 2
@@ -237,7 +205,7 @@ echo "probing unsupported sampling rejection"
 unsupported_sampling_request="$(jq -cn --arg model "$MODEL_ID" '{
   model: $model,
   messages: [{role: "user", content: "Say hi"}],
-  typical_p: 0.9,
+  adaptive: true,
   max_tokens: 2
 }')"
 unsupported_sampling_response="${WORK_DIR}/unsupported-sampling-response.json"
@@ -257,11 +225,13 @@ fi
 unsupported_sampling_json="$(cat "$unsupported_sampling_response")"
 echo "$unsupported_sampling_json" | jq -e '.error.code == "unsupported_model_feature"' >/dev/null
 
-if ! grep -q '"event":"stage.scheduler_iteration"' "$SERVER_LOG"; then
-  echo "default OpenAI request path did not emit scheduler iteration telemetry" >&2
-  tail -80 "$SERVER_LOG" >&2 || true
-  exit 1
-fi
+for event in stage.openai_decode stage.openai_request_summary; do
+  if ! grep -q "\"event\":\"${event}\"" "$SERVER_LOG"; then
+    echo "default OpenAI request path did not emit ${event} telemetry" >&2
+    tail -80 "$SERVER_LOG" >&2 || true
+    exit 1
+  fi
+done
 
 if [[ "$RUN_BENCHY" == "1" ]]; then
   require_cmd uvx
@@ -279,7 +249,6 @@ if [[ "$RUN_BENCHY" == "1" ]]; then
 fi
 
 echo "OpenAI smoke passed"
-echo "  config: $CONFIG_PATH"
 echo "  server log: $SERVER_LOG"
 if [[ "$RUN_BENCHY" == "1" ]]; then
   echo "  benchy result: ${SAVE_RESULT:-$WORK_DIR/benchy-smoke.md}"

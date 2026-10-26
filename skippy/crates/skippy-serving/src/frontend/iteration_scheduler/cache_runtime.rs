@@ -44,6 +44,12 @@ pub(super) struct CacheRuntimeQueue {
 }
 
 impl CacheRuntimeQueue {
+    /// Drops every queued operation; their callers see a closed reply channel.
+    pub(super) fn clear(&mut self) {
+        self.operations.clear();
+        self.order_dirty = false;
+    }
+
     pub(super) fn new(aging_cost_per_turn: u64, group_waiting_prefixes: bool) -> Self {
         Self {
             operations: Vec::new(),

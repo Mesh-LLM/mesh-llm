@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "hf-download-smoke",
-  "registry_sha256": "adc196473b245989a68ae2d684b72aae766e1b2ba1de414f6ed35cb5c6739e40",
+  "registry_sha256": "698f46a298161cbaec1aee3a4ee889c40965eeba535ba10c54d42966b985d877",
   "artifacts": [
     {
       "id": "smollm2-q4-download",

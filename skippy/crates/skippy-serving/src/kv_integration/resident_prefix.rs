@@ -811,7 +811,7 @@ fn resident_index_over_capacity(
 mod proactive_eviction_tests {
     use super::*;
     use crate::kv_integration::KvLifecycleObserver;
-    use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
+    use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode};
     use skippy_runtime::ModelStateKind;
     use std::sync::Arc;
 
@@ -850,7 +850,6 @@ mod proactive_eviction_tests {
             kv_cache: Some(StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: StageKvCacheMode::LookupRecord,
-                payload: StageKvCachePayload::ResidentKv,
                 max_entries: 4,
                 max_bytes: 0,
                 l2_max_bytes: 0,
@@ -862,11 +861,19 @@ mod proactive_eviction_tests {
             ..StageConfig::default()
         };
         let observer = Arc::new(RecordingObserver::default());
-        let integration =
-            KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Dense), None, None)
-                .unwrap()
-                .expect("resident cache should be enabled")
-                .with_kv_lifecycle_observer(observer.clone());
+        let integration = KvStageIntegration::from_loaded_model(
+            &config,
+            Some(ModelStateKind::Dense),
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+                full_state: true,
+            }),
+            None,
+        )
+        .unwrap()
+        .expect("resident cache should be enabled")
+        .with_kv_lifecycle_observer(observer.clone());
         let seq_id = lock_resident_sequences(&integration.resident_sequences)
             .allocate()
             .unwrap();

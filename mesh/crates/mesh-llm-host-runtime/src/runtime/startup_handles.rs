@@ -22,7 +22,6 @@ use super::{
 use crate::api;
 use crate::inference::{election, skippy};
 use crate::mesh;
-use crate::network::tunnel;
 use crate::plugin;
 use crate::runtime::interactive;
 use crate::runtime::local;
@@ -41,8 +40,9 @@ use std::time::{Duration, Instant};
 mod startup_loop;
 pub(super) use startup_loop::*;
 
-pub(super) type BootstrapProxyStopTx =
-    tokio::sync::mpsc::Sender<tokio::sync::oneshot::Sender<tokio::net::TcpListener>>;
+pub(super) type BootstrapProxyStopTx = tokio::sync::mpsc::Sender<
+    tokio::sync::oneshot::Sender<crate::network::openai::accept::IngressListener>,
+>;
 
 pub(super) struct StartupLaunchHandles {
     pub(super) loaded_name: String,
@@ -57,7 +57,6 @@ pub(super) struct StartupLaunchHandles {
 pub(super) struct StartupLocalModelTask {
     pub(super) node: mesh::Node,
     pub(super) config: plugin::MeshConfig,
-    pub(super) tunnel_mgr: tunnel::Manager,
     pub(super) target_tx: Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     pub(super) model_path: PathBuf,
     pub(super) model_ref: String,
@@ -506,7 +505,6 @@ pub(super) async fn startup_register_loaded_runtime(
     ctx.node
         .register_runtime_instance_lifecycle(handle.port, ctx.lifecycle.clone());
     add_runtime_local_target(ctx.target_tx, loaded_name, handle.port);
-    ctx.tunnel_mgr.set_http_port(ctx.api_port);
     register_runtime_instance(
         ctx.runtime_instance_registry,
         ctx.node,

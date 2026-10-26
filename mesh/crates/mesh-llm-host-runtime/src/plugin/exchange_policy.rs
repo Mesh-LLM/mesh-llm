@@ -6,7 +6,7 @@ use skippy_inference_api::http_exchange::{HttpExchangeAdmission, HttpExchangePol
 use skippy_inference_api::wire_bytes::{WireBytesCommitment, WireBytesObserver};
 use skippy_inference_api::{
     CapsuleMarker, ChatCompletionOutcome, ChatCompletionRequest, ChatCompletionResponse,
-    ChatExchangeRoute, OpenAiHookPolicy, OpenAiResult,
+    ChatExchangeRoute, InferenceHookPolicy, InferenceResult,
 };
 use std::sync::{Arc, Mutex};
 
@@ -31,7 +31,7 @@ impl NodeExchangePolicy {
         endpoint: &str,
         path: &str,
         exchange_id: &str,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         let Some(manager) = self.node.plugin_manager().await else {
             return Ok(());
         };
@@ -39,7 +39,7 @@ impl NodeExchangePolicy {
             return Ok(());
         }
         let bytes = serde_json::to_vec(request).map_err(|_| {
-            skippy_inference_api::OpenAiError::backend("cannot encode effective request")
+            skippy_inference_api::InferenceError::backend("cannot encode effective request")
         })?;
         let mut event = super::request_event(
             exchange_id.to_owned(),
@@ -78,7 +78,7 @@ impl NodeExchangePolicy {
     }
 }
 #[async_trait]
-impl OpenAiHookPolicy for NodeExchangePolicy {
+impl InferenceHookPolicy for NodeExchangePolicy {
     fn requires_exchange_lifecycle(&self) -> bool {
         true
     }
@@ -89,7 +89,7 @@ impl OpenAiHookPolicy for NodeExchangePolicy {
         &self,
         request: &ChatCompletionRequest,
         route: &ChatExchangeRoute,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         self.admit_typed_request(
             request,
             &request.model,
@@ -103,7 +103,7 @@ impl OpenAiHookPolicy for NodeExchangePolicy {
         &self,
         request: &skippy_inference_api::CompletionRequest,
         exchange_id: &str,
-    ) -> OpenAiResult<()> {
+    ) -> InferenceResult<()> {
         self.admit_typed_request(
             request,
             &request.model,
@@ -276,26 +276,26 @@ impl WireBytesObserver for TypedEmission {
     }
 }
 
-pub(crate) fn compose_node_hooks(node: crate::mesh::Node) -> Arc<dyn OpenAiHookPolicy> {
+pub(crate) fn compose_node_hooks(node: crate::mesh::Node) -> Arc<dyn InferenceHookPolicy> {
     skippy_inference_api::composite_hooks::CompositeOpenAiHookPolicy::new(vec![
         crate::inference::skippy::MeshAutoHookPolicy::new(node.clone()),
         NodeExchangePolicy::new(node),
     ])
 }
 
-fn permission_error(message: &str) -> skippy_inference_api::OpenAiError {
-    skippy_inference_api::OpenAiError::from_kind(
+fn permission_error(message: &str) -> skippy_inference_api::InferenceError {
+    skippy_inference_api::InferenceError::from_kind(
         axum::http::StatusCode::FORBIDDEN,
-        skippy_inference_api::OpenAiErrorKind::Permission,
+        skippy_inference_api::InferenceErrorKind::Permission,
         message,
     )
     .with_code("plugin_policy_denied")
 }
 
-fn hook_unavailable(message: &str) -> skippy_inference_api::OpenAiError {
-    skippy_inference_api::OpenAiError::from_kind(
+fn hook_unavailable(message: &str) -> skippy_inference_api::InferenceError {
+    skippy_inference_api::InferenceError::from_kind(
         axum::http::StatusCode::SERVICE_UNAVAILABLE,
-        skippy_inference_api::OpenAiErrorKind::ServiceUnavailable,
+        skippy_inference_api::InferenceErrorKind::ServiceUnavailable,
         message,
     )
     .with_code("plugin_hook_unavailable")

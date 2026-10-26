@@ -3,8 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use skippy_inference_api::{
-    ChatCompletionRequest, ChatHookOutcome, ChatMediaKind, GenerationHookSignals, OpenAiHookPolicy,
-    OpenAiResult, PrefillHookSignals, chat_skippy_hooks_enabled, first_chat_media,
+    ChatCompletionRequest, ChatHookOutcome, ChatMediaKind, GenerationHookSignals,
+    InferenceHookPolicy, InferenceResult, PrefillHookSignals, chat_skippy_hooks_enabled,
+    first_chat_media,
 };
 
 use crate::{inference::virtual_llm, mesh};
@@ -38,11 +39,11 @@ impl MeshAutoHookPolicy {
 }
 
 #[async_trait]
-impl OpenAiHookPolicy for MeshAutoHookPolicy {
+impl InferenceHookPolicy for MeshAutoHookPolicy {
     async fn before_chat_completion(
         &self,
         request: &mut ChatCompletionRequest,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         if !chat_skippy_hooks_enabled(request) {
             return Ok(ChatHookOutcome::none());
         }
@@ -67,7 +68,7 @@ impl OpenAiHookPolicy for MeshAutoHookPolicy {
         &self,
         request: &mut ChatCompletionRequest,
         signals: PrefillHookSignals,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         if !chat_skippy_hooks_enabled(request) {
             return Ok(ChatHookOutcome::none());
         }
@@ -99,7 +100,7 @@ impl OpenAiHookPolicy for MeshAutoHookPolicy {
         &self,
         request: &mut ChatCompletionRequest,
         signals: GenerationHookSignals,
-    ) -> OpenAiResult<ChatHookOutcome> {
+    ) -> InferenceResult<ChatHookOutcome> {
         if !chat_skippy_hooks_enabled(request) {
             return Ok(ChatHookOutcome::none());
         }
@@ -125,7 +126,7 @@ impl OpenAiHookPolicy for MeshAutoHookPolicy {
     // Only the pre-dispatch hooks above are implemented — the post-dispatch
     // request snapshot (`on_chat_completion_terminal`,
     // `capsule_marker_for_response`) is never read here, so skip the clone
-    // `HookedOpenAiBackend` would otherwise take on every completion.
+    // `HookedInferenceBackend` would otherwise take on every completion.
     fn observes_dispatched_request(&self) -> bool {
         false
     }

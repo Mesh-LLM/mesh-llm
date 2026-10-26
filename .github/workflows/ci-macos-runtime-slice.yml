@@ -3,6 +3,30 @@ name: CI macOS Runtime Slice
 on:
   workflow_call:
     inputs:
+      authority_linux_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_linux_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_macos_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_windows_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON from the lane's product_automation producer (source SHA, artifact ID, executable digest, OS, architecture). The job restores that executable and never compiles xtask.
+        required: true
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: true
@@ -98,6 +122,14 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+      - name: Restore product-source automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
       - uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
           include_tool_versions: "true"
@@ -108,13 +140,14 @@ jobs:
           backend: ${{ matrix.runtime.backend }}
           target: ${{ matrix.runtime.target }}
           output_dir: runtime-input
-      - name: Bind native runtime producer to source revision
+      - name: Bind native producer to selected source
         shell: bash
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)" == "$SOURCE_SHA" ]]
           printf '{"source_sha":"%s"}\n' "$SOURCE_SHA" > runtime-input/ci-source.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

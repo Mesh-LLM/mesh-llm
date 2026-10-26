@@ -174,6 +174,7 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
+        token_logprobs: None,
     };
     let parsed = ParsedChatMessage {
         content: Some("Final answer.".to_string()),
@@ -228,6 +229,7 @@ fn generated_text_timings_are_present_without_native_mtp() {
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
+        token_logprobs: None,
     };
 
     let timings = output.timings().expect("standard timings");
@@ -250,12 +252,12 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         native_mtp_stats: NativeMtpStats::default(),
         native_mtp_decode_telemetry: None,
         verify_window_pipeline_stats: None,
-        speculative_stats: Some(OpenAiSpeculativeStats {
+        speculative_stats: Some(InferenceSpeculativeStats {
             windows: 3,
             draft_tokens: 12,
             accepted_tokens: 9,
             rejected_tokens: 3,
-            ..OpenAiSpeculativeStats::default()
+            ..InferenceSpeculativeStats::default()
         }),
         prompt_ms: 20.0,
         predicted_ms: 100.0,
@@ -266,6 +268,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
+        token_logprobs: None,
     };
 
     let timings = output.timings().expect("standalone speculative timings");
@@ -277,6 +280,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
 
 #[test]
 fn generated_text_timings_prefer_composite_proposal_totals() {
+    skippy_runtime::test_support::require_native_runtime();
     let mut counters = NativeMtpDecodeCounters::default();
     let context = [1, 2, 3, 1, 2, 3, 1, 2];
     let mut cache = HistoryNgramProposer::new_cache(2, 2).unwrap();
@@ -319,6 +323,7 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
+        token_logprobs: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -608,4 +613,97 @@ fn chat_message_generation_value_preserves_omitted_content() {
 
     assert!(!value.as_object().unwrap().contains_key("content"));
     assert_eq!(value["tool_calls"][0]["id"], "call_123");
+}
+
+/// Two generated tokens with recorded logprobs; the second one's row was unreadable.
+fn generated_text_with_logprobs() -> GeneratedText {
+    let candidate = |text: &str, logprob: Option<f32>| GeneratedLogprobCandidate {
+        text: text.to_string(),
+        bytes: text.as_bytes().to_vec(),
+        logprob,
+    };
+    GeneratedText {
+        prompt_tokens: 4,
+        completion_tokens: 2,
+        cache_status: "disabled",
+        cached_prompt_tokens: 0,
+        matched_prefix_tokens: 0,
+        suffix_prefill_tokens: 0,
+        cache_hit_kind: None,
+        native_mtp_stats: NativeMtpStats::default(),
+        native_mtp_decode_telemetry: None,
+        verify_window_pipeline_stats: None,
+        speculative_stats: None,
+        prompt_ms: 0.0,
+        predicted_ms: 0.0,
+        queue_wait_ms: 0.0,
+        restore_ms: 0.0,
+        text: "Hi!".to_string(),
+        finish_reason: FinishReason::Stop,
+        detokenize_ms: 0.0,
+        text_emit_ms: 0.0,
+        eog_check_ms: 0.0,
+        token_logprobs: Some(vec![
+            GeneratedTokenLogprob {
+                token: candidate("Hi", Some(-0.25)),
+                top: vec![candidate("Hi", Some(-0.25)), candidate("Hello", Some(-1.5))],
+            },
+            GeneratedTokenLogprob {
+                token: candidate("!", None),
+                top: Vec::new(),
+            },
+        ]),
+    }
+}
+
+#[test]
+fn chat_response_reports_token_logprobs_in_openai_shape() {
+    let output = generated_text_with_logprobs();
+
+    let response = chat_response_from_generated_text("qwen".to_string(), &output, None);
+
+    assert_eq!(
+        response.choices[0].logprobs,
+        Some(json!({
+            "content": [
+                {
+                    "token": "Hi",
+                    "logprob": -0.25,
+                    "bytes": [72, 105],
+                    "top_logprobs": [
+                        {"token": "Hi", "logprob": -0.25, "bytes": [72, 105]},
+                        {"token": "Hello", "logprob": -1.5, "bytes": [72, 101, 108, 108, 111]}
+                    ]
+                },
+                {"token": "!", "logprob": null, "bytes": [33], "top_logprobs": []}
+            ],
+            "refusal": null
+        }))
+    );
+
+    let mut plain = output;
+    plain.token_logprobs = None;
+    let response = chat_response_from_generated_text("qwen".to_string(), &plain, None);
+    assert_eq!(response.choices[0].logprobs, None);
+}
+
+#[test]
+fn completion_response_reports_token_logprobs_in_legacy_shape() {
+    let output = generated_text_with_logprobs();
+
+    let response = completion_response_from_generated_text("qwen".to_string(), &output);
+
+    assert_eq!(
+        response.choices[0].logprobs,
+        Some(json!({
+            "tokens": ["Hi", "!"],
+            "token_logprobs": [-0.25, null],
+            "top_logprobs": [{"Hi": -0.25, "Hello": -1.5}, {}]
+        }))
+    );
+
+    let mut plain = output;
+    plain.token_logprobs = None;
+    let response = completion_response_from_generated_text("qwen".to_string(), &plain);
+    assert_eq!(response.choices[0].logprobs, None);
 }

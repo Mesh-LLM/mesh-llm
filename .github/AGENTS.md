@@ -10,6 +10,12 @@ release, deployment, or CI script:
 4. For PR/main composition, routing, fan-out, or provider changes, follow
    `.omo/specs/pr-ci-optimization.md`.
 
+For new CI automation, follow the Rust ownership rule in the manage-ci skill:
+use typed `tools/xtask` commands through thin Just recipes. From the repository
+root, `cargo xtool repo-consistency ci-crate-lists` runs an existing check.
+Keep current Python validation and the five PR/main entrypoints in place until
+their Rust replacements pass parity checks; do not add new Python helpers.
+
 Strict extension pattern:
 
 - keep event entrypoints thin;

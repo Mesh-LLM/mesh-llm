@@ -3,6 +3,30 @@ name: CI Linux Runtime Slice
 on:
   workflow_call:
     inputs:
+      authority_linux_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_linux_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_macos_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_windows_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      product_automation:
+        description: Same-run product-source automation identity JSON from the lane's product_automation producer (source SHA, artifact ID, executable digest, OS, architecture). The job restores that executable and never compiles xtask.
+        required: true
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: true
@@ -139,6 +163,14 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+      - name: Restore product-source automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
       - name: Verify prebuilt native environment
         env:
           VERIFY_BACKEND: ${{ matrix.runtime.verify_backend }}
@@ -166,34 +198,24 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: runtime-input
-          key: skippy-runtime-linux-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ inputs.source_sha }}-${{ hashFiles('skippy/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'Justfile', 'just/**', 'scripts/**', 'ci/slices.yml', '.github/actions/prepare-native-runtime-input/**', '.github/cache-version.txt') }}
+          key: skippy-runtime-linux-${{ inputs.source_sha }}-${{ matrix.runtime.target }}-${{ matrix.runtime.toolchain_epoch }}-${{ hashFiles('skippy/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'Justfile', 'just/**', 'scripts/**', 'ci/slices.yml', '.github/actions/prepare-native-runtime-input/**', '.github/cache-version.txt') }}
       - name: Verify restored Linux CPU runtime
         id: cached_runtime
         if: ${{ steps.runtime_cache.outputs.cache-hit == 'true' }}
         env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
           EXPECTED_BACKEND: ${{ matrix.runtime.backend }}
           EXPECTED_TARGET: ${{ matrix.runtime.target }}
         run: |
           set -euo pipefail
+          jq -e --arg sha "$SOURCE_SHA" '.source_sha == $sha' runtime-input/ci-source.json >/dev/null
           mapfile -t manifests < <(find runtime-input -mindepth 2 -maxdepth 2 -type f -name manifest.json -print)
           if [[ "${#manifests[@]}" -ne 1 ]]; then
             echo "expected exactly one cached native runtime" >&2
             exit 1
           fi
           runtime_dir="$(dirname "${manifests[0]}")"
-          python3 - "$runtime_dir/manifest.json" <<'PY'
-          import json
-          import os
-          import sys
-
-          with open(sys.argv[1], encoding="utf-8") as manifest_file:
-              runtime = json.load(manifest_file)["runtime"]
-          if runtime["backend"]["kind"] != os.environ["EXPECTED_BACKEND"]:
-              raise SystemExit("cached runtime backend does not match the planned row")
-          if runtime["platform"]["target"] != os.environ["EXPECTED_TARGET"]:
-              raise SystemExit("cached runtime target does not match the planned row")
-          PY
-          scripts/verify-native-runtime-package.sh "$runtime_dir" "$runtime_dir.tar.gz"
+          scripts/verify-native-runtime-package.sh --expected-backend "$EXPECTED_BACKEND" --expected-target "$EXPECTED_TARGET" "$runtime_dir" "$runtime_dir.tar.gz"
           if ! tar -xOzf "$runtime_dir.tar.gz" "$(basename "$runtime_dir")/manifest.json" | cmp -s "$runtime_dir/manifest.json" -; then
             echo "cached runtime directory and archive manifests differ" >&2
             exit 1
@@ -242,12 +264,14 @@ jobs:
           path: runtime-events-native-evidence.txt
           if-no-files-found: error
           retention-days: 7
-      - name: Bind native runtime producer to source revision
+      - name: Bind native producer to selected source
+        shell: bash
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
-          test "$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)" = "$SOURCE_SHA"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)" == "$SOURCE_SHA" ]]
           printf '{"source_sha":"%s"}\n' "$SOURCE_SHA" > runtime-input/ci-source.json
       - name: Upload immutable Linux runtime input
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

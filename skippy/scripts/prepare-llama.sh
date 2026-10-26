@@ -240,29 +240,17 @@ if [[ -f "$GENERATED_SERIES" ]]; then
   fi
 fi
 
-python_bin() {
-  local candidate
-  for candidate in python3 python; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
   elif command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
   else
-    local python
-    python="$(python_bin)" || {
-      echo "shasum, sha256sum, or python is required" >&2
-      return 1
-    }
-    "$python" -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$1"
+    if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+      "$MESH_LLM_AUTOMATION_BIN" artifact file-projection sha256 "$1"
+    else
+      cargo xtool artifact file-projection sha256 "$1"
+    fi
   fi
 }
 
@@ -272,12 +260,11 @@ sha256_stream() {
   elif command -v sha256sum >/dev/null 2>&1; then
     sha256sum | awk '{print $1}'
   else
-    local python
-    python="$(python_bin)" || {
-      echo "shasum, sha256sum, or python is required" >&2
-      return 1
-    }
-    "$python" -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+    if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+      "$MESH_LLM_AUTOMATION_BIN" artifact file-projection sha256 -
+    else
+      cargo xtool artifact file-projection sha256 -
+    fi
   fi
 }
 

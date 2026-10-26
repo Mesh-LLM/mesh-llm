@@ -1,6 +1,7 @@
 mod public_frontend;
 mod server_lifecycle;
 
+use crate::runtime_state::panic_recovery::lock_runtime;
 pub(crate) use server_lifecycle::serve_binary_stage_with_shutdown_and_boundary_observer;
 use server_lifecycle::{EmbeddedFrontendTask, wait_for_shutdown};
 pub use server_lifecycle::{serve_binary_stage, serve_binary_stage_with_shutdown};
@@ -31,7 +32,7 @@ use crate::{
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
     runtime_state::{
-        RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_has_indexer_memory,
+        RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_memory_cache_capabilities,
         loaded_model_state_kind,
     },
     telemetry::{Telemetry, lifecycle_attrs},
@@ -409,9 +410,7 @@ fn run_binary_stage(
     )?
     .context("binary stage server requires model_path")?;
     let (input_boundary, output_boundary) = {
-        let runtime = runtime
-            .lock()
-            .map_err(|_| anyhow!("runtime lock poisoned"))?;
+        let runtime = lock_runtime(&runtime);
         (
             runtime.input_activation_boundary(),
             runtime.output_activation_boundary(),
@@ -423,9 +422,7 @@ fn run_binary_stage(
         activation_width_from_graph("output", output_boundary, config.downstream.is_some())?;
     if max_inflight > 0 {
         let timer = Instant::now();
-        let sessions = runtime
-            .lock()
-            .map_err(|_| anyhow!("runtime lock poisoned"))?
+        let sessions = lock_runtime(&runtime)
             .prewarm_idle_sessions(max_inflight)
             .context("prewarm binary stage runtime sessions")?;
         let mut attrs = lifecycle_attrs(&config);
@@ -449,10 +446,7 @@ fn run_binary_stage(
         telemetry.emit("stage.binary_runtime_prewarm", attrs);
     }
     if let Some(meter) = compute_meter {
-        runtime
-            .lock()
-            .map_err(|_| anyhow!("runtime lock poisoned"))?
-            .set_compute_meter(meter);
+        lock_runtime(&runtime).set_compute_meter(meter);
     }
     let iteration_scheduler = IterationScheduler::new(
         runtime.clone(),
@@ -470,11 +464,20 @@ fn run_binary_stage(
     let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
         &config,
         loaded_model_state_kind(Some(&runtime)),
-        loaded_model_has_indexer_memory(Some(&runtime)),
+        loaded_memory_cache_capabilities(Some(&runtime)),
         l3_manager.clone(),
         None,
     )?
     .map(Arc::new);
+    if let Some(kv) = kv.as_ref() {
+        let mut attrs = lifecycle_attrs(&config);
+        attrs.extend(
+            kv.attrs()
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value)),
+        );
+        telemetry.emit("stage.kv_payload_selected", attrs);
+    }
     let prediction_returns = Arc::new(PredictionReturnHub::default());
     let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
     let session_ownership = Arc::new(ConnectionSessionOwnership::default());
@@ -697,7 +700,7 @@ fn activation_width_from_graph(
         }
         return Ok(0);
     };
-    descriptor.raw_f32_width(edge)
+    descriptor.primary_token_width(edge)
 }
 
 #[cfg(test)]
@@ -746,18 +749,22 @@ mod shutdown_tests {
     }
 
     #[test]
-    fn unsupported_graph_boundary_fails_closed() {
+    fn typed_graph_boundary_width_does_not_select_a_codec() {
         let mut boundary = boundary_f32(1024);
-        boundary.parts[0].ggml_type = 1;
-        let error = activation_width_from_graph("output", Some(boundary), true)
-            .expect_err("non-F32 graph boundary must not use the F32 codec");
-        assert!(error.to_string().contains("not token-indexed F32"));
+        boundary.parts[0].ggml_type = skippy_runtime::GGML_TYPE_I32;
+        assert_eq!(
+            activation_width_from_graph("output", Some(boundary), true).unwrap(),
+            1024
+        );
+    }
 
+    #[test]
+    fn unsupported_graph_boundary_fails_closed() {
         let mut boundary = boundary_f32(1024);
         boundary.parts[0].token_axis = -1;
         let error = activation_width_from_graph("output", Some(boundary), true)
             .expect_err("non-token-indexed graph boundary must fail");
-        assert!(error.to_string().contains("not token-indexed F32"));
+        assert!(error.to_string().contains("not token-indexed"));
 
         let mut boundary = boundary_f32(1024);
         boundary.part_count = 0;

@@ -9,10 +9,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use mesh_llm_payments_types::contract::{
-    AdvertisedPricing, ArrivalResponse, AuthorizeRequest, CancelRequest, Empty, FinishRequest,
-    IdRequest, InvoiceRequest, OpError, OutputReceivableResponse, PayInputRequest,
-    RecordDeliveredRequest, RoutingBudgetRequest, ServeBeginRequest, ServeFinishRequest,
-    ServeInputInvoiceRequest, SettleOutputRequest, SettledReceived,
+    AcceptAdmissionRequest, AdvertisedPricing, ArrivalResponse, CancelRequest, Empty,
+    FinishRequest, InvoiceRequest, OpError, PayDepositRequest, RequestIdRequest,
+    RoutingBudgetRequest, ServeAdmitRequest, ServeSettleRequest, SettleFinalRequest,
+    SettledReceived,
 };
 use mesh_llm_payments_types::engine::AdvertisedPrices;
 use mesh_llm_plugin::{
@@ -119,6 +119,21 @@ pub fn payments_plugin(
 
 fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> OperationRouter {
     let mut router = OperationRouter::new();
+    router.add_raw(
+        operation_with_schema(
+            ops::BILLING_CONTRACT,
+            "Implemented billing contract.",
+            serde_json::Map::new(),
+        ),
+        |_request, _context| {
+            Box::pin(async {
+                op_result(Ok(mesh_llm_payments_types::contract::BillingContract {
+                    revision: mesh_llm_payments_types::contract::BillingRevision::V3,
+                }))
+            })
+        },
+    );
+
     // Answered from the host-supplied price read, so a node that has never had
     // payments state advertises nothing without opening an engine.
     {
@@ -170,17 +185,10 @@ fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> Operatio
     add_op(
         &mut router,
         &source,
-        ops::SETTLE_OUTPUT,
-        "Validate and pay a seller output invoice.",
-        |service, request: SettleOutputRequest| async move { service.settle_output(request).await },
-    );
-    add_op(
-        &mut router,
-        &source,
         ops::FINISH,
-        "Mark a request finished.",
+        "Close a completed metered request.",
         |service, request: FinishRequest| async move {
-            service.ledger.finish(&request.id).map(|()| Empty {})
+            service.finish_metered(&request.id).await.map(|()| Empty {})
         },
     );
     add_op(
@@ -193,17 +201,10 @@ fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> Operatio
     add_op(
         &mut router,
         &source,
-        ops::PREFETCH,
-        "Start reading the balance for a request.",
-        |service, request: IdRequest| async move { service.prefetch(request.id).map(|()| Empty {}) },
-    );
-    add_op(
-        &mut router,
-        &source,
-        ops::AUTHORIZE,
-        "Propose and approve request terms.",
-        |service, request: AuthorizeRequest| async move {
-            service.authorize(request).await.map(|()| Empty {})
+        ops::ACCEPT_ADMISSION,
+        "Approve a seller's admission against policy, the daily budget and the local cap.",
+        |service, request: AcceptAdmissionRequest| async move {
+            service.accept_admission(request).await.map(|()| Empty {})
         },
     );
     add_op(
@@ -216,11 +217,21 @@ fn operation_router(source: ServiceSource, prices: AdvertisedPrices) -> Operatio
     add_op(
         &mut router,
         &source,
-        ops::PAY_INPUT,
-        "Pay the input invoice of an authorized request.",
-        |service, request: PayInputRequest| async move {
+        ops::PAY_DEPOSIT,
+        "Pay the deposit invoice of an accepted admission.",
+        |service, request: PayDepositRequest| async move {
             // Durable submission continues even if the caller goes away.
-            tokio::spawn(async move { service.pay_input(request).await }).await?
+            tokio::spawn(async move { service.pay_deposit(request).await }).await?
+        },
+    );
+    add_op(
+        &mut router,
+        &source,
+        ops::SETTLE_FINAL,
+        "Check a seller's settlement against the admission and pay the final invoice.",
+        |service, request: SettleFinalRequest| async move {
+            // Durable submission continues even if the caller goes away.
+            tokio::spawn(async move { service.settle_final(request).await }).await?
         },
     );
     add_serving_ops(&mut router, &source);
@@ -231,29 +242,56 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
     add_op(
         router,
         source,
-        ops::SERVE_BEGIN,
-        "Check prices, wait out prior debt and open serving.",
-        |service, request: ServeBeginRequest| async move {
-            service.serve_begin(request).await.map(|()| Empty {})
+        ops::SERVE_ADMIT,
+        "Admit a metered request: refuse, quote a deposit, or admit without one.",
+        |service, request: ServeAdmitRequest| async move { service.serve_admit(request).await },
+    );
+    add_op(
+        router,
+        source,
+        ops::SERVE_DEPOSIT_CONFIRMED,
+        "Wait for the deposit to settle and claim the once-only dispatch.",
+        |service, request: RequestIdRequest| async move {
+            // Durable settlement continues even if the caller goes away.
+            tokio::spawn(async move { service.serve_deposit_confirmed(&request.request_id).await })
+                .await?
         },
     );
     add_op(
         router,
         source,
-        ops::SERVE_INPUT_INVOICE,
-        "Fix the output allowance and issue the input invoice.",
-        |service, request: ServeInputInvoiceRequest| async move {
-            service.serve_input_invoice(request).await
+        ops::SERVE_SETTLE,
+        "Bill the reported usage, apply the deposit and issue the final invoice.",
+        |service, request: ServeSettleRequest| async move { service.serve_settle(request).await },
+    );
+    add_op(
+        router,
+        source,
+        ops::SERVE_ABANDON,
+        "Close a request without usage: no bill, no invoice, no debt.",
+        |service, request: RequestIdRequest| async move {
+            service
+                .serve_abandon(&request.request_id)
+                .map(|()| Empty {})
+        },
+    );
+    add_op(
+        router,
+        source,
+        ops::SERVE_RECOVER,
+        "Answer a buyer's recovery probe with the stored bill.",
+        |service, request: RequestIdRequest| async move {
+            service.serve_recover(&request.request_id).await
         },
     );
     add_op(
         router,
         source,
         ops::AWAIT_ARRIVAL,
-        "Wait for receiver-side evidence of an input payment.",
+        "Wait for receiver-side evidence of an incoming payment.",
         |service, request: InvoiceRequest| async move {
             let claiming = service
-                .arrival(&request.invoice, crate::lifetimes::INPUT_ARRIVAL_WAIT)
+                .arrival(&request.invoice, crate::lifetimes::DEPOSIT_ARRIVAL_WAIT)
                 .await?;
             Ok(ArrivalResponse { claiming })
         },
@@ -262,60 +300,26 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
         router,
         source,
         ops::SETTLE_RECEIVED,
-        "Wait for an invoice to settle and record it received.",
+        "Wait a bounded time for an invoice to settle and record it received.",
         |service, request: InvoiceRequest| async move {
-            // Durable settlement continues even if the caller goes away.
-            let payment =
-                tokio::spawn(async move { service.settle_received(&request.invoice).await })
-                    .await??;
+            // Settlement continues even if the caller goes away, but never
+            // past FINAL_SETTLEMENT_WAIT: an unpaid final stays a ledger
+            // strike and reconciliation records a late payment.
+            let payment = tokio::spawn(async move {
+                service
+                    .settle_received_within(
+                        &request.invoice,
+                        crate::lifetimes::FINAL_SETTLEMENT_WAIT,
+                    )
+                    .await
+            })
+            .await??;
             // A wallet that reports no amount reports 0; never claim a 0 credit.
             Ok(SettledReceived {
                 credited_msat: (payment.amount_msat > 0).then_some(payment.amount_msat),
                 fee_msat: Some(payment.fee_msat),
             })
         },
-    );
-    add_op(
-        router,
-        source,
-        ops::RECORD_DELIVERED,
-        "Raise the delivered-token watermark.",
-        |service, request: RecordDeliveredRequest| async move {
-            service
-                .ledger
-                .record_delivered_tokens(&request.id, request.tokens)
-                .map(|()| Empty {})
-        },
-    );
-    add_op(
-        router,
-        source,
-        ops::SERVE_FINISH,
-        "Record the final delivered-token watermark and close serving accounting atomically.",
-        |service, request: ServeFinishRequest| async move {
-            service
-                .ledger
-                .finish_serving_at(&request.id, request.tokens)
-                .map(|()| Empty {})
-        },
-    );
-    add_op(
-        router,
-        source,
-        ops::OUTPUT_RECEIVABLE,
-        "Issue or return the output invoice.",
-        |service, request: IdRequest| async move {
-            Ok(OutputReceivableResponse {
-                output: service.output_invoice(&request.id).await?,
-            })
-        },
-    );
-    add_op(
-        router,
-        source,
-        ops::SERVE_RECOVER,
-        "Answer a payer's recovery probe.",
-        |service, request: IdRequest| async move { service.serve_recover(&request.id).await },
     );
 }
 

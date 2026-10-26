@@ -93,6 +93,7 @@ export default defineConfig({
     host: '0.0.0.0',
     allowedHosts: true,
     proxy: {
+      '/v1': { target: apiTarget, changeOrigin: true },
       '/api': {
         target: apiTarget,
         changeOrigin: true,

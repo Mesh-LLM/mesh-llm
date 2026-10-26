@@ -1,3 +1,19 @@
+# Preserved MoA trace evidence
+
+The research scripts moved to the local `mesh-llm-research` repository, under
+`moa-openrouter/`. This directory retains captured JSONL and results cited by
+native Mesh tests and source documentation. The checked Rust fixture remains
+`mesh/crates/mesh-mixture-of-agents/tests/fixtures/real_traces.json`.
+
+Run external fixture conversion only with an explicit `--output` destination;
+it never infers a Mesh checkout path. Recording requires explicit credentials
+and paid API calls. No recording was performed by this extraction.
+
+## Original experiment notes
+
+The following script paths and commands describe the original experiment.
+Use the external repository README for current research commands.
+
 # MoA trace recording (OpenRouter)
 
 Records real fan-out responses from open-weight models and turns them into a
@@ -36,9 +52,10 @@ things the tests exist to protect:
 
 ```bash
 export OPENROUTER_API_KEY=...        # required
-python3 record.py                    # -> corpus.jsonl
-python3 record_agentic.py            # -> agentic.jsonl
-python3 make_fixture.py              # -> tests/fixtures/real_traces.json
+python3 "$MESH_PYTHON_RESEARCH_SOURCE/moa-openrouter/record.py"         # external paid capture
+python3 "$MESH_PYTHON_RESEARCH_SOURCE/moa-openrouter/record_agentic.py" # external paid capture
+python3 "$MESH_PYTHON_RESEARCH_SOURCE/moa-openrouter/make_fixture.py" \
+  --output "$PWD/mesh/crates/mesh-mixture-of-agents/tests/fixtures/real_traces.json"
 ```
 
 Stdlib only, no install step. A full re-record is a few hundred calls against

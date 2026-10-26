@@ -1,5 +1,6 @@
 use crate::SpeculativeDecodeConfig;
 use crate::runtime_state::RuntimeState;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -220,9 +221,7 @@ pub(in crate::frontend) fn attach_native_mtp_draft_model(
         bail!("MTP draft model does not exist: {}", path.display());
     }
     let layer_count = model_layer_count(path)?;
-    let mut runtime = runtime
-        .lock()
-        .map_err(|_| anyhow!("runtime lock poisoned"))?;
+    let mut runtime = lock_runtime(runtime);
     runtime
         .model
         .attach_mtp_draft_model(

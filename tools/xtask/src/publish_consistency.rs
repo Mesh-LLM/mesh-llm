@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub(crate) mod release_source;
+
 pub(crate) fn check_publish_crates_consistency(repo_root: &Path) -> DynResult<()> {
     let metadata = workspace_metadata(repo_root, "publish crate consistency")?;
     let publish_crates = publish_script_crates(repo_root)?;
@@ -32,39 +34,8 @@ pub(crate) fn check_publish_crates_consistency(repo_root: &Path) -> DynResult<()
 fn publish_script_crates(repo_root: &Path) -> DynResult<Vec<String>> {
     let relative_path = "scripts/publish-crates.sh";
     let contents = fs::read_to_string(repo_root.join(relative_path))?;
-    let mut in_array = false;
-    let mut crates = Vec::new();
-    let mut seen = BTreeSet::new();
-
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if !in_array {
-            if trimmed == "publish_crates=(" {
-                in_array = true;
-            }
-            continue;
-        }
-
-        if trimmed == ")" {
-            if crates.is_empty() {
-                return Err(format!("{relative_path}: publish_crates array is empty").into());
-            }
-            return Ok(crates);
-        }
-
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let crate_name = trimmed.trim_matches('"').to_string();
-        if !seen.insert(crate_name.clone()) {
-            return Err(
-                format!("{relative_path}: duplicate publish_crates entry `{crate_name}`").into(),
-            );
-        }
-        crates.push(crate_name);
-    }
-
-    Err(format!("{relative_path}: missing publish_crates array").into())
+    crate::repository::publish_roster::parse(&contents)
+        .map_err(|error| format!("{relative_path}: {error}").into())
 }
 
 fn workspace_packages_by_name<'a>(
@@ -419,6 +390,28 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         "cargo run -p xtask -- repo-consistency publish-crates",
         "release workflow publish-chain consistency check",
     )?;
+    let preflight_job = workflow_job_section(&release_workflow, "publish_crates_preflight")
+        .ok_or("release workflow: missing `publish_crates_preflight` job")?;
+    ensure_contains(
+        preflight_job,
+        "needs: [metadata, compose_cpu_products]",
+        "release workflow preflight must precede publication and reuse the same-run product",
+    )?;
+    ensure_contains(
+        preflight_job,
+        "ref: ${{ needs.metadata.outputs.source_sha }}",
+        "release workflow preflight checks out the immutable source revision",
+    )?;
+    ensure_contains(
+        preflight_job,
+        "name: release-linux",
+        "release workflow preflight downloads the same-run release-linux artifact",
+    )?;
+    ensure_not_contains(
+        preflight_job,
+        "releases/download",
+        "release workflow preflight must not read published release assets",
+    )?;
     ensure_contains(
         &release_workflow,
         "scripts/publish-crates.sh --dry-run --allow-dirty --sleep-seconds 0",
@@ -426,6 +419,11 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     let publish_job = workflow_job_section(&release_workflow, "publish")
         .ok_or("release workflow: missing `publish` job for release tag staging check")?;
+    ensure_contains(
+        publish_job,
+        "needs.publish_crates_preflight.result == 'success'",
+        "release workflow publish requires preflight success",
+    )?;
     ensure_contains(
         publish_job,
         "git add --update",
@@ -459,59 +457,6 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         &release_script,
         "scripts/release-version.sh",
         "local release must not maintain a second version mutation path",
-    )?;
-    ensure_contains_normalized(
-        &release_workflow,
-        "publish_crates_preflight:
-          name: Preflight crates.io packages
-          needs: [metadata, compose_cpu_products]
-          if: ${{ needs.metadata.result == 'success' && needs.compose_cpu_products.result == 'success' }}
-          runs-on: ubuntu-24.04
-          container:
-            image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
-          env:
-            SCCACHE_GHA_ENABLED: \"false\"
-            SCCACHE_MULTILEVEL_CHAIN: disk
-          steps:
-            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-              with:
-                ref: ${{ needs.metadata.outputs.source_sha }}
-                persist-credentials: false
-            - name: Trust checkout directory
-              run: git config --global --add safe.directory \"$GITHUB_WORKSPACE\"
-            - uses: ./.github/actions/configure-sccache-gha
-              with:
-                allow_depot_remote_cache: \"false\"
-                allow_native_github_cache: \"false\"
-            - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
-            - name: Prepare dispatched release version
-              if: github.event_name == 'workflow_dispatch'
-              env:
-                RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-              run: scripts/release-version.sh \"$RELEASE_TAG\"",
-        "release workflow publish preflight dispatched version preparation",
-    )?;
-    let preflight_job = workflow_job_section(&release_workflow, "publish_crates_preflight")
-        .ok_or("release workflow: missing crates preflight job")?;
-    ensure_contains(
-        preflight_job,
-        "name: release-linux",
-        "release preflight same-run Linux artifact",
-    )?;
-    ensure_not_contains(
-        preflight_job,
-        "releases/download",
-        "release preflight must not fetch already-published assets",
-    )?;
-    ensure_contains(
-        publish_job,
-        "needs.publish_crates_preflight.result == 'success'",
-        "GitHub publication must wait for crates preflight",
-    )?;
-    ensure_contains(
-        &release_workflow,
-        "needs: [metadata, publish, publish_crates_preflight]",
-        "release workflow real publish preflight dependency",
     )?;
     ensure_contains(
         &quality_workflow,

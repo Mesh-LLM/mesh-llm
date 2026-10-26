@@ -106,9 +106,9 @@ can be exported.
 
 ## Evidence Collection
 
-Two scripts cover the rollout evidence path:
+Two native or thin-adapter commands cover the rollout evidence path:
 
-- `scripts/run-openai-guardrail-corpus.py` for guardrail reliability runs
+- `just automation-run automation guardrail-corpus` for guardrail reliability runs
 - `scripts/run-llama-benchy-openai.sh` for throughput and latency runs
 
 The guardrail corpus runner should write its JSON artifact under
@@ -143,7 +143,7 @@ The corpus should include a small set of prompts that cover:
 Context compaction now exists as a sibling hosted-model decorator instead of as
 part of the retry/validation guardrail engine. The pure compaction policy lives
 in `skippy-guardrails`; the OpenAI-facing decorator is
-`CompactingOpenAiBackend`. Requests can force the behavior with the
+`CompactingInferenceBackend`. Requests can force the behavior with the
 `mesh_compact` extra field, while Skippy-hosted backends fill the runtime
 context limit from the loaded stage config before composing compaction with the
 tool-call guardrail wrapper.

@@ -53,7 +53,7 @@ reports can show both overall latency and per-bucket latency.
 The initial KV-focused checked-in corpus lives at:
 
 ```text
-skippy/crates/skippy-bench/corpora/kv_mixed_prompts.jsonl
+skippy/evals/corpora/kv_mixed_prompts.jsonl
 ```
 
 It is intentionally smaller than the full 60-prompt production corpus while the

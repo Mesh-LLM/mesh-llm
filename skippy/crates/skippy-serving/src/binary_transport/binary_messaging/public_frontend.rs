@@ -93,9 +93,9 @@ pub(super) fn start(launch: PublicFrontendLaunch) -> Result<Option<EmbeddedFront
                     generation_lifecycle: None,
                     linear_proposal_ingress: None,
                     kv_lifecycle_observer: None,
-                    openai_guardrails: tuning
-                        .guardrails
-                        .or_else(|| Some(frontend::OpenAiGuardrailsConfig::disabled_for_skippy())),
+                    openai_guardrails: tuning.guardrails.or_else(|| {
+                        Some(frontend::InferenceGuardrailsConfig::disabled_for_skippy())
+                    }),
                     l3_manager,
                 },
                 openai_iteration_scheduler,

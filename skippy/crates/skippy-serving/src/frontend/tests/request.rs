@@ -16,44 +16,116 @@ fn chat_runtime_feature_guard_allows_noop_parity_fields() {
     ensure_chat_runtime_features_supported(&request).unwrap();
 }
 
+/// A one-message chat request with `extra` fields merged in.
+fn chat_request_with(extra: &serde_json::Value) -> ChatCompletionRequest {
+    let mut payload = json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hi"}]
+    });
+    let fields = extra.as_object().unwrap().clone();
+    payload.as_object_mut().unwrap().extend(fields);
+    serde_json::from_value(payload).unwrap()
+}
+
 #[test]
-fn chat_runtime_feature_guard_rejects_logprobs() {
-    for payload in [
-        json!({
-            "model": "test",
-            "messages": [{"role": "user", "content": "hi"}],
-            "logprobs": true
-        }),
-        json!({
-            "model": "test",
-            "messages": [{"role": "user", "content": "hi"}],
-            "logprobs": false,
-            "top_logprobs": 1
-        }),
+fn chat_runtime_feature_guard_accepts_logprobs() {
+    for extra in [
+        json!({"logprobs": true}),
+        json!({"logprobs": true, "top_logprobs": 0}),
+        json!({"logprobs": true, "top_logprobs": skippy_runtime::MAX_TOP_LOGPROBS}),
     ] {
-        let request: ChatCompletionRequest = serde_json::from_value(payload).unwrap();
-        let error = ensure_chat_runtime_features_supported(&request).unwrap_err();
-        assert_eq!(
-            unsupported_code(error),
-            Some("unsupported_model_feature".to_string())
-        );
+        ensure_chat_runtime_features_supported(&chat_request_with(&extra)).unwrap();
     }
 }
 
 #[test]
-fn completion_runtime_feature_guard_rejects_logprobs() {
-    let request: CompletionRequest = serde_json::from_value(json!({
-        "model": "test",
-        "prompt": "hi",
-        "logprobs": 2
-    }))
-    .unwrap();
+fn chat_runtime_feature_guard_rejects_logprobs_it_cannot_serve() {
+    let too_many = skippy_runtime::MAX_TOP_LOGPROBS + 1;
+    for (extra, code) in [
+        (
+            json!({"logprobs": true, "stream": true}),
+            "unsupported_model_feature",
+        ),
+        (
+            json!({"logprobs": true, "skippy_hooks": true}),
+            "unsupported_model_feature",
+        ),
+        (
+            json!({"logprobs": true, "top_logprobs": too_many}),
+            "invalid_value",
+        ),
+        (
+            json!({"logprobs": false, "top_logprobs": 1}),
+            "invalid_value",
+        ),
+        (json!({"top_logprobs": 1}), "invalid_value"),
+    ] {
+        let error = ensure_chat_runtime_features_supported(&chat_request_with(&extra)).unwrap_err();
+        assert_eq!(unsupported_code(error), Some(code.to_string()), "{extra}");
+    }
+}
 
-    let error = ensure_completion_runtime_features_supported(&request).unwrap_err();
+#[test]
+fn chat_logprobs_requests_reach_the_sampler() {
+    for (extra, top_logprobs, temperature) in [
+        // Greedy stays greedy: the config is passed so the runtime records logprobs.
+        (json!({"logprobs": true, "temperature": 0}), Some(0), 0.0),
+        (
+            json!({"logprobs": true, "top_logprobs": 5, "temperature": 0.7}),
+            Some(5),
+            0.7,
+        ),
+        (json!({"temperature": 0.7}), None, 0.7),
+    ] {
+        let request = chat_request_with(&extra);
+        let sampling =
+            chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
+        assert_eq!(sampling.top_logprobs, top_logprobs, "{extra}");
+        assert_eq!(sampling.temperature, temperature, "{extra}");
+        if top_logprobs.is_some() {
+            assert!(sampling.enabled, "{extra}");
+        }
+    }
+}
+
+/// A completion request for "hi" with `extra` fields merged in.
+fn completion_request_with(extra: &serde_json::Value) -> CompletionRequest {
+    let mut payload = json!({"model": "test", "prompt": "hi"});
+    let fields = extra.as_object().unwrap().clone();
+    payload.as_object_mut().unwrap().extend(fields);
+    serde_json::from_value(payload).unwrap()
+}
+
+#[test]
+fn completion_logprobs_requests_reach_the_sampler() {
+    for count in [0, 2, 5] {
+        let request = completion_request_with(&json!({"logprobs": count, "temperature": 0}));
+        ensure_completion_runtime_features_supported(&request).unwrap();
+        let sampling = completion_sampling_config(&request).unwrap();
+        assert_eq!(sampling.top_logprobs, Some(count));
+        assert!(sampling.enabled);
+        assert_eq!(sampling.temperature, 0.0);
+    }
+    let request = completion_request_with(&json!({}));
     assert_eq!(
-        unsupported_code(error),
-        Some("unsupported_model_feature".to_string())
+        completion_sampling_config(&request).unwrap().top_logprobs,
+        None
     );
+}
+
+#[test]
+fn completion_runtime_feature_guard_rejects_logprobs_it_cannot_serve() {
+    for (extra, code) in [
+        (
+            json!({"logprobs": 1, "stream": true}),
+            "unsupported_model_feature",
+        ),
+        (json!({"logprobs": 6}), "invalid_value"),
+    ] {
+        let error = ensure_completion_runtime_features_supported(&completion_request_with(&extra))
+            .unwrap_err();
+        assert_eq!(unsupported_code(error), Some(code.to_string()), "{extra}");
+    }
 }
 
 #[test]
@@ -627,7 +699,7 @@ fn explicit_completion_request_values_override_request_defaults() {
 }
 
 #[test]
-fn request_defaults_do_not_make_logprobs_executable() {
+fn request_defaults_keep_logprobs_requests_servable() {
     let mut request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],
@@ -642,11 +714,10 @@ fn request_defaults_do_not_make_logprobs_executable() {
 
     apply_chat_request_defaults(&mut request, &test_request_defaults()).unwrap();
 
-    let error = ensure_chat_runtime_features_supported(&request).unwrap_err();
-    assert_eq!(
-        unsupported_code(error),
-        Some("unsupported_model_feature".to_string())
-    );
+    ensure_chat_runtime_features_supported(&request).unwrap();
+    let sampling = chat_sampling_config(&request, &test_request_defaults()).unwrap();
+    assert_eq!(sampling.top_logprobs, Some(2));
+    assert_eq!(sampling.temperature, 0.2);
 }
 
 #[test]
@@ -857,17 +928,26 @@ fn provider_enable_thinking_overrides_chat_template_thinking() {
 
 #[test]
 fn chat_template_kwargs_enable_thinking_overrides_template() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
-        "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
-        "messages": [{"role": "user", "content": "hello"}],
-        "chat_template_kwargs": {"enable_thinking": false}
-    }))
-    .unwrap();
+    for enabled in [true, false] {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "chat_template_kwargs": {"enable_thinking": enabled}
+        }))
+        .unwrap();
+        let defaults = EmbeddedOpenAiRequestDefaults {
+            reasoning_enabled: Some(if enabled {
+                EmbeddedReasoningEnabled::Disabled
+            } else {
+                EmbeddedReasoningEnabled::Enabled
+            }),
+            ..EmbeddedOpenAiRequestDefaults::default()
+        };
 
-    let options =
-        chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
-    assert_eq!(options.enable_thinking, Some(false));
-    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
+        let options = chat_template_options(&request, &defaults).unwrap();
+        assert_eq!(options.enable_thinking, Some(enabled));
+        assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
+    }
 }
 
 #[test]
@@ -1183,4 +1263,139 @@ fn oversized_structured_output_is_rejected() {
     .unwrap();
 
     assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
+}
+
+#[test]
+fn deeply_nested_grammar_is_rejected_before_native_parsing() {
+    let depth = 100_000;
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "grammar": format!("root ::= {}\"a\"{}", "(".repeat(depth), ")".repeat(depth))
+    }))
+    .unwrap();
+
+    assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
+}
+
+#[test]
+fn grammars_that_expand_too_far_are_rejected_before_native_parsing() {
+    let mut chain = String::from("root ::= r0\n");
+    for rule in 0..10_000 {
+        chain.push_str(&format!("r{rule} ::= r{}\n", rule + 1));
+    }
+    chain.push_str("r10000 ::= \"a\"\n");
+    for grammar in [chain, "root ::= \"a\"{5,3}\n".to_string()] {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "grammar": grammar
+        }))
+        .unwrap();
+        assert!(
+            chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err()
+        );
+    }
+}
+
+#[test]
+fn oversized_stop_lists_are_rejected_before_generation() {
+    let stops = vec!["x"; 65];
+    let chat: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stop": stops
+    }))
+    .unwrap();
+    assert!(ensure_chat_runtime_features_supported(&chat).is_err());
+
+    let completion: CompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "prompt": "hello",
+        "stop": "x".repeat(1025)
+    }))
+    .unwrap();
+    assert!(ensure_completion_runtime_features_supported(&completion).is_err());
+}
+
+#[test]
+fn request_chat_templates_are_rejected_by_default() {
+    // The template engine has no recursion, loop, or memory limits, so a
+    // request's own template is only rendered where the operator opted in.
+    let hostile = "{% macro f() %}{{ f() }}{% endmacro %}{{ f() }}";
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "chat_template": hostile,
+        // A request cannot grant itself the operator setting.
+        "allow_request_chat_template": true
+    }))
+    .unwrap();
+    let defaults = EmbeddedOpenAiRequestDefaults::default();
+    apply_chat_request_defaults(&mut request, &defaults).unwrap();
+
+    let error = chat_template_options(&request, &defaults).unwrap_err();
+    assert_eq!(error.status().as_u16(), 400);
+    assert!(
+        error.to_string().contains("allow_request_chat_template"),
+        "{error}"
+    );
+
+    let disabled = EmbeddedOpenAiRequestDefaults {
+        allow_request_chat_template: Some(false),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    assert!(chat_template_options(&request, &disabled).is_err());
+}
+
+#[test]
+fn operators_can_allow_request_chat_templates() {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "chat_template": "{{ messages[0].role }}"
+    }))
+    .unwrap();
+    let defaults = EmbeddedOpenAiRequestDefaults {
+        allow_request_chat_template: Some(true),
+        chat_template: Some("{{ messages[0].content }}".to_string()),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    apply_chat_request_defaults(&mut request, &defaults).unwrap();
+
+    ensure_chat_runtime_features_supported(&request).unwrap();
+    let options = chat_template_options(&request, &defaults).unwrap();
+    assert_eq!(
+        options.chat_template.as_deref(),
+        Some("{{ messages[0].role }}")
+    );
+
+    let oversized: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "chat_template": "x".repeat(1_048_577)
+    }))
+    .unwrap();
+    assert!(chat_template_options(&oversized, &defaults).is_err());
+}
+
+#[test]
+fn operator_chat_template_still_reaches_the_renderer() {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}]
+    }))
+    .unwrap();
+    let defaults = EmbeddedOpenAiRequestDefaults {
+        chat_template: Some("{{ messages[0].content }}".to_string()),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    apply_chat_request_defaults(&mut request, &defaults).unwrap();
+
+    ensure_chat_runtime_features_supported(&request).unwrap();
+    let options = chat_template_options(&request, &defaults).unwrap();
+    assert_eq!(
+        options.chat_template.as_deref(),
+        Some("{{ messages[0].content }}")
+    );
 }

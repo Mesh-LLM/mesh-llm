@@ -94,7 +94,9 @@ runs:
         READ_TIMEOUT_SECONDS: ${{ inputs.read_timeout_seconds }}
       run: |
         set -euo pipefail
-        python scripts/ci-laya-smoke.py \
+        source scripts/lib/automation.sh
+        REPO_ROOT="$GITHUB_WORKSPACE"
+        mesh_automation automation laya product \
           --mesh-binary "$MESH_BINARY" \
           --model "$MODEL_PATH" \
           --device "$DEVICE" \

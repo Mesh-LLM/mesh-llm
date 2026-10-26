@@ -26,6 +26,8 @@ export type ChatSessionContextValue = {
   /** The node chat requests are sent to (`x-mesh-target`); '' routes as usual. */
   sessionTarget: string
   setSessionTarget: (target: string) => void
+  /** Keep chat requests off paid hosts (`mesh_payment: free_only`). */
+  setSessionFreeOnly: (freeOnly: boolean) => void
   setSystemPrompt: (systemPrompt: string) => void
   systemPrompt: string
   streamingConversationIds: readonly string[]

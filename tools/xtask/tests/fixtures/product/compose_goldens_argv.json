@@ -1,0 +1,100 @@
+{
+  "abbreviations_reach_composition": {
+    "code": 1,
+    "products": {},
+    "stderr": "FileNotFoundError: [Errno 2] No such file or directory: 'bundle/product-manifest.json'\n",
+    "stdout": ""
+  },
+  "ambiguous_prefix": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: ambiguous option: --b could match --bundle, --backend\n",
+    "stdout": ""
+  },
+  "check_with_empty_value": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: argument --check: ignored explicit argument ''\n",
+    "stdout": ""
+  },
+  "check_with_value": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: argument --check: ignored explicit argument '1'\n",
+    "stdout": ""
+  },
+  "double_dash_extras": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: unrecognized arguments: -- --check\n",
+    "stdout": ""
+  },
+  "expected_one_argument": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: argument --bundle: expected one argument\n",
+    "stdout": ""
+  },
+  "help": {
+    "code": 0,
+    "products": {},
+    "stderr": "",
+    "stdout": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\n\noptions:\n  -h, --help         show this help message and exit\n  --bundle BUNDLE\n  --host HOST\n  --runtime RUNTIME\n  --version VERSION\n  --backend BACKEND\n  --check            Validate the existing product manifest without rewriting\n                     it.\n"
+  },
+  "help_bundled": {
+    "code": 0,
+    "products": {},
+    "stderr": "",
+    "stdout": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\n\noptions:\n  -h, --help         show this help message and exit\n  --bundle BUNDLE\n  --host HOST\n  --runtime RUNTIME\n  --version VERSION\n  --backend BACKEND\n  --check            Validate the existing product manifest without rewriting\n                     it.\n"
+  },
+  "help_long_abbreviated": {
+    "code": 0,
+    "products": {},
+    "stderr": "",
+    "stdout": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\n\noptions:\n  -h, --help         show this help message and exit\n  --bundle BUNDLE\n  --host HOST\n  --runtime RUNTIME\n  --version VERSION\n  --backend BACKEND\n  --check            Validate the existing product manifest without rewriting\n                     it.\n"
+  },
+  "help_with_explicit_value": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: argument -h/--help: ignored explicit argument 'yes'\n",
+    "stdout": ""
+  },
+  "no_arguments": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: the following arguments are required: --bundle, --host, --runtime, --version, --backend\n",
+    "stdout": ""
+  },
+  "repeated_option_keeps_last": {
+    "code": 0,
+    "products": {
+      "bundle/product-manifest.json": "{\n  \"backend\": \"cpu\",\n  \"contract\": \"mesh-llm-product-v2\",\n  \"host\": {\n    \"path\": \"mesh-llm\",\n    \"sha256\": \"d8215ea0d081c8dc0a0d953811d82a50220457ca8e0bb4a3d364be0f84e59230\"\n  },\n  \"mesh_version\": \"0.70.0\",\n  \"runtime\": {\n    \"id\": \"mesh-llm-native-cpu\",\n    \"manifest_sha256\": \"9ecf7666956132e18af0c5f0a9c2f5ae6fbcf85b29d674a4ea4bd874fed717ad\",\n    \"path\": \"native-runtimes/rt\",\n    \"sha256\": \"f1d865d2f9a8b8e6fa8252057306e1ab2934769a3ed99689e26b742d0532ba08\"\n  },\n  \"schema_version\": 2\n}\n"
+    },
+    "stderr": "",
+    "stdout": ""
+  },
+  "required_before_unrecognized": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: the following arguments are required: --host, --runtime, --version, --backend\n",
+    "stdout": ""
+  },
+  "some_required_missing": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: the following arguments are required: --host, --runtime, --backend\n",
+    "stdout": ""
+  },
+  "unrecognized_after_required": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: unrecognized arguments: extra -5 --wat\n",
+    "stdout": ""
+  },
+  "value_looks_like_option": {
+    "code": 2,
+    "products": {},
+    "stderr": "usage: compose-product-bundle.py [-h] --bundle BUNDLE --host HOST\n                                 --runtime RUNTIME --version VERSION\n                                 --backend BACKEND [--check]\ncompose-product-bundle.py: error: argument --host: expected one argument\n",
+    "stdout": ""
+  }
+}

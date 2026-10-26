@@ -11,9 +11,10 @@ use crate::binary_transport::binary_kv::{
     take_shared_prefill_tokens,
 };
 use crate::binary_transport::direct_return::PredictionReturnSinks;
+use crate::binary_transport::peer_sampling::runtime_sampling_config;
 use crate::binary_transport::restore_prefill_decode::handle_binary_restore_prefill_decode_control;
 use crate::binary_transport::stage_execution::{
-    binary_message_attrs, elapsed_ms, runtime_sampling_config, stage_mask, token_sideband_or_fill,
+    binary_message_attrs, elapsed_ms, stage_mask, token_sideband_or_fill,
 };
 use crate::binary_transport::write_stage_message_conditioned;
 use crate::frontend::iteration_scheduler::IterationScheduler;
@@ -55,7 +56,7 @@ pub(super) fn handle_stop(
         bail!("cannot stop with {pending_prefill_replies} deferred prefill replies");
     }
     let mut stop_stats = std::mem::take(pending_reply_stats);
-    request_summary.emit(telemetry, config, session_id);
+    request_summary.emit(telemetry, config, session_id, kv.map(|stage| stage.payload));
     *request_summary = BinaryRequestSummary::default();
     if let Some(downstream) = downstream.as_mut() {
         if let Some(forwarder) = async_forwarder {
@@ -101,7 +102,7 @@ pub(super) fn handle_stop(
                 runtime
                     .drop_session_timed(&scheduler_session_key)
                     .map_err(|error| {
-                        skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                        skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                     })?;
             Ok((record, drop_stats))
         })
@@ -182,7 +183,9 @@ pub(super) fn handle_verify_retirement(
         .execute_runtime("binary-verify-retire", move |runtime| {
             runtime
                 .retire_verify_checkpoint(&scheduler_session_key, token_start, token_count)
-                .map_err(|error| skippy_inference_api::OpenAiError::backend(format!("{error:#}")))
+                .map_err(|error| {
+                    skippy_inference_api::InferenceError::backend(format!("{error:#}"))
+                })
         })
         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
         .context("retire binary stage verify checkpoint")?;
@@ -226,7 +229,7 @@ pub(super) fn handle_session_control(
                     runtime
                         .trim_session(&scheduler_session_key, token_count)
                         .map_err(|error| {
-                            skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                            skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                         })
                 })
                 .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
@@ -285,7 +288,7 @@ pub(super) fn handle_generation_control(
         generation_stats.merge(reply.stats);
     } else {
         if let Some(metadata) = message.chat_sampling_metadata.as_deref() {
-            let sampling = runtime_sampling_config(message.sampling.as_ref());
+            let sampling = runtime_sampling_config(message.sampling.as_ref(), config.ctx_size);
             let scheduler_session_key = session_key.to_string();
             let metadata = metadata.to_string();
             let prompt_token_count = message.state.prompt_token_count.max(0) as u64;
@@ -299,7 +302,7 @@ pub(super) fn handle_generation_control(
                             sampling.as_ref(),
                         )
                         .map_err(|error| {
-                            skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                            skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                         })
                 })
                 .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
@@ -418,7 +421,7 @@ pub(super) fn handle_prefix_cache_control(
                     .drop_session_timed(&scheduler_session_key)
                     .map(|_| ())
                     .map_err(|error| {
-                        skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                        skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                     })
             });
         }

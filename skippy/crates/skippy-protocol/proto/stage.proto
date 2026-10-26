@@ -306,6 +306,7 @@ message StageAdmissionDescriptor {
   repeated StageAdmissionSidecar sidecars = 7;
   repeated StageAdmissionProfile profiles = 8;
   string execution_contract = 9;
+  string kv_graph_state = 10;
 }
 
 message StageAdmissionSidecar {

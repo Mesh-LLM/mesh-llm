@@ -199,7 +199,12 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     // Submit.
     writeln!(err)?;
     let jobs_client = jobs_client.as_ref().expect("jobs client initialized");
-    let info = jobs_client.submit(&job.namespace, &job.spec).await?;
+    let follow_deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(job.spec.timeout_seconds))
+        .context("job observation deadline overflow")?;
+    let info = jobs_client
+        .submit_until(&job.namespace, &job.spec, follow_deadline)
+        .await?;
     let job_url = format!(
         "{}/jobs/{}/{}",
         jobs_client.endpoint(),
@@ -248,7 +253,11 @@ pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
         writeln!(err)?;
         writeln!(err, "📜 Following logs...")?;
         writeln!(err)?;
-        follow_until_done(jobs_client, &job.namespace, &info.id).await?;
+        // Allow for time spent queued before the job starts running.
+        let observe_deadline = follow_deadline
+            .checked_add(std::time::Duration::from_secs(3600))
+            .context("job observation deadline overflow")?;
+        follow_until_done(jobs_client, &job.namespace, &info.id, observe_deadline).await?;
     }
 
     Ok(())
@@ -535,19 +544,14 @@ async fn run_cancel(client: &HfJobsClient, job_id: &str, json_output: bool) -> R
     let mut err = crate::models::output::console_err();
     let mut machine = crate::models::output::machine_out();
     let (namespace, id) = parse_job_id(job_id).await?;
-    client.cancel(&namespace, &id).await?;
+    let receipt = client.cancel_receipt(&namespace, &id).await?;
     if json_output {
-        writeln!(
-            machine,
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "namespace": namespace,
-                "jobId": id,
-                "canceled": true,
-            }))?
-        )?;
+        writeln!(machine, "{}", serde_json::to_string_pretty(&receipt)?)?;
     } else {
-        writeln!(err, "✅ Job {id} canceled")?;
+        writeln!(
+            err,
+            "Cancellation request accepted for job {id}; terminal state is unconfirmed"
+        )?;
     }
     Ok(())
 }
@@ -586,72 +590,44 @@ async fn run_list(client: &HfJobsClient, json_output: bool) -> Result<()> {
 }
 
 /// Follow job logs until the job reaches a terminal state.
-async fn follow_until_done(client: &HfJobsClient, namespace: &str, job_id: &str) -> Result<()> {
-    use ::skippy_model_package::jobs::JobStage;
-
+async fn follow_until_done(
+    client: &HfJobsClient,
+    namespace: &str,
+    job_id: &str,
+    deadline: std::time::Instant,
+) -> Result<()> {
+    use ::skippy_model_package::jobs::{MonitorEnd, MonitorLimits};
     let mut out = crate::models::output::console_out();
     let mut err = crate::models::output::console_err();
-
-    loop {
-        loop {
-            let info = client.inspect(namespace, job_id).await?;
-            match info.status.stage {
-                JobStage::Running => break,
-                JobStage::Completed => {
-                    writeln!(err, "Job {} finished: {}", job_id, info.status.stage)?;
-                    return Ok(());
-                }
-                JobStage::Error | JobStage::Canceled | JobStage::Deleted => {
-                    if let Some(msg) = &info.status.message {
-                        writeln!(err, "Message: {msg}")?;
-                    }
-                    anyhow::bail!(
-                        "Job {} finished unsuccessfully: {}",
-                        job_id,
-                        info.status.stage
-                    );
-                }
-                _ => tokio::time::sleep(std::time::Duration::from_secs(3)).await,
-            }
+    // Existing process SIGINT behavior remains unchanged. Async embedding callers
+    // can pass their owned cancellation future to the shared monitor API.
+    let receipt = client
+        .monitor_until(
+            namespace,
+            job_id,
+            deadline,
+            std::future::pending(),
+            MonitorLimits::default(),
+            |text| writeln!(out, "{text}").map_err(anyhow::Error::from),
+        )
+        .await;
+    writeln!(
+        err,
+        "Job {job_id} observation: {:?} (polls={}, log lines={}, bytes={})",
+        receipt.end, receipt.polls, receipt.log_lines, receipt.log_bytes
+    )?;
+    match receipt.end {
+        MonitorEnd::Completed => Ok(()),
+        MonitorEnd::Deadline | MonitorEnd::LimitFailure => {
+            writeln!(
+                err,
+                "Stopped observing job {job_id}; it may still be running. Check it with --status."
+            )?;
+            Ok(())
         }
-
-        let mut stream = std::pin::pin!(client.stream_logs(namespace, job_id).await?);
-        while let Some(line) = stream.next().await {
-            match line {
-                Ok(text) => writeln!(out, "{text}")?,
-                Err(e) => {
-                    writeln!(err, "Log stream error: {e}")?;
-                    break;
-                }
-            }
-        }
-
-        let info = client.inspect(namespace, job_id).await?;
-        match info.status.stage {
-            JobStage::Completed => {
-                writeln!(err)?;
-                writeln!(err, "Job {} finished: {}", job_id, info.status.stage)?;
-                return Ok(());
-            }
-            JobStage::Error | JobStage::Canceled | JobStage::Deleted => {
-                if let Some(msg) = &info.status.message {
-                    writeln!(err, "Message: {msg}")?;
-                }
-                anyhow::bail!(
-                    "Job {} finished unsuccessfully: {}",
-                    job_id,
-                    info.status.stage
-                );
-            }
-            _ => {
-                writeln!(
-                    err,
-                    "Log stream ended while job is still {}; reconnecting...",
-                    info.status.stage
-                )?;
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            }
-        }
+        _ => bail!(
+            "Job observation did not complete successfully; remote job cancellation was not requested"
+        ),
     }
 }
 

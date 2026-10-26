@@ -9,6 +9,8 @@ mod runtime;
 mod serve;
 mod serve_settings;
 
+include!(concat!(env!("OUT_DIR"), "/source_sha.rs"));
+
 use anyhow::Context;
 use anyhow::Result;
 use cli::{Cli, Command, OutputFormat};
@@ -80,7 +82,7 @@ async fn run_main(
             "product_version": env!("CARGO_PKG_VERSION"),
             "runtime_release": skippy_runtime_install::runtime_release_version(),
             "skippy_abi": skippy_runtime_install::current_skippy_abi_version(),
-            "source_sha": option_env!("SKIPPY_SOURCE_SHA"),
+            "source_sha": SKIPPY_SOURCE_SHA,
             "os": std::env::consts::OS,
             "architecture": std::env::consts::ARCH,
         }));

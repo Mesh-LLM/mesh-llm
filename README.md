@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="mesh/docs/mesh-llm-wordmark.png" alt="Mesh LLM" width="420">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="mesh/docs/mesh-llm-wordmark.png">
+    <source media="(prefers-color-scheme: light)" srcset="mesh/docs/mesh-llm-wordmark-light.png">
+    <img src="mesh/docs/mesh-llm-wordmark-light.png" alt="Mesh LLM" width="420">
+  </picture>
 </p>
 
 ![Mesh LLM web console](mesh.png)
@@ -386,7 +390,6 @@ mesh-llm --llama-flavor cuda serve \
 
 | Doc | Use it for |
 |---|---|
-| [CI and release audit](ci/CI_RELEASE_AUDIT.md) | Proposed Skippy-first CI, platform test coverage, release gates and workflow cleanup |
 | [docs/MESHES.md](mesh/docs/MESHES.md) | Private meshes, public discovery, publishing, invite tokens, API-only clients |
 | [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) | Running big models with package-backed Skippy stage splits |
 | [docs/LAYER_PACKAGE_REPOS.md](skippy/docs/LAYER_PACKAGE_REPOS.md) | Contributing and publishing layer package repositories |

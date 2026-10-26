@@ -1,9 +1,7 @@
 use std::{io::Read, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use skippy_protocol::{
-    LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-};
+use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::MtpSource;
 use skippy_serving::{
     DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions,
@@ -371,6 +369,7 @@ impl ResolvedSkippyConfig {
                     .as_ref()
                     .and_then(resolve_reasoning_budget),
                 chat_template,
+                allow_request_chat_template: self.request_defaults.allow_request_chat_template,
                 jinja: self.request_defaults.jinja,
                 chat_template_kwargs,
                 skip_chat_parsing: self.request_defaults.skip_chat_parsing,
@@ -474,7 +473,6 @@ impl ResolvedSkippyConfig {
             ResolvedStageKvCache::Disabled => Some(StageKvCacheConfig {
                 exact_max_bytes: None,
                 mode: StageKvCacheMode::Disabled,
-                payload: StageKvCachePayload::Auto,
                 max_entries: 0,
                 max_bytes: 0,
                 min_tokens: 0,
@@ -487,7 +485,6 @@ impl ResolvedSkippyConfig {
                 let mut cache = family_default.unwrap_or(StageKvCacheConfig {
                     exact_max_bytes: None,
                     mode: template.mode.clone(),
-                    payload: StageKvCachePayload::Auto,
                     max_entries: 128,
                     max_bytes: 0,
                     min_tokens: 256,
@@ -497,7 +494,6 @@ impl ResolvedSkippyConfig {
                     codec: skippy_protocol::StageKvCacheCodec::Native,
                 });
                 cache.mode = template.mode.clone();
-                cache.payload = template.payload;
                 if let Some(value) = template.max_entries {
                     cache.max_entries = value;
                 }

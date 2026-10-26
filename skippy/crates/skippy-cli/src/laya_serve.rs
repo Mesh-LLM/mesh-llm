@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use skippy_commands::console;
 use skippy_serving::EmbeddedState;
 
-use crate::{cli::ServeCommandArgs, shutdown_signal};
+use crate::{cli::ServeCommandArgs, serve, shutdown_signal};
 
 pub(crate) fn is_laya(path: &Path) -> bool {
     skippy_model_artifact::gguf::scan_gguf_compact_meta(path)
@@ -37,7 +37,7 @@ pub(crate) async fn run(args: ServeCommandArgs) -> Result<()> {
     });
     let bind_addr = public
         .bind_addr
-        .unwrap_or_else(super::serve::default_public_bind_addr);
+        .unwrap_or_else(serve::default_public_bind_addr);
     if bind_addr.port() == 0 {
         bail!("--bind-addr must use a fixed port so readiness can be reported");
     }
@@ -78,7 +78,7 @@ pub(crate) async fn run(args: ServeCommandArgs) -> Result<()> {
             _ = tokio::time::sleep(Duration::from_millis(100)) => {}
         }
     }
-    let api_base = format!("http://{}/v1", super::serve::readiness_addr(bind_addr));
+    let api_base = format!("http://{}/v1", serve::readiness_addr(bind_addr));
     console::event(
         "ready",
         &serde_json::json!({"model_id": model_id, "api_base": api_base}),

@@ -1,0 +1,5 @@
+{
+  "code": 2,
+  "stderr": "usage: runner-image-identity.py [-h] [--root ROOT] [--catalog CATALOG]\n                                {validate,check,diagnose,lookup,seed-key,bind} ...\nrunner-image-identity.py: error: argument command: invalid choice: 'bogus' (choose from 'validate', 'check', 'diagnose', 'lookup', 'seed-key', 'bind')\n",
+  "stdout": ""
+}

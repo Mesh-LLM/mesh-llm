@@ -1,0 +1,31 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--repo",
+    "o/r",
+    "--out-body",
+    "body.linked.md",
+    "--out-links",
+    "links.json"
+  ],
+  "code": 0,
+  "gh_argv": [],
+  "git_argv": [
+    [
+      "cwd={root}",
+      "log",
+      "--reverse",
+      "--format=%H%x1f%s%x1f%b%x1e",
+      "v1.0.0..v1.0.1"
+    ]
+  ],
+  "outputs": {
+    "body.linked.md": "\n",
+    "links.json": "{}\n"
+  },
+  "stderr": "",
+  "stdout": "linked 0 commit(s) to a pull request through the API; recovered 0 entry(ies) GitHub did not credit (0 published)\n"
+}

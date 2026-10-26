@@ -135,8 +135,11 @@ constraint rather than advertising a switch to disable it.
 
 `prefix_cache = "auto"` follows the model's prefix-cache policy; `on` enables
 lookup/record, `off` disables reuse, and `record` only records state. Automatic
-payload selection preserves recurrent/indexer state when required. Explicit
-payload and experimental codec compatibility resolve against the loaded model.
+payload selection uses the loaded graph and native memory exporters to preserve
+all required state. If no complete representation is available, prefix reuse is
+disabled while inference remains available. Operators cannot override admission
+or select a payload. Experimental codec compatibility resolves against the
+admitted representation.
 
 Cache sizes use whole IEC units (`KiB`, `MiB`, `GiB`, `TiB`). The prefix retention
 budget accepts `auto` or `unbounded`; the exact-state ceiling accepts `auto` or
@@ -204,7 +207,6 @@ with their runtime purpose; existing controls follow in the same sections.
 | CLI flag | TOML key | Purpose |
 |---|---|---|
 | `--prefix-cache` | `prefix_cache` | Prompt reuse: auto, on, off, record |
-| `--prefix-cache-payload` | `prefix_cache_payload` | State payload: auto, resident-kv, kv-recurrent, full-state |
 | `--prefix-cache-codec` | `prefix_cache_codec` | Durable representation: native or experimental cachegen |
 | `--prefix-cache-budget` | `prefix_cache_budget` | Retention target: auto, unbounded, or IEC size; exact snapshots may exceed it |
 | `--prefix-cache-ram` | `prefix_cache_ram` | Host-RAM tier: off or IEC size; requires disk caching |
@@ -283,6 +285,7 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--json-schema` | `json_schema` | Default structured-output JSON schema; @file loads JSON |
 | `--system-prompt` | `system_prompt` | Default system prompt; @file loads UTF-8 text |
 | `--chat-template` | `chat_template` | Chat template; @file loads UTF-8 text |
+| `--allow-request-chat-template` | `allow_request_chat_template` | Let requests supply their own chat template. Off by default. The template engine has no recursion, loop, or memory limits, so this trusts every caller that can reach the server |
 | `--grammar` | `grammar` | Default grammar; @file loads UTF-8 text |
 | `--jinja` | `jinja` | Use the Jinja template engine |
 | `--skip-chat-parsing` | `skip_chat_parsing` | Skip structured chat-output parsing |

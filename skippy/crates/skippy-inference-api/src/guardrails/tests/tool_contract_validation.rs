@@ -86,7 +86,7 @@ async fn tool_choice_none_retries_tool_call_then_accepts_text() {
             "No tool is needed.",
         )),
     ]));
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), one_retry_policy());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "answer without tools"}],
@@ -142,7 +142,7 @@ async fn structured_output_with_tool_choice_none_still_enforces_schema() {
         Ok(response_with_content("Qwen3-8B-Q4_K_M", "plain text")),
         Ok(synthetic_structured_response()),
     ]));
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), one_retry_policy());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
@@ -173,7 +173,7 @@ async fn forced_tool_mismatch_retries_with_original_forced_choice() {
         Ok(search_tool_response()),
         Ok(lookup_tool_response()),
     ]));
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), one_retry_policy());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
     let request: ChatCompletionRequest =
         serde_json::from_value(request_forced_lookup_tool_choice()).unwrap();
     let expected_tool_choice = request.tool_choice.clone();
@@ -196,7 +196,7 @@ async fn parallel_tool_calls_false_retries_then_exhausts_multiple_calls() {
         Ok(invalid.clone()),
         Ok(invalid),
     ]));
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), one_retry_policy());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
     let request: ChatCompletionRequest =
         serde_json::from_value(request_parallel_tool_calls_false()).unwrap();
 
@@ -289,7 +289,7 @@ async fn assert_tool_choice_none_retry_text_only(first_response: ChatCompletionR
             "No tool is needed.",
         )),
     ]));
-    let guarded = GuardedOpenAiBackend::new(backend.clone(), one_retry_policy());
+    let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "answer without tools"}],

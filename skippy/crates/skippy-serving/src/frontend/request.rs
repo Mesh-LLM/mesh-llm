@@ -2,15 +2,17 @@ use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::EmbeddedReasoningBudget;
 use crate::frontend::EmbeddedReasoningEnabled;
 use crate::frontend::EmbeddedReasoningFormat;
+use crate::frontend::stop_sequences::validate_stop_sequences;
 use base64::Engine;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::ChatMessage;
 use skippy_inference_api::CompletionRequest;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_inference_api::MessageContent;
 use skippy_inference_api::MessageContentPart;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::chat_skippy_hooks_enabled;
 use skippy_package_format::{
     GenerationProfile, GenerationReasoningBudget, GenerationReasoningBudgetLevel,
     GenerationReasoningEnabled, GenerationReasoningFormat,
@@ -37,6 +39,9 @@ use skippy_runtime::penalty_window;
 use std::collections::BTreeMap;
 
 const MAX_NATIVE_PARSER_INPUT_BYTES: usize = 1024 * 1024;
+/// Media parts accepted across all messages of one request. Each part is
+/// decoded natively and held in memory until the prompt is evaluated.
+pub(super) const MAX_MEDIA_PARTS_PER_REQUEST: usize = 16;
 
 /// Built-in reasoning default when neither the request nor the deployment config
 /// asks for reasoning: off.
@@ -60,7 +65,7 @@ pub(super) struct RequestDefaultsDiagnostics {
 pub(super) fn resolve_chat_request_defaults(
     request: &ChatCompletionRequest,
     configured: &EmbeddedOpenAiRequestDefaults,
-) -> OpenAiResult<(EmbeddedOpenAiRequestDefaults, RequestDefaultsDiagnostics)> {
+) -> InferenceResult<(EmbeddedOpenAiRequestDefaults, RequestDefaultsDiagnostics)> {
     let template_reasoning = skippy_inference_api::normalize_reasoning_template_options(
         request.reasoning.as_ref(),
         request.reasoning_effort,
@@ -677,7 +682,7 @@ struct SharedRequestFields<'a> {
 pub(super) fn apply_chat_request_defaults(
     request: &mut ChatCompletionRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if request.max_tokens.is_none() && request.max_completion_tokens.is_none() {
         request.max_tokens = defaults.max_tokens;
     }
@@ -700,12 +705,8 @@ pub(super) fn apply_chat_request_defaults(
 fn apply_chat_only_request_defaults(
     request: &mut ChatCompletionRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     for (name, value) in [
-        (
-            "chat_template",
-            defaults.chat_template.clone().map(Value::from),
-        ),
         ("jinja", defaults.jinja.map(Value::from)),
         (
             "chat_template_kwargs",
@@ -775,7 +776,7 @@ fn apply_chat_only_request_defaults(
     Ok(())
 }
 
-fn prefill_assistant_message(value: &Value) -> OpenAiResult<ChatMessage> {
+fn prefill_assistant_message(value: &Value) -> InferenceResult<ChatMessage> {
     if let Some(content) = value.as_str() {
         return Ok(ChatMessage {
             role: "assistant".to_string(),
@@ -786,10 +787,10 @@ fn prefill_assistant_message(value: &Value) -> OpenAiResult<ChatMessage> {
         });
     }
     let message = serde_json::from_value::<ChatMessage>(value.clone()).map_err(|_| {
-        OpenAiError::invalid_request("prefill_assistant must be a string or chat message object")
+        InferenceError::invalid_request("prefill_assistant must be a string or chat message object")
     })?;
     if message.role != "assistant" {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "prefill_assistant message role must be assistant",
         ));
     }
@@ -822,7 +823,7 @@ pub(super) fn message_content_to_generation_text(
     content: &MessageContent,
     marker: &str,
     media: &mut Vec<MediaInput>,
-) -> OpenAiResult<String> {
+) -> InferenceResult<String> {
     match content {
         MessageContent::Text(text) => Ok(text.clone()),
         MessageContent::Parts(parts) => {
@@ -833,6 +834,11 @@ pub(super) fn message_content_to_generation_text(
                         chunks.push(text.to_string());
                     }
                     continue;
+                }
+                if is_media_part(part) && media.len() >= MAX_MEDIA_PARTS_PER_REQUEST {
+                    return Err(InferenceError::invalid_request(format!(
+                        "a request may include at most {MAX_MEDIA_PARTS_PER_REQUEST} media parts"
+                    )));
                 }
                 if let Some(bytes) = media_bytes_from_part(part)? {
                     media.push(MediaInput { bytes });
@@ -845,12 +851,15 @@ pub(super) fn message_content_to_generation_text(
     }
 }
 
-pub(super) fn media_bytes_from_part(part: &MessageContentPart) -> OpenAiResult<Option<Vec<u8>>> {
-    let is_media = matches!(
+fn is_media_part(part: &MessageContentPart) -> bool {
+    matches!(
         part.content_type.as_str(),
         "image_url" | "input_image" | "image" | "input_audio" | "audio" | "audio_url"
-    );
-    if !is_media {
+    )
+}
+
+pub(super) fn media_bytes_from_part(part: &MessageContentPart) -> InferenceResult<Option<Vec<u8>>> {
+    if !is_media_part(part) {
         return Ok(None);
     }
     if let Some(url) = media_url(part) {
@@ -859,7 +868,7 @@ pub(super) fn media_bytes_from_part(part: &MessageContentPart) -> OpenAiResult<O
     if let Some(data) = media_data(part) {
         return decode_base64_payload(&data).map(Some);
     }
-    Err(OpenAiError::invalid_request(format!(
+    Err(InferenceError::invalid_request(format!(
         "media content block '{}' is missing url or data",
         part.content_type
     )))
@@ -873,7 +882,7 @@ pub(super) fn media_data(part: &MessageContentPart) -> Option<String> {
     part.media_data()
 }
 
-pub(super) fn decode_media_url(url: &str) -> OpenAiResult<Vec<u8>> {
+pub(super) fn decode_media_url(url: &str) -> InferenceResult<Vec<u8>> {
     match url.split_once(',') {
         Some((prefix, payload)) if prefix.starts_with("data:") && prefix.contains(";base64") => {
             return decode_base64_payload(payload);
@@ -881,18 +890,18 @@ pub(super) fn decode_media_url(url: &str) -> OpenAiResult<Vec<u8>> {
         _ => {}
     }
     if url.starts_with("http://") || url.starts_with("https://") {
-        return Err(OpenAiError::unsupported(
+        return Err(InferenceError::unsupported(
             "remote multimodal URLs must be fetched by mesh before reaching skippy",
         ));
     }
     decode_base64_payload(url)
 }
 
-pub(super) fn decode_base64_payload(payload: &str) -> OpenAiResult<Vec<u8>> {
+pub(super) fn decode_base64_payload(payload: &str) -> InferenceResult<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(payload.as_bytes())
         .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload.as_bytes()))
-        .map_err(|error| OpenAiError::invalid_request(format!("invalid media base64: {error}")))
+        .map_err(|error| InferenceError::invalid_request(format!("invalid media base64: {error}")))
 }
 
 fn apply_shared_request_defaults(
@@ -1024,7 +1033,7 @@ fn extra_value_is_omitted(
 pub(super) fn chat_sampling_config(
     request: &ChatCompletionRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
-) -> OpenAiResult<SamplingConfig> {
+) -> InferenceResult<SamplingConfig> {
     let mut sampling = sampling_config(
         request.temperature,
         request.top_p,
@@ -1036,13 +1045,32 @@ pub(super) fn chat_sampling_config(
     )?;
     sampling.reasoning_budget =
         request_reasoning_budget(request)?.unwrap_or_else(|| embedded_reasoning_budget(defaults));
-    Ok(sampling)
+    let top_logprobs = request
+        .logprobs
+        .unwrap_or(false)
+        .then(|| request.top_logprobs.unwrap_or(0));
+    Ok(with_logprobs(sampling, top_logprobs))
+}
+
+/// Asks the runtime to record each sampled token's logprob and `top` alternatives.
+fn with_logprobs(mut sampling: SamplingConfig, top: Option<u32>) -> SamplingConfig {
+    let Some(top) = top else {
+        return sampling;
+    };
+    sampling.top_logprobs = Some(top);
+    // Disabled sampling means greedy decoding, and every call site passes
+    // the config only when it is enabled. Keep greedy, but pass it.
+    if !sampling.enabled {
+        sampling.enabled = true;
+        sampling.temperature = 0.0;
+    }
+    sampling
 }
 
 pub(super) fn completion_sampling_config(
     request: &CompletionRequest,
-) -> OpenAiResult<SamplingConfig> {
-    sampling_config(
+) -> InferenceResult<SamplingConfig> {
+    let sampling = sampling_config(
         request.temperature,
         request.top_p,
         request.presence_penalty,
@@ -1050,13 +1078,14 @@ pub(super) fn completion_sampling_config(
         request.seed,
         request.logit_bias.as_ref(),
         &request.extra,
-    )
+    )?;
+    Ok(with_logprobs(sampling, request.logprobs))
 }
 
 pub(super) fn chat_template_options(
     request: &ChatCompletionRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
-) -> OpenAiResult<ChatTemplateOptions> {
+) -> InferenceResult<ChatTemplateOptions> {
     let reasoning = skippy_inference_api::normalize_reasoning_template_options(
         request.reasoning.as_ref(),
         request.reasoning_effort,
@@ -1075,8 +1104,8 @@ pub(super) fn chat_template_options(
         )?
         .map(|kwargs| serialize_bounded_native_parser_json("chat_template_kwargs", &kwargs))
         .transpose()
-        .map_err(|error| OpenAiError::invalid_request(error.to_string()))?,
-        chat_template: bounded_optional_string_extra(&request.extra, "chat_template")?,
+        .map_err(|error| InferenceError::invalid_request(error.to_string()))?,
+        chat_template: chat_template(request, defaults)?,
         use_jinja: optional_bool_extra(&request.extra, "jinja")?.unwrap_or(true),
         grammar: structured_output_string(request, "grammar")?,
         json_schema: structured_output_json(request, "json_schema")?,
@@ -1109,7 +1138,7 @@ pub(crate) fn thinking_probe_options(
     reasoning: Option<&skippy_inference_api::ReasoningConfig>,
     reasoning_effort: Option<skippy_inference_api::ReasoningEffort>,
     template_override: Option<&str>,
-) -> OpenAiResult<ChatTemplateJsonOptions> {
+) -> InferenceResult<ChatTemplateJsonOptions> {
     let normalized = skippy_inference_api::normalize_reasoning_template_options(
         reasoning,
         reasoning_effort,
@@ -1125,7 +1154,7 @@ pub(crate) fn thinking_probe_options(
         )?
         .map(|kwargs| serialize_bounded_native_parser_json("chat_template_kwargs", &kwargs))
         .transpose()
-        .map_err(|error| OpenAiError::invalid_request(error.to_string()))?,
+        .map_err(|error| InferenceError::invalid_request(error.to_string()))?,
         tools_json: None,
         tool_choice_json: None,
         parallel_tool_calls: true,
@@ -1140,13 +1169,13 @@ pub(crate) fn thinking_probe_options(
 fn merged_chat_template_kwargs(
     defaults: &EmbeddedOpenAiRequestDefaults,
     request: &std::collections::BTreeMap<String, Value>,
-) -> OpenAiResult<Option<std::collections::BTreeMap<String, Value>>> {
+) -> InferenceResult<Option<std::collections::BTreeMap<String, Value>>> {
     let mut merged = defaults
         .chat_template_kwargs
         .as_ref()
         .map(|value| {
             value.as_object().cloned().ok_or_else(|| {
-                OpenAiError::invalid_request("chat_template_kwargs must be an object")
+                InferenceError::invalid_request("chat_template_kwargs must be an object")
             })
         })
         .transpose()?
@@ -1183,7 +1212,7 @@ fn merged_chat_template_kwargs(
 fn request_reasoning_format(
     request: &ChatCompletionRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
-) -> OpenAiResult<ChatReasoningFormat> {
+) -> InferenceResult<ChatReasoningFormat> {
     let value = optional_string_extra(&request.extra, "reasoning_format")?;
     match value.as_deref() {
         Some("auto") => Ok(ChatReasoningFormat::Auto),
@@ -1192,7 +1221,7 @@ fn request_reasoning_format(
         Some("deepseek") => Ok(ChatReasoningFormat::Deepseek),
         Some("deepseek-legacy") => Ok(ChatReasoningFormat::DeepseekLegacy),
         Some("hidden") => Ok(ChatReasoningFormat::Hidden),
-        Some(_) => Err(OpenAiError::invalid_request(
+        Some(_) => Err(InferenceError::invalid_request(
             "reasoning_format must be auto, none, deepseek, deepseek-legacy, or hidden",
         )),
     }
@@ -1200,7 +1229,7 @@ fn request_reasoning_format(
 
 fn request_reasoning_budget(
     request: &ChatCompletionRequest,
-) -> OpenAiResult<Option<ReasoningBudget>> {
+) -> InferenceResult<Option<ReasoningBudget>> {
     let normalized = skippy_inference_api::normalize_reasoning_template_options(
         request.reasoning.as_ref(),
         request.reasoning_effort,
@@ -1219,7 +1248,7 @@ fn request_reasoning_budget(
             return match tokens {
                 -1 => Ok(Some(ReasoningBudget::Unrestricted)),
                 0.. => Ok(Some(ReasoningBudget::Explicit(tokens as u32))),
-                _ => Err(OpenAiError::invalid_request(format!(
+                _ => Err(InferenceError::invalid_request(format!(
                     "{field} must be -1 or greater"
                 ))),
             };
@@ -1268,7 +1297,7 @@ fn embedded_reasoning_budget(defaults: &EmbeddedOpenAiRequestDefaults) -> Reason
 fn optional_string_extra(
     extra: &std::collections::BTreeMap<String, Value>,
     name: &str,
-) -> OpenAiResult<Option<String>> {
+) -> InferenceResult<Option<String>> {
     extra
         .get(name)
         .filter(|value| !value.is_null())
@@ -1276,21 +1305,54 @@ fn optional_string_extra(
             value
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| OpenAiError::invalid_request(format!("{name} must be a string")))
+                .ok_or_else(|| InferenceError::invalid_request(format!("{name} must be a string")))
         })
         .transpose()
+}
+
+/// The chat template to render with. A request's own template is accepted
+/// only where the operator set `allow_request_chat_template`: the native
+/// template engine has no recursion, loop, or memory limits, so a template
+/// is code the serving process runs.
+fn chat_template(
+    request: &ChatCompletionRequest,
+    defaults: &EmbeddedOpenAiRequestDefaults,
+) -> InferenceResult<Option<String>> {
+    match bounded_optional_string_extra(&request.extra, "chat_template")? {
+        Some(_) if !defaults.allow_request_chat_template.unwrap_or(false) => {
+            Err(InferenceError::invalid_request(
+                "chat_template cannot be set per request on this server; the operator \
+                 configures the chat template, or enables allow_request_chat_template",
+            ))
+        }
+        Some(template) => Ok(Some(template)),
+        None => operator_chat_template(defaults),
+    }
+}
+
+fn operator_chat_template(
+    defaults: &EmbeddedOpenAiRequestDefaults,
+) -> InferenceResult<Option<String>> {
+    match defaults.chat_template.as_ref() {
+        Some(template) if template.len() > MAX_NATIVE_PARSER_INPUT_BYTES => {
+            Err(InferenceError::invalid_request(format!(
+                "chat_template exceeds the {MAX_NATIVE_PARSER_INPUT_BYTES}-byte limit"
+            )))
+        }
+        template => Ok(template.cloned()),
+    }
 }
 
 fn bounded_optional_string_extra(
     extra: &std::collections::BTreeMap<String, Value>,
     name: &str,
-) -> OpenAiResult<Option<String>> {
+) -> InferenceResult<Option<String>> {
     let value = optional_string_extra(extra, name)?;
     if value
         .as_ref()
         .is_some_and(|value| value.len() > MAX_NATIVE_PARSER_INPUT_BYTES)
     {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "{name} exceeds the {MAX_NATIVE_PARSER_INPUT_BYTES}-byte limit"
         )));
     }
@@ -1300,14 +1362,14 @@ fn bounded_optional_string_extra(
 fn optional_bool_extra(
     extra: &std::collections::BTreeMap<String, Value>,
     name: &str,
-) -> OpenAiResult<Option<bool>> {
+) -> InferenceResult<Option<bool>> {
     extra
         .get(name)
         .filter(|value| !value.is_null())
         .map(|value| {
             value
                 .as_bool()
-                .ok_or_else(|| OpenAiError::invalid_request(format!("{name} must be a boolean")))
+                .ok_or_else(|| InferenceError::invalid_request(format!("{name} must be a boolean")))
         })
         .transpose()
 }
@@ -1315,7 +1377,7 @@ fn optional_bool_extra(
 fn structured_output_string(
     request: &ChatCompletionRequest,
     name: &str,
-) -> OpenAiResult<Option<String>> {
+) -> InferenceResult<Option<String>> {
     let value = bounded_optional_string_extra(&request.extra, name)?;
     if value.is_some()
         && request
@@ -1323,9 +1385,12 @@ fn structured_output_string(
             .get("json_schema")
             .is_some_and(|value| !value.is_null())
     {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "grammar and json_schema cannot both be set",
         ));
+    }
+    if let Some(grammar) = value.as_deref() {
+        crate::grammar_bounds::check_grammar(grammar).map_err(InferenceError::invalid_request)?;
     }
     Ok(value)
 }
@@ -1333,14 +1398,14 @@ fn structured_output_string(
 fn structured_output_json(
     request: &ChatCompletionRequest,
     name: &str,
-) -> OpenAiResult<Option<String>> {
+) -> InferenceResult<Option<String>> {
     request
         .extra
         .get(name)
         .filter(|value| !value.is_null())
         .map(|value| {
             if !value.is_object() {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "json_schema must be an object",
                 ));
             }
@@ -1352,11 +1417,11 @@ fn structured_output_json(
 fn serialize_bounded_native_parser_json(
     name: &str,
     value: &impl serde::Serialize,
-) -> OpenAiResult<String> {
+) -> InferenceResult<String> {
     let serialized = serde_json::to_string(value)
-        .map_err(|error| OpenAiError::invalid_request(format!("serialize {name}: {error}")))?;
+        .map_err(|error| InferenceError::invalid_request(format!("serialize {name}: {error}")))?;
     if serialized.len() > MAX_NATIVE_PARSER_INPUT_BYTES {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "{name} exceeds the {MAX_NATIVE_PARSER_INPUT_BYTES}-byte limit"
         )));
     }
@@ -1396,25 +1461,58 @@ fn chat_reasoning_format(value: Option<EmbeddedReasoningFormat>) -> ChatReasonin
 
 pub(super) fn ensure_chat_runtime_features_supported(
     request: &ChatCompletionRequest,
-) -> OpenAiResult<()> {
-    if request.logprobs.unwrap_or(false) || request.top_logprobs.is_some() {
-        return Err(OpenAiError::unsupported(
-            "chat logprobs are parsed by skippy-inference-api but not yet implemented by skippy runtime",
+) -> InferenceResult<()> {
+    if !request.logprobs.unwrap_or(false) && request.top_logprobs.is_some() {
+        return Err(InferenceError::invalid_request(
+            "top_logprobs requires logprobs to be true",
         ));
     }
-    Ok(())
+    if request.logprobs.unwrap_or(false) {
+        if request.stream {
+            return Err(InferenceError::unsupported(
+                "streamed chat logprobs are not implemented yet; request them without stream",
+            ));
+        }
+        // A hook that injects text discards a sample whose entry was already
+        // recorded, so the entries would no longer line up with the tokens.
+        if chat_skippy_hooks_enabled(request) {
+            return Err(InferenceError::unsupported(
+                "logprobs are not implemented yet for requests with skippy_hooks",
+            ));
+        }
+        if request
+            .top_logprobs
+            .is_some_and(|count| count as usize > skippy_runtime::MAX_TOP_LOGPROBS)
+        {
+            return Err(InferenceError::invalid_request(format!(
+                "top_logprobs must be at most {}",
+                skippy_runtime::MAX_TOP_LOGPROBS
+            )));
+        }
+    }
+    validate_stop_sequences(request.stop.as_ref())
 }
 
 pub(super) fn ensure_completion_runtime_features_supported(
     request: &CompletionRequest,
-) -> OpenAiResult<()> {
-    if request.logprobs.is_some() {
-        return Err(OpenAiError::unsupported(
-            "completion logprobs are parsed by skippy-inference-api but not yet implemented by skippy runtime",
-        ));
+) -> InferenceResult<()> {
+    if let Some(count) = request.logprobs {
+        if request.stream {
+            return Err(InferenceError::unsupported(
+                "streamed completion logprobs are not implemented yet; request them without stream",
+            ));
+        }
+        if count > MAX_COMPLETION_LOGPROBS {
+            return Err(InferenceError::invalid_request(format!(
+                "logprobs must be at most {MAX_COMPLETION_LOGPROBS}"
+            )));
+        }
     }
-    Ok(())
+    validate_stop_sequences(request.stop.as_ref())
 }
+
+/// The legacy completions API's bound on `logprobs` alternatives.
+const MAX_COMPLETION_LOGPROBS: u32 = 5;
 
 pub(super) fn has_requested_tools(value: &Value) -> bool {
     !matches!(value, Value::Array(items) if items.is_empty())
@@ -1422,12 +1520,12 @@ pub(super) fn has_requested_tools(value: &Value) -> bool {
 
 pub(super) fn ensure_extra_generation_fields_absent(
     extra: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     const UNSUPPORTED_FIELDS: &[&str] = &["adaptive", "backend_sampling"];
 
     for field in UNSUPPORTED_FIELDS {
         if extra.get(*field).is_some_and(|value| !value.is_null()) {
-            return Err(OpenAiError::unsupported(format!(
+            return Err(InferenceError::unsupported(format!(
                 "{field} is parsed but not yet implemented"
             )));
         }
@@ -1443,7 +1541,7 @@ pub(super) fn sampling_config(
     seed: Option<u64>,
     logit_bias: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
     extra: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> OpenAiResult<SamplingConfig> {
+) -> InferenceResult<SamplingConfig> {
     ensure_extra_generation_fields_absent(extra)?;
     let temperature = temperature.unwrap_or(0.8);
     let top_p = top_p.unwrap_or(0.95);
@@ -1483,12 +1581,12 @@ pub(super) fn sampling_config(
     validate_sampling_range("xtc.threshold", xtc.threshold, 0.0..=1.0)?;
     validate_mirostat_sampling(mirostat_mode, mirostat_entropy, mirostat_learning_rate)?;
     if top_k < 0 {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "top_k must be greater than or equal to zero",
         ));
     }
     if penalty_last_n < -1 {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "repeat_last_n must be greater than or equal to -1",
         ));
     }
@@ -1499,7 +1597,7 @@ pub(super) fn sampling_config(
     };
     let seed = match seed {
         Some(seed) => u32::try_from(seed)
-            .map_err(|_| OpenAiError::invalid_request("seed exceeds u32 range"))?,
+            .map_err(|_| InferenceError::invalid_request("seed exceeds u32 range"))?,
         None => 0,
     };
     let logit_bias = parse_logit_bias(logit_bias)?;
@@ -1550,28 +1648,29 @@ pub(super) fn sampling_config(
         mirostat_learning_rate,
         samplers,
         reasoning_budget: ReasoningBudget::Unrestricted,
+        top_logprobs: None,
     })
 }
 
-fn validate_dry_sampling(dry: &DrySamplingConfig) -> OpenAiResult<()> {
+fn validate_dry_sampling(dry: &DrySamplingConfig) -> InferenceResult<()> {
     validate_sampling_range("dry.multiplier", dry.multiplier, 0.0..=f32::MAX)?;
     validate_positive_sampling_value("dry.base", dry.base)?;
     if dry.allowed_length < 0 {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "dry.allowed_length must be greater than or equal to zero",
         ));
     }
     if dry.penalty_last_n < -1 {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "dry.penalty_last_n must be greater than or equal to -1",
         ));
     }
     Ok(())
 }
 
-fn validate_mirostat_sampling(mode: i32, entropy: f32, learning_rate: f32) -> OpenAiResult<()> {
+fn validate_mirostat_sampling(mode: i32, entropy: f32, learning_rate: f32) -> InferenceResult<()> {
     if !matches!(mode, 0..=2) {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "mirostat_mode must be one of: 0 (disabled), 1, 2",
         ));
     }
@@ -1579,22 +1678,22 @@ fn validate_mirostat_sampling(mode: i32, entropy: f32, learning_rate: f32) -> Op
     validate_positive_sampling_value("mirostat_learning_rate", learning_rate)
 }
 
-fn validate_positive_sampling_value(name: &str, value: f32) -> OpenAiResult<()> {
+fn validate_positive_sampling_value(name: &str, value: f32) -> InferenceResult<()> {
     if !value.is_finite() || value <= 0.0 {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "{name} is outside the supported range"
         )));
     }
     Ok(())
 }
 
-fn parse_dry_sampling(value: Option<&Value>) -> OpenAiResult<DrySamplingConfig> {
+fn parse_dry_sampling(value: Option<&Value>) -> InferenceResult<DrySamplingConfig> {
     let Some(value) = value.filter(|value| !value.is_null()) else {
         return Ok(SamplingConfig::default().dry);
     };
     let object = value
         .as_object()
-        .ok_or_else(|| OpenAiError::invalid_request("dry must be an object"))?;
+        .ok_or_else(|| InferenceError::invalid_request("dry must be an object"))?;
     ensure_allowed_object_keys(
         object,
         "dry",
@@ -1613,23 +1712,23 @@ fn parse_dry_sampling(value: Option<&Value>) -> OpenAiResult<DrySamplingConfig> 
             .iter()
             .map(|value| {
                 let value = value.as_str().ok_or_else(|| {
-                    OpenAiError::invalid_request("dry.sequence_breakers must contain strings")
+                    InferenceError::invalid_request("dry.sequence_breakers must contain strings")
                 })?;
                 if value.len() >= MAX_DRY_SEQUENCE_BREAKER_BYTES {
-                    return Err(OpenAiError::invalid_request(
+                    return Err(InferenceError::invalid_request(
                         "dry.sequence_breakers entry exceeds maximum length",
                     ));
                 }
                 Ok(value.to_string())
             })
-            .collect::<OpenAiResult<Vec<_>>>()?,
+            .collect::<InferenceResult<Vec<_>>>()?,
         Some(Value::Array(_)) => {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "dry.sequence_breakers contains too many entries",
             ));
         }
         Some(_) => {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "dry.sequence_breakers must be an array",
             ));
         }
@@ -1646,13 +1745,13 @@ fn parse_dry_sampling(value: Option<&Value>) -> OpenAiResult<DrySamplingConfig> 
     })
 }
 
-fn parse_xtc_sampling(value: Option<&Value>) -> OpenAiResult<XtcSamplingConfig> {
+fn parse_xtc_sampling(value: Option<&Value>) -> InferenceResult<XtcSamplingConfig> {
     let Some(value) = value.filter(|value| !value.is_null()) else {
         return Ok(SamplingConfig::default().xtc);
     };
     let object = value
         .as_object()
-        .ok_or_else(|| OpenAiError::invalid_request("xtc must be an object"))?;
+        .ok_or_else(|| InferenceError::invalid_request("xtc must be an object"))?;
     ensure_allowed_object_keys(object, "xtc", &["probability", "threshold"])?;
     let defaults = SamplingConfig::default().xtc;
     Ok(XtcSamplingConfig {
@@ -1667,13 +1766,13 @@ fn optional_object_f32(
     object: &serde_json::Map<String, Value>,
     name: &str,
     key: &str,
-) -> OpenAiResult<Option<f32>> {
+) -> InferenceResult<Option<f32>> {
     object
         .get(key)
         .filter(|value| !value.is_null())
         .map(|value| {
             serde_json::from_value(value.clone())
-                .map_err(|_| OpenAiError::invalid_request(format!("{name} must be a number")))
+                .map_err(|_| InferenceError::invalid_request(format!("{name} must be a number")))
         })
         .transpose()
 }
@@ -1682,13 +1781,13 @@ fn optional_object_i32(
     object: &serde_json::Map<String, Value>,
     name: &str,
     key: &str,
-) -> OpenAiResult<Option<i32>> {
+) -> InferenceResult<Option<i32>> {
     object
         .get(key)
         .filter(|value| !value.is_null())
         .map(|value| {
             serde_json::from_value(value.clone())
-                .map_err(|_| OpenAiError::invalid_request(format!("{name} must be an integer")))
+                .map_err(|_| InferenceError::invalid_request(format!("{name} must be an integer")))
         })
         .transpose()
 }
@@ -1697,9 +1796,9 @@ fn ensure_allowed_object_keys(
     object: &serde_json::Map<String, Value>,
     name: &str,
     allowed: &[&str],
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "{name} contains unknown field {key}"
         )));
     }
@@ -1708,22 +1807,22 @@ fn ensure_allowed_object_keys(
 
 fn parse_sampler_order(
     extra: &std::collections::BTreeMap<String, Value>,
-) -> OpenAiResult<Vec<String>> {
+) -> InferenceResult<Vec<String>> {
     if let Some(value) = extra.get("samplers").filter(|value| !value.is_null()) {
         let values = value
             .as_array()
-            .ok_or_else(|| OpenAiError::invalid_request("samplers must be an array"))?;
+            .ok_or_else(|| InferenceError::invalid_request("samplers must be an array"))?;
         if values.len() > MAX_STAGE_SAMPLERS {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "samplers contains too many entries",
             ));
         }
         return values
             .iter()
             .map(|value| {
-                let sampler = value
-                    .as_str()
-                    .ok_or_else(|| OpenAiError::invalid_request("samplers must contain strings"))?;
+                let sampler = value.as_str().ok_or_else(|| {
+                    InferenceError::invalid_request("samplers must contain strings")
+                })?;
                 canonical_sampler_name(sampler).map(str::to_string)
             })
             .collect();
@@ -1734,7 +1833,7 @@ fn parse_sampler_order(
     {
         let sequence = value
             .as_str()
-            .ok_or_else(|| OpenAiError::invalid_request("sampler_sequence must be a string"))?;
+            .ok_or_else(|| InferenceError::invalid_request("sampler_sequence must be a string"))?;
         let samplers = sequence
             .chars()
             .filter(|value| !value.is_whitespace())
@@ -1748,14 +1847,14 @@ fn parse_sampler_order(
                 'm' => Ok("min_p"),
                 'x' => Ok("xtc"),
                 't' => Ok("temperature"),
-                _ => Err(OpenAiError::invalid_request(
+                _ => Err(InferenceError::invalid_request(
                     "sampler_sequence contains an unsupported sampler code",
                 )),
             })
             .map(|result| result.map(str::to_string))
-            .collect::<OpenAiResult<Vec<_>>>()?;
+            .collect::<InferenceResult<Vec<_>>>()?;
         if samplers.len() > MAX_STAGE_SAMPLERS {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "sampler_sequence contains too many entries",
             ));
         }
@@ -1764,7 +1863,7 @@ fn parse_sampler_order(
     Ok(SamplingConfig::default().samplers)
 }
 
-fn canonical_sampler_name(value: &str) -> OpenAiResult<&'static str> {
+fn canonical_sampler_name(value: &str) -> InferenceResult<&'static str> {
     match value {
         "penalties" => Ok("penalties"),
         "dry" => Ok("dry"),
@@ -1775,7 +1874,7 @@ fn canonical_sampler_name(value: &str) -> OpenAiResult<&'static str> {
         "min_p" => Ok("min_p"),
         "xtc" => Ok("xtc"),
         "temperature" | "temp" => Ok("temperature"),
-        _ => Err(OpenAiError::invalid_request(
+        _ => Err(InferenceError::invalid_request(
             "samplers contains an unsupported sampler name",
         )),
     }
@@ -1783,27 +1882,27 @@ fn canonical_sampler_name(value: &str) -> OpenAiResult<&'static str> {
 
 pub(super) fn parse_logit_bias(
     logit_bias: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
-) -> OpenAiResult<Vec<RuntimeLogitBias>> {
+) -> InferenceResult<Vec<RuntimeLogitBias>> {
     let Some(logit_bias) = logit_bias else {
         return Ok(Vec::new());
     };
     if logit_bias.len() > MAX_LOGIT_BIAS {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "logit_bias supports at most {MAX_LOGIT_BIAS} entries"
         )));
     }
     let mut parsed = Vec::with_capacity(logit_bias.len());
     for (token_id, bias) in logit_bias {
-        let token_id = token_id
-            .parse::<i32>()
-            .map_err(|_| OpenAiError::invalid_request("logit_bias token IDs must be integers"))?;
+        let token_id = token_id.parse::<i32>().map_err(|_| {
+            InferenceError::invalid_request("logit_bias token IDs must be integers")
+        })?;
         if token_id < 0 {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "logit_bias token IDs must be greater than or equal to zero",
             ));
         }
         let bias = serde_json::from_value::<f32>(bias.clone())
-            .map_err(|_| OpenAiError::invalid_request("logit_bias values must be numbers"))?;
+            .map_err(|_| InferenceError::invalid_request("logit_bias values must be numbers"))?;
         validate_sampling_range("logit_bias", bias, -100.0..=100.0)?;
         parsed.push(RuntimeLogitBias { token_id, bias });
     }
@@ -1814,9 +1913,9 @@ pub(super) fn validate_sampling_range(
     name: &str,
     value: f32,
     range: std::ops::RangeInclusive<f32>,
-) -> OpenAiResult<()> {
+) -> InferenceResult<()> {
     if !value.is_finite() || !range.contains(&value) {
-        return Err(OpenAiError::invalid_request(format!(
+        return Err(InferenceError::invalid_request(format!(
             "{name} is outside the supported range"
         )));
     }
@@ -1826,13 +1925,13 @@ pub(super) fn validate_sampling_range(
 pub(super) fn optional_f32_extra(
     extra: &std::collections::BTreeMap<String, serde_json::Value>,
     field: &str,
-) -> OpenAiResult<Option<f32>> {
+) -> InferenceResult<Option<f32>> {
     extra
         .get(field)
         .filter(|value| !value.is_null())
         .map(|value| {
             serde_json::from_value::<f32>(value.clone())
-                .map_err(|_| OpenAiError::invalid_request(format!("{field} must be a number")))
+                .map_err(|_| InferenceError::invalid_request(format!("{field} must be a number")))
         })
         .transpose()
 }
@@ -1840,13 +1939,13 @@ pub(super) fn optional_f32_extra(
 pub(super) fn optional_i32_extra(
     extra: &std::collections::BTreeMap<String, serde_json::Value>,
     field: &str,
-) -> OpenAiResult<Option<i32>> {
+) -> InferenceResult<Option<i32>> {
     extra
         .get(field)
         .filter(|value| !value.is_null())
         .map(|value| {
             serde_json::from_value::<i32>(value.clone())
-                .map_err(|_| OpenAiError::invalid_request(format!("{field} must be an integer")))
+                .map_err(|_| InferenceError::invalid_request(format!("{field} must be an integer")))
         })
         .transpose()
 }

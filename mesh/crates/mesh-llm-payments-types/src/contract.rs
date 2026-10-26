@@ -13,8 +13,27 @@ use crate::terms::RequestTerms;
 /// Capability name the host resolves the payments engine by.
 pub const CAPABILITY: &str = "payments.v1";
 
+/// Billing semantics explicitly selected by the host for a new admission.
+/// No default: old hosts and unknown revisions must fail before opening the
+/// provider or creating authorization/invoices. Contract negotiation separately
+/// protects new hosts from old providers that ignore unknown request fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BillingRevision {
+    /// Cached-input discounts and the positive final-remainder floor.
+    #[serde(rename = "v3")]
+    V3,
+}
+
+/// Ledger-free declaration of the billing contract implemented by a provider.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct BillingContract {
+    pub revision: BillingRevision,
+}
+
 /// Operation names.
 pub mod ops {
+    /// Ledger-free billing contract check; incompatible providers fail closed.
+    pub const BILLING_CONTRACT: &str = "billing_contract";
     /// Run one local operator command (the `/api/wallet` surface).
     pub const CONTROL: &str = "control";
     /// Advertised seller prices, and whether the provider has payments state.
@@ -24,38 +43,43 @@ pub mod ops {
     /// Reconcile uncertain charges and recover output debt; returns the
     /// approved requests the host must re-contact their sellers about.
     pub const RECONCILE: &str = "reconcile";
-    /// Validate and pay a seller's output invoice for a request.
-    pub const SETTLE_OUTPUT: &str = "settle_output";
-    /// Mark a request finished.
+    /// Close a metered request the seller completed: retire an unsubmitted
+    /// deposit and mark the request finished.
     pub const FINISH: &str = "finish";
     /// The operator's profile payment intent (no wallet I/O).
     pub const PAYMENT_INTENT: &str = "payment_intent";
-    /// Start reading the balance for a request so it overlaps seller prefill.
-    pub const PREFETCH: &str = "prefetch";
-    /// Durably propose and approve request terms against policy and balance.
-    pub const AUTHORIZE: &str = "authorize";
+    /// Durably approve a seller's admission: the local spending cap against
+    /// policy and the daily budget, and the admitted terms every later payment of the
+    /// request is checked against.
+    pub const ACCEPT_ADMISSION: &str = "accept_admission";
     /// Release a request that did not (or can no longer) start paying.
     pub const CANCEL: &str = "cancel";
-    /// Pay the seller's input invoice for an authorized request.
-    pub const PAY_INPUT: &str = "pay_input";
+    /// Pay the seller's deposit invoice for an accepted admission.
+    pub const PAY_DEPOSIT: &str = "pay_deposit";
+    /// Check a seller's settlement against the admission and pay the final
+    /// invoice; an abandoned settlement creates no charge.
+    pub const SETTLE_FINAL: &str = "settle_final";
 
-    // Seller (serving) side.
-    /// Check prices, wait out the peer's prior debt, and open serving.
-    pub const SERVE_BEGIN: &str = "serve_begin";
-    /// Fix the output allowance and issue the input invoice.
-    pub const SERVE_INPUT_INVOICE: &str = "serve_input_invoice";
+    // Seller (serving) side: token-metered billing.
+    /// Admit a buyer's request at the seller's current prices: refuse a buyer
+    /// at the unpaid-final-invoice strike limit, otherwise state the deposit
+    /// (a flat 1 sat, applied to the final bill) or admit without one.
+    pub const SERVE_ADMIT: &str = "serve_admit";
+    /// Wait for the admitted deposit to settle and claim the once-only
+    /// backend dispatch. Nothing runs before this returns.
+    pub const SERVE_DEPOSIT_CONFIRMED: &str = "serve_deposit_confirmed";
+    /// Price the backend-reported usage at the admitted rates, apply the paid
+    /// deposit and issue (or return) the final invoice for the remainder.
+    pub const SERVE_SETTLE: &str = "serve_settle";
+    /// Close a request without usage: no bill, no invoice, no debt.
+    pub const SERVE_ABANDON: &str = "serve_abandon";
+    /// Answer a buyer's recovery probe: the stored bill and final invoice,
+    /// never a new dispatch.
+    pub const SERVE_RECOVER: &str = "serve_recover";
     /// Wait for the earliest receiver-side evidence of an invoice payment.
     pub const AWAIT_ARRIVAL: &str = "await_arrival";
     /// Wait for an invoice to settle and record it received.
     pub const SETTLE_RECEIVED: &str = "settle_received";
-    /// Raise the delivered-token watermark of a serving request.
-    pub const RECORD_DELIVERED: &str = "record_delivered";
-    /// Close a serving request's accounting.
-    pub const SERVE_FINISH: &str = "serve_finish";
-    /// Issue (or return) the output invoice of a finished serving request.
-    pub const OUTPUT_RECEIVABLE: &str = "output_receivable";
-    /// Answer a payer's recovery probe for a serving request.
-    pub const SERVE_RECOVER: &str = "serve_recover";
 }
 
 /// Bound for the ledger-only operations listed by [`deadline`].
@@ -70,19 +94,23 @@ pub const BOOKKEEPING_DEADLINE: Duration = Duration::from_secs(10);
 /// that create invoices, observe settlement, wait out a peer's prior debt or pay
 /// are deliberately unbounded here — the provider bounds them (invoice expiry,
 /// arrival wait, prior-settlement deadline) and the caller owns cancellation.
+/// `serve_admit`, `serve_settle` and `serve_recover` may each create one
+/// invoice in the wallet, which has been observed to take 30-45s on a freshly
+/// started wallet; bounding them here cancelled the ledger write after the
+/// wallet had already issued the invoice, leaving an orphan pending invoice
+/// and a 503 for the buyer. The buyer's admission read is the bound instead.
 ///
 /// An operation that is not listed is unbounded: a new operation must be
 /// classified here, rather than silently inheriting a housekeeping deadline.
 pub fn deadline(operation: &str) -> Option<Duration> {
     matches!(
         operation,
-        ops::PRICING
+        ops::BILLING_CONTRACT
+            | ops::PRICING
             | ops::FINISH
             | ops::PAYMENT_INTENT
-            | ops::PREFETCH
             | ops::CANCEL
-            | ops::RECORD_DELIVERED
-            | ops::SERVE_FINISH
+            | ops::SERVE_ABANDON
     )
     .then_some(BOOKKEEPING_DEADLINE)
 }
@@ -122,15 +150,30 @@ pub struct RoutingBudgetResponse {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ReconcileResponse {
-    /// Approved requests (excluding local wallet sends) still owing output.
+    /// Accepted admissions (excluding local wallet sends) whose settlement
+    /// has not been completed; the host refetches each from its seller.
     pub approved: Vec<RequestTerms>,
 }
 
+/// Request for [`ops::SETTLE_FINAL`]: the seller's settlement frame, as
+/// received. The provider recomputes the bill from the stored admission and
+/// pays only an invoice that matches the remainder.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SettleOutputRequest {
-    pub terms: RequestTerms,
-    pub tokens: u64,
-    pub invoice: mesh_llm_wallet::invoice::Invoice,
+pub struct SettleFinalRequest {
+    pub request_id: String,
+    /// `None` means the seller abandoned the request: no bill, no charge.
+    pub usage: Option<crate::metering::MeteredUsage>,
+    pub bill_msat: Option<u64>,
+    pub deposit_applied_msat: u64,
+    pub invoice: Option<mesh_llm_wallet::invoice::Invoice>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SettleFinalResponse {
+    /// The bill the provider verified; zero for an abandoned request.
+    pub bill_msat: u64,
+    /// The final payment, when a remainder was owed and paid.
+    pub payment: Option<mesh_llm_wallet::provider::Transaction>,
 }
 
 /// Request for [`ops::FINISH`].
@@ -144,9 +187,14 @@ pub struct IdRequest {
     pub id: String,
 }
 
+/// Request for [`ops::ACCEPT_ADMISSION`]. `terms` carry the buyer's local
+/// cap (`max_total_msat`) and never leave this node; `admission` is what the
+/// seller stated and what every payment of the request is checked against.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuthorizeRequest {
+pub struct AcceptAdmissionRequest {
+    pub billing_revision: BillingRevision,
     pub terms: RequestTerms,
+    pub admission: crate::metered_wire::AdmissionTerms,
 }
 
 /// Which release a [`ops::CANCEL`] performs.
@@ -165,31 +213,89 @@ pub struct CancelRequest {
     pub stage: CancelStage,
 }
 
+/// Request for [`ops::PAY_DEPOSIT`]; the amount comes from the admission.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PayInputRequest {
-    pub terms: RequestTerms,
+pub struct PayDepositRequest {
+    pub request_id: String,
     pub invoice: mesh_llm_wallet::invoice::Invoice,
 }
 
+/// Request for [`ops::SERVE_ADMIT`]. `request_id` is the buyer's unguessable
+/// request identifier; it doubles as the bearer recovery capability.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ServeBeginRequest {
-    pub id: String,
-    pub peer: String,
+pub struct ServeAdmitRequest {
+    pub billing_revision: BillingRevision,
+    pub request_id: String,
+    /// Authenticated mesh endpoint ID of the buyer.
+    pub buyer: String,
     pub model: String,
     pub pricing: crate::pricing::Pricing,
-    pub max_output: u64,
-    /// How long to wait for the peer's prior debt before refusing.
-    pub prior_settlement_ms: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ServeInputInvoiceRequest {
-    pub id: String,
-    pub peer: String,
-    pub model: String,
-    pub pricing: crate::pricing::Pricing,
-    pub input_tokens: u64,
-    pub max_output_tokens: u64,
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ServeAdmitResponse {
+    /// Pay this deposit, then call [`ops::SERVE_DEPOSIT_CONFIRMED`] before
+    /// any backend work. The amount is applied against the final bill.
+    Deposit {
+        request_id: String,
+        invoice: mesh_llm_wallet::invoice::Invoice,
+        /// The seller's minimum payment, carried into the admission terms.
+        #[serde(default = "crate::contract::default_payment_floor")]
+        min_payment_msat: u64,
+    },
+    /// Buyer in good standing: dispatch now, no deposit.
+    Admitted {
+        request_id: String,
+        #[serde(default = "crate::contract::default_payment_floor")]
+        min_payment_msat: u64,
+    },
+    /// Refused: the buyer has too many issued and unpaid final invoices.
+    Blocked { reason: String },
+    /// This seller already holds the request: answer with
+    /// [`ops::SERVE_RECOVER`], never a second dispatch.
+    Replayed { request_id: String },
+}
+
+/// Request for [`ops::SERVE_DEPOSIT_CONFIRMED`], [`ops::SERVE_ABANDON`] and
+/// [`ops::SERVE_RECOVER`].
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RequestIdRequest {
+    pub request_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServeSettleRequest {
+    pub request_id: String,
+    pub usage: crate::metering::MeteredUsage,
+}
+
+/// The bill of a settled request. `bill = input × input_rate + output ×
+/// output_rate`; `remaining = max(bill − deposit, 0)`. A deposit above the
+/// bill is kept, never refunded. `invoice` is `None` when nothing remains.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalBill {
+    pub usage: crate::metering::MeteredUsage,
+    pub bill_msat: u64,
+    /// Deposit actually received and applied.
+    pub deposit_msat: u64,
+    pub remaining_msat: u64,
+    /// True once nothing is owed: the deposit covered the bill or the final
+    /// invoice has been paid.
+    pub settled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invoice: Option<mesh_llm_wallet::invoice::Invoice>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ServeRecoverResponse {
+    /// Admitted but neither settled nor abandoned yet.
+    Pending,
+    /// Closed without usage: nothing owed, nothing to recover.
+    Abandoned,
+    /// The stored bill, with the issued final invoice when a remainder is owed.
+    Billed { bill: FinalBill },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -222,43 +328,8 @@ pub struct ArrivalResponse {
     pub claiming: bool,
 }
 
-/// Request for [`ops::SERVE_FINISH`]: raise the delivered-token watermark to
-/// `tokens` and close serving accounting in one atomic step, so a close can
-/// never freeze a watermark lower than what was delivered.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ServeFinishRequest {
-    pub id: String,
-    pub tokens: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RecordDeliveredRequest {
-    pub id: String,
-    pub tokens: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OutputInvoice {
-    pub tokens: u64,
-    pub invoice: mesh_llm_wallet::invoice::Invoice,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct OutputReceivableResponse {
-    pub output: Option<OutputInvoice>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum ServeRecoverResponse {
-    Pending,
-    Complete { output: Option<OutputInvoice> },
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InputInvoiceResponse {
-    pub terms: RequestTerms,
-    pub invoice: mesh_llm_wallet::invoice::Invoice,
+pub(crate) fn default_payment_floor() -> u64 {
+    crate::metering::PAYMENT_FLOOR_MSAT
 }
 
 #[cfg(test)]
@@ -283,25 +354,24 @@ mod tests {
     /// Every operation the host may invoke, so a new one cannot ship without
     /// being classified as bounded or as a wallet wait.
     const ALL_OPS: &[&str] = &[
+        ops::BILLING_CONTRACT,
         ops::CONTROL,
         ops::PRICING,
         ops::ROUTING_BUDGET,
         ops::RECONCILE,
-        ops::SETTLE_OUTPUT,
         ops::FINISH,
         ops::PAYMENT_INTENT,
-        ops::PREFETCH,
-        ops::AUTHORIZE,
+        ops::ACCEPT_ADMISSION,
         ops::CANCEL,
-        ops::PAY_INPUT,
-        ops::SERVE_BEGIN,
-        ops::SERVE_INPUT_INVOICE,
+        ops::PAY_DEPOSIT,
+        ops::SETTLE_FINAL,
+        ops::SERVE_ADMIT,
+        ops::SERVE_DEPOSIT_CONFIRMED,
+        ops::SERVE_SETTLE,
+        ops::SERVE_ABANDON,
+        ops::SERVE_RECOVER,
         ops::AWAIT_ARRIVAL,
         ops::SETTLE_RECEIVED,
-        ops::RECORD_DELIVERED,
-        ops::SERVE_FINISH,
-        ops::OUTPUT_RECEIVABLE,
-        ops::SERVE_RECOVER,
     ];
 
     #[test]
@@ -314,13 +384,12 @@ mod tests {
         assert_eq!(
             bounded,
             [
+                ops::BILLING_CONTRACT,
                 ops::PRICING,
                 ops::FINISH,
                 ops::PAYMENT_INTENT,
-                ops::PREFETCH,
                 ops::CANCEL,
-                ops::RECORD_DELIVERED,
-                ops::SERVE_FINISH,
+                ops::SERVE_ABANDON,
             ]
         );
     }

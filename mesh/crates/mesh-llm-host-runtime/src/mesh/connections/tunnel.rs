@@ -17,6 +17,7 @@ impl Node {
         stream_type: u8,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) -> bool {
         if stream_type == STREAM_TUNNEL {
             return self.forward_tunnel_stream(send, recv).await;
@@ -25,7 +26,7 @@ impl Node {
             return self.forward_tunnel_http_stream(remote, send, recv).await;
         }
 
-        self.spawn_non_tunnel_mesh_stream(remote, protocol, stream_type, send, recv);
+        self.spawn_non_tunnel_mesh_stream(remote, protocol, stream_type, send, recv, slot);
         true
     }
 
@@ -62,6 +63,7 @@ impl Node {
     pub(crate) async fn _dispatch_streams(&self, conn: Connection, remote: EndpointId) {
         let protocol = connection_protocol(&conn);
         let dispatcher_stable_id = conn.stable_id();
+        let pre_admission_slots = super::super::pre_admission::PreAdmissionSlots::new();
         loop {
             let accepted = match self.accept_mesh_stream(&conn, protocol).await {
                 Ok(accepted) => accepted,
@@ -83,8 +85,30 @@ impl Node {
             else {
                 continue;
             };
+            let slot = match pre_admission_slots.claim(accepted.stream_type) {
+                super::super::pre_admission::SlotClaim::Unlimited => None,
+                super::super::pre_admission::SlotClaim::Granted(permit) => Some(permit),
+                super::super::pre_admission::SlotClaim::Full => {
+                    tracing::warn!(
+                        "Refusing stream {:#04x} from {}: too many gossip and route handlers on one connection",
+                        accepted.stream_type,
+                        accepted.remote.fmt_short()
+                    );
+                    let (mut send, mut recv) = (send, recv);
+                    let _ = recv.stop(0u32.into());
+                    let _ = send.reset(0u32.into());
+                    continue;
+                }
+            };
             if !self
-                .dispatch_mesh_stream(accepted.remote, protocol, accepted.stream_type, send, recv)
+                .dispatch_mesh_stream(
+                    accepted.remote,
+                    protocol,
+                    accepted.stream_type,
+                    send,
+                    recv,
+                    slot,
+                )
                 .await
             {
                 break;

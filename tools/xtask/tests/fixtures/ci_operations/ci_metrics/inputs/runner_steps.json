@@ -1,0 +1,82 @@
+[
+  {
+    "databaseId": 104,
+    "attempt": 1,
+    "workflowName": "PR Builds",
+    "displayTitle": "run 104",
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-07-03T00:00:00Z",
+    "startedAt": "2026-07-03T00:00:01Z",
+    "updatedAt": "2026-07-03T00:03:00Z",
+    "url": "https://example.test/runs/104",
+    "headSha": "sha-104",
+    "headBranch": "feature",
+    "plan_profile": "ready-pr",
+    "planDigest": "abc",
+    "changeClass": "rust",
+    "runner_image": null,
+    "toolchainEpoch": 7,
+    "cacheMode": "restore-only",
+    "jobs": [
+      {
+        "id": 1041,
+        "name": "Linux CPU runtime",
+        "conclusion": "success",
+        "created_at": "2026-07-03T00:00:02Z",
+        "started_at": "2026-07-03T00:00:03Z",
+        "completed_at": "2026-07-03T00:02:00Z",
+        "html_url": "https://example.test/jobs/a",
+        "labels": [
+          "depot-ubuntu-24.04-8"
+        ],
+        "steps": [
+          {
+            "name": "Restore native cache",
+            "number": 1,
+            "conclusion": "success",
+            "started_at": "2026-07-03T00:00:04Z",
+            "completed_at": "2026-07-03T00:00:14Z"
+          },
+          {
+            "name": "Build runtime",
+            "number": 2,
+            "conclusion": "success",
+            "started_at": "2026-07-03T00:00:14Z",
+            "completed_at": "2026-07-03T00:01:44Z"
+          },
+          "not a step"
+        ]
+      },
+      {
+        "id": 1042,
+        "name": "Linux CPU runtime",
+        "conclusion": "success",
+        "created_at": "2026-07-03T00:00:05Z",
+        "started_at": "2026-07-03T00:00:06Z",
+        "completed_at": "2026-07-03T00:02:30Z",
+        "html_url": "https://example.test/jobs/b",
+        "labels": [
+          "depot-ubuntu-24.04-arm-8"
+        ],
+        "steps": [
+          {
+            "name": "Restore native cache",
+            "number": 1,
+            "conclusion": "success",
+            "startedAt": "2026-07-03T00:00:07Z",
+            "completedAt": "2026-07-03T00:00:27Z"
+          },
+          {
+            "name": "Build runtime",
+            "number": 2,
+            "conclusion": "failure",
+            "started_at": "2026-07-03T00:00:27Z",
+            "completed_at": "2026-07-03T00:02:27Z"
+          }
+        ]
+      }
+    ]
+  }
+]

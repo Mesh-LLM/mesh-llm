@@ -3,10 +3,10 @@ use super::{
     OPENCODE_OUTPUT_LIMIT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
     build_opencode_launch_spec_with_limits, build_pi_provider_config,
     build_pi_provider_config_with_limits, cleanup_mesh_child, configure_claude_launch_command,
-    configure_opencode_launch_command, merge_goose_mcp_config, mesh_mcp_claude_config_json,
-    normalize_opencode_host, opencode_missing_binary_guidance, pi_missing_binary_guidance,
-    resolve_opencode_config_path_from_home, write_opencode_config_for_test,
-    write_pi_config_for_test, write_pi_config_to_path,
+    configure_opencode_launch_command, goose_config_dir_for, local_mcp_url, merge_goose_mcp_config,
+    mesh_mcp_claude_config_json, normalize_opencode_host, opencode_missing_binary_guidance,
+    pi_missing_binary_guidance, resolve_opencode_config_path_from_home,
+    write_opencode_config_for_test, write_pi_config_for_test, write_pi_config_to_path,
 };
 
 const LOCAL_OPENCODE_HOST: &str = "127.0.0.1:9337";
@@ -1072,4 +1072,45 @@ async fn remote_inventory_fetch_preserves_context_with_served_id() {
     assert_eq!(chosen, "org/remote:Q4");
     assert_eq!(inventory.context_limit(&chosen), 16384);
     server.await.unwrap();
+}
+
+#[test]
+fn local_mcp_url_follows_the_console_port() {
+    assert_eq!(local_mcp_url(3131), DEFAULT_MESH_MCP_URL);
+    assert_eq!(local_mcp_url(13131), "http://127.0.0.1:13131/mcp");
+}
+
+#[test]
+fn goose_config_dir_follows_where_goose_reads_its_config() {
+    // Absolute on every platform, so the cases hold wherever the test runs.
+    let base = std::env::temp_dir();
+    let home = base.join("home");
+    let goose_home =
+        |appdata: Option<std::path::PathBuf>| goose_config_dir_for(None, appdata, None, &home);
+    assert_eq!(goose_home(None), home.join(".config").join("goose"));
+    assert_eq!(
+        goose_home(Some(base.join("Roaming"))),
+        base.join("Roaming")
+            .join("Block")
+            .join("goose")
+            .join("config")
+    );
+    assert_eq!(
+        goose_config_dir_for(None, None, Some(base.join("xdg").into()), &home),
+        base.join("xdg").join("goose")
+    );
+    // goose ignores a relative XDG_CONFIG_HOME or GOOSE_PATH_ROOT.
+    assert_eq!(
+        goose_config_dir_for(Some("root".into()), None, Some("xdg".into()), &home),
+        home.join(".config").join("goose")
+    );
+    assert_eq!(
+        goose_config_dir_for(
+            Some(base.join("root").into()),
+            Some(base.join("Roaming")),
+            None,
+            &home
+        ),
+        base.join("root").join("config")
+    );
 }

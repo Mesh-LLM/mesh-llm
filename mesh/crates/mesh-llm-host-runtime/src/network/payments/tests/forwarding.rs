@@ -7,11 +7,11 @@ async fn payments_three_nodes_cannot_spend_forwarding_wallet() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn payments_three_nodes_cannot_spend_through_legacy_bridge() -> Result<()> {
+async fn payments_three_nodes_cannot_spend_without_execution_handler() -> Result<()> {
     tokio::time::timeout(Duration::from_secs(15), remote_request(true)).await?
 }
 
-async fn remote_request(legacy: bool) -> Result<()> {
+async fn remote_request(missing_ingress: bool) -> Result<()> {
     let directory = tempfile::tempdir()?;
     let network = Arc::new(Network::default());
     let service = Arc::new(PaymentService::with_provider(
@@ -43,6 +43,7 @@ async fn remote_request(legacy: bool) -> Result<()> {
         Pricing {
             input_msat_per_million: 1_000_000,
             output_msat_per_million: 1_000_000,
+            cache_discount_percent: 0,
         },
     );
     assert!(
@@ -61,19 +62,28 @@ async fn remote_request(legacy: bool) -> Result<()> {
         vec![InferenceTarget::Remote(provider.endpoint.id())],
     );
     let (targets_tx, targets_rx) = tokio::sync::watch::channel(targets);
-    let (_legacy_tx, legacy_rx) = tokio::sync::mpsc::channel(1);
+    let (_missing_ingress_tx, missing_ingress_rx) = tokio::sync::mpsc::channel(1);
     let (http_tx, http_rx) = tokio::sync::mpsc::channel(1);
     let (_stage_tx, stage_rx) = tokio::sync::mpsc::channel(1);
-    let manager = Manager::start(relay.clone(), legacy_rx, http_rx, stage_rx).await?;
+    let manager = Manager::start(relay.clone(), missing_ingress_rx, http_rx, stage_rx).await?;
     let unused_backend = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    manager.set_http_port(unused_backend.local_addr()?.port());
-    if !legacy {
+    if !missing_ingress {
         manager.set_http_ingress(targets_rx, AffinityRouter::default());
     }
     let (response, accepted_connection) = send_remote_request(&caller, &relay, http_tx).await?;
-    assert_forwarding_denied(&response, legacy, &service, &network, &unused_backend).await?;
+    assert_forwarding_denied(
+        &response,
+        missing_ingress,
+        &service,
+        &network,
+        &unused_backend,
+    )
+    .await?;
     drop(accepted_connection);
     drop(targets_tx);
+    let payments_manager = relay.take_plugin_manager().await.expect("payments manager");
+    payments_manager.shutdown().await;
+    drop(payments_manager);
     caller.endpoint.close().await;
     relay.endpoint.close().await;
     provider.endpoint.close().await;
@@ -112,16 +122,21 @@ async fn send_remote_request(
 
 async fn assert_forwarding_denied(
     response: &str,
-    legacy: bool,
+    missing_ingress: bool,
     service: &PaymentService,
     network: &Network,
     unused_backend: &tokio::net::TcpListener,
 ) -> Result<()> {
-    assert!(response.starts_with("HTTP/1.1 402"), "{response}");
-    let message = if legacy {
+    let status = if missing_ingress {
+        "HTTP/1.1 402"
+    } else {
+        "HTTP/1.1 503"
+    };
+    assert!(response.starts_with(status), "{response}");
+    let message = if missing_ingress {
         "payment-capable peer required"
     } else {
-        "only locally originated requests may spend this wallet"
+        "unavailable on this execution host"
     };
     assert!(response.contains(message), "{response}");
     assert!(service.ledger.requests()?.is_empty());

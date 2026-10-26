@@ -84,8 +84,8 @@ their operating procedure must include rotation.
 mesh-llm serve --model Qwen3-8B-Q4_K_M --publish --mesh-name "lab-a"
 
 # Join by name from anywhere
-mesh-llm serve --discover "lab-a"
-mesh-llm client --discover "lab-a"
+mesh-llm serve --discover=lab-a
+mesh-llm client --discover=lab-a
 
 # Browse what's out there
 mesh-llm discover
@@ -120,10 +120,10 @@ supplied matching invite token (mDNS advertisements only carry fingerprints).
 
 ```bash
 # Peers on each node (expect N-1)
-curl -s http://localhost:3131/api/status | python3 -m json.tool
+curl -s http://localhost:3131/api/status
 
 # Union of models across the mesh
-curl -s http://localhost:9337/v1/models | python3 -m json.tool
+curl -s http://localhost:9337/v1/models
 
 # Route to a specific peer's model — the response "model" field
 # confirms which node answered

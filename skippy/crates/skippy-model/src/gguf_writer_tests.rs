@@ -14,3 +14,5 @@ include!("gguf_writer_tests/validation.rs");
 include!("gguf_writer_tests/layout.rs");
 include!("gguf_writer_tests/parser.rs");
 include!("gguf_writer_tests/fixtures.rs");
+
+include!("gguf_writer_tests/nemotron_mtp.rs");

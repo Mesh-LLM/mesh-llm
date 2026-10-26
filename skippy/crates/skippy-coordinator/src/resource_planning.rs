@@ -10,10 +10,10 @@ const MIN_AUTO_CONTEXT_LENGTH: u32 = 512;
 /// (see `tools/server/server.cpp`,
 /// `"n_parallel is set to auto, using n_parallel = 4 and kv_unified = true"`).
 ///
-/// Skippy's stage runtime always sets `kv_unified = true`. It allocates one
-/// pool of `context_length × lane_count` cells so every lane can reach its
-/// requested context concurrently. The ceiling of four limits the default
-/// concurrency independently of the pool's memory cost.
+/// With the default `kv_unified = auto`, Skippy enables a shared KV pool when
+/// more than one lane is selected. It allocates `context_length × lane_count`
+/// cells so every lane can reach its requested context concurrently. The
+/// ceiling of four limits default concurrency independently of pool cost.
 ///
 /// Concrete failure mode that prompted this change: Qwen3-8B on a
 /// 32k `n_ctx` got `slots = 16`. Three concurrent agent-shape

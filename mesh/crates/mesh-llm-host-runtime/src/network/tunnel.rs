@@ -9,15 +9,10 @@ use anyhow::{Context, Result};
 use iroh::EndpointId;
 use prost::Message;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::net::TcpStream;
 
 mod inbound_http;
-mod remote_origin;
-pub(crate) use remote_origin::RemoteBridge;
-#[cfg(feature = "payments")]
-pub(crate) use remote_origin::is_remote_bridge;
 
 fn quic_response_first_byte_timeout() -> Duration {
     Duration::from_secs(5 * 60)
@@ -33,7 +28,6 @@ pub(super) struct HttpIngress {
 #[derive(Clone)]
 pub struct Manager {
     node: Node,
-    http_port: Arc<AtomicU16>,
     http_ingress: Arc<std::sync::RwLock<Option<HttpIngress>>>,
 }
 
@@ -60,29 +54,21 @@ impl Manager {
     ) -> Result<Self> {
         let mgr = Manager {
             node: node.clone(),
-            http_port: Arc::new(AtomicU16::new(0)),
             http_ingress: Arc::new(std::sync::RwLock::new(None)),
         };
 
         // Handle inbound HTTP tunnel streams in-process when the runtime has
-        // installed direct ingress; retain the legacy port fallback for embedders.
-        let http_port_ref = mgr.http_port.clone();
+        // installed direct ingress; otherwise reject the request.
         let http_ingress_ref = mgr.http_ingress.clone();
         let http_node = mgr.node.clone();
         tokio::spawn(async move {
             while let Some((remote, send, recv)) = tunnel_http_rx.recv().await {
                 let ingress = http_ingress_ref.read().ok().and_then(|guard| guard.clone());
-                let port = http_port_ref.load(Ordering::Relaxed);
-                if ingress.is_none() && port == 0 {
-                    tracing::warn!("Inbound HTTP tunnel but no OpenAI surface running, dropping");
-                    continue;
-                }
                 let node = http_node.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = inbound_http::handle_inbound_http_stream(
-                        node, remote, send, recv, port, ingress,
-                    )
-                    .await
+                    if let Err(e) =
+                        inbound_http::handle_inbound_http_stream(node, remote, send, recv, ingress)
+                            .await
                     {
                         tracing::warn!("Inbound HTTP tunnel stream error: {e}");
                     }
@@ -119,11 +105,6 @@ impl Manager {
         }
         tracing::info!("Tunnel manager: direct HTTP ingress enabled");
     }
-
-    /// Update the compatibility API proxy port used until direct ingress is installed.
-    pub fn set_http_port(&self, port: u16) {
-        self.http_port.store(port, Ordering::Relaxed);
-    }
 }
 
 async fn handle_inbound_stage_transport(
@@ -139,6 +120,13 @@ async fn handle_inbound_stage_transport(
         .map_err(|e| anyhow::anyhow!("StageTransportOpen validation error: {e}"))?;
     if open.requester_id.as_slice() != remote.as_bytes() {
         anyhow::bail!("stage transport requester_id does not match QUIC peer identity");
+    }
+    if !node.stage_transport_allowed(remote, &open).await {
+        anyhow::bail!(
+            "stage transport requester is not part of topology {} / {}",
+            open.topology_id,
+            open.run_id
+        );
     }
 
     let bind_addr = resolve_stage_transport_bind_addr(&node, &open).await?;

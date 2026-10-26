@@ -239,7 +239,7 @@ impl InboundMessageReader {
                 // never wrap, or the reader parks on the ceiling forever.
                 let bytes = message.estimated_wire_bytes();
                 self.queued_bytes
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
                         Some(queued.saturating_sub(bytes))
                     })
                     .ok();

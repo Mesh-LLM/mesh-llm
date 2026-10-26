@@ -1,9 +1,10 @@
 use crate::runtime_state::RuntimeState;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use sha2::Digest;
 use sha2::Sha256;
 use skippy_inference_api::FinishReason;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -91,10 +92,8 @@ pub(super) fn stable_wire_id(parts: &[&[u8]]) -> u64 {
 pub(super) fn token_is_eog_with_runtime(
     runtime: &Arc<Mutex<RuntimeState>>,
     token_id: i32,
-) -> OpenAiResult<bool> {
-    let runtime = runtime
-        .lock()
-        .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+) -> InferenceResult<bool> {
+    let runtime = lock_runtime(runtime);
     runtime
         .model
         .token_is_eog(token_id)
@@ -109,12 +108,21 @@ pub(super) fn us_to_ms(us: i64) -> f64 {
     us as f64 / 1000.0
 }
 
-pub(super) fn openai_backend_error(error: anyhow::Error) -> OpenAiError {
-    OpenAiError::backend(error.to_string())
+pub(super) fn openai_backend_error(error: anyhow::Error) -> InferenceError {
+    InferenceError::backend(error.to_string())
 }
 
-pub(super) fn openai_io_error(error: std::io::Error) -> OpenAiError {
-    OpenAiError::backend(error.to_string())
+/// Maps a media prefill failure: media the request was not allowed to send
+/// is the client's error, anything else is the backend's.
+pub(super) fn openai_media_error(error: anyhow::Error) -> InferenceError {
+    match error.downcast_ref::<skippy_runtime::MediaRejected>() {
+        Some(rejected) => InferenceError::invalid_request(rejected.to_string()),
+        None => openai_backend_error(error),
+    }
+}
+
+pub(super) fn openai_io_error(error: std::io::Error) -> InferenceError {
+    InferenceError::backend(error.to_string())
 }
 
 #[cfg(test)]
@@ -151,13 +159,30 @@ pub(super) fn finish_reason_for_generation(exhausted_max_tokens: bool) -> Finish
 pub(super) fn context_budget_completion_tokens(
     prompt_token_count: usize,
     ctx_size: usize,
-) -> OpenAiResult<u32> {
+) -> InferenceResult<u32> {
     if prompt_token_count > ctx_size {
-        return Err(OpenAiError::context_length_exceeded(format!(
+        return Err(InferenceError::context_length_exceeded(format!(
             "requested prompt tokens ({prompt_token_count}) exceed context window ({ctx_size})"
         )));
     }
     Ok(ctx_size
         .saturating_sub(prompt_token_count)
         .min(u32::MAX as usize) as u32)
+}
+
+#[cfg(test)]
+mod media_error_tests {
+    use super::*;
+
+    #[test]
+    fn rejected_media_is_an_invalid_request() {
+        let rejected = anyhow::Error::new(skippy_runtime::MediaRejected::new("image too large"))
+            .context("prefill media");
+        let error = openai_media_error(rejected);
+        assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(error.to_string().contains("image too large"), "{error}");
+
+        let failed = openai_media_error(anyhow::anyhow!("native decode failed"));
+        assert_eq!(failed.status(), axum::http::StatusCode::BAD_GATEWAY);
+    }
 }

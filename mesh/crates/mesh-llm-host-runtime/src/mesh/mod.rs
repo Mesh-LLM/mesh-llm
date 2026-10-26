@@ -30,9 +30,9 @@ use self::requirements::{
     evaluate_direct_peer_admission, peer_release_attestation_status,
 };
 use crate::crypto::{
-    DEFAULT_NODE_CERT_LIFETIME_SECS, OwnershipSummary, SignedNodeOwnership, TrustPolicy,
-    TrustStore, default_node_ownership_path, save_node_ownership, sign_node_ownership,
-    verify_node_ownership,
+    DEFAULT_NODE_CERT_LIFETIME_SECS, DEFAULT_NODE_CERT_RENEW_WINDOW_SECS, OwnershipSummary,
+    SignedNodeOwnership, TrustPolicy, TrustStore, certificate_needs_renewal,
+    default_node_ownership_path, save_node_ownership, sign_node_ownership, verify_node_ownership,
 };
 use crate::protocol::*;
 
@@ -100,6 +100,7 @@ mod plugin_config;
 pub(crate) mod plugin_keys;
 mod plugin_mesh;
 mod plugin_streams;
+mod pre_admission;
 pub mod requirements;
 mod signed_records;
 mod stage_artifacts;

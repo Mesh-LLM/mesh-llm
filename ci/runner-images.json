@@ -273,32 +273,6 @@
     }
   },
   "consumer_roles": {
-    "skippy-cli-linux": {
-      "image_id": "public-cpu",
-      "scope": "ordinary",
-      "bindings": [
-        {
-          "workflow": "ci-skippy-cli-slice.yml",
-          "job": "linux_cli",
-          "matrix_selector": null,
-          "image_expression": "{image}",
-          "epoch_field": null
-        }
-      ]
-    },
-    "skippy-product-linux": {
-      "image_id": "public-cpu",
-      "scope": "ordinary",
-      "bindings": [
-        {
-          "workflow": "ci-skippy-product-slice.yml",
-          "job": "linux_product",
-          "matrix_selector": null,
-          "image_expression": "{image}",
-          "epoch_field": null
-        }
-      ]
-    },
     "rust-clippy": {
       "image_id": "public-cpu",
       "scope": "ordinary",
@@ -714,6 +688,19 @@
       "image_id": "public-web",
       "scope": "release"
     },
+    "release-ui-stamp": {
+      "image_id": "public-cpu",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "ci-ui-artifact-slice.yml",
+          "job": "ui_stamp",
+          "matrix_selector": null,
+          "image_expression": "{image}",
+          "epoch_field": null
+        }
+      ]
+    },
     "runtime-seed-canary": {
       "image_id": "public-cpu",
       "scope": "ordinary",
@@ -762,6 +749,32 @@
           "job": "publish",
           "matrix_selector": null,
           "image_expression": "{image}",
+          "epoch_field": null
+        }
+      ]
+    },
+    "skippy-cli-linux": {
+      "image_id": "public-cpu",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "ci-skippy-cli-slice.yml",
+          "job": "linux_cli",
+          "matrix_selector": null,
+          "image_expression": "{image}",
+          "epoch_field": null
+        }
+      ]
+    },
+    "skippy-product-linux": {
+      "image_id": "public-cpu",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "ci-skippy-product-slice.yml",
+          "job": "linux_product",
+          "matrix_selector": null,
+          "image_expression": "${{ !((matrix.runtime.backend == 'cuda' && needs.runner_policy.outputs.cuda == 'true') || (matrix.runtime.backend == 'rocm' && needs.runner_policy.outputs.rocm == 'true') || (matrix.runtime.backend == 'vulkan' && needs.runner_policy.outputs.vulkan == 'true')) && '{image}' || '' }}",
           "epoch_field": null
         }
       ]

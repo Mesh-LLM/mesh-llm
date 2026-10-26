@@ -28,7 +28,7 @@ use crate::chat::{
 };
 use crate::common::{FinishReason, Usage};
 use crate::common::{PromptCacheRetention, ReasoningConfig, ReasoningEffort};
-use crate::errors::OpenAiError;
+use crate::errors::InferenceError;
 
 /// Anthropic stop reasons. `refusal` maps from the OpenAI content-filter
 /// finish reason; the `error` stop reason is produced only by in-band
@@ -41,12 +41,12 @@ pub const STOP_REASON_REFUSAL: &str = "refusal";
 /// Translate a Messages request into the internal chat request.
 pub fn messages_request_to_chat_request(
     mut request: AnthropicMessagesRequest,
-) -> Result<ChatCompletionRequest, OpenAiError> {
+) -> Result<ChatCompletionRequest, InferenceError> {
     if request.model.trim().is_empty() {
-        return Err(OpenAiError::invalid_request("model is required"));
+        return Err(InferenceError::invalid_request("model is required"));
     }
     if request.messages.is_empty() {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "messages: at least one message is required",
         ));
     }
@@ -67,7 +67,7 @@ pub fn messages_request_to_chat_request(
         .cloned()
         .map(serde_json::from_value)
         .transpose()
-        .map_err(|_| OpenAiError::invalid_request("unsupported output_config.effort"))?;
+        .map_err(|_| InferenceError::invalid_request("unsupported output_config.effort"))?;
     let reasoning = request
         .extra
         .remove("thinking")
@@ -95,7 +95,7 @@ pub fn messages_request_to_chat_request(
             )
         }
         Some(_) => {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "output_config.format requires a json_schema object",
             ));
         }
@@ -105,13 +105,13 @@ pub fn messages_request_to_chat_request(
         .remove("prompt_cache_key")
         .map(serde_json::from_value)
         .transpose()
-        .map_err(|_| OpenAiError::invalid_request("prompt_cache_key must be a string"))?;
+        .map_err(|_| InferenceError::invalid_request("prompt_cache_key must be a string"))?;
     let explicit_prompt_cache_retention = request
         .extra
         .remove("prompt_cache_retention")
         .map(serde_json::from_value)
         .transpose()
-        .map_err(|_| OpenAiError::invalid_request("unsupported prompt_cache_retention"))?;
+        .map_err(|_| InferenceError::invalid_request("unsupported prompt_cache_retention"))?;
     let prompt_cache_retention = explicit_prompt_cache_retention
         .or_else(|| request_uses_cache_control(&request).then_some(PromptCacheRetention::InMemory));
     let mut messages = Vec::new();
@@ -124,7 +124,7 @@ pub fn messages_request_to_chat_request(
     for (turn_index, message) in request.messages.iter().enumerate() {
         let role = message.role.as_str();
         if role != "user" && role != "assistant" && role != "system" {
-            return Err(OpenAiError::invalid_request(format!(
+            return Err(InferenceError::invalid_request(format!(
                 "messages[{turn_index}]: role must be `user`, `assistant`, or the Claude Code `system` extension, got `{role}`"
             )));
         }
@@ -180,10 +180,10 @@ pub fn messages_request_to_chat_request(
     })
 }
 
-fn reasoning_from_thinking(value: &Value) -> Result<ReasoningConfig, OpenAiError> {
+fn reasoning_from_thinking(value: &Value) -> Result<ReasoningConfig, InferenceError> {
     let kind = value["type"]
         .as_str()
-        .ok_or_else(|| OpenAiError::invalid_request("thinking.type is required"))?;
+        .ok_or_else(|| InferenceError::invalid_request("thinking.type is required"))?;
     Ok(match kind {
         "adaptive" => ReasoningConfig {
             enabled: Some(true),
@@ -199,7 +199,7 @@ fn reasoning_from_thinking(value: &Value) -> Result<ReasoningConfig, OpenAiError
             effort: Some(ReasoningEffort::None),
             ..Default::default()
         },
-        _ => return Err(OpenAiError::invalid_request("unsupported thinking.type")),
+        _ => return Err(InferenceError::invalid_request("unsupported thinking.type")),
     })
 }
 
@@ -245,7 +245,7 @@ fn expand_message(
     role: &str,
     content: &AnthropicMessageContent,
     out: &mut Vec<ChatMessage>,
-) -> Result<(), OpenAiError> {
+) -> Result<(), InferenceError> {
     match content {
         AnthropicMessageContent::Text(text) => {
             if !text.is_empty() {
@@ -324,7 +324,7 @@ fn expand_message(
                         out.push(text_message("user", &text_parts.join("\n")));
                     }
                     if text_parts.is_empty() && media_parts.is_empty() && !has_tool_results {
-                        return Err(OpenAiError::invalid_request(
+                        return Err(InferenceError::invalid_request(
                             "messages: user message has no content",
                         ));
                     }
@@ -350,9 +350,9 @@ fn expand_message(
     }
 }
 
-fn image_part(value: &Value) -> Result<MessageContentPart, OpenAiError> {
+fn image_part(value: &Value) -> Result<MessageContentPart, InferenceError> {
     if value.get("type").and_then(Value::as_str) != Some("image") {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "unsupported Anthropic content block",
         ));
     }
@@ -360,7 +360,7 @@ fn image_part(value: &Value) -> Result<MessageContentPart, OpenAiError> {
         .as_object()
         .is_none_or(|object| object.keys().any(|key| key != "type" && key != "source"))
     {
-        return Err(OpenAiError::invalid_request("unsupported image field"));
+        return Err(InferenceError::invalid_request("unsupported image field"));
     }
     let source = &value["source"];
     if source.as_object().is_none_or(|object| {
@@ -368,7 +368,7 @@ fn image_part(value: &Value) -> Result<MessageContentPart, OpenAiError> {
             .keys()
             .any(|key| !["type", "url", "media_type", "data"].contains(&key.as_str()))
     }) {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "unsupported image source field",
         ));
     }
@@ -384,7 +384,7 @@ fn image_part(value: &Value) -> Result<MessageContentPart, OpenAiError> {
         _ => None,
     }
     .ok_or_else(|| {
-        OpenAiError::invalid_request("image source requires url or base64 media_type/data")
+        InferenceError::invalid_request("image source requires url or base64 media_type/data")
     })?;
     Ok(MessageContentPart {
         content_type: "image_url".into(),
@@ -404,7 +404,7 @@ fn text_message(role: &str, text: &str) -> ChatMessage {
 fn tool_result_content(
     content: &Option<Value>,
     is_error: bool,
-) -> Result<MessageContent, OpenAiError> {
+) -> Result<MessageContent, InferenceError> {
     let mut parts = Vec::new();
     if is_error {
         parts.push(MessageContentPart {
@@ -426,12 +426,12 @@ fn tool_result_content(
                     if block.as_object().is_some_and(|object| {
                         object.keys().any(|key| key != "type" && key != "text")
                     }) {
-                        return Err(OpenAiError::invalid_request(
+                        return Err(InferenceError::invalid_request(
                             "unsupported tool_result text field",
                         ));
                     }
                     let text = block["text"].as_str().ok_or_else(|| {
-                        OpenAiError::invalid_request("tool_result text is required")
+                        InferenceError::invalid_request("tool_result text is required")
                     })?;
                     parts.push(MessageContentPart {
                         content_type: "text".into(),
@@ -444,7 +444,7 @@ fn tool_result_content(
             }
         }
         _ => {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "tool_result content must be text or content blocks",
             ));
         }
@@ -464,11 +464,11 @@ fn tool_result_content(
 
 fn translate_tools(
     tools: &[crate::anthropic::protocol::AnthropicToolDefinition],
-) -> Result<Value, OpenAiError> {
+) -> Result<Value, InferenceError> {
     let mut translated = Vec::with_capacity(tools.len());
     for (index, tool) in tools.iter().enumerate() {
         if tool.name.trim().is_empty() {
-            return Err(OpenAiError::invalid_request(format!(
+            return Err(InferenceError::invalid_request(format!(
                 "tools[{index}].name must be a non-empty string"
             )));
         }
@@ -491,14 +491,14 @@ fn translate_tools(
 
 fn translate_tool_choice(
     choice: &crate::anthropic::protocol::AnthropicToolChoice,
-) -> Result<Value, OpenAiError> {
+) -> Result<Value, InferenceError> {
     match choice.kind.as_str() {
         "auto" => Ok(json!("auto")),
         "none" => Ok(json!("none")),
         "any" => Ok(json!("required")),
         "tool" => {
             let Some(name) = choice.name.as_deref() else {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "tool_choice.type `tool` requires tool_choice.name",
                 ));
             };
@@ -507,7 +507,7 @@ fn translate_tool_choice(
                 "function": { "name": name },
             }))
         }
-        other => Err(OpenAiError::invalid_request(format!(
+        other => Err(InferenceError::invalid_request(format!(
             "tool_choice.type must be `auto`, `any`, or `tool`; got `{other}`"
         ))),
     }
@@ -516,9 +516,9 @@ fn translate_tool_choice(
 /// Build the non-streaming Messages response from a chat completion.
 pub fn messages_response_from_chat_response(
     response: &ChatCompletionResponse,
-) -> Result<AnthropicMessagesResponse, OpenAiError> {
+) -> Result<AnthropicMessagesResponse, InferenceError> {
     let Some(choice) = response.choices.first() else {
-        return Err(OpenAiError::internal(
+        return Err(InferenceError::internal(
             "chat completion response had no choices",
         ));
     };
@@ -555,16 +555,16 @@ pub fn messages_response_from_chat_response(
     })
 }
 
-fn tool_use_blocks(tool_calls: &[Value]) -> Result<Vec<AnthropicResponseBlock>, OpenAiError> {
+fn tool_use_blocks(tool_calls: &[Value]) -> Result<Vec<AnthropicResponseBlock>, InferenceError> {
     let mut blocks = Vec::with_capacity(tool_calls.len());
     for (index, tool_call) in tool_calls.iter().enumerate() {
         let Some(function) = tool_call.get("function") else {
-            return Err(OpenAiError::internal(format!(
+            return Err(InferenceError::internal(format!(
                 "tool_calls[{index}] is missing its function object"
             )));
         };
         let Some(name) = function.get("name").and_then(Value::as_str) else {
-            return Err(OpenAiError::internal(format!(
+            return Err(InferenceError::internal(format!(
                 "tool_calls[{index}].function.name is missing"
             )));
         };
@@ -579,12 +579,18 @@ fn tool_use_blocks(tool_calls: &[Value]) -> Result<Vec<AnthropicResponseBlock>, 
             .unwrap_or_else(|| json!("{}"));
         let input = match arguments {
             Value::String(text) => serde_json::from_str(&text)
-                .map_err(|_| OpenAiError::backend("tool arguments are not valid JSON"))?,
+                .map_err(|_| InferenceError::backend("tool arguments are not valid JSON"))?,
             Value::Object(_) => arguments,
-            _ => return Err(OpenAiError::backend("tool arguments must be a JSON object")),
+            _ => {
+                return Err(InferenceError::backend(
+                    "tool arguments must be a JSON object",
+                ));
+            }
         };
         if !input.is_object() {
-            return Err(OpenAiError::backend("tool arguments must be a JSON object"));
+            return Err(InferenceError::backend(
+                "tool arguments must be a JSON object",
+            ));
         }
         blocks.push(AnthropicResponseBlock::ToolUse {
             id,

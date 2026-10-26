@@ -6,18 +6,18 @@ use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::util::context_budget_completion_tokens;
 use crate::runtime_state::RuntimeState;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
 use anyhow::Result;
-use anyhow::anyhow;
 use anyhow::bail;
 use axum::http::StatusCode;
 use serde_json::json;
 use skippy_inference_api::CancellationToken;
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiErrorKind;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceErrorKind;
+use skippy_inference_api::InferenceResult;
 use skippy_protocol::StageConfig;
 use skippy_scheduler::{CacheAffinity, CacheAwareCandidate, order_cache_aware_candidates};
 use std::collections::BTreeMap;
@@ -126,7 +126,7 @@ impl GenerationAdmissionQueue {
         scheduling: GenerationAdmissionScheduling,
         generation_queue_depth: Arc<AtomicUsize>,
         generation_queue_limit: usize,
-    ) -> OpenAiResult<GenerationAdmissionClaim> {
+    ) -> InferenceResult<GenerationAdmissionClaim> {
         // Validate an impossible request before queue capacity or current load
         // can disguise it as transient overload.
         let _ = token_budget.can_reserve_now(token_budget_request)?;
@@ -178,7 +178,10 @@ impl GenerationAdmissionQueue {
         self.changed.notify_waiters();
     }
 
-    fn selected_waiter(&self, token_budget: &GenerationTokenBudget) -> OpenAiResult<Option<u64>> {
+    fn selected_waiter(
+        &self,
+        token_budget: &GenerationTokenBudget,
+    ) -> InferenceResult<Option<u64>> {
         // Notify wakes the whole waiting set. Serialize and memoize one
         // election per available lane so N waiters do not each refresh and
         // sort the same N affinities.
@@ -331,10 +334,10 @@ impl GenerationAdmissionQueueLease {
         admission_timeout: Duration,
         deadline: Option<Instant>,
         cancellation: &CancellationToken,
-    ) -> OpenAiResult<GenerationAdmissionResources> {
+    ) -> InferenceResult<GenerationAdmissionResources> {
         loop {
             if cancellation.is_cancelled() {
-                return Err(OpenAiError::cancelled("request cancelled"));
+                return Err(InferenceError::cancelled("request cancelled"));
             }
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Err(generation_queue_timeout_error(admission_timeout));
@@ -364,7 +367,7 @@ impl GenerationAdmissionQueueLease {
                     () = &mut token_released => {}
                     () = timeout => return Err(generation_queue_timeout_error(admission_timeout)),
                     () = cancellation.cancelled() => {
-                        return Err(OpenAiError::cancelled("request cancelled"));
+                        return Err(InferenceError::cancelled("request cancelled"));
                     }
                 }
             } else {
@@ -372,7 +375,7 @@ impl GenerationAdmissionQueueLease {
                     () = &mut notified => {}
                     () = &mut token_released => {}
                     () = cancellation.cancelled() => {
-                        return Err(OpenAiError::cancelled("request cancelled"));
+                        return Err(InferenceError::cancelled("request cancelled"));
                     }
                 }
             }
@@ -384,7 +387,7 @@ fn try_acquire_generation_resources(
     generation_limit: Arc<Semaphore>,
     token_budget: &Arc<GenerationTokenBudget>,
     token_budget_request: GenerationTokenBudgetRequest,
-) -> OpenAiResult<Option<GenerationAdmissionResources>> {
+) -> InferenceResult<Option<GenerationAdmissionResources>> {
     let lane = match generation_limit.try_acquire_owned() {
         Ok(lane) => lane,
         Err(tokio::sync::TryAcquireError::NoPermits) => return Ok(None),
@@ -659,9 +662,9 @@ pub(in crate::frontend) async fn acquire_generation_permit_with_queue_reservatio
     admission_timeout: Duration,
     deadline: Instant,
     cancellation: &CancellationToken,
-) -> OpenAiResult<OwnedSemaphorePermit> {
+) -> InferenceResult<OwnedSemaphorePermit> {
     if cancellation.is_cancelled() {
-        return Err(OpenAiError::cancelled("request cancelled"));
+        return Err(InferenceError::cancelled("request cancelled"));
     }
 
     let timeout = tokio::time::timeout_at(
@@ -674,7 +677,7 @@ pub(in crate::frontend) async fn acquire_generation_permit_with_queue_reservatio
             match result {
                 Ok(Ok(permit)) if cancellation.is_cancelled() => {
                     drop(permit);
-                    Err(OpenAiError::cancelled("request cancelled"))
+                    Err(InferenceError::cancelled("request cancelled"))
                 }
                 Ok(Ok(permit)) => Ok(permit),
                 Ok(Err(_)) => Err(generation_lanes_busy_error()),
@@ -683,7 +686,7 @@ pub(in crate::frontend) async fn acquire_generation_permit_with_queue_reservatio
         }
         () = cancellation.cancelled() => {
             drop(reservation);
-            Err(OpenAiError::cancelled("request cancelled"))
+            Err(InferenceError::cancelled("request cancelled"))
         }
     }
 }
@@ -694,7 +697,7 @@ pub(in crate::frontend) async fn acquire_generation_permit_with_queue(
     generation_queue_depth: Arc<AtomicUsize>,
     generation_queue_limit: usize,
     admission_timeout: Duration,
-) -> OpenAiResult<OwnedSemaphorePermit> {
+) -> InferenceResult<OwnedSemaphorePermit> {
     let deadline = Instant::now() + admission_timeout;
     match generation_limit.clone().try_acquire_owned() {
         Ok(permit) => return Ok(permit),
@@ -774,7 +777,7 @@ impl GenerationTokenLimit {
         self,
         prompt_token_count: usize,
         ctx_size: usize,
-    ) -> OpenAiResult<u32> {
+    ) -> InferenceResult<u32> {
         match self {
             Self::Explicit(max_tokens) => {
                 // Client-asserted ceiling. `max_tokens` is an upper bound on
@@ -812,9 +815,7 @@ pub(in crate::frontend) fn prewarm_generation_sessions(
     event_name: &'static str,
 ) -> Result<()> {
     let timer = PhaseTimer::start();
-    let mut runtime = runtime
-        .lock()
-        .map_err(|_| anyhow!("runtime lock poisoned"))?;
+    let mut runtime = lock_runtime(runtime);
     let generation_graph_warmed = runtime.warmup_generation_graph()?;
     let sessions = runtime.prewarm_idle_sessions(generation_concurrency)?;
     let mut attrs = lifecycle_attrs(config);
@@ -865,28 +866,28 @@ pub(in crate::frontend) fn ensure_generation_concurrency_fits_lanes(
     Ok(())
 }
 
-pub(in crate::frontend) fn generation_lanes_busy_error() -> OpenAiError {
-    OpenAiError::from_kind(
+pub(in crate::frontend) fn generation_lanes_busy_error() -> InferenceError {
+    InferenceError::from_kind(
         StatusCode::TOO_MANY_REQUESTS,
-        OpenAiErrorKind::RateLimit,
+        InferenceErrorKind::RateLimit,
         "all execution lanes are busy",
     )
     .with_retry_after_secs(GENERATION_RETRY_AFTER_SECS)
 }
 
-pub(in crate::frontend) fn generation_queue_full_error() -> OpenAiError {
-    OpenAiError::from_kind(
+pub(in crate::frontend) fn generation_queue_full_error() -> InferenceError {
+    InferenceError::from_kind(
         StatusCode::TOO_MANY_REQUESTS,
-        OpenAiErrorKind::RateLimit,
+        InferenceErrorKind::RateLimit,
         "generation queue is full; retry later",
     )
     .with_retry_after_secs(GENERATION_RETRY_AFTER_SECS)
 }
 
-pub(in crate::frontend) fn generation_queue_timeout_error(timeout: Duration) -> OpenAiError {
-    OpenAiError::from_kind(
+pub(in crate::frontend) fn generation_queue_timeout_error(timeout: Duration) -> InferenceError {
+    InferenceError::from_kind(
         StatusCode::TOO_MANY_REQUESTS,
-        OpenAiErrorKind::RateLimit,
+        InferenceErrorKind::RateLimit,
         format!(
             "timed out waiting for an execution lane after {} seconds",
             timeout.as_secs()
@@ -898,10 +899,10 @@ pub(in crate::frontend) fn generation_queue_timeout_error(timeout: Duration) -> 
 pub(in crate::frontend) fn generation_predicted_wait_error(
     predicted_wait_ms: f64,
     timeout: Duration,
-) -> OpenAiError {
-    OpenAiError::from_kind(
+) -> InferenceError {
+    InferenceError::from_kind(
         StatusCode::TOO_MANY_REQUESTS,
-        OpenAiErrorKind::RateLimit,
+        InferenceErrorKind::RateLimit,
         format!(
             "predicted generation wait {:.3} seconds exceeds the {:.3}-second admission timeout",
             predicted_wait_ms / 1_000.0,

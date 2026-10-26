@@ -27,20 +27,25 @@ with-lld *COMMAND:
 
 [private]
 [windows]
-with-lld *COMMAND:
-    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = 'Stop'; if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }; Invoke-Expression '{{ COMMAND }}'"
+[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+@with-lld *COMMAND:
+    $ErrorActionPreference = 'Stop'
+    if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }
+    $LASTEXITCODE = 0
+    Invoke-Expression '{{ COMMAND }}'
+    exit $LASTEXITCODE
 
 
 # Build both local products for the current platform: Skippy, then MeshLLM.
 # The MeshLLM host stays backend-neutral beside Skippy's packaged runtime.
 [macos]
 build backend="" cuda_arch="" rocm_arch="":
-    @python3 scripts/manage-build-cache.py build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+    @just automation-run ci-ops build-cache build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Fast local iteration build: dynamic host + adjacent native runtime + UI.
 [macos]
 build-dev:
-    @python3 scripts/manage-build-cache.py build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev
+    @just automation-run ci-ops build-cache build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev
 
 # Linux overrides:
 #   just build backend=cpu
@@ -49,12 +54,12 @@ build-dev:
 # just build backend=vulkan
 [linux]
 build backend="" cuda_arch="" rocm_arch="":
-    @python3 scripts/manage-build-cache.py build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+    @just automation-run ci-ops build-cache build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Fast local iteration build: dynamic host + adjacent native runtime + UI.
 [linux]
 build-dev backend="" cuda_arch="" rocm_arch="":
-    @python3 scripts/manage-build-cache.py build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+    @just automation-run ci-ops build-cache build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
 # Windows overrides:
 #   just build backend=cpu

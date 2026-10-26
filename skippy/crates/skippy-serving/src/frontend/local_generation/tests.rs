@@ -5,11 +5,12 @@ use std::sync::{
 use std::{thread, time::Duration};
 
 use super::token_generation::capture_trace;
+use super::token_generation::ensure_readable_logprobs;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::{
-    GenerationConcurrencyController, LocalGeneration, OpenAiBackendMode, OpenAiCacheHints,
-    OpenAiGenerationIds, StageOpenAiBackend, TokenControl,
+    GenerationConcurrencyController, InferenceBackendMode, InferenceCacheHints,
+    InferenceGenerationIds, LocalGeneration, StageOpenAiBackend, TokenControl,
 };
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::local_generation::{
@@ -24,10 +25,8 @@ use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::{RuntimeState, load_runtime};
 use crate::telemetry::{Telemetry, TelemetryLevel};
 use anyhow::{Result, bail};
-use skippy_inference_api::{ChatCompletionRequest, OpenAiBackend};
-use skippy_protocol::{
-    LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-};
+use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
+use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
 // The real-model tests below are deliberately ignored by default. The
@@ -229,7 +228,6 @@ fn recurrent_test_backend(
         kv_cache: Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::KvRecurrent,
             max_entries: 8,
             max_bytes: 0,
             l2_max_bytes: 0,
@@ -247,9 +245,10 @@ fn recurrent_test_backend(
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
-    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)?
-        .map(Arc::new)
-        .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
+    let kv =
+        KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Recurrent)?
+            .map(Arc::new)
+            .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
     let iteration_scheduler =
@@ -264,7 +263,7 @@ fn recurrent_test_backend(
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         thinking: None,
         ctx_size,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
@@ -321,7 +320,7 @@ fn local_generation_signal_window_uses_configured_value() {
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         thinking: None,
         ctx_size: 4096,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
@@ -399,8 +398,8 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
     )?;
     let sampling = SamplingConfig::default();
     let first_prompt = [1, 2, 3];
-    let first_ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let first_ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         Some("recurrent-cache-test"),
         true,
         None,
@@ -464,8 +463,8 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
         first_output[0],
         4,
     ];
-    let second_ids = OpenAiGenerationIds::new_with_trust(
-        OpenAiCacheHints::default(),
+    let second_ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
         Some("recurrent-cache-test"),
         true,
         None,
@@ -805,7 +804,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
         thinking: None,
         ctx_size: 128,
-        mode: OpenAiBackendMode::LocalRuntime,
+        mode: InferenceBackendMode::LocalRuntime,
         draft: None,
         speculative_window: 0,
         adaptive_speculative_window: false,
@@ -832,7 +831,8 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     // above one token so the test exercises a fresh runtime session before
     // its batch size is queried.
     let prompt_token_ids = [1, 2];
-    let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+    let ids =
+        InferenceGenerationIds::new_with_trust(InferenceCacheHints::default(), None, false, None);
     let mut emitted = Vec::new();
     backend.generate_local_tokens(
         LocalGeneration {
@@ -888,7 +888,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
 
     sink.fail.store(true, Ordering::Relaxed);
     let failing_ids =
-        OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
+        InferenceGenerationIds::new_with_trust(InferenceCacheHints::default(), None, false, None);
     backend.generate_local_tokens(
         LocalGeneration {
             prompt_token_ids: &prompt_token_ids,
@@ -917,4 +917,27 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     );
 
     Ok(())
+}
+
+#[test]
+fn unreadable_logprobs_fail_the_request() {
+    let readable = skippy_runtime::TokenLogprobs {
+        token: 7,
+        logprob: -0.25,
+        top: vec![(7, -0.25), (9, -1.5)],
+    };
+    assert!(ensure_readable_logprobs(std::slice::from_ref(&readable)).is_ok());
+
+    let unreadable_token = skippy_runtime::TokenLogprobs {
+        logprob: f32::NAN,
+        top: Vec::new(),
+        ..readable.clone()
+    };
+    assert!(ensure_readable_logprobs(&[readable.clone(), unreadable_token]).is_err());
+
+    let unreadable_alternative = skippy_runtime::TokenLogprobs {
+        top: vec![(7, -0.25), (9, f32::NAN)],
+        ..readable
+    };
+    assert!(ensure_readable_logprobs(&[unreadable_alternative]).is_err());
 }

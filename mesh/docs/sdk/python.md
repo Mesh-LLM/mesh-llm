@@ -1,3 +1,11 @@
+# Python SDK source ownership
+
+The Python package, generated UniFFI bindings, SDK tests and real OpenAI/LiteLLM/LangChain/embedding clients are owned by the separately versioned `Mesh-LLM/mesh-llm-python-sdk` project. Both extracted projects are published; fresh anonymous restore and native source admission passed for the [SDK descriptor](../../../ci/required-sdk-python/sdk-source.json) and [research descriptor](../../../ci/python-research-source.json). This source proof does not qualify hosted workflows, installed SDKs, native bridges, models or a new PyPI release.
+
+Mesh preparation restores the exact commit in `ci/required-sdk-python/sdk-source.json` and admits its manifest and all tracked file hashes through `automation smoke-observation sdk-source`. Local preparation must set `MESH_PYTHON_SDK_SOURCE` to an absolute checkout of that pinned source. Runtime SDK execution is offline and does not resolve dependencies or compile a native bridge. The compatibility and embedding checks keep their required cadence.
+
+SDK binding generation belongs to the external producer: pass an explicit Mesh source checkout and an existing UniFFI 0.32.0 generator. Packaging consumes an explicitly supplied, already built Mesh FFI library; it does not infer a neighboring Mesh checkout. The native bridge source/API and runtime ABI remain Mesh-owned and must match the generated binding artifact.
+
 # Python SDK
 
 The Python package exposes one `Node` with `client`, `serve`, and `combined`

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mesh-llm.dev/schemas/ci-plan.schema.json",
   "title": "MeshLLM CI plan",
-  "$comment": "This schema validates the transport shape. Consumers must obtain plans from scripts/plan-ci.py, whose semantic validation additionally enforces unique matrix IDs and requires reasons, dependencies, runner_roles, and cache_modes to be keyed exactly by required_slices.",
+  "$comment": "This schema validates the transport shape. Consumers must obtain plans from cargo xtool ci plan, whose semantic validation additionally enforces unique matrix IDs and requires reasons, dependencies, runner_roles, and cache_modes to be keyed exactly by required_slices.",
   "type": "object",
   "additionalProperties": false,
   "required": [

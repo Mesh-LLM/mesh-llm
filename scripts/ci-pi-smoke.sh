@@ -4,6 +4,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Frozen automation selection begins.
+agent_automation_home="${HOME:-}"
+agent_automation=(env "HOME=$agent_automation_home" just --justfile "$ROOT/Justfile" automation-run)
+if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
+  if [[ "$MESH_LLM_AUTOMATION_BIN" != /* || ! -f "$MESH_LLM_AUTOMATION_BIN" || ! -x "$MESH_LLM_AUTOMATION_BIN" ]]; then
+    echo 'MESH_LLM_AUTOMATION_BIN must be an absolute executable' >&2
+    exit 1
+  fi
+  agent_automation=("$MESH_LLM_AUTOMATION_BIN")
+fi
+# Frozen automation selection ends.
 # shellcheck source=scripts/ci-agent-live-fixture-lib.sh
 source "${SCRIPT_DIR}/ci-agent-live-fixture-lib.sh"
 
@@ -35,38 +47,9 @@ ERROR_LOG="${PI_SMOKE_ERROR_LOG:-${WORK_DIR}/pi-stderr.log}"
 PROMPT="$(agent_smoke_prompt)"
 INITIAL_IMPL_SHA="$(agent_smoke_write_fixture "$WORK_DIR")"
 
+mkdir -p "${WORK_DIR}/home/.pi/agent"
+"${agent_automation[@]}" automation agent-client-config pi "$BASE_URL" "$MODEL" "${WORK_DIR}/home/.pi/agent/models.json"
 export HOME="${WORK_DIR}/home"
-mkdir -p "${HOME}/.pi/agent"
-python3 - "$BASE_URL" "$MODEL" "${HOME}/.pi/agent/models.json" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-base_url, model, path = sys.argv[1:4]
-config = {
-    "providers": {
-        "mesh": {
-            "api": "openai-completions",
-            "apiKey": "mesh",
-            "baseUrl": base_url.rstrip("/"),
-            "compat": {
-                "supportsStore": False,
-                "supportsDeveloperRole": False,
-                "supportsUsageInStreaming": True,
-            },
-            "models": [
-                {
-                    "id": model,
-                    "name": model,
-                    "contextWindow": 32768,
-                    "maxTokens": 4096,
-                }
-            ],
-        }
-    }
-}
-Path(path).write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-PY
 
 echo "=== CI Pi Live Smoke ==="
 echo "  mesh:     ${BASE_URL%/}"

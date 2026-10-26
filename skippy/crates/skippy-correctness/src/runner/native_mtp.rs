@@ -324,6 +324,7 @@ mod tests {
             Some(StageNativeMtpDraft {
                 token_ids: vec![12, 13],
                 proposal_compute_us: 34,
+                follows_correction: false,
             }),
         ));
 
@@ -344,6 +345,7 @@ mod tests {
             Some(StageNativeMtpDraft {
                 token_ids: vec![12],
                 proposal_compute_us: 34,
+                follows_correction: false,
             }),
         ));
 
@@ -361,6 +363,7 @@ mod tests {
             Some(StageNativeMtpDraft {
                 token_ids: vec![12],
                 proposal_compute_us: -34,
+                follows_correction: false,
             }),
         ));
 
@@ -376,6 +379,7 @@ mod tests {
             Some(StageNativeMtpDraft {
                 token_ids: vec![12],
                 proposal_compute_us: 34,
+                follows_correction: false,
             }),
         ));
         let optional = NativeMtpRequirement {
@@ -398,6 +402,7 @@ mod tests {
             Some(StageNativeMtpDraft {
                 token_ids: vec![12, 13],
                 proposal_compute_us: 34,
+                follows_correction: false,
             }),
         ));
         let report = native_mtp_verification_report(true, &first, Some(12), Some(12), Some(9))
@@ -429,6 +434,7 @@ mod tests {
             Some(StageNativeMtpDraft {
                 token_ids: vec![12],
                 proposal_compute_us: 34,
+                follows_correction: false,
             }),
         ));
         let report = native_mtp_verification_report(true, &first, Some(13), Some(13), Some(9))

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    errors::OpenAiError,
+    errors::InferenceError,
     system_one::{
         SystemOneAnswer, SystemOneJson, SystemOneJsonObject, SystemOneQuestion, SystemOneRequest,
         SystemOneResponse, SystemOneUsage,
@@ -59,7 +59,7 @@ enum DecisionInputPart {
 }
 
 impl DecisionInput {
-    fn text(&self) -> Result<String, OpenAiError> {
+    fn text(&self) -> Result<String, InferenceError> {
         match self {
             Self::Text(text) => Ok(text.clone()),
             Self::Messages(messages) => {
@@ -71,7 +71,7 @@ impl DecisionInput {
                             .as_deref()
                             .is_some_and(|kind| kind != "message")
                     {
-                        return Err(OpenAiError::invalid_request(
+                        return Err(InferenceError::invalid_request(
                             "Decisions input supports only user messages",
                         ));
                     }
@@ -85,7 +85,7 @@ impl DecisionInput {
                                     }
                                     DecisionInputPart::InputImage { image_url, detail } => {
                                         let _ = (image_url, detail);
-                                        return Err(OpenAiError::unsupported(
+                                        return Err(InferenceError::unsupported(
                                             "Decisions image input is not supported by the local System One backend",
                                         ));
                                     }
@@ -161,7 +161,7 @@ impl DecisionsQuestion {
         }
     }
 
-    fn to_system_one(&self) -> Result<SystemOneQuestion, OpenAiError> {
+    fn to_system_one(&self) -> Result<SystemOneQuestion, InferenceError> {
         match self {
             Self::Predicate { instructions, .. } => Ok(SystemOneQuestion::Noul {
                 instructions: Some(SystemOneJson::from(instructions.as_str())),
@@ -188,7 +188,7 @@ impl DecisionsQuestion {
             Self::Score { levels, .. } => {
                 let mut seen = HashSet::new();
                 if levels.is_empty() || levels.iter().any(|level| !seen.insert(&level.label)) {
-                    return Err(OpenAiError::invalid_request(
+                    return Err(InferenceError::invalid_request(
                         "score levels must have distinct labels",
                     ));
                 }
@@ -216,14 +216,14 @@ impl DecisionsQuestion {
     }
 }
 
-fn choice_keys(choices: &[ChoiceOption]) -> Result<Vec<String>, OpenAiError> {
+fn choice_keys(choices: &[ChoiceOption]) -> Result<Vec<String>, InferenceError> {
     let mut values = HashSet::new();
     if choices.is_empty()
         || choices
             .iter()
             .any(|choice| !values.insert(choice.value.clone()))
     {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "choices must have distinct values",
         ));
     }
@@ -250,9 +250,9 @@ fn choice_keys(choices: &[ChoiceOption]) -> Result<Vec<String>, OpenAiError> {
 }
 
 impl DecisionsRequest {
-    pub(crate) fn to_system_one(&self) -> Result<SystemOneRequest, OpenAiError> {
+    pub(crate) fn to_system_one(&self) -> Result<SystemOneRequest, InferenceError> {
         if self.model.trim().is_empty() || self.questions.is_empty() {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "Decisions needs a model and at least one question",
             ));
         }
@@ -261,7 +261,7 @@ impl DecisionsRequest {
             .as_ref()
             .is_some_and(|value| value.chars().count() > 128)
         {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "safety_identifier exceeds 128 characters",
             ));
         }
@@ -284,33 +284,33 @@ impl DecisionsRequest {
     pub(crate) fn response(
         &self,
         result: SystemOneResponse,
-    ) -> Result<DecisionsResponse, OpenAiError> {
+    ) -> Result<DecisionsResponse, InferenceError> {
         let answers = self.questions.iter().enumerate().map(|(index, question)| {
             let key = format!("question_{index}");
-            let answer = result.answers.get(&key).ok_or_else(|| OpenAiError::backend(format!("Decisions backend omitted answer {key:?}")))?;
+            let answer = result.answers.get(&key).ok_or_else(|| InferenceError::backend(format!("Decisions backend omitted answer {key:?}")))?;
             let name = question.name().map(str::to_owned);
             match (question, answer) {
                 (DecisionsQuestion::Predicate { .. }, SystemOneAnswer::Noul { noul }) =>
                     Ok(DecisionsAnswer::Predicate { name, probability: *noul }),
                 (DecisionsQuestion::Choice { choices, .. }, SystemOneAnswer::Choice { choice, probabilities, confidence }) => {
                     let keys = choice_keys(choices)?;
-                    let selected = keys.iter().position(|key| key == choice).ok_or_else(|| OpenAiError::backend("Decisions backend returned unknown choice"))?;
+                    let selected = keys.iter().position(|key| key == choice).ok_or_else(|| InferenceError::backend("Decisions backend returned unknown choice"))?;
                     let probabilities = choices.iter().zip(keys).map(|(option, key)| Ok(ChoiceProbability {
                         value: option.value.clone(),
-                        probability: *probabilities.get(&key).ok_or_else(|| OpenAiError::backend(format!("Decisions backend omitted probability for {key:?}")))?,
-                    })).collect::<Result<Vec<_>, OpenAiError>>()?;
+                        probability: *probabilities.get(&key).ok_or_else(|| InferenceError::backend(format!("Decisions backend omitted probability for {key:?}")))?,
+                    })).collect::<Result<Vec<_>, InferenceError>>()?;
                     Ok(DecisionsAnswer::Choice { name, choice: choices[selected].value.clone(), probabilities, confidence: *confidence })
                 }
                 (DecisionsQuestion::Score { levels, .. }, SystemOneAnswer::Score { score, probabilities, confidence, .. }) => {
                     let probabilities = levels.iter().enumerate().map(|(index, level)| Ok(ScoreProbability {
                         value: index, label: level.label.clone(),
-                        probability: *probabilities.get(&index.to_string()).ok_or_else(|| OpenAiError::backend(format!("Decisions backend omitted score probability {index}")))?,
-                    })).collect::<Result<Vec<_>, OpenAiError>>()?;
+                        probability: *probabilities.get(&index.to_string()).ok_or_else(|| InferenceError::backend(format!("Decisions backend omitted score probability {index}")))?,
+                    })).collect::<Result<Vec<_>, InferenceError>>()?;
                     Ok(DecisionsAnswer::Score { name, score: *score, probabilities, confidence: *confidence })
                 }
-                _ => Err(OpenAiError::backend(format!("Decisions backend returned wrong answer type for {key:?}"))),
+                _ => Err(InferenceError::backend(format!("Decisions backend returned wrong answer type for {key:?}"))),
             }
-        }).collect::<Result<Vec<_>, OpenAiError>>()?;
+        }).collect::<Result<Vec<_>, InferenceError>>()?;
         Ok(DecisionsResponse {
             model: result.model,
             answers,

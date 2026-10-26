@@ -1,0 +1,839 @@
+{
+  "description": "native windows-runtime-deps cases; code/stdout/stderr/calls are observed scripts/windows-native-runtime-deps.py (python3.13) output with only the case stub directory on PATH. pes are synthetic PE32+ images (see migration_native_policy/pe_stub.rs).",
+  "cases": [
+    {
+      "group": "happy",
+      "name": "verify a closed package",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/ggml-cuda.dll": {
+          "imports": [
+            "KERNEL32.dll",
+            "cudart64_12.dll",
+            "api-ms-win-crt-runtime-l1-1-0.dll",
+            "ext-ms-win-foo.dll",
+            "nvcuda.dll",
+            "VCRUNTIME140.dll"
+          ]
+        },
+        "lib/cudart64_12.dll": {
+          "imports": [
+            "kernel32.dll",
+            "vulkan-1.dll",
+            "ws2_32.dll"
+          ]
+        }
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "verify matches packaged names case-insensitively",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "./lib/"
+      ],
+      "pes": {
+        "lib/mesh.DLL": {
+          "imports": [
+            "GGML.DLL",
+            "msvcp140.dll"
+          ]
+        },
+        "lib/ggml.dll": {
+          "imports": []
+        }
+      },
+      "files": {
+        "lib/readme.txt": "not a dll",
+        "lib/.dll": "hidden",
+        "lib/trailing.dll.": "dot"
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "verify a PE32 image and one without imports",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/x86.dll": {
+          "magic": 267,
+          "imports": [
+            "user32.dll"
+          ]
+        },
+        "lib/bare.dll": {
+          "no_imports": true
+        }
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "verify an empty library directory",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "files": {
+        "lib/notes.txt": "x"
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "collect closes the package transitively",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda/bin",
+        "--search-dir",
+        "missing"
+      ],
+      "pes": {
+        "lib/ggml-cuda.dll": {
+          "imports": [
+            "kernel32.dll",
+            "cudart64_12.dll",
+            "cublas64_12.dll"
+          ]
+        },
+        "cuda/bin/cudart64_12.dll": {
+          "imports": [
+            "kernel32.dll"
+          ]
+        },
+        "cuda/bin/cublas64_12.dll": {
+          "imports": [
+            "cublasLt64_12.dll",
+            "cudart64_12.dll"
+          ]
+        },
+        "cuda/bin/cublasLt64_12.dll": {
+          "imports": [
+            "kernel32.dll"
+          ]
+        },
+        "cuda/bin/unused.dll": {
+          "imports": []
+        }
+      },
+      "code": 0,
+      "stdout": "bundled Windows runtime dependency: cublas64_12.dll\nbundled Windows runtime dependency: cudart64_12.dll\nbundled Windows runtime dependency: cublasLt64_12.dll\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "collect finds dependencies on PATH",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--scan-dir",
+        "bin"
+      ],
+      "pes": {
+        "bin/mesh-llm-runtime.dll": {
+          "imports": [
+            "libgomp-1.dll"
+          ]
+        },
+        ".stub-bin/libgomp-1.dll": {
+          "imports": [
+            "libwinpthread-1.dll"
+          ]
+        },
+        ".stub-bin/libwinpthread-1.dll": {
+          "imports": [
+            "msvcrt.dll"
+          ]
+        }
+      },
+      "files": {
+        "lib/.keep": ""
+      },
+      "code": 0,
+      "stdout": "bundled Windows runtime dependency: libgomp-1.dll\nbundled Windows runtime dependency: libwinpthread-1.dll\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "collect prefers the library directory copy",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "first",
+        "--search-dir",
+        "second"
+      ],
+      "pes": {
+        "lib/ggml.dll": {
+          "imports": [
+            "Dep.dll"
+          ]
+        },
+        "first/DEP.DLL": {
+          "imports": []
+        },
+        "second/dep.dll": {
+          "imports": [
+            "never.dll"
+          ]
+        }
+      },
+      "code": 0,
+      "stdout": "bundled Windows runtime dependency: DEP.DLL\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "collect with nothing to copy",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/ggml.dll": {
+          "imports": [
+            "kernel32.dll"
+          ]
+        }
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "happy",
+      "name": "collect never bundles the host driver",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "driver"
+      ],
+      "pes": {
+        "lib/ggml-cuda.dll": {
+          "imports": [
+            "nvcuda.dll",
+            "vulkan-1.dll"
+          ]
+        },
+        "driver/nvcuda.dll": {
+          "imports": []
+        },
+        "driver/vulkan-1.dll": {
+          "imports": []
+        }
+      },
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "rejected",
+      "name": "verify ignores a bundled driver but flags its importer gap",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/nvcuda.dll": {
+          "imports": [
+            "nvfatbinaryloader.dll"
+          ]
+        },
+        "lib/ggml-cuda.dll": {
+          "imports": [
+            "NVCUDA.DLL"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unpackaged Windows runtime DLL dependencies: nvcuda.dll: nvfatbinaryloader.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "rejected",
+      "name": "verify reports a missing redistributable",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/ggml-cuda.dll": {
+          "imports": [
+            "kernel32.dll",
+            "cudart64_12.dll",
+            "cublas64_12.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unpackaged Windows runtime DLL dependencies: ggml-cuda.dll: cublas64_12.dll, cudart64_12.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "rejected",
+      "name": "verify reports every importer sorted",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--scan-dir",
+        "host"
+      ],
+      "pes": {
+        "lib/zeta.dll": {
+          "imports": [
+            "b.dll",
+            "a.dll"
+          ]
+        },
+        "lib/alpha.dll": {
+          "imports": [
+            "c.dll"
+          ]
+        },
+        "host/mesh-llm.exe.dll": {
+          "imports": [
+            "ggml-vulkan.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unpackaged Windows runtime DLL dependencies: alpha.dll: c.dll; mesh-llm.exe.dll: ggml-vulkan.dll; zeta.dll: a.dll, b.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "rejected",
+      "name": "verify rejects a host importing a backend",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--scan-dir",
+        "host"
+      ],
+      "pes": {
+        "lib/runtime.dll": {
+          "imports": [
+            "kernel32.dll"
+          ]
+        },
+        "host/mesh-host.dll": {
+          "imports": [
+            "kernel32.dll",
+            "ggml-cuda.dll",
+            "cudart64_12.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unpackaged Windows runtime DLL dependencies: mesh-host.dll: cudart64_12.dll, ggml-cuda.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "rejected",
+      "name": "verify does not treat toolkit DLLs as host",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/ggml-cuda.dll": {
+          "imports": [
+            "nvcuda.dll",
+            "nvrtc64_120_0.dll",
+            "cublasLt64_12.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unpackaged Windows runtime DLL dependencies: ggml-cuda.dll: cublasLt64_12.dll, nvrtc64_120_0.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "rejected",
+      "name": "collect reports an unresolved redistributable",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda"
+      ],
+      "pes": {
+        "lib/ggml-cuda.dll": {
+          "imports": [
+            "cudart64_12.dll",
+            "cublas64_12.dll"
+          ]
+        },
+        "cuda/cudart64_12.dll": {
+          "imports": []
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unresolved Windows runtime DLL dependencies: ggml-cuda.dll: cublas64_12.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "rejected",
+      "name": "collect copies then reports a transitive gap",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "cuda"
+      ],
+      "pes": {
+        "lib/ggml-cuda.dll": {
+          "imports": [
+            "cublas64_12.dll"
+          ]
+        },
+        "cuda/cublas64_12.dll": {
+          "imports": [
+            "cublasLt64_12.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unresolved Windows runtime DLL dependencies: cublas64_12.dll: cublasLt64_12.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "not a PE image",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "files": {
+        "lib/fake.dll": "hello world"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "not a PE image: lib/fake.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "truncated DOS header",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "files": {
+        "lib/stub.dll": "MZ"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "truncated PE image\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "invalid PE signature",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/bad.dll": {
+          "bad_signature": true,
+          "imports": [
+            "a.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "invalid PE signature: lib/bad.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "unsupported optional header magic",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/rom.dll": {
+          "magic": 263,
+          "imports": [
+            "a.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unsupported PE optional-header magic 0x107: lib/rom.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "import descriptor without a name",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/nameless.dll": {
+          "nameless": true,
+          "imports": [
+            "a.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "PE import descriptor has no DLL name: lib/nameless.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "truncated import table",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/cut.dll": {
+          "truncate": 520,
+          "imports": [
+            "a.dll",
+            "b.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "truncated PE image\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "name RVA outside every section",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/far.dll": {
+          "name_rva": 1048576,
+          "imports": [
+            "a.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "PE RVA 0x100000 is outside every section: lib/far.dll\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "name RVA inside the headers",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/low.dll": {
+          "name_rva": 16,
+          "imports": [
+            "a.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "unpackaged Windows runtime DLL dependencies: low.dll: \n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "non-ASCII import name",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "pes": {
+        "lib/utf.dll": {
+          "imports": [
+            "café.dll"
+          ]
+        }
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "UnicodeDecodeError: 'ascii' codec can't decode byte 0xc3 in position 3: ordinal not in range(128)\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "missing library directory",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "absent"
+      ],
+      "code": 1,
+      "stdout": "",
+      "stderr": "[Errno 2] No such file or directory: 'absent'\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "library directory is a file",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib.txt"
+      ],
+      "files": {
+        "lib.txt": "x"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "[Errno 20] Not a directory: 'lib.txt'\n",
+      "calls": ""
+    },
+    {
+      "group": "error",
+      "name": "missing scan directory is skipped then lib fails",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--scan-dir",
+        "nowhere"
+      ],
+      "files": {
+        "lib/bad.dll": "MZ"
+      },
+      "code": 1,
+      "stdout": "",
+      "stderr": "truncated PE image\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "no subcommand",
+      "args": [],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py [-h] {collect,verify} ...\nwindows-native-runtime-deps.py: error: the following arguments are required: command\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "top-level help",
+      "args": [
+        "-h"
+      ],
+      "code": 0,
+      "stdout": "usage: windows-native-runtime-deps.py [-h] {collect,verify} ...\n\nCollect and verify non-system DLL dependencies in Windows native runtimes.\n\npositional arguments:\n  {collect,verify}\n\noptions:\n  -h, --help        show this help message and exit\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "collect help",
+      "args": [
+        "collect",
+        "--help"
+      ],
+      "code": 0,
+      "stdout": "usage: windows-native-runtime-deps.py collect [-h] --lib-dir LIB_DIR\n                                              [--search-dir SEARCH_DIR]\n                                              [--scan-dir SCAN_DIR]\n\noptions:\n  -h, --help            show this help message and exit\n  --lib-dir LIB_DIR\n  --search-dir SEARCH_DIR\n  --scan-dir SCAN_DIR\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "verify help",
+      "args": [
+        "verify",
+        "-h"
+      ],
+      "code": 0,
+      "stdout": "usage: windows-native-runtime-deps.py verify [-h] --lib-dir LIB_DIR\n                                             [--scan-dir SCAN_DIR]\n\noptions:\n  -h, --help           show this help message and exit\n  --lib-dir LIB_DIR\n  --scan-dir SCAN_DIR\n",
+      "stderr": "",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "unknown subcommand",
+      "args": [
+        "order",
+        "--lib-dir",
+        "lib"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py [-h] {collect,verify} ...\nwindows-native-runtime-deps.py: error: argument command: invalid choice: 'order' (choose from 'collect', 'verify')\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "collect without lib dir",
+      "args": [
+        "collect",
+        "--search-dir",
+        "x"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py collect [-h] --lib-dir LIB_DIR\n                                              [--search-dir SEARCH_DIR]\n                                              [--scan-dir SCAN_DIR]\nwindows-native-runtime-deps.py collect: error: the following arguments are required: --lib-dir\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "verify without lib dir",
+      "args": [
+        "verify"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py verify [-h] --lib-dir LIB_DIR\n                                             [--scan-dir SCAN_DIR]\nwindows-native-runtime-deps.py verify: error: the following arguments are required: --lib-dir\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "verify rejects search dir",
+      "args": [
+        "verify",
+        "--lib-dir",
+        "lib",
+        "--search-dir",
+        "x"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py [-h] {collect,verify} ...\nwindows-native-runtime-deps.py: error: unrecognized arguments: --search-dir x\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "lib dir without value",
+      "args": [
+        "verify",
+        "--lib-dir"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py verify [-h] --lib-dir LIB_DIR\n                                             [--scan-dir SCAN_DIR]\nwindows-native-runtime-deps.py verify: error: argument --lib-dir: expected one argument\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "ambiguous prefix",
+      "args": [
+        "collect",
+        "--lib-dir",
+        "lib",
+        "--s",
+        "x"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py collect [-h] --lib-dir LIB_DIR\n                                              [--search-dir SEARCH_DIR]\n                                              [--scan-dir SCAN_DIR]\nwindows-native-runtime-deps.py collect: error: ambiguous option: --s could match --search-dir, --scan-dir\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "unique prefix then extra",
+      "args": [
+        "verify",
+        "--lib",
+        "lib",
+        "extra"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py [-h] {collect,verify} ...\nwindows-native-runtime-deps.py: error: unrecognized arguments: extra\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "option before subcommand",
+      "args": [
+        "-x",
+        "verify",
+        "--lib-dir",
+        "lib"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py [-h] {collect,verify} ...\nwindows-native-runtime-deps.py: error: unrecognized arguments: -x\n",
+      "calls": ""
+    },
+    {
+      "group": "usage",
+      "name": "help with value",
+      "args": [
+        "--help=yes"
+      ],
+      "code": 2,
+      "stdout": "",
+      "stderr": "usage: windows-native-runtime-deps.py [-h] {collect,verify} ...\nwindows-native-runtime-deps.py: error: argument -h/--help: ignored explicit argument 'yes'\n",
+      "calls": ""
+    }
+  ]
+}

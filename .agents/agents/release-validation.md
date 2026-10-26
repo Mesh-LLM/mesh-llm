@@ -28,6 +28,14 @@ applies. These include remote process supervision, platform deployment,
 private-mesh setup, agent/tool-call checks, CI inspection, and subsystem-specific
 Skippy, plugin, configuration, telemetry, or benchmark validation.
 
+For new release inventory automation, follow the Rust ownership rule in
+`.agents/skills/manage-ci/SKILL.md`; use typed `tools/xtask` commands, not new
+Python helpers. From the repository root, the raw owner is
+`cargo xtool release inventory`; use `just release-inventory` on Unix.
+Windows currently uses the portable native command directly. Follow the skill
+for candidate/base provenance, output and uncertainty semantics. Raw inventory
+collection does not authorize product builds, remote hosts or publication.
+
 ## Required Inputs And Authorization
 
 Resolve:

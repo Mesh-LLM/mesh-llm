@@ -1,7 +1,6 @@
 use super::{AffinityRouter, RequestId, handle_mesh_request};
 use crate::inference::election;
 use crate::mesh;
-use crate::network::openai::ingress::api_proxy;
 use crate::network::tunnel::Manager as TunnelManager;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -206,27 +205,12 @@ async fn assert_passive_legacy_lifecycle_path_is_rejected(path: &str) {
     let (sender, sender_channels, _sender_directory) = start_http_tunnel_test_node().await;
     let (receiver, receiver_channels, _receiver_directory) = start_http_tunnel_test_node().await;
     let (upstream_port, upstream_rx, upstream_handle) = spawn_tunnel_capture().await;
-    let api_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind receiving API proxy listener");
-    let api_port = api_listener
-        .local_addr()
-        .expect("receiving API proxy listener address")
-        .port();
     let mut targets = election::ModelTargets::default();
     targets.targets.insert(
         "test".to_string(),
         vec![election::InferenceTarget::Local(upstream_port)],
     );
     let (_target_tx, target_rx) = watch::channel(targets);
-    let api_proxy_handle = tokio::spawn(api_proxy(
-        receiver.clone(),
-        api_port,
-        target_rx,
-        Some(api_listener),
-        false,
-        AffinityRouter::new(),
-    ));
     let tunnel_manager = TunnelManager::start(
         receiver.clone(),
         receiver_channels.rpc,
@@ -235,7 +219,7 @@ async fn assert_passive_legacy_lifecycle_path_is_rejected(path: &str) {
     )
     .await
     .expect("start receiving tunnel manager");
-    tunnel_manager.set_http_port(api_port);
+    tunnel_manager.set_http_ingress(target_rx, AffinityRouter::new());
     sender.start_accepting();
     receiver.start_accepting();
     sender
@@ -271,7 +255,6 @@ async fn assert_passive_legacy_lifecycle_path_is_rejected(path: &str) {
             .is_err(),
         "legacy lifecycle paths must not reach an inference target"
     );
-    api_proxy_handle.abort();
     upstream_handle.abort();
     drop(sender_channels);
 }
@@ -471,3 +454,6 @@ async fn passive_body_parse_error_persists_a_response_only_after_complete_header
         .expect("response artifact content");
     assert_eq!(content.bytes, wire[body_start..]);
 }
+
+#[path = "duplicate_alias_repro.rs"]
+mod duplicate_alias_repro;

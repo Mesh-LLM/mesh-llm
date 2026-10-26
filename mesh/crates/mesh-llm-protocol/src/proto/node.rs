@@ -393,6 +393,13 @@ pub struct LightningOffer {
     pub output_msat_per_million: u64,
     #[prost(uint64, tag = "4")]
     pub minimum_invoice_msat: u64,
+    /// Percentage discount for backend-reported cached input (0 = full price).
+    #[prost(uint32, tag = "5")]
+    pub cache_discount_percent: u32,
+    /// Payment protocol the seller accepts payment over (3 = metered v3).
+    /// Absent (0) on releases before v3; buyers skip such paid offers.
+    #[prost(uint32, tag = "6")]
+    pub payment_protocol: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignedMeshGenesisPolicy {
@@ -1452,6 +1459,7 @@ pub enum ModelWorkloadClass {
     EncoderDecoder = 4,
     SpeechSynthesis = 5,
     Decision = 6,
+    SpeechRecognition = 7,
 }
 impl ModelWorkloadClass {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1467,6 +1475,7 @@ impl ModelWorkloadClass {
             Self::EncoderDecoder => "MODEL_WORKLOAD_CLASS_ENCODER_DECODER",
             Self::SpeechSynthesis => "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS",
             Self::Decision => "MODEL_WORKLOAD_CLASS_DECISION",
+            Self::SpeechRecognition => "MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1479,6 +1488,7 @@ impl ModelWorkloadClass {
             "MODEL_WORKLOAD_CLASS_ENCODER_DECODER" => Some(Self::EncoderDecoder),
             "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS" => Some(Self::SpeechSynthesis),
             "MODEL_WORKLOAD_CLASS_DECISION" => Some(Self::Decision),
+            "MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION" => Some(Self::SpeechRecognition),
             _ => None,
         }
     }

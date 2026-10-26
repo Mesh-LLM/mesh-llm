@@ -73,49 +73,17 @@ runs:
         INPUT_MODEL_FILE: ${{ inputs.model_file }}
       run: |
         set -euo pipefail
-        if [[ -n "$INPUT_MODEL_URL" || -n "$INPUT_MODEL_FILE" ]]; then
-          if [[ -z "$INPUT_MODEL_URL" || -z "$INPUT_MODEL_FILE" ]]; then
-            echo "model_url and model_file must be supplied together" >&2
-            exit 2
-          fi
-          if [[ ! "$INPUT_MODEL_FILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-            echo "model_file must be a safe single filename" >&2
-            exit 2
-          fi
-          {
-            printf 'url=%s\n' "$INPUT_MODEL_URL"
-            printf 'file=%s\n' "$INPUT_MODEL_FILE"
-            printf 'sha256=\n'
-            printf 'size_bytes=\n'
-          } >> "$GITHUB_OUTPUT"
-        elif [[ -n "$MODEL_MANIFEST" ]]; then
-          if [[ -z "$MODEL_CADENCE" ]]; then
-            echo "model_cadence is required with model_manifest" >&2
-            exit 2
-          fi
-          # Only the optional artifact selector goes through an array.
-          # `--cadence` stays literal on the invocation: every manifest
-          # consumer must declare the cadence it is authorized for, and
-          # `scripts/tests/test_model_artifact_registry.py` checks that by
-          # reading the call site.
-          artifact_args=()
-          if [[ -n "$MODEL_ARTIFACT_ID" ]]; then
-            artifact_args+=(--artifact-id "$MODEL_ARTIFACT_ID")
-          fi
-          python3 scripts/resolve-test-model-manifest.py \
-            "$MODEL_MANIFEST" \
-            --cadence "$MODEL_CADENCE" \
-            --require-single-file \
-            "${artifact_args[@]+"${artifact_args[@]}"}" \
-            --github-output "$GITHUB_OUTPUT"
-        else
-          {
-            printf 'url=\n'
-            printf 'file=\n'
-            printf 'sha256=\n'
-            printf 'size_bytes=\n'
-          } >> "$GITHUB_OUTPUT"
+        automation=(cargo xtool)
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+          automation=("$MESH_LLM_AUTOMATION_BIN")
         fi
+        "${automation[@]}" models restore-inputs \
+          --model-url="$INPUT_MODEL_URL" \
+          --model-file="$INPUT_MODEL_FILE" \
+          --model-manifest="$MODEL_MANIFEST" \
+          --model-artifact-id="$MODEL_ARTIFACT_ID" \
+          --model-cadence="$MODEL_CADENCE" \
+          --github-output "$GITHUB_OUTPUT"
 
     - name: Restore integration model cache
       if: ${{ steps.resolve-model.outputs.url != '' && steps.resolve-model.outputs.file != '' }}
@@ -189,7 +157,11 @@ runs:
         if [[ -n "$MODEL_ARTIFACT_ID" ]]; then
           artifact_args+=(--artifact-id "$MODEL_ARTIFACT_ID")
         fi
-        python3 scripts/resolve-test-model-manifest.py \
+        automation=(cargo xtool)
+        if [[ -n "${MESH_LLM_AUTOMATION_BIN:-}" ]]; then
+          automation=("$MESH_LLM_AUTOMATION_BIN")
+        fi
+        "${automation[@]}" models resolve \
           "$MODEL_MANIFEST" \
           --cadence "$MODEL_CADENCE" \
           --require-single-file \

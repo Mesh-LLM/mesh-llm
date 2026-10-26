@@ -271,6 +271,7 @@ mod tests {
             },
         };
         context.admission.execution_contract = "admitted-dependency-contract".into();
+        context.admission.kv_graph_state = "dense".into();
         let request = remote_stage_load_request(
             &context,
             &MeshStagePlan {

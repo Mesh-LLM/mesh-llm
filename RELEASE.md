@@ -1,11 +1,5 @@
 # Releasing mesh-llm
 
-The [CI and release audit](ci/CI_RELEASE_AUDIT.md) proposes Skippy-first
-qualification, verified artifact reuse, final-byte release testing and workflow
-cleanup. It includes the platform matrix, before/after workflow inventory and
-phased implementation plan. The procedure below describes the current release
-process.
-
 ## Preferred path: dispatch from GitHub
 
 Releases are normally cut by running the **Release** workflow
@@ -23,9 +17,7 @@ range plus any post-RC changes. The `just release <version>` recipe performs
 local preflight and
 dispatches this same workflow; it does not maintain a second version-bump path.
 Canary dispatches build the requested version without changing `main` or
-publishing and run the same credential-free crates dry run against the
-same-run Linux release artifact. The dry run gates GitHub publication for a
-normal release. After a complete
+publishing. After a complete
 stable, non-canary release with the full GPU matrix succeeds, it dispatches
 `Mesh-LLM/mesh-packaging` to package the verified release archives, publish the
 native package release assets, publish the supported GHCR image matrix, and
@@ -33,9 +25,16 @@ assemble and publish the Node SDK to npm. Prereleases publish their immutable
 GitHub Release inputs without invoking downstream publication. Dispatch inputs
 include `skip_gpu_bundles` and `canary` (dry-run: build and smoke everything
 without publishing). Releases that intentionally skip GPU bundles do not
-dispatch the full packaging matrix. The stable full release then waits for an
-identity-bound terminal packaging receipt; dispatch acceptance by itself does
-not complete the upstream release workflow.
+dispatch the full packaging matrix.
+
+GitHub publication waits for the credential-free crates preflight against the
+same run's composed `release-linux` artifact, including checksum and native
+runtime verification. Canary builds run this preflight without publication.
+The workflow retains `composed-native-runtimes-manifest` for 90 days, dispatches
+its digest with the exact Mesh commit and a correlation ID, then waits for the
+matching downstream packaging receipt. All selected channels must report
+terminal readiness; dispatch acceptance alone does not complete the release.
+The receipt is retained as `release-packaging-readiness-<tag>` for 90 days.
 
 Do not use GitHub's bare **Draft a new release** form as an alternate release
 path. It bypasses the verified artifact graph. The Release workflow is the only
@@ -53,10 +52,10 @@ bundle validation.
 - Node/npm installed for the UI build
 - `gh` CLI authenticated if publishing manually
 - `MESH_AGENT_IMAGES_DISPATCH_TOKEN` configured as a fine-grained repository
-  token or GitHub App token with Contents write access to
-  `Mesh-LLM/mesh-packaging`, which is the permission required to create a
-  repository dispatch event. The workflow checks this access without printing
-  the credential before it sends the event. The legacy secret name is retained
+  token or GitHub App token with Contents write and Actions read access to
+  `Mesh-LLM/mesh-packaging`, to create a repository dispatch event and read its
+  readiness artifact. The workflow checks dispatch access without printing the
+  credential before it sends the event. The legacy secret name is retained
   so existing release environments do not require a coordinated secret rename.
 
 ## Release Attestation Signing Keys
@@ -142,6 +141,21 @@ release archives contain `mesh-llm`, `host-imports.json`,
 `product-manifest.json`, and exactly one
 `native-runtimes/<runtime-id>` directory. Backend-flavored archive names select
 different runtimes while retaining byte-identical host input for an OS/arch.
+
+macOS and Linux release archives also carry `plugins/`, holding the release
+archive of each default plugin the host pins for that target
+(`DEFAULT_PLUGINS` in `mesh-llm-plugin-manager`). `scripts/package-release.sh`
+lists them with `cargo xtool repository bundled-plugins --target <triple>`,
+downloads each from the plugin's own GitHub release, and fails unless it
+matches the pinned SHA-256 and the bundle's own host installs it as a default
+(`cargo xtool repository bundled-plugins-check --bundle <dir>`). The check runs
+even when nothing is listed, and fails if the host reports a default it pins for
+that platform as missing from the bundle. Packaging
+needs network access to GitHub; for an offline run, set
+`MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR` to a directory that already holds the
+archives, which are checked against the pins all the same. Windows packaging
+(`package-release.ps1`) bundles no plugins; no default pins a Windows build
+today.
 
 Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
 `valid` means the packaged binary matches a trusted release signer, `missing`
@@ -258,10 +272,9 @@ distribution channel.
 
 If the downstream dispatch preflight fails, update the repository Actions secret
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` with a fine-grained token or GitHub App token
-that has Contents write access to `Mesh-LLM/mesh-packaging`, then retry the
+that has Contents write and Actions read access to `Mesh-LLM/mesh-packaging`, then retry the
 failed dispatch job. A repository secret's presence does not prove that its
-credential can write the target repository. The receipt wait additionally needs
-Actions read access there. Do not put the token in workflow
+credential can write the target repository. Do not put the token in workflow
 logs or command output.
 
 On non-prerelease tags, the release workflow also publishes the Rust SDK crate

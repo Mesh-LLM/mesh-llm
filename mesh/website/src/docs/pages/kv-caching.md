@@ -80,7 +80,7 @@ The relevant controls are:
 | `cache_type_k` | `auto`, `f16`, `q8_0`, `q4_0` | Storage and compute dtype for attention keys |
 | `cache_type_v` | `auto`, `f16`, `q8_0`, `q4_0` | Storage and compute dtype for attention values |
 | `kv_offload` | `auto`, `true`, `false` | Whether KV tensors may reside on the selected accelerator rather than host memory |
-| `kv_unified` | `auto`, `true` | Legacy compatibility setting. Skippy always uses unified KV; `false` is rejected. |
+| `kv_unified` | `auto`, `true`, `false` | `auto` derives from lane count. `false` requests per-sequence KV; multi-lane activation exports still require unified KV. |
 | `flash_attention` | `auto`, `enabled`, `disabled` | Selects the fused attention path; a quantized V cache requires the enabled path |
 
 Q8_0 and Q4_0 encode values in 32-element blocks. A model whose KV head
@@ -128,7 +128,6 @@ To keep it enabled but set explicit bounds:
 ```toml
 [defaults.model_fit.prefix_cache]
 enabled = true
-payload_mode = "auto"
 min_tokens = 512
 max_entries = 256
 max_bytes = 8589934592
@@ -136,9 +135,10 @@ shared_stride_tokens = 128
 shared_record_limit = 4
 ```
 
-`payload_mode = "auto"` stores resident KV for known dense models and KV plus
-recurrent state for known recurrent or hybrid models. Unknown architectures do
-not cache automatically. The size fields are byte counts; `max_bytes = 0`
+Skippy selects complete cache contents from the loaded graph and native memory
+capabilities. Attention, recurrent, and other persistent state are runtime facts,
+not configuration settings. Models requiring other state use complete snapshots.
+The size fields are byte counts; `max_bytes = 0`
 means no explicit byte cap. Setting `prompt_cache = false` disables prefix
 caching and conflicts with an explicitly enabled `prefix_cache` block.
 

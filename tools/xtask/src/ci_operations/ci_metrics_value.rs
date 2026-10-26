@@ -1,0 +1,181 @@
+//! JSON-shaped saved inputs and generated CI report fields. Input parsing uses
+//! the repository JSON owner; report publication separately requires finite
+//! numeric values. Exact decimal attempt identities may exceed i128.
+//! Ordered objects retain source order for raw snapshots; report keys are sorted.
+
+use crate::ci_plan::document::Json;
+use crate::ci_plan::plan_bytes::write_string;
+use crate::prepared_input::value_format::float_repr;
+use crate::repository::text;
+
+#[derive(Debug, Clone)]
+pub(crate) enum Value {
+    Null,
+    Bool(bool),
+    Int(i128),
+    /// An integer beyond `i128`, as its decimal text.
+    BigInt(String),
+    Float(f64),
+    Str(String),
+    Array(Vec<Value>),
+    Object(Vec<(String, Value)>),
+}
+
+pub(crate) fn parse(raw: &[u8]) -> Result<Value, String> {
+    let json = Json::parse(raw).map_err(|error| error.to_string())?;
+    Ok(convert(json))
+}
+
+fn convert(json: Json) -> Value {
+    match json {
+        Json::Null => Value::Null,
+        Json::Bool(flag) => Value::Bool(flag),
+        Json::Number(number) => number
+            .as_i64()
+            .map(|int| Value::Int(i128::from(int)))
+            .or_else(|| number.as_u64().map(|int| Value::Int(i128::from(int))))
+            .unwrap_or_else(|| Value::Float(number.as_f64().unwrap_or(f64::NAN))),
+        Json::String(text) => Value::Str(text),
+        Json::Array(items) => Value::Array(items.into_iter().map(convert).collect()),
+        Json::Object(entries) => Value::Object(
+            entries
+                .into_iter()
+                .map(|(key, item)| (key, convert(item)))
+                .collect(),
+        ),
+    }
+}
+
+impl Value {
+    pub(crate) fn get(&self, key: &str) -> Option<&Value> {
+        match self {
+            Value::Object(entries) => entries
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn text(text: &str) -> Self {
+        Value::Str(text.to_owned())
+    }
+
+    pub(crate) fn opt_text(text: Option<&str>) -> Self {
+        text.map_or(Value::Null, Value::text)
+    }
+
+    pub(crate) fn opt_float(value: Option<f64>) -> Self {
+        value.map_or(Value::Null, Value::Float)
+    }
+
+    pub(crate) fn count(value: usize) -> Self {
+        Value::Int(i128::try_from(value).unwrap_or(i128::MAX))
+    }
+}
+
+/// Builds an object from `(key, value)` pairs.
+pub(crate) fn object<const N: usize>(entries: [(&str, Value); N]) -> Value {
+    Value::Object(
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+    )
+}
+
+/// Render strings directly and other report fields through the compact formatter.
+pub(crate) fn display(value: &Value) -> String {
+    match value {
+        Value::Str(text) => text.clone(),
+        other => repr(other),
+    }
+}
+
+/// Compact report-value formatting; this is not an interpreter representation.
+pub(crate) fn repr(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_owned(),
+        Value::Bool(true) => "true".to_owned(),
+        Value::Bool(false) => "false".to_owned(),
+        Value::Int(int) => int.to_string(),
+        Value::BigInt(text) => text.clone(),
+        Value::Float(float) => float_repr(*float),
+        Value::Str(text) => text::repr(text),
+        Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(repr).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::Object(entries) => {
+            let entries: Vec<String> = entries
+                .iter()
+                .map(|(key, item)| format!("{}: {}", text::repr(key), repr(item)))
+                .collect();
+            format!("{{{}}}", entries.join(", "))
+        }
+    }
+}
+
+/// Emit indented report or raw-snapshot JSON, with optional key sorting.
+pub(crate) fn dumps(value: &Value, sort_keys: bool) -> String {
+    let mut out = String::new();
+    write_value(&mut out, value, 0, sort_keys);
+    out
+}
+
+fn write_value(out: &mut String, value: &Value, depth: usize, sort_keys: bool) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+        Value::Int(int) => out.push_str(&int.to_string()),
+        Value::BigInt(text) => out.push_str(text),
+        Value::Float(float) if float.is_nan() => out.push_str("NaN"),
+        Value::Float(float) if float.is_infinite() => {
+            out.push_str(if *float > 0.0 {
+                "Infinity"
+            } else {
+                "-Infinity"
+            });
+        }
+        Value::Float(float) => out.push_str(&float_repr(*float)),
+        Value::Str(text) => write_string(out, text),
+        Value::Array(items) if items.is_empty() => out.push_str("[]"),
+        Value::Object(entries) if entries.is_empty() => out.push_str("{}"),
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                separator(out, index, depth + 1);
+                write_value(out, item, depth + 1, sort_keys);
+            }
+            close(out, depth, ']');
+        }
+        Value::Object(entries) => {
+            let mut ordered: Vec<&(String, Value)> = entries.iter().collect();
+            if sort_keys {
+                ordered.sort_by(|(a, _), (b, _)| a.cmp(b));
+            }
+            out.push('{');
+            for (index, (key, item)) in ordered.into_iter().enumerate() {
+                separator(out, index, depth + 1);
+                write_string(out, key);
+                out.push_str(": ");
+                write_value(out, item, depth + 1, sort_keys);
+            }
+            close(out, depth, '}');
+        }
+    }
+}
+
+fn separator(out: &mut String, index: usize, depth: usize) {
+    if index > 0 {
+        out.push(',');
+    }
+    out.push('\n');
+    out.push_str(&"  ".repeat(depth));
+}
+
+fn close(out: &mut String, depth: usize, bracket: char) {
+    out.push('\n');
+    out.push_str(&"  ".repeat(depth));
+    out.push(bracket);
+}

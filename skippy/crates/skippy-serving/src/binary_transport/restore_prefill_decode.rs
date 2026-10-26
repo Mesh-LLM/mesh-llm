@@ -30,9 +30,10 @@ use super::{
         BinaryProactiveEviction, BinaryProactiveEvictionPlan,
         evict_binary_resident_prefix_for_decode,
     },
+    peer_sampling::runtime_sampling_config,
     stage_execution::{
         binary_message_attrs, elapsed_ms, input_activation_frame, run_binary_stage_message,
-        runtime_sampling_config, stage_output_activation_capacity,
+        stage_output_activation_capacity,
     },
 };
 
@@ -154,9 +155,12 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 scheduler_decode_message.token_count,
                 runtime.output_activation_boundary(),
             )
-            .map_err(|error| skippy_inference_api::OpenAiError::backend(format!("{error:#}")))?;
+            .map_err(|error| skippy_inference_api::InferenceError::backend(format!("{error:#}")))?;
             if let Some(metadata) = scheduler_message.chat_sampling_metadata.as_deref() {
-                let sampling = runtime_sampling_config(scheduler_message.sampling.as_ref());
+                let sampling = runtime_sampling_config(
+                    scheduler_message.sampling.as_ref(),
+                    runtime.kv_pool_tokens(),
+                );
                 runtime
                     .configure_chat_sampling(
                         &scheduler_session_id,
@@ -165,7 +169,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                         sampling.as_ref(),
                     )
                     .map_err(|error| {
-                        skippy_inference_api::OpenAiError::backend(format!("{error:#}"))
+                        skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                     })?;
             }
             let proactive_eviction = evict_binary_resident_prefix_for_decode(
@@ -178,7 +182,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                     target_tokens: None,
                 },
             )
-            .map_err(|error| skippy_inference_api::OpenAiError::backend(format!("{error:#}")))?;
+            .map_err(|error| skippy_inference_api::InferenceError::backend(format!("{error:#}")))?;
             let (predicted, _, output, _) = run_binary_stage_message(
                 runtime,
                 &scheduler_session_id,
@@ -187,7 +191,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 input.as_ref(),
                 BinaryStageExecutionOptions::new(sample, output_capacity, native_mtp_enabled),
             )
-            .map_err(|error| skippy_inference_api::OpenAiError::backend(format!("{error:#}")))?;
+            .map_err(|error| skippy_inference_api::InferenceError::backend(format!("{error:#}")))?;
             Ok((predicted, output, proactive_eviction))
         })
         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
@@ -383,16 +387,24 @@ pub(super) fn restore_prefill_decode_as_decode_message(
     message: &StageWireMessage,
     current_token: i32,
 ) -> StageWireMessage {
-    let mut decode = message.clone();
-    decode.kind = WireMessageKind::DecodeEmbd;
-    decode.token_count = 1;
-    decode.tokens = vec![current_token];
-    decode.positions.clear();
-    decode.activation.clear();
-    decode.raw_bytes.clear();
-    decode.state.phase = StageStateHeader::new(WireMessageKind::DecodeEmbd).phase;
-    decode.state.current_token = current_token;
-    decode
+    let mut state = message.state;
+    state.phase = StageStateHeader::new(WireMessageKind::DecodeEmbd).phase;
+    state.current_token = current_token;
+    // Keep only decode metadata, not the prefill buffers that would be discarded.
+    StageWireMessage {
+        kind: WireMessageKind::DecodeEmbd,
+        pos_start: message.pos_start,
+        token_count: 1,
+        state,
+        request_id: message.request_id,
+        session_id: message.session_id,
+        sampling: message.sampling.clone(),
+        chat_sampling_metadata: message.chat_sampling_metadata.clone(),
+        tokens: vec![current_token],
+        positions: Vec::new(),
+        activation: Vec::new(),
+        raw_bytes: Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -447,12 +459,27 @@ mod tests {
             sampling: Some(sampling.clone()),
             chat_sampling_metadata: Some(metadata.to_string()),
             tokens: vec![101, 102, 103, 104],
-            positions: Vec::new(),
+            positions: vec![0, 1, 2, 3],
             activation: vec![1, 2, 3, 4],
-            raw_bytes: Vec::new(),
+            raw_bytes: vec![5, 6, 7, 8],
         };
 
+        let original = message.clone();
         let decode = restore_prefill_decode_as_decode_message(&message, 104);
+        let mut expected = original.clone();
+        expected.kind = WireMessageKind::DecodeEmbd;
+        expected.token_count = 1;
+        expected.tokens = vec![104];
+        expected.positions.clear();
+        expected.activation.clear();
+        expected.raw_bytes.clear();
+        expected.state.phase = StageStateHeader::new(WireMessageKind::DecodeEmbd).phase;
+        expected.state.current_token = 104;
+        assert_eq!(decode, expected);
+        assert_eq!(message, original);
+        assert_eq!(decode.activation.capacity(), 0);
+        assert_eq!(decode.raw_bytes.capacity(), 0);
+        assert_eq!(decode.positions.capacity(), 0);
 
         assert_eq!(decode.kind, WireMessageKind::DecodeEmbd);
         assert_eq!(decode.token_count, 1);

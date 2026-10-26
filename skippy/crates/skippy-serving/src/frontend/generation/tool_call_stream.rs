@@ -32,6 +32,7 @@ struct StreamedToolCall {
 pub(in crate::frontend) struct ToolCallStreamState {
     streamed: Vec<StreamedToolCall>,
     completed: bool,
+    observed: bool,
 }
 
 impl ToolCallStreamState {
@@ -47,9 +48,16 @@ impl ToolCallStreamState {
         tool_calls: &[Value],
         is_partial: bool,
     ) -> Option<Value> {
+        self.observed |= !tool_calls.is_empty();
         let deltas = self.deltas(tool_calls);
         if !is_partial {
-            self.completed = self.streamed_matches(tool_calls);
+            self.completed = !tool_calls.is_empty()
+                && self.streamed_matches(tool_calls)
+                && tool_calls.iter().all(|call| {
+                    tool_call_arguments(call)
+                        .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+                        .is_some_and(|arguments| arguments.is_object())
+                });
         }
         deltas
     }
@@ -65,6 +73,10 @@ impl ToolCallStreamState {
     /// tool call whose arguments it never fully received.
     pub(in crate::frontend) fn completed(&self) -> bool {
         self.completed
+    }
+
+    pub(in crate::frontend) fn incomplete(&self) -> bool {
+        self.observed && !self.completed
     }
 
     /// Does every streamed index reproduce the terminal parse byte for byte?
@@ -89,8 +101,8 @@ impl ToolCallStreamState {
                 // `suffix_delta` yields `None` when the new value is not an
                 // extension of what was already sent. The parser can revise a
                 // partial guess downward on malformed output; re-sending would
-                // corrupt clients that concatenate, so hold what we have and let
-                // the request's own error surface.
+                // corrupt clients that concatenate. Terminal validation reports
+                // an error if subsequent snapshots never repair the mismatch.
                 if let Some(delta) = suffix_delta(arguments, &mut streamed.emitted_arguments) {
                     deltas.push(json!({
                         "index": index,

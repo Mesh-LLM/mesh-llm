@@ -197,13 +197,6 @@ pub const OPTIONS: &[OptionSpec] = &[
         "Prompt reuse: auto, on, off, record",
     ),
     option(
-        "prefix-cache-payload",
-        "cache",
-        "kv_cache.payload",
-        Kind::Text,
-        "State payload: auto, resident-kv, kv-recurrent, full-state",
-    ),
-    option(
         "prefix-cache-codec",
         "cache",
         "kv_cache.codec",
@@ -573,6 +566,13 @@ pub const OPTIONS: &[OptionSpec] = &[
         "request.grammar",
         Kind::Content,
         "Default grammar; @file loads UTF-8 text",
+    ),
+    option(
+        "allow-request-chat-template",
+        "chat",
+        "request.allow_request_chat_template",
+        Kind::Bool,
+        "Let requests supply their own chat template (trusts every caller)",
     ),
     option(
         "jinja",

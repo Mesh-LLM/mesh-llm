@@ -1,0 +1,18 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--plan",
+    "plan.json",
+    "--out",
+    "notes.md"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {
+    "notes.md": null
+  },
+  "stderr": "error: plan metadata rejected\n  group title is not a plain heading: '<img src=x>'\n",
+  "stdout": ""
+}

@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use skippy_protocol::{StageKvCacheMode, StageKvCachePayload};
+use skippy_protocol::StageKvCacheMode;
 
 use super::types::{ResolvedStageKvCache, ResolvedStageKvCacheTemplate};
 use mesh_llm_config::{
@@ -150,12 +150,6 @@ pub(super) fn resolve_prefix_cache(
     Ok(ResolvedStageKvCache::Explicit(
         ResolvedStageKvCacheTemplate {
             mode: StageKvCacheMode::LookupRecord,
-            payload: match prefix_cache.payload_mode.as_deref().unwrap_or("auto") {
-                "resident-kv" => StageKvCachePayload::ResidentKv,
-                "kv-recurrent" => StageKvCachePayload::KvRecurrent,
-                "full-state" => StageKvCachePayload::FullState,
-                _ => StageKvCachePayload::Auto,
-            },
             max_entries: prefix_cache.max_entries.map(|value| value as usize),
             max_bytes: prefix_cache.max_bytes,
             min_tokens: prefix_cache.min_tokens.map(u64::from),

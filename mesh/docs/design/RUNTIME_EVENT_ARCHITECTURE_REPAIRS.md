@@ -135,6 +135,10 @@ before citing any performance number from this subsystem.
 
 ### Current-tree measurements (issue #1167 completion)
 
+The commands below record the original Python measurement provenance. Current
+operator usage is documented in [Native runtime event benchmarks](RUNTIME_EVENT_BENCHMARKS.md);
+that migration does not retroactively requalify these historical results.
+
 All figures below come from one Apple Silicon Mac (macOS, aarch64, Metal
 runtime built from this tree), release build of branch
 `task/issue-1167-runtime-events` at `a8cc87fca` (binary sha256

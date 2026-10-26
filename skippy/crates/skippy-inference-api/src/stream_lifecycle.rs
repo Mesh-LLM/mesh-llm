@@ -18,12 +18,13 @@ use futures_util::{Stream, StreamExt};
 use skippy_events::usage::TokenUsage;
 
 use crate::{
-    backend::{CancellationToken, OpenAiResult},
+    backend::{CancellationToken, InferenceResult},
     common::Usage,
-    errors::OpenAiError,
+    errors::InferenceError,
     lifecycle::{
-        OpenAiBackendOperation, OpenAiLifecycleContext, OpenAiLifecycleEvent,
-        OpenAiLifecycleObserver, OpenAiTerminalResult, OpenAiUsage, terminal_result_for_error,
+        InferenceBackendOperation, InferenceLifecycleContext, InferenceLifecycleEvent,
+        InferenceLifecycleObserver, InferenceTerminalResult, InferenceUsage,
+        terminal_result_for_error,
     },
 };
 
@@ -32,20 +33,20 @@ struct StreamingResponse;
 
 #[derive(Clone)]
 pub(crate) struct StreamLifecycle {
-    observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
-    context: OpenAiLifecycleContext,
-    operation: OpenAiBackendOperation,
+    observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+    context: InferenceLifecycleContext,
+    operation: InferenceBackendOperation,
     terminal: Arc<AtomicBool>,
     backend_error: Arc<AtomicBool>,
     protocol_complete: Arc<AtomicBool>,
-    usage: Arc<Mutex<Option<OpenAiUsage>>>,
+    usage: Arc<Mutex<Option<InferenceUsage>>>,
 }
 
 impl StreamLifecycle {
     pub(crate) fn new(
-        observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
-        context: OpenAiLifecycleContext,
-        operation: OpenAiBackendOperation,
+        observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+        context: InferenceLifecycleContext,
+        operation: InferenceBackendOperation,
     ) -> Self {
         Self {
             observer,
@@ -63,7 +64,7 @@ impl StreamLifecycle {
     }
 
     pub(crate) fn record_exchange_id(&self, exchange_id: String) {
-        self.observe(&OpenAiLifecycleEvent::ExchangeIdentified {
+        self.observe(&InferenceLifecycleEvent::ExchangeIdentified {
             context: self.context.clone(),
             exchange_id,
         });
@@ -78,15 +79,15 @@ impl StreamLifecycle {
     }
 
     fn first_item(&self) {
-        self.observe(&OpenAiLifecycleEvent::StreamFirstItem {
+        self.observe(&InferenceLifecycleEvent::StreamFirstItem {
             context: self.context.clone(),
             operation: self.operation,
         });
     }
 
-    fn failed(&self, error: &OpenAiError) {
+    fn failed(&self, error: &InferenceError) {
         self.backend_error.store(true, Ordering::Release);
-        self.finish_terminal(OpenAiLifecycleEvent::StreamTerminal {
+        self.finish_terminal(InferenceLifecycleEvent::StreamTerminal {
             context: self.context.clone(),
             result: terminal_result_for_error(error),
         });
@@ -104,12 +105,12 @@ impl StreamLifecycle {
             StreamDropOutcome::BackendError => {}
             StreamDropOutcome::Completed => self.finish_success(),
             StreamDropOutcome::Cancelled => {
-                self.finish_terminal(OpenAiLifecycleEvent::StreamCancelled {
+                self.finish_terminal(InferenceLifecycleEvent::StreamCancelled {
                     context: self.context.clone(),
                 });
             }
             StreamDropOutcome::ClientDisconnect => {
-                self.finish_terminal(OpenAiLifecycleEvent::StreamDropped {
+                self.finish_terminal(InferenceLifecycleEvent::StreamDropped {
                     context: self.context.clone(),
                 });
             }
@@ -134,7 +135,7 @@ impl StreamLifecycle {
         }
         let usage = *self.usage.lock().expect("stream usage lock poisoned");
         if let Some(usage) = usage {
-            self.observe(&OpenAiLifecycleEvent::ResponseCompleted {
+            self.observe(&InferenceLifecycleEvent::ResponseCompleted {
                 context: self.context.clone(),
                 operation: self.operation,
                 usage,
@@ -152,19 +153,19 @@ impl StreamLifecycle {
                 })
             })
             .map_or(
-                OpenAiTerminalResult::Completed { status_code: 200 },
-                |usage| OpenAiTerminalResult::CompletedWithUsage {
+                InferenceTerminalResult::Completed { status_code: 200 },
+                |usage| InferenceTerminalResult::CompletedWithUsage {
                     status_code: 200,
                     usage,
                 },
             );
-        self.observe(&OpenAiLifecycleEvent::StreamTerminal {
+        self.observe(&InferenceLifecycleEvent::StreamTerminal {
             context: self.context.clone(),
             result,
         });
     }
 
-    fn finish_terminal(&self, event: OpenAiLifecycleEvent) {
+    fn finish_terminal(&self, event: InferenceLifecycleEvent) {
         if self.claim_terminal() {
             self.observe(&event);
         }
@@ -174,7 +175,7 @@ impl StreamLifecycle {
         !self.terminal.swap(true, Ordering::AcqRel)
     }
 
-    fn observe(&self, event: &OpenAiLifecycleEvent) {
+    fn observe(&self, event: &InferenceLifecycleEvent) {
         if let Some(observer) = &self.observer {
             observer.observe(event);
         }
@@ -192,9 +193,9 @@ enum StreamDropOutcome {
 pub(crate) fn observe_backend_stream<S, T>(
     stream: S,
     lifecycle: StreamLifecycle,
-) -> impl Stream<Item = OpenAiResult<T>> + Send + 'static
+) -> impl Stream<Item = InferenceResult<T>> + Send + 'static
 where
-    S: Stream<Item = OpenAiResult<T>> + Send + 'static,
+    S: Stream<Item = InferenceResult<T>> + Send + 'static,
     T: Send + 'static,
 {
     let mut first_item = true;
@@ -275,20 +276,20 @@ mod tests {
 
     use super::*;
     use crate::lifecycle::{
-        OpenAiFailure, OpenAiFrontendRoute, OpenAiRequestMethod, parse_request_id,
+        InferenceFailure, InferenceFrontendRoute, InferenceRequestMethod, parse_request_id,
     };
 
     #[derive(Default)]
-    struct RecordingObserver(Mutex<Vec<OpenAiLifecycleEvent>>);
+    struct RecordingObserver(Mutex<Vec<InferenceLifecycleEvent>>);
 
     impl RecordingObserver {
-        fn events(&self) -> Vec<OpenAiLifecycleEvent> {
+        fn events(&self) -> Vec<InferenceLifecycleEvent> {
             self.0.lock().expect("observer lock").clone()
         }
     }
 
-    impl OpenAiLifecycleObserver for RecordingObserver {
-        fn observe(&self, event: &OpenAiLifecycleEvent) {
+    impl InferenceLifecycleObserver for RecordingObserver {
+        fn observe(&self, event: &InferenceLifecycleEvent) {
             self.0.lock().expect("observer lock").push(event.clone());
         }
     }
@@ -296,12 +297,12 @@ mod tests {
     fn lifecycle(observer: Arc<RecordingObserver>) -> StreamLifecycle {
         StreamLifecycle::new(
             Some(observer),
-            OpenAiLifecycleContext::new(
+            InferenceLifecycleContext::new(
                 parse_request_id("ac04bc97-ab30-4111-826d-60b7c4b6e720").expect("request ID"),
-                OpenAiRequestMethod::Post,
-                OpenAiFrontendRoute::ChatCompletions,
+                InferenceRequestMethod::Post,
+                InferenceFrontendRoute::ChatCompletions,
             ),
-            OpenAiBackendOperation::ChatCompletionStream,
+            InferenceBackendOperation::ChatCompletionStream,
         )
     }
 
@@ -320,8 +321,8 @@ mod tests {
         assert!(matches!(
             events.as_slice(),
             [
-                OpenAiLifecycleEvent::ResponseCompleted {
-                    usage: OpenAiUsage {
+                InferenceLifecycleEvent::ResponseCompleted {
+                    usage: InferenceUsage {
                         prompt_tokens: 12,
                         cached_tokens: Some(9),
                         completion_tokens: 3,
@@ -329,8 +330,8 @@ mod tests {
                     },
                     ..
                 },
-                OpenAiLifecycleEvent::StreamTerminal {
-                    result: OpenAiTerminalResult::CompletedWithUsage {
+                InferenceLifecycleEvent::StreamTerminal {
+                    result: InferenceTerminalResult::CompletedWithUsage {
                         status_code: 200,
                         usage: TokenUsage {
                             prompt_tokens: Some(12),
@@ -351,7 +352,7 @@ mod tests {
         let lifecycle = lifecycle(observer.clone());
         lifecycle.capture_usage(&Usage::new(3, 1));
         lifecycle.mark_protocol_complete();
-        lifecycle.failed(&OpenAiError::backend("private backend detail"));
+        lifecycle.failed(&InferenceError::backend("private backend detail"));
 
         lifecycle.finish_natural();
         lifecycle.finish_drop(false);
@@ -359,10 +360,10 @@ mod tests {
         let events = observer.events();
         assert!(matches!(
             events.as_slice(),
-            [OpenAiLifecycleEvent::StreamTerminal {
-                result: OpenAiTerminalResult::Failed {
+            [InferenceLifecycleEvent::StreamTerminal {
+                result: InferenceTerminalResult::Failed {
                     status_code: 502,
-                    failure: OpenAiFailure::Backend,
+                    failure: InferenceFailure::Backend,
                 },
                 ..
             }]
@@ -375,14 +376,14 @@ mod tests {
         lifecycle(cancelled_observer.clone()).finish_drop(true);
         assert!(matches!(
             cancelled_observer.events().as_slice(),
-            [OpenAiLifecycleEvent::StreamCancelled { .. }]
+            [InferenceLifecycleEvent::StreamCancelled { .. }]
         ));
 
         let dropped_observer = Arc::new(RecordingObserver::default());
         lifecycle(dropped_observer.clone()).finish_drop(false);
         assert!(matches!(
             dropped_observer.events().as_slice(),
-            [OpenAiLifecycleEvent::StreamDropped { .. }]
+            [InferenceLifecycleEvent::StreamDropped { .. }]
         ));
     }
 
@@ -402,8 +403,8 @@ mod tests {
 
         assert!(matches!(
             observer.events().as_slice(),
-            [OpenAiLifecycleEvent::StreamTerminal {
-                result: OpenAiTerminalResult::Completed { .. },
+            [InferenceLifecycleEvent::StreamTerminal {
+                result: InferenceTerminalResult::Completed { .. },
                 ..
             }]
         ));
@@ -414,8 +415,8 @@ mod tests {
         let observer = Arc::new(RecordingObserver::default());
         let lifecycle = lifecycle(observer.clone());
         let source = stream::iter(vec![
-            Ok::<_, OpenAiError>(1_u8),
-            Err(OpenAiError::backend("private backend detail")),
+            Ok::<_, InferenceError>(1_u8),
+            Err(InferenceError::backend("private backend detail")),
         ]);
         let items = observe_backend_stream(source, lifecycle)
             .collect::<Vec<_>>()
@@ -425,9 +426,9 @@ mod tests {
         assert!(matches!(
             observer.events().as_slice(),
             [
-                OpenAiLifecycleEvent::StreamFirstItem { .. },
-                OpenAiLifecycleEvent::StreamTerminal {
-                    result: OpenAiTerminalResult::Failed { .. },
+                InferenceLifecycleEvent::StreamFirstItem { .. },
+                InferenceLifecycleEvent::StreamTerminal {
+                    result: InferenceTerminalResult::Failed { .. },
                     ..
                 },
             ]

@@ -6,7 +6,8 @@ use std::{
 
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
-    ActivationDesc, BackendDevice, CacheGenRecordV1, Error, GenerationSignalWindow,
+    ActivationDesc, AsrAbortCallback, AsrInfoV1, AsrModel, AsrResult, AsrSegmentV1,
+    AsrTranscribeParamsV1, BackendDevice, CacheGenRecordV1, Error, GenerationSignalWindow,
     IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
     LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo,
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
@@ -16,8 +17,8 @@ use crate::{
     Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
     SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
     StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
-    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
-    WorkloadInfoV1, runtime_abi_supported,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenLogprobs,
+    TokenSignal, WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -169,6 +170,8 @@ macro_rules! dynamic_symbols {
 dynamic_symbols! {
     llama_get_embeddings_ith(ctx: *mut Opaque, index: i32) -> *mut f32;
     llama_set_embeddings(ctx: *mut Opaque, embeddings: bool);
+    llama_model_get_vocab(model: *const Opaque) -> *const Opaque;
+    llama_vocab_n_tokens(vocab: *const Opaque) -> i32;
     llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
     ggml_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
     llama_model_quantize_default_params() -> LlamaModelQuantizeParams;
@@ -197,6 +200,17 @@ dynamic_symbols! {
     skippy_laya_model_info_v1(model: *const LayaModel, out_info: *mut LayaInfoV1, out_error: *mut *mut Error) -> Status;
     skippy_laya_tokenize(model: *const LayaModel, text: *const c_char, text_len: usize, out_tokens: *mut i32, capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_laya_read(model: *mut LayaModel, tokens: *const i32, token_count: usize, marker_positions: *const i32, marker_count: usize, sequences: *const LayaSequence, sequence_count: usize, out_logits: *mut f32, logits_capacity: usize, out_act_logits: *mut f32, act_logits_capacity: usize, out_error: *mut *mut Error) -> Status;
+    skippy_asr_model_open(model_path: *const c_char, device: *const c_char, out_model: *mut *mut AsrModel, out_error: *mut *mut Error) -> Status;
+    skippy_asr_model_free(model: *mut AsrModel);
+    skippy_asr_model_info_v1(model: *const AsrModel, out_info: *mut AsrInfoV1, out_error: *mut *mut Error) -> Status;
+    skippy_asr_decode_audio(data: *const u8, len: usize, out_samples: *mut *mut f32, out_sample_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_asr_samples_free(samples: *mut f32);
+    skippy_asr_transcribe(model: *mut AsrModel, samples: *const f32, sample_count: usize, params: *const AsrTranscribeParamsV1, abort_callback: AsrAbortCallback, abort_user_data: *mut c_void, out_result: *mut *mut AsrResult, out_error: *mut *mut Error) -> Status;
+    skippy_asr_result_segment_count(result: *const AsrResult) -> usize;
+    skippy_asr_result_segment_v1(result: *const AsrResult, index: usize, out_segment: *mut AsrSegmentV1, out_error: *mut *mut Error) -> Status;
+    skippy_asr_result_language(result: *const AsrResult) -> *const c_char;
+    skippy_asr_result_duration_seconds(result: *const AsrResult) -> f64;
+    skippy_asr_result_free(result: *mut AsrResult);
     skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_create_from_resident_prefix(model: *mut Model, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
@@ -206,6 +220,7 @@ dynamic_symbols! {
     skippy_session_begin_external_decode(session: *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_end_external_decode(session: *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_set_position(session: *mut Session, n_past: i32, out_error: *mut *mut Error) -> Status;
+    skippy_session_restore_token_history(session: *mut Session, token_ids: *const i32, token_count: usize, out_error: *mut *mut Error) -> Status;
     skippy_session_sample_current(session: *mut Session, sampling: *const SamplingConfig, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
     skippy_session_configure_chat_sampling(session: *mut Session, sampling: *const SamplingConfig, metadata_json: *const c_char, prompt_token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_session_embed(session: *mut Session, token_ids: *const i32, token_count: usize, output: *mut f32, output_capacity: usize, out_dimensions: *mut usize, out_error: *mut *mut Error) -> Status;
@@ -228,6 +243,7 @@ dynamic_symbols! {
     skippy_verify_tokens_frame_sampled(session: *mut Session, token_ids: *const i32, token_count: usize, sampling: *const SamplingConfig, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, max_draft_tokens: usize, out_mtp_draft: *mut NativeMtpDraft, out_error: *mut *mut Error) -> Status;
     skippy_session_copy_output_activation_frame(session: *mut Session, token_count: usize, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_session_last_token_signal(session: *mut Session, out_signal: *mut TokenSignal, out_error: *mut *mut Error) -> Status;
+    skippy_session_take_token_logprobs(session: *mut Session, out_entries: *mut TokenLogprobs, capacity: usize, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_session_signal_window(session: *mut Session, window_tokens: u32, out_window: *mut GenerationSignalWindow, out_error: *mut *mut Error) -> Status;
     skippy_trim_session(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_retire_verify_checkpoint(session: *mut Session, token_start: u64, token_count: u64, out_error: *mut *mut Error) -> Status;
@@ -238,6 +254,7 @@ dynamic_symbols! {
     skippy_export_kv_page(session: *mut Session, layer_start: i32, layer_end: i32, token_start: u64, token_count: u64, out_desc: *mut KvPageDesc, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_import_kv_page(session: *mut Session, desc: *const KvPageDesc, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
     skippy_import_cachegen_kv_page_v1(session: *mut Session, desc: *const KvPageDesc, records: *const CacheGenRecordV1, record_count: usize, out_error: *mut *mut Error) -> Status;
+    skippy_model_memory_cache_capabilities(model: *const Model) -> u32;
     skippy_export_recurrent_state(session: *mut Session, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_import_recurrent_state(session: *mut Session, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
     skippy_session_save_prefix(session: *mut Session, cache_seq_id: i32, token_count: u64, out_error: *mut *mut Error) -> Status;
@@ -282,6 +299,7 @@ dynamic_symbols! {
     mtmd_helper_bitmap_init_from_buf(ctx: *mut MtmdContext, buf: *const u8, len: usize, placeholder: bool, opt: MtmdHelperInitOpt) -> MtmdHelperBitmapWrapper;
     mtmd_helper_video_free(video: *mut MtmdHelperVideo);
     mtmd_bitmap_free(bitmap: *mut MtmdBitmap);
+    mtmd_bitmap_get_n_bytes(bitmap: *const MtmdBitmap) -> usize;
     mtmd_input_chunks_init() -> *mut MtmdInputChunks;
     mtmd_input_chunks_free(chunks: *mut MtmdInputChunks);
     mtmd_tokenize(ctx: *mut MtmdContext, output: *mut MtmdInputChunks, text: *const MtmdInputText, bitmaps: *const *const MtmdBitmap, n_bitmaps: usize) -> c_int;

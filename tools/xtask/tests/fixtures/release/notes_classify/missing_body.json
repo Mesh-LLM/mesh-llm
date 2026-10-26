@@ -1,0 +1,20 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--range",
+    "v1.0.0..v1.0.1",
+    "--version",
+    "1.0.0",
+    "--date",
+    "2026-01-01",
+    "--out",
+    "plan.json"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "Traceback (most recent call last):\nFileNotFoundError: [Errno 2] No such file or directory: 'body.md'\n",
+  "stdout": ""
+}

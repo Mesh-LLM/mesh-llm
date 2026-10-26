@@ -1,7 +1,7 @@
 //! Best-effort payment lifecycle observations, payer and provider side; never
 //! a ledger, replay service or payment authority.
-use mesh_llm_payments_types::RequestTerms;
 use mesh_llm_payments_types::contract::SettledReceived;
+use mesh_llm_payments_types::metered_wire::AdmissionTerms;
 use mesh_llm_wallet::{invoice::Invoice, provider::Transaction};
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -69,17 +69,15 @@ pub(crate) struct Observations {
 }
 
 impl Observations {
-    /// Payer side: joins on the host's OpenAI exchange ID carried in `terms`.
+    /// Payer side: joins on the host's OpenAI exchange ID in `evidence`.
     pub(crate) async fn for_exchange(
         evidence: Option<&(Node, String)>,
-        terms: &RequestTerms,
+        terms: &AdmissionTerms,
     ) -> Self {
-        let Some((node, _)) = evidence else {
+        let Some((node, exchange_id)) = evidence else {
             return Self::default();
         };
-        let Some(exchange_id) = terms.exchange_id.clone() else {
-            return Self::default();
-        };
+        let exchange_id = exchange_id.clone();
         let Some(manager) = node.plugin_manager().await else {
             return Self::default();
         };
@@ -93,9 +91,9 @@ impl Observations {
         manager: PluginManager,
         role: Role,
         exchange_id: String,
-        terms: &RequestTerms,
+        terms: &AdmissionTerms,
     ) -> Option<Self> {
-        let terms_digest = terms_digest(terms)?;
+        let terms_digest = terms_digest(&exchange_id, terms)?;
         let (sender, mut receiver) = mpsc::channel::<Event>(8);
         tokio::spawn(async move {
             while let Some(event) = receiver.recv().await {
@@ -122,13 +120,13 @@ impl Observations {
         })
     }
 
-    /// Terms accepted by this side; `cap` is the terms' `max_total_msat`.
+    /// Terms accepted by this side; `cap` is the payer's local spending cap.
     pub(crate) fn accepted(&self, cap: u64) {
         let Some(role) = self.role else { return };
         self.emit("terms_accepted", role.asserted(), None, None, cap, None);
     }
 
-    /// An invoice for `segment` (0 = input, 1 = output). The provider issues
+    /// An invoice for `segment` (0 = deposit, 1 = final). The provider issues
     /// every invoice, so this is `provider_asserted` on both sides.
     pub(crate) fn invoice(&self, segment: u32, invoice: &Invoice) {
         self.emit(
@@ -173,7 +171,7 @@ impl Observations {
         );
     }
 
-    /// Provider side: the delivered-token watermark written when serving closed.
+    /// Provider side: the completion tokens the backend reported at settlement.
     pub(crate) fn delivered(&self, tokens: u64) {
         self.emit(
             "delivered",
@@ -320,29 +318,25 @@ impl ProviderLifecycle {
         }
     }
 
-    /// Start observing a serving request once its input invoice exists. The
-    /// provider has no payer-side exchange to join: the serving path names
-    /// the exchange with its own fresh ID ([`Self::named`]), never the private
+    /// Start observing a serving request once it is admitted. The provider
+    /// has no payer-side exchange to join: the serving path names the
+    /// exchange with its own fresh ID ([`Self::named`]), never the private
     /// request (recovery) ID. Nothing is observed for an unnamed request.
-    pub(crate) fn observe(&self, terms: &RequestTerms) -> Observations {
+    pub(crate) fn observe(&self, terms: &AdmissionTerms) -> Observations {
         let (Some(manager), Some(exchange_id)) = (self.manager.clone(), self.exchange_id.clone())
         else {
             return Observations::default();
         };
-        let mut terms = terms.clone();
-        terms.exchange_id = Some(exchange_id.clone());
-        Observations::start(manager, Role::Provider, exchange_id, &terms).unwrap_or_default()
+        Observations::start(manager, Role::Provider, exchange_id, terms).unwrap_or_default()
     }
 }
 
-fn terms_digest(terms: &RequestTerms) -> Option<String> {
-    // Public terms only: never hash/serialize the bearer recovery ID or local peer field.
+fn terms_digest(exchange_id: &str, terms: &AdmissionTerms) -> Option<String> {
+    // Public terms only: never hash/serialize the bearer recovery ID.
     request_body_digest(
         &serde_json::json!({
-            "exchange_id": terms.exchange_id, "payee": terms.payee, "model": terms.model,
-            "pricing": terms.pricing, "input_tokens": terms.input_tokens,
-            "max_output_tokens": terms.max_output_tokens, "max_total_msat": terms.max_total_msat,
-            "expires_at_ms": terms.expires_at_ms,
+            "exchange_id": exchange_id, "model": terms.model, "pricing": terms.pricing,
+            "deposit_msat": terms.deposit_msat,
         }),
         None,
     )
@@ -352,21 +346,17 @@ fn terms_digest(terms: &RequestTerms) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn terms() -> RequestTerms {
-        RequestTerms {
+    fn terms() -> AdmissionTerms {
+        AdmissionTerms {
             id: "private-recovery".into(),
-            exchange_id: Some("exchange-one".into()),
-            peer: "private-peer".into(),
-            payee: Some("payee".into()),
             model: "model".into(),
             pricing: mesh_llm_payments_types::pricing::Pricing {
                 input_msat_per_million: 1000,
                 output_msat_per_million: 2000,
+                cache_discount_percent: 0,
             },
-            input_tokens: 10,
-            max_output_tokens: 20,
-            max_total_msat: 100,
-            expires_at_ms: 1000,
+            deposit_msat: 3,
+            min_payment_msat: mesh_llm_payments_types::metering::PAYMENT_FLOOR_MSAT,
         }
     }
 
@@ -376,7 +366,7 @@ mod tests {
             Observations {
                 sender: Some(sender),
                 exchange_id: exchange_id.into(),
-                terms_digest: terms_digest(&terms()).unwrap(),
+                terms_digest: terms_digest("exchange-one", &terms()).unwrap(),
                 role: Some(role),
             },
             receiver,
@@ -386,12 +376,11 @@ mod tests {
     #[test]
     fn digest_is_checked_and_excludes_private_capability() {
         let mut request = terms();
-        let digest = terms_digest(&request).unwrap();
+        let digest = terms_digest("exchange-one", &request).unwrap();
         request.id = "different-secret".into();
-        request.peer = "different-local-peer".into();
-        assert_eq!(terms_digest(&request).unwrap(), digest);
-        request.max_total_msat = u64::MAX;
-        assert!(terms_digest(&request).is_none());
+        assert_eq!(terms_digest("exchange-one", &request).unwrap(), digest);
+        request.deposit_msat = u64::MAX;
+        assert!(terms_digest("exchange-one", &request).is_none());
     }
 
     #[test]

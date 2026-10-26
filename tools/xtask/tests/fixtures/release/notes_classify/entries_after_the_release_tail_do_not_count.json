@@ -1,0 +1,13 @@
+{
+  "args": [
+    "--body",
+    "body.md",
+    "--has-entries"
+  ],
+  "code": 1,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "",
+  "stdout": ""
+}

@@ -24,7 +24,7 @@ impl KvLifecycleObserver for RecordingKvObserver {
 fn cold_lookup_notifies_a_cache_miss() {
     let config = prefix_cache_test_config();
     let observer = Arc::new(RecordingKvObserver::default());
-    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+    let kv = KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled")
         .with_kv_lifecycle_observer(observer.clone());
@@ -46,7 +46,7 @@ fn cold_lookup_notifies_a_cache_miss() {
 fn repeated_prompt_lookup_notifies_a_cache_hit_with_bounded_counts() {
     let config = prefix_cache_test_config();
     let observer = Arc::new(RecordingKvObserver::default());
-    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+    let kv = KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled")
         .with_kv_lifecycle_observer(observer.clone());
@@ -87,7 +87,7 @@ fn repeated_prompt_lookup_notifies_a_cache_hit_with_bounded_counts() {
 fn eviction_notify_reaches_the_observer_with_bounded_counts() {
     let config = prefix_cache_test_config();
     let observer = Arc::new(RecordingKvObserver::default());
-    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+    let kv = KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled")
         .with_kv_lifecycle_observer(observer.clone());
@@ -114,7 +114,11 @@ fn real_initialization_notifies_started_then_completed() {
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         Some(skippy_runtime::ModelStateKind::Dense),
-        None,
+        Some(skippy_runtime::MemoryCacheCapabilities {
+            resident: true,
+            kv_recurrent: true,
+            full_state: true,
+        }),
         Some(observer.clone()),
     )
     .unwrap()
@@ -146,7 +150,11 @@ fn disabled_kv_config_never_notifies_init_at_all() {
     let kv = KvStageIntegration::from_loaded_model(
         &config,
         Some(skippy_runtime::ModelStateKind::Dense),
-        None,
+        Some(skippy_runtime::MemoryCacheCapabilities {
+            resident: true,
+            kv_recurrent: true,
+            full_state: true,
+        }),
         Some(observer.clone()),
     )
     .unwrap();
@@ -162,7 +170,7 @@ fn disabled_kv_config_never_notifies_init_at_all() {
 fn capacity_rejection_notifies_the_real_admission_deficit() {
     let config = prefix_cache_test_config();
     let observer = Arc::new(RecordingKvObserver::default());
-    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+    let kv = KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled")
         .with_kv_lifecycle_observer(observer.clone());
@@ -187,7 +195,7 @@ fn capacity_rejection_notifies_the_real_admission_deficit() {
 #[test]
 fn no_observer_attached_is_unaffected_and_never_panics() {
     let config = prefix_cache_test_config();
-    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+    let kv = KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let identity = kv.prefill_identity(

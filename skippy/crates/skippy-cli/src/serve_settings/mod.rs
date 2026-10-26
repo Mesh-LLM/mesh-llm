@@ -216,6 +216,15 @@ impl ServeSettings {
         command: &clap::Command,
         environment: impl Fn(&str) -> Option<String>,
     ) -> Result<()> {
+        for retired in [
+            "SKIPPY_SERVE_PREFIX_CACHE_PAYLOAD",
+            "SKIPPY_KV_CACHE_PAYLOAD",
+        ] {
+            anyhow::ensure!(
+                environment(retired).is_none(),
+                "{retired} was removed; the loaded runtime selects complete cache state"
+            );
+        }
         for name in known_arguments(command).keys() {
             if matches!(
                 name.as_str(),

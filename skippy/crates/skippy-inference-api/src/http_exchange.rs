@@ -12,7 +12,7 @@ use axum::{
 };
 
 use crate::{
-    OpenAiError, OpenAiErrorKind, RequestId,
+    InferenceError, InferenceErrorKind, RequestId,
     router::FrontendState,
     wire_bytes::{WireBytesObserver, observe_response_body},
 };
@@ -22,7 +22,7 @@ use crate::{
 #[derive(Default)]
 pub struct HttpExchangeAdmission {
     pub observer: Option<Arc<dyn WireBytesObserver>>,
-    pub denial: Option<OpenAiError>,
+    pub denial: Option<InferenceError>,
     pub observation_id: Option<String>,
     /// Bounded host-validated metadata supplied before response headers commit.
     pub response_headers: Vec<(String, String)>,
@@ -82,9 +82,9 @@ pub(crate) async fn http_exchange_middleware(
     let body = match to_bytes(body, limit).await {
         Ok(body) => body,
         Err(_) => {
-            return OpenAiError::from_kind(
+            return InferenceError::from_kind(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                OpenAiErrorKind::PayloadTooLarge,
+                InferenceErrorKind::PayloadTooLarge,
                 "request body exceeds lifecycle observation limit",
             )
             .into_response();

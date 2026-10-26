@@ -3,6 +3,35 @@ name: CI Linux Product Slice
 on:
   workflow_call:
     inputs:
+      require_skippy_receipts:
+        description: Require standalone Skippy qualification before consuming this product.
+        required: false
+        default: false
+        type: boolean
+      authority_linux_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_linux_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_macos_arm64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      authority_windows_x64:
+        description: Exact same-run protected native producer identity JSON, source SHA, artifact ID, independent digest, OS, and architecture.
+        required: false
+        default: ''
+        type: string
+      product_automation:
+        description: Optional same-run product-source automation identity JSON from the lane's product_automation producer (source SHA, artifact ID, executable digest, OS, architecture). When supplied the job restores that executable instead of compiling xtask.
+        required: true
+        type: string
       source_sha:
         description: Immutable product source revision.
         required: true
@@ -33,11 +62,6 @@ on:
         type: number
       fail_fast:
         description: Cancel sibling product rows after the first required failure.
-        required: false
-        default: false
-        type: boolean
-      require_skippy_receipts:
-        description: Bind the standalone Skippy qualification receipt record into the composed product manifest.
         required: false
         default: false
         type: boolean
@@ -109,6 +133,14 @@ jobs:
           persist-credentials: false
       - name: Verify product composition environment
         run: verify-runner-image public cpu
+      - name: Restore product-source automation
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ inputs.source_sha }}
+          artifact_id: ${{ fromJson(inputs.product_automation).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.product_automation).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.product_automation).producer_os }}
+          producer_arch: ${{ fromJson(inputs.product_automation).producer_arch }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ci-host-linux-${{ matrix.runtime.architecture }}
@@ -117,8 +149,9 @@ jobs:
         with:
           name: ci-runtime-linux-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
           path: runtime-input
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Download host qualification record
         if: ${{ inputs.require_skippy_receipts }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ci-host-skippy-receipts-linux-${{ matrix.runtime.architecture }}
           path: skippy-receipts
@@ -126,11 +159,11 @@ jobs:
         id: compose
         uses: ./.github/actions/compose-product-input
         with:
+          qualification_receipts: ${{ inputs.require_skippy_receipts && 'skippy-receipts/skippy-qualification-receipts.json' || '' }}
           host_input_dir: host-input
           runtime_input_dir: runtime-input
           output_dir: product-input
           backend: ${{ matrix.runtime.backend }}
-          qualification_receipts: ${{ inputs.require_skippy_receipts && 'skippy-receipts/skippy-qualification-receipts.json' || '' }}
       - name: Upload immutable Linux product
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

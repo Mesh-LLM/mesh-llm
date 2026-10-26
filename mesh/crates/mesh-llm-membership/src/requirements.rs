@@ -119,6 +119,7 @@ pub enum MeshRequirementRejectReason {
     NodeVersionMalformed,
     NodeVersionBelowMinimum,
     NodeVersionAboveMaximum,
+    NodeVersionAttestationMismatch,
     ProtocolGenerationBoundsInvalid,
     ProtocolGenerationBelowMinimum,
     ProtocolGenerationAboveMaximum,
@@ -171,6 +172,7 @@ impl MeshRequirementRejectReason {
             Self::NodeVersionMalformed => "node_version_malformed",
             Self::NodeVersionBelowMinimum => "node_version_below_minimum",
             Self::NodeVersionAboveMaximum => "node_version_above_maximum",
+            Self::NodeVersionAttestationMismatch => "node_version_attestation_mismatch",
             Self::ProtocolGenerationBoundsInvalid => "protocol_generation_bounds_invalid",
             Self::ProtocolGenerationBelowMinimum => "protocol_generation_below_minimum",
             Self::ProtocolGenerationAboveMaximum => "protocol_generation_above_maximum",
@@ -202,6 +204,9 @@ impl MeshRequirementRejectReason {
             }
             Self::NodeVersionAboveMaximum => {
                 "the peer mesh-llm version is above this mesh's maximum allowed version."
+            }
+            Self::NodeVersionAttestationMismatch => {
+                "the peer's advertised mesh-llm version does not match its signed release attestation."
             }
             Self::ProtocolGenerationBoundsInvalid => {
                 "the mesh protocol-generation requirement range is invalid."
@@ -540,7 +545,7 @@ impl MeshRequirements {
                 }
                 PeerReleaseAttestationStatus::Present {
                     signer_key,
-                    attested_version: _,
+                    attested_version,
                 } => {
                     if !normalized_release_attestation
                         .allowed_signer_keys
@@ -560,6 +565,22 @@ impl MeshRequirements {
                                 MeshRequirementRejectReason::ReleaseSignerUntrusted,
                             );
                         }
+                    }
+                    // The attested version is signed by the release signer; the
+                    // advertised version is self-reported. The version gate above
+                    // is evaluated on the advertised value, so a mismatch here
+                    // means the peer could sidestep the floor/ceiling by lying.
+                    // Checked after signer trust: an untrusted signer's attested
+                    // version carries no weight. A missing advertised version is
+                    // already handled by the version gate when it is constrained.
+                    if let (Some(attested), Some(advertised)) = (
+                        attested_version.as_deref(),
+                        input.advertised_node_version.as_deref(),
+                    ) && !node_versions_equivalent(attested, advertised)
+                    {
+                        return MeshRequirementDecision::Rejected(
+                            MeshRequirementRejectReason::NodeVersionAttestationMismatch,
+                        );
                     }
                 }
             }
@@ -598,6 +619,13 @@ impl MeshRequirements {
         };
         requirements.validate()?;
         Ok(requirements)
+    }
+}
+
+fn node_versions_equivalent(attested: &str, advertised: &str) -> bool {
+    match (parse_node_version(attested), parse_node_version(advertised)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => attested.trim().trim_start_matches('v') == advertised.trim().trim_start_matches('v'),
     }
 }
 

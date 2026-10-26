@@ -270,7 +270,7 @@ async fn tool_result_enforce_mode_returns_text_successfully() {
         "Qwen3-8B-Q4_K_M",
         "The answer is 10!",
     ))]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -319,7 +319,7 @@ async fn malformed_tool_arguments_retry_once_then_succeed() {
             Usage::new(7, 3),
         )),
     ]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -374,7 +374,7 @@ async fn retry_exhaustion_returns_openai_error() {
             r#"{"name":"lookup","arguments":"still-bad"}"#,
         )),
     ]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend,
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -410,7 +410,7 @@ async fn pass_last_text_exhaustion_returns_safe_final_text() {
             Usage::new(5, 4),
         ),
     )]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend,
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -454,7 +454,7 @@ async fn pass_last_text_rejects_mixed_synthetic_and_real_exhausted_output() {
             Usage::new(5, 4),
         ),
     )]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend,
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -491,7 +491,7 @@ async fn pass_last_text_rejects_sentinel_leaking_text_without_safe_fallback() {
             Usage::new(4, 3),
         ),
     )]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend,
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -533,7 +533,7 @@ async fn mixed_mesh_respond_plus_real_tool_calls_retry_exhaustion_handling() {
         Ok(invalid.clone()),
         Ok(invalid),
     ]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -574,7 +574,7 @@ async fn final_visible_usage_equals_final_attempt_usage_only() {
             Usage::new(3, 2),
         )),
     ]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend,
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -602,7 +602,7 @@ async fn no_mesh_tool_survives_responses_function_call_conversion() {
         json!([{"type":"function","function":{"name":"_mesh_emit_structured","arguments":"{\"answer\":42}"}}]),
         None,
     ))]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend,
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -637,7 +637,7 @@ async fn no_mesh_tool_survives_responses_function_call_conversion() {
 #[tokio::test]
 async fn structured_response_format_rewrites_to_synthetic_tool() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -697,7 +697,7 @@ async fn valid_structured_payload_becomes_json_assistant_text() {
         }]),
         None,
     ))]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend,
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -751,7 +751,7 @@ async fn invalid_structured_payload_retries_then_exhaustion_error() {
             None,
         )),
     ]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -780,7 +780,7 @@ async fn invalid_structured_payload_retries_then_exhaustion_error() {
 #[tokio::test]
 async fn unsupported_schema_feature_behavior_is_explicit_and_asserted() {
     let backend = Arc::new(RecordingBackend::default());
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::Enforce,
@@ -831,7 +831,7 @@ async fn metrics_only_failed_validation_returns_original_backend_response() {
     );
     let telemetry = Arc::new(RecordingTelemetrySink::default());
     let backend = Arc::new(SequencedBackend::new(vec![Ok(original.clone())]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::MetricsOnly,
@@ -865,7 +865,7 @@ async fn metrics_only_eligible_tool_request_does_not_rewrite_or_sanitize() {
     let original = response_with_content("Qwen3-8B-Q4_K_M", "plain assistant text");
     let telemetry = Arc::new(RecordingTelemetrySink::default());
     let backend = Arc::new(SequencedBackend::new(vec![Ok(original.clone())]));
-    let guarded = GuardedOpenAiBackend::new(
+    let guarded = GuardedInferenceBackend::new(
         backend.clone(),
         GuardrailPolicy {
             mode: GuardrailMode::MetricsOnly,

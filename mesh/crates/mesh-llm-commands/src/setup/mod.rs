@@ -8,8 +8,14 @@ mod planner;
 mod prompt;
 mod service;
 pub(crate) mod service_files;
+pub(crate) mod service_host;
+#[cfg(windows)]
+mod service_host_windows;
 pub(crate) mod service_paths;
 pub(crate) mod service_runner;
+// Only the Windows service host runs it; its tests run everywhere.
+#[cfg(any(windows, test))]
+mod service_supervisor;
 mod service_templates;
 pub(crate) mod summary;
 
@@ -22,6 +28,7 @@ pub use plan::{
 };
 pub use planner::{SetupPlanError, plan_setup};
 pub use prompt::{SetupConfirmPrompt, SetupPromptDefault, SetupPromptKind, SetupPrompter};
+pub use service_host::run_service_host;
 
 #[cfg(test)]
 mod cli_actions_tests;
@@ -34,6 +41,9 @@ mod github_tests;
 
 #[cfg(test)]
 mod orchestration_tests;
+
+#[cfg(test)]
+mod service_host_tests;
 
 #[cfg(test)]
 mod service_tests;

@@ -35,7 +35,7 @@ impl InferenceRpcBridge {
         Self {
             api_port,
             plugins,
-            client: reqwest::Client::new(),
+            client: crate::network::local_http::local_http_client(),
         }
     }
 
@@ -867,6 +867,7 @@ mod tests {
         mesh_llm_payments_types::pricing::Pricing {
             input_msat_per_million: 1,
             output_msat_per_million: 1,
+            cache_discount_percent: 0,
         }
     }
 

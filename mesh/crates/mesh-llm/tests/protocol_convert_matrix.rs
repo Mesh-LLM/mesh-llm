@@ -607,6 +607,48 @@ fn mesh_requirements_release_attestation_rejects_untrusted_signer() {
 }
 
 #[test]
+fn mesh_requirements_release_attestation_rejects_advertised_version_mismatch() {
+    let requirements = MeshRequirements {
+        node_version: NodeVersionBounds {
+            min: Some("0.65.1".into()),
+            max: None,
+        },
+        release_attestation: ReleaseAttestationRequirement {
+            required: true,
+            allowed_signer_keys: vec!["trusted-signer".into()],
+        },
+        ..MeshRequirements::unrestricted()
+    };
+    // Self-reported version clears the floor, but the signed attestation says
+    // the binary is actually older: the attested value wins.
+    assert_eq!(
+        requirements.evaluate(&MeshRequirementEvaluationInput {
+            advertised_node_version: Some("0.65.1".into()),
+            release_attestation: PeerReleaseAttestationStatus::Present {
+                signer_key: Some("trusted-signer".into()),
+                attested_version: Some("0.64.0".into()),
+            },
+            ..stable_requirement_input()
+        }),
+        MeshRequirementDecision::Rejected(
+            MeshRequirementRejectReason::NodeVersionAttestationMismatch
+        )
+    );
+    // Equivalent spellings are still accepted.
+    assert_eq!(
+        requirements.evaluate(&MeshRequirementEvaluationInput {
+            advertised_node_version: Some("0.65.1".into()),
+            release_attestation: PeerReleaseAttestationStatus::Present {
+                signer_key: Some("trusted-signer".into()),
+                attested_version: Some("v0.65.1".into()),
+            },
+            ..stable_requirement_input()
+        }),
+        MeshRequirementDecision::Accepted
+    );
+}
+
+#[test]
 fn mesh_requirements_release_attestation_rejects_mismatched_policy_hash() {
     let policy = MeshGenesisPolicy::new("owner-123", 1_717_171_717_000, restricted_requirements())
         .expect("policy should validate");

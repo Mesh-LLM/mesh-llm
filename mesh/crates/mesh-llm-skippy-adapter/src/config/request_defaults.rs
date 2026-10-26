@@ -161,6 +161,10 @@ pub(super) fn resolve_request_defaults(
             .or_else(|| global.and_then(|value| value.reasoning_budget.clone())),
         chat_template,
         chat_template_file,
+        allow_request_chat_template: request_defaults
+            .and_then(|v| v.allow_request_chat_template)
+            .or_else(|| model.and_then(|v| v.allow_request_chat_template))
+            .or_else(|| global.and_then(|v| v.allow_request_chat_template)),
         jinja: request_defaults
             .and_then(|v| v.jinja)
             .or_else(|| model.and_then(|v| v.jinja))

@@ -47,36 +47,118 @@ concurrency:
   cancel-in-progress: ${{ inputs.original_event_name == 'pull_request' }}
 
 jobs:
-  skippy_cli:
-    name: Standalone Skippy CLI
-    if: ${{ fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
-    uses: ./.github/workflows/ci-skippy-cli-slice.yml
+  authority_source:
+    name: Freeze protected automation source
+    if: ${{ (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) || (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null || fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null || fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GIT_MASTER: '1'
+      MESH_LLM_POSTHOG_KEY: ''
+    outputs:
+      source_sha: ${{ steps.freeze.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Freeze the protected commit
+        id: freeze
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+  authority_linux_x64:
+    name: Protected linux x64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
     with:
-      source_sha: ${{ inputs.source_sha }}
-      original_event_name: ${{ inputs.original_event_name }}
-      platform: windows
-      architecture: ${{ fromJson(inputs.lane_plan_json).matrices.hosts[0].architecture }}
-      profile: release
+      platform: linux-x64
+      lane: windows
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
+  authority_windows_x64:
+    name: Protected windows x64 automation
+    needs: authority_source
+    if: ${{ needs.authority_source.result == 'success' && (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null || fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null || fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/protected-automation-artifact.yml
+    with:
+      platform: windows-x64
+      lane: windows
+      protected_source_sha: ${{ needs.authority_source.outputs.source_sha }}
+
+  product_automation_windows_x64:
+    name: Product windows x64 automation
+    if: ${{ (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null || fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/product-automation-artifact.yml
+    with:
+      platform: windows-x64
+      lane: windows
+      product_source_sha: ${{ inputs.source_sha }}
 
   ui_artifact:
+    needs: [authority_linux_x64]
     name: Console artifact
-    if: ${{ fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
+    if: ${{ (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) && needs.authority_linux_x64.result == 'success' }}
     uses: ./.github/workflows/ci-ui-artifact-slice.yml
     with:
+      authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       artifact_name: ci-ui-dist-windows-${{ github.run_id }}
       retention_days: 1
 
+  skippy_cli:
+    name: Standalone Skippy CLI
+    needs: [product_automation_windows_x64]
+    if: ${{ fromJson(inputs.lane_plan_json).matrices.hosts[0] != null && needs.product_automation_windows_x64.result == 'success' }}
+    uses: ./.github/workflows/ci-skippy-cli-slice.yml
+    with:
+      product_automation: ${{ needs.product_automation_windows_x64.outputs.identity_json }}
+      source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      platform: windows
+      architecture: ${{ fromJson(inputs.lane_plan_json).matrices.hosts[0].architecture }}
+      profile: release
+
+  skippy_product:
+    name: Standalone Skippy qualification
+    needs: [skippy_cli, native_runtimes, product_automation_windows_x64]
+    if: ${{ !cancelled() && needs.skippy_cli.result == 'success' && needs.native_runtimes.result == 'success' && needs.product_automation_windows_x64.result == 'success' && fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null }}
+    uses: ./.github/workflows/ci-skippy-product-slice.yml
+    with:
+      product_automation: ${{ needs.product_automation_windows_x64.outputs.identity_json }}
+      source_sha: ${{ inputs.source_sha }}
+      original_event_name: ${{ inputs.original_event_name }}
+      plan_digest: ${{ inputs.plan_digest }}
+      platform: windows
+      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
+      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
+
   hosts:
     name: Neutral Windows host
-    needs: [ui_artifact, skippy_product]
-    if: ${{ !cancelled() && needs.ui_artifact.result == 'success' && needs.skippy_product.result == 'success' && fromJson(inputs.lane_plan_json).matrices.hosts[0] != null }}
+    needs: [skippy_product, ui_artifact, authority_windows_x64, product_automation_windows_x64]
+    if: ${{ needs.skippy_product.result == 'success' && (!cancelled() && needs.ui_artifact.result == 'success' && fromJson(inputs.lane_plan_json).matrices.hosts[0] != null) && needs.authority_windows_x64.result == 'success' && needs.product_automation_windows_x64.result == 'success' }}
     uses: ./.github/workflows/ci-windows-host-slice.yml
     with:
       plan_digest: ${{ inputs.plan_digest }}
       require_skippy_receipts: true
+      authority_windows_x64: ${{ needs.authority_windows_x64.outputs.identity_json }}
+      product_automation: ${{ needs.product_automation_windows_x64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -87,10 +169,13 @@ jobs:
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   native_runtimes:
+    needs: [authority_windows_x64, product_automation_windows_x64]
     name: Native Windows runtimes
-    if: ${{ fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null }}
+    if: ${{ (fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null) && needs.authority_windows_x64.result == 'success' && needs.product_automation_windows_x64.result == 'success' }}
     uses: ./.github/workflows/ci-windows-runtime-slice.yml
     with:
+      authority_windows_x64: ${{ needs.authority_windows_x64.outputs.identity_json }}
+      product_automation: ${{ needs.product_automation_windows_x64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -98,27 +183,15 @@ jobs:
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
-  skippy_product:
-    name: Standalone Skippy products
-    needs: [skippy_cli, native_runtimes]
-    if: ${{ !cancelled() && needs.skippy_cli.result == 'success' && needs.native_runtimes.result == 'success' }}
-    uses: ./.github/workflows/ci-skippy-product-slice.yml
-    with:
-      source_sha: ${{ inputs.source_sha }}
-      original_event_name: ${{ inputs.original_event_name }}
-      platform: windows
-      runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
-      plan_digest: ${{ inputs.plan_digest }}
-      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.windows_max_parallel }}
-      fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
-
   runtime_product:
     name: Windows products
-    needs: [hosts, native_runtimes]
-    if: ${{ !cancelled() && needs.hosts.result == 'success' && needs.native_runtimes.result == 'success' }}
+    needs: [hosts, native_runtimes, authority_windows_x64, product_automation_windows_x64]
+    if: ${{ (!cancelled() && needs.hosts.result == 'success' && needs.native_runtimes.result == 'success') && needs.authority_windows_x64.result == 'success' && needs.product_automation_windows_x64.result == 'success' }}
     uses: ./.github/workflows/ci-windows-product-slice.yml
     with:
       require_skippy_receipts: true
+      authority_windows_x64: ${{ needs.authority_windows_x64.outputs.identity_json }}
+      product_automation: ${{ needs.product_automation_windows_x64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -127,10 +200,12 @@ jobs:
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   platform_checks:
+    needs: [authority_windows_x64]
     name: Windows checks
-    if: ${{ fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null }}
+    if: ${{ (fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null) && needs.authority_windows_x64.result == 'success' }}
     uses: ./.github/workflows/ci-platform-checks-slice.yml
     with:
+      authority_windows_x64: ${{ needs.authority_windows_x64.outputs.identity_json }}
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
@@ -154,7 +229,7 @@ jobs:
 
   summary:
     name: CI / Windows
-    needs: [skippy_cli, skippy_product, ui_artifact, hosts, native_runtimes, runtime_product, platform_checks, product_smoke]
+    needs: [skippy_cli, skippy_product, ui_artifact, hosts, native_runtimes, runtime_product, platform_checks, product_smoke, authority_source, authority_linux_x64, authority_windows_x64, product_automation_windows_x64]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:
@@ -163,16 +238,20 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.repository.default_branch }}
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+      - uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
       - name: Validate planned Windows jobs
         id: validate
         continue-on-error: true
         env:
           LANE_PLAN: ${{ inputs.lane_plan_json }}
           NEEDS_RESULTS: ${{ toJson(needs) }}
-        run: python3 scripts/validate-ci-lane-results.py --lane-plan "$LANE_PLAN" --needs "$NEEDS_RESULTS"
-      - uses: ./.github/actions/report-ci-lane
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci validate-lane --lane-plan "$LANE_PLAN" --needs "$NEEDS_RESULTS"'
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/report-ci-lane
         with:
           lane_name: CI / Windows
           lane_result: ${{ steps.validate.outcome == 'success' && 'success' || 'failure' }}

@@ -154,14 +154,12 @@ fn exact_prefill_record_allowed(
 mod tests {
     use super::*;
     use crate::binary_transport::stage_execution::prefix_cache_test_config;
-    use skippy_protocol::{StageKvCachePayload, binary::StageStateHeader};
+    use skippy_protocol::binary::StageStateHeader;
     use skippy_runtime::ModelStateKind;
 
     fn exact_prefill_fixture(prompt_token_count: i32) -> (KvStageIntegration, StageWireMessage) {
-        let mut config = prefix_cache_test_config();
-        config.kv_cache.as_mut().expect("test cache config").payload =
-            StageKvCachePayload::KvRecurrent;
-        let kv = KvStageIntegration::from_config(&config, ModelStateKind::Recurrent)
+        let config = prefix_cache_test_config();
+        let kv = KvStageIntegration::from_test_state(&config, ModelStateKind::Recurrent)
             .unwrap()
             .expect("exact cache enabled");
         let mut state =
@@ -258,7 +256,11 @@ mod tests {
         let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
             &config,
             Some(ModelStateKind::Dense),
-            None,
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: true,
+                kv_recurrent: true,
+                full_state: true,
+            }),
             Some(manager),
             None,
         )

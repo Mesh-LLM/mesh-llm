@@ -1,0 +1,11 @@
+{
+  "args": [
+    "v2.0.0"
+  ],
+  "code": 2,
+  "gh_argv": [],
+  "git_argv": [],
+  "outputs": {},
+  "stderr": "'utf-8' codec can't decode byte 0xff in position 7: invalid start byte\n",
+  "stdout": ""
+}

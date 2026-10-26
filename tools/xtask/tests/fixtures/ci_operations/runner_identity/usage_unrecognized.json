@@ -1,0 +1,5 @@
+{
+  "code": 2,
+  "stderr": "usage: runner-image-identity.py [-h] [--root ROOT] [--catalog CATALOG]\n                                {validate,check,diagnose,lookup,seed-key,bind} ...\nrunner-image-identity.py: error: unrecognized arguments: extra --x=1\n",
+  "stdout": ""
+}

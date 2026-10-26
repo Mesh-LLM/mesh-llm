@@ -37,6 +37,7 @@ mod tests {
 
     #[test]
     fn invalid_selected_backend_device_fails_before_model_open() {
+        crate::test_support::require_native_runtime();
         let _native_log_guard = crate::logging::native_log_test_guard();
         let config = RuntimeConfig {
             selected_backend_device: Some("definitely-not-a-device".to_string()),
@@ -319,6 +320,29 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn detokenize_rejects_ids_outside_the_vocabulary_when_model_is_configured()
+    -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model(&model_path)?;
+        let tokens = model.tokenize("in range", false)?;
+        assert!(!model.detokenize(&tokens)?.is_empty());
+
+        // Out-of-range ids used to throw inside the vocab lookup, and the
+        // exception aborted the process when it crossed the C ABI.
+        for token in [-1, i32::MAX] {
+            let error = model.detokenize_bytes(&[token]).unwrap_err();
+            assert!(
+                error.to_string().contains("outside the vocabulary"),
+                "token={token}: {error:#}"
+            );
+        }
+        Ok(())
+    }
+
     // Requires SKIPPY_CORRECTNESS_MODEL to point at a reasoning-capable model
     // family whose chat parser extracts <think> blocks (e.g. Qwen3).
     #[test]
@@ -444,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn configure_chat_sampling_survives_bad_metadata_json() -> anyhow::Result<()> {
+    fn configure_chat_sampling_rejects_bad_metadata_and_recovers() -> anyhow::Result<()> {
         let Some(model_path) = correctness_model() else {
             eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
             return Ok(());
@@ -452,17 +476,38 @@ mod tests {
         let model = open_correctness_model(&model_path)?;
         let mut session = model.create_session()?;
         let sampling = SamplingConfig {
+            enabled: true,
             temperature: 0.0,
+            // Without the recovered grammar, sampling would choose token 43.
+            logit_bias: vec![crate::LogitBias {
+                token_id: 43,
+                bias: 100_000.0,
+            }],
             ..Default::default()
         };
-        // Send deliberately malformed JSON — the C++ catch blocks
-        // should clear chat sampling and return success instead of
-        // surfacing the parse error as a fatal status.
-        let result = session.configure_chat_sampling("this is not valid json", 0, Some(&sampling));
-        assert!(
-            result.is_ok(),
-            "configure_chat_sampling should return Ok even with bad metadata: {result:?}"
-        );
+        for metadata in ["this is not valid json", r#"{"grammar":7}"#] {
+            session.reset()?;
+            session.configure_chat_sampling(
+                r#"{"grammar":"root ::= <[43]>"}"#,
+                1,
+                Some(&sampling),
+            )?;
+            // A parse or type error must reach the caller so serving aborts
+            // the request instead of silently generating without its grammar.
+            let error = session
+                .configure_chat_sampling(metadata, 1, Some(&sampling))
+                .expect_err("invalid sampling metadata must fail");
+            assert!(error.to_string().contains("RuntimeError"), "{error:#}");
+
+            // A later valid request can configure a different grammar. Prove
+            // decoding obeys it rather than keeping the old or no grammar.
+            session.configure_chat_sampling(
+                r#"{"grammar":"root ::= <[42]>"}"#,
+                1,
+                Some(&sampling),
+            )?;
+            assert_eq!(session.decode_step_sampled(1, Some(&sampling))?, 42);
+        }
         Ok(())
     }
 

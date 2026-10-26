@@ -6,7 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::errors::OpenAiError;
+use crate::errors::InferenceError;
 
 const MAX_AGENT_SESSION_ID_BYTES: usize = 512;
 const INTERNAL_AGENT_SESSION_ID: &str = "mesh_internal_agent_session_id";
@@ -34,14 +34,14 @@ pub struct AgentSessionIdentity {
 }
 
 impl AgentSessionIdentity {
-    pub fn new(id: impl Into<String>, source: AgentSessionSource) -> Result<Self, OpenAiError> {
+    pub fn new(id: impl Into<String>, source: AgentSessionSource) -> Result<Self, InferenceError> {
         let id = id.into();
         let trimmed = id.trim();
         if trimmed.is_empty()
             || trimmed.len() > MAX_AGENT_SESSION_ID_BYTES
             || trimmed.chars().any(char::is_control)
         {
-            return Err(OpenAiError::invalid_request(
+            return Err(InferenceError::invalid_request(
                 "agent session identity must be non-empty, printable, and at most 512 bytes",
             ));
         }
@@ -136,7 +136,7 @@ impl StopSequence {
 /// authoritative and all source compatibility fields remain present.
 pub(crate) fn normalize_reasoning_compat_fields(
     object: &mut Map<String, Value>,
-) -> Result<bool, OpenAiError> {
+) -> Result<bool, InferenceError> {
     let mut enable_thinking = reasoning_object_override(object.get("reasoning"))?;
 
     if let Some(effort) = optional_string_field(object, "reasoning_effort")? {
@@ -144,7 +144,7 @@ pub(crate) fn normalize_reasoning_compat_fields(
             "none" => false,
             "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => true,
             _ => {
-                return Err(OpenAiError::invalid_request(
+                return Err(InferenceError::invalid_request(
                     "reasoning_effort must be one of none, minimal, low, medium, high, xhigh, max",
                 ));
             }
@@ -172,7 +172,7 @@ pub(crate) fn normalize_reasoning_compat_fields(
     Ok(true)
 }
 
-fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, OpenAiError> {
+fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, InferenceError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -181,7 +181,7 @@ fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, Open
     }
     let object = value
         .as_object()
-        .ok_or_else(|| OpenAiError::invalid_request("reasoning must be an object"))?;
+        .ok_or_else(|| InferenceError::invalid_request("reasoning must be an object"))?;
     let enabled = optional_bool_field(object, "enabled")?;
     let effort = optional_string_field(object, "effort")?;
     let effort_is_valid = match effort {
@@ -189,7 +189,7 @@ fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, Open
         Some(_) => false,
     };
     if !effort_is_valid {
-        return Err(OpenAiError::invalid_request(
+        return Err(InferenceError::invalid_request(
             "reasoning.effort must be one of none, minimal, low, medium, high, xhigh, max",
         ));
     }
@@ -204,7 +204,7 @@ fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, Open
     }
 }
 
-fn chat_template_kwargs_override(object: &Map<String, Value>) -> Result<bool, OpenAiError> {
+fn chat_template_kwargs_override(object: &Map<String, Value>) -> Result<bool, InferenceError> {
     let Some(value) = object.get("chat_template_kwargs") else {
         return Ok(false);
     };
@@ -213,7 +213,7 @@ fn chat_template_kwargs_override(object: &Map<String, Value>) -> Result<bool, Op
     }
     let kwargs = value
         .as_object()
-        .ok_or_else(|| OpenAiError::invalid_request("chat_template_kwargs must be an object"))?;
+        .ok_or_else(|| InferenceError::invalid_request("chat_template_kwargs must be an object"))?;
     for field in THINKING_BOOLEAN_ALIASES {
         if optional_bool_field(kwargs, field)?.is_some() {
             return Ok(true);
@@ -224,7 +224,7 @@ fn chat_template_kwargs_override(object: &Map<String, Value>) -> Result<bool, Op
 
 fn ensure_chat_template_kwargs_object(
     object: &mut Map<String, Value>,
-) -> Result<&mut Map<String, Value>, OpenAiError> {
+) -> Result<&mut Map<String, Value>, InferenceError> {
     if !object.contains_key("chat_template_kwargs") {
         object.insert(
             "chat_template_kwargs".to_string(),
@@ -234,20 +234,20 @@ fn ensure_chat_template_kwargs_object(
     object
         .get_mut("chat_template_kwargs")
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| OpenAiError::invalid_request("chat_template_kwargs must be an object"))
+        .ok_or_else(|| InferenceError::invalid_request("chat_template_kwargs must be an object"))
 }
 
 fn optional_bool_field(
     object: &Map<String, Value>,
     field: &str,
-) -> Result<Option<bool>, OpenAiError> {
+) -> Result<Option<bool>, InferenceError> {
     object
         .get(field)
         .filter(|value| !value.is_null())
         .map(|value| {
-            value
-                .as_bool()
-                .ok_or_else(|| OpenAiError::invalid_request(format!("{field} must be a boolean")))
+            value.as_bool().ok_or_else(|| {
+                InferenceError::invalid_request(format!("{field} must be a boolean"))
+            })
         })
         .transpose()
 }
@@ -255,14 +255,14 @@ fn optional_bool_field(
 fn optional_string_field<'a>(
     object: &'a Map<String, Value>,
     field: &str,
-) -> Result<Option<&'a str>, OpenAiError> {
+) -> Result<Option<&'a str>, InferenceError> {
     object
         .get(field)
         .filter(|value| !value.is_null())
         .map(|value| {
             value
                 .as_str()
-                .ok_or_else(|| OpenAiError::invalid_request(format!("{field} must be a string")))
+                .ok_or_else(|| InferenceError::invalid_request(format!("{field} must be a string")))
         })
         .transpose()
 }
@@ -270,13 +270,13 @@ fn optional_string_field<'a>(
 fn optional_u32_field(
     object: &Map<String, Value>,
     field: &str,
-) -> Result<Option<u32>, OpenAiError> {
+) -> Result<Option<u32>, InferenceError> {
     object
         .get(field)
         .filter(|value| !value.is_null())
         .map(|value| {
             serde_json::from_value::<u32>(value.clone())
-                .map_err(|_| OpenAiError::invalid_request(format!("{field} must be an integer")))
+                .map_err(|_| InferenceError::invalid_request(format!("{field} must be an integer")))
         })
         .transpose()
 }
@@ -338,7 +338,7 @@ pub fn normalize_reasoning_template_options(
     reasoning: Option<&ReasoningConfig>,
     reasoning_effort: Option<ReasoningEffort>,
     extra: &BTreeMap<String, Value>,
-) -> Result<ReasoningTemplateOptions, OpenAiError> {
+) -> Result<ReasoningTemplateOptions, InferenceError> {
     let mut options = ReasoningTemplateOptions::default();
 
     if let Some(reasoning) = reasoning {
@@ -378,7 +378,7 @@ pub fn normalize_reasoning_template_options(
 
     if let Some(value) = extra.get("chat_template_kwargs") {
         let object = value.as_object().ok_or_else(|| {
-            OpenAiError::invalid_request("chat_template_kwargs must be an object")
+            InferenceError::invalid_request("chat_template_kwargs must be an object")
         })?;
         for (field, value) in object {
             options
@@ -388,7 +388,7 @@ pub fn normalize_reasoning_template_options(
         for field in THINKING_BOOLEAN_ALIASES {
             if let Some(value) = object.get(*field) {
                 let enabled = value.as_bool().ok_or_else(|| {
-                    OpenAiError::invalid_request(format!(
+                    InferenceError::invalid_request(format!(
                         "chat_template_kwargs.{field} must be a boolean"
                     ))
                 })?;
@@ -417,13 +417,13 @@ impl ReasoningEffort {
 fn optional_u32_extra(
     extra: &BTreeMap<String, Value>,
     field: &str,
-) -> Result<Option<u32>, OpenAiError> {
+) -> Result<Option<u32>, InferenceError> {
     extra
         .get(field)
         .filter(|value| !value.is_null())
         .map(|value| {
             serde_json::from_value::<u32>(value.clone())
-                .map_err(|_| OpenAiError::invalid_request(format!("{field} must be an integer")))
+                .map_err(|_| InferenceError::invalid_request(format!("{field} must be an integer")))
         })
         .transpose()
 }
@@ -431,14 +431,14 @@ fn optional_u32_extra(
 fn optional_bool_extra(
     extra: &BTreeMap<String, Value>,
     field: &str,
-) -> Result<Option<bool>, OpenAiError> {
+) -> Result<Option<bool>, InferenceError> {
     extra
         .get(field)
         .filter(|value| !value.is_null())
         .map(|value| {
-            value
-                .as_bool()
-                .ok_or_else(|| OpenAiError::invalid_request(format!("{field} must be a boolean")))
+            value.as_bool().ok_or_else(|| {
+                InferenceError::invalid_request(format!("{field} must be a boolean"))
+            })
         })
         .transpose()
 }

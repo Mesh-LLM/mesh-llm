@@ -253,6 +253,11 @@ message LightningOffer {
   uint64 output_msat_per_million = 3;
   // Deprecated and ignored on read; sellers send 1 for older buyers.
   uint64 minimum_invoice_msat = 4;
+  // Optional cached-input discount percentage, 0..100; absent means full rate.
+  uint32 cache_discount_percent = 5;
+  // Payment protocol the seller accepts payment over (3 = metered v3).
+  // Absent (0) on releases before v3; buyers skip such paid offers.
+  uint32 payment_protocol = 6;
 }
 
 enum InferenceAdmissionState {
@@ -464,6 +469,7 @@ enum ModelWorkloadClass {
   MODEL_WORKLOAD_CLASS_ENCODER_DECODER = 4;
   MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS = 5;
   MODEL_WORKLOAD_CLASS_DECISION = 6;
+  MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION = 7;
 }
 
 message ServedModelIdentity {

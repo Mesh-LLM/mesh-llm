@@ -46,6 +46,7 @@ lifecycle_health_interval_ms = 5000
 #[test]
 fn stage_zero_runtime_config_carries_the_admitted_activation_frontier() {
     let mut load = stage_load_request(LoadMode::RuntimeSlice);
+    load.admission.kv_graph_state = "dense".to_string();
     let profile = load
         .admission
         .profiles

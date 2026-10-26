@@ -1,0 +1,17 @@
+{
+  "args": [
+    "--input",
+    "truncated.json",
+    "--compare-input",
+    "missing.json",
+    "--json-out",
+    "out/nested/metrics.json",
+    "--markdown-out",
+    "md/nested/summary.md"
+  ],
+  "code": 2,
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: Expecting value: line 1 column 11 (char 10)\n",
+  "stdout": ""
+}

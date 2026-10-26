@@ -6,23 +6,24 @@ use axum::http::StatusCode;
 use skippy_events::usage::TokenUsage;
 
 use crate::lifecycle::{
-    CLIENT_CLOSED_REQUEST_STATUS, OpenAiFailure, OpenAiLifecycleContext, OpenAiLifecycleEvent,
-    OpenAiLifecycleObserver, OpenAiRejection, OpenAiTerminalResult, failure_for_status,
+    CLIENT_CLOSED_REQUEST_STATUS, InferenceFailure, InferenceLifecycleContext,
+    InferenceLifecycleEvent, InferenceLifecycleObserver, InferenceRejection,
+    InferenceTerminalResult, failure_for_status,
 };
 
 pub(crate) struct RequestLifecycle {
-    observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
-    context: OpenAiLifecycleContext,
+    observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+    context: InferenceLifecycleContext,
     terminal_or_transferred: bool,
 }
 
 impl RequestLifecycle {
     pub(crate) fn admit(
-        observer: Option<Arc<dyn OpenAiLifecycleObserver>>,
-        context: OpenAiLifecycleContext,
+        observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+        context: InferenceLifecycleContext,
     ) -> Self {
         if let Some(observer) = &observer {
-            observer.observe(&OpenAiLifecycleEvent::Admitted {
+            observer.observe(&InferenceLifecycleEvent::Admitted {
                 context: context.clone(),
             });
         }
@@ -44,37 +45,37 @@ impl RequestLifecycle {
         }
         self.terminal_or_transferred = true;
         let event = if status.as_u16() == CLIENT_CLOSED_REQUEST_STATUS {
-            OpenAiLifecycleEvent::NonStreamTerminal {
+            InferenceLifecycleEvent::NonStreamTerminal {
                 context: self.context.clone(),
-                result: OpenAiTerminalResult::Failed {
+                result: InferenceTerminalResult::Failed {
                     status_code: CLIENT_CLOSED_REQUEST_STATUS,
-                    failure: OpenAiFailure::Cancelled,
+                    failure: InferenceFailure::Cancelled,
                 },
                 exchange_id,
             }
         } else if status.is_client_error() {
-            OpenAiLifecycleEvent::Rejected {
+            InferenceLifecycleEvent::Rejected {
                 context: self.context.clone(),
                 status_code: status.as_u16(),
                 rejection: rejection_for_status(status),
             }
         } else {
             let result = if status.is_server_error() {
-                OpenAiTerminalResult::Failed {
+                InferenceTerminalResult::Failed {
                     status_code: status.as_u16(),
                     failure: failure_for_status(status),
                 }
             } else if let Some(usage) = usage {
-                OpenAiTerminalResult::CompletedWithUsage {
+                InferenceTerminalResult::CompletedWithUsage {
                     status_code: status.as_u16(),
                     usage,
                 }
             } else {
-                OpenAiTerminalResult::Completed {
+                InferenceTerminalResult::Completed {
                     status_code: status.as_u16(),
                 }
             };
-            OpenAiLifecycleEvent::NonStreamTerminal {
+            InferenceLifecycleEvent::NonStreamTerminal {
                 context: self.context.clone(),
                 result,
                 exchange_id,
@@ -87,7 +88,7 @@ impl RequestLifecycle {
         self.terminal_or_transferred = true;
     }
 
-    fn observe(&self, event: &OpenAiLifecycleEvent) {
+    fn observe(&self, event: &InferenceLifecycleEvent) {
         if let Some(observer) = &self.observer {
             observer.observe(event);
         }
@@ -100,19 +101,19 @@ impl Drop for RequestLifecycle {
             return;
         }
         self.terminal_or_transferred = true;
-        self.observe(&OpenAiLifecycleEvent::RequestCancelled {
+        self.observe(&InferenceLifecycleEvent::RequestCancelled {
             context: self.context.clone(),
         });
     }
 }
 
-fn rejection_for_status(status: StatusCode) -> OpenAiRejection {
+fn rejection_for_status(status: StatusCode) -> InferenceRejection {
     match status {
-        StatusCode::PAYLOAD_TOO_LARGE => OpenAiRejection::PayloadTooLarge,
-        StatusCode::METHOD_NOT_ALLOWED => OpenAiRejection::MethodNotAllowed,
-        StatusCode::NOT_FOUND => OpenAiRejection::NotFound,
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => OpenAiRejection::AdmissionDenied,
-        _ => OpenAiRejection::InvalidRequest,
+        StatusCode::PAYLOAD_TOO_LARGE => InferenceRejection::PayloadTooLarge,
+        StatusCode::METHOD_NOT_ALLOWED => InferenceRejection::MethodNotAllowed,
+        StatusCode::NOT_FOUND => InferenceRejection::NotFound,
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => InferenceRejection::AdmissionDenied,
+        _ => InferenceRejection::InvalidRequest,
     }
 }
 
@@ -121,22 +122,22 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::lifecycle::{OpenAiFrontendRoute, OpenAiRequestMethod, parse_request_id};
+    use crate::lifecycle::{InferenceFrontendRoute, InferenceRequestMethod, parse_request_id};
 
     #[derive(Default)]
-    struct RecordingObserver(Mutex<Vec<OpenAiLifecycleEvent>>);
+    struct RecordingObserver(Mutex<Vec<InferenceLifecycleEvent>>);
 
-    impl OpenAiLifecycleObserver for RecordingObserver {
-        fn observe(&self, event: &OpenAiLifecycleEvent) {
+    impl InferenceLifecycleObserver for RecordingObserver {
+        fn observe(&self, event: &InferenceLifecycleEvent) {
             self.0.lock().expect("observer lock").push(event.clone());
         }
     }
 
-    fn context() -> OpenAiLifecycleContext {
-        OpenAiLifecycleContext::new(
+    fn context() -> InferenceLifecycleContext {
+        InferenceLifecycleContext::new(
             parse_request_id("54c2252a-0ce7-41e8-9884-897e902e2df5").expect("request ID"),
-            OpenAiRequestMethod::Post,
-            OpenAiFrontendRoute::ChatCompletions,
+            InferenceRequestMethod::Post,
+            InferenceFrontendRoute::ChatCompletions,
         )
     }
 
@@ -151,8 +152,8 @@ mod tests {
         assert!(matches!(
             events.as_slice(),
             [
-                OpenAiLifecycleEvent::Admitted { .. },
-                OpenAiLifecycleEvent::RequestCancelled { .. },
+                InferenceLifecycleEvent::Admitted { .. },
+                InferenceLifecycleEvent::RequestCancelled { .. },
             ]
         ));
     }
@@ -168,7 +169,7 @@ mod tests {
         let events = observer.0.lock().expect("observer lock");
         assert!(matches!(
             events.as_slice(),
-            [OpenAiLifecycleEvent::Admitted { .. }]
+            [InferenceLifecycleEvent::Admitted { .. }]
         ));
     }
 
@@ -182,11 +183,11 @@ mod tests {
         assert!(matches!(
             observer.0.lock().expect("observer lock").as_slice(),
             [
-                OpenAiLifecycleEvent::Admitted { .. },
-                OpenAiLifecycleEvent::NonStreamTerminal {
-                    result: OpenAiTerminalResult::Failed {
+                InferenceLifecycleEvent::Admitted { .. },
+                InferenceLifecycleEvent::NonStreamTerminal {
+                    result: InferenceTerminalResult::Failed {
                         status_code: CLIENT_CLOSED_REQUEST_STATUS,
-                        failure: OpenAiFailure::Cancelled,
+                        failure: InferenceFailure::Cancelled,
                     },
                     ..
                 },

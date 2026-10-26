@@ -1,5 +1,5 @@
-use skippy_inference_api::OpenAiError;
-use skippy_inference_api::OpenAiResult;
+use skippy_inference_api::InferenceError;
+use skippy_inference_api::InferenceResult;
 use skippy_protocol::binary::LLAMA_TOKEN_NULL;
 use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
 use skippy_protocol::binary::StageStateHeader;
@@ -14,9 +14,13 @@ pub(super) struct DecodeMessageArgs {
     pub(super) decode_step: usize,
     pub(super) current: i32,
     pub(super) sampling: Option<WireSamplingConfig>,
+    /// Native MTP drafts the final stage should propose; zero asks for none.
+    pub(super) native_mtp_draft_tokens: usize,
 }
 
-pub(super) fn embedded_decode_message(args: DecodeMessageArgs) -> OpenAiResult<StageWireMessage> {
+pub(super) fn embedded_decode_message(
+    args: DecodeMessageArgs,
+) -> InferenceResult<StageWireMessage> {
     let mut message = ReusableDecodeMessage::new(ReusableDecodeMessageArgs {
         request_id: args.request_id,
         session_id: args.session_id,
@@ -24,6 +28,7 @@ pub(super) fn embedded_decode_message(args: DecodeMessageArgs) -> OpenAiResult<S
         base_pos_start: args.pos_start,
         sampling: args.sampling,
         sideband_capacity: 1,
+        native_mtp_draft_tokens: args.native_mtp_draft_tokens,
     })?;
     message.update_at_pos(
         args.decode_step,
@@ -41,6 +46,7 @@ pub(super) struct ReusableDecodeMessageArgs {
     pub(super) base_pos_start: usize,
     pub(super) sampling: Option<WireSamplingConfig>,
     pub(super) sideband_capacity: usize,
+    pub(super) native_mtp_draft_tokens: usize,
 }
 
 pub(super) struct ReusableDecodeMessage {
@@ -49,17 +55,18 @@ pub(super) struct ReusableDecodeMessage {
 }
 
 impl ReusableDecodeMessage {
-    pub(super) fn new(args: ReusableDecodeMessageArgs) -> OpenAiResult<Self> {
+    pub(super) fn new(args: ReusableDecodeMessageArgs) -> InferenceResult<Self> {
         let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
         state.seq_id = 0;
+        state.set_native_mtp_draft_tokens(args.native_mtp_draft_tokens);
         state.prompt_token_count = i32::try_from(args.prompt_token_count)
-            .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
+            .map_err(|_| InferenceError::backend("prompt token count exceeds i32"))?;
         state.source_stage_index = -1;
         Ok(Self {
             message: StageWireMessage {
                 kind: WireMessageKind::DecodeEmbd,
                 pos_start: i32::try_from(args.base_pos_start)
-                    .map_err(|_| OpenAiError::backend("decode position exceeds i32"))?,
+                    .map_err(|_| InferenceError::backend("decode position exceeds i32"))?,
                 token_count: 1,
                 state,
                 request_id: args.request_id,
@@ -79,7 +86,7 @@ impl ReusableDecodeMessage {
         &mut self,
         decode_step: usize,
         current: i32,
-    ) -> OpenAiResult<&StageWireMessage> {
+    ) -> InferenceResult<&StageWireMessage> {
         self.update_with_tokens(decode_step, current, &[current])
     }
 
@@ -88,11 +95,11 @@ impl ReusableDecodeMessage {
         decode_step: usize,
         current: i32,
         tokens: &[i32],
-    ) -> OpenAiResult<&StageWireMessage> {
+    ) -> InferenceResult<&StageWireMessage> {
         let pos_start = self
             .base_pos_start
             .checked_add(decode_step)
-            .ok_or_else(|| OpenAiError::backend("decode position overflow"))?;
+            .ok_or_else(|| InferenceError::backend("decode position overflow"))?;
         self.update_at_pos(decode_step, pos_start, current, tokens)
     }
 
@@ -102,11 +109,11 @@ impl ReusableDecodeMessage {
         pos_start: usize,
         current: i32,
         tokens: &[i32],
-    ) -> OpenAiResult<&StageWireMessage> {
+    ) -> InferenceResult<&StageWireMessage> {
         self.message.pos_start = i32::try_from(pos_start)
-            .map_err(|_| OpenAiError::backend("decode position exceeds i32"))?;
+            .map_err(|_| InferenceError::backend("decode position exceeds i32"))?;
         self.message.state.decode_step = i32::try_from(decode_step)
-            .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?;
+            .map_err(|_| InferenceError::backend("decode step exceeds i32"))?;
         self.message.state.current_token = current;
         self.message.tokens.clear();
         self.message.tokens.extend_from_slice(tokens);
@@ -127,30 +134,35 @@ pub(super) struct VerifyWindowMessageArgs<'a> {
     pub(super) decode_step: usize,
     pub(super) tokens: &'a [i32],
     pub(super) sampling: Option<WireSamplingConfig>,
+    pub(super) native_mtp_draft_tokens: usize,
 }
 
 pub(super) fn embedded_verify_window_message(
     args: VerifyWindowMessageArgs<'_>,
-) -> OpenAiResult<StageWireMessage> {
+) -> InferenceResult<StageWireMessage> {
     if args.tokens.is_empty() {
-        return Err(OpenAiError::backend(
+        return Err(InferenceError::backend(
             "verify window requires at least one token",
         ));
     }
     let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
     state.seq_id = args.window_id;
+    state.set_native_mtp_draft_tokens(args.native_mtp_draft_tokens);
+    // The verify loop commits a rejected window's correction token, so a
+    // draft that follows it is usable as the next proposal.
+    state.set_accepts_native_mtp_draft_after_correction(args.native_mtp_draft_tokens > 0);
     state.prompt_token_count = i32::try_from(args.prompt_token_count)
-        .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
+        .map_err(|_| InferenceError::backend("prompt token count exceeds i32"))?;
     state.decode_step = i32::try_from(args.decode_step)
-        .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?;
+        .map_err(|_| InferenceError::backend("decode step exceeds i32"))?;
     state.current_token = args.tokens[0];
     state.source_stage_index = -1;
     Ok(StageWireMessage {
         kind: WireMessageKind::VerifyWindow,
         pos_start: i32::try_from(args.pos_start)
-            .map_err(|_| OpenAiError::backend("verify window position exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("verify window position exceeds i32"))?,
         token_count: i32::try_from(args.tokens.len())
-            .map_err(|_| OpenAiError::backend("verify window exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("verify window exceeds i32"))?,
         state,
         request_id: args.request_id,
         session_id: args.session_id,
@@ -172,9 +184,9 @@ pub(super) fn discard_stale_windows_message(
     session_id: u64,
     min_window_id: i32,
     max_window_id: i32,
-) -> OpenAiResult<StageWireMessage> {
+) -> InferenceResult<StageWireMessage> {
     if min_window_id > max_window_id {
-        return Err(OpenAiError::backend(
+        return Err(InferenceError::backend(
             "stale window discard range must be non-empty",
         ));
     }
@@ -200,14 +212,14 @@ pub(super) fn retire_verify_window_message(
     session_id: u64,
     token_start: usize,
     token_count: usize,
-) -> OpenAiResult<StageWireMessage> {
+) -> InferenceResult<StageWireMessage> {
     let kind = WireMessageKind::RetireVerifyWindow;
     Ok(StageWireMessage {
         kind,
         pos_start: i32::try_from(token_start)
-            .map_err(|_| OpenAiError::backend("verify retirement position exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("verify retirement position exceeds i32"))?,
         token_count: i32::try_from(token_count)
-            .map_err(|_| OpenAiError::backend("verify retirement count exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("verify retirement count exceeds i32"))?,
         state: StageStateHeader::new(kind),
         request_id,
         session_id,
@@ -226,9 +238,9 @@ pub(super) fn generation_config_message(
     prompt_token_count: usize,
     sampling: Option<WireSamplingConfig>,
     chat_sampling_metadata: Option<&str>,
-) -> OpenAiResult<StageWireMessage> {
+) -> InferenceResult<StageWireMessage> {
     let prompt_token_count = i32::try_from(prompt_token_count)
-        .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
+        .map_err(|_| InferenceError::backend("prompt token count exceeds i32"))?;
     Ok(StageWireMessage::configure_generation(
         request_id,
         session_id,
@@ -249,23 +261,23 @@ pub(super) struct OpenAiPrefillChunk<'a> {
 
 pub(super) fn embedded_prefill_message(
     chunk: OpenAiPrefillChunk<'_>,
-) -> OpenAiResult<StageWireMessage> {
+) -> InferenceResult<StageWireMessage> {
     let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
-    state.seq_id =
-        i32::try_from(chunk.seq_id).map_err(|_| OpenAiError::backend("prefill seq exceeds i32"))?;
+    state.seq_id = i32::try_from(chunk.seq_id)
+        .map_err(|_| InferenceError::backend("prefill seq exceeds i32"))?;
     state.prompt_token_count = i32::try_from(chunk.prefill_token_count)
-        .map_err(|_| OpenAiError::backend("prefill token count exceeds i32"))?;
+        .map_err(|_| InferenceError::backend("prefill token count exceeds i32"))?;
     state.current_token = *chunk
         .tokens
         .last()
-        .ok_or_else(|| OpenAiError::backend("prefill chunk is empty"))?;
+        .ok_or_else(|| InferenceError::backend("prefill chunk is empty"))?;
     state.source_stage_index = -1;
     Ok(StageWireMessage {
         kind: WireMessageKind::PrefillEmbd,
         pos_start: i32::try_from(chunk.pos_start)
-            .map_err(|_| OpenAiError::backend("prefill chunk position exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("prefill chunk position exceeds i32"))?,
         token_count: i32::try_from(chunk.tokens.len())
-            .map_err(|_| OpenAiError::backend("prefill token count exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("prefill token count exceeds i32"))?,
         state,
         request_id: chunk.request_id,
         session_id: chunk.session_id,
@@ -283,17 +295,17 @@ pub(super) fn embedded_prefix_cache_message(
     tokens: &[i32],
     request_id: u64,
     session_id: u64,
-) -> OpenAiResult<StageWireMessage> {
+) -> InferenceResult<StageWireMessage> {
     let mut state = StageStateHeader::new(kind);
     state.prompt_token_count = i32::try_from(tokens.len())
-        .map_err(|_| OpenAiError::backend("prefix token count exceeds i32"))?;
+        .map_err(|_| InferenceError::backend("prefix token count exceeds i32"))?;
     state.current_token = tokens.last().copied().unwrap_or(LLAMA_TOKEN_NULL);
     state.source_stage_index = -1;
     Ok(StageWireMessage {
         kind,
         pos_start: 0,
         token_count: i32::try_from(tokens.len())
-            .map_err(|_| OpenAiError::backend("prefix token count exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("prefix token count exceeds i32"))?,
         state,
         request_id,
         session_id,
@@ -316,17 +328,19 @@ pub(super) struct RestorePrefillDecodeMessageArgs<'a> {
     pub(super) current: i32,
     pub(super) sampling: Option<WireSamplingConfig>,
     pub(super) chat_sampling_metadata: Option<&'a str>,
+    pub(super) native_mtp_draft_tokens: usize,
 }
 
 pub(super) fn embedded_restore_prefill_decode_message(
     args: RestorePrefillDecodeMessageArgs<'_>,
-) -> OpenAiResult<StageWireMessage> {
+) -> InferenceResult<StageWireMessage> {
     let mut state = StageStateHeader::new(WireMessageKind::TryRestorePrefillDecode);
     state.seq_id = 0;
+    state.set_native_mtp_draft_tokens(args.native_mtp_draft_tokens);
     state.prompt_token_count = i32::try_from(args.prompt_token_count)
-        .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
+        .map_err(|_| InferenceError::backend("prompt token count exceeds i32"))?;
     state.decode_step = i32::try_from(args.decode_step)
-        .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?;
+        .map_err(|_| InferenceError::backend("decode step exceeds i32"))?;
     state.current_token = args.current;
     state.source_stage_index = -1;
     let mut tokens = Vec::with_capacity(args.prefix_tokens.len().saturating_add(1));
@@ -335,7 +349,7 @@ pub(super) fn embedded_restore_prefill_decode_message(
     Ok(StageWireMessage {
         kind: WireMessageKind::TryRestorePrefillDecode,
         pos_start: i32::try_from(args.pos_start)
-            .map_err(|_| OpenAiError::backend("decode position exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("decode position exceeds i32"))?,
         token_count: 1,
         state,
         request_id: args.request_id,
@@ -371,7 +385,7 @@ pub(super) struct MultimodalPrefillArgs {
 
 pub(super) fn multimodal_prefill_message(
     args: MultimodalPrefillArgs,
-) -> OpenAiResult<StageWireMessage> {
+) -> InferenceResult<StageWireMessage> {
     let kind = if args.final_chunk {
         WireMessageKind::PrefillFinalEmbd
     } else {
@@ -380,15 +394,15 @@ pub(super) fn multimodal_prefill_message(
     let mut state = StageStateHeader::new(kind);
     state.seq_id = 0;
     state.prompt_token_count = i32::try_from(args.prompt_token_count)
-        .map_err(|_| OpenAiError::backend("multimodal prefill token count exceeds i32"))?;
+        .map_err(|_| InferenceError::backend("multimodal prefill token count exceeds i32"))?;
     state.current_token = LLAMA_TOKEN_NULL;
     state.source_stage_index = -1;
     Ok(StageWireMessage {
         kind,
         pos_start: i32::try_from(args.pos_start)
-            .map_err(|_| OpenAiError::backend("multimodal prefill position exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("multimodal prefill position exceeds i32"))?,
         token_count: i32::try_from(args.token_count)
-            .map_err(|_| OpenAiError::backend("multimodal prefill token count exceeds i32"))?,
+            .map_err(|_| InferenceError::backend("multimodal prefill token count exceeds i32"))?,
         state,
         request_id: args.request_id,
         session_id: args.session_id,

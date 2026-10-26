@@ -1,4 +1,5 @@
 use super::super::http::{respond_error, respond_json};
+use crate::models::search::model_context;
 use crate::models::{
     SearchArtifactFilter, SearchSort, remote_catalog, search_catalog_json_payload,
     search_catalog_models, search_huggingface, search_huggingface_json_payload,
@@ -43,12 +44,14 @@ pub(super) async fn handle(stream: &mut tokio::net::TcpStream, path: &str) -> an
         return respond_json(stream, 200, &response).await;
     }
 
+    let context = tokio::task::spawn_blocking(model_context).await?;
     match search_huggingface(
         &request.query,
         request.limit,
         request.artifact,
         request.sort,
         |_| {},
+        context.clone(),
     )
     .await
     {
@@ -58,6 +61,7 @@ pub(super) async fn handle(stream: &mut tokio::net::TcpStream, path: &str) -> an
                 request.artifact,
                 request.sort,
                 &results,
+                context,
             );
             respond_json(stream, 200, &response).await
         }

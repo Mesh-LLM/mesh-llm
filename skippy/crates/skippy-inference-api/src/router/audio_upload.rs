@@ -1,13 +1,13 @@
 //! Multipart audio ingestion with a file limit enforced during streaming.
 
 use super::multipart_error;
-use crate::{AudioTranscriptionRequest, OpenAiError, OpenAiResult};
+use crate::{AudioTranscriptionRequest, InferenceError, InferenceResult};
 use axum::extract::{Multipart, multipart::Field};
 
 /// Decode a bounded audio upload, rejecting duplicate recognized fields consistently.
 pub(super) async fn parse_audio_multipart(
     mut multipart: Multipart,
-) -> OpenAiResult<AudioTranscriptionRequest> {
+) -> InferenceResult<AudioTranscriptionRequest> {
     let mut model = None;
     let mut file = None;
     let mut filename = None;
@@ -28,7 +28,7 @@ pub(super) async fn parse_audio_multipart(
             "model" | "file" | "language" | "prompt" | "response_format" | "temperature"
         ) && !seen_fields.insert(name.clone())
         {
-            return Err(OpenAiError::invalid_request(format!(
+            return Err(InferenceError::invalid_request(format!(
                 "duplicate multipart {name} field"
             )));
         }
@@ -47,18 +47,17 @@ pub(super) async fn parse_audio_multipart(
             "prompt" => prompt = Some(value),
             "response_format" => response_format = Some(value),
             "temperature" => {
-                temperature =
-                    Some(value.parse::<f32>().map_err(|_| {
-                        OpenAiError::invalid_request("temperature must be a number")
-                    })?);
+                temperature = Some(value.parse::<f32>().map_err(|_| {
+                    InferenceError::invalid_request("temperature must be a number")
+                })?);
             }
             _ => {}
         }
     }
 
     Ok(AudioTranscriptionRequest {
-        model: model.ok_or_else(|| OpenAiError::invalid_request("model field is required"))?,
-        file: file.ok_or_else(|| OpenAiError::invalid_request("file field is required"))?,
+        model: model.ok_or_else(|| InferenceError::invalid_request("model field is required"))?,
+        file: file.ok_or_else(|| InferenceError::invalid_request("file field is required"))?,
         filename,
         language,
         prompt,
@@ -68,7 +67,7 @@ pub(super) async fn parse_audio_multipart(
 }
 
 /// Stop consuming the upload before copying a chunk that exceeds the file budget.
-async fn read_audio_file(mut field: Field<'_>, limit: usize) -> OpenAiResult<Vec<u8>> {
+async fn read_audio_file(mut field: Field<'_>, limit: usize) -> InferenceResult<Vec<u8>> {
     let mut file = Vec::new();
     while let Some(chunk) = field
         .chunk()
@@ -76,7 +75,7 @@ async fn read_audio_file(mut field: Field<'_>, limit: usize) -> OpenAiResult<Vec
         .map_err(|error| multipart_error(error, "audio file field"))?
     {
         if chunk.len() > limit - file.len() {
-            return Err(OpenAiError::payload_too_large(format!(
+            return Err(InferenceError::payload_too_large(format!(
                 "audio file exceeds the {limit} byte limit"
             )));
         }

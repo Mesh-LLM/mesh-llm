@@ -1,0 +1,22 @@
+{
+  "args": [
+    "--run-id",
+    "9"
+  ],
+  "code": 2,
+  "gh_argv": [
+    [
+      "run",
+      "view",
+      "9",
+      "--repo",
+      "Mesh-LLM/mesh-llm",
+      "--json",
+      "databaseId,attempt,workflowName,displayTitle,event,status,conclusion,createdAt,startedAt,updatedAt,url,headSha,headBranch"
+    ]
+  ],
+  "output": null,
+  "raw_output": null,
+  "stderr": "ci metrics error: invalid run response for 9\n",
+  "stdout": ""
+}

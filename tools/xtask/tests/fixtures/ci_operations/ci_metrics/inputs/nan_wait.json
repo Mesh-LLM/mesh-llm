@@ -1,0 +1,1 @@
+[{"jobs":[{"id":1,"name":"n","status":"completed","conclusion":"success","created_at":"2026-07-01T00:00:00Z","started_at":"2026-07-01T00:00:01.5Z","completed_at":"2026-07-01T00:00:09.25Z","dependency_wait_seconds":NaN}], "status":"completed","conclusion":"success","attempt":true}]

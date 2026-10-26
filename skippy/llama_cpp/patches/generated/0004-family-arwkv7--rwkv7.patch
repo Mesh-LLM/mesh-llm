@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/arwkv7.cpp b/src/models/arwkv7.cpp
-index b38b2064785b2d4ec566a228e01fded680e2a67f..4d15add5335de0a15c10b53c107e7d2f91c120e1 100644
+index 5f1ca4384d72184672d5ddc4df4a07c77159efa0..f65489f65db5072efc78170264fcbaebc74ec597 100644
 --- a/src/models/arwkv7.cpp
 +++ b/src/models/arwkv7.cpp
 @@ -135,6 +135,8 @@ llama_model_arwkv7::graph::graph(const llama_model & model, const llm_graph_para

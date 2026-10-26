@@ -30,10 +30,15 @@ pub(super) async fn attach_prices(
         let id = public_model_id(base, descriptor_for_model(descriptors, base), profile);
         let mut offers = Vec::new();
         for peer in &peers {
-            if mesh::routes_http_model(peer, base) {
+            let price = mesh::payments::peer_offer_for_model(peer, base);
+            // A seller charging over a payment protocol this node cannot pay
+            // is neither a paid nor a free option for it, so it is not listed.
+            if mesh::routes_http_model(peer, base)
+                && (price.is_none() || peer.lightning_offers.payable())
+            {
                 offers.push(offer(
                     &peer.id.to_string(),
-                    mesh::payments::peer_offer_for_model(peer, base),
+                    price,
                     Some(peer.last_seen.elapsed().as_secs()),
                     false,
                 ));
@@ -55,6 +60,7 @@ pub(super) async fn attach_prices(
         {
             item["payment"] = json!({
                 "binding_quote": false,
+                "model": model,
                 "free_available": offers.iter().any(|offer| offer["paid"] == false),
                 "paid_available": offers.iter().any(|offer| offer["paid"] == true),
                 "offers": offers,
@@ -99,6 +105,7 @@ mod tests {
                     mesh_llm_payments_types::pricing::Pricing {
                         input_msat_per_million: 10,
                         output_msat_per_million: 20,
+                        cache_discount_percent: 0,
                     },
                 );
             }
@@ -125,6 +132,36 @@ mod tests {
         );
         assert!(body["data"][1].get("payment").is_none());
         assert!(node.payments.get().is_none());
+        // The same seller on a payment protocol this node cannot pay drops
+        // out of the listing instead of showing as payable (or free).
+        let mut legacy =
+            paid.build_local_announcement(paid.snapshot_local_announcement_data().await);
+        legacy.lightning_offers.insert(
+            "test".into(),
+            mesh_llm_payments_types::pricing::Pricing {
+                input_msat_per_million: 10,
+                output_msat_per_million: 20,
+                cache_discount_percent: 0,
+            },
+        );
+        legacy.lightning_offers.protocol = 0;
+        node.add_peer_after_direct_requirements_validated(
+            paid.id(),
+            paid.endpoint.addr(),
+            &legacy,
+            Some(1),
+        )
+        .await;
+        let mut body = json!({"data":[{"id":"test"}]});
+        attach_prices(&mut body, &["test".into()], &[], &node).await;
+        assert_eq!(body["data"][0]["payment"]["paid_available"], false);
+        assert_eq!(
+            body["data"][0]["payment"]["offers"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         node.endpoint.close().await;
         free.endpoint.close().await;
         paid.endpoint.close().await;
@@ -178,7 +215,8 @@ mod tests {
         paid.set_models(vec!["falcon-runtime".into()]).await;
         paid.set_hosted_models(vec!["falcon-runtime".into()]).await;
         paid.set_serving_models(vec!["falcon-runtime".into()]).await;
-        paid.set_served_model_descriptors(vec![descriptor]).await;
+        paid.set_served_model_descriptors(vec![descriptor.clone()])
+            .await;
         let mut announcement =
             paid.build_local_announcement(paid.snapshot_local_announcement_data().await);
         announcement.lightning_offers.insert(
@@ -186,6 +224,7 @@ mod tests {
             mesh_llm_payments_types::pricing::Pricing {
                 input_msat_per_million: 10,
                 output_msat_per_million: 20,
+                cache_discount_percent: 0,
             },
         );
         node.add_peer_after_direct_requirements_validated(
@@ -198,7 +237,8 @@ mod tests {
         node.update_peer_rtt(paid.id(), 1).await;
 
         let mut body = json!({"data":[{"id": public_id}]});
-        attach_prices(&mut body, std::slice::from_ref(&public_id), &[], &node).await;
+        attach_prices(&mut body, &["falcon-runtime".into()], &[descriptor], &node).await;
+        assert_eq!(body["data"][0]["payment"]["model"], "falcon-runtime");
         assert_eq!(body["data"][0]["payment"]["paid_available"], true);
         assert_eq!(body["data"][0]["payment"]["free_available"], false);
         assert!(
@@ -217,6 +257,7 @@ mod tests {
         let price = mesh_llm_payments_types::pricing::Pricing {
             input_msat_per_million: 10,
             output_msat_per_million: 20,
+            cache_discount_percent: 0,
         };
         let free = offer("free", None, Some(3), false);
         let paid = offer("paid", Some(&price), Some(1), false);

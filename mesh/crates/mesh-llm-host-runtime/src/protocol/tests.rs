@@ -198,6 +198,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
 mod announcements;
 mod config;
 mod control_frames;
+mod frame_reading;
 mod mesh_timestamps;
 mod owner_control;
 

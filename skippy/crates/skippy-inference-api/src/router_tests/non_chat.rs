@@ -230,10 +230,46 @@ async fn audio_translation_uses_translation_backend() {
 }
 
 #[tokio::test]
+/// Timed formats render the backend's segments; without timing they are refused.
+async fn timed_response_formats_need_segment_timing() {
+    let boundary = "mesh-audio-boundary";
+    let verbose = post_audio_multipart(
+        "/v1/audio/translations",
+        boundary,
+        audio_multipart(boundary, "verbose_json"),
+    )
+    .await;
+    assert_eq!(verbose.status(), StatusCode::OK);
+    let body = response_body_json(verbose).await;
+    assert_eq!(body["task"], "translate");
+    assert_eq!(body["segments"][0]["end"], 1.5);
+
+    let srt = post_audio_multipart(
+        "/v1/audio/translations",
+        boundary,
+        audio_multipart(boundary, "srt"),
+    )
+    .await;
+    assert_eq!(srt.status(), StatusCode::OK);
+    assert_eq!(
+        response_body_text(srt).await,
+        "1\n00:00:00,000 --> 00:00:01,500\ntranslated\n\n"
+    );
+
+    let untimed = post_audio_multipart(
+        "/v1/audio/transcriptions",
+        boundary,
+        audio_multipart(boundary, "vtt"),
+    )
+    .await;
+    assert_eq!(untimed.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 /// Binary upload limits remain independent of JSON endpoint limits.
 async fn audio_upload_uses_its_dedicated_body_limit() {
     let boundary = "mesh-large-audio-boundary";
-    let file_bytes = vec![0x2a; OpenAiFrontendConfig::default().max_request_body_bytes + 1];
+    let file_bytes = vec![0x2a; InferenceFrontendConfig::default().max_request_body_bytes + 1];
     let mut body = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\naudio-model\r\n\
          --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sample.wav\"\r\n\

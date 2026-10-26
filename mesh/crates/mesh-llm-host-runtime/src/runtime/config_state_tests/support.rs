@@ -98,6 +98,7 @@ pub(super) fn minimal_valid_config() -> MeshConfig {
         owner_control: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
+        updates: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![],
@@ -120,6 +121,7 @@ pub(super) fn installed_plugin_metadata(
         downloaded_asset_name: format!("{name}.tar.gz"),
         install_path: std::env::temp_dir().join(format!("mesh-llm-plugin-{name}")),
         enabled: true,
+        default_managed: false,
         manifest: Some(InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: schema,

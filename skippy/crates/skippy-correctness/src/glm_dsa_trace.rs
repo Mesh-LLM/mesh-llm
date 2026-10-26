@@ -4,7 +4,7 @@ use std::{
     io::{self, ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -704,10 +704,12 @@ fn start_stage0(
     let err_log = log
         .try_clone()
         .with_context(|| format!("clone {}", log_path.display()))?;
-    let mut command = Command::new(&args.server.stage_server_bin);
+    let mut command = crate::stage_process::command(
+        &args.server.stage_server_bin,
+        args.server.startup_timeout_secs,
+    );
     command
         .args([
-            "serve",
             "--stage-transport",
             "binary",
             "--worker-only",

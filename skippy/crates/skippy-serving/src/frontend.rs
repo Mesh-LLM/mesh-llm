@@ -8,7 +8,6 @@ mod embedded_generation;
 mod generation;
 mod generation_commit_batcher;
 mod generation_flow;
-pub mod generation_gate;
 mod generation_receipt;
 mod guardrails;
 pub(crate) mod iteration_scheduler;
@@ -27,6 +26,8 @@ pub mod runahead_search;
 mod sampling_cache_key;
 mod speculation_gate;
 mod speculative;
+mod speech_recognition;
+mod stop_sequences;
 mod system_one;
 mod token_counting;
 mod tool_emulation;
@@ -61,7 +62,8 @@ pub use self::generation_receipt::{
     GenerationStateDigest, GenerationTermination, generation_token_id_digest,
 };
 pub use self::guardrails::{
-    OpenAiGuardrailsConfig, OpenAiGuardrailsMode, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget,
+    InferenceGuardrailsConfig, InferenceGuardrailsMode, InferenceGuardrailsStatus,
+    InferenceGuardrailsTarget,
 };
 pub use self::linear_proposal::{
     LinearProposal, LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,
@@ -75,6 +77,7 @@ pub use self::speculative::{
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
     SpeculativeDecodeConfig, VerifyWindowConfig,
 };
+pub use self::speech_recognition::{SpeechRecognitionBackend, SpeechTranscriber};
 pub use self::system_one::LayaSystemOneBackend;
 
 #[cfg(test)]

@@ -47,11 +47,11 @@ only a candidate until the evidence exists.
 
 ## Standard Checks
 
-Validate the parity manifest and current llama.cpp family inventory:
+Validate the parity manifest and current llama.cpp family inventory using the complete request schema in [NATIVE_PARITY.md](NATIVE_PARITY.md):
 
 ```bash
-python3 scripts/skippy-llama-parity.py validate
-python3 scripts/skippy-llama-parity.py inventory --priority p0
+# Use the source-admitted inventory JSON with priorities: ["p0"].
+cargo xtool automation replay-matrix parity-local --input /absolute/parity-local.json
 ```
 
 List a candidate package job without spending HF Jobs credits:

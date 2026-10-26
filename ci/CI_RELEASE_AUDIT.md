@@ -642,6 +642,35 @@ Implementation validation includes `just ci-validate`, relevant planner/action/s
 
 ### Audit validation record
 
+#### Rust migration continuation (2026-10-14)
+
+The continuation on `ci/skippy-first-qualification-port` merges main at
+`20b3bd570` and replaces the historical Python
+implementation with typed xtask qualification, receipt binding, Cargo censuses
+and downstream readiness commands. The new standalone slices restore immutable
+lane automation and gate Mesh host production on matching qualification receipts.
+Workflow, topology and inventory changes are local until separately authorized.
+
+Focused local checks passed with Rust 1.98.0: 126 lane graph tests, 36 qualification
+tests and eight downstream packaging tests, plus warning-denying xtask Clippy
+with automation contracts enabled. Actionlint, shell syntax, whitespace,
+release-target, publish-chain, crate-list and console-output checks passed.
+The full `just ci-validate` rerun exited 0, including the automation roster,
+Windows compatibility checks, crate lists, release targets, console-output policy
+and publish-chain consistency. The run included 2,362 xtask unit passes (13
+expected ignores), 1,158 lifecycle passes (eight expected ignores), 346
+runner/cache passes and 126 lane-graph passes. Local source-dependent contracts
+used the admitted SDK checkpoint `d2a881612186b0626a153ee237dfa3df00ab6087` and
+research checkpoint `d280c63122350fb3f3d91734d61eb836f37a15ee`. These local
+contracts do not establish live model/hardware acceptance.
+
+The downstream identity contract
+[mesh-packaging#35](https://github.com/Mesh-LLM/mesh-packaging/pull/35) merged on
+2026-10-11. Protected catalogs and lane summaries still require the CI-control
+rollout before the new graph can obtain matching branch-run evidence. No new
+push, label, dispatch, release rehearsal, hardware pass or cache-warmer retirement
+is claimed by this continuation.
+
 The initial local `just ci-validate` run failed: the Python suite ran 1,965 tests with two failures, 22 errors and 15 skips. Inspected failures were sandbox denials involving local sockets and process inspection. These are not treated as product regressions.
 
 The second run with local process/socket access exited successfully. Its Python suite ran 1,965 tests with 15 skips and no failures/errors. Actionlint, diff whitespace checking, CI crate-list consistency, release-target consistency, console-output policy and publish-chain consistency completed successfully. This validates the existing local definition/contracts; it does not contradict the execution gaps above, which those checks do not currently catch.

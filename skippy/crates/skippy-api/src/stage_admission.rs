@@ -38,6 +38,9 @@ pub struct PlannedStageAdmission {
     pub sidecars: Vec<Sidecar>,
     /// Guarded per-profile identities, sorted by `profile_id`.
     pub profiles: Vec<PlannedStageProfile>,
+    /// Conservative state shape from the graph, cross-checked with the
+    /// content-identified package metadata.
+    pub kv_graph_state: String,
 }
 
 /// One guarded execution profile's planned identities.
@@ -54,6 +57,7 @@ pub struct PlannedStageProfile {
     pub activation_exports: Vec<String>,
     pub activation_import_bindings: Vec<String>,
     pub activation_export_bindings: Vec<String>,
+    pub state_effects: Vec<RealizedStageStateEffect>,
 }
 
 /// The realized native stage descriptor as returned through the ABI.
@@ -138,8 +142,10 @@ fn planned_admission_from_discovery(
                 activation_exports: profile.activation_exports.clone(),
                 activation_import_bindings: profile.activation_import_bindings.clone(),
                 activation_export_bindings: profile.activation_export_bindings.clone(),
+                state_effects: profile.state_effects.clone(),
             })
             .collect(),
+        kv_graph_state: package_kv_graph_state(manifest, &discovered.profiles),
     }
 }
 
@@ -183,7 +189,68 @@ impl From<&PlannedStageAdmission> for skippy_protocol::StageAdmissionDescriptor 
                     activation_export_bindings: profile.activation_export_bindings.clone(),
                 })
                 .collect(),
+            kv_graph_state: planned.kv_graph_state.clone(),
         }
+    }
+}
+
+/// Only graph effects shared by every guarded profile can authorize partial
+/// snapshots. Derived state or missing/inconsistent effects require full state.
+fn kv_graph_state<'a>(
+    profiles: impl IntoIterator<Item = &'a [RealizedStageStateEffect]>,
+) -> &'static str {
+    fn profile_state(effects: &[RealizedStageStateEffect]) -> &'static str {
+        use skippy_ffi::StagePlanStateKind as Kind;
+        let mut kv = false;
+        let mut recurrent = false;
+        for effect in effects {
+            match effect.kind {
+                Kind::KvKey | Kind::KvValue => kv = true,
+                Kind::RecurrentConv | Kind::RecurrentSsm => recurrent = true,
+                Kind::DerivedPersistent => return "full-state",
+            }
+        }
+        if recurrent {
+            "recurrent"
+        } else if kv {
+            "dense"
+        } else {
+            "full-state"
+        }
+    }
+    let mut profiles = profiles.into_iter();
+    let Some(first) = profiles.next() else {
+        return "full-state";
+    };
+    let state = profile_state(first);
+    if profiles.all(|effects| profile_state(effects) == state) {
+        state
+    } else {
+        "full-state"
+    }
+}
+
+fn package_kv_graph_state(manifest: &PackageManifest, profiles: &[RealizedStageProfile]) -> String {
+    let graph_state = kv_graph_state(
+        profiles
+            .iter()
+            .map(|profile| profile.state_effects.as_slice()),
+    );
+    let metadata_reports_recurrence = manifest.model_metadata.iter().any(|(key, value)| {
+        (key.ends_with(".attention.recurrent_layers")
+            && value
+                .as_array()
+                .is_some_and(|layers| layers.iter().any(|layer| layer.as_bool() == Some(true))))
+            || (key.ends_with(".ssm.conv_kernel")
+                || key.ends_with(".ssm.inner_size")
+                || key.ends_with(".ssm.state_size")
+                || key.ends_with(".full_attention_interval"))
+                && value.as_u64().is_some_and(|value| value > 0)
+    });
+    if graph_state == "dense" && metadata_reports_recurrence {
+        "full-state".into()
+    } else {
+        graph_state.into()
     }
 }
 
@@ -799,6 +866,14 @@ fn admit_profiles(
                     realized: format!("{realized_values:?}"),
                 });
             }
+        }
+        if planned_profile.state_effects != realized_profile.state_effects {
+            return Err(StagePlanAdmissionError::ProfileIdentityMismatch {
+                profile_id: realized_profile.profile_id.clone(),
+                field: "state_effects",
+                planned: format!("{:?}", planned_profile.state_effects),
+                realized: format!("{:?}", realized_profile.state_effects),
+            });
         }
     }
     Ok(())
