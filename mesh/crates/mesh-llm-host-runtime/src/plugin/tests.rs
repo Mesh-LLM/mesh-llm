@@ -134,6 +134,7 @@ fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
 }
 
 #[test]
+#[serial_test::serial]
 fn builtin_payments_is_served_in_process_and_can_be_switched_off() {
     super::config::TEST_PAYMENTS_COMPILED_IN.with(|slot| *slot.borrow_mut() = Some(true));
     let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
@@ -359,6 +360,7 @@ fn external_plugin_can_be_enabled_with_url() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_rejects_url_that_is_empty_after_normalization() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -383,6 +385,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
 }
 
 #[test]
+#[serial_test::serial]
 fn remote_plugin_control_url_is_rejected_without_authentication() {
     let raw_url = "\u{2003}tcp://user:secret@127.0.0.1:19091/control?token=private\u{2003}";
     let config = MeshConfig {
