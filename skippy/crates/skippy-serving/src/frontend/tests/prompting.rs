@@ -436,6 +436,82 @@ fn tool_choice_limits_allowed_tool_name() {
 }
 
 #[test]
+fn named_tool_choice_reduces_offered_tools_to_the_named_tool() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "get_weather"}},
+        {"type": "function", "function": {"name": "read_file"}}
+    ]);
+    let choice = json!({"type": "function", "function": {"name": "get_weather"}});
+
+    let restricted = effective_tools_for_choice(Some(&tools), Some(&choice))
+        .expect("offered tools stay offered");
+    let entries = restricted.as_array().expect("tool list");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["function"]["name"], "get_weather");
+}
+
+#[test]
+fn bare_string_named_tool_choice_reduces_offered_tools() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "search"}}
+    ]);
+
+    let restricted =
+        effective_tools_for_choice(Some(&tools), Some(&json!("search"))).expect("offered tools");
+    let entries = restricted.as_array().expect("tool list");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["function"]["name"], "search");
+}
+
+#[test]
+fn anthropic_named_tool_choice_reduces_offered_tools() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "search"}}
+    ]);
+    let choice = json!({"type": "tool", "name": "lookup"});
+
+    let restricted =
+        effective_tools_for_choice(Some(&tools), Some(&choice)).expect("offered tools");
+    let entries = restricted.as_array().expect("tool list");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["function"]["name"], "lookup");
+}
+
+#[test]
+fn named_tool_choice_keeps_full_list_when_name_is_not_offered() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "search"}}
+    ]);
+    let choice = json!({"type": "function", "function": {"name": "missing"}});
+
+    let kept = effective_tools_for_choice(Some(&tools), Some(&choice)).expect("offered tools");
+    assert_eq!(kept, tools, "unoffered names keep today's tool list");
+}
+
+#[test]
+fn unnamed_tool_choice_keeps_all_offered_tools() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "search"}}
+    ]);
+    for choice in [
+        None,
+        Some(json!("auto")),
+        Some(json!("required")),
+        Some(json!("none")),
+        Some(json!({"type": "any"})),
+    ] {
+        let kept =
+            effective_tools_for_choice(Some(&tools), choice.as_ref()).expect("offered tools");
+        assert_eq!(kept, tools, "choice {choice:?} must not drop offered tools");
+    }
+    assert!(effective_tools_for_choice(None, Some(&json!("lookup"))).is_none());
+}
+
+#[test]
 fn parallel_tool_calls_false_keeps_first_call() {
     let mut request = tool_request();
     request.parallel_tool_calls = Some(false);
