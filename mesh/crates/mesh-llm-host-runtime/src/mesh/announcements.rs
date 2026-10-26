@@ -286,6 +286,7 @@ impl Node {
             // behind it, unlike artifact transfer.
             decode_batch_policy_supported: true,
             plugin_origin_signature_supported: true,
+            persistent_lane_marker_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
             #[cfg(feature = "payments")]
             lightning_offers: data.lightning_offers.into(),

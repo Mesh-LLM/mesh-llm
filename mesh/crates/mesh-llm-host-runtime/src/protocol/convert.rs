@@ -17,6 +17,7 @@ fn skippy_stage_subprotocols(
     stage_protocol_generation_supported: bool,
     status_list_supported: bool,
     local_gguf_content_id_supported: bool,
+    persistent_lane_marker_supported: bool,
 ) -> Vec<crate::proto::node::MeshSubprotocol> {
     let mut features = vec![
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
@@ -27,6 +28,10 @@ fn skippy_stage_subprotocols(
     if local_gguf_content_id_supported {
         features
             .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.to_string());
+    }
+    if persistent_lane_marker_supported {
+        features
+            .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER.to_string());
     }
     if stage_protocol_generation_supported {
         features.push(
@@ -930,6 +935,7 @@ pub(crate) fn local_ann_to_proto_ann(
                 ann.stage_protocol_generation_supported,
                 ann.stage_status_list_supported,
                 ann.local_gguf_content_id_supported,
+                ann.persistent_lane_marker_supported,
             );
             if ann.plugin_origin_signature_supported {
                 subprotocols.push(crate::proto::node::MeshSubprotocol {
@@ -1215,6 +1221,10 @@ pub(crate) fn proto_ann_to_local(
                     .iter()
                     .any(|feature| feature == mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE)
         }),
+        persistent_lane_marker_supported: supports_skippy_stage_feature(
+            &pa.subprotocols,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER,
+        ),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()

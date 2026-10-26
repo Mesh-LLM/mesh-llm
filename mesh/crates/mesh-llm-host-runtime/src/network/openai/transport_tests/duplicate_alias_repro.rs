@@ -70,6 +70,7 @@ pub(super) fn duplicate_peer(peer_id: iroh::EndpointId, model: &str) -> mesh::Pe
         inference_admission_state: None,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
     }
 }
 

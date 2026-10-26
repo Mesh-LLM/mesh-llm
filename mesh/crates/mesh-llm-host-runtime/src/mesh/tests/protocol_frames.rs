@@ -318,6 +318,7 @@ async fn transitive_peer_update_refreshes_last_mentioned() {
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -907,6 +908,7 @@ fn stale_serving_announcement(
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,

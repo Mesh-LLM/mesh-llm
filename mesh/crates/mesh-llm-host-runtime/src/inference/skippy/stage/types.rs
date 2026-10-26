@@ -212,6 +212,8 @@ pub(crate) enum SourceModelKind {
 
 #[derive(Clone, Debug)]
 pub(crate) struct StagePeerDescriptor {
+    /// Local capability evidence, never accepted from a stage-control request.
+    pub(crate) persistent_lane_marker: bool,
     pub(crate) stage_id: String,
     pub(crate) stage_index: u32,
     pub(crate) endpoint: String,

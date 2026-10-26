@@ -670,6 +670,7 @@ pub(crate) fn admitted_resident_tensor_names(
 
 fn peer_config(peer: &StagePeerDescriptor) -> PeerConfig {
     PeerConfig {
+        persistent_lane_marker: peer.persistent_lane_marker,
         stage_id: peer.stage_id.clone(),
         stage_index: peer.stage_index,
         endpoint: peer.endpoint.clone(),

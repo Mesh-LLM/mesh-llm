@@ -249,6 +249,7 @@ mod tests {
     fn stage_zero_with_an_upstream_is_rejected_before_native_loading() {
         let mut request = request();
         request.runtime.config.upstream = Some(skippy_protocol::PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "foreign-stage".into(),
             stage_index: 1,
             endpoint: "127.0.0.1:19001".into(),

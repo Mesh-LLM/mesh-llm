@@ -183,6 +183,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]

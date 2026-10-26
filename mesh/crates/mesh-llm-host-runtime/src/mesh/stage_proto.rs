@@ -619,6 +619,7 @@ pub(super) fn stage_peer_from_proto(
     peer: skippy_stage_proto::StagePeer,
 ) -> anyhow::Result<crate::inference::skippy::StagePeerDescriptor> {
     Ok(crate::inference::skippy::StagePeerDescriptor {
+        persistent_lane_marker: false,
         stage_id: peer.stage_id,
         stage_index: peer.stage_index,
         endpoint: peer.endpoint,

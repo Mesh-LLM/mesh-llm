@@ -414,6 +414,9 @@ impl Node {
         run_id: &str,
         peer: &mut crate::inference::skippy::StagePeerDescriptor,
     ) -> anyhow::Result<()> {
+        peer.persistent_lane_marker = self
+            .stage_peer_supports_persistent_lane_marker(peer.node_id)
+            .await;
         let Some(peer_node) = peer.node_id else {
             return Ok(());
         };
@@ -425,6 +428,23 @@ impl Node {
             .await?;
         peer.endpoint = bridge_addr;
         Ok(())
+    }
+
+    pub(crate) async fn stage_peer_supports_persistent_lane_marker(
+        &self,
+        peer_id: Option<EndpointId>,
+    ) -> bool {
+        let Some(peer_id) = peer_id else {
+            return false;
+        };
+        if peer_id == self.endpoint.id() {
+            return true;
+        }
+        self.peer_supports_skippy_subprotocol_feature(
+            peer_id,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER,
+        )
+        .await
     }
 
     pub(crate) async fn prefetch_stage_package_from_coordinator(
@@ -481,6 +501,9 @@ impl Node {
             }
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST => {
                 peer.stage_status_list_supported
+            }
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER => {
+                peer.persistent_lane_marker_supported
             }
             _ => false,
         }

@@ -506,6 +506,10 @@ pub(super) async fn stage0_runtime_options(
     runtime_options.config.bind_addr = stage0_return_endpoint.to_string();
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = Some(PeerConfig {
+        persistent_lane_marker: spec
+            .node
+            .stage_peer_supports_persistent_lane_marker(downstream.node_id)
+            .await,
         stage_id: downstream.stage_id.clone(),
         stage_index: downstream.stage_index,
         endpoint: downstream_endpoint.to_string(),
@@ -629,6 +633,7 @@ pub(super) async fn load_downstream_split_runtime_stages(
             )?;
         }
         *downstream = Some(skippy::StagePeerDescriptor {
+            persistent_lane_marker: false,
             stage_id: stage.stage_id.clone(),
             stage_index: stage.stage_index,
             endpoint: ready.status.bind_addr.clone(),
@@ -808,6 +813,7 @@ pub(super) fn split_runtime_stage_upstream(
 ) -> Option<skippy::StagePeerDescriptor> {
     let stage0 = spec.generation.stages.first()?;
     Some(skippy::StagePeerDescriptor {
+        persistent_lane_marker: false,
         stage_id: stage0.stage_id.clone(),
         stage_index: stage0.stage_index,
         endpoint: stage0_return_endpoint.to_string(),
