@@ -1000,4 +1000,95 @@ mod tests {
 
         assert!(priced_model_requires_payment(Some(MODEL), &prices));
     }
+
+    /// #2246: a seller that prices a model under the public ID it advertises
+    /// must still charge a remote caller whose request ingress rewrote to the
+    /// internal served name. Ingress runs `rewrite_public_model_alias` before
+    /// payment admission, so admission is handed the internal name while the
+    /// operator's `payments.v1` pricing key is the public ID.
+    #[cfg(feature = "payments")]
+    #[test]
+    fn priced_public_alias_still_requires_payment_after_ingress_alias_rewrite() {
+        use crate::network::openai::request_parse::{
+            BufferedHttpRequest, rewrite_public_model_alias,
+        };
+
+        let descriptor = mesh::ServedModelDescriptor {
+            identity: mesh::ServedModelIdentity {
+                model_name: "Falcon-H1-1.5B-Instruct-Q4_K_M".to_string(),
+                source_kind: mesh::ModelSourceKind::HuggingFace,
+                repository: Some("tiiuae/Falcon-H1-1.5B-Instruct-GGUF".to_string()),
+                revision: Some("0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a".to_string()),
+                artifact: Some("Falcon-H1-1.5B-Instruct-Q4_K_M.gguf".to_string()),
+                canonical_ref: Some(
+                    "tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+                        .to_string(),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let internal = descriptor.identity.model_name.clone();
+        // The ID this node advertises for that internal served name, which is
+        // what a remote caller puts in its request and what the operator prices.
+        let public = mesh::public_model_id_from_identity(&descriptor.identity).unwrap();
+        assert_ne!(
+            public, internal,
+            "the fixture must model a public alias distinct from the internal served name"
+        );
+        let descriptors = vec![descriptor];
+        let served = vec![internal.clone()];
+
+        let body = serde_json::json!({"model": public, "prompt": "Hi"});
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let mut raw = format!(
+            "POST /v1/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+            bytes.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&bytes);
+        let mut request = BufferedHttpRequest {
+            raw,
+            method: "POST".into(),
+            path: "/v1/completions".into(),
+            client_path: "/v1/completions".into(),
+            request_id: RequestId::default(),
+            body_json: Some(body),
+            body_json_attempted: true,
+            body_len_bytes: bytes.len(),
+            body_bytes: Some(bytes),
+            completion_tokens: None,
+            model_name: Some(public.clone()),
+            stream: None,
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+            correlation_id: None,
+            exchange_observation_id: None,
+        };
+
+        // Ingress order exactly as `ingress/buffered_exchange.rs` runs it: the
+        // public alias becomes the internal served name before admission.
+        rewrite_public_model_alias(&mut request, &served, &descriptors);
+        assert_eq!(
+            request.model_name.as_deref(),
+            Some(internal.as_str()),
+            "ingress must rewrite the advertised public alias to the internal served name"
+        );
+
+        // The operator priced the model under the public ID it advertises.
+        let prices = std::collections::BTreeMap::from([(
+            public.clone(),
+            mesh_llm_payments_types::pricing::Pricing {
+                input_msat_per_million: 1,
+                output_msat_per_million: 1,
+                cache_discount_percent: 0,
+            },
+        )]);
+
+        assert!(
+            priced_model_requires_payment(request.model_name.as_deref(), &prices),
+            "a model priced under its advertised public ID {public} must require payment even \
+             though ingress rewrote the request to the internal served name {internal}"
+        );
+    }
 }
