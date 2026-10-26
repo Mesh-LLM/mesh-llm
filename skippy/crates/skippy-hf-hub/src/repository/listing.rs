@@ -14,7 +14,7 @@ use reqwest::Url;
 
 use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash};
 use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
-use crate::client::{encode_ref, is_relative_location};
+use crate::client::encode_ref;
 use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
 
@@ -164,7 +164,7 @@ impl<T: RepoType> HFRepository<T> {
         )?;
 
         let headers = self.hf_client.auth_headers();
-        // As in huggingface_hub, only same-host redirects are followed (a
+        // As in huggingface_hub, only same-origin redirects are followed (a
         // renamed repo, `/api/resolve-cache/`). A Xet- or LFS-backed file
         // answers with a redirect to its CDN, and only that redirect carries
         // `X-Repo-Commit` and the linked ETag and size: the CDN's own answer
@@ -255,14 +255,15 @@ fn head_client(client: &crate::HFClient) -> &reqwest::Client {
     client.http_client()
 }
 
-/// Where `response` redirects to, if that is a `Location` without a host,
-/// resolved against `url`. `None` for any other answer, including a redirect
-/// to another host such as the Xet or LFS CDN.
+/// Where `response` redirects to, if that keeps the scheme, host and port of
+/// `url`: the request carries the Hub token, which no other origin may get.
+/// `None` for any other answer, including a redirect to the Xet or LFS CDN.
+/// The check is on the resolved URL, not the `Location` text: `\\host/path`
+/// reads as relative but resolves to another host.
 fn same_host_redirect(url: &str, response: &reqwest::Response) -> Option<String> {
-    if !is_relative_location(location_header(response)?) {
-        return None;
-    }
-    redirect_target(url, response)
+    let current = Url::parse(url).ok()?;
+    let next = current.join(location_header(response)?).ok()?;
+    (next.origin() == current.origin()).then(|| next.into())
 }
 
 /// Where a redirect answered for `url` points.
@@ -355,6 +356,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::same_host_redirect;
     use crate::HFClientBuilder;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -397,7 +399,11 @@ mod tests {
     #[tokio::test]
     async fn metadata_comes_from_the_hub_redirect_not_the_cdn_answer() {
         let (listener, endpoint) = hub().await;
-        let cdn = format!("{endpoint}/xet-bridge/blob");
+        // The same server under another origin, as the Xet CDN is.
+        let cdn = format!(
+            "{}/xet-bridge/blob",
+            endpoint.replace("127.0.0.1", "localhost")
+        );
         serve(
             listener,
             vec![
@@ -475,5 +481,74 @@ mod tests {
         assert_eq!(info.etag, "readme");
         assert_eq!(info.file_size, 28_503);
         assert_eq!(info.location, Some(format!("{endpoint}{cached}")));
+    }
+
+    #[test]
+    fn only_a_same_origin_redirect_is_followed() {
+        let at = "https://huggingface.co/owner/repo/resolve/main/README.md";
+        let redirect = |location: &str| {
+            reqwest::Response::from(
+                http::Response::builder()
+                    .status(307)
+                    .header("location", location)
+                    .body("")
+                    .unwrap(),
+            )
+        };
+        assert_eq!(
+            same_host_redirect(at, &redirect("/api/resolve-cache/x")).as_deref(),
+            Some("https://huggingface.co/api/resolve-cache/x")
+        );
+        assert_eq!(
+            same_host_redirect(at, &redirect("https://huggingface.co/api/x")).as_deref(),
+            Some("https://huggingface.co/api/x")
+        );
+        // Each of these reaches another origin, which must not get the token;
+        // `\\host` reads as relative but resolves to another host.
+        for elsewhere in [
+            "https://cdn-lfs.hf.co/x",
+            "//cdn-lfs.hf.co/x",
+            "\\\\evil.example/x",
+            "http://huggingface.co/x",
+            "https://huggingface.co:8443/x",
+        ] {
+            assert_eq!(
+                same_host_redirect(at, &redirect(elsewhere)),
+                None,
+                "{elsewhere}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_requests_keep_the_supplied_transport_settings() {
+        let (listener, endpoint) = hub().await;
+        serve(
+            listener,
+            vec![(
+                "/owner/repo/resolve/main/model.gguf".into(),
+                format!(
+                    "HTTP/1.1 200 OK\r\nETag: \"e\"\r\nX-Repo-Commit: {COMMIT}\r\n\
+                     Content-Length: 1\r\n"
+                ),
+            )],
+        );
+        // The local Hub is plain HTTP, so an HTTPS-only client must refuse it,
+        // including for the metadata HEAD that bypasses the main client.
+        let client = HFClientBuilder::new()
+            .endpoint(endpoint)
+            .retry_max_attempts(0)
+            .client_builder(|| reqwest::Client::builder().https_only(true))
+            .build()
+            .unwrap();
+
+        let result = client
+            .model("owner", "repo")
+            .get_file_metadata()
+            .filepath("model.gguf")
+            .send()
+            .await;
+
+        assert!(result.is_err(), "{result:?}");
     }
 }
