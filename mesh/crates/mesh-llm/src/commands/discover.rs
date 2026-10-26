@@ -256,6 +256,14 @@ pub(crate) fn run_stop() -> Result<()> {
     if let Some(line) = tally.finish()? {
         writeln!(err, "{line}")?;
     }
+    // A plain client never registers a runtime instance, so this command
+    // cannot see it; say so in the closing output, since a bare
+    // "Nothing running." would be false while a client still serves
+    // (issue #2352, papercut 1).
+    writeln!(
+        err,
+        "Note: mesh-llm client processes are not covered by this command and keep running."
+    )?;
     Ok(())
 }
 
