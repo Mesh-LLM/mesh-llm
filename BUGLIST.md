@@ -237,3 +237,20 @@ gh issue list --repo Mesh-LLM/mesh-llm --state open --limit 300 \
 
 Re-read each body before trusting a rank: several entries cite commit SHAs, line numbers, and
 release tags that will have moved.
+
+## Progress
+
+| Rank | Issue | Status | Branch | PR | Evidence |
+|---:|---|---|---|---|---|
+| 12 | [#2003](https://github.com/Mesh-LLM/mesh-llm/issues/2003) | NOT-REPRODUCIBLE | `fix/12-2003-platform-checks-cache-mode` | — | [evidence](https://github.com/Mesh-LLM/mesh-llm/issues/2003#issuecomment-6406982137) |
+
+#2003: the reported cold `platform-checks` compile on `main` does not occur. `main_windows.yml`
+run [40248201661](https://github.com/Mesh-LLM/mesh-llm/actions/runs/40248201661) job
+`Platform checks (windows-unit)` logs `Baked sccache is using job-local disk with a read_write
+GitHub Actions cache.` with `Cache hits rate 80.88 %` (1438 hits / 340 misses), not the reported
+0.25%. The cited cause is also disconnected: `plan.cache_modes` is planner metadata whose only
+consumer is the pull-request-profile assertion in
+`.github/workflows/ci-runner-contract-slice.yml`, while the lane's cache behavior comes from
+`.github/actions/configure-sccache-gha` (event name plus `select-ci-runners` trust outputs). The
+catalog inconsistency the issue names is real but inert, so no catalog, workflow, or policy change
+was made.
