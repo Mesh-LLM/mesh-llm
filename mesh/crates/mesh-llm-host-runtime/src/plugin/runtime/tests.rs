@@ -18,7 +18,7 @@ use std::ffi::OsStr;
 use std::time::Duration;
 use tempfile::TempDir;
 
-fn test_host_mode() -> PluginHostMode {
+pub(super) fn test_host_mode() -> PluginHostMode {
     PluginHostMode {
         mesh_visibility: MeshVisibility::Private,
     }
@@ -231,6 +231,7 @@ pub(super) fn plugin_for_spec_with_mesh_tx(
         }),
         restart_lock: Arc::new(Mutex::new(())),
         stopping: AtomicBool::new(false),
+        announce_starts: AtomicBool::new(true),
         next_request_id: AtomicU64::new(1),
         next_generation: AtomicU64::new(1),
         in_process: None,
