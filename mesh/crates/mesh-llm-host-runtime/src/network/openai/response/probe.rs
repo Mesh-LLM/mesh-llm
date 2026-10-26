@@ -763,4 +763,51 @@ mod tests {
         );
         assert_eq!(result.unwrap().status_code, 200);
     }
+
+    /// #2195: a non-streaming local request's first response byte is the whole
+    /// completion, so a prefill longer than the built-in local first-byte
+    /// deadline must be survivable by raising that deadline. The budget is read
+    /// from the environment, so the assertion runs in a child process (the
+    /// `mesh-llm-config` idiom for env-driven behavior: mutating the shared
+    /// test process environment races every other test in the binary).
+    #[tokio::test]
+    async fn local_first_byte_budget_is_configurable() {
+        if !mesh_llm_config::env_override_in_child_for_test(
+            concat!(
+                module_path!(),
+                "::local_first_byte_budget_is_configurable"
+            ),
+            "MESH_LLM_OPENAI_FIRST_BYTE_TIMEOUT_SECS",
+            "1",
+        ) {
+            return;
+        }
+
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let _ = writer
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                .await;
+        });
+
+        let started = Instant::now();
+        let probe = tokio::time::timeout(
+            Duration::from_secs(10),
+            super::probe_http_response_local(&mut reader),
+        )
+        .await
+        .expect("a configured 1s first-byte budget must end the wait, not the built-in default");
+        let elapsed = started.elapsed();
+        let result = match probe {
+            Ok(_) => panic!("a first byte later than the configured budget must be a timeout"),
+            Err(error) => error,
+        };
+
+        assert!(is_timeout_error(&result), "unexpected error: {result:#}");
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "the configured 1s first-byte budget was not applied: {elapsed:?}"
+        );
+    }
 }
