@@ -79,6 +79,9 @@ pub struct SpeechStreamConfig {
     /// Buffer length past which unconfirmed words are confirmed anyway, to
     /// stay inside Whisper's 30 s window.
     pub max_buffer_ms: u32,
+    /// Report the words a pass heard but has not confirmed, so a caller can
+    /// show speech a pass sooner than the deltas do.
+    pub tentative: bool,
 }
 
 impl Default for SpeechStreamConfig {
@@ -90,6 +93,7 @@ impl Default for SpeechStreamConfig {
             step_ms: 1_000,
             trim_after_ms: 15_000,
             max_buffer_ms: 28_000,
+            tentative: false,
         }
     }
 }
@@ -114,6 +118,13 @@ pub enum SpeechStreamEvent {
     Completed {
         turn: u64,
         transcript: String,
+    },
+    /// What the latest pass heard after the confirmed text, when
+    /// [`SpeechStreamConfig::tentative`] is set. It may change: each replaces
+    /// the last, an empty one clears it, and `Completed` supersedes it.
+    Tentative {
+        turn: u64,
+        text: String,
     },
 }
 
@@ -145,6 +156,8 @@ pub struct SpeechStream {
     confirmed_in_buffer: usize,
     /// The previous pass's words after the confirmed ones.
     pending: Vec<String>,
+    /// The tentative text last reported, so an unchanged one isn't repeated.
+    reported_tentative: String,
     last_pass_at: u64,
 }
 
@@ -165,6 +178,7 @@ impl SpeechStream {
             confirmed: Vec::new(),
             confirmed_in_buffer: 0,
             pending: Vec::new(),
+            reported_tentative: String::new(),
             last_pass_at: 0,
         }
     }
@@ -361,7 +375,26 @@ impl SpeechStream {
         } else if buffer_ms > u64::from(self.config.trim_after_ms) {
             self.trim_confirmed(&segments);
         }
+        self.report_tentative(events);
         Ok(())
+    }
+
+    fn report_tentative(&mut self, events: &mut Vec<SpeechStreamEvent>) {
+        if !self.config.tentative {
+            return;
+        }
+        let mut text = self.pending.join(" ");
+        // Like a delta, it reads on from the confirmed text.
+        if !text.is_empty() && !self.confirmed.is_empty() {
+            text.insert(0, ' ');
+        }
+        if text != self.reported_tentative {
+            self.reported_tentative.clone_from(&text);
+            events.push(SpeechStreamEvent::Tentative {
+                turn: self.turn,
+                text,
+            });
+        }
     }
 
     /// Cuts the buffer at the end of the last segment whose words are all
@@ -418,6 +451,7 @@ impl SpeechStream {
         self.confirmed.clear();
         self.confirmed_in_buffer = 0;
         self.pending.clear();
+        self.reported_tentative.clear();
         self.speech_frames = 0;
         self.silence_samples = 0;
     }

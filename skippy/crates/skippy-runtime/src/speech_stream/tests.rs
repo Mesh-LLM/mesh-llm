@@ -101,6 +101,59 @@ fn words_are_confirmed_once_two_passes_agree() {
 }
 
 #[test]
+fn tentative_text_shows_what_a_pass_heard_before_it_is_confirmed() {
+    let mut script = Script::new(vec![
+        vec![(900, " Hello")],
+        vec![(1_900, " Hello world")],
+        vec![(2_900, " Hello world")],
+        vec![(3_000, " Hello world again.")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        tentative: true,
+        ..manual()
+    });
+    let tentative = |events: Vec<SpeechStreamEvent>| {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                SpeechStreamEvent::Tentative { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        tentative(stream.push(&loud(1_000), &mut transcribe).unwrap()),
+        ["Hello"]
+    );
+    // It reads on from the confirmed text, as a delta does.
+    assert_eq!(
+        tentative(stream.push(&loud(1_000), &mut transcribe).unwrap()),
+        [" world"]
+    );
+    // All of it is confirmed: an empty one clears what was shown.
+    assert_eq!(
+        tentative(stream.push(&loud(1_000), &mut transcribe).unwrap()),
+        [""]
+    );
+    assert!(tentative(stream.commit(&mut transcribe).unwrap()).is_empty());
+}
+
+#[test]
+fn tentative_text_is_off_by_default() {
+    let mut script = Script::new(vec![vec![(900, " Hello")]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let events = stream.push(&loud(1_000), &mut transcribe).unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SpeechStreamEvent::Tentative { .. }))
+    );
+}
+
+#[test]
 fn passes_wait_for_a_step_of_new_audio() {
     let mut script = Script::new(vec![vec![(500, " Hi")]]);
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
@@ -298,6 +351,7 @@ fn two_turns_inside_one_push_are_reported_in_order() {
             SpeechStreamEvent::SpeechStopped { turn, .. } => format!("stop{turn}"),
             SpeechStreamEvent::Delta { turn, .. } => format!("delta{turn}"),
             SpeechStreamEvent::Completed { turn, transcript } => format!("done{turn}:{transcript}"),
+            SpeechStreamEvent::Tentative { turn, .. } => format!("tentative{turn}"),
         })
         .collect::<Vec<_>>();
     assert_eq!(
