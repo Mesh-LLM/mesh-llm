@@ -91,6 +91,7 @@ const FIXTURE_ROWS = [
   { name: "Qwen3-32B-Q4_K_M", size: "19.8GB", source_model_repo: "unsloth/Qwen3-32B-GGUF", source_file: "Q4_K_M/Qwen3-32B-Q4_K_M.gguf", mmproj_json: "", layer_package_available: false },
   { name: "Llama-4-Scout-Q4_K_M", size: "22.5GB", source_model_repo: "unsloth/Llama-4-Scout-GGUF", source_file: "Q4_K_M/Llama-4-Scout-Q4_K_M.gguf", mmproj_json: "", layer_package_available: false },
   { name: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M", size: "18.6GB", source_model_repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF", source_file: "Q4_K_M/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf", mmproj_json: "", layer_package_available: false },
+  { name: "Devstral-Small-2505", size: "14.3GB", source_model_repo: "unsloth/Devstral-Small-2505-GGUF", source_file: "Q4_K_M/Devstral-Small-2505-Q4_K_M.gguf", mmproj_json: "", layer_package_available: false },
   { name: "Qwen3.5-9B-Vision-Q4_K_M", size: "5.8GB", source_model_repo: "unsloth/Qwen3.5-9B-GGUF", source_file: "Q4_K_M/Qwen3.5-9B-GGUF-Q4_K_M.gguf", mmproj_json: '{"file":"mmproj-BF16.gguf","repo":"unsloth/Qwen3.5-9B-GGUF","revision":"main"}', layer_package_available: false },
   { name: "unsloth/Kimi-K2-Thinking-GGUF:UD-Q4_K_XL", size: "61 layers", source_model_repo: "unsloth/Kimi-K2-Thinking-GGUF", source_file: "UD-Q4_K_XL/Kimi-K2-Thinking-UD-Q4_K_XL-00001-of-00046.gguf", mmproj_json: "", layer_package_available: true },
 ];
@@ -269,6 +270,7 @@ const expectedCapabilities = {
   "Qwen3-32B-Q4_K_M": [],
   "Llama-4-Scout-Q4_K_M": [],
   "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M": ["Code"],
+  "Devstral-Small-2505": ["Code"],
   "Qwen3.5-9B-Vision-Q4_K_M": ["Vision"],
   "unsloth/Kimi-K2-Thinking-GGUF:UD-Q4_K_XL": [],
 };
@@ -307,6 +309,18 @@ for (const chunk of homeSection.split(/(?=<tr\b)/).filter((c) => /\bdata-capabil
     );
   }
 }
+
+const devstralHomeRow = homeSection
+  .split(/(?=<tr\b)/)
+  .find((chunk) => /<strong>Devstral-Small-2505<\/strong>/.test(chunk));
+assert.ok(devstralHomeRow, "the homepage catalog must include the Devstral-Small-2505 row");
+const devstralHomeCapabilities = attributeValue(
+  devstralHomeRow.match(/\bdata-capability="([^"]*)"/)[1],
+).split(" ").filter(Boolean);
+assert.ok(
+  devstralHomeCapabilities.includes("Code"),
+  "the homepage Devstral-Small-2505 row must be included by the Code filter",
+);
 
 console.log(
   `Catalog filters: ${catalogHardware.length} hardware buckets selectable and contiguous, ` +

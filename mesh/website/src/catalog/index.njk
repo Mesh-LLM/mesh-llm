@@ -204,7 +204,7 @@ permalink: /catalog/index.html
     if (mmproj && mmproj !== '{}' && mmproj !== 'null') capabilities.push('Vision');
     const identity = [row.name, row.variant_id, row.source_model_repo || row.source_repo]
       .filter(Boolean).join(' ');
-    if (/coder/i.test(identity)) capabilities.push('Code');
+    if (/coder|devstral[- ]small[- ]2505/i.test(identity)) capabilities.push('Code');
     return capabilities.join(' ');
   }
 
