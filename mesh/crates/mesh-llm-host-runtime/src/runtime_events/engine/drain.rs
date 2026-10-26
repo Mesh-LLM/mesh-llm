@@ -897,12 +897,17 @@ mod tests {
     /// `EngineHealth::replay_evicted` by exactly one per push regardless of
     /// the real eviction count) and passes once it reports the real count.
     /// Three distinct facts are drained together so each publishes its own
-    /// replay frame within microseconds of the others (well under the tiny
-    /// age bound); after real wall-clock time passes that bound, a fourth
-    /// push must evict all three in ONE `ReplayBuffer::push` call.
+    /// replay frame well within the small age bound; after real wall-clock
+    /// time passes that bound, a fourth push must evict all three in ONE
+    /// `ReplayBuffer::push` call.
+    ///
+    /// The bound leaves room for scheduling on a loaded runner: a frame is
+    /// stamped before its wire bytes are encoded and aged again when it is
+    /// pushed, so a bound shorter than that gap ages the fresh frame out at
+    /// its own push and counts it as a fourth eviction.
     #[test]
     fn a_single_push_that_evicts_several_stale_frames_credits_every_one_at_the_engine_level() {
-        let engine = engine_with_tiny_replay_age(Duration::from_millis(5));
+        let engine = engine_with_tiny_replay_age(Duration::from_millis(200));
 
         submit_one(&engine);
         submit_one(&engine);
@@ -911,14 +916,14 @@ mod tests {
         assert_eq!(
             engine.health().snapshot().replay_evicted,
             0,
-            "all three frames were recorded within microseconds of each \
-             other, well under the 5ms age bound -- nothing is stale yet"
+            "all three frames were recorded well under the 200ms age bound \
+             -- nothing is stale yet"
         );
         assert_eq!(engine.replay().len(), 3);
 
-        // Real wall-clock time passing the tiny age bound, well past it for
+        // Real wall-clock time passing the age bound, well past it for
         // safety margin against scheduling jitter on a loaded machine.
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(600));
 
         submit_one(&engine);
         engine.drain();
