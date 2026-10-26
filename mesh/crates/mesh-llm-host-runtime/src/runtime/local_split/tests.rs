@@ -1013,8 +1013,9 @@ fn runtime_model_planning_bytes_rejects_legacy_layer_package() {
     let dir = tempfile::tempdir().unwrap();
     write_test_layer_package(dir.path(), 4_800_000_000);
 
-    let error = runtime_model_planning_bytes(dir.path())
-        .unwrap_err()
+    let error = runtime_model_sizing(dir.path())
+        .err()
+        .expect("legacy layer package must be rejected")
         .to_string();
 
     assert!(error.contains("requires package schema 2"), "{error}");
