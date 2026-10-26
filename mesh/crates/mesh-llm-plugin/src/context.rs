@@ -58,6 +58,7 @@ pub struct PluginContext<'a> {
     pub(crate) plugin_id: String,
     /// What the host listed in its `InitializeRequest`.
     pub(crate) host_capabilities: Arc<[String]>,
+    pub(crate) inference_observation: crate::inference_observation::FeedSlot,
     pub(crate) _marker: PhantomData<&'a mut ()>,
 }
 
@@ -72,6 +73,7 @@ impl<'a> PluginContext<'a> {
             pending_host_responses,
             plugin_id,
             host_capabilities: Arc::from([]),
+            inference_observation: Default::default(),
             _marker: PhantomData,
         }
     }
@@ -82,8 +84,17 @@ impl<'a> PluginContext<'a> {
             pending_host_responses: self.pending_host_responses.clone(),
             plugin_id: self.plugin_id.clone(),
             host_capabilities: self.host_capabilities.clone(),
+            inference_observation: self.inference_observation.clone(),
             _marker: PhantomData,
         }
+    }
+
+    pub(crate) fn with_inference_observation(
+        mut self,
+        slot: crate::inference_observation::FeedSlot,
+    ) -> Self {
+        self.inference_observation = slot;
+        self
     }
 
     pub(crate) fn with_host_capabilities(mut self, host_capabilities: Arc<[String]>) -> Self {
@@ -401,6 +412,65 @@ impl<'a> PluginContext<'a> {
         }
     }
 
+    /// Subscribe to the local inference observation feed: a snapshot of what
+    /// this node is executing, then its events in order. A later call
+    /// replaces the subscription. See [`crate::inference_observation`].
+    ///
+    /// Fails at once, without sending anything, if the host does not list
+    /// [`crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION`]. The host
+    /// refuses a plugin whose manifest does not declare
+    /// `inference_observation`, or whose operator has not set
+    /// `allow_inference_observation = true` for it.
+    pub async fn subscribe_inference_observation(
+        &mut self,
+    ) -> Result<crate::inference_observation::InferenceObservationFeed> {
+        self.subscribe_inference_observation_within(PEER_BLOCK_REQUEST_TIMEOUT)
+            .await
+    }
+
+    async fn subscribe_inference_observation_within(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<crate::inference_observation::InferenceObservationFeed> {
+        if !self.host_supports(crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION) {
+            bail!(
+                "local inference observation is unsupported by this host: it does not list the `{}` capability",
+                crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION
+            );
+        }
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut pending_guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
+        // Open before asking, so a batch the host sends right after its answer
+        // is kept even if it is read first.
+        let feed = self.inference_observation.open();
+        let feed_guard = FeedCloseGuard(self.inference_observation.clone(), true);
+
+        self.send_payload(
+            proto::envelope::Payload::SubscribeInferenceObservationRequest(
+                proto::SubscribeInferenceObservationRequest {},
+            ),
+            request_id,
+        )
+        .await?;
+
+        let Ok(response) = tokio::time::timeout(timeout, rx).await else {
+            bail!("inference observation subscription: the host did not answer within {timeout:?}");
+        };
+        let response = response??;
+        pending_guard.disarm();
+        match response.payload {
+            Some(proto::envelope::Payload::SubscribeInferenceObservationResponse(response)) => {
+                feed_guard.disarm();
+                Ok(feed.start(response.snapshot.unwrap_or_default()))
+            }
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected inference observation response"),
+        }
+    }
+
     pub async fn connect_mesh_stream(
         &mut self,
         request: proto::OpenMeshStreamRequest,
@@ -431,6 +501,23 @@ impl<'a> PluginContext<'a> {
             })
             .await
             .map_err(|_| anyhow::anyhow!("plugin host connection is closed"))
+    }
+}
+
+/// Closes a subscription the host did not grant, whatever the way out.
+struct FeedCloseGuard(crate::inference_observation::FeedSlot, bool);
+
+impl FeedCloseGuard {
+    fn disarm(mut self) {
+        self.1 = false;
+    }
+}
+
+impl Drop for FeedCloseGuard {
+    fn drop(&mut self) {
+        if self.1 {
+            self.0.close();
+        }
     }
 }
 
@@ -702,5 +789,103 @@ mod tests {
         });
         context.withdraw_status().await.unwrap();
         host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_observation_subscription_to_an_older_host_fails_at_once() {
+        let (mut context, mut outbound_rx, pending) = context(&[]);
+        let error = context
+            .subscribe_inference_observation()
+            .await
+            .err()
+            .expect("refused");
+        assert!(
+            error.to_string().contains("unsupported by this host"),
+            "{error}"
+        );
+        assert!(outbound_rx.try_recv().is_err(), "nothing was sent");
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_observation_subscription_keeps_the_batches_sent_with_its_answer() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION]);
+        let slot = context.inference_observation.clone();
+        let host = tokio::spawn(async move {
+            let request = outbound_rx.recv().await.unwrap();
+            assert!(matches!(
+                request.payload,
+                Some(proto::envelope::Payload::SubscribeInferenceObservationRequest(_))
+            ));
+            // The first batch is read before the answer reaches the plugin.
+            slot.deliver(proto::InferenceObservationBatch {
+                host_generation: 5,
+                watermark_unix_ns: 99,
+                ..Default::default()
+            });
+            remove_pending_host_response(&pending, request.request_id)
+                .unwrap()
+                .send(Ok(proto::Envelope {
+                    request_id: request.request_id,
+                    payload: Some(
+                        proto::envelope::Payload::SubscribeInferenceObservationResponse(
+                            proto::SubscribeInferenceObservationResponse {
+                                snapshot: Some(proto::InferenceObservationSnapshot {
+                                    host_generation: 5,
+                                    next_sequence: 1,
+                                    ..Default::default()
+                                }),
+                            },
+                        ),
+                    ),
+                    ..Default::default()
+                }))
+                .unwrap();
+        });
+        let mut feed = context.subscribe_inference_observation().await.unwrap();
+        host.await.unwrap();
+        assert_eq!(feed.snapshot().host_generation, 5);
+        let Some(crate::inference_observation::InferenceObservationItem::Batch(batch)) =
+            feed.next().await
+        else {
+            panic!("expected the early batch");
+        };
+        assert_eq!(batch.watermark_unix_ns, 99);
+    }
+
+    #[tokio::test]
+    async fn a_refused_observation_subscription_receives_nothing() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION]);
+        let slot = context.inference_observation.clone();
+        let host = tokio::spawn(async move {
+            let request = outbound_rx.recv().await.unwrap();
+            remove_pending_host_response(&pending, request.request_id)
+                .unwrap()
+                .send(Ok(proto::Envelope {
+                    request_id: request.request_id,
+                    payload: Some(proto::envelope::Payload::ErrorResponse(
+                        proto::ErrorResponse {
+                            message: "not granted".into(),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                }))
+                .unwrap();
+            slot
+        });
+        let error = context
+            .subscribe_inference_observation()
+            .await
+            .err()
+            .expect("refused");
+        assert!(error.to_string().contains("not granted"), "{error}");
+        let slot = host.await.unwrap();
+        // A batch arriving now has nowhere to go.
+        let mut probe = slot.open().start(Default::default());
+        slot.close();
+        assert!(probe.next().await.is_none());
     }
 }

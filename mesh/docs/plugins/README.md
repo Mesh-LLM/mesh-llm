@@ -1445,6 +1445,88 @@ a plugin that cannot run without it declares `.required(true)` and then refuses
 to initialize there. A default-managed plugin keeps its declaration only when
 its entry in `DEFAULT_PLUGINS` allows `Surface::StatusContributions`.
 
+## Local Inference Observation
+
+A plugin can follow what this node executes, to measure it (energy per token,
+for example) without sitting in the request path. It declares
+`mesh_llm_plugin::inference_observation::inference_observation()` in its
+manifest (`PluginManifest.inference_observation`), its operator opts it in:
+
+```toml
+[[plugin]]
+name = "example"
+allow_inference_observation = true
+```
+
+and it calls `PluginContext::subscribe_inference_observation()`, from
+`on_initialized` or any task holding an owned context. Without the declaration
+or the opt-in the host refuses the subscription and sends nothing. The setting
+is read when the plugin subscribes. A default-managed plugin keeps the
+declaration only if its `DEFAULT_PLUGINS` entry allows
+`Surface::InferenceObservation`; an unlisted default never keeps it.
+
+**What it covers.** The host composes an adapter into the lifecycle observer of
+each local inference frontend, so the feed has what this node executes: local
+API requests, and requests that arrived from peers, which the model-aware proxy
+also serves on the local frontend. A request this node only forwards to a peer
+never reaches one and never appears. Listing models and counting tokens are not
+executions. Not covered: split worker stages that have no frontend, and
+backends a plugin serves. A split's first stage reports the whole request,
+although later stages run on peers.
+
+**What it carries.** Activity and token counts only: never prompts, completion
+text, headers, admission decisions or keys. Execution ids are host counters,
+not request ids.
+
+**The feed.** The subscription answers with a snapshot: `host_generation`
+(random per host start), the `next_sequence` the following events start at,
+the local models whose frontends are serving, and every execution in flight
+(model, operation, streaming, start time, whether compute has finished). Then
+batches follow, in order, at least once a second. Each event has a sequence
+number one above the previous one, the host time it happened at (Unix
+nanoseconds, from a clock that is monotonic within a host generation), and an
+execution id:
+
+- `started`: a model execution began, with its model, operation and whether it
+  streams;
+- `first_output`: a stream produced its first output;
+- `compute_finished`: the backend finished computing. A streaming backend call
+  returns when the stream opens, so for a stream this comes when the stream
+  ends;
+- `usage`: prompt, cached and completion tokens, at most once per execution;
+- `ended`: completed, failed, cancelled, or dropped (the client went away),
+  exactly once and last;
+- `model_ready` / `model_unloaded`: a local model's first frontend started or
+  its last one stopped.
+
+A duplicate usage or terminal report from the frontend is not repeated, so no
+work is counted twice. A long stream stays in flight, and in every snapshot,
+until it ends: nothing expires for its age.
+
+**Timing.** Event times are when the frontend reported the event, not when the
+plugin received it. Each batch carries a `watermark`: every event at or before
+it has been delivered, so a plugin can settle an interval that ends before the
+watermark. The host stamps and queues each event under one lock and reads the
+watermark under the same lock, so nothing older can arrive later. A plugin on
+the same machine can compare the host clock with its own sensor clock through
+the snapshot's `taken_at_unix_ns`.
+
+**Loss.** The frontend's observer never waits on a plugin: it queues the event
+and returns. Each subscriber has a bounded queue of 4,096 events. When a
+subscriber falls that far behind, the host drops its queue and the next batch
+carries `loss` (the first lost sequence and how many were lost) and `resync`, a
+fresh snapshot listing what is still running, instead of events. The SDK holds
+up to 1,024 batches for a plugin that reads slowly, then reports
+`InferenceObservationItem::Overflowed`, and the plugin subscribes again. A plugin
+never has to read a gap as idle time. When the plugin restarts, its new
+connection subscribes again and gets a snapshot. A new `host_generation` means
+the host restarted, and earlier sequences and ids no longer apply.
+
+The host advertises the `local_inference_observation.v1` host capability.
+Against a host without it, `subscribe_inference_observation` fails at once; a
+plugin that cannot run without it declares `.required(true)` and refuses to
+initialize there.
+
 ## What The Host Owns
 
 The host is responsible for:
