@@ -225,6 +225,23 @@ Each is listed with the reason it does not belong in a bug ranking.
 - **#2200** is excluded: the report itself says it does not establish a MeshLLM software defect
   (host NVMe completion-polled timeouts).
 
+## Progress
+
+| Rank | Issue | Status | Branch | PR | Evidence |
+|---|---|---|---|---|---|
+| 15 | [#2563](https://github.com/Mesh-LLM/mesh-llm/issues/2563) | BLOCKED | — | — | [triage](https://github.com/Mesh-LLM/mesh-llm/issues/2563#issuecomment-6408480561) |
+
+#2563 is not a repository defect. The llama.cpp upstream canary has not evaluated a candidate since 2026-10-19:
+`preflight` fails on the self-hosted `family-certify` pool and every later job skips. Three separate external conditions
+are recorded in the triage comment — the NAS Hugging Face cache lost its content-addressed snapshot symlinks
+(`snapshot entry is not a content-addressed symlink`, runs 39396649578 and 39572726820), three runs were never assigned
+a runner and died at the 24 h ceiling (39751501508, 39927588419, 40077938412), and run 40177811387 landed on
+`jy-agt_e85gsewhhp1hd6p`, which exports no `HF_CACHE`/`HF_HOME`/`HF_HUB_CACHE` at all. The owning validators
+(`tools/xtask/src/automation/canary_receipts/source_plan/admission.rs`,
+`tools/xtask/src/ci_operations/cache_configuration.rs`) and the family roster are byte-identical across the last green
+run (38979714837, 2026-10-16) and the failing sources, and that green run passed the same step on the same runner and
+the same cache root. Prerequisite: repair the lab runner pool and its model cache, then re-run the canary.
+
 ## Regenerating this list
 
 ```sh
