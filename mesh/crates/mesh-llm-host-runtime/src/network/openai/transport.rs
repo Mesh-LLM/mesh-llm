@@ -1690,8 +1690,26 @@ pub async fn route_to_target(
             node.record_routed_request(model, 1, outcome);
             delivered_outcome(status_code, usage, output_digests)
         }
-        RouteAttemptResult::RetryableTimeout
-        | RouteAttemptResult::RetryableContextOverflow
+        // A single target that ran out its deadline is a gateway timeout, not
+        // generic unavailability: 504 is the status the OpenAI error contract
+        // labels `timeout`, and it is the one an operator can act on by
+        // raising the budget (#2195).
+        RouteAttemptResult::RetryableTimeout => {
+            node.record_routed_request(
+                model,
+                1,
+                crate::network::metrics::RequestOutcome::Unavailable,
+            );
+            let result = send_error_observed(
+                tcp_stream,
+                504,
+                &format!("single target {target:?} timed out (route_to_target)"),
+                route_observer,
+            )
+            .await;
+            response_outcome(504, result)
+        }
+        RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
             node.record_routed_request(

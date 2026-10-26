@@ -817,12 +817,15 @@ async fn test_read_http_request_truncates_pipelined_follow_up_bytes() {
     assert!(raw.contains("Connection: close\r\n\r\n"));
 }
 
-/// `probe_http_response_local` uses a much longer timeout (10 min)
+/// `probe_http_response_local` uses a much longer default budget (10 min)
 /// than `probe_http_response` (5 min), because local prefill can
-/// legitimately take minutes under load.
+/// legitimately take minutes under load. The local budget is configurable
+/// through `MESH_LLM_OPENAI_FIRST_BYTE_TIMEOUT_SECS` (#2195); these tests
+/// inject theirs through `TEST_RESPONSE_FIRST_BYTE_TIMEOUT`, which takes
+/// precedence over the environment.
 ///
 /// This test sends a response after a 2s delay and verifies that
-/// `probe_http_response_local` waits for it (well within its 10-min
+/// `probe_http_response_local` waits for it (well within its default budget
 #[test]
 fn test_inject_skippy_hooks_enabled() {
     let mut raw = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 25\r\n\r\n{\"model\":\"auto\",\"n\":1}".to_vec();
