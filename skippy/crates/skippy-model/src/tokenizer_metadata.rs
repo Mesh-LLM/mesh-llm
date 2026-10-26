@@ -12,6 +12,7 @@ use crate::gguf_writer::GgufKv;
 const TOKEN_TYPE_NORMAL: i32 = 1;
 const TOKEN_TYPE_UNUSED: i32 = 5;
 const TOKEN_TYPE_CONTROL: i32 = 3;
+const TOKEN_TYPE_USER_DEFINED: i32 = 4;
 const MAX_TOKENIZER_VOCAB_SIZE: usize = 1_048_576;
 
 pub(crate) fn push_tokenizer_metadata(
@@ -541,6 +542,53 @@ mod tests {
         assert!(text.contains("tokenizer.ggml.padding_token_id"));
         assert!(text.contains("tokenizer.ggml.add_bos_token"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn classifies_qwen_tool_call_added_tokens_as_control_tokens() {
+        let tokenizer: Value = serde_json::from_str(
+            r#"{
+              "model": {
+                "type": "BPE",
+                "vocab": {
+                  "a": 0,
+                  "<tool_call>": 1,
+                  "</tool_call>": 2,
+                  "<tool_response>": 3,
+                  "</tool_response>": 4,
+                  "<think>": 5,
+                  "</think>": 6
+                },
+                "merges": []
+              },
+              "decoder": {"type": "ByteLevel"},
+              "added_tokens": [
+                {"id": 1, "content": "<tool_call>", "special": false},
+                {"id": 2, "content": "</tool_call>", "special": false},
+                {"id": 3, "content": "<tool_response>", "special": false},
+                {"id": 4, "content": "</tool_response>", "special": false},
+                {"id": 5, "content": "<think>", "special": false},
+                {"id": 6, "content": "</think>", "special": false}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let config: Value =
+            serde_json::from_str(r#"{"model_type":"qwen3","vocab_size":7}"#).unwrap();
+
+        let metadata = read_byte_level_bpe(&tokenizer, &config).unwrap();
+
+        assert_eq!(metadata.tokens[0], "a");
+        assert_eq!(metadata.token_types[0], TOKEN_TYPE_NORMAL);
+        assert_eq!(metadata.tokens[1], "<tool_call>");
+        assert_eq!(metadata.tokens[2], "</tool_call>");
+        assert_eq!(metadata.tokens[3], "<tool_response>");
+        assert_eq!(metadata.tokens[4], "</tool_response>");
+        assert_eq!(metadata.tokens[5], "<think>");
+        assert_eq!(metadata.tokens[6], "</think>");
+        assert!(metadata.token_types[1..].iter().all(|token_type| {
+            *token_type == TOKEN_TYPE_USER_DEFINED
+        }));
     }
 
     #[test]
