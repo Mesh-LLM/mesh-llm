@@ -369,14 +369,12 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
         10200
     };
     let memory = super::memory::Monitor::start(&input.output)?;
+    let debug_scheduler = input.profile == Profile::Contention
+        || std::env::var("AGENTX_SKIPPY_DEBUG_TELEMETRY").as_deref() == Ok("1");
     let mut owner = Owner {
         memory_pid: std::sync::Arc::clone(&memory.pid),
-        cache_decisions: (engine == "skippy"
-            && (input.profile == Profile::Contention
-                || std::env::var("AGENTX_SKIPPY_DEBUG_TELEMETRY").as_deref() == Ok("1")))
-        .then(CacheDecisions::new),
-        scheduler_profile: (engine == "skippy" && input.profile == Profile::Contention)
-            .then(SchedulerProfile::new),
+        cache_decisions: (engine == "skippy" && debug_scheduler).then(CacheDecisions::new),
+        scheduler_profile: (engine == "skippy" && debug_scheduler).then(SchedulerProfile::new),
         server: Some(launch(input, server, MemberId::Seed, "server", seconds)),
         worker: Some(launch(
             input,
