@@ -152,8 +152,13 @@ pub(super) fn take_direct_iteration_batch_with_policy(
             && batch
                 .first()
                 .is_some_and(|first| first.phase != request.phase);
+        if phase_blocked {
+            // A later prefill must not pass a queued decode just to fill the
+            // current native batch. Keep the phase boundary in FIFO order.
+            deferred.push_back(request);
+            break;
+        }
         if request.token_ids.len() > token_budget
-            || phase_blocked
             || (prefill && prefill_sequences >= policy.max_prefill_sequences)
         {
             claimed_sessions.insert(request.session_id.clone());

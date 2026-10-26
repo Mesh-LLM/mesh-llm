@@ -448,10 +448,11 @@ impl IterationScheduler {
         );
         let scheduler_lane_count =
             effective_scheduler_lane_count(lane_count, safe_mode, continuous_batching);
+        let recurrent_bytes_per_sequence = stage_recurrent_bytes_per_native_sequence(config);
         let scheduler_config = build_scheduler_config(
             scheduler_lane_count,
             kv_pool_tokens,
-            stage_recurrent_bytes_per_native_sequence(config),
+            recurrent_bytes_per_sequence,
             config.n_batch,
             config.n_ubatch,
             queue_capacity,
@@ -548,7 +549,13 @@ impl IterationScheduler {
             })?;
         Ok(Self {
             shared: Arc::new(IterationSchedulerShared {
-                prefill_admission: Default::default(),
+                prefill_admission: prefill_admission::PrefillAdmission::new(
+                    if recurrent_bytes_per_sequence > 0 {
+                        scheduler_lane_count.min(2)
+                    } else {
+                        1
+                    },
+                ),
                 service_estimator,
                 commands,
                 max_direct_iteration_tokens,
@@ -1662,12 +1669,10 @@ fn build_scheduler_config(
         max_waiting_sequences: queue_capacity.max(1),
         max_tokens_per_iteration,
         prefill_chunk_tokens,
-        // Recurrent models can become substantially slower when several
-        // independent prompt rows share one native prefill call. Preserve
-        // decode batching, but serialize recurrent prefills through the same
-        // scheduler worker.
+        // Admit at most two recurrent prefill rows in one native iteration.
+        // Decode remains a separate phase in the same unified KV pool.
         max_prefill_sequences_per_iteration: if recurrent_bytes_per_sequence > 0 {
-            1
+            2
         } else {
             usize::MAX
         },

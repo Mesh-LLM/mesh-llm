@@ -1,17 +1,39 @@
-//! Admit one prompt chunk at a time to the unified KV allocator.
-//! Waiting prompts take turns at native iteration boundaries.
+//! Bound concurrent prompt submitters for the unified KV allocator.
+//! The scheduler serializes native iterations; waiting prompts rotate at
+//! native iteration boundaries.
 use skippy_inference_api::{CancellationToken, InferenceError, InferenceResult};
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-#[derive(Default)]
 pub(super) struct PrefillAdmission {
     waiting: Mutex<VecDeque<Arc<()>>>,
     changed: Condvar,
+    active_limit: usize,
+}
+
+impl Default for PrefillAdmission {
+    fn default() -> Self {
+        Self::new(1)
+    }
 }
 
 impl PrefillAdmission {
+    pub(super) fn new(active_limit: usize) -> Self {
+        Self {
+            waiting: Mutex::new(VecDeque::new()),
+            changed: Condvar::new(),
+            active_limit: active_limit.max(1),
+        }
+    }
+
+    fn admitted(&self, waiting: &VecDeque<Arc<()>>, ticket: &Arc<()>) -> bool {
+        waiting
+            .iter()
+            .take(self.active_limit)
+            .any(|candidate| Arc::ptr_eq(candidate, ticket))
+    }
+
     pub(super) fn acquire(
         &self,
         deadline: Instant,
@@ -54,10 +76,7 @@ impl PrefillAdmission {
                 drop(waiting);
                 return Err(error);
             }
-            if waiting
-                .front()
-                .is_some_and(|first| Arc::ptr_eq(first, ticket))
-            {
+            if self.admitted(&waiting, ticket) {
                 return Ok(());
             }
             let wait = deadline
@@ -90,15 +109,15 @@ impl PrefillTurn<'_> {
             .waiting
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if waiting.len() <= 1 {
+        if waiting.len() <= self.admission.active_limit {
             return Ok(None);
         }
-        assert!(
-            waiting
-                .front()
-                .is_some_and(|first| Arc::ptr_eq(first, &self.ticket))
-        );
-        waiting.pop_front();
+        let position = waiting
+            .iter()
+            .position(|ticket| Arc::ptr_eq(ticket, &self.ticket))
+            .expect("active prefill ticket is queued");
+        assert!(position < self.admission.active_limit);
+        waiting.remove(position);
         waiting.push_back(Arc::clone(&self.ticket));
         self.admission.changed.notify_all();
         let started = Instant::now();
@@ -168,6 +187,43 @@ mod tests {
             release.send(()).unwrap();
             assert_eq!(events.recv_timeout(Duration::from_secs(5)).unwrap(), 3);
         });
+        assert!(admission.waiting.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn two_admitted_prefills_rotate_before_a_third_waiter() {
+        let admission = PrefillAdmission::new(2);
+        let mut first = admission.acquire(deadline(), None).unwrap();
+        let (entered, events) = mpsc::channel();
+        let (release_second, second_released) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let admission = &admission;
+            let second_entered = entered.clone();
+            scope.spawn(move || {
+                let _second = admission.acquire(deadline(), None).unwrap();
+                second_entered.send("second").unwrap();
+                second_released
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+            });
+            assert_eq!(
+                events.recv_timeout(Duration::from_secs(5)).unwrap(),
+                "second"
+            );
+            scope.spawn(move || {
+                let _third = admission.acquire(deadline(), None).unwrap();
+                entered.send("third").unwrap();
+            });
+            wait_for_queue(admission, 3);
+            assert!(events.try_recv().is_err());
+            assert!(first.yield_to_waiters(deadline(), None).unwrap().is_some());
+            assert_eq!(
+                events.recv_timeout(Duration::from_secs(5)).unwrap(),
+                "third"
+            );
+            release_second.send(()).unwrap();
+        });
+        drop(first);
         assert!(admission.waiting.lock().unwrap().is_empty());
     }
 

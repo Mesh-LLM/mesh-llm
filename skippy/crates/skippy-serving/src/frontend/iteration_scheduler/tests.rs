@@ -229,6 +229,35 @@ fn continuous_batching_controls_multi_request_direct_iterations() {
 }
 
 #[test]
+fn recurrent_direct_batch_combines_two_prefills_without_decode_mixing() {
+    let config = build_scheduler_config(4, 4096, 1024, Some(2048), Some(512), 8, false);
+    let policy = DirectBatchPolicy {
+        max_prefill_sequences: config.max_prefill_sequences_per_iteration,
+        mixed_prefill_decode: config.mixed_prefill_decode,
+    };
+    let mut decode = direct_iteration("decode", 1);
+    decode.phase = IterationBatchPhase::Decode;
+    let mut queue = VecDeque::from([
+        direct_iteration("prefill-a", 1),
+        direct_iteration("prefill-b", 1),
+        direct_iteration("prefill-c", 1),
+        decode,
+    ]);
+
+    let batch = take_direct_iteration_batch_with_policy(&mut queue, 4, 4, policy);
+    assert_eq!(
+        batch
+            .iter()
+            .map(|request| request.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["prefill-a", "prefill-b"]
+    );
+    assert_eq!(queue.len(), 2);
+    assert_eq!(queue[0].session_id, "prefill-c");
+    assert_eq!(queue[1].session_id, "decode");
+}
+
+#[test]
 fn direct_coalescing_tracks_active_sessions_without_penalizing_singletons() {
     assert_eq!(direct_coalesce_target(1, 1, 16), 1);
     assert_eq!(direct_coalesce_target(16, 1, 16), 16);
@@ -243,6 +272,7 @@ fn server_scheduler_config_uses_runtime_lanes_and_native_batch_limits() {
     assert_eq!(config.max_waiting_sequences, 64);
     assert_eq!(config.max_tokens_per_iteration, 2048);
     assert_eq!(config.prefill_chunk_tokens, 128);
+    assert_eq!(config.max_prefill_sequences_per_iteration, 2);
     assert_eq!(config.max_consecutive_prefill_iterations, 1);
     assert!(!config.mixed_prefill_decode);
     assert_eq!(config.memory_components[0].capacity_bytes, 131_072);
@@ -250,6 +280,10 @@ fn server_scheduler_config_uses_runtime_lanes_and_native_batch_limits() {
     assert_eq!(config.memory_components[1].capacity_bytes, 65_536);
 
     let non_recurrent = build_scheduler_config(32, 131_072, 0, Some(4096), Some(128), 64, false);
+    assert_eq!(
+        non_recurrent.max_prefill_sequences_per_iteration,
+        usize::MAX
+    );
     assert!(non_recurrent.mixed_prefill_decode);
 }
 

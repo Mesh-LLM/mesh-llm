@@ -26,6 +26,80 @@ pub(super) fn prefill_without_intermediate_sampling(
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
+fn native_batched_recurrent_prefills_preserve_continuations() -> Result<()> {
+    let serial = two_recurrent_prefill_continuations(false)?;
+    let batched = two_recurrent_prefill_continuations(true)?;
+    assert_eq!(
+        batched, serial,
+        "batched prefills changed either continuation"
+    );
+    Ok(())
+}
+
+fn two_recurrent_prefill_continuations(batched: bool) -> Result<[Vec<i32>; 2]> {
+    let prompts = [
+        (1..=64).collect::<Vec<_>>(),
+        (1..=64).rev().collect::<Vec<_>>(),
+    ];
+    let (backend, _) = recurrent_test_backend_with_lanes(
+        "batched-prefill-shape",
+        "batched-prefill-shape",
+        256,
+        (32, 32, 2),
+        8,
+        512,
+        None,
+    )?;
+    let mut runtime = backend.runtime.lock().unwrap();
+    let sessions = ["batched-prefill-0", "batched-prefill-1"];
+    let sampling = SamplingConfig::default();
+    let mut first = [None; 2];
+    for offset in [0, 32] {
+        let sample_last = offset == 32;
+        if batched {
+            let requests = [0, 1].map(|lane| RuntimeIterationBatchRequest {
+                session_id: sessions[lane],
+                token_ids: &prompts[lane][offset..offset + 32],
+                positions: &[],
+                sampling: sample_last.then_some(&sampling),
+                input: None,
+                sample_last,
+                phase: IterationBatchPhase::Prefill,
+            });
+            for sample in runtime.iteration_batch_sampled(&requests)?.samples {
+                first[sample.request_index] = Some(sample.predicted_token);
+            }
+        } else {
+            for lane in 0..2 {
+                if let Some(token) = prefill_without_intermediate_sampling(
+                    &mut runtime,
+                    sessions[lane],
+                    &prompts[lane][offset..offset + 32],
+                    sample_last,
+                )? {
+                    first[lane] = Some(token);
+                }
+            }
+        }
+    }
+    let mut continuations = [Vec::new(), Vec::new()];
+    for lane in 0..2 {
+        continuations[lane].push(first[lane].expect("final prefill sampled"));
+        for _ in 0..3 {
+            let input = [*continuations[lane].last().unwrap()];
+            continuations[lane].extend(iterate(
+                &mut runtime,
+                &[sessions[lane]],
+                &[&input],
+                IterationBatchPhase::Decode,
+            )?);
+        }
+    }
+    Ok(continuations)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
 fn native_interleaved_prefills_preserve_concurrent_decode() -> Result<()> {
     let serial = interleaved_prefill_continuation(false, false, None)?;
     let interleaved = interleaved_prefill_continuation(true, false, None)?;
