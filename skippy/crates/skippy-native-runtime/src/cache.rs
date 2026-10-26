@@ -131,6 +131,27 @@ impl NativeRuntimeCache {
         let Ok(root) = self.root.canonicalize() else {
             return Ok(target);
         };
+        if let Some(parent) = target.parent() {
+            match parent.symlink_metadata() {
+                Ok(_) => {
+                    let canonical = parent.canonicalize().with_context(|| {
+                        format!(
+                            "canonicalize native runtime cache parent {}",
+                            parent.display()
+                        )
+                    })?;
+                    if !canonical.starts_with(&root) {
+                        bail!("native runtime cache parent escapes its root: {release_version}");
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("inspect native runtime cache parent {}", parent.display())
+                    });
+                }
+            }
+        }
         if target.symlink_metadata().is_ok() {
             let canonical = target.canonicalize().with_context(|| {
                 format!(
@@ -145,6 +166,56 @@ impl NativeRuntimeCache {
             }
         }
         Ok(target)
+    }
+
+    /// Create the release directory only after confirming it resolves below
+    /// the canonical cache root. A symlinked release directory must not let an
+    /// install create a new runtime outside the cache.
+    fn ensure_runtime_parent(&self, target: &Path) -> Result<()> {
+        fs::create_dir_all(&self.root)
+            .with_context(|| format!("create native runtime cache {}", self.root.display()))?;
+        let root = self.root.canonicalize().with_context(|| {
+            format!("canonicalize native runtime cache {}", self.root.display())
+        })?;
+        let parent = target
+            .parent()
+            .context("native runtime cache entry has no parent")?;
+        match fs::symlink_metadata(parent) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if let Err(error) = fs::create_dir(parent)
+                    && error.kind() != std::io::ErrorKind::AlreadyExists
+                {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "create native runtime release directory {}",
+                            parent.display()
+                        )
+                    });
+                }
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "inspect native runtime release directory {}",
+                        parent.display()
+                    )
+                });
+            }
+        }
+        let canonical_parent = parent.canonicalize().with_context(|| {
+            format!(
+                "canonicalize native runtime release directory {}",
+                parent.display()
+            )
+        })?;
+        if !canonical_parent.starts_with(&root) {
+            bail!(
+                "native runtime release directory escapes its cache root: {}",
+                parent.display()
+            );
+        }
+        Ok(())
     }
 
     pub fn installed(&self) -> Result<Vec<InstalledNativeRuntime>> {
@@ -321,11 +392,7 @@ impl NativeRuntimeCache {
             anyhow::ensure!(existing.manifest == manifest, "{}", collision());
             return Ok(existing);
         }
-        fs::create_dir_all(
-            target
-                .parent()
-                .context("runtime cache entry has no parent")?,
-        )?;
+        self.ensure_runtime_parent(&target)?;
         // Claim this entry atomically: a concurrent installer must not be overwritten.
         fs::create_dir(&target).with_context(collision)?;
         let result = (|| {
@@ -814,6 +881,38 @@ mod tests {
             victim.join("keep.txt").is_file(),
             "removal recursively deleted {} outside the canonical cache root",
             victim.display()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_from_dir_refuses_a_release_directory_symlink_outside_the_cache_root() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+        fs::create_dir_all(cache.root()).unwrap();
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, cache.root().join("1.2.3")).unwrap();
+
+        assert!(
+            cache.checked_runtime_dir("1.2.3", "runtime-a").is_err(),
+            "an escaped release directory must be refused even when the runtime is absent"
+        );
+
+        let source = temp.path().join("source");
+        write_runtime(&source, "1.2.3", "runtime-a");
+        let outcome = cache.install_from_dir(&source);
+
+        assert!(
+            outcome.is_err(),
+            "installation through a release-directory symlink must be refused"
+        );
+        assert!(
+            !outside.join("runtime-a").exists(),
+            "installation created {} outside the canonical cache root",
+            outside.join("runtime-a").display()
         );
     }
 }
