@@ -927,25 +927,9 @@ impl ExternalPlugin {
         if let Some(runtime) = failed_runtime {
             let generation = runtime.generation;
             stop_runtime(runtime, &reason).await;
-            self.announce_disconnected(generation).await;
+            status_publication::announce_disconnected(&self.mesh_tx, &self.spec.name, generation);
         }
         self.publish_summary().await;
-    }
-
-    /// Tell the node that connection `generation` is gone, so what it
-    /// published to `/api/status` shows as unavailable. Bounded like
-    /// [`Self::announce_stopped`].
-    async fn announce_disconnected(&self, generation: u64) {
-        let _ = self
-            .mesh_tx
-            .send_timeout(
-                PluginMeshEvent::PluginDisconnected {
-                    plugin_id: self.spec.name.clone(),
-                    generation,
-                },
-                PLUGIN_STOPPED_SEND_TIMEOUT,
-            )
-            .await;
     }
 
     async fn disabled_reason(&self) -> Option<String> {

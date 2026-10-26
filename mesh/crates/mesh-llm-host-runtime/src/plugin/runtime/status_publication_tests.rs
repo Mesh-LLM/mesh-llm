@@ -202,23 +202,52 @@ async fn a_failed_connection_tells_the_node_its_status_is_unavailable() {
     plugin
         .handle_runtime_failure(Some(4), "plugin exited".into())
         .await;
-    let mut disconnected = Vec::new();
-    while let Ok(event) = mesh_rx.try_recv() {
-        if let PluginMeshEvent::PluginDisconnected {
-            plugin_id,
-            generation,
-        } = event
-        {
-            disconnected.push((plugin_id, generation));
+    let disconnected = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(PluginMeshEvent::PluginDisconnected {
+                plugin_id,
+                generation,
+            }) = mesh_rx.recv().await
+            {
+                break (plugin_id, generation);
+            }
         }
-    }
-    assert_eq!(disconnected, vec![("demo".to_string(), 4)]);
+    })
+    .await
+    .expect("the node is told");
+    assert_eq!(disconnected, ("demo".to_string(), 4));
 
     // No runtime, nothing to announce.
     plugin
         .handle_runtime_failure(None, "plugin exited".into())
         .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(mesh_rx.try_recv().is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_disconnect_notice_waits_for_a_full_node_queue_instead_of_being_lost() {
+    let (mesh_tx, mut mesh_rx) = mpsc::channel(1);
+    mesh_tx
+        .try_send(PluginMeshEvent::PluginStopped {
+            plugin_id: "other".into(),
+        })
+        .unwrap();
+    announce_disconnected(&mesh_tx, "demo", 7);
+
+    // Far longer than any deadline a bounded send would have given it.
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert!(matches!(
+        mesh_rx.recv().await,
+        Some(PluginMeshEvent::PluginStopped { .. })
+    ));
+    let notice = tokio::time::timeout(Duration::from_secs(1), mesh_rx.recv())
+        .await
+        .expect("the notice is delivered once there is room");
+    assert!(matches!(
+        notice,
+        Some(PluginMeshEvent::PluginDisconnected { ref plugin_id, generation: 7 }) if plugin_id == "demo"
+    ));
 }
 
 #[test]

@@ -32,8 +32,6 @@ const PLUGIN_ENVELOPE_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const PLUGIN_ENVELOPE_TEST_READ_TIMEOUT: Duration = Duration::from_secs(1);
 const PLUGIN_MESH_STREAM_RESPONSE_TIMEOUT: Duration =
     Duration::from_secs(super::REQUEST_TIMEOUT_SECS);
-/// Bounded: a node that is itself stopping may not read it.
-const PLUGIN_DISCONNECTED_SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn plugin_mesh_stream_error(message: impl Into<String>) -> super::proto::ErrorResponse {
     super::proto::ErrorResponse {
@@ -247,17 +245,11 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                 summary.status = "stopped".into();
                 summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
                 drop(summary);
-                // What this connection published to `/api/status` is now
-                // shown as unavailable.
-                let _ = mesh_tx
-                    .send_timeout(
-                        PluginMeshEvent::PluginDisconnected {
-                            plugin_id: plugin_name.clone(),
-                            generation,
-                        },
-                        PLUGIN_DISCONNECTED_SEND_TIMEOUT,
-                    )
-                    .await;
+                super::runtime::status_publication::announce_disconnected(
+                    &mesh_tx,
+                    &plugin_name,
+                    generation,
+                );
             }
 
             let mut pending = pending.lock().await;

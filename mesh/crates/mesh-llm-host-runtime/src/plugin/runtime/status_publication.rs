@@ -38,6 +38,27 @@ impl StatusDeclaration {
     }
 }
 
+/// Tell the node that connection `generation` of `plugin_name` is gone, so what
+/// it published to `/api/status` shows as unavailable. The notice waits for
+/// room in the node's queue on its own task rather than giving up after a
+/// deadline, since a lost notice would leave the snapshot `ready`; it ends at
+/// once if the node is gone. The node marks only a snapshot from this
+/// generation, so a late notice never touches a newer connection's.
+pub(crate) fn announce_disconnected(
+    mesh_tx: &mpsc::Sender<PluginMeshEvent>,
+    plugin_name: &str,
+    generation: u64,
+) {
+    let mesh_tx = mesh_tx.clone();
+    let event = PluginMeshEvent::PluginDisconnected {
+        plugin_id: plugin_name.to_string(),
+        generation,
+    };
+    tokio::spawn(async move {
+        let _ = mesh_tx.send(event).await;
+    });
+}
+
 /// Refuse a declaration whose schema version is 0: versions start at 1.
 pub(crate) fn validate_declaration(
     plugin_name: &str,
