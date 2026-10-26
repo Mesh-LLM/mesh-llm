@@ -287,6 +287,12 @@ pub struct InstalledPluginMetadata {
     pub last_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_error: Option<String>,
+    /// The SHA-256 the installed archive was verified against when it was
+    /// installed: the catalog pin for a catalog install, the digest GitHub
+    /// reported for a GitHub reference. Absent for a local `--archive` install
+    /// and for metadata written before installs recorded provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_sha256: Option<String>,
 }
 
 impl InstalledPluginMetadata {
@@ -555,6 +561,7 @@ mod tests {
             last_protocol_version: Some(2),
             last_status: Some("running".to_string()),
             last_error: None,
+            verified_sha256: None,
         }
     }
 
