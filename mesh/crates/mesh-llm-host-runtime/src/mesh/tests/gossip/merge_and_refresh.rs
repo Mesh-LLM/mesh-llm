@@ -669,3 +669,52 @@ pub(crate) async fn direct_paid_offer_survives_unpriced_transitive_announcement(
     assert!(node.peer_payment_offer(seller, model).await.is_none());
     node.endpoint.close().await;
 }
+
+/// The other half of the #2213 gate: once direct proof-of-life goes stale the
+/// bridge is the only remaining source, so it must regain full authority.
+/// Without this, protecting a live direct record would freeze a peer that
+/// really did move onto different models.
+#[tokio::test]
+pub(crate) async fn transitive_announcement_updates_a_direct_record_once_proof_of_life_is_stale() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x4d);
+    let direct_addr = test_addr(0x4d);
+    let bridge_id = test_endpoint_id(0xee);
+
+    let mut direct = test_announcement(Some(100));
+    direct.addr = direct_addr.clone();
+    direct.models = vec!["direct-model".into()];
+    direct.serving_models = vec!["direct-model".into()];
+    direct.hosted_models = Some(vec!["direct-model".into()]);
+    node.add_peer(peer_id, direct_addr.clone(), &direct, None)
+        .await;
+
+    // The direct session goes quiet for longer than the stale window.
+    {
+        let mut state = node.state.lock().await;
+        let peer = state.peers.get_mut(&peer_id).expect("direct peer");
+        peer.last_seen = std::time::Instant::now()
+            - std::time::Duration::from_secs(
+                mesh_llm_membership::peer_state::PEER_STALE_SECS + 1,
+            );
+    }
+
+    let mut relayed = direct.clone();
+    relayed.models = vec!["relayed-model".into()];
+    relayed.serving_models = vec!["relayed-model".into()];
+    relayed.hosted_models = Some(vec!["relayed-model".into()]);
+    node.update_transitive_peer(peer_id, &direct_addr, &relayed, bridge_id)
+        .await;
+
+    let state = node.state.lock().await;
+    let peer = state
+        .peers
+        .get(&peer_id)
+        .expect("peer remains tracked once stale");
+    assert_eq!(
+        peer.models, relayed.models,
+        "a bridge must be able to refresh a peer whose direct proof-of-life went stale"
+    );
+    assert_eq!(peer.serving_models, relayed.serving_models);
+    assert_eq!(peer.hosted_models, vec!["relayed-model".to_string()]);
+}
