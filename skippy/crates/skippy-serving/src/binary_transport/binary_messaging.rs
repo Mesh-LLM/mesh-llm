@@ -390,7 +390,6 @@ fn run_binary_stage(
     };
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
     validate_config(&config, topology.as_ref())?;
-    let max_inflight = max_inflight.min(config.lane_count as usize);
     let telemetry = Telemetry::new(
         metrics_otlp_grpc,
         telemetry_queue_capacity,
@@ -409,6 +408,11 @@ fn run_binary_stage(
         None,
     )?
     .context("binary stage server requires model_path")?;
+    // In-flight admission is bounded by the lanes the runtime actually serves.
+    // The native encoder-decoder clamp can hold that below `config.lane_count`
+    // (#1954).
+    let max_inflight = max_inflight
+        .min(usize::try_from(lock_runtime(&runtime).lane_count()).unwrap_or(usize::MAX));
     let (input_boundary, output_boundary) = {
         let runtime = lock_runtime(&runtime);
         (

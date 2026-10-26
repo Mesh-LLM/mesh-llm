@@ -920,8 +920,11 @@ model cadence, device gates and protected action references remain unchanged.
 - `ci-{linux,macos,windows}-host-slice.yml` — one platform-pure neutral host
   producer consuming that lane's immutable UI distribution.
 - `ci-{linux,macos,windows}-runtime-slice.yml` — platform-pure native runtime
-  producers selected by backend rows. The Linux CPU row additionally runs the
-  native runtime-event gate
+  producers selected by backend rows. The `native-abi` domain routes through
+  `linux-cpu`, `windows-cpu`, and `windows-vulkan`; the Windows Vulkan row
+  feeds the Windows product/smoke consumers, while Windows CPU also selects
+  the `windows-skippy-probes` platform check below. The Linux CPU row
+  additionally runs the native runtime-event gate
   (`scripts/ci-runtime-events-native-gate.sh`) against its verified runtime
   and the `family-qwen3-dense` fixture from `skippy-ci-smoke.json`,
   authorized for pull-request, main, and manual cadences, and uploads its
