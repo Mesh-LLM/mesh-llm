@@ -45,7 +45,7 @@ fn two_recurrent_prefill_continuations(batched: bool) -> Result<[Vec<i32>; 2]> {
         "batched-prefill-shape",
         "batched-prefill-shape",
         256,
-        (32, 32, 2),
+        (128, 64, 2),
         8,
         512,
         None,
