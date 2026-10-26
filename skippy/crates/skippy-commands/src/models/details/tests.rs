@@ -280,6 +280,28 @@ async fn show_exact_model_accepts_pinned_hf_layer_package_ref() {
 
 #[tokio::test]
 #[serial]
+async fn show_exact_model_accepts_hf_layer_package_ref_with_slash_revision() {
+    let _catalog = empty_catalog_guard();
+    let _probe = skippy_model_hf::remote_catalog::set_hf_model_file_probe_for_test(
+        |repo, revision, file| {
+            repo == "meshllm/gemma-4-E4B-it-Q4_K_M-layers"
+                && revision == "refs/pr/42"
+                && file == "model-package.json"
+        },
+    );
+
+    let details = show_exact_model("hf://meshllm/gemma-4-E4B-it-Q4_K_M-layers@refs/pr/42")
+        .await
+        .expect("models show must preserve slash-containing HF package revisions");
+
+    assert_eq!(
+        details.exact_ref,
+        "hf://meshllm/gemma-4-E4B-it-Q4_K_M-layers@refs/pr/42"
+    );
+}
+
+#[tokio::test]
+#[serial]
 async fn show_exact_model_rejects_hf_ref_without_a_package_manifest() {
     let _catalog = empty_catalog_guard();
     let _probe = skippy_model_hf::remote_catalog::set_hf_model_file_probe_for_test(|_, _, _| false);

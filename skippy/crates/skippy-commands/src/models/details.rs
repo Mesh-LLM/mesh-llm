@@ -89,9 +89,9 @@ fn show_layer_package(input: &str) -> Result<ModelDetails> {
     else {
         bail!("Only Hugging Face layer packages can be shown: {input}");
     };
-    let query = skippy_model_ref::format_model_ref(&repo, revision.as_deref(), None);
-    let exact_ref = skippy_model_hf::remote_catalog::find_huggingface_layer_package(&query)
-        .with_context(|| format!("No layer package manifest found for {input}"))?;
+    let exact_ref =
+        remote_catalog::find_huggingface_layer_package_at_revision(&repo, revision.as_deref())
+            .with_context(|| format!("No layer package manifest found for {input}"))?;
     Ok(ModelDetails {
         display_name: repo.rsplit('/').next().unwrap_or(&repo).to_string(),
         exact_ref,
