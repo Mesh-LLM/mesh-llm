@@ -245,7 +245,9 @@ async fn show_exact_model_accepts_hf_layer_package_ref() {
         "hf://meshllm/gemma-4-E4B-it-Q4_K_M-layers"
     );
     assert_eq!(
-        crate::models::formatters::model_kind_code(details.kind), "layer_package");
+        crate::models::formatters::model_kind_code(details.kind),
+        "layer_package"
+    );
 }
 
 #[tokio::test]
@@ -271,7 +273,9 @@ async fn show_exact_model_accepts_pinned_hf_layer_package_ref() {
         "hf://meshllm/gemma-4-E4B-it-Q4_K_M-layers@d7a5df3d3a142d44e1e5d65b205812e0c8f1deac"
     );
     assert_eq!(
-        crate::models::formatters::model_kind_code(details.kind), "layer_package");
+        crate::models::formatters::model_kind_code(details.kind),
+        "layer_package"
+    );
 }
 
 #[tokio::test]
@@ -280,7 +284,11 @@ async fn show_exact_model_rejects_hf_ref_without_a_package_manifest() {
     let _catalog = empty_catalog_guard();
     let _probe = skippy_model_hf::remote_catalog::set_hf_model_file_probe_for_test(|_, _, _| false);
 
-    assert!(show_exact_model("hf://meshllm/not-a-layer-package").await.is_err());
+    assert!(
+        show_exact_model("hf://meshllm/not-a-layer-package")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -317,11 +325,12 @@ async fn show_model_variants_requests_the_pinned_revision_for_an_unrecognized_qu
 
     assert_eq!(
         *requested.lock().unwrap(),
-        vec![("ggml-org/gpt-oss-20b-GGUF".to_string(), REVISION.to_string())]
+        vec![(
+            "ggml-org/gpt-oss-20b-GGUF".to_string(),
+            REVISION.to_string()
+        )]
     );
-    assert!(
-        variants
-            .iter()
-            .any(|variant| { variant.exact_ref == format!("ggml-org/gpt-oss-20b-GGUF@{REVISION}:Q4_K_M") })
-    );
+    assert!(variants.iter().any(|variant| {
+        variant.exact_ref == format!("ggml-org/gpt-oss-20b-GGUF@{REVISION}:Q4_K_M")
+    }));
 }

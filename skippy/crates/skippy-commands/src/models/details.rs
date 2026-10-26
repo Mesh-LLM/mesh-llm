@@ -74,8 +74,48 @@ pub(super) fn merge_capabilities(
         system_one: left.system_one.max(right.system_one),
     }
 }
+/// Kind label for an `hf://` layer package. `model_kind_code` maps it to its
+/// own code so `models show` does not go looking for GGUF quant variants.
+const LAYER_PACKAGE_KIND: &str = "📦 Layer package";
+
+/// Details for an `hf://` layer-package ref, the form `serve --model` and
+/// `models download` accept. `models show` is how a ref gets checked without
+/// downloading it, so the package manifest has to be present at the revision.
+fn show_layer_package(input: &str) -> Result<ModelDetails> {
+    let package_ref = skippy_api::package::acquisition::StagePackageRef::parse(input)
+        .with_context(|| format!("Invalid layer-package ref {input}"))?;
+    let skippy_api::package::acquisition::StagePackageRef::HuggingFacePackage { repo, revision } =
+        package_ref
+    else {
+        bail!("Only Hugging Face layer packages can be shown: {input}");
+    };
+    let query = skippy_model_ref::format_model_ref(&repo, revision.as_deref(), None);
+    let exact_ref = skippy_model_hf::remote_catalog::find_huggingface_layer_package(&query)
+        .with_context(|| format!("No layer package manifest found for {input}"))?;
+    Ok(ModelDetails {
+        display_name: repo.rsplit('/').next().unwrap_or(&repo).to_string(),
+        exact_ref,
+        source: "huggingface",
+        kind: LAYER_PACKAGE_KIND,
+        download_url: format!(
+            "https://huggingface.co/{repo}/tree/{}",
+            revision.as_deref().unwrap_or("main")
+        ),
+        size_label: None,
+        description: Some(
+            "Layer package. Serve it with `serve --model` or fetch it with `models download`."
+                .to_string(),
+        ),
+        draft: None,
+        capabilities: ModelCapabilities::default(),
+    })
+}
+
 pub async fn show_exact_model(input: &str) -> Result<ModelDetails> {
     let input = canonicalize_model_ref_input(input).await?;
+    if input.starts_with("hf://") {
+        return show_layer_package(&input);
+    }
     match parse_exact_model_ref(&input)? {
         ExactModelRef::Catalog(model) => {
             let exact_ref = remote_catalog_model_ref(&model);
@@ -154,7 +194,14 @@ where
     F: FnMut(ShowVariantsProgress),
 {
     let input = canonicalize_model_ref_input(input).await?;
-    let parsed = parse_huggingface_repo_ref(&input).or_else(|| parse_huggingface_repo_url(&input));
+    // An exact ref for a file whose name carries no quant marker the formatter
+    // knows (`MXFP4`) is rendered as `org/repo@rev/file.gguf`. The repo parser
+    // reads everything after `@` as the revision, so the file form has to be
+    // tried first or the revision reaches the Hub as `rev/file.gguf`.
+    let parsed = parse_huggingface_ref(&input)
+        .map(|(repo, revision, _file)| (repo, revision, None))
+        .or_else(|| parse_huggingface_repo_ref(&input))
+        .or_else(|| parse_huggingface_repo_url(&input));
     let Some((repo, revision, _selector)) = parsed else {
         return Ok(None);
     };
