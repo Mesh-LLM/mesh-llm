@@ -18,6 +18,7 @@ pub(in crate::runtime) struct StartupLoopContext<'a> {
     pub(super) ctx_size: Option<u32>,
     pub(super) pinned_gpu: Option<&'a StartupPinnedGpuTarget>,
     pub(super) device_override: Option<&'a str>,
+    pub(super) compact_meta: Option<&'a crate::models::gguf::GgufCompactMeta>,
     pub(super) runtime_capacity_ledger: &'a RuntimeCapacityLedger,
     pub(super) cache_type_k: Option<&'a str>,
     pub(super) cache_type_v: Option<&'a str>,
@@ -87,6 +88,8 @@ pub(in crate::runtime) enum StartupLoopOutcome {
 pub(in crate::runtime) struct StartupPreparedLaunch {
     pub(super) local_capacity: u64,
     pub(super) model_bytes: u64,
+    pub(super) compact_meta: Option<crate::models::gguf::GgufCompactMeta>,
+    pub(super) device_override: Option<String>,
     pub(super) runtime_plan: StartupRuntimePlan,
     pub(super) launch_kind: survey::SurveyLaunchKind,
 }
@@ -94,6 +97,7 @@ pub(in crate::runtime) struct StartupPreparedLaunch {
 pub(in crate::runtime) struct StartupPrepareLaunchContext<'a> {
     pub(super) node: &'a mesh::Node,
     pub(super) pinned_gpu: Option<&'a StartupPinnedGpuTarget>,
+    pub(super) device_override: Option<&'a str>,
     pub(super) model_path: &'a Path,
     pub(super) target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     pub(super) model_name: &'a str,
@@ -117,6 +121,7 @@ pub(in crate::runtime) struct StartupLaunchRuntimeContext<'a> {
     pub(super) ctx_size: Option<u32>,
     pub(super) pinned_gpu: Option<&'a StartupPinnedGpuTarget>,
     pub(super) device_override: Option<String>,
+    pub(super) compact_meta: Option<&'a crate::models::gguf::GgufCompactMeta>,
     pub(super) runtime_capacity_ledger: &'a RuntimeCapacityLedger,
     pub(super) cache_type_k: Option<&'a str>,
     pub(super) cache_type_v: Option<&'a str>,
@@ -225,9 +230,13 @@ pub(in crate::runtime) async fn startup_handle_local_fallback_event(
         ctx.runtime_capacity_ledger,
         ctx.instance_id,
         &old_loaded_name,
-        ctx.pinned_gpu,
-        None,
-        local_capacity,
+        RuntimeCapacityTarget {
+            compact_meta: ctx.compact_meta,
+            pinned_gpu: ctx.pinned_gpu,
+            device_override: ctx.device_override,
+            node_capacity_bytes: local_capacity,
+            host_ram_capacity_bytes: ctx.node.host_ram_capacity_bytes,
+        },
         model_bytes,
     ) {
         Ok(reservation) => reservation,
@@ -637,6 +646,7 @@ pub(in crate::runtime) async fn startup_local_model_loop(params: StartupLocalMod
 
         let ctx = startup_loop_context(
             &params,
+            &prepared,
             runtime_data_producer.as_ref(),
             prepared.launch_kind,
         );
@@ -705,6 +715,7 @@ async fn prepare_startup_local_model_task(
     startup_prepare_launch(StartupPrepareLaunchContext {
         node: &params.node,
         pinned_gpu: params.pinned_gpu.as_ref(),
+        device_override: params.device_override.as_deref(),
         model_path: &params.model_path,
         target_tx: &params.target_tx,
         model_name: &params.model_name,
@@ -765,7 +776,8 @@ async fn launch_startup_local_model_task(
         mmproj_path: params.mmproj_path.as_ref(),
         ctx_size: params.ctx_size,
         pinned_gpu: params.pinned_gpu.as_ref(),
-        device_override: params.device_override.clone(),
+        device_override: prepared.device_override.clone(),
+        compact_meta: prepared.compact_meta.as_ref(),
         runtime_capacity_ledger: &params.runtime_capacity_ledger,
         cache_type_k: params.cache_type_k.as_deref(),
         cache_type_v: params.cache_type_v.as_deref(),
@@ -794,6 +806,7 @@ async fn launch_startup_local_model_task(
 
 fn startup_loop_context<'a>(
     params: &'a StartupLocalModelTask,
+    prepared: &'a StartupPreparedLaunch,
     runtime_data_producer: Option<&'a crate::runtime_data::RuntimeDataProducer>,
     launch_kind: survey::SurveyLaunchKind,
 ) -> StartupLoopContext<'a> {
@@ -812,7 +825,8 @@ fn startup_loop_context<'a>(
         mmproj_path: params.mmproj_path.as_ref(),
         ctx_size: params.ctx_size,
         pinned_gpu: params.pinned_gpu.as_ref(),
-        device_override: params.device_override.as_deref(),
+        device_override: prepared.device_override.as_deref(),
+        compact_meta: prepared.compact_meta.as_ref(),
         runtime_capacity_ledger: &params.runtime_capacity_ledger,
         cache_type_k: params.cache_type_k.as_deref(),
         cache_type_v: params.cache_type_v.as_deref(),
