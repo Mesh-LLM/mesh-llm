@@ -9,6 +9,18 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The server's own explanation for a failed request, when its body carried one.
+ * `parseApiErrorBody` falls back to a synthesized `HTTP <status>: <statusText>`
+ * line, which is not a reason and must not be shown as one.
+ */
+export function apiErrorReason(body: string, status: number): string | undefined {
+  const reason = body.trim()
+  if (!reason) return undefined
+  if (reason.startsWith(`HTTP ${status}:`)) return undefined
+  return reason
+}
+
 export async function parseApiErrorBody(response: Response): Promise<string> {
   let body = ''
   try {

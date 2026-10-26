@@ -1132,7 +1132,8 @@ pub(crate) mod tests {
             now_unix_secs: 1_700_000_000,
         });
 
-        let json = serde_json::to_value(&mesh_models(snapshot)).expect("serialize mesh model payload");
+        let json =
+            serde_json::to_value(mesh_models(snapshot)).expect("serialize mesh model payload");
         let row = |name: &str| {
             json.as_array()
                 .and_then(|rows| {
