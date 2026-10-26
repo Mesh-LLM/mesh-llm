@@ -244,7 +244,7 @@ fn server_scheduler_config_uses_runtime_lanes_and_native_batch_limits() {
     assert_eq!(config.max_tokens_per_iteration, 2048);
     assert_eq!(config.prefill_chunk_tokens, 128);
     assert_eq!(config.max_consecutive_prefill_iterations, 1);
-    assert!(!config.mixed_prefill_decode);
+    assert!(config.mixed_prefill_decode);
     assert_eq!(config.memory_components[0].capacity_bytes, 131_072);
     assert_eq!(config.memory_components[1].bytes_per_sequence, 1024);
     assert_eq!(config.memory_components[1].capacity_bytes, 65_536);

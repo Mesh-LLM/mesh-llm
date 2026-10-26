@@ -1671,13 +1671,13 @@ fn build_scheduler_config(
         } else {
             usize::MAX
         },
-        // Retained for scheduler-lab compatibility; production uses the mixed
-        // path below when the model does not carry recurrent state.
+        // Retained for scheduler-lab compatibility; this probe permits mixed
+        // iterations across both recurrent and non-recurrent models.
         max_consecutive_prefill_iterations: 1,
-        // A live mixed probe permanently raised subsequent decode-step cost by
-        // 9-20% on the Studio54 Qwen3.5 recurrent trace even after admission
-        // fell back. Keep phase-homogeneous execution for recurrent models.
-        mixed_prefill_decode: recurrent_bytes_per_sequence == 0,
+        // Experimental AgentX probe: test whether the prior recurrent mixed
+        // regression also occurs on Qwen3.5-4B with the current unified KV
+        // scheduler. Do not promote this policy without matched model evidence.
+        mixed_prefill_decode: true,
         cache_aging_cost_per_iteration: CACHE_AGING_COST_PER_TURN,
         group_waiting_prefixes: true,
         // Native execution already provides a collection window: requests
