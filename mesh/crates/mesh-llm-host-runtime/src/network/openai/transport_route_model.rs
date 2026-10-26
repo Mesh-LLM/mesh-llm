@@ -112,8 +112,8 @@ struct RouteModelState {
     attempts: usize,
     timeout_attempts: usize,
     refreshed: bool,
-    /// Every attempt so far refused to serve without payment.
-    payment_required: bool,
+    /// Number of attempts that refused to serve without payment.
+    payment_required_attempts: usize,
 }
 
 enum RouteModelDisposition {
@@ -324,7 +324,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         attempts: 0,
         timeout_attempts: 0,
         refreshed: false,
-        payment_required: false,
+        payment_required_attempts: 0,
     };
     // `request.raw` was already stabilized at ingress (finalize_forwarded_request
     // resolves the capsule client nonce once, before target selection), so every
@@ -710,7 +710,7 @@ fn handle_retryable_route_model_payment_required(
     target: &election::InferenceTarget,
     state: &mut RouteModelState,
 ) -> RouteModelDisposition {
-    state.payment_required = true;
+    state.payment_required_attempts += 1;
     handle_retryable_route_model_unavailable(node, target, state)
 }
 
@@ -945,7 +945,7 @@ mod tests {
             attempts: 1,
             timeout_attempts: 0,
             refreshed: false,
-            payment_required: false,
+            payment_required_attempts: 0,
         };
         (node, affinity, target, selection, state)
     }
@@ -1317,13 +1317,16 @@ mod tests {
     /// `backends` and return the router's outcome together with the raw
     /// response bytes the downstream client actually received.
     ///
-    /// Backends are dialed in the order the router ranks them. Backend tasks
-    /// are deliberately not awaited: a router that stops at the first target
+    /// Responses are assigned by connection order, so target ranking cannot
+    /// make a scenario skip its intended first response. Backend tasks are
+    /// deliberately not awaited: a router that stops at the first target
     /// leaves the later backends parked in `accept`, and awaiting them would
     /// hang instead of reporting the missing failover.
     async fn route_across_mock_backends(
         backends: &[(u16, &str)],
-    ) -> (RouteDispatchOutcome, String) {
+    ) -> (RouteDispatchOutcome, String, usize) {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         const MODEL: &str = "qwen";
@@ -1342,21 +1345,38 @@ mod tests {
             }
         }
 
+        let mut listeners = Vec::new();
         let mut ports = Vec::new();
-        for (status, body) in backends {
+        for _ in backends {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("mock backend must bind");
             ports.push(listener.local_addr().expect("mock backend address").port());
-            let status = *status;
-            let body = (*body).to_owned();
-            let reason = match status {
-                200 => "OK",
-                402 => "Payment Required",
-                _ => "Internal Server Error",
-            };
-            tokio::spawn(async move {
+            listeners.push(listener);
+        }
+
+        let connect_order = Arc::new(AtomicUsize::new(0));
+        let response_plan = Arc::new(
+            backends
+                .iter()
+                .map(|(status, body)| (*status, (*body).to_owned()))
+                .collect::<Vec<_>>(),
+        );
+        let mut backend_tasks = Vec::new();
+        for listener in listeners {
+            let connect_order = Arc::clone(&connect_order);
+            let response_plan = Arc::clone(&response_plan);
+            backend_tasks.push(tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.expect("mock backend accept");
+                let response_index = connect_order.fetch_add(1, Ordering::SeqCst);
+                let Some((status, body)) = response_plan.get(response_index) else {
+                    return;
+                };
+                let reason = match status {
+                    200 => "OK",
+                    402 => "Payment Required",
+                    _ => "Internal Server Error",
+                };
                 drain_request_headers(&mut stream).await;
                 let response = format!(
                     "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
@@ -1367,7 +1387,7 @@ mod tests {
                     .await
                     .expect("mock backend write");
                 stream.shutdown().await.expect("mock backend shutdown");
-            });
+            }));
         }
 
         let downstream = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1450,7 +1470,15 @@ mod tests {
             .await
             .expect("the client must receive a response")
             .expect("the client task must not panic");
-        (outcome, String::from_utf8_lossy(&raw_response).into_owned())
+        let backend_attempts = connect_order.load(Ordering::SeqCst);
+        for task in backend_tasks {
+            task.abort();
+        }
+        (
+            outcome,
+            String::from_utf8_lossy(&raw_response).into_owned(),
+            backend_attempts,
+        )
     }
 
     fn paid_replica_body() -> &'static str {
@@ -1469,11 +1497,16 @@ mod tests {
     /// directly, so the committee silently lost the worker.
     #[tokio::test]
     async fn a_replica_that_requires_payment_fails_over_to_the_free_standby() {
-        let (outcome, raw_response) = route_across_mock_backends(&[
+        let (outcome, raw_response, backend_attempts) = route_across_mock_backends(&[
             (402, paid_replica_body()),
             (200, served_completion_body()),
         ])
         .await;
+
+        assert_eq!(
+            backend_attempts, 2,
+            "the paid backend must be tried before the free standby"
+        );
 
         assert!(
             raw_response.starts_with("HTTP/1.1 200"),
@@ -1496,8 +1529,10 @@ mod tests {
     /// not launder a genuine 402 into an unavailable-model error.
     #[tokio::test]
     async fn a_model_served_only_by_a_paying_replica_still_reports_402() {
-        let (outcome, raw_response) =
+        let (outcome, raw_response, backend_attempts) =
             route_across_mock_backends(&[(402, paid_replica_body())]).await;
+
+        assert_eq!(backend_attempts, 1, "the only backend must be attempted");
 
         assert!(
             raw_response.starts_with("HTTP/1.1 402"),
