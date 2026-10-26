@@ -4,8 +4,8 @@ use super::common::{
     sse_data_frame_is_openai_error,
 };
 use super::probe::{
-    ResponseProbe, append_capsule_nonce_headers, append_mesh_served_by_header,
-    response_is_event_stream, try_parse_response_headers,
+    ResponseProbe, append_capsule_nonce_headers, append_mesh_request_id_header,
+    append_mesh_served_by_header, response_is_event_stream, try_parse_response_headers,
 };
 use super::relay::{relay_error_response, relay_success_response};
 use super::stream_translation::write_captured_sse_event;
@@ -15,6 +15,7 @@ use crate::network::openai::{
 };
 use anyhow::{Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
+use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::{AsyncRead, AsyncWriteExt};
 
 pub(in crate::network::openai::response) async fn relay_translated_messages_stream<
@@ -26,6 +27,7 @@ pub(in crate::network::openai::response) async fn relay_translated_messages_stre
     retry_policy: ResponseRetryPolicy,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
+    request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
     relay_chat_protocol_stream(
         tcp_stream,
@@ -35,6 +37,7 @@ pub(in crate::network::openai::response) async fn relay_translated_messages_stre
         served_by,
         route_observer,
         true,
+        request_id,
     )
     .await
 }
@@ -135,6 +138,7 @@ impl ChatProtocolRelayState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
     R: AsyncRead + Unpin,
 >(
@@ -145,6 +149,7 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
     anthropic: bool,
+    request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
@@ -160,10 +165,19 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await;
         }
-        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
+        return relay_error_response(
+            tcp_stream,
+            reader,
+            probe,
+            served_by,
+            route_observer,
+            request_id,
+        )
+        .await;
     }
 
     let parsed = try_parse_response_headers(&probe.buffered)?
@@ -177,6 +191,7 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await
         } else {
@@ -188,6 +203,7 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
                 retry_policy,
                 served_by,
                 route_observer,
+                request_id,
             )
             .await
         };
@@ -210,6 +226,7 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
         parsed.nonce_origin.as_deref(),
     );
     append_mesh_served_by_header(&mut header, served_by);
+    append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     let mut response_capture = route_observer.begin_stream_response_capture();
@@ -336,6 +353,7 @@ mod tests {
     use super::relay_chat_protocol_stream;
     use crate::logging::OpenAiRouteObserver;
     use crate::network::openai::client_stream::ClientStream;
+    use mesh_llm_events::logging::identifiers::RequestId;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -344,6 +362,7 @@ mod tests {
     // minimal (non-completing) upstream stream is enough to capture it.
     #[tokio::test]
     async fn relay_chat_protocol_stream_echoes_the_canonical_request_id() {
+        let request_id = RequestId::new();
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -366,6 +385,7 @@ mod tests {
                 None,
                 OpenAiRouteObserver::default(),
                 true,
+                request_id,
             )
             .await
         });
@@ -383,7 +403,7 @@ mod tests {
 
         let head = String::from_utf8_lossy(&output);
         assert!(
-            head.contains("x-request-id: "),
+            head.contains(&format!("x-request-id: {}", request_id.as_uuid())),
             "the Anthropic-Messages SSE head must echo the canonical request id: {head}"
         );
     }
