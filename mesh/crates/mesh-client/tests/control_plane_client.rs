@@ -564,6 +564,7 @@ async fn control_plane_client_apply_config_get_watch_refresh_and_close() {
                 mesh_requirements: None,
                 lifecycle_log_parser: None,
             },
+            vec![],
         )
         .await
         .expect("apply_config should succeed");

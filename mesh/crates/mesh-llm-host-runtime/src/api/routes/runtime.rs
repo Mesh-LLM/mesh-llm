@@ -258,6 +258,7 @@ struct ApplyConfigRequest {
     endpoint: Option<String>,
     expected_revision: u64,
     config: crate::plugin::MeshConfig,
+    plugin_command_approvals: Vec<RawPluginCommandApproval>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -265,6 +266,14 @@ struct RawApplyConfigRequest {
     endpoint: Option<String>,
     expected_revision: u64,
     config: serde_json::Value,
+    #[serde(default)]
+    plugin_command_approvals: Vec<RawPluginCommandApproval>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawPluginCommandApproval {
+    plugin: String,
+    command: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -567,6 +576,7 @@ async fn handle_control_apply_config(
             Ok(config) => config,
             Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
         },
+        plugin_command_approvals: raw_request.plugin_command_approvals,
     };
     let endpoint = match required_control_endpoint(request.endpoint) {
         Ok(endpoint) => endpoint,
@@ -605,6 +615,16 @@ async fn handle_control_apply_config(
                 .apply_config(
                     request.expected_revision,
                     crate::protocol::convert::mesh_config_to_proto(&request.config),
+                    request
+                        .plugin_command_approvals
+                        .iter()
+                        .map(|approval| {
+                            mesh_client::proto::node::OwnerControlPluginCommandApproval {
+                                plugin: approval.plugin.clone(),
+                                command: approval.command.clone(),
+                            }
+                        })
+                        .collect(),
                 )
                 .await;
             client.close().await;
@@ -1065,6 +1085,9 @@ async fn ensure_owner_control_caller(
     if !ensure_loopback_control_caller(stream).await? {
         return Ok(false);
     }
+    if !ensure_owner_control_local_user(stream).await? {
+        return Ok(false);
+    }
     let presented = mesh_llm_control_api::access::request_authorization_bearer(raw_request)
         .map_err(|_| anyhow::anyhow!("invalid owner-control credential header"))?
         .unwrap_or_default();
@@ -1083,8 +1106,32 @@ async fn ensure_owner_control_caller(
     Ok(false)
 }
 
+/// Owner-control surfaces the host's owner key material, so loopback
+/// reachability is not enough: the caller process must also run as the OS
+/// user that runs the host. Where the platform does not expose peer
+/// credentials (e.g. Windows loopback TCP) the bearer credential alone
+/// remains the owner-control requirement.
+async fn ensure_owner_control_local_user(stream: &mut TcpStream) -> anyhow::Result<bool> {
+    match crate::api::peer_identity::peer_runs_as_current_user(&*stream) {
+        Some(false) => {
+            tracing::warn!("owner control: rejected caller running as another OS user");
+            respond_json(
+                stream,
+                403,
+                &serde_json::json!({"error": "owner control is only available to the host service user"}),
+            )
+            .await?;
+            Ok(false)
+        }
+        Some(true) | None => Ok(true),
+    }
+}
+
 async fn handle_owner_control_token(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+    if !ensure_owner_control_local_user(stream).await? {
         return Ok(());
     }
     match state.owner_control_token().await {
@@ -1105,11 +1152,12 @@ async fn handle_owner_control_token(stream: &mut TcpStream, state: &MeshApi) -> 
 fn local_control_snapshot_payload(
     snapshot: mesh_client::proto::node::OwnerControlConfigSnapshot,
 ) -> LocalControlSnapshotPayload {
-    let config = snapshot
+    let mut config = snapshot
         .config
         .as_ref()
         .map(crate::protocol::convert::proto_config_to_mesh)
         .unwrap_or_default();
+    crate::protocol::config_redaction::redact_telemetry_headers(&mut config);
     LocalControlSnapshotPayload {
         node_id: hex::encode(snapshot.node_id),
         revision: snapshot.revision,

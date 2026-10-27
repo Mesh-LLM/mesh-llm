@@ -1134,6 +1134,7 @@ mod tests {
                     target_node_id: vec![0x40; 32],
                     expected_revision: 7,
                     config: Some(control_plane_test_config()),
+                    plugin_command_approvals: vec![],
                 }),
                 refresh_inventory: None,
                 load_model: None,
