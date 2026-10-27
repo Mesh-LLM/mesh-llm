@@ -82,6 +82,9 @@ pub(crate) struct ExternalPlugin {
 pub(crate) struct PluginRuntime {
     pub(crate) managed_models: Vec<mesh_llm_plugin::models::ManagedModelConfig>,
     pub(crate) generation: u64,
+    /// Its start finished: initialized and, after `spawn`, given the mesh
+    /// snapshot. Only a started runtime takes `ensure_running`'s fast path.
+    pub(crate) started: bool,
     pub(crate) authenticated_peer: bool,
     pub(crate) initialized_lifecycle: Option<Box<proto::OpenAiExchangeHookManifest>>,
     /// What this generation's manifest says about `/api/status`.
@@ -347,6 +350,7 @@ impl ExternalPlugin {
         *self.runtime.lock().await = Some(PluginRuntime {
             managed_models,
             generation,
+            started: false,
             authenticated_peer,
             initialized_lifecycle: None,
             status_declaration: StatusDeclaration::Pending,
@@ -564,14 +568,16 @@ impl ExternalPlugin {
         // guard is held while the runtime is checked, so no start can begin
         // in between (the restart lock is always taken before the runtime's).
         if let Ok(_no_start_in_progress) = self.restart_lock.try_lock()
-            && self.runtime.lock().await.is_some()
+            && self.runtime_started().await == Some(true)
         {
             return Ok(());
         }
         let _guard = self.restart_lock.lock().await;
         self.reject_shutdown()?;
-        if self.runtime.lock().await.is_some() {
-            return Ok(());
+        match self.runtime_started().await {
+            Some(true) => return Ok(()),
+            Some(false) => self.discard_unfinished_start().await,
+            None => {}
         }
 
         self.authenticated_peer.store(false, Ordering::Release);
@@ -630,6 +636,7 @@ impl ExternalPlugin {
                 if self.announce_starts.load(Ordering::Acquire) {
                     self.announce_started(generation).await;
                 }
+                self.mark_started(generation).await;
                 Ok(())
             }
             Err(error) => {

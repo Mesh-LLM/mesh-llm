@@ -278,6 +278,7 @@ pub(super) async fn mark_plugin_running(plugin: &ExternalPlugin, generation: u64
     *plugin.runtime.lock().await = Some(PluginRuntime {
         managed_models: Vec::new(),
         generation,
+        started: true,
         authenticated_peer: true,
         initialized_lifecycle: None,
         status_declaration: StatusDeclaration::Pending,
@@ -859,6 +860,7 @@ async fn try_send_channel_message_does_not_block_on_a_full_outbound_queue() {
     *plugin.runtime.lock().await = Some(PluginRuntime {
         managed_models: Vec::new(),
         generation: 1,
+        started: true,
         authenticated_peer: true,
         initialized_lifecycle: None,
         status_declaration: StatusDeclaration::Pending,

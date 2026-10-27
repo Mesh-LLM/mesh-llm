@@ -47,6 +47,39 @@ impl ExternalPlugin {
         }
     }
 
+    /// Whether the installed process's start finished; `None` when none is
+    /// installed.
+    pub(super) async fn runtime_started(&self) -> Option<bool> {
+        self.runtime
+            .lock()
+            .await
+            .as_ref()
+            .map(|runtime| runtime.started)
+    }
+
+    /// The process of `generation` finished its start, announcement included.
+    pub(super) async fn mark_started(&self, generation: u64) {
+        if let Some(runtime) = self.runtime.lock().await.as_mut()
+            && runtime.generation == generation
+        {
+            runtime.started = true;
+        }
+    }
+
+    /// Stop an installed process whose start never finished, so the next
+    /// start is a whole one. Called under the restart lock, when no start is
+    /// in progress: a start whose caller was cancelled after its process was
+    /// installed leaves it uninitialized or without the mesh snapshot, and
+    /// serving it would bring back Mesh-LLM/capsules#48.
+    pub(super) async fn discard_unfinished_start(&self) {
+        let generation = self.runtime.lock().await.as_ref().map(|r| r.generation);
+        self.handle_runtime_failure(
+            generation,
+            format!("Plugin '{}' did not finish starting", self.spec.name),
+        )
+        .await;
+    }
+
     /// Send `event` to the plugin process of `generation` only. Never starts
     /// or restarts the plugin: a snapshot meant for a process that has since
     /// exited is dropped, so it cannot start the next one.
