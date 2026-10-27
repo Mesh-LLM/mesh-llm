@@ -12,13 +12,15 @@ pub enum CaptureAdmission {
 }
 
 /// Total in-flight exact-state payloads per stage — exporting, queued in the
-/// recorder channel, or held by the recorder worker. Sized as channel
-/// capacity (1) plus one worker-held record.
-pub const EXACT_STATE_ADMISSION_TOTAL: usize = 2;
+/// recorder channel, or held by the recorder worker. Four reserved
+/// continuation slots allow one checkpoint per default serving lane, instead
+/// of letting one lane's two compatible demotions exhaust the stage. The byte
+/// reservation remains the stricter bound for large snapshots.
+pub const EXACT_STATE_ADMISSION_TOTAL: usize = 5;
 /// Slots reserved for [`CaptureAdmission::Continuation`]: BestEffort captures
 /// can never occupy more than `TOTAL - RESERVED` slots, so a continuation
 /// boundary always finds a slot unless the whole budget is exhausted.
-pub const EXACT_STATE_ADMISSION_RESERVED: usize = 1;
+pub const EXACT_STATE_ADMISSION_RESERVED: usize = 4;
 
 /// Move-only credit for one in-flight exact-state payload. Construction
 /// reserves a slot atomically (CAS, so competing producers cannot
@@ -170,27 +172,24 @@ mod admission_credit_tests {
     #[test]
     fn continuation_declines_when_total_budget_exhausted() {
         let (total, best_effort) = counters();
-        let first = ExactStateAdmissionCredit::acquire(
+        let held = (0..EXACT_STATE_ADMISSION_TOTAL)
+            .map(|_| {
+                ExactStateAdmissionCredit::acquire(
+                    &total,
+                    &best_effort,
+                    CaptureAdmission::Continuation,
+                )
+                .expect("continuation slot admits one record")
+            })
+            .collect::<Vec<_>>();
+        let extra = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
             CaptureAdmission::Continuation,
         );
-        let second = ExactStateAdmissionCredit::acquire(
-            &total,
-            &best_effort,
-            CaptureAdmission::Continuation,
-        );
-        assert!(first.is_some() && second.is_some(), "two slots for TOTAL=2");
-        let third = ExactStateAdmissionCredit::acquire(
-            &total,
-            &best_effort,
-            CaptureAdmission::Continuation,
-        );
-        assert!(
-            third.is_none(),
-            "third Continuation must decline at TOTAL=2"
-        );
-        assert_eq!(total.load(Ordering::Acquire), 2);
+        assert!(extra.is_none(), "continuation declines at the stage limit");
+        assert_eq!(total.load(Ordering::Acquire), EXACT_STATE_ADMISSION_TOTAL);
+        drop(held);
     }
 
     #[test]
@@ -223,6 +222,38 @@ mod admission_credit_tests {
             cont.is_some(),
             "Continuation must admit into the reserved share"
         );
+    }
+
+    #[test]
+    fn four_lane_demotions_survive_one_outstanding_prefill_capture() {
+        let (total, best_effort) = counters();
+        let prefill =
+            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort)
+                .expect("one prefill capture is admitted");
+        let demotions = (0..4)
+            .map(|_| {
+                ExactStateAdmissionCredit::acquire(
+                    &total,
+                    &best_effort,
+                    CaptureAdmission::Continuation,
+                )
+                .expect("each active lane can demote a checkpoint")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(total.load(Ordering::Acquire), 5);
+        assert!(
+            ExactStateAdmissionCredit::acquire(
+                &total,
+                &best_effort,
+                CaptureAdmission::Continuation
+            )
+            .is_none(),
+            "a fifth demotion remains bounded"
+        );
+        drop(demotions);
+        drop(prefill);
+        assert_eq!(total.load(Ordering::Acquire), 0);
+        assert_eq!(best_effort.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -363,27 +394,25 @@ mod admission_credit_tests {
         const THREADS: usize = 4;
         const ATTEMPTS: usize = 50;
         // Deterministic rollback exercise: the budget STARTS held by exactly
-        // TWO Continuation credits (total=2, best_effort=0), so the first
+        // TOTAL Continuation credits (best_effort=0), so the first
         // BestEffort attempts must pass the class cap and fail the total CAS
         // — the rollback path. Overlapping contenders can still decline at
-        // the class cap while a rollback is in flight; the exact 2/0
+        // the class cap while a rollback is in flight; the exact TOTAL/0
         // assertions afterwards are what prove no rollback leaked. The
         // mixed-contention test above can retain a BestEffort credit, in
         // which case its hammer exits at the class cap throughout.
         let (total, best_effort) = counters();
-        let first = ExactStateAdmissionCredit::acquire(
-            &total,
-            &best_effort,
-            CaptureAdmission::Continuation,
-        )
-        .expect("first Continuation admitted");
-        let second = ExactStateAdmissionCredit::acquire(
-            &total,
-            &best_effort,
-            CaptureAdmission::Continuation,
-        )
-        .expect("second Continuation admitted");
-        assert_eq!(total.load(Ordering::Acquire), 2);
+        let held = (0..EXACT_STATE_ADMISSION_TOTAL)
+            .map(|_| {
+                ExactStateAdmissionCredit::acquire(
+                    &total,
+                    &best_effort,
+                    CaptureAdmission::Continuation,
+                )
+                .expect("Continuation admitted")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(total.load(Ordering::Acquire), EXACT_STATE_ADMISSION_TOTAL);
         assert_eq!(best_effort.load(Ordering::Acquire), 0);
 
         let barrier = Arc::new(Barrier::new(THREADS));
@@ -413,7 +442,7 @@ mod admission_credit_tests {
         }
         assert_eq!(
             total.load(Ordering::Acquire),
-            2,
+            EXACT_STATE_ADMISSION_TOTAL,
             "rollback leaves the total at the held credits"
         );
         assert_eq!(
@@ -423,7 +452,7 @@ mod admission_credit_tests {
         );
 
         // Drain and recovery.
-        drop((first, second));
+        drop(held);
         assert_eq!(total.load(Ordering::Acquire), 0);
         assert_eq!(best_effort.load(Ordering::Acquire), 0);
         assert!(
