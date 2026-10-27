@@ -615,4 +615,23 @@ mod tests {
         assert!(message.contains("connection failed"));
         assert!(message.contains("orphan cleanup failed"));
     }
+
+    #[test]
+    fn second_connection_cannot_claim_a_live_owned_session() {
+        let ownership = Arc::new(ConnectionSessionOwnership::default());
+        let mut owner = tracker(1, &ownership);
+        let mut claimant = tracker(2, &ownership);
+
+        owner.touch("7");
+        claimant.touch("7");
+
+        assert!(
+            owner.session_lease("7").still_owns(),
+            "a second connection must not seize ownership of a live session"
+        );
+        assert!(
+            !claimant.session_lease("7").still_owns(),
+            "a claim for a session owned by another live connection must be denied"
+        );
+    }
 }
