@@ -1050,3 +1050,93 @@ fn new_streaming_report_marks_streaming_v1_and_records_trial_unit() {
             .contains("warmup")
     );
 }
+
+
+/// In-process reproduction of issue #2192: what MTP verify path does a tune
+/// trial request select, versus the manual-request form?
+///
+/// The batched native-MTP "accept-and-skip" verify path is admitted by
+/// skippy-serving only while generation hooks are inactive
+/// (`native_mtp_span_admitted = native_mtp_enabled && !generation_hooks_active
+/// && ...`, tuned to greedy sampling with no logprobs — the tune request's
+/// shape). The mesh host force-enables generation hooks for auto-routed chat
+/// requests: `build_mesh_request_plan` injects `mesh_hooks: true` whenever the
+/// model is the auto directive (`if is_auto_request { inject_skippy_hooks_flag
+/// (raw, true) }`, where `is_auto_request` is true for a model-less request or
+/// the `mesh`/`auto` directive). So a tune request addressed as `model:auto`
+/// is routed through hooks and falls back to the serial MTP verify path, while
+/// the manual-request form (concrete model id, `mesh_hooks: false`) takes the
+/// batched path. The helpers below mirror those two host/skippy decisions
+/// in-process so the routing selection is observable without a GPU or a real
+/// model.
+fn mesh_host_forces_generation_hooks(model: &str) -> bool {
+    // mesh-llm-host-runtime `automatic::is_directive`: the `mesh` directive or
+    // the deprecated `auto` alias; a model-less chat request also auto-routes.
+    model.is_empty() || model == "mesh" || model == "auto"
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuneMtpVerifyPath {
+    Batched,
+    Serial,
+}
+
+fn mtp_verify_path(native_mtp_enabled: bool, generation_hooks_active: bool) -> TuneMtpVerifyPath {
+    // skippy-serving `native_mtp_span_admitted = native_mtp_enabled &&
+    // !generation_hooks_active && ...` (MTP head present, greedy, no logprobs).
+    if native_mtp_enabled && !generation_hooks_active {
+        TuneMtpVerifyPath::Batched
+    } else {
+        TuneMtpVerifyPath::Serial
+    }
+}
+
+#[test]
+fn tune_trial_request_routes_to_batched_mtp_verify_not_serial_fallback() {
+    // A trial child serves exactly one model; `prepared_plan_fixture` names it
+    // by its filesystem path, which is exactly the concrete ref the trial
+    // config registers under `appended_model_ref`.
+    let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
+    let expected_model = "/tmp/model.gguf";
+
+    // The model the tune trial request is actually sent with (issue #2192 seam).
+    let request_model = trial_chat_request_model(&prepared);
+    let generation_hooks_active = mesh_host_forces_generation_hooks(&request_model);
+    let path = mtp_verify_path(
+        /* native_mtp_enabled: trial config sets speculative.strategy = "mtp" */ true,
+        generation_hooks_active,
+    );
+
+    // The tune trial request must select the batched native-MTP verify path (the
+    // intended MTP implementation), not the serial fallback. On the buggy
+    // `model:auto` form the host force-injects mesh hooks, enabling generation
+    // hooks and standing down the batched MTP span.
+    assert_eq!(
+        path,
+        TuneMtpVerifyPath::Batched,
+        "tune trial request (model `{request_model}`) routed to the serial MTP fallback: \
+         auto-routed requests are force-injected with mesh_hooks, enabling generation \
+         hooks and standing down the batched native-MTP verify path"
+    );
+    // The request must name the concrete served model to stay off the
+    // auto-routing path that injects the hooks.
+    assert_eq!(
+        request_model, expected_model,
+        "tune trial request must name the concrete served model, \
+         not the auto directive (auto-routing force-injects mesh_hooks)"
+    );
+
+    // Contrast: the manual-request form (concrete model id, mesh_hooks: false)
+    // takes the batched path; the legacy `model:auto` form is what forced the
+    // serial fallback the issue measured.
+    assert_eq!(
+        mtp_verify_path(true, mesh_host_forces_generation_hooks(expected_model)),
+        TuneMtpVerifyPath::Batched,
+        "manual-request form (concrete model id) takes the batched MTP verify path"
+    );
+    assert_eq!(
+        mtp_verify_path(true, mesh_host_forces_generation_hooks("auto")),
+        TuneMtpVerifyPath::Serial,
+        "legacy model:auto form is force-routed through hooks to the serial fallback"
+    );
+}

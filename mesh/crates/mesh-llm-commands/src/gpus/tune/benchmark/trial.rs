@@ -22,6 +22,12 @@ const PORT_BIND_ERROR_HINTS: [&str; 6] = [
     "could not bind",
 ];
 
+/// Model ref the benchmark tune trial request sends to the trial child
+/// (issue #2192).
+pub(crate) fn trial_chat_request_model(_prepared: &PreparedTunePlan) -> String {
+    "auto".to_string()
+}
+
 pub(crate) fn run_trial(
     request: &TuneBenchmarkRunRequest<'_>,
     prepared: &PreparedTunePlan,
