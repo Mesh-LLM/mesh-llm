@@ -6,6 +6,11 @@ use tokio::sync::oneshot;
 pub(crate) enum StageControlCommand {
     Execute {
         request: StageControlRequest,
+        /// Authenticated sender of the command: the QUIC peer identity on the
+        /// remote stage-control stream, the local endpoint on the in-process
+        /// control channel. Stage transitions bind terms and shutdown to it
+        /// (#2217).
+        requester: iroh::EndpointId,
         resp: oneshot::Sender<Result<StageControlResponse>>,
     },
     ValidateLoad {

@@ -397,23 +397,39 @@ pub(super) fn stage_control_request_from_proto(
 ) -> anyhow::Result<crate::inference::skippy::StageControlRequest> {
     use skippy_stage_proto::stage_control_request::Command;
 
+    // The frame's requester_id is the authenticated QUIC peer identity: the
+    // inbound decode pins it against the connection before conversion
+    // (#2217). Commands that carry a self-asserted coordinator identity must
+    // be issued by that identity, or they never reach the stage transition.
+    // Stop/Status/Inventory carry no identity in the command body; they are
+    // bound to the requester downstream, where the running stage and topology
+    // state live.
+    let requester_id =
+        endpoint_id_from_bytes(frame.requester_id).context("invalid stage control requester_id")?;
+
     match frame
         .command
         .ok_or_else(|| anyhow::anyhow!("missing stage control command"))?
     {
         Command::ClaimCoordinator(claim) => {
-            Ok(crate::inference::skippy::StageControlRequest::Claim(
-                stage_coordinator_claim_from_proto(claim)?,
-            ))
+            let claim = stage_coordinator_claim_from_proto(claim)?;
+            anyhow::ensure!(
+                claim.coordinator_id.parse::<EndpointId>().ok() == Some(requester_id),
+                "stage claim coordinator identity does not match the authenticated requester"
+            );
+            Ok(crate::inference::skippy::StageControlRequest::Claim(claim))
         }
-        Command::LoadStage(load) => Ok(crate::inference::skippy::StageControlRequest::Load(
-            stage_load_from_proto(load)?,
-        )),
+        Command::LoadStage(load) => {
+            let load = stage_load_from_proto(load)?;
+            stage_load_requester_matches(&load, requester_id)?;
+            Ok(crate::inference::skippy::StageControlRequest::Load(load))
+        }
         Command::LoadLocalStage(load) => {
             let mut load = stage_load_from_proto(load)?;
             // Preserve the command-level invariant even if this conversion is
             // called on a frame that did not pass the wire validator first.
             load.local_source_required = true;
+            stage_load_requester_matches(&load, requester_id)?;
             Ok(crate::inference::skippy::StageControlRequest::LoadLocal(
                 load,
             ))
@@ -451,6 +467,23 @@ pub(super) fn stage_control_request_from_proto(
             ))
         }
     }
+}
+
+/// A claimed load must be issued by the coordinator identity it names
+/// (#2217). An unbound load (no coordinator identity) keeps converting at the
+/// wire boundary; the execution boundary rejects it where it would fence a
+/// coordinator-bound stage.
+fn stage_load_requester_matches(
+    load: &crate::inference::skippy::StageLoadRequest,
+    requester_id: EndpointId,
+) -> anyhow::Result<()> {
+    if let Some(coordinator_id) = load.coordinator_id {
+        anyhow::ensure!(
+            coordinator_id == requester_id,
+            "stage load coordinator identity does not match the authenticated requester"
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn stage_load_from_proto(
