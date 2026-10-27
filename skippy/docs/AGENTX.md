@@ -82,9 +82,11 @@ Build time is outside the measured cells.
 For a native KV-span diagnostic, set `AGENTX_SKIPPY_KV_SPAN_DEBUG=1` on the
 `agentx run` process. It launches Skippy with verbose native logging and
 `LLAMA_KV_CACHE_DEBUG=1`; the per-decode `llama_kv_cache::find_slot` lines report
-the highest occupied KV cell and the occupied-cell count. Before stopping the
-server, the harness saves those lines in `native-kv-span.log` in the cell
-artifact. This option is Skippy-only, appears in `launch.json`, and is
+the highest occupied KV cell and the occupied-cell count. The standalone
+Skippy CLI writes them to stderr; the harness parses bounded numeric observations
+as they arrive, then saves `native-kv-span.log` in the cell artifact before
+stopping the server. This bypasses the ordinary 64 KiB stderr receipt limit.
+This option is Skippy-only, appears in `launch.json`, and is
 intentionally excluded from performance qualification because the extra
 logging changes timing.
 
@@ -227,7 +229,9 @@ per-request cache-read tokens alongside such a result.
 
 Set `SKIPPY_EXACT_STATE_DIAGNOSTICS=1` on a diagnostic Skippy server to
 record numeric-only exact-state demotion, L1 publication, and eviction events
-in the server log. This opt-in trace identifies whether a missing long prefix
+in the server log. With `AGENTX_SKIPPY_DEBUG_TELEMETRY=1`, the harness also
+counts these event types in `cache-decisions.json`, beyond the 64 KiB stderr
+receipt limit. This opt-in trace identifies whether a missing long prefix
 was rejected before export, queued but not published, or evicted after
 publication. It records token counts and byte sizes, never token content or
 cache identities. Leave it unset for timing comparisons.

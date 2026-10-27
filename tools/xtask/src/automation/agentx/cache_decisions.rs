@@ -2,6 +2,7 @@
 use crate::process::{ObservedLine, Stream, retained::MemberId};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 const MAX_EVENTS: usize = 512;
 
@@ -10,6 +11,7 @@ pub(super) struct CacheDecisions {
     schema_version: u8,
     events: Vec<CacheDecision>,
     omitted_events: u64,
+    exact_state_events: BTreeMap<&'static str, u64>,
 }
 
 #[derive(Serialize)]
@@ -24,13 +26,17 @@ struct CacheDecision {
 impl CacheDecisions {
     pub(super) fn new() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             ..Self::default()
         }
     }
 
     pub(super) fn observe(&mut self, member: MemberId, line: ObservedLine<'_>) {
         if member != MemberId::Seed || line.stream != Stream::Stderr {
+            return;
+        }
+        if let Some(event) = exact_state_event(line.bytes) {
+            *self.exact_state_events.entry(event).or_default() += 1;
             return;
         }
         let Some(event) = parse(line.bytes) else {
@@ -41,6 +47,24 @@ impl CacheDecisions {
         } else {
             self.omitted_events = self.omitted_events.saturating_add(1);
         }
+    }
+}
+
+fn exact_state_event(line: &[u8]) -> Option<&'static str> {
+    match line.strip_prefix(b"Skippy exact-state ")? {
+        b"demotion_credit_full" => Some("demotion_credit_full"),
+        b"demotion_byte_full" => Some("demotion_byte_full"),
+        b"demotion_queue_full" => Some("demotion_queue_full"),
+        b"demotion_worker_stopped" => Some("demotion_worker_stopped"),
+        b"demotion_duplicate_or_stopped" => Some("demotion_duplicate_or_stopped"),
+        b"demotion_queued" => Some("demotion_queued"),
+        b"demotion_no_native_prefix" => Some("demotion_no_native_prefix"),
+        b"demotion_error" => Some("demotion_error"),
+        b"evicted_l1_count" => Some("evicted_l1_count"),
+        b"evicted_l1_soft" => Some("evicted_l1_soft"),
+        b"evicted_l1_hard" => Some("evicted_l1_hard"),
+        b"published_l1" => Some("published_l1"),
+        _ => None,
     }
 }
 
@@ -112,6 +136,30 @@ mod tests {
         assert!(!projected.contains("private-value"));
         assert!(!projected.contains("token secret"));
         assert!(!projected.contains("authorization"));
+    }
+
+    #[test]
+    fn counts_exact_state_drops_without_retaining_context() {
+        let mut decisions = CacheDecisions::new();
+        for line in [
+            b"Skippy exact-state demotion_credit_full".as_slice(),
+            b"  position=155509 secret=private-prompt".as_slice(),
+            b"Skippy exact-state demotion_credit_full".as_slice(),
+            b"Skippy exact-state demotion_queued".as_slice(),
+        ] {
+            decisions.observe(
+                MemberId::Seed,
+                ObservedLine {
+                    stream: Stream::Stderr,
+                    bytes: line,
+                    ending: crate::process::LineEnding::Lf,
+                },
+            );
+        }
+        let projected = serde_json::to_string(&decisions).unwrap();
+        assert!(projected.contains("\"demotion_credit_full\":2"));
+        assert!(projected.contains("\"demotion_queued\":1"));
+        assert!(!projected.contains("private-prompt"));
     }
 
     #[test]

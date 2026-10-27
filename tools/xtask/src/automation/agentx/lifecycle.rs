@@ -302,7 +302,7 @@ fn server(
             enable_exact_state_diagnostics(&mut spec);
         }
         if std::env::var("AGENTX_SKIPPY_KV_SPAN_DEBUG").as_deref() == Ok("1") {
-            enable_native_kv_span_debug(&mut spec, &input.output);
+            enable_native_kv_span_debug(&mut spec);
         }
     }
     spec.environment.insert(
@@ -323,15 +323,9 @@ fn enable_exact_state_diagnostics(spec: &mut process::ProcessSpec) {
     );
 }
 
-fn enable_native_kv_span_debug(spec: &mut process::ProcessSpec, output: &std::path::Path) {
+fn enable_native_kv_span_debug(spec: &mut process::ProcessSpec) {
     spec.arguments
         .push(process::Value::Public("--debug".into()));
-    // Mesh only keeps llama.cpp debug logging enabled when this startup gate
-    // accompanies --debug; GGML_LLAMA_LOG_LEVEL alone is reset by run_auto.
-    spec.environment.insert(
-        "MESH_LLM_DEBUG_NATIVE_VERBOSE".into(),
-        process::Value::Public("1".into()),
-    );
     spec.environment.insert(
         "LLAMA_KV_CACHE_DEBUG".into(),
         process::Value::Public("1".into()),
@@ -339,10 +333,6 @@ fn enable_native_kv_span_debug(spec: &mut process::ProcessSpec, output: &std::pa
     spec.environment.insert(
         "GGML_LLAMA_LOG_LEVEL".into(),
         process::Value::Public("4".into()),
-    );
-    spec.environment.insert(
-        "MESH_LLM_RUNTIME_ROOT".into(),
-        process::Value::Public(output.join("native-runtime").into_os_string()),
     );
 }
 pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynResult<()> {
@@ -385,9 +375,9 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
         memory_pid: std::sync::Arc::clone(&memory.pid),
         cache_decisions: (engine == "skippy" && debug_scheduler).then(CacheDecisions::new),
         scheduler_profile: (engine == "skippy" && debug_scheduler).then(SchedulerProfile::new),
-        native_kv_span_root: (engine == "skippy"
+        native_kv_span: (engine == "skippy"
             && std::env::var("AGENTX_SKIPPY_KV_SPAN_DEBUG").as_deref() == Ok("1"))
-        .then(|| input.output.join("native-runtime")),
+        .then(native_kv_span::NativeKvSpan::default),
         native_kv_span_output: input.output.clone(),
         server: Some(launch(input, server, MemberId::Seed, "server", seconds)),
         worker: Some(launch(
@@ -540,7 +530,7 @@ struct Owner {
     memory_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
     cache_decisions: Option<CacheDecisions>,
     scheduler_profile: Option<SchedulerProfile>,
-    native_kv_span_root: Option<PathBuf>,
+    native_kv_span: Option<native_kv_span::NativeKvSpan>,
     native_kv_span_output: PathBuf,
     server: Option<Launch>,
     worker: Option<Launch>,
@@ -557,6 +547,9 @@ impl Coordinator for Owner {
     ) -> process::ProbeDecision<String> {
         if let Some(profile) = self.scheduler_profile.as_mut() {
             profile.observe(member, &line);
+        }
+        if let Some(span) = self.native_kv_span.as_mut() {
+            span.observe(member, &line);
         }
         if let Some(decisions) = self.cache_decisions.as_mut() {
             decisions.observe(member, line);
@@ -593,19 +586,10 @@ impl Coordinator for Owner {
             member.member == MemberId::WorkerOne
                 && matches!(member.state, MemberState::ExpectedExit { .. })
         }) {
-            if let Some(root) = self.native_kv_span_root.as_ref() {
-                let Some(server) = context
-                    .members
-                    .iter()
-                    .find(|member| member.member == MemberId::Seed)
-                else {
-                    return Action::Reject("missing server for native KV span capture".into());
-                };
-                if let Err(error) =
-                    native_kv_span::capture(root, server.pid, &self.native_kv_span_output)
-                {
-                    return Action::Reject(format!("capture native KV span: {error}"));
-                }
+            if let Some(span) = self.native_kv_span.as_ref()
+                && let Err(error) = span.save(&self.native_kv_span_output)
+            {
+                return Action::Reject(format!("capture native KV span: {error}"));
             }
             self.stop = true;
             return Action::Stop(MemberId::Seed);
@@ -651,23 +635,14 @@ mod tests {
     #[test]
     fn kv_span_diagnostic_enables_native_cell_span_logging() {
         let mut spec = command::spec(&std::env::temp_dir(), "sh", &[]).unwrap();
-        let output = std::env::temp_dir().join("agentx-kv-span-cell");
-        enable_native_kv_span_debug(&mut spec, &output);
+        enable_native_kv_span_debug(&mut spec);
         assert!(spec.arguments.iter().any(|argument| matches!(argument,
             process::Value::Public(value) if value == "--debug")));
-        for (key, expected) in [
-            ("MESH_LLM_DEBUG_NATIVE_VERBOSE", "1"),
-            ("LLAMA_KV_CACHE_DEBUG", "1"),
-            ("GGML_LLAMA_LOG_LEVEL", "4"),
-        ] {
+        for (key, expected) in [("LLAMA_KV_CACHE_DEBUG", "1"), ("GGML_LLAMA_LOG_LEVEL", "4")] {
             assert!(
                 matches!(spec.environment.get(std::ffi::OsStr::new(key)), Some(process::Value::Public(value)) if value == expected)
             );
         }
-        assert!(matches!(
-            spec.environment.get(std::ffi::OsStr::new("MESH_LLM_RUNTIME_ROOT")),
-            Some(process::Value::Public(value)) if value == &output.join("native-runtime").into_os_string()
-        ));
     }
     #[test]
     fn paired_engines_pin_identical_batch_capacity() {
