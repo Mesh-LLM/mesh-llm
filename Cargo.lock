@@ -4802,6 +4802,7 @@ dependencies = [
  "serde_yaml_ng",
  "serial_test 4.0.1",
  "skippy-commands",
+ "skippy-coordinator",
  "skippy-hardware-profile",
  "skippy-hf-hub",
  "skippy-model-artifact",
