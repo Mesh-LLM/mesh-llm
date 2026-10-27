@@ -69,61 +69,60 @@ pub(super) fn evict_exact_entries_over(
     Ok(())
 }
 
-/// Within one stage, an older recurrent checkpoint already followed by a
-/// newer, longer checkpoint on the same token path is a better eviction
-/// candidate than the sole checkpoint on another branch. Rank those older
-/// ancestors first, then use saved prefill work per logical snapshot byte and
-/// recency within each group. Recheck physical bytes after each release because
-/// deduplicated blocks may not free their full logical size.
+/// A retained recurrent ancestor can replay the suffix of a longer branch,
+/// but a descendant cannot rewind its recurrent state to serve a fork from
+/// that ancestor. Price eviction by the suffix missing from the nearest
+/// compatible retained ancestor, then rank that recompute cost per logical
+/// snapshot byte. Recheck physical bytes after each release because deduped
+/// blocks may not free their full logical size.
 fn evict_lowest_recompute_value(
     radix: &mut UnifiedRadixCache<RadixResidentEntry, RadixExactEntry>,
     publishing: Option<(&str, &[i32])>,
 ) -> Option<RadixEviction<RadixExactEntry>> {
-    let candidates = radix
-        .recurrent_eviction_candidates()
-        .into_iter()
-        .filter(|candidate| {
+    let candidates = radix.recurrent_eviction_candidates();
+    let mut ranked = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| {
             publishing.is_none_or(|(namespace, tokens)| {
                 candidate.namespace != namespace || candidate.tokens != tokens
             })
         })
+        .map(|(index, candidate)| EvictableCacheEntry {
+            id: index.to_string(),
+            units: candidate.logical_bytes,
+            recompute_cost: recurrent_recompute_tokens(candidate, &candidates),
+            last_used: candidate.last_used,
+        })
         .collect::<Vec<_>>();
-    let (mut superseded, mut other): (Vec<_>, Vec<_>) = candidates
-        .iter()
-        .enumerate()
-        .partition(|(_, candidate)| superseded_recurrent_prefix(candidate, &candidates));
-    let ranked = [&mut superseded, &mut other].map(|group| {
-        let mut ranked = group
-            .iter()
-            .map(|(index, candidate)| EvictableCacheEntry {
-                id: index.to_string(),
-                units: candidate.logical_bytes,
-                recompute_cost: u64::try_from(candidate.tokens.len()).unwrap_or(u64::MAX),
-                last_used: candidate.last_used,
-            })
-            .collect::<Vec<_>>();
-        rank_eviction_candidates(&mut ranked);
-        ranked
-    });
-    ranked.into_iter().flatten().find_map(|entry| {
+    rank_eviction_candidates(&mut ranked);
+    ranked.into_iter().find_map(|entry| {
         let candidate = candidates.get(entry.id.parse::<usize>().ok()?)?;
         radix.evict_recurrent_candidate(&candidate.namespace, &candidate.tokens)
     })
 }
 
-fn superseded_recurrent_prefix(
+fn recurrent_recompute_tokens(
     candidate: &RadixEvictionCandidate<RadixExactEntry>,
     candidates: &[RadixEvictionCandidate<RadixExactEntry>],
-) -> bool {
+) -> u64 {
     let kind = candidate.value.payload.kind();
-    kind != ExactStatePayloadKind::FullState
-        && candidates.iter().any(|other| {
-            other.namespace == candidate.namespace
-                && other.value.payload.kind() == kind
-                && other.tokens.len() > candidate.tokens.len()
-                && other.last_used >= candidate.last_used
-                && other.tokens.starts_with(&candidate.tokens)
-        })
+    let ancestor_tokens = if kind == ExactStatePayloadKind::FullState {
+        0
+    } else {
+        candidates
+            .iter()
+            .filter(|other| {
+                other.namespace == candidate.namespace
+                    && other.value.payload.kind() == kind
+                    && other.tokens.len() < candidate.tokens.len()
+                    && candidate.tokens.starts_with(&other.tokens)
+            })
+            .map(|other| other.tokens.len())
+            .max()
+            .unwrap_or(0)
+    };
+    u64::try_from(candidate.tokens.len() - ancestor_tokens).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -187,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn byte_pressure_keeps_a_distinct_recurrent_branch_anchor() {
+    fn byte_pressure_keeps_recurrent_ancestors_for_forked_followups() {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4096));
         let unique = vec![9; 40];
@@ -214,17 +213,26 @@ mod tests {
 
         evict_exact_entries_over(&radix, &blobs, 600, 4, "soft", None).unwrap();
 
-        assert_eq!(blobs.lock().unwrap().physical_bytes(), 580);
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 480);
         let mut radix = radix.lock().unwrap();
         assert!(radix.recurrent_exact("stage", &unique).is_some());
-        assert!(radix.recurrent_exact("stage", &a_short).is_none());
-        assert!(radix.recurrent_exact("stage", &a_long).is_some());
+        assert!(radix.recurrent_exact("stage", &a_short).is_some());
+        assert!(radix.recurrent_exact("stage", &a_long).is_none());
         assert!(radix.recurrent_exact("stage", &b_short).is_some());
         assert!(radix.recurrent_exact("stage", &b_long).is_some());
+        let mut fork = a_short;
+        fork.extend([8; 20]);
+        assert_eq!(
+            radix
+                .lookup_recurrent("stage", &fork)
+                .unwrap()
+                .matched_tokens,
+            50
+        );
     }
 
     #[test]
-    fn byte_pressure_keeps_a_distinct_recurrent_only_branch_anchor() {
+    fn byte_pressure_keeps_recurrent_only_ancestor_for_a_fork() {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4096));
         let unique = vec![9; 40];
@@ -243,10 +251,20 @@ mod tests {
 
         evict_exact_entries_over(&radix, &blobs, 300, 2, "soft", None).unwrap();
 
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 180);
         let mut radix = radix.lock().unwrap();
         assert!(radix.recurrent_exact("stage", &unique).is_some());
-        assert!(radix.recurrent_exact("stage", &short).is_none());
-        assert!(radix.recurrent_exact("stage", &long).is_some());
+        assert!(radix.recurrent_exact("stage", &short).is_some());
+        assert!(radix.recurrent_exact("stage", &long).is_none());
+        let mut fork = short;
+        fork.extend([8; 20]);
+        assert_eq!(
+            radix
+                .lookup_recurrent("stage", &fork)
+                .unwrap()
+                .matched_tokens,
+            50
+        );
     }
 
     #[test]
@@ -276,8 +294,9 @@ mod tests {
             50
         );
         let evicted = evict_lowest_recompute_value(&mut radix, None).unwrap();
-        assert_eq!(evicted.tokens, unique);
+        assert_eq!(evicted.tokens, long);
         assert!(radix.recurrent_exact("stage", &short).is_some());
+        assert!(radix.recurrent_exact("stage", &unique).is_some());
     }
 
     #[test]
@@ -321,6 +340,34 @@ mod tests {
         assert!(radix.recurrent_exact("stage", &publishing).is_some());
         assert!(radix.recurrent_exact("stage", &old_a).is_none());
         assert!(radix.recurrent_exact("stage", &old_b).is_some());
+    }
+
+    #[test]
+    fn publishing_ancestor_makes_an_old_descendant_cheaper_to_recompute() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4096));
+        let long = vec![1; 100];
+        let unique = vec![2; 40];
+        let publishing = vec![1; 50];
+        for (tokens, bytes, seed) in [(&long, 200, 1), (&unique, 100, 2), (&publishing, 100, 3)] {
+            insert_recurrent(
+                &radix,
+                &blobs,
+                tokens,
+                bytes,
+                seed,
+                ExactStatePayloadKind::KvRecurrent,
+            );
+        }
+
+        evict_exact_entries_over(&radix, &blobs, 300, 1, "soft", Some(("stage", &publishing)))
+            .unwrap();
+
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 200);
+        let mut radix = radix.lock().unwrap();
+        assert!(radix.recurrent_exact("stage", &long).is_none());
+        assert!(radix.recurrent_exact("stage", &publishing).is_some());
+        assert!(radix.recurrent_exact("stage", &unique).is_some());
     }
 
     #[test]
