@@ -971,6 +971,64 @@ mod tests {
         handle.stop().await.expect("stop embedded mesh client");
     }
 
+    /// Regression test for issue #2147: embedded startup must not report
+    /// readiness from a console served by a foreign process on the requested
+    /// console port. A stub HTTP server answering `/api/status` with a token
+    /// must not make `start_embedded_serve` return a successful handle whose
+    /// advertised `invite_token` belongs to that foreign instance.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn embedded_startup_rejects_foreign_console_on_requested_port() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let stub_body = r#"{"token":"foreign-stub-token"}"#;
+        let stub = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind foreign stub console");
+        let console_port = stub.local_addr().expect("foreign stub local addr").port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = stub.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    // Drain the request head, then answer with the foreign token.
+                    let mut request = [0u8; 1024];
+                    let _ = socket.read(&mut request).await;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        stub_body.len(),
+                        stub_body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+
+        let api_port = free_local_port();
+        let startup = start_embedded_serve(EmbeddedServeConfig {
+            mode: EmbeddedMeshNodeMode::Client,
+            api_port,
+            console_port,
+            startup_timeout: Duration::from_secs(5),
+            ..EmbeddedServeConfig::default()
+        })
+        .await;
+
+        if let Ok(handle) = startup {
+            let observed_token = handle
+                .invite_token()
+                .unwrap_or("<none>")
+                .to_string();
+            let observed_console = handle.console_url().to_string();
+            // Clean up before failing so the test process does not hang.
+            let _ = handle.stop().await;
+            panic!(
+                "embedded startup reported ready from a foreign console at {observed_console} with invite_token = {observed_token:?} (issue #2147)"
+            );
+        }
+    }
+
     fn make_served_model(
         model_ref: &str,
         profile: &str,
