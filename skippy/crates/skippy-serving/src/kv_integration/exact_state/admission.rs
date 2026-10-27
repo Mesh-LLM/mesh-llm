@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
+use super::super::EXACT_STATE_RECORD_CAPACITY;
+
 /// Admission class for an exact-state capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureAdmission {
     /// Same-session continuation boundary (post-decode). Re-derivable only by
-    /// replaying generation; competes for the reserved recorder slot.
+    /// replaying generation; competes for the reserved recorder capacity.
     Continuation,
     /// Prefill-ladder boundary (shared checkpoint / final prefill state).
     /// Re-derivable by re-prefill; best-effort admission.
@@ -12,13 +14,14 @@ pub enum CaptureAdmission {
 }
 
 /// Total in-flight exact-state payloads per stage — exporting, queued in the
-/// recorder channel, or held by the recorder worker. Sized as channel
-/// capacity (1) plus one worker-held record.
-pub const EXACT_STATE_ADMISSION_TOTAL: usize = 2;
-/// Slots reserved for [`CaptureAdmission::Continuation`]: BestEffort captures
-/// can never occupy more than `TOTAL - RESERVED` slots, so a continuation
-/// boundary always finds a slot unless the whole budget is exhausted.
-pub const EXACT_STATE_ADMISSION_RESERVED: usize = 1;
+/// recorder channel, or held by the recorder worker. Keeping this at channel
+/// capacity guarantees room to enqueue an admitted export even if the worker
+/// is stopped; the independent byte budget bounds their combined size.
+pub const EXACT_STATE_ADMISSION_TOTAL: usize = EXACT_STATE_RECORD_CAPACITY;
+/// Leave all but one slot for continuation boundaries. Four concurrent lanes
+/// may finish before the recorder drains, and dropping their exact states
+/// forces long agent follow-ups to re-prefill from zero.
+pub const EXACT_STATE_ADMISSION_RESERVED: usize = EXACT_STATE_RECORD_CAPACITY - 1;
 
 /// Move-only credit for one in-flight exact-state payload. Construction
 /// reserves a slot atomically (CAS, so competing producers cannot
@@ -170,27 +173,28 @@ mod admission_credit_tests {
     #[test]
     fn continuation_declines_when_total_budget_exhausted() {
         let (total, best_effort) = counters();
-        let first = ExactStateAdmissionCredit::acquire(
-            &total,
-            &best_effort,
-            CaptureAdmission::Continuation,
-        );
-        let second = ExactStateAdmissionCredit::acquire(
-            &total,
-            &best_effort,
-            CaptureAdmission::Continuation,
-        );
-        assert!(first.is_some() && second.is_some(), "two slots for TOTAL=2");
-        let third = ExactStateAdmissionCredit::acquire(
+        let held = (0..EXACT_STATE_ADMISSION_TOTAL)
+            .map(|_| {
+                ExactStateAdmissionCredit::acquire(
+                    &total,
+                    &best_effort,
+                    CaptureAdmission::Continuation,
+                )
+                .expect("each recorder slot admits a continuation")
+            })
+            .collect::<Vec<_>>();
+        let overflow = ExactStateAdmissionCredit::acquire(
             &total,
             &best_effort,
             CaptureAdmission::Continuation,
         );
         assert!(
-            third.is_none(),
-            "third Continuation must decline at TOTAL=2"
+            overflow.is_none(),
+            "continuation must decline after all recorder slots are reserved"
         );
-        assert_eq!(total.load(Ordering::Acquire), 2);
+        assert_eq!(total.load(Ordering::Acquire), EXACT_STATE_ADMISSION_TOTAL);
+        drop(held);
+        assert_eq!(total.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -223,6 +227,29 @@ mod admission_credit_tests {
             cont.is_some(),
             "Continuation must admit into the reserved share"
         );
+    }
+
+    #[test]
+    fn four_continuations_survive_one_pending_prefill_capture() {
+        let (total, best_effort) = counters();
+        let prefill =
+            ExactStateAdmissionCredit::acquire(&total, &best_effort, CaptureAdmission::BestEffort)
+                .expect("one prefill capture admitted");
+        let continuations = (0..4)
+            .map(|_| {
+                ExactStateAdmissionCredit::acquire(
+                    &total,
+                    &best_effort,
+                    CaptureAdmission::Continuation,
+                )
+                .expect("four concurrent lanes retain their continuation captures")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(total.load(Ordering::Acquire), 5);
+        assert_eq!(best_effort.load(Ordering::Acquire), 1);
+        drop((continuations, prefill));
+        assert_eq!(total.load(Ordering::Acquire), 0);
+        assert_eq!(best_effort.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -363,27 +390,25 @@ mod admission_credit_tests {
         const THREADS: usize = 4;
         const ATTEMPTS: usize = 50;
         // Deterministic rollback exercise: the budget STARTS held by exactly
-        // TWO Continuation credits (total=2, best_effort=0), so the first
+        // Every slot is held by Continuation credits, so the first
         // BestEffort attempts must pass the class cap and fail the total CAS
         // — the rollback path. Overlapping contenders can still decline at
-        // the class cap while a rollback is in flight; the exact 2/0
+        // the class cap while a rollback is in flight; the exact total/zero
         // assertions afterwards are what prove no rollback leaked. The
         // mixed-contention test above can retain a BestEffort credit, in
         // which case its hammer exits at the class cap throughout.
         let (total, best_effort) = counters();
-        let first = ExactStateAdmissionCredit::acquire(
-            &total,
-            &best_effort,
-            CaptureAdmission::Continuation,
-        )
-        .expect("first Continuation admitted");
-        let second = ExactStateAdmissionCredit::acquire(
-            &total,
-            &best_effort,
-            CaptureAdmission::Continuation,
-        )
-        .expect("second Continuation admitted");
-        assert_eq!(total.load(Ordering::Acquire), 2);
+        let held = (0..EXACT_STATE_ADMISSION_TOTAL)
+            .map(|_| {
+                ExactStateAdmissionCredit::acquire(
+                    &total,
+                    &best_effort,
+                    CaptureAdmission::Continuation,
+                )
+                .expect("Continuation admitted until recorder capacity")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(total.load(Ordering::Acquire), EXACT_STATE_ADMISSION_TOTAL);
         assert_eq!(best_effort.load(Ordering::Acquire), 0);
 
         let barrier = Arc::new(Barrier::new(THREADS));
@@ -413,7 +438,7 @@ mod admission_credit_tests {
         }
         assert_eq!(
             total.load(Ordering::Acquire),
-            2,
+            EXACT_STATE_ADMISSION_TOTAL,
             "rollback leaves the total at the held credits"
         );
         assert_eq!(
@@ -423,7 +448,7 @@ mod admission_credit_tests {
         );
 
         // Drain and recovery.
-        drop((first, second));
+        drop(held);
         assert_eq!(total.load(Ordering::Acquire), 0);
         assert_eq!(best_effort.load(Ordering::Acquire), 0);
         assert!(

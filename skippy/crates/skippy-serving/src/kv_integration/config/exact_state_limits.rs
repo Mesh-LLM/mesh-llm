@@ -5,7 +5,7 @@ const EXACT_STATE_RECORD_QUEUE_MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Let a stage record its latest and shared hybrid boundaries together when
 /// its cache budget can retain both. Other payload modes retain the existing
-/// 4 GiB limit. The two-credit limit still bounds the recorder, and its byte
+/// 4 GiB limit. Recorder channel capacity still bounds the record count, and its byte
 /// allowance never exceeds 8 GiB except for one indivisible record.
 pub(super) fn exact_state_record_queue_limit(
     cache_bytes: u64,
