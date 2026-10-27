@@ -1107,10 +1107,11 @@ async fn ensure_owner_control_caller(
 }
 
 /// Owner-control surfaces the host's owner key material, so loopback
-/// reachability is not enough: the caller process must also run as the OS
-/// user that runs the host. Where the platform does not expose peer
-/// credentials (e.g. Windows loopback TCP) the bearer credential alone
-/// remains the owner-control requirement.
+/// reachability is not enough: where the platform exposes the peer process's
+/// credentials (Unix-domain sockets), the caller must also run as the OS
+/// user that runs the host. Loopback TCP never exposes peer credentials on
+/// the supported platforms, so there the bearer credential alone remains the
+/// owner-control requirement (see `crate::api::peer_identity`).
 async fn ensure_owner_control_local_user(stream: &mut TcpStream) -> anyhow::Result<bool> {
     match crate::api::peer_identity::peer_runs_as_current_user(&*stream) {
         Some(false) => {
