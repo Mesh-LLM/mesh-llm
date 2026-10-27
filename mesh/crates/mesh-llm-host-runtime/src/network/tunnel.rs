@@ -12,7 +12,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 
+mod admission;
 mod inbound_http;
+
+#[cfg(test)]
+#[path = "tunnel/admission_tests.rs"]
+mod admission_tests;
 
 fn quic_response_first_byte_timeout() -> Duration {
     Duration::from_secs(5 * 60)
@@ -61,18 +66,35 @@ impl Manager {
         // installed direct ingress; otherwise reject the request.
         let http_ingress_ref = mgr.http_ingress.clone();
         let http_node = mgr.node.clone();
+        let admission = admission::TunnelHttpAdmission::new();
         tokio::spawn(async move {
-            while let Some((remote, send, recv)) = tunnel_http_rx.recv().await {
-                let ingress = http_ingress_ref.read().ok().and_then(|guard| guard.clone());
-                let node = http_node.clone();
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        inbound_http::handle_inbound_http_stream(node, remote, send, recv, ingress)
-                            .await
-                    {
-                        tracing::warn!("Inbound HTTP tunnel stream error: {e}");
+            while let Some((remote, mut send, mut recv)) = tunnel_http_rx.recv().await {
+                match admission.claim(remote) {
+                    admission::TunnelHttpClaim::Full => {
+                        // Above the global or per-peer quota: close the stream
+                        // pair fast and spawn no request work.
+                        tracing::warn!(
+                            peer = %remote.fmt_short(),
+                            "Refusing tunneled HTTP request stream: the per-peer or global quota is exhausted"
+                        );
+                        let _ = recv.stop(0u32.into());
+                        let _ = send.reset(0u32.into());
                     }
-                });
+                    admission::TunnelHttpClaim::Granted(permit) => {
+                        let ingress = http_ingress_ref.read().ok().and_then(|guard| guard.clone());
+                        let node = http_node.clone();
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            if let Err(e) = inbound_http::handle_inbound_http_stream(
+                                node, remote, send, recv, ingress,
+                            )
+                            .await
+                            {
+                                tracing::warn!("Inbound HTTP tunnel stream error: {e}");
+                            }
+                        });
+                    }
+                }
             }
         });
 
