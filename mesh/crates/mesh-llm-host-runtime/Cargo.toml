@@ -43,8 +43,8 @@ mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78
 mesh-llm-transport = { path = "../mesh-llm-transport", version = "0.78.0" }
 skippy-api = { path = "../../../skippy/crates/skippy-api", version = "0.78.0" }
 skippy-events = { path = "../../../skippy/crates/skippy-events", version = "0.78.0" }
-mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.78.0", optional = true }
-mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.78.0", optional = true }
+mesh-llm-payments-types = { path = "../../plugins/pay-lightning/lib/mesh-llm-payments-types", version = "0.78.0", optional = true }
+mesh-llm-wallet = { path = "../../plugins/pay-lightning/lib/mesh-llm-wallet", version = "0.78.0", optional = true }
 bytes = "1"
 mesh-llm-build-info.workspace = true
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.78.0"  }
@@ -142,7 +142,7 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78.0", features = ["test-support"] }
-mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.78.0", features = ["plugin-server"] }
+mesh-llm-payments = { path = "../../plugins/pay-lightning/lib/mesh-llm-payments", version = "0.78.0", features = ["plugin-server"] }
 # start_paused test clocks for the probe cooldown regression tests.
 tokio = { version = "1", features = ["full", "test-util"] }
 bitcoin = { version = "0.32", features = ["secp-recovery"] }

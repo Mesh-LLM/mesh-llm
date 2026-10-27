@@ -18,7 +18,7 @@ plugin-server = ["dep:mesh-llm-plugin", "dep:rmcp", "mesh-llm-payments-types/eng
 
 [dependencies]
 anyhow.workspace = true
-mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.78.0", optional = true }
+mesh-llm-plugin = { path = "../../../../crates/mesh-llm-plugin", version = "0.78.0", optional = true }
 rmcp = { version = "3", features = ["server"], optional = true }
 async-trait = "0.1"
 fs2 = "0.4"
