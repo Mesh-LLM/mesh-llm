@@ -323,9 +323,15 @@ impl Node {
     /// command against the topology state this node owns (#2217). Claim and
     /// Load carry their coordinator identity and are bound by the wire
     /// conversion and again at the execution boundary; Stop is bound to the
-    /// running stage's coordinator in the stage-control loop. Status and
-    /// Inventory carry no identity in the command body, so the requester must
-    /// be a participant of the active topology the query targets.
+    /// running stage's coordinator in the stage-control loop. Status names a
+    /// concrete topology and run, so the requester must be a participant of
+    /// that registered topology. Inventory is a model-scoped read that the
+    /// split coordinator issues during eligibility probing and before the
+    /// target records the topology being planned (the topology is only
+    /// registered once the target accepts a load), so requiring a registered
+    /// topology would deadlock pre-topology planning; it is admitted for any
+    /// authenticated, mesh-admitted peer, and the write commands it gates
+    /// stay identity-bound.
     pub(crate) async fn authorize_remote_stage_control_request(
         &self,
         remote: EndpointId,
@@ -359,17 +365,10 @@ impl Node {
                     .ok_or_else(|| anyhow::anyhow!("unknown stage topology"))?;
                 Self::ensure_stage_topology_participant(topology, remote)
             }
-            crate::inference::skippy::StageControlRequest::Inventory(inventory) => {
-                let topology = topologies
-                    .iter()
-                    .find(|topology| {
-                        topology.model_id == inventory.model_id
-                            && topology.package_ref == inventory.package_ref
-                            && topology.manifest_sha256 == inventory.manifest_sha256
-                    })
-                    .ok_or_else(|| anyhow::anyhow!("unknown stage topology"))?;
-                Self::ensure_stage_topology_participant(topology, remote)
-            }
+            // Pre-topology eligibility and load planning query the stage
+            // inventory before this node knows the topology being planned,
+            // so Inventory (and the identity-bound write commands) are
+            // admitted for any authenticated mesh peer.
             _ => Ok(()),
         }
     }

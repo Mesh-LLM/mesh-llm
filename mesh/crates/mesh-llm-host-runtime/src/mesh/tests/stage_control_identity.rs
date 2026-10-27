@@ -130,9 +130,7 @@ fn admitted_non_coordinator_claim_with_forged_identity_and_higher_term_is_reject
     // while the claim body forges the coordinator identity at a higher term.
     let frame = stage_control_request_to_proto(
         attacker,
-        crate::inference::skippy::StageControlRequest::Claim(identity_test_claim(
-            coordinator, 2,
-        )),
+        crate::inference::skippy::StageControlRequest::Claim(identity_test_claim(coordinator, 2)),
     )
     .expect("forged claim frame must encode");
 
@@ -178,9 +176,7 @@ fn legitimate_coordinator_commands_still_convert_for_their_authenticated_request
 
     let claim_frame = stage_control_request_to_proto(
         coordinator,
-        crate::inference::skippy::StageControlRequest::Claim(identity_test_claim(
-            coordinator, 1,
-        )),
+        crate::inference::skippy::StageControlRequest::Claim(identity_test_claim(coordinator, 1)),
     )
     .expect("legitimate claim frame must encode");
     assert!(
@@ -263,3 +259,73 @@ async fn pre_topology_inventory_query_is_admitted_for_authenticated_mesh_peer() 
     Ok(())
 }
 
+#[tokio::test]
+async fn remote_status_query_outside_the_target_topology_is_rejected() -> Result<()> {
+    let node = Node::new_for_tests(super::NodeRole::Worker).await?;
+    let participant = make_test_endpoint_id(0x60);
+    let outsider = make_test_endpoint_id(0xC2);
+
+    node.stage_topologies
+        .lock()
+        .await
+        .record_topology(crate::mesh::StageTopologyInstance {
+            topology_id: "topology-a".to_string(),
+            run_id: "run-a".to_string(),
+            model_id: "model-a".to_string(),
+            package_ref: "gguf:///model.gguf".to_string(),
+            manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
+            admissions: Default::default(),
+            stages: vec![crate::mesh::StageAssignment {
+                stage_id: "stage-1".to_string(),
+                stage_index: 1,
+                node_id: participant,
+                layer_start: 12,
+                layer_end: 24,
+                endpoint: crate::mesh::StageEndpoint {
+                    bind_addr: "127.0.0.1:0".to_string(),
+                },
+            }],
+        });
+
+    let error = node
+        .authorize_remote_stage_control_request(
+            outsider,
+            &crate::inference::skippy::StageControlRequest::Status(
+                crate::inference::skippy::StageStatusFilter {
+                    topology_id: Some("topology-a".to_string()),
+                    run_id: Some("run-a".to_string()),
+                    stage_id: None,
+                },
+            ),
+        )
+        .await
+        .expect_err(
+            "#2217: a status query from a peer outside the target topology must stay rejected",
+        )
+        .to_string();
+    assert!(
+        error.contains("not a participant"),
+        "status rejection must cite the participant check: {error}"
+    );
+
+    let unknown = node
+        .authorize_remote_stage_control_request(
+            participant,
+            &crate::inference::skippy::StageControlRequest::Status(
+                crate::inference::skippy::StageStatusFilter {
+                    topology_id: Some("topology-missing".to_string()),
+                    run_id: Some("run-missing".to_string()),
+                    stage_id: None,
+                },
+            ),
+        )
+        .await
+        .expect_err("a status query for an unknown topology must stay rejected")
+        .to_string();
+    assert!(
+        unknown.contains("unknown stage topology"),
+        "unknown-topology rejection must name the missing topology: {unknown}"
+    );
+
+    Ok(())
+}
