@@ -308,6 +308,13 @@ retired parser behavior, and source review still owns semantic emulation.
 - Use measured workload data to rebalance deterministic shards, but keep the
   checked-in algorithm reproducible. Use one Cargo invocation per shard unless
   a documented package-isolation check requires otherwise.
+- The local `just test-all` gate runs all `xtask` tests in a separate Cargo
+  invocation with `--test-threads=1`, because their signal scopes are
+  process-global. Pass the harness argument to that package only; a global
+  `RUST_TEST_THREADS` override also changes child-process output fixtures.
+- The portable local gate may parallelize JavaScript checks, but must finish
+  SDK checks before building the website: both stages invoke Cargo (the website
+  generates CLI documentation). Preserve every stage and aggregate failures.
 
 ### Dependencies, summaries, and cancellation
 
@@ -616,6 +623,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
   required jobs reach a terminal successful conclusion; state expected skips.
 
 ## Llama canary family fan-out
+
+The System One contract fixture must exercise both single-token causal
+readouts and multi-token likelihoods as supported execution paths, retaining
+all malformed/unsupported request refusals. Verify ordered finite scores,
+tokenizer lengths, probability semantics and zero generated tokens. Keep
+DiffusionGemma and Laya qualification separate; causal mechanics do not certify
+their behavior or classification quality.
 
 The final publisher must use an explicit `!cancelled()` status condition,
 require successful source resolution and final selection, and require

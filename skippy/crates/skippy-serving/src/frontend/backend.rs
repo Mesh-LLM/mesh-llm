@@ -312,7 +312,7 @@ fn should_emit_stream_usage(
     request_include_usage || context.observes_stream_usage()
 }
 
-struct GenerationSessionPermit {
+pub(in crate::frontend) struct GenerationSessionPermit {
     registry: Arc<Mutex<BTreeMap<String, Arc<GenerationSessionLockEntry>>>>,
     key: String,
     entry: Arc<GenerationSessionLockEntry>,
@@ -808,13 +808,9 @@ impl InferenceBackend for StageOpenAiBackend {
         ])
     }
 
+    /// Serve System One requests through the backend's selected execution path.
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
-        let backend = self.clone();
-        task::spawn_blocking(move || backend.run_system_one(request))
-            .await
-            .map_err(|error| {
-                InferenceError::backend(format!("System One execution task failed: {error}"))
-            })?
+        self.serve_system_one(request).await
     }
 
     async fn chat_completion(
@@ -1444,7 +1440,8 @@ impl InferenceBackend for StageOpenAiBackend {
 }
 
 impl StageOpenAiBackend {
-    async fn acquire_generation_admission(
+    /// Admit generation work subject to concurrency, queue, token-budget and cancellation gates.
+    pub(in crate::frontend) async fn acquire_generation_admission(
         &self,
         ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,

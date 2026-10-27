@@ -270,3 +270,11 @@ fn bound_host_refuses_binary_changed_by_inspection_before_publishing_report() {
     );
     assert!(!report_path.exists());
 }
+
+#[test]
+fn report_binary_name_strips_windows_and_posix_directories() {
+    assert_eq!(file_name(r"skippy-cli-input\skippy.exe"), "skippy.exe");
+    assert_eq!(file_name("skippy-cli-input/skippy"), "skippy");
+    assert_eq!(file_name(r"D:\a\out/skippy.exe"), "skippy.exe");
+    assert_eq!(file_name("skippy"), "skippy");
+}

@@ -66,7 +66,11 @@ fn product_server_early_exit_fails_without_publishing_success() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let state = tempfile::tempdir().unwrap();
     let binary = state.path().join("mesh-fixture");
-    std::fs::write(&binary, "#!/bin/sh\nexit 7\n").unwrap();
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\nmkdir -p \"$MESH_LLM_RUNTIME_ROOT/fixture/logs\"\nprintf '%s\\n' 'cudaMalloc failed: fixture allocation error' > \"$MESH_LLM_RUNTIME_ROOT/fixture/logs/skippy-native.log\"\nexit 7\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     let model = state.path().join("model.gguf");
     std::fs::write(&model, b"fixture").unwrap();
@@ -90,6 +94,15 @@ fn product_server_early_exit_fails_without_publishing_success() {
         .output()
         .unwrap();
     assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("Laya product smoke failed: EarlyExit"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("cudaMalloc failed: fixture allocation error"),
+        "{stderr}"
+    );
     assert!(!report.exists());
 }
 

@@ -90,6 +90,8 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
         let authenticated_peer = peer_state.load(Ordering::Acquire);
         Box::pin(async move {
             let result: Result<()> = async {
+                // Started by the first status publication, if any.
+                let mut status_lane = None;
                 loop {
                     tokio::select! {
                         maybe_outbound = outbound_rx.recv() => {
@@ -162,6 +164,21 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         mesh_tx.clone(),
                                         outbound_tx.clone(),
                                     );
+                                }
+                                Some(super::proto::envelope::Payload::PublishPluginStatusRequest(request)) => {
+                                    // Shown under the connection's own name,
+                                    // so one plugin cannot publish as another.
+                                    status_lane
+                                        .get_or_insert_with(|| {
+                                            super::runtime::status_publication::StatusLane::spawn(
+                                                plugin_name.clone(),
+                                                generation,
+                                                runtime.clone(),
+                                                mesh_tx.clone(),
+                                                outbound_tx.clone(),
+                                            )
+                                        })
+                                        .push(request_id, request);
                                 }
                                 Some(super::proto::envelope::Payload::RpcRequest(request)) => {
                                     forward_plugin_request(
@@ -238,6 +255,12 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                     summary.pid = None;
                     summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
                 }
+                drop(summary);
+                super::runtime::status_publication::announce_disconnected(
+                    &mesh_tx,
+                    &plugin_name,
+                    generation,
+                );
             }
 
             let mut pending = pending.lock().await;

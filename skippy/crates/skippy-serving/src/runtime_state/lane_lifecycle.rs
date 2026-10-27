@@ -35,6 +35,7 @@ impl RuntimeState {
     pub(crate) fn supports_system_one_endpoint(&self) -> bool {
         system_one_endpoint_is_runnable(
             self.serves_system_one(),
+            self.model.supports_causal_readout(),
             self.model.input_activation_boundary().is_some(),
             self.model.output_activation_boundary().is_some(),
             self.lane_count,
@@ -562,13 +563,17 @@ impl RuntimeState {
     }
 }
 
+/// Check whether loaded capabilities and stage placement can serve System One.
 fn system_one_endpoint_is_runnable(
     has_canvas: bool,
+    has_causal_readout: bool,
     has_input_boundary: bool,
     has_output_boundary: bool,
     lane_count: u32,
 ) -> bool {
-    has_canvas && !has_input_boundary && !has_output_boundary && lane_count == 1
+    !has_input_boundary
+        && lane_count > 0
+        && (has_causal_readout || (has_canvas && !has_output_boundary && lane_count == 1))
 }
 
 /// Clamps a requested idle-pool prewarm target to `model_fit.cache_idle_slots`

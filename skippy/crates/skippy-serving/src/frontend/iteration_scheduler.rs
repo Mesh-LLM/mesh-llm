@@ -5,6 +5,7 @@ mod direct_reply;
 mod generation_events;
 mod native_execution;
 mod prefill_admission;
+pub(crate) mod readout;
 pub(in crate::frontend) use prefill_admission::PrefillTurn;
 
 use self::cache_runtime::{
@@ -88,6 +89,7 @@ pub(super) struct ScheduledResumeRequest<'a> {
 #[derive(Debug, Clone)]
 pub(crate) struct SchedulerIterationOutcome {
     pub(crate) predicted: i32,
+    pub(crate) log_probabilities: Vec<f32>,
     pub(crate) output: ActivationFrame,
     pub(crate) batch_size: usize,
     pub(crate) batch_wait_ms: f64,
@@ -148,6 +150,7 @@ struct DirectIteration {
     sampling: Option<SamplingConfig>,
     input: Option<ActivationFrame>,
     sample_last: bool,
+    selected_tokens: Option<Vec<i32>>,
     phase: IterationBatchPhase,
     deadline: Option<Instant>,
     cancellation: Option<skippy_inference_api::CancellationToken>,
@@ -724,6 +727,7 @@ impl IterationScheduler {
                 sampling: sampling.cloned(),
                 input,
                 sample_last,
+                selected_tokens: None,
                 phase,
                 deadline,
                 cancellation: cancellation.cloned(),

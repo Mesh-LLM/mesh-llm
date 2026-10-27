@@ -1389,6 +1389,62 @@ Every change is published once, as JSON, on the local channel
 `until_ms` and `reason` are omitted when absent. The host keeps no ranking, no
 history of changes, and no shared lists.
 
+## Status Contributions
+
+A plugin can add a snapshot of its own to the node's `GET /api/status`, so
+clients see it without querying a plugin endpoint. It declares
+`mesh_llm_plugin::plugin_status::plugin_status(schema_version)` in its manifest
+(`PluginManifest.plugin_status`), then publishes with
+`PluginContext::publish_status(&data, fresh_for)`, from `on_initialized` or any
+task holding an owned context. Each publication replaces the previous one;
+`withdraw_status` removes it. The host shows the latest one under the name it
+knows the plugin connection by, never a name the plugin claims, so one plugin
+cannot overwrite another's contribution or a core field:
+
+```json
+"plugins": {
+  "powermetrics": {
+    "schema_version": 1,
+    "state": "ready",
+    "received_at_unix_ms": 1793404800000,
+    "fresh_until_unix_ms": 1793404860000,
+    "data": { "source": "macmon", "idle_watts": 8.2 }
+  }
+}
+```
+
+`data` is the plugin's, in version `schema_version` of its own schema. The rest
+is the host's:
+
+- `state` is `ready` until `fresh_until_unix_ms`, then `stale`. A snapshot asks
+  for its freshness with `fresh_for`: 0 means 60 s, and the host keeps it
+  between 1 s and 1 h. When the plugin connection that published it closes or
+  fails, the snapshot stays, shown as `unavailable`, until a later connection
+  publishes. When the plugin is disabled, removed or shut down, it goes.
+- The timestamps say when the host last heard from the plugin. They say nothing
+  about how old the plugin's own readings are: a plugin that publishes an old or
+  missing sensor reading says so in `data`.
+
+The host refuses a publication from a plugin whose manifest does not declare
+`plugin_status`, from a connection that is no longer the plugin's current one,
+`data_json` that is not a JSON object or is larger than 16 KiB, and a snapshot
+sent less than 1 s after the previous one from the same connection. Refusals
+come back as an error and change nothing; a withdrawal is always accepted. A
+plugin may publish from `on_initialized`: a publication that arrives before the
+host has read the plugin's manifest waits for it.
+
+Reads serve the host's copy: `/api/status` never starts, restarts or calls a
+plugin, so a hung plugin cannot slow it. Every accepted publication, and every
+change of state, wakes `/api/events`, which sends the new status. Without any
+contribution, `plugins` is omitted and the response is unchanged. It is
+local to this node, like the rest of `/api/status`: nothing is gossiped.
+
+The host advertises the `plugin_status.v1` host capability in its
+`InitializeRequest`. Against a host without it, `publish_status` fails at once;
+a plugin that cannot run without it declares `.required(true)` and then refuses
+to initialize there. A default-managed plugin keeps its declaration only when
+its entry in `DEFAULT_PLUGINS` allows `Surface::StatusContributions`.
+
 ## What The Host Owns
 
 The host is responsible for:

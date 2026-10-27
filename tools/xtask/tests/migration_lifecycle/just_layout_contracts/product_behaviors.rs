@@ -2,6 +2,9 @@
 use super::*;
 use std::{io::Read as _, os::unix::fs::PermissionsExt as _};
 
+#[path = "product_behaviors/portable_gate.rs"]
+mod portable_gate;
+
 fn executable(path: &Path, source: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, source).unwrap();

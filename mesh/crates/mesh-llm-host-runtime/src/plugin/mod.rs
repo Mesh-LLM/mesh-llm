@@ -1737,4 +1737,6 @@ pub async fn run_plugin_process(name: String, args: Vec<String>) -> Result<()> {
 }
 
 #[cfg(test)]
+mod status_contribution_tests;
+#[cfg(test)]
 mod tests;

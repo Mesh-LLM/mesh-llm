@@ -428,6 +428,7 @@ impl InferenceBackend for FakeBackend {
         Ok(vec![ModelObject::new("org/repo:Q4_K_M")])
     }
 
+    /// Return deterministic System One fixtures for HTTP adapter contract tests.
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         if request.questions.contains_key("question_0") {
             let answers = request
@@ -481,16 +482,21 @@ impl InferenceBackend for FakeBackend {
                 })
                 .collect();
             return Ok(SystemOneResponse {
+                readouts: Default::default(),
+                readout_usage: None,
                 model: request.model,
                 answers,
                 usage: crate::SystemOneUsage {
                     input_tokens: 12,
                     output_tokens: 0,
+                    cached_tokens: 0,
                 },
             });
         }
         if request.questions.contains_key("urgent") {
             return Ok(SystemOneResponse {
+                readouts: Default::default(),
+                readout_usage: None,
                 model: request.model,
                 answers: [
                     (
@@ -528,10 +534,13 @@ impl InferenceBackend for FakeBackend {
                 usage: crate::SystemOneUsage {
                     input_tokens: 12,
                     output_tokens: 0,
+                    cached_tokens: 0,
                 },
             });
         }
         Ok(SystemOneResponse {
+            readouts: Default::default(),
+            readout_usage: None,
             model: request.model,
             answers: [(
                 "safe".to_string(),
@@ -542,6 +551,7 @@ impl InferenceBackend for FakeBackend {
             usage: crate::SystemOneUsage {
                 input_tokens: 12,
                 output_tokens: 0,
+                cached_tokens: 0,
             },
         })
     }

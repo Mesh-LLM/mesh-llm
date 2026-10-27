@@ -12,12 +12,37 @@ impl RuntimeState {
         &mut self,
         requests: &[RuntimeIterationBatchRequest<'_>],
     ) -> Result<IterationBatchOutput> {
+        self.iteration_batch_with_readouts(requests, None)
+            .map(|(outputs, _)| outputs)
+    }
+
+    /// Execute an iteration batch with selected-token scores instead of sampling.
+    pub fn iteration_batch_scored(
+        &mut self,
+        requests: &[RuntimeIterationBatchRequest<'_>],
+        selections: &[&[i32]],
+    ) -> Result<(IterationBatchOutput, Vec<Vec<f32>>)> {
+        anyhow::ensure!(
+            requests.len() == selections.len(),
+            "readout request count mismatch"
+        );
+        self.iteration_batch_with_readouts(requests, Some(selections))
+    }
+
+    fn iteration_batch_with_readouts(
+        &mut self,
+        requests: &[RuntimeIterationBatchRequest<'_>],
+        selections: Option<&[&[i32]]>,
+    ) -> Result<(IterationBatchOutput, Vec<Vec<f32>>)> {
         self.completed_execution = None;
         if requests.is_empty() {
-            return Ok(IterationBatchOutput {
-                request_outputs: Vec::new(),
-                samples: Vec::new(),
-            });
+            return Ok((
+                IterationBatchOutput {
+                    request_outputs: Vec::new(),
+                    samples: Vec::new(),
+                },
+                Vec::new(),
+            ));
         }
         let mut unique = std::collections::BTreeSet::new();
         for request in requests {
@@ -65,7 +90,13 @@ impl RuntimeState {
                 .collect::<Vec<_>>();
             let before = self.model.execution_epoch();
             let started = Instant::now();
-            let result = StageSession::iteration_batch_sampled(&mut iteration_requests);
+            let result = match selections {
+                Some(selections) => {
+                    StageSession::iteration_batch_scored(&mut iteration_requests, selections)
+                }
+                None => StageSession::iteration_batch_sampled(&mut iteration_requests)
+                    .map(|outputs| (outputs, Vec::new())),
+            };
             let elapsed = started.elapsed();
             let after = self.model.execution_epoch();
             let mut work = super::execution_accounting::CompletedExecution {

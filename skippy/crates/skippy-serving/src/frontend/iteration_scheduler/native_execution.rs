@@ -33,12 +33,29 @@ impl SchedulerWorker {
                 request.reply.send(Err(error));
                 continue;
             }
+            if request.selected_tokens.is_some() && !runtime.model.supports_causal_readout() {
+                request.reply.send(Err(InferenceError::unsupported(
+                    "loaded stage does not support causal readouts",
+                )));
+                continue;
+            }
             let alignment = match request.target_token_count {
                 Some(target_token_count) => runtime
                     .align_session_to_token_count_if_ahead(&request.session_id, target_token_count),
                 None => Ok(None),
             };
             match alignment {
+                Ok(_)
+                    if request.selected_tokens.is_some()
+                        && runtime
+                            .session_token_count(&request.session_id)
+                            .unwrap_or(0)
+                            != request.target_token_count.unwrap_or(0) =>
+                {
+                    request.reply.send(Err(InferenceError::invalid_request(
+                        "decision readout position does not match session prefix",
+                    )));
+                }
                 Ok(alignment) => runnable.push((request, alignment)),
                 Err(error) => {
                     request.reply.send(Err(openai_backend_error(error)));
@@ -80,8 +97,12 @@ impl SchedulerWorker {
         {
             panic!("direct iteration batch panicked");
         }
+        let selections = runnable
+            .iter()
+            .map(|(request, _)| request.selected_tokens.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>();
         let result = runtime
-            .iteration_batch_sampled(&requests)
+            .iteration_batch_scored(&requests, &selections)
             .map_err(openai_backend_error);
         let hold = hold_started.elapsed();
         let runtime_lock_hold_ms = hold.as_secs_f64() * 1_000.0;
@@ -145,11 +166,22 @@ impl SchedulerWorker {
         }
 
         match result {
-            Ok(outputs) => {
+            Ok((outputs, scores)) => {
                 if outputs.request_outputs.len() != runnable.len() {
                     let error = InferenceError::backend(format!(
                         "scheduler iteration returned {} outputs for {} requests",
                         outputs.request_outputs.len(),
+                        runnable.len()
+                    ));
+                    for (request, _) in runnable {
+                        request.reply.send(Err(error.clone()));
+                    }
+                    return;
+                }
+                if scores.len() != runnable.len() {
+                    let error = InferenceError::backend(format!(
+                        "scheduler iteration returned {} score sets for {} requests",
+                        scores.len(),
                         runnable.len()
                     ));
                     for (request, _) in runnable {
@@ -181,14 +213,19 @@ impl SchedulerWorker {
                         return;
                     }
                 }
-                for ((((request, session_alignment), output), predicted), batch_wait_ms) in runnable
+                for (
+                    ((((request, session_alignment), output), predicted), batch_wait_ms),
+                    scores,
+                ) in runnable
                     .into_iter()
                     .zip(outputs.request_outputs)
                     .zip(predicted)
                     .zip(batch_wait_ms)
+                    .zip(scores)
                 {
                     request.reply.send(Ok(SchedulerIterationOutcome {
                         predicted: predicted.unwrap_or(-1),
+                        log_probabilities: scores,
                         output,
                         batch_size,
                         batch_wait_ms,

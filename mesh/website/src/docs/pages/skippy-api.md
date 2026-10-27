@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **20 headers** and **127 exported functions**.
+Current generated surface: **20 headers** and **128 exported functions**.
 
 ## Quick navigation
 
@@ -70,8 +70,9 @@ Current generated surface: **20 headers** and **127 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-execution-h"><code>execution.h</code><span>15 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-execution-h"><code>execution.h</code><span>16 functions</span></a>
       <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-model-supports-causal-readout"><code>skippy_model_supports_causal_readout</code></a>
         <a href="#skippy-fn-skippy-prefill-chunk"><code>skippy_prefill_chunk</code></a>
         <a href="#skippy-fn-skippy-verify-tokens"><code>skippy_verify_tokens</code></a>
         <a href="#skippy-fn-skippy-decode-step-sampled"><code>skippy_decode_step_sampled</code></a>
@@ -577,6 +578,16 @@ LLAMA_API void skippy_emit_unload_event(
 
 <a id="skippy-header-execution-h"></a>
 ### `execution.h`
+
+<a id="skippy-fn-skippy-model-supports-causal-readout"></a>
+#### `skippy_model_supports_causal_readout`
+
+Whether the loaded graph supports causal next-token score reads.
+
+```cpp
+LLAMA_API bool skippy_model_supports_causal_readout(
+        const struct skippy_model * model);
+```
 
 <a id="skippy-fn-skippy-prefill-chunk"></a>
 #### `skippy_prefill_chunk`
@@ -2124,7 +2135,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 74`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
-- `execution.h`: `skippy_iteration_request`
+- `execution.h`: `skippy_token_score_request`, `skippy_iteration_request`
 - `laya.h`: `skippy_laya_model`, `skippy_laya_qtype`, `skippy_laya_info_v1`, `skippy_laya_memory_v1`, `skippy_laya_sequence`, `SKIPPY_LAYA_INFO_V1_ABI_VERSION = 1`, `SKIPPY_LAYA_QTYPE_COUNT = 3`, `SKIPPY_LAYA_MEMORY_V1_ABI_VERSION = 1`, `SKIPPY_LAYA_MAX_SEQUENCE_TOKENS = 4096`
 - `logprobs.h`: `skippy_logprob_entry`, `skippy_token_logprobs`, `SKIPPY_MAX_TOP_LOGPROBS = 20`
 - `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_tensor_info`

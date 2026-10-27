@@ -34,6 +34,8 @@ message Envelope {
     PeerBlockResponse peer_block_response = 33;
     PluginKeyRequest plugin_key_request = 34;
     PluginKeyResponse plugin_key_response = 35;
+    PublishPluginStatusRequest publish_plugin_status_request = 36;
+    PublishPluginStatusResponse publish_plugin_status_response = 37;
   }
 }
 
@@ -199,6 +201,19 @@ message PluginManifest {
   repeated VirtualModelManifest virtual_models = 13;
   // Optional, additive generation-3 lifecycle contract. Declarations are not grants.
   optional OpenAiExchangeHookManifest openai_exchange_hook = 14;
+  // This plugin publishes a snapshot shown in `GET /api/status`; see
+  // `PublishPluginStatusRequest`. A host takes publications only from a plugin
+  // that declares this.
+  optional PluginStatusManifest plugin_status = 15;
+}
+
+message PluginStatusManifest {
+  // The version of the plugin's own snapshot schema, shown beside its data.
+  // At least 1.
+  uint32 schema_version = 1;
+  // Refuse to initialize on a host that does not list the `plugin_status.v1`
+  // capability, instead of running without a status contribution.
+  bool required = 2;
 }
 
 message VirtualModelManifest {
@@ -741,6 +756,29 @@ message PluginKeyResponse {
   string node_id = 1;
   // The binding signature announced with the key; empty after a withdrawal.
   bytes binding_signature = 2;
+}
+
+// A plugin publishes the snapshot that `GET /api/status` shows under
+// `plugins.<name>`, where `<name>` is the host's name for the plugin
+// connection, never a name the plugin claims. A later publication replaces it, and an empty `data_json`
+// withdraws it. The host keeps the latest one and owns its envelope: receipt
+// time and freshness. `/api/status` reads that copy and never calls the
+// plugin. Handled only by a host listing the `plugin_status.v1` capability,
+// for a plugin whose manifest declares `plugin_status`, from its current
+// connection.
+message PublishPluginStatusRequest {
+  // A JSON object, at most 16 KiB, in the plugin's own schema. Empty to withdraw.
+  string data_json = 1;
+  // How long the host shows the snapshot as `ready` before it turns `stale`.
+  // 0 means 60 s; the host keeps it between 1 s and 1 h.
+  uint64 fresh_for_ms = 2;
+}
+
+message PublishPluginStatusResponse {
+  // When the host accepted the snapshot, Unix milliseconds; 0 after a withdrawal.
+  uint64 received_at_unix_ms = 1;
+  // When it turns `stale`, Unix milliseconds; 0 after a withdrawal.
+  uint64 fresh_until_unix_ms = 2;
 }
 
 message ErrorResponse {

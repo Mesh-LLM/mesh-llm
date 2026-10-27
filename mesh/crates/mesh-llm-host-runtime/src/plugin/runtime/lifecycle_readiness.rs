@@ -34,6 +34,8 @@ impl ExternalPlugin {
         *self.server_info.lock().await = Some(server_info);
         *self.manifest.lock().await = init.manifest.clone();
         runtime.initialized_lifecycle = declaration;
+        runtime.status_declaration =
+            super::StatusDeclaration::from_manifest(init.manifest.as_ref());
         Ok(())
     }
 
