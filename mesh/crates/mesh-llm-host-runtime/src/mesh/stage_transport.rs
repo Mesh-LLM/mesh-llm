@@ -233,23 +233,54 @@ pub(crate) async fn wait_local_stage_control_response(
 }
 
 /// Whether `remote` may bridge a transport stream into the local stage named
-/// by `open`. Only nodes assigned to a stage of the same topology run qualify.
-/// Stage ids are visible to every mesh peer, so without this any peer could
-/// feed activations and decode steps into a stage it does not belong to.
+/// by `open`. Only the target stage's assigned predecessor (its coordinator
+/// for the first downstream stage) or, for stage 0, the final stage's owner
+/// whose predictions return to stage 0, may open a transport into that stage.
+/// Stage ids are visible to every mesh peer, so without the edge check any
+/// peer assigned to the run could feed activations and decode steps into a
+/// stage it does not belong to.
 pub(crate) fn stage_transport_allowed_by_topology<'a>(
     topologies: impl IntoIterator<Item = &'a StageTopologyInstance>,
     remote: EndpointId,
     open: &skippy_protocol::proto::stage::StageTransportOpen,
 ) -> bool {
     topologies.into_iter().any(|topology| {
-        topology.topology_id == open.topology_id
-            && topology.run_id == open.run_id
-            && topology
-                .stages
-                .iter()
-                .any(|stage| stage.stage_id == open.stage_id)
-            && topology.stages.iter().any(|stage| stage.node_id == remote)
+        if topology.topology_id != open.topology_id || topology.run_id != open.run_id {
+            return false;
+        }
+        topology
+            .stages
+            .iter()
+            .find(|stage| stage.stage_id == open.stage_id)
+            .is_some_and(|target| stage_transport_edge_allowed(topology, target, remote))
     })
+}
+
+/// The transport edges that may open a raw stream into `target`: the owner of
+/// the assigned predecessor stage and, for stage 0, the final stage's owner.
+fn stage_transport_edge_allowed(
+    topology: &StageTopologyInstance,
+    target: &StageAssignment,
+    remote: EndpointId,
+) -> bool {
+    let final_index = topology
+        .stages
+        .iter()
+        .map(|stage| stage.stage_index)
+        .max()
+        .unwrap_or(0);
+    let is_predecessor_owner = topology.stages.iter().any(|stage| {
+        stage.node_id == remote
+            && target.stage_index > 0
+            && stage.stage_index == target.stage_index - 1
+    });
+    let is_final_owner_returning = target.stage_index == 0
+        && final_index > 0
+        && topology
+            .stages
+            .iter()
+            .any(|stage| stage.node_id == remote && stage.stage_index == final_index);
+    is_predecessor_owner || is_final_owner_returning
 }
 
 pub(crate) fn artifact_transfer_allowed_by_topology(
@@ -1190,7 +1221,7 @@ impl Node {
             .insert(key, bind_addr.into());
     }
 
-    /// Whether `remote` belongs to the topology run of the stage `open` targets.
+    /// Whether `remote` holds a transport edge into the stage `open` targets.
     pub(crate) async fn stage_transport_allowed(
         &self,
         remote: EndpointId,
