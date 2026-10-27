@@ -519,6 +519,7 @@ if [[ "$LLAMA_STAGE_BUILD_TESTS" == "ON" ]]; then
     skippy-model-loader-accounting
     skippy-runtime-events-test
     skippy-sampling-history
+    skippy-selected-logits
     skippy-noalloc-graph-planning
     skippy-renamed-multishard-planning
     skippy-stage-slice-plan

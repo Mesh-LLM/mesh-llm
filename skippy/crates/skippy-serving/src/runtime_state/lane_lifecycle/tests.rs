@@ -57,13 +57,46 @@ fn dropping_an_absent_session_notifies_nothing() {
     );
 }
 
+/// Canvas execution is advertised only for a single unsplit runtime lane.
 #[test]
-fn system_one_advertisement_requires_a_single_unsplit_runtime_lane() {
-    assert!(system_one_endpoint_is_runnable(true, false, false, 1));
-    assert!(!system_one_endpoint_is_runnable(true, false, false, 4));
-    assert!(!system_one_endpoint_is_runnable(true, true, false, 1));
-    assert!(!system_one_endpoint_is_runnable(true, false, true, 1));
-    assert!(!system_one_endpoint_is_runnable(false, false, false, 1));
+fn canvas_advertisement_requires_a_single_unsplit_runtime_lane() {
+    assert!(system_one_endpoint_is_runnable(
+        true, false, false, false, 1
+    ));
+    assert!(!system_one_endpoint_is_runnable(
+        true, false, false, false, 4
+    ));
+    assert!(!system_one_endpoint_is_runnable(
+        true, false, true, false, 1
+    ));
+    assert!(!system_one_endpoint_is_runnable(
+        true, false, false, true, 1
+    ));
+    assert!(!system_one_endpoint_is_runnable(
+        false, false, false, false, 1
+    ));
+}
+
+/// Causal decisions require a live input-owning stage before advertisement.
+#[test]
+fn causal_advertisement_requires_a_live_ingress_stage() {
+    for lanes in [1, 4] {
+        assert!(system_one_endpoint_is_runnable(
+            false, true, false, false, lanes
+        ));
+        assert!(system_one_endpoint_is_runnable(
+            false, true, false, true, lanes
+        ));
+        assert!(!system_one_endpoint_is_runnable(
+            false, true, true, false, lanes
+        ));
+        assert!(!system_one_endpoint_is_runnable(
+            false, true, true, true, lanes
+        ));
+    }
+    assert!(!system_one_endpoint_is_runnable(
+        false, true, false, false, 0
+    ));
 }
 
 /// `drop_session_timed`'s real reset/discard branches require a

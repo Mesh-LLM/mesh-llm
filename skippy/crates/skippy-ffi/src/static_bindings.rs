@@ -117,6 +117,11 @@ unsafe extern "C" {
 
     pub fn skippy_model_llama_model(model: *const Model) -> *const Opaque;
 
+    /// Probe whether a live model can return unsampled causal next-token scores.
+    ///
+    /// `model` must be null or a valid Skippy model handle retained for this call.
+    pub fn skippy_model_supports_causal_readout(model: *const Model) -> bool;
+
     pub fn llama_model_is_recurrent(model: *const Opaque) -> bool;
 
     /// Borrow the vocabulary of a llama model.

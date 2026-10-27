@@ -184,6 +184,7 @@ pub(super) async fn load_split_runtime_generation(
     result
 }
 
+/// Load and register an elected split generation with its serving capabilities.
 pub(super) async fn load_split_runtime_generation_inner(
     spec: &SplitGenerationLoadSpec<'_>,
     cleanup_on_error: &mut bool,
@@ -335,11 +336,14 @@ pub(super) async fn load_split_runtime_generation_inner(
     });
     let http = handle.start_http(alloc_local_port().await?)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
-    let capabilities = models::runtime_verified_model_capabilities(
+    let mut capabilities = models::runtime_verified_model_capabilities(
         spec.model_ref,
         spec.model_path,
         media_capability_evidence,
     );
+    if handle.supports_system_one() {
+        capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
+    }
 
     spec.node
         .activate_stage_topology(split_stage_topology_instance(

@@ -636,6 +636,7 @@ mod tests {
         );
     }
 
+    /// Wait for a direct reply while retaining the bounded downstream fallback path.
     fn receive_direct_reply_one_of(
         reply_kind: WireReplyKind,
         expected_replies: &[WireReplyKind],
@@ -661,6 +662,7 @@ mod tests {
                         tokens: Vec::new(),
                         positions: Vec::new(),
                         activation: Vec::new(),
+                        readout_tokens: Vec::new(),
                         raw_bytes: Vec::new(),
                     },
                     direct_server,
@@ -673,6 +675,7 @@ mod tests {
                 kind: reply_kind,
                 predicted: 0,
                 predicted_tokens: Vec::new(),
+                log_probabilities: Vec::new(),
                 native_mtp_draft: None,
                 window: Default::default(),
                 stats: StageReplyStats::default(),
@@ -783,6 +786,7 @@ mod tests {
         assert!(started.elapsed() >= Duration::from_millis(100));
     }
 
+    /// A completed direct reply wakes its consumer without waiting for the fallback poll.
     #[test]
     fn direct_return_reply_wakes_the_wait_immediately() {
         // Far wider than the production 10ms fallback poll so an event-driven
@@ -816,6 +820,7 @@ mod tests {
                         kind: WireReplyKind::PredictedToken,
                         predicted: 5,
                         predicted_tokens: vec![5],
+                        log_probabilities: Vec::new(),
                         native_mtp_draft: None,
                         window: Default::default(),
                         stats: StageReplyStats::default(),
@@ -894,6 +899,7 @@ mod tests {
         assert_eq!(downstream.read_timeout().unwrap(), None);
     }
 
+    /// Fallback reply handling accepts a fragmented downstream message.
     #[test]
     fn direct_return_fallback_accepts_fragmented_downstream_reply() {
         use std::io::Write;
@@ -910,6 +916,7 @@ mod tests {
                 kind: WireReplyKind::PredictedTokens,
                 predicted: 0,
                 predicted_tokens: vec![17, 23],
+                log_probabilities: Vec::new(),
                 native_mtp_draft: None,
                 window: Default::default(),
                 stats: StageReplyStats::default(),

@@ -198,7 +198,9 @@ fn graph_release_selector_and_secret_hosts_keep_approved_effective_runner_author
     assert_eq!(input(selector, "ref"), Some("${{ github.ref }}"));
     assert_eq!(
         input(selector, "depot_main_enabled"),
-        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}")
+        // Rolling previews pass force_hosted_runners=true so main dispatches stay
+        // on GitHub-hosted runners, like tagged releases from release/* refs.
+        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' && inputs.force_hosted_runners != true }}")
     );
     assert_eq!(
         input(selector, "manual_use_depot"),

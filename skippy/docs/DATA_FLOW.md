@@ -40,18 +40,25 @@ activation links and then crossed three reply links before stage 0 could emit
 the token. On a topology with a fixed 10 ms delay per inter-stage hop, the reply
 chain alone makes the hot path six hops, or about 60 ms before compute.
 
-## Generation 10 Stage Admission and Verify Retirement
+## Current Stage Admission and Readout Transport
 
 Generation 7 introduced direct prediction return, and generation 9 added
-canonical stage-admission descriptors. Generation 10 is the current
+canonical stage-admission descriptors. Generation 12 is the current
 compatibility-breaking cutover: a peer is stage compatible only when it
-advertises both `skippy-stage/2` and the complete `stage-generation-11` bundle.
+advertises both `skippy-stage/2` and the complete `stage-generation-12` bundle.
 Every load carries a canonical admission descriptor. The ready response echoes
 that descriptor exactly before topology publication.
 Prediction-bearing messages return directly from the final/readout stage to the
 driver-facing stage. Intermediate stages
 continue to forward activations and may handle cold-path control acknowledgments,
 but they are not part of the decode-token prediction return path.
+
+Causal decision reads use a separate `PrefillReadout` request. Intermediate
+stages forward activations; the terminal stage reads the selected final-row
+log probabilities without sampling a token. Its bounded `TokenScores` reply
+returns along the ordered stage chain, with at most 256 scores and no
+vocabulary-sized logits. This path does not enter the decode-token loop or
+use the prediction-return channel. See [causal decisions](CAUSAL_DECISIONS.md).
 
 ```mermaid
 flowchart LR
@@ -85,9 +92,9 @@ compute. That removes two serialized reply hops from every generated token.
 
 ## Stale Verify-Window Discard
 
-Generation 10 adds the `DiscardStaleWindows` control frame (wire kind 23),
-which makes this generation compatibility-breaking: a pre-generation-11
-peer rejects the kind outright and drops the request connection.
+The `DiscardStaleWindows` control frame (wire kind 23) is part of the required
+current-generation capability bundle. Peers that do not implement it are
+excluded by the generation gate before joining the stage chain.
 
 Run-ahead admission dispatches verify windows before their predecessors are
 verified, so a rejection strands every window queued behind the divergence.
