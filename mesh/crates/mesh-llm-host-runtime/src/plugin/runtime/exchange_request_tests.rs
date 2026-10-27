@@ -20,6 +20,7 @@ async fn running_observer() -> (Arc<ExternalPlugin>, mpsc::Receiver<super::proto
     let (outbound_tx, outbound_rx) = mpsc::channel(4);
     *plugin.runtime.lock().await = Some(PluginRuntime {
         generation: 7,
+        started: true,
         authenticated_peer: true,
         initialized_lifecycle: Some(Box::new(
             mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe"),

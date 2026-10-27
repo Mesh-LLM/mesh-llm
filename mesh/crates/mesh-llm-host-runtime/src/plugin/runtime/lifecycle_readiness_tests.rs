@@ -28,6 +28,7 @@ async fn install_replacement(
     let (outbound_tx, outbound_rx) = mpsc::channel(4);
     *plugin.runtime.lock().await = Some(PluginRuntime {
         generation: 8,
+        started: true,
         authenticated_peer: authenticated,
         initialized_lifecycle: None,
         status_declaration: Default::default(),

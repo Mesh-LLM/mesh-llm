@@ -6,6 +6,7 @@ fn runtime_with(generation: u64, declaration: StatusDeclaration) -> PluginRuntim
     let (outbound_tx, _outbound_rx) = mpsc::channel(4);
     PluginRuntime {
         generation,
+        started: true,
         authenticated_peer: false,
         initialized_lifecycle: None,
         status_declaration: declaration,

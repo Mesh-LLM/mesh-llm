@@ -18,13 +18,21 @@ fn started_events(rx: &mut mpsc::Receiver<PluginMeshEvent>) -> Vec<String> {
 
 /// Answers `initialize`, then reads until the host closes the stream.
 fn initializing_runner() -> crate::plugin::InProcessPluginRunner {
-    Arc::new(|mut stream| {
+    gated_runner(Arc::new(tokio::sync::Semaphore::new(usize::MAX >> 4)))
+}
+
+/// [`initializing_runner`], answering each `initialize` only once `gate`
+/// gives it a permit.
+fn gated_runner(gate: Arc<tokio::sync::Semaphore>) -> crate::plugin::InProcessPluginRunner {
+    Arc::new(move |mut stream| {
+        let gate = gate.clone();
         Box::pin(async move {
             loop {
                 let incoming = mesh_llm_plugin::read_envelope(&mut stream).await?;
                 let Some(proto::envelope::Payload::InitializeRequest(_)) = incoming.payload else {
                     continue;
                 };
+                gate.acquire().await?.forget();
                 mesh_llm_plugin::write_envelope(
                     &mut stream,
                     &proto::Envelope {
@@ -54,6 +62,15 @@ async fn spawn_in_process(
     lazy_start: bool,
     mesh_tx: mpsc::Sender<PluginMeshEvent>,
 ) -> ExternalPlugin {
+    spawn_with_runner(name, lazy_start, mesh_tx, initializing_runner()).await
+}
+
+async fn spawn_with_runner(
+    name: &str,
+    lazy_start: bool,
+    mesh_tx: mpsc::Sender<PluginMeshEvent>,
+    runner: crate::plugin::InProcessPluginRunner,
+) -> ExternalPlugin {
     let runtime_data = RuntimeDataCollector::new();
     ExternalPlugin::spawn(
         &ExternalPluginSpec {
@@ -80,7 +97,7 @@ async fn spawn_in_process(
             plugin_data_key: None,
             plugin_endpoint_key: None,
         }),
-        Some(initializing_runner()),
+        Some(runner),
     )
     .await
     .expect("the plugin starts")
@@ -239,5 +256,64 @@ async fn a_start_event_the_node_cannot_take_yet_is_queued_later() {
     ));
     let (plugin_id, generation, _) = next_started(&mut mesh_rx).await;
     assert_eq!((plugin_id.as_str(), generation), ("eager", current));
+    plugin.shutdown().await;
+}
+
+/// A start whose caller is cancelled after its process was installed, but
+/// before the node sent it the mesh snapshot, leaves a process that never
+/// got this node's id. The next request does not use it: it stops that
+/// process and starts a whole one, which asks for the snapshot again.
+#[tokio::test]
+async fn a_start_cancelled_before_its_snapshot_is_not_served() {
+    let (mesh_tx, mut mesh_rx) = mpsc::channel(8);
+    let plugin = spawn_in_process("eager", false, mesh_tx).await;
+    plugin
+        .handle_runtime_failure(None, "plugin exited".into())
+        .await;
+
+    // Boxed, so dropping it cancels the start itself.
+    let mut start = Box::pin(plugin.ensure_running());
+    let (_, cancelled, _delivered) = tokio::select! {
+        started = &mut start => panic!("started before the node was told: {started:?}"),
+        event = next_started(&mut mesh_rx) => event,
+    };
+    drop(start);
+    assert_eq!(plugin.runtime_started().await, Some(false));
+
+    let (_, generation) = start_as_the_node_answers(&plugin, &mut mesh_rx).await;
+    assert_ne!(
+        generation, cancelled,
+        "a new process, not the unannounced one"
+    );
+    assert_eq!(plugin.runtime_started().await, Some(true));
+    plugin.shutdown().await;
+}
+
+/// The same for a start cancelled while its process was still initializing.
+#[tokio::test]
+async fn a_start_cancelled_during_initialize_is_not_served() {
+    let (mesh_tx, mut mesh_rx) = mpsc::channel(8);
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let plugin = spawn_with_runner("lazy", true, mesh_tx, gated_runner(gate.clone())).await;
+
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            plugin.ensure_running()
+        )
+        .await
+        .is_err(),
+        "initialize is held back"
+    );
+    assert_eq!(plugin.runtime_started().await, Some(false));
+    let (cancelled, _, _) = plugin.runtime_handles().await.expect("installed");
+
+    gate.add_permits(2);
+    let (_, generation) = start_as_the_node_answers(&plugin, &mut mesh_rx).await;
+    assert_ne!(
+        generation, cancelled,
+        "a new process, not the half-started one"
+    );
+    assert!(started_events(&mut mesh_rx).is_empty(), "one announcement");
     plugin.shutdown().await;
 }
