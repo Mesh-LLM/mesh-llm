@@ -3,9 +3,9 @@
 //!
 //! Two kinds are gossiped mesh-wide: the node record (the node's
 //! self-description) and its cache-affinity evidence. Both are relayed
-//! byte-for-byte. Unsigned announcements are still sent and applied so nodes
-//! that predate signed records keep interoperating; a usable signed record
-//! only takes precedence over the unsigned data sent alongside it.
+//! byte-for-byte. A signed genesis policy can require origin-signed relayed
+//! records. Existing meshes retain the legacy compatibility path until their
+//! operator explicitly creates a strict mesh.
 
 use super::{Node, PeerAnnouncement};
 use crate::mesh::requirements::current_time_unix_ms;
@@ -30,11 +30,19 @@ use std::collections::HashMap;
 
 type Announcement = (EndpointAddr, PeerAnnouncement);
 
+mod verification;
+pub(crate) use verification::VerificationGate;
+
 impl Node {
     pub(super) async fn collect_outbound_gossip(&self) -> OutboundGossip {
-        let announcements = self.collect_announcements().await;
+        let mut announcements = self.collect_announcements().await;
         let (signed_records, signed_cache_affinity) =
             self.collect_signed_records(&announcements).await;
+        if self.requires_signed_gossip().await {
+            // The direct entry retains merged demand, admission proof and
+            // plugin keys. Third-party descriptions travel only as signed bytes.
+            announcements.retain(|ann| ann.addr.id == self.id());
+        }
         OutboundGossip {
             announcements,
             signed_records,
@@ -91,45 +99,51 @@ impl Node {
         (node_records, cache_records)
     }
 
-    /// Turns a decoded frame into the announcements gossip applies.
-    ///
-    /// A node record that verifies and is current replaces the sender's
-    /// unsigned entry for the same node, and signed cache affinity replaces
-    /// the unsigned copy. Every other unsigned entry still applies, including
-    /// entries from nodes that predate signed records and the unsigned twin
-    /// of a record that was skipped. The sender's own unsigned entry is
-    /// always kept: the connection authenticates it and it carries
-    /// direct-only data (demand, admission proof) that records leave out.
+    pub(super) async fn requires_signed_gossip(&self) -> bool {
+        self.requirement_mesh_state.lock().await.as_ref().map_or(
+            self.local_mesh_requirements.require_signed_gossip,
+            |state| state.policy.requirements.require_signed_gossip,
+        )
+    }
+
+    /// Verify off the membership lock and commit against the current sequence.
+    /// Strict meshes accept unsigned data only from the authenticated origin.
     pub(super) async fn resolve_inbound_gossip(
         &self,
         remote: EndpointId,
-        inbound: InboundGossip,
+        mut inbound: InboundGossip,
     ) -> Vec<Announcement> {
+        let strict = self.requires_signed_gossip().await;
+        let record_count = inbound.signed_records.len();
+        let cache_count = inbound.signed_cache_affinity.len();
+        let prepared = self.prepare_gossip_records(remote, &mut inbound).await;
+        let verification_completed = prepared.is_some();
+        let prepared = prepared.unwrap_or_default();
         let local_id = self.endpoint.id();
-        let now = current_time_unix_ms();
         let (mut node_records, cache_affinity) = {
             let mut state = self.state.lock().await;
+            let now = current_time_unix_ms();
             let node_records = admit_node_records(
                 &mut state.node_records,
                 local_id,
                 remote,
-                &inbound.signed_records,
+                prepared.nodes,
                 now,
             );
             let cache_affinity = admit_cache_affinity(
                 &mut state.cache_affinity_records,
                 local_id,
                 remote,
-                &inbound.signed_cache_affinity,
+                prepared.caches,
                 now,
             );
             // A sender that no longer signs its own records (for example, it
             // was downgraded) is described only by its unsigned entry, so
             // stop relaying the records we hold for it.
-            if !node_records.sender_signed {
+            if !strict && verification_completed && !prepared.sender_node_record_present {
                 state.node_records.remove(&remote);
             }
-            if !cache_affinity.sender_signed {
+            if !strict && verification_completed && !prepared.sender_cache_record_present {
                 state.cache_affinity_records.remove(&remote);
             }
             (node_records, cache_affinity)
@@ -137,6 +151,7 @@ impl Node {
         let unsigned_received = inbound.announcements.len();
         let mut announcements = merge_unsigned(
             remote,
+            strict,
             inbound.announcements,
             &mut node_records.replacements,
         );
@@ -146,9 +161,9 @@ impl Node {
         apply_signed_cache_affinity(&mut announcements, &cache_affinity.advertisements);
         tracing::debug!(
             sender = %remote.fmt_short(),
-            records = inbound.signed_records.len(),
+            records = record_count,
             relayed_records_applied,
-            cache_affinity_records = inbound.signed_cache_affinity.len(),
+            cache_affinity_records = cache_count,
             cache_affinity_applied = cache_affinity.advertisements.len(),
             unsigned_received,
             unsigned_applied,
@@ -181,11 +196,15 @@ fn cache_affinity_wire(record: &VerifiedRecord) -> SignedCacheAffinity {
 /// announcement, for senders that do not sign cache affinity.
 fn merge_unsigned(
     remote: EndpointId,
+    strict: bool,
     unsigned: Vec<Announcement>,
     replacements: &mut HashMap<EndpointId, Announcement>,
 ) -> Vec<Announcement> {
     let mut kept = Vec::with_capacity(unsigned.len());
     for (addr, ann) in unsigned {
+        if strict && addr.id != remote {
+            continue;
+        }
         match replacements.get_mut(&addr.id) {
             Some((_, from_record)) if addr.id != remote => {
                 from_record.cache_affinity = ann.cache_affinity;
@@ -211,8 +230,6 @@ fn apply_signed_cache_affinity(
 }
 
 struct AdmittedNodeRecords {
-    /// Whether the frame carried a record naming the sender itself.
-    sender_signed: bool,
     /// Announcements rebuilt from accepted records about nodes other than
     /// the sender. Each replaces the frame's unsigned entry for that node.
     replacements: HashMap<EndpointId, Announcement>,
@@ -222,46 +239,36 @@ fn admit_node_records(
     held: &mut HeldRecords,
     local_id: EndpointId,
     remote: EndpointId,
-    records: &[SignedNodeRecord],
+    records: Vec<verification::PreparedNode>,
     now: u64,
 ) -> AdmittedNodeRecords {
     let mut admitted = AdmittedNodeRecords {
-        sender_signed: false,
         replacements: HashMap::new(),
     };
     for wire in records {
-        let admission = held.admit(
-            local_id,
-            remote,
-            &wire.signed,
-            &wire.signature,
-            now,
-            decode_node_record,
-        );
+        let admission = held.admit_verified(local_id, remote, wire.record, wire.body, now);
         match admission {
-            Ok(RecordAdmission::Accepted { record, body }) => {
+            RecordAdmission::Accepted { record, body } => {
                 let id = record.endpoint_id();
-                if id == remote {
-                    admitted.sender_signed = true;
-                } else if let Some(entry) = relayed_record_announcement(remote, id, &body, wire) {
+                if id != remote
+                    && let Some(entry) =
+                        relayed_record_announcement(remote, id, &body, wire.hop.as_ref())
+                {
                     admitted.replacements.insert(id, entry);
                 }
             }
-            Ok(RecordAdmission::Skipped {
+            RecordAdmission::Skipped {
                 endpoint_id,
                 reason,
-            }) => {
-                admitted.sender_signed |= endpoint_id == remote;
+            } => {
                 log_skipped_record("node record", remote, endpoint_id, reason);
             }
-            Err(error) => log_malformed_record("node record", remote, error),
         }
     }
     admitted
 }
 
 struct AdmittedCacheAffinity {
-    sender_signed: bool,
     advertisements: HashMap<EndpointId, CacheAffinityAdvertisement>,
 }
 
@@ -269,36 +276,25 @@ fn admit_cache_affinity(
     held: &mut HeldRecords,
     local_id: EndpointId,
     remote: EndpointId,
-    records: &[SignedCacheAffinity],
+    records: Vec<(VerifiedRecord, CacheAffinityAdvertisement)>,
     now: u64,
 ) -> AdmittedCacheAffinity {
     let mut admitted = AdmittedCacheAffinity {
-        sender_signed: false,
         advertisements: HashMap::new(),
     };
-    for wire in records {
-        let admission = held.admit(
-            local_id,
-            remote,
-            &wire.signed,
-            &wire.signature,
-            now,
-            decode_cache_affinity,
-        );
+    for (record, body) in records {
+        let admission = held.admit_verified(local_id, remote, record, body, now);
         match admission {
-            Ok(RecordAdmission::Accepted { record, body }) => {
+            RecordAdmission::Accepted { record, body } => {
                 let id = record.endpoint_id();
-                admitted.sender_signed |= id == remote;
                 admitted.advertisements.insert(id, body);
             }
-            Ok(RecordAdmission::Skipped {
+            RecordAdmission::Skipped {
                 endpoint_id,
                 reason,
-            }) => {
-                admitted.sender_signed |= endpoint_id == remote;
+            } => {
                 log_skipped_record("cache affinity", remote, endpoint_id, reason);
             }
-            Err(error) => log_malformed_record("cache affinity", remote, error),
         }
     }
     admitted
@@ -320,9 +316,9 @@ fn relayed_record_announcement(
     remote: EndpointId,
     id: EndpointId,
     body: &NodeRecord,
-    wire: &SignedNodeRecord,
+    hop: Option<&crate::proto::node::HopObservation>,
 ) -> Option<Announcement> {
-    let entry = node_record_to_local(id, body, wire.hop.as_ref());
+    let entry = node_record_to_local(id, body, hop);
     if entry.is_none() {
         tracing::debug!(
             peer = %id.fmt_short(),

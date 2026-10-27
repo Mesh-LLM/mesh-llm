@@ -28,6 +28,9 @@ mod setup_tests;
 mod speculative_tests;
 
 #[cfg(test)]
+mod signed_gossip_tests;
+
+#[cfg(test)]
 mod uninstall_tests;
 
 #[cfg(test)]

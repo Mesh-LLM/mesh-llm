@@ -71,6 +71,53 @@ async fn peer_ids(node: &Node) -> HashSet<EndpointId> {
     node.peers().await.into_iter().map(|peer| peer.id).collect()
 }
 
+#[tokio::test]
+async fn gossip_verification_work_is_isolated_between_memberships() -> Result<()> {
+    use crate::protocol::InboundGossip;
+
+    let owner = test_owner_keypair(0x51, 0x52);
+    let node = owned_node(&owner, &[&owner]).await?;
+    let busy = named_membership_of(&node, "busy", &[&owner]).await?;
+    let other = named_membership_of(&node, "other", &[&owner]).await?;
+    let sender = make_test_node(super::super::NodeRole::Worker).await?;
+    let record = sender
+        .collect_outbound_gossip()
+        .await
+        .signed_records
+        .remove(0);
+    let frame = |records| InboundGossip {
+        announcements: Vec::new(),
+        signed_records: records,
+        signed_cache_affinity: Vec::new(),
+    };
+
+    // Invalid records still consume the authenticated sender's work quota.
+    // Keep this below the frame byte limit and avoid expensive cryptography.
+    let mut invalid = record.clone();
+    invalid.signed.clear();
+    assert!(
+        busy.prepare_gossip_records(sender.id(), &mut frame(vec![invalid; 4096]))
+            .await
+            .is_some()
+    );
+    assert!(
+        busy.prepare_gossip_records(sender.id(), &mut frame(vec![record.clone()]))
+            .await
+            .is_none()
+    );
+    for independent in [&node, &other] {
+        let prepared = independent
+            .prepare_gossip_records(sender.id(), &mut frame(vec![record.clone()]))
+            .await
+            .expect("another mesh must retain its verification allowance");
+        assert_eq!(prepared.nodes.len(), 1);
+    }
+    node.close_memberships().await;
+    node.close_endpoint().await;
+    sender.close_endpoint().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_membership_keeps_its_peers_apart_from_the_nodes_own() -> Result<()> {
     let me = test_owner_keypair(0x51, 0x52);
@@ -270,6 +317,15 @@ async fn a_membership_refuses_a_peer_announcing_another_mesh() -> Result<()> {
     let _ = elsewhere.join(&membership.invite_token().await).await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert!(!peer_ids(&membership).await.contains(&elsewhere.id()));
+    assert!(
+        !membership
+            .state
+            .lock()
+            .await
+            .node_records
+            .contains(&elsewhere.id()),
+        "a rejected mesh must not seed the membership's signed records"
+    );
 
     // A node not yet in any mesh is welcome, and adopts this one.
     let newcomer = owned_node(&me, &[&me]).await?;

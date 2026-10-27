@@ -2,6 +2,19 @@ use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[test]
+fn signed_gossip_runtime_requirement_reaches_genesis_creation() {
+    let options = RuntimeOptions {
+        require_signed_gossip: true,
+        ..Default::default()
+    };
+    let state =
+        resolve_startup_mesh_creation_state(&options, &crate::plugin::MeshConfig::default())
+            .unwrap();
+    assert!(state.requirements.require_signed_gossip);
+    assert!(!state.requirements.is_unrestricted());
+}
+
+#[test]
 fn parser_mode_runtime_events_maps_every_config_mode() {
     use mesh_llm_config::LifecycleLogParserMode;
     use skippy_runtime::NativeLogParserMode;

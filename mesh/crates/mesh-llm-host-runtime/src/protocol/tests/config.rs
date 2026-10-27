@@ -281,6 +281,7 @@ pub(crate) fn mesh_requirements_survive_owner_control_config_round_trip() {
         version: Some(1),
         gpu: Default::default(),
         mesh_requirements: MeshRequirementsConfig {
+            require_signed_gossip: true,
             min_node_version: Some("0.65.0".to_string()),
             max_node_version: Some("0.66.0".to_string()),
             min_protocol_version: Some(1),

@@ -100,6 +100,7 @@ pub(crate) fn mesh_requirements_config_to_runtime(
     config: &MeshRequirementsConfig,
 ) -> MeshRequirements {
     MeshRequirements {
+        require_signed_gossip: config.require_signed_gossip,
         node_version: NodeVersionBounds {
             min: config.min_node_version.clone(),
             max: config.max_node_version.clone(),
@@ -119,6 +120,7 @@ pub(crate) fn mesh_requirements_config_from_runtime(
     requirements: &MeshRequirements,
 ) -> MeshRequirementsConfig {
     MeshRequirementsConfig {
+        require_signed_gossip: requirements.require_signed_gossip,
         min_node_version: requirements.node_version.min.clone(),
         max_node_version: requirements.node_version.max.clone(),
         min_protocol_version: requirements.protocol_generation.min,

@@ -2,6 +2,16 @@ use crate::protocol::InboundGossip;
 use mesh_llm_membership::signed_record::{CACHE_AFFINITY_RECORD, NODE_RECORD, VerifiedRecord};
 use prost::Message;
 
+mod strict_policy {
+    use super::*;
+    include!("strict_signed_records.rs");
+}
+
+mod compatibility {
+    use super::*;
+    include!("signed_record_compatibility.rs");
+}
+
 fn signing_key(seed: u8) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
 }
@@ -210,13 +220,15 @@ async fn relayed_record_is_applied_and_forwarded_byte_for_byte() {
 async fn record_replaces_its_unsigned_twin_but_keeps_its_cache_affinity() {
     let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
     let mut twin = unsigned_worker(0x61, "relay-view-model");
-    twin.1.cache_affinity = Some(mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
-        salt: [3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES],
-        epoch: 7,
-        generated_at_unix_ms: current_time_unix_ms(),
-        ttl_ms: 120_000,
-        entries: Vec::new(),
-    });
+    twin.1.cache_affinity = Some(
+        mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
+            salt: [3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES],
+            epoch: 7,
+            generated_at_unix_ms: current_time_unix_ms(),
+            ttl_ms: 120_000,
+            entries: Vec::new(),
+        },
+    );
 
     receive(
         &node,
@@ -227,10 +239,15 @@ async fn record_replaces_its_unsigned_twin_but_keeps_its_cache_affinity() {
     .await;
 
     let state = node.state.lock().await;
-    let peer = state.peers.get(&test_endpoint_id(0x61)).expect("peer added");
+    let peer = state
+        .peers
+        .get(&test_endpoint_id(0x61))
+        .expect("peer added");
     assert_eq!(peer.serving_models, vec!["signed-model".to_string()]);
     assert_eq!(
-        peer.cache_affinity.as_ref().map(|advertisement| advertisement.epoch),
+        peer.cache_affinity
+            .as_ref()
+            .map(|advertisement| advertisement.epoch),
         Some(7)
     );
 }
@@ -247,7 +264,13 @@ async fn unsigned_announcements_from_older_relays_still_apply() {
     .await;
 
     // A relay that predates signed records only sends unsigned entries.
-    let resolved = receive(&node, 0x63, vec![unsigned_worker(0x61, "unsigned-model")], Vec::new()).await;
+    let resolved = receive(
+        &node,
+        0x63,
+        vec![unsigned_worker(0x61, "unsigned-model")],
+        Vec::new(),
+    )
+    .await;
 
     assert!(ids(&resolved).contains(&test_endpoint_id(0x61)));
     assert_eq!(
@@ -315,7 +338,13 @@ async fn forged_record_is_dropped_and_its_unsigned_twin_applies() {
 async fn unsigned_announcements_still_work_for_nodes_without_records() {
     let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
 
-    let resolved = receive(&node, 0x62, vec![unsigned_worker(0x64, "legacy-model")], Vec::new()).await;
+    let resolved = receive(
+        &node,
+        0x62,
+        vec![unsigned_worker(0x64, "legacy-model")],
+        Vec::new(),
+    )
+    .await;
 
     assert!(ids(&resolved).contains(&test_endpoint_id(0x64)));
     assert_eq!(

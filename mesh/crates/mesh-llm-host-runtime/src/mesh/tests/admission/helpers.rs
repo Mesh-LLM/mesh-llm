@@ -203,6 +203,7 @@ pub(super) fn requirement_policy(trusted_signer: &str) -> crate::MeshGenesisPoli
         requirement_policy_owner().owner_id(),
         1_717_171_717_000,
         crate::MeshRequirements {
+            require_signed_gossip: false,
             node_version: crate::NodeVersionBounds::default(),
             protocol_generation: crate::ProtocolGenerationBounds {
                 min: Some(NODE_PROTOCOL_GENERATION),
@@ -222,6 +223,7 @@ pub(super) fn requirement_policy_without_release_attestation() -> crate::MeshGen
         requirement_policy_owner().owner_id(),
         1_717_171_717_000,
         crate::MeshRequirements {
+            require_signed_gossip: false,
             node_version: crate::NodeVersionBounds::default(),
             protocol_generation: crate::ProtocolGenerationBounds {
                 min: Some(NODE_PROTOCOL_GENERATION),

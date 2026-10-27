@@ -56,6 +56,7 @@ pub(super) fn validate_local_model_only_options(options: &RuntimeOptions) -> Res
             && options.min_protocol_version.is_none()
             && options.max_protocol_version.is_none()
             && !options.require_release_attestation
+            && !options.require_signed_gossip
             && options.release_signer_key.is_empty(),
         "--local-model-only does not accept mesh admission options"
     );

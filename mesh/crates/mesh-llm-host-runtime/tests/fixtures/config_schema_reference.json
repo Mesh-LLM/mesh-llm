@@ -433,6 +433,37 @@
       }
     },
     {
+      "canonical_path": "mesh_requirements.require_signed_gossip",
+      "owner": "built_in",
+      "source": {
+        "kind": "built_in"
+      },
+      "value_schema": {
+        "kind": "boolean"
+      },
+      "support": "supported",
+      "control_surfaces": [
+        "config_file"
+      ],
+      "apply_mode": "static_on_load",
+      "restart_scope": "process_restart",
+      "visibility": "user",
+      "description": "Require origin-signed records for relayed peers in a newly created mesh. Joining peers inherit the signed genesis policy; older versions cannot join a strict mesh.",
+      "presentation": {
+        "label": "Require signed peer gossip",
+        "help": "Require origin-signed records for relayed peers in a newly created mesh. Joining peers inherit the signed genesis policy; older versions cannot join a strict mesh.",
+        "category_id": "attestation",
+        "category_label": "Attestation",
+        "category_summary": "Creation-time peer admission and signed-gossip requirements",
+        "category_order": 30,
+        "setting_order": 55,
+        "control_hint": "toggle"
+      },
+      "control_behavior": {
+        "options_source": "static"
+      }
+    },
+    {
       "canonical_path": "models.<model-ref>.hardware.device",
       "owner": "built_in",
       "source": {
