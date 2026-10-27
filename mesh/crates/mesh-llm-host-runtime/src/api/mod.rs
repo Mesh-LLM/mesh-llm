@@ -56,6 +56,7 @@ mod management_lifecycle;
 mod model_target_capacity;
 mod model_targets;
 mod network_diagnostics;
+pub(crate) mod owner_control_token;
 pub(crate) mod routes;
 mod server;
 mod split_readiness;
@@ -269,6 +270,7 @@ impl MeshApi {
                 runtime_control: None,
                 control_bootstrap: state::ControlBootstrapPayload::default(),
                 owner_key_path,
+                owner_control_token: None,
                 local_processes: Vec::new(),
                 sse_clients: Vec::new(),
                 model_interests: std::collections::HashMap::new(),
@@ -460,6 +462,17 @@ impl MeshApi {
     #[cfg(test)]
     pub(crate) async fn set_owner_key_path(&self, owner_key_path: Option<std::path::PathBuf>) {
         self.inner.lock().await.owner_key_path = owner_key_path;
+    }
+
+    pub(crate) async fn owner_control_token(&self) -> Option<zeroize::Zeroizing<String>> {
+        self.inner.lock().await.owner_control_token.clone()
+    }
+
+    pub(crate) async fn set_owner_control_token(
+        &self,
+        owner_control_token: Option<zeroize::Zeroizing<String>>,
+    ) {
+        self.inner.lock().await.owner_control_token = owner_control_token;
     }
 
     pub(crate) async fn status_snapshot_string(&self) -> String {

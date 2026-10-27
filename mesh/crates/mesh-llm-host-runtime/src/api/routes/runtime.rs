@@ -54,7 +54,13 @@ pub(super) async fn handle(
     method: &str,
     path_only: &str,
     body: &str,
+    raw_request: &[u8],
 ) -> anyhow::Result<()> {
+    if requires_owner_control_credential(method, path_only)
+        && !ensure_owner_control_caller(stream, state, raw_request).await?
+    {
+        return Ok(());
+    }
     match method {
         "GET" => handle_get(stream, state, path_only).await,
         "POST" => handle_post(stream, state, path_only, body).await,
@@ -62,6 +68,31 @@ pub(super) async fn handle(
         "DELETE" => handle_delete(stream, state, path_only, body).await,
         _ => Ok(()),
     }
+}
+
+/// Owner-control routes make the host act as the owner on the caller's
+/// behalf, so they require the owner-control bearer credential on top of
+/// loopback reachability. Reads that expose no secret material (bootstrap,
+/// schema, control-state, validate, kv-cache status) stay loopback-only.
+fn requires_owner_control_credential(method: &str, path_only: &str) -> bool {
+    matches!(
+        (method, path_only),
+        ("POST", "/api/runtime/control/get-config")
+            | ("POST", "/api/runtime/control/scan-refresh")
+            | ("POST", "/api/runtime/control/refresh-inventory")
+            | ("POST", "/api/runtime/control/apply-config")
+            | ("POST", "/api/runtime/control/kv-cache")
+            | ("POST", "/api/runtime/control/load-model")
+            | ("POST", "/api/runtime/control/unload-model")
+            | ("POST", "/api/runtime/control/ensure-model")
+            | ("POST", "/api/runtime/control/drain-model")
+            | ("POST", "/api/runtime/models")
+            | ("POST", "/api/runtime/kv-cache/prune")
+            | ("POST", "/api/runtime/mesh-guardrails")
+            | ("DELETE", "/api/runtime/kv-cache")
+    ) || (method == "DELETE"
+        && (path_only.starts_with("/api/runtime/models/")
+            || path_only.starts_with("/api/runtime/instances/")))
 }
 
 async fn handle_get(
@@ -84,6 +115,9 @@ async fn handle_get(
         }
         "/api/runtime/kv-cache" => super::kv_cache::handle_status(stream).await,
         "/api/runtime/control-bootstrap" => handle_control_bootstrap(stream, state).await,
+        "/api/runtime/control/owner-control-token" => {
+            handle_owner_control_token(stream, state).await
+        }
         "/api/runtime/intents" => handle_get_intents(stream, state).await,
         "/api/runtime/activity" => super::runtime_activity::handle_get(stream, state).await,
         "/api/events" => handle_events(stream, state).await,
@@ -1017,6 +1051,55 @@ pub(crate) async fn ensure_loopback_control_caller_for_peer_addr(
 
 fn is_loopback_control_caller(addr: SocketAddr) -> bool {
     addr.ip().is_loopback()
+}
+
+/// Loopback reachability is not owner identity: an owner-control route also
+/// requires the host's owner-control bearer credential. A caller without it
+/// is rejected before the host signs any owner-control traffic on its
+/// behalf, and the host fails closed when no token is configured.
+async fn ensure_owner_control_caller(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    raw_request: &[u8],
+) -> anyhow::Result<bool> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(false);
+    }
+    let presented = mesh_llm_control_api::access::request_authorization_bearer(raw_request)
+        .map_err(|_| anyhow::anyhow!("invalid owner-control credential header"))?
+        .unwrap_or_default();
+    if let Some(expected) = state.owner_control_token().await
+        && crate::api::owner_control_token::owner_control_tokens_match(&expected, presented)
+    {
+        return Ok(true);
+    }
+    tracing::warn!("owner control: rejected loopback caller without owner-control credential");
+    respond_json(
+        stream,
+        401,
+        &serde_json::json!({"error": "owner control credential required"}),
+    )
+    .await?;
+    Ok(false)
+}
+
+async fn handle_owner_control_token(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+    match state.owner_control_token().await {
+        Some(token) => {
+            respond_json(stream, 200, &serde_json::json!({"token": token.as_str()})).await
+        }
+        None => {
+            respond_json(
+                stream,
+                503,
+                &serde_json::json!({"error": "owner control credential is not configured"}),
+            )
+            .await
+        }
+    }
 }
 
 fn local_control_snapshot_payload(
