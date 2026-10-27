@@ -264,17 +264,26 @@ const PLUGIN_REPOSITORY_SUFFIX: &str = "-plugin";
 /// when no asset matches the repository name we retry once with that suffix
 /// removed. A repository that does publish `<repo>-*` assets keeps its name as
 /// the identity, so existing plugins are unaffected.
+///
+/// `allow_repository_alias` is false when the identity is already recorded in
+/// the store: an update must not resolve its plugin to a different name, which
+/// would write a second record and leave the original installation in place
+/// under the name configuration still refers to.
 fn select_install_asset(
     requested_name: &str,
     version: &PluginVersion,
     target: &PluginTarget,
     asset_names: &[String],
+    allow_repository_alias: bool,
 ) -> Result<(String, PluginAsset)> {
     let requested = select_plugin_asset(requested_name, Some(version), target, asset_names);
     let requested_error = match requested {
         Ok(asset) => return Ok((requested_name.to_string(), asset)),
         Err(error) => error,
     };
+    if !allow_repository_alias {
+        return Err(requested_error);
+    }
     let Some(identity) = requested_name.strip_suffix(PLUGIN_REPOSITORY_SUFFIX) else {
         return Err(requested_error);
     };
@@ -350,6 +359,7 @@ async fn install_resolved_plugin(
         &PluginVersion::new(release.tag_name.clone())?,
         &options.target,
         &asset_names,
+        current.is_none(),
     )?;
     resolved.plugin_name = plugin_name;
     let asset = release
@@ -967,6 +977,33 @@ mod tests {
     }
 
     #[test]
+    fn an_update_never_resolves_a_different_identity() {
+        let target = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
+        let version = PluginVersion::new("v0.2.0").unwrap();
+        // `foo-plugin` was installed from a release that published
+        // `foo-plugin-*`; the new release publishes `foo-*` only.
+        let assets = asset_names(&["foo-v0.2.0-x86_64-unknown-linux-gnu.tar.gz"]);
+
+        let error =
+            select_install_asset("foo-plugin", &version, &target, &assets, false).unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("foo-plugin"), "{message}");
+    }
+
+    #[test]
+    fn a_fresh_install_may_resolve_the_repository_alias() {
+        let target = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
+        let version = PluginVersion::new("v0.2.0").unwrap();
+        let assets = asset_names(&["foo-v0.2.0-x86_64-unknown-linux-gnu.tar.gz"]);
+
+        let (identity, _) =
+            select_install_asset("foo-plugin", &version, &target, &assets, true).unwrap();
+
+        assert_eq!(identity, "foo");
+    }
+
+    #[test]
     fn a_plugin_repository_suffix_is_not_part_of_the_installed_identity() {
         let target = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
         let version = PluginVersion::new("v0.1.0").unwrap();
@@ -977,7 +1014,7 @@ mod tests {
         ]);
 
         let (identity, asset) =
-            select_install_asset("agents-plugin", &version, &target, &assets).unwrap();
+            select_install_asset("agents-plugin", &version, &target, &assets, true).unwrap();
 
         assert_eq!(identity, "agents");
         assert_eq!(asset.name, "agents-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
@@ -993,7 +1030,7 @@ mod tests {
         ]);
 
         let (identity, asset) =
-            select_install_asset("cool-plugin", &version, &target, &assets).unwrap();
+            select_install_asset("cool-plugin", &version, &target, &assets, true).unwrap();
 
         assert_eq!(identity, "cool-plugin");
         assert_eq!(
@@ -1009,7 +1046,7 @@ mod tests {
         let assets = asset_names(&["metrics-v0.1.0-x86_64-unknown-linux-gnu.tar.gz"]);
 
         let (identity, asset) =
-            select_install_asset("metrics", &version, &target, &assets).unwrap();
+            select_install_asset("metrics", &version, &target, &assets, true).unwrap();
 
         assert_eq!(identity, "metrics");
         assert_eq!(asset.name, "metrics-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
@@ -1021,7 +1058,8 @@ mod tests {
         let version = PluginVersion::new("v0.1.0").unwrap();
         let assets = asset_names(&["something-else-v0.1.0-x86_64-unknown-linux-gnu.tar.gz"]);
 
-        let error = select_install_asset("missing-plugin", &version, &target, &assets).unwrap_err();
+        let error =
+            select_install_asset("missing-plugin", &version, &target, &assets, true).unwrap_err();
 
         let message = error.to_string();
         assert!(message.contains("missing-plugin"), "{message}");
