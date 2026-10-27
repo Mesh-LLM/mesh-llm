@@ -115,7 +115,7 @@ The adjudicator publishes, per model:
     above needs either an allowed `HMAC-SHA-256` algorithm with a key id or a
     sibling field.
   - adjudication/v1 has no citation slot for the calibration-summary/v1 and
-    sample-manifest/v1 records its threshold comes from, so the mapping needs a
+    sample-manifest/v1 records behind its threshold, so the mapping needs a
     digest citation or a wrapper.
   - The corpus commitment needs a fixed encoding.
 
