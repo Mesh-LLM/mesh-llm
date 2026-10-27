@@ -316,7 +316,7 @@ confirmation or disposition comment.
 | 28 | [#2352](https://github.com/Mesh-LLM/mesh-llm/issues/2352) | FIXED | `fix/27-2352-papercuts` | [#2619](https://github.com/Mesh-LLM/mesh-llm/pull/2619) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2352#issuecomment-6425300831) |
 | 29 | [#2508](https://github.com/Mesh-LLM/mesh-llm/issues/2508) | NOT-REPRODUCIBLE | — | — | [disposition](https://github.com/Mesh-LLM/mesh-llm/issues/2508#issuecomment-6427982348) |
 | 30 | [#2217](https://github.com/Mesh-LLM/mesh-llm/issues/2217) | CONFIRMED | `fix/30-2217-stage-control-coordinator-auth` | [#2621](https://github.com/Mesh-LLM/mesh-llm/pull/2621) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2217#issuecomment-6428331830) |
-| 31 | [#2218](https://github.com/Mesh-LLM/mesh-llm/issues/2218) | CONFIRMED | `fix/31-2218-stage-transport-budgets` | [#2622](https://github.com/Mesh-LLM/mesh-llm/pull/2622) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2218#issuecomment-6428881530) |
+| 31 | [#2218](https://github.com/Mesh-LLM/mesh-llm/issues/2218) | FIXED | `fix/31-2218-stage-transport-budgets` | [#2622](https://github.com/Mesh-LLM/mesh-llm/pull/2622) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2218#issuecomment-6428881530) |
 | 32 | [#2206](https://github.com/Mesh-LLM/mesh-llm/issues/2206) | CONFIRMED | `fix/32-2206-inference-connection-bounds` | [#2624](https://github.com/Mesh-LLM/mesh-llm/pull/2624) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2206#issuecomment-6429715273) |
 | 33 | [#2207](https://github.com/Mesh-LLM/mesh-llm/issues/2207) | TODO | — | — | — |
 | 34 | [#2208](https://github.com/Mesh-LLM/mesh-llm/issues/2208) | TODO | — | — | — |
