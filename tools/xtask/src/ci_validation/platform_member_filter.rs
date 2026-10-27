@@ -133,7 +133,7 @@ fn referenced_step_id(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_source, PLATFORM_SLICE};
+    use super::{PLATFORM_SLICE, check_source};
     use crate::repo_consistency::repo_root;
     use std::fs;
 
