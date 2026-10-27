@@ -96,6 +96,15 @@ pub(in crate::frontend) struct PrefillTurn<'a> {
 }
 
 impl PrefillTurn<'_> {
+    pub(in crate::frontend) fn admitted_count(&self) -> usize {
+        self.admission
+            .waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+            .min(self.admission.active_limit)
+    }
+
     /// Rotate only when another prompt is waiting. The scheduler owns every
     /// native iteration, so allocator mutations remain serial while prompts
     /// share the same KV stream.
@@ -194,6 +203,7 @@ mod tests {
     fn two_admitted_prefills_rotate_before_a_third_waiter() {
         let admission = PrefillAdmission::new(2);
         let mut first = admission.acquire(deadline(), None).unwrap();
+        assert_eq!(first.admitted_count(), 1);
         let (entered, events) = mpsc::channel();
         let (release_second, second_released) = mpsc::channel();
         std::thread::scope(|scope| {
@@ -210,6 +220,7 @@ mod tests {
                 events.recv_timeout(Duration::from_secs(5)).unwrap(),
                 "second"
             );
+            assert_eq!(first.admitted_count(), 2);
             scope.spawn(move || {
                 let _third = admission.acquire(deadline(), None).unwrap();
                 entered.send("third").unwrap();

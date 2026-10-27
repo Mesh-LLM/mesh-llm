@@ -11,6 +11,7 @@ fn suffix_chunk_tokens(
     exports_activations: bool,
     n_batch: Option<u32>,
     n_ubatch: Option<u32>,
+    admitted_prefills: usize,
 ) -> usize {
     let batch = usize::try_from(n_batch.unwrap_or(2048))
         .unwrap_or(MAX_NATIVE_ITERATION_TOKENS)
@@ -21,20 +22,15 @@ fn suffix_chunk_tokens(
         // one microbatch at a time adds an unnecessary synchronization boundary.
         return batch;
     }
+    let per_prefill_budget = if exports_activations {
+        batch
+    } else {
+        batch / admitted_prefills.max(1)
+    };
     usize::try_from(n_ubatch.unwrap_or(256))
         .unwrap_or(batch)
         .clamp(1, batch)
-}
-
-fn suffix_chunk_sample_flags(
-    suffix_len: usize,
-    chunk_tokens: usize,
-    sample_last: bool,
-) -> Vec<bool> {
-    let chunk_count = suffix_len.div_ceil(chunk_tokens);
-    (0..chunk_count)
-        .map(|index| sample_last && index == chunk_count.saturating_sub(1))
-        .collect()
+        .min(per_prefill_budget.max(1))
 }
 
 pub(in crate::frontend) struct SuffixPrefillOutcome {
@@ -70,14 +66,6 @@ impl StageOpenAiBackend {
                 "deferred suffix prefill requires at least one token",
             ));
         }
-        let chunk_tokens = suffix_chunk_tokens(
-            self.config.lane_count,
-            self.config.emits_activation_frame(),
-            self.config.n_batch,
-            self.config.n_ubatch,
-        );
-        let sample_flags =
-            suffix_chunk_sample_flags(request.suffix.len(), chunk_tokens, request.sample_last);
         let channel = self.iteration_scheduler.direct_iteration_channel();
         let mut predicted = None;
         let mut chunk_count = 0usize;
@@ -86,7 +74,8 @@ impl StageOpenAiBackend {
         let mut runtime_lock_hold_ms = 0.0;
         let mut admission_wait_ms = 0.0;
         let mut admission_yields = 0usize;
-        for (chunk, should_sample) in request.suffix.chunks(chunk_tokens).zip(sample_flags) {
+        let mut offset = 0;
+        while offset < request.suffix.len() {
             ensure_suffix_prefill_active(request.deadline, request.cancellation)?;
             if let Some(waited) =
                 prefill_turn.yield_to_waiters(request.deadline, request.cancellation)?
@@ -94,10 +83,21 @@ impl StageOpenAiBackend {
                 admission_wait_ms += waited.as_secs_f64() * 1000.0;
                 admission_yields = admission_yields.saturating_add(1);
             }
+            let chunk_tokens = suffix_chunk_tokens(
+                self.config.lane_count,
+                self.config.emits_activation_frame(),
+                self.config.n_batch,
+                self.config.n_ubatch,
+                prefill_turn.admitted_count(),
+            );
+            let end = offset
+                .saturating_add(chunk_tokens)
+                .min(request.suffix.len());
+            let should_sample = request.sample_last && end == request.suffix.len();
             let outcome = self.iteration_scheduler.execute_iteration_on(
                 &channel,
                 request.session_id,
-                chunk,
+                &request.suffix[offset..end],
                 &[],
                 request.sampling,
                 should_sample,
@@ -112,6 +112,7 @@ impl StageOpenAiBackend {
             if should_sample {
                 predicted = Some(outcome.predicted);
             }
+            offset = end;
         }
         Ok(SuffixPrefillOutcome {
             predicted,
@@ -144,33 +145,38 @@ fn ensure_suffix_prefill_active(
 
 #[cfg(test)]
 mod tests {
-    use super::{suffix_chunk_sample_flags, suffix_chunk_tokens};
+    use super::suffix_chunk_tokens;
 
     #[test]
     fn single_lane_prefill_batches_preserve_microbatch_export_and_fairness_limits() {
-        assert_eq!(suffix_chunk_tokens(1, false, Some(2048), Some(512)), 2048);
-        assert_eq!(suffix_chunk_tokens(1, true, Some(2048), Some(512)), 512);
-        assert_eq!(suffix_chunk_tokens(2, false, Some(2048), Some(512)), 512);
-        assert_eq!(suffix_chunk_tokens(1, false, Some(4096), Some(512)), 2048);
-        assert_eq!(suffix_chunk_tokens(2, false, Some(128), Some(512)), 128);
-        assert_eq!(suffix_chunk_tokens(1, false, Some(0), Some(0)), 1);
+        assert_eq!(
+            suffix_chunk_tokens(1, false, Some(2048), Some(512), 1),
+            2048
+        );
+        assert_eq!(suffix_chunk_tokens(1, true, Some(2048), Some(512), 1), 512);
+        assert_eq!(suffix_chunk_tokens(2, false, Some(2048), Some(512), 1), 512);
+        assert_eq!(
+            suffix_chunk_tokens(1, false, Some(4096), Some(512), 1),
+            2048
+        );
+        assert_eq!(suffix_chunk_tokens(2, false, Some(128), Some(512), 1), 128);
+        assert_eq!(suffix_chunk_tokens(1, false, Some(0), Some(0), 1), 1);
     }
 
     #[test]
-    fn deferred_suffix_samples_only_the_final_chunk() {
+    fn concurrent_prefills_share_one_large_native_microbatch() {
         assert_eq!(
-            suffix_chunk_sample_flags(7, 3, true),
-            vec![false, false, true]
+            suffix_chunk_tokens(4, false, Some(2048), Some(2048), 1),
+            2048
         );
         assert_eq!(
-            suffix_chunk_sample_flags(7, 3, false),
-            vec![false, false, false]
+            suffix_chunk_tokens(4, false, Some(2048), Some(2048), 2),
+            1024
         );
-    }
-
-    #[test]
-    fn resident_suffix_keeps_final_chunk_sampling() {
-        assert_eq!(suffix_chunk_sample_flags(3, 3, true), vec![true]);
-        assert_eq!(suffix_chunk_sample_flags(4, 3, true), vec![false, true]);
+        assert_eq!(suffix_chunk_tokens(4, false, Some(2048), Some(512), 2), 512);
+        assert_eq!(
+            suffix_chunk_tokens(4, true, Some(2048), Some(2048), 2),
+            2048
+        );
     }
 }
