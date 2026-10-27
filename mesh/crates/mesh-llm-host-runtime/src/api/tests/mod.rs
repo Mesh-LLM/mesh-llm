@@ -70,6 +70,7 @@ mod kv_cache_csrf;
 mod logs_api_routes;
 mod management_request_id;
 mod network_diagnostics;
+mod owner_control_identity;
 mod runtime_config;
 mod runtime_config_validation_authority;
 mod runtime_control_state;
