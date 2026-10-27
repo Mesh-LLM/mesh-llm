@@ -124,6 +124,18 @@ pub(super) async fn handle_buffered_api_request(
     {
         Ok(stream) => stream,
         Err(outcome) => {
+            // A 409 here is a pre-routing rejection (routing headers the
+            // dispatch cannot honor); count it like the other pre-routing
+            // rejections. 400s are malformed-client errors, not rejections.
+            if matches!(outcome, proxy::RouteDispatchOutcome::Responded(409)) {
+                ctx.route.node.record_routed_request(
+                    routing_model.as_deref(),
+                    0,
+                    crate::network::metrics::RequestOutcome::Rejected(
+                        crate::network::metrics::RequestService::Local,
+                    ),
+                );
+            }
             finish_exchange(&mut exchange, outcome).await;
             lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
             return;
