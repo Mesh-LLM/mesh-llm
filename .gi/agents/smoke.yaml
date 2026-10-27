@@ -1,0 +1,24 @@
+name: Goose smoke
+description: Minimal end-to-end test of the jianyang goose agent runtime on mesh-llm.
+provider: zai
+model: glm-5.3-flash
+runner:
+  selector:
+    os: { family: macos }
+    chip: { in: [Apple M1, Apple M2] }
+    memory:
+      system_gib: { min: 16, max: 16 }
+concurrency: 1
+timeout_s: 600
+max_turns: 8
+tools: [filesystem]
+instructions: |
+  This is a smoke test of the agent runtime. Using the filesystem tool only,
+  read the repository README (first ~100 lines) and report back:
+
+  1. One sentence on what this repository is for, based only on what you read.
+  2. The trigger context you were given (kind, branch, revision), quoted exactly.
+  3. Whether the runtime told you which model you are running as.
+
+  Do not modify any file. Do not use the network. Keep the final answer under
+  12 lines.
