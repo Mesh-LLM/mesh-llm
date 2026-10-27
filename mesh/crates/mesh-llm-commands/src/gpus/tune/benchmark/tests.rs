@@ -165,23 +165,127 @@ fn trial_config_honors_the_one_lane_base_parallel() {
             speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
             flash_attention: None,
         };
-        let rendered =
-            trial_config(&base, &prepared, &candidate).expect("trial config renders");
+        let rendered = trial_config(&base, &prepared, &candidate).expect("trial config renders");
         let plan = planned_trial_launch(&rendered, 196_608);
         assert_eq!(
-            plan.slots,
-            1,
+            plan.slots, 1,
             "one-lane base config ({label}) must launch 1 serving lane, not the {}-lane auto default",
             plan.slots
         );
         let total = plan.context_length * u32::try_from(plan.slots).unwrap();
         assert_eq!(
-            total,
-            196_608,
+            total, 196_608,
             "total tuned context must stay 196608 ({label}), not {} (4x the requested context)",
             total
         );
     }
+}
+
+/// A per-model parallel must beat the global default in the trial config,
+/// matching the child host's own model-before-global precedence.
+#[test]
+fn trial_config_prefers_model_parallel_over_defaults() {
+    let base =
+        mesh_llm_config::parse_config_toml(
+            "version = 1\n\n[defaults.throughput]\nparallel = 1\n\n[[models]]\nmodel = \"model.gguf\"\nparallel = 2\n",
+        )
+        .expect("base config parses");
+    let prepared = prepared_plan_fixture(
+        "/tmp/model.gguf",
+        vec![ConfigModelMatch {
+            row_index: 0,
+            configured_model: "model.gguf".to_string(),
+        }],
+        Vec::new(),
+    );
+    let candidate = TuneBenchmarkCandidate {
+        ctx_size: 4096,
+        batch: 2048,
+        ubatch: 1024,
+        cache_type_k: TuneKvCacheType::Q8_0,
+        cache_type_v: TuneKvCacheType::Q8_0,
+        mmap: TuneBoolOrAutoValue::Disabled,
+        mlock: false,
+        speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+        flash_attention: None,
+    };
+    let rendered = trial_config(&base, &prepared, &candidate).expect("trial config renders");
+    let trial = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
+    assert_eq!(trial_effective_parallel(&trial), Some(2));
+}
+
+/// A base config without any parallel setting keeps the trial child's
+/// auto-planned lane behavior; the fix must not invent a lane count.
+#[test]
+fn trial_config_keeps_auto_lanes_when_base_config_has_no_parallel() {
+    let base =
+        mesh_llm_config::parse_config_toml("version = 1\n\n[[models]]\nmodel = \"model.gguf\"\n")
+            .expect("base config parses");
+    let prepared = prepared_plan_fixture(
+        "/tmp/model.gguf",
+        vec![ConfigModelMatch {
+            row_index: 0,
+            configured_model: "model.gguf".to_string(),
+        }],
+        Vec::new(),
+    );
+    let candidate = TuneBenchmarkCandidate {
+        ctx_size: 4096,
+        batch: 2048,
+        ubatch: 1024,
+        cache_type_k: TuneKvCacheType::Q8_0,
+        cache_type_v: TuneKvCacheType::Q8_0,
+        mmap: TuneBoolOrAutoValue::Disabled,
+        mlock: false,
+        speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+        flash_attention: None,
+    };
+    let rendered = trial_config(&base, &prepared, &candidate).expect("trial config renders");
+    let plan = planned_trial_launch(&rendered, 4096);
+    assert_eq!(plan.slots, 4, "auto default lane count must be unchanged");
+}
+
+/// A speculative (MTP) candidate must not disturb the inherited lane count;
+/// the one-lane base setting survives an MTP-head sweep candidate.
+#[test]
+fn trial_config_honors_base_parallel_with_mtp_candidate() {
+    let base = mesh_llm_config::parse_config_toml(
+        "version = 1\n\n[[models]]\nmodel = \"model.gguf\"\nparallel = 1\n",
+    )
+    .expect("base config parses");
+    let prepared = prepared_plan_fixture(
+        "/tmp/model.gguf",
+        vec![ConfigModelMatch {
+            row_index: 0,
+            configured_model: "model.gguf".to_string(),
+        }],
+        Vec::new(),
+    );
+    let candidate = TuneBenchmarkCandidate {
+        ctx_size: 196_608,
+        batch: 2048,
+        ubatch: 1024,
+        cache_type_k: TuneKvCacheType::Q8_0,
+        cache_type_v: TuneKvCacheType::Q8_0,
+        mmap: TuneBoolOrAutoValue::Disabled,
+        mlock: false,
+        speculative: TuneBenchmarkSpeculativeCandidate::Mtp {
+            draft_model: None,
+            draft_max_tokens: 3,
+            draft_min_tokens: 0,
+            draft_acceptance_threshold: None,
+            draft_split_probability: None,
+        },
+        flash_attention: None,
+    };
+    let rendered = trial_config(&base, &prepared, &candidate).expect("trial config renders");
+    let plan = planned_trial_launch(&rendered, 196_608);
+    assert_eq!(
+        plan.slots, 1,
+        "MTP candidate must not change the lane count"
+    );
+    let total = plan.context_length * u32::try_from(plan.slots).unwrap();
+    assert_eq!(total, 196_608);
 }
 
 /// Resolves the effective serving-lane parallel from a mesh config using the
@@ -200,15 +304,12 @@ fn trial_effective_parallel(config: &mesh_llm_config::MeshConfig) -> Option<usiz
                 .or(entry.parallel)
         })
         .or_else(|| {
-            config
-                .defaults
-                .as_ref()
-                .and_then(|defaults| {
-                    defaults
-                        .throughput
-                        .as_ref()
-                        .and_then(|throughput| throughput.parallel)
-                })
+            config.defaults.as_ref().and_then(|defaults| {
+                defaults
+                    .throughput
+                    .as_ref()
+                    .and_then(|throughput| throughput.parallel)
+            })
         })
         .or(config.gpu.parallel)
 }
@@ -221,8 +322,7 @@ fn planned_trial_launch(
     rendered: &str,
     ctx_size: u32,
 ) -> skippy_coordinator::resource_planning::RuntimeResourcePlan {
-    let trial =
-        mesh_llm_config::parse_config_toml(rendered).expect("trial config parses");
+    let trial = mesh_llm_config::parse_config_toml(rendered).expect("trial config parses");
     skippy_coordinator::resource_planning::plan_runtime_resources(
         skippy_coordinator::resource_planning::RuntimeResourcePlanInput {
             ctx_size_override: Some(ctx_size),
@@ -233,7 +333,8 @@ fn planned_trial_launch(
             metadata: None,
             kv_cache_quant: skippy_model_artifact::gguf::GgufKvCacheQuant::F16,
             local_layer_fraction: None,
-            planning_profile: skippy_coordinator::resource_planning::RuntimeResourcePlanningProfile::SharedMesh,
+            planning_profile:
+                skippy_coordinator::resource_planning::RuntimeResourcePlanningProfile::SharedMesh,
             measured_buffers: None,
         },
     )
