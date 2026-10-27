@@ -334,6 +334,7 @@ pub(crate) fn start_speech_recognition_http_on(
         )),
         lifecycle_observer,
     );
+    crate::runtime::energy_sampler::start_energy_sampler();
     SkippyHttpHandle {
         port: bind_addr.port(),
         server,
