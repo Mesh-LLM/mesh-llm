@@ -5412,6 +5412,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-pay-lightning"
+version = "0.78.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bitcoin",
+ "lightning-invoice",
+ "mesh-llm-payments",
+ "mesh-llm-payments-types",
+ "mesh-llm-plugin",
+ "mesh-llm-wallet",
+ "prost",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "metrics-server"
 version = "0.78.0"
 dependencies = [

@@ -1,0 +1,351 @@
+//! Credit-first plugin protocol. A prepared admission is single-use and owner-bound.
+mod tickets;
+pub mod wallet_child;
+mod wallet_transport;
+use anyhow::{Context, Result, ensure};
+use mesh_llm_payments::service::PaymentService;
+use mesh_llm_payments_types::{
+    contract::*, metered_wire::AdmissionTerms, pricing::Pricing, terms::RequestTerms,
+};
+use mesh_llm_plugin::openai_exchange::{
+    OpenAiAdmissionDecision as Decision, OpenAiExchangeDecision,
+};
+use mesh_llm_wallet::invoice::Invoice;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+
+pub const CHANNEL: &str = "pay.ln.v1";
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Message {
+    Quote,
+    Admission {
+        terms: AdmissionTerms,
+        invoice: Option<Invoice>,
+    },
+    Paid {
+        id: String,
+    },
+    Ready {
+        id: String,
+    },
+    Settlement {
+        id: String,
+        bill: FinalBill,
+    },
+    Recover {
+        id: String,
+    },
+    Abandoned {
+        id: String,
+    },
+}
+
+pub struct Engine {
+    pub service: Arc<PaymentService>,
+    tickets: tickets::Tickets,
+    pub header: String,
+    pub cap_msat: u64,
+    pub buying: BTreeMap<String, Pricing>,
+    pub buy_peers: BTreeSet<String>,
+}
+impl Engine {
+    pub fn new(
+        service: Arc<PaymentService>,
+        namespace: &str,
+        cap_msat: u64,
+        directory: &std::path::Path,
+    ) -> Result<Self> {
+        Ok(Self {
+            service,
+            tickets: tickets::Tickets::open(directory)?,
+            header: format!("x-plugin-{namespace}-pay-terms"),
+            cap_msat,
+            buying: BTreeMap::new(),
+            buy_peers: BTreeSet::new(),
+        })
+    }
+    pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
+        match message {
+            Message::Quote => self.quote(peer).await,
+            Message::Admission { terms, invoice } => {
+                ensure!(self.cap_msat > 0, "buyer payments disabled");
+                ensure!(self.buy_peers.contains(peer), "seller not authorized");
+                let ceiling = self
+                    .buying
+                    .get(&terms.model)
+                    .context("model not authorized for purchases")?;
+                ensure!(
+                    terms.pricing.input_msat_per_million <= ceiling.input_msat_per_million
+                        && terms.pricing.output_msat_per_million <= ceiling.output_msat_per_million
+                        && terms.pricing.cache_discount_percent >= ceiling.cache_discount_percent,
+                    "seller rates exceed authorized ceiling"
+                );
+                let stored = self.service.ledger.request_terms(&terms.id)?;
+                let proposed = RequestTerms {
+                    exchange_id: None,
+                    id: terms.id.clone(),
+                    peer: peer.into(),
+                    payee: None,
+                    model: terms.model.clone(),
+                    pricing: terms.pricing.clone(),
+                    max_output_tokens: 1,
+                    max_total_msat: self.cap_msat,
+                    expires_at_ms: mesh_llm_wallet::now_ms() + 60_000,
+                };
+                let proposed = if let Some(stored) = stored {
+                    ensure!(
+                        stored.peer == peer
+                            && stored.model == terms.model
+                            && stored.pricing == terms.pricing,
+                        "admission owner or terms changed"
+                    );
+                    stored
+                } else {
+                    proposed
+                };
+
+                self.service
+                    .accept_admission(AcceptAdmissionRequest {
+                        billing_revision: BillingRevision::V3,
+                        terms: proposed,
+                        admission: terms.clone(),
+                    })
+                    .await?;
+                if let Some(invoice) = invoice {
+                    self.service
+                        .pay_deposit(PayDepositRequest {
+                            request_id: terms.id.clone(),
+                            invoice,
+                        })
+                        .await?;
+                }
+                Ok(vec![Message::Paid { id: terms.id }])
+            }
+            Message::Paid { id } => {
+                self.owner(peer, &id)?;
+                if self
+                    .service
+                    .ledger
+                    .metered_invoice(
+                        &id,
+                        mesh_llm_payments::ledger::metered_invoices::MeteredInvoiceKind::Deposit,
+                    )?
+                    .is_some()
+                    && !self.service.ledger.metered_past_admission(&id)?
+                {
+                    self.service.serve_deposit_confirmed(&id).await?;
+                }
+                let settlement = self.service.serve_recover(&id).await?;
+                if matches!(settlement, ServeRecoverResponse::Pending)
+                    && !self.tickets.consumed(&id, peer)?
+                {
+                    self.tickets.ready(&id, peer)?;
+                }
+                let mut replies = vec![Message::Ready { id }];
+                if matches!(settlement, ServeRecoverResponse::Billed { .. }) {
+                    replies.extend(self.quote(peer).await?);
+                }
+                Ok(replies)
+            }
+            Message::Settlement { id, bill } => {
+                let terms = self
+                    .service
+                    .ledger
+                    .request_terms(&id)?
+                    .context("unknown buyer admission")?;
+                ensure!(terms.peer == peer, "settlement from wrong seller");
+                self.service
+                    .settle_final(SettleFinalRequest {
+                        request_id: id.clone(),
+                        usage: Some(bill.usage),
+                        bill_msat: Some(bill.bill_msat),
+                        deposit_applied_msat: bill.deposit_msat.min(bill.bill_msat),
+                        invoice: bill.invoice,
+                    })
+                    .await?;
+                self.service.finish_metered(&id).await?;
+                Ok(vec![Message::Paid { id }])
+            }
+            Message::Recover { id } => {
+                self.owner(peer, &id)?;
+                Ok(match self.service.serve_recover(&id).await? {
+                    ServeRecoverResponse::Billed { bill } => vec![Message::Settlement { id, bill }],
+                    ServeRecoverResponse::Abandoned => vec![Message::Abandoned { id }],
+                    ServeRecoverResponse::Pending => vec![],
+                })
+            }
+            Message::Abandoned { id } => {
+                let terms = self
+                    .service
+                    .ledger
+                    .request_terms(&id)?
+                    .context("unknown buyer admission")?;
+                ensure!(terms.peer == peer, "abandonment from wrong seller");
+                self.service.finish_metered(&id).await?;
+                Ok(vec![Message::Quote])
+            }
+            Message::Ready { .. } => Ok(vec![]),
+        }
+    }
+    pub async fn peer_up(&self, peer: &str) -> Result<Vec<Message>> {
+        if !self.buy_peers.contains(peer) || self.cap_msat == 0 {
+            return Ok(vec![]);
+        }
+        let mut messages = Vec::new();
+        // Observe uncertain payments before asking the authenticated seller for stored outcomes.
+        for terms in self.service.reconcile().await?.approved {
+            if terms.peer == peer {
+                messages.push(Message::Recover { id: terms.id });
+            }
+        }
+        messages.push(Message::Quote);
+        Ok(messages)
+    }
+    fn owner(&self, peer: &str, id: &str) -> Result<()> {
+        ensure!(
+            self.service.ledger.metered_owner(id)?.as_deref() == Some(peer),
+            "wrong admission owner"
+        );
+        Ok(())
+    }
+    async fn quote(&self, peer: &str) -> Result<Vec<Message>> {
+        let mut replies = vec![];
+        for (model, pricing) in self.service.ledger.pricing()? {
+            if self.tickets.outstanding(peer, &model)? {
+                if let Some(admission) = self.tickets.admission(peer, &model)? {
+                    replies.push(serde_json::from_str(&admission)?);
+                }
+                continue;
+            }
+
+            let id = uuid::Uuid::new_v4().to_string();
+            let admission = self
+                .service
+                .serve_admit(ServeAdmitRequest {
+                    billing_revision: BillingRevision::V3,
+                    request_id: id.clone(),
+                    buyer: peer.into(),
+                    model: model.clone(),
+                    pricing: pricing.clone(),
+                })
+                .await?;
+            let (deposit_msat, min_payment_msat, invoice) = match admission {
+                ServeAdmitResponse::Deposit {
+                    invoice,
+                    min_payment_msat,
+                    ..
+                } => (
+                    invoice.amount_msat.context("amountless deposit")?,
+                    min_payment_msat,
+                    Some(invoice),
+                ),
+                ServeAdmitResponse::Admitted {
+                    min_payment_msat, ..
+                } => (0, min_payment_msat, None),
+                _ => continue,
+            };
+            self.tickets.insert(&id, peer, &model)?;
+            let message = Message::Admission {
+                terms: AdmissionTerms {
+                    id: id.clone(),
+                    model,
+                    pricing,
+                    deposit_msat,
+                    min_payment_msat,
+                },
+                invoice,
+            };
+            self.tickets
+                .save_admission(&id, &serde_json::to_string(&message)?)?;
+            replies.push(message);
+        }
+        Ok(replies)
+    }
+    pub fn gate(&self, event: &Value) -> Result<OpenAiExchangeDecision> {
+        if event["observation_point"] != "serving_host_ingress"
+            || event["phase"] != "request_received"
+        {
+            return Ok(OpenAiExchangeDecision::default());
+        }
+        let model = event["model"].as_str().context("model missing")?;
+        if !self.service.ledger.pricing()?.contains_key(model) {
+            return Ok(OpenAiExchangeDecision::default());
+        }
+        let peer = event["requested_by_node_id"].as_str();
+        let exchange = event["exchange_id"]
+            .as_str()
+            .context("exchange id missing")?;
+        if let Some(peer) = peer
+            && self.service.ledger.metered_unpaid_finals(peer)?
+                < mesh_llm_payments::ledger::metered::STRIKE_LIMIT
+            && self.tickets.consume(peer, model, exchange)?
+        {
+            return Ok(OpenAiExchangeDecision {
+                decision: Decision::Allow,
+                ..Default::default()
+            });
+        }
+
+        Ok(OpenAiExchangeDecision { decision: Decision::Deny, status: Some(402),
+            response_headers: vec![(self.header.clone(), json!({"channel": CHANNEL, "model": model, "pricing": self.service.ledger.pricing()?[model]}).to_string())], ..Default::default() })
+    }
+    pub async fn terminal(&self, event: &Value) -> Result<Option<(String, Message)>> {
+        if event["phase"] != "exchange_finished"
+            || event["ingress_observation_point"] != "serving_host_ingress"
+        {
+            return Ok(None);
+        }
+        let exchange = event["exchange_id"]
+            .as_str()
+            .context("exchange id missing")?;
+        let active = self.tickets.exchange(exchange)?;
+        let Some((peer, id)) = active else {
+            return Ok(None);
+        };
+        let usage = reported_usage(event);
+        let message = if let Some(usage) = usage {
+            Message::Settlement {
+                id: id.clone(),
+                bill: self
+                    .service
+                    .serve_settle(ServeSettleRequest {
+                        request_id: id,
+                        usage,
+                    })
+                    .await?,
+            }
+        } else {
+            self.service.serve_abandon(&id)?;
+            Message::Abandoned { id }
+        };
+        Ok(Some((peer, message)))
+    }
+}
+
+/// The host may normalize cached counters; preserve both supported evidence shapes.
+pub fn reported_usage(event: &Value) -> Option<mesh_llm_payments_types::metering::MeteredUsage> {
+    let mut normalized = event.clone();
+    if let Some(cached) = event["usage"]
+        .get("cached_prompt_tokens")
+        .filter(|v| !v.is_null())
+    {
+        normalized["usage"]["prompt_tokens_details"] = json!({"cached_tokens": cached});
+    }
+    mesh_llm_payments_types::metering::MeteredUsage::from_response(&normalized)
+}
+
+pub fn parse_prices(raw: &str) -> Result<BTreeMap<String, Pricing>> {
+    let prices: BTreeMap<String, Pricing> = serde_json::from_str(raw)?;
+    for price in prices.values() {
+        price.validate()?;
+    }
+    Ok(prices)
+}
+
+#[cfg(test)]
+mod tests;

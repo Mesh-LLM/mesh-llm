@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "mesh/plugins/pay-lightning",
     "mesh/crates/mesh-llm",
     "mesh/crates/mesh-llm-analytics",
     "mesh/crates/mesh-llm-cli",
