@@ -255,3 +255,40 @@ async fn requirement_attaches_by_public_model_id() {
     assert!(projected[0].hosted_models.is_empty());
     node.close_endpoint().await;
 }
+
+#[tokio::test]
+async fn unmatched_requirement_warning_resets_after_match_or_withdrawal() {
+    let node = super::make_test_node(NodeRole::Worker).await.unwrap();
+    *node.plugin_manager.lock().await = Some(manager().await);
+    node.apply_model_requirement("gate", request(Vec::new()))
+        .await
+        .unwrap();
+    let key = ("gate".to_string(), "gated".to_string());
+    for _ in 0..2 {
+        node.descriptors_with_requirements(&[]).await;
+        assert_eq!(node.unmatched_model_requirements.lock().await.len(), 1);
+        assert!(
+            node.unmatched_model_requirements
+                .lock()
+                .await
+                .contains(&key)
+        );
+    }
+    node.descriptors_with_requirements(&["gated".into()]).await;
+    assert!(node.unmatched_model_requirements.lock().await.is_empty());
+    node.descriptors_with_requirements(&[]).await;
+    assert!(
+        node.unmatched_model_requirements
+            .lock()
+            .await
+            .contains(&key)
+    );
+    node.forward_plugin_event(crate::plugin::PluginMeshEvent::ModelRequirementsWithdraw {
+        plugin_id: "gate".into(),
+    })
+    .await
+    .unwrap();
+    node.descriptors_with_requirements(&[]).await;
+    assert!(node.unmatched_model_requirements.lock().await.is_empty());
+    node.close_endpoint().await;
+}

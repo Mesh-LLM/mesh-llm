@@ -461,6 +461,7 @@ async fn make_test_node_with_requirements(
         route_target_health: Arc::new(std::sync::OnceLock::new()),
         plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
         model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
         config_revision_tx: {
             let (tx, _rx) = tokio::sync::watch::channel(0u64);
             Arc::new(tx)

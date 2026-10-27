@@ -366,6 +366,7 @@ impl Node {
             plugin_manager: Arc::new(Mutex::new(None)),
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
             model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
             control_listener: Arc::new(Mutex::new(None)),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),

@@ -107,21 +107,46 @@ impl Node {
                 .sort_by(|a, b| a.channel.cmp(&b.channel).then(a.terms.cmp(&b.terms)));
             descriptor.requires.dedup();
         }
+        self.report_unmatched_requirements(&descriptors, &requirements)
+            .await;
+        descriptors
+    }
+
+    async fn report_unmatched_requirements(
+        &self,
+        descriptors: &[ServedModelDescriptor],
+        requirements: &std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, Vec<mesh_llm_types::mesh::ChannelRequirement>>,
+        >,
+    ) {
+        let mut unmatched = HashSet::new();
+        let mut warned = self.unmatched_model_requirements.lock().await;
         for (plugin, owned) in requirements.iter() {
             for model in owned.keys() {
                 if !descriptors.iter().any(|d| {
                     &d.identity.model_name == model
                         || super::public_model_id_from_identity(&d.identity).as_ref() == Some(model)
                 }) {
-                    tracing::warn!(
-                        plugin,
-                        model,
-                        "Model requirement matched no hosted descriptor"
-                    );
+                    let key = (plugin.clone(), model.clone());
+                    unmatched.insert(key.clone());
+                    if warned.insert(key) {
+                        tracing::warn!(
+                            plugin,
+                            model,
+                            "Model requirement matched no hosted descriptor"
+                        );
+                    } else {
+                        tracing::debug!(
+                            plugin,
+                            model,
+                            "Model requirement still matches no hosted descriptor"
+                        );
+                    }
                 }
             }
         }
-        descriptors
+        warned.retain(|key| unmatched.contains(key));
     }
 
     pub(crate) async fn supported_model_channels(&self, peers: &[PeerInfo]) -> HashSet<String> {

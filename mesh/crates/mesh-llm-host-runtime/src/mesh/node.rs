@@ -200,6 +200,8 @@ pub struct Node {
     /// directly-connected peers announce (`mesh::plugin_keys`).
     pub(crate) plugin_keys: crate::mesh::plugin_keys::PluginKeys,
     pub(crate) model_requirements: super::model_requirements::ModelRequirements,
+    pub(crate) unmatched_model_requirements:
+        Arc<tokio::sync::Mutex<std::collections::HashSet<(String, String)>>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
     /// Stops the payment-recovery loop, which holds a `Node` clone.
     /// Shared activity policy guard for ingress admission checks.
@@ -893,6 +895,7 @@ impl Node {
             owner_attestation: Arc::new(Mutex::new(owner_runtime.owner_attestation)),
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
             model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(
                 crate::ReleaseAttestationSummary::default(),
@@ -1080,6 +1083,7 @@ impl Node {
             owner_attestation: Arc::new(Mutex::new(None)),
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
             model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(
                 crate::ReleaseAttestationSummary::default(),
