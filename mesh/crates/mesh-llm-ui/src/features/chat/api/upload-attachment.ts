@@ -36,7 +36,7 @@ async function uploadAttachmentRequest(params: UploadAttachmentParams): Promise<
 
   if (!response.ok) {
     const errorBody = await parseApiErrorBody(response)
-    throw new ApiError(response.status, errorBody, `Upload failed: ${response.status}`)
+    throw new ApiError(response.status, errorBody.body, `Upload failed: ${response.status}`)
   }
 
   const data = (await response.json()) as AttachmentUploadResponse
