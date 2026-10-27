@@ -67,7 +67,8 @@ impl NodeExchangePolicy {
                 None => manager.exchange_phase(event).await,
             };
         match result.error_status() {
-            Some(403) => Err(permission_error(
+            Some(status @ (402 | 403)) => Err(policy_denial(
+                status,
                 "OpenAI plugin policy denied the selected backend",
             )),
             Some(_) => Err(hook_unavailable(
@@ -222,12 +223,9 @@ impl HttpExchangePolicy for NodeExchangePolicy {
         event["emission_boundary"] = json!("http_body_poll");
         event["dispatch_path"] = json!("typed_frontend");
         let (session, result) = ExchangeSession::begin(&manager, event).await;
-        let denial = result.error_status().map(|status| {
-            if status == 403 {
-                permission_error("OpenAI plugin policy denied the exchange")
-            } else {
-                hook_unavailable("required OpenAI plugin admission unavailable")
-            }
+        let denial = result.error_status().map(|status| match status {
+            402 | 403 => policy_denial(status, "OpenAI plugin policy denied the exchange"),
+            _ => hook_unavailable("required OpenAI plugin admission unavailable"),
         });
         HttpExchangeAdmission {
             observation_id: Some(session.observation_id().to_owned()),
@@ -283,9 +281,14 @@ pub(crate) fn compose_node_hooks(node: crate::mesh::Node) -> Arc<dyn InferenceHo
     ])
 }
 
-fn permission_error(message: &str) -> skippy_inference_api::InferenceError {
+/// A plugin deny as the typed frontend's error: 403 when the caller can never
+/// pass, 402 when the denying plugin says the caller can satisfy its gate and
+/// retry (its `response_headers` carry the terms; the host never reads them).
+fn policy_denial(status: u16, message: &str) -> skippy_inference_api::InferenceError {
+    let status =
+        axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::FORBIDDEN);
     skippy_inference_api::InferenceError::from_kind(
-        axum::http::StatusCode::FORBIDDEN,
+        status,
         skippy_inference_api::InferenceErrorKind::Permission,
         message,
     )

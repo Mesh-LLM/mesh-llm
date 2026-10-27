@@ -511,6 +511,10 @@ fn handle_route_model_attempt_result(
         RouteAttemptResult::RetryableContextOverflow => {
             handle_retryable_route_model_context(target)
         }
+        RouteAttemptResult::RetryableGateUnsatisfied => {
+            tracing::info!("Target {target:?} answered 402 (gate unsatisfied), trying next");
+            RouteModelDisposition::Continue
+        }
         RouteAttemptResult::RetryableResponseQuality(failure) => {
             handle_retryable_route_model_response_quality(target, failure)
         }

@@ -15,6 +15,12 @@ const DEFAULT_MAX_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_MAX_ENTRIES: usize = 2048;
 const DEFAULT_REPUTATION_TTL: Duration = Duration::from_secs(20 * 60);
 const DEFAULT_REPUTATION_RECOVERY_SUCCESSES: u32 = 2;
+/// How long a (model, target) stays skipped after the target answered 402.
+/// A gate verdict is deterministic from the caller's side — nothing the proxy
+/// does changes it — so this is a flat cooldown, not the escalating one used
+/// for availability failures, and it carries no reputation penalty: the host
+/// is healthy, it just will not serve *us* yet.
+const DEFAULT_GATE_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TargetHealthOutcome {
@@ -23,6 +29,10 @@ pub(crate) enum TargetHealthOutcome {
     Unavailable,
     ContextOverflow,
     Rejected,
+    /// The target answered 402: its gate plugin will not admit this caller
+    /// right now. Cached per (model, target) so routing skips it while an
+    /// alternative exists; a later success clears it.
+    GateUnsatisfied,
     ClientDisconnected,
 }
 
@@ -52,6 +62,7 @@ struct TargetHealthConfig {
     max_entries: usize,
     reputation_ttl: Duration,
     reputation_recovery_successes: u32,
+    gate_cooldown: Duration,
 }
 
 impl Default for TargetHealthConfig {
@@ -62,6 +73,7 @@ impl Default for TargetHealthConfig {
             max_entries: DEFAULT_MAX_ENTRIES,
             reputation_ttl: DEFAULT_REPUTATION_TTL,
             reputation_recovery_successes: DEFAULT_REPUTATION_RECOVERY_SUCCESSES,
+            gate_cooldown: DEFAULT_GATE_COOLDOWN,
         }
     }
 }
@@ -119,6 +131,7 @@ impl TargetHealth {
                 max_entries,
                 reputation_ttl: DEFAULT_REPUTATION_TTL,
                 reputation_recovery_successes: DEFAULT_REPUTATION_RECOVERY_SUCCESSES,
+                gate_cooldown: DEFAULT_GATE_COOLDOWN,
             },
         }
     }
@@ -151,6 +164,9 @@ impl TargetHealth {
             TargetHealthOutcome::Timeout | TargetHealthOutcome::Unavailable => {
                 state.record_failure(key.clone(), now, self.config);
                 state.record_reputation_penalty(key, now, 1, self.config);
+            }
+            TargetHealthOutcome::GateUnsatisfied => {
+                state.record_gate_cooldown(key, now, self.config);
             }
             TargetHealthOutcome::ContextOverflow
             | TargetHealthOutcome::Rejected
@@ -245,6 +261,23 @@ impl TargetHealthState {
             TargetEntry {
                 failures,
                 cool_until: now + cooldown,
+            },
+        );
+        self.touch_key(&key);
+        self.prune_over_capacity(config.max_entries);
+    }
+
+    fn record_gate_cooldown(&mut self, key: TargetKey, now: Instant, config: TargetHealthConfig) {
+        let failures = self
+            .entries
+            .get(&key)
+            .map(|entry| entry.failures)
+            .unwrap_or(0);
+        self.entries.insert(
+            key.clone(),
+            TargetEntry {
+                failures,
+                cool_until: now + config.gate_cooldown,
             },
         );
         self.touch_key(&key);
@@ -471,6 +504,44 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn gate_unsatisfied_skips_target_per_model_without_penalty_until_it_admits_us() {
+        let health = TargetHealth::default();
+        let candidates = vec![local(9001), local(9002)];
+
+        health.record_outcome(
+            Some("paid"),
+            &local(9001),
+            TargetHealthOutcome::GateUnsatisfied,
+        );
+
+        // Skipped for the gated model while an alternative exists ...
+        assert_eq!(
+            health.eligible_candidates("paid", &candidates),
+            vec![local(9002)]
+        );
+        // ... still tried when it is the only candidate (the gate may have
+        // changed its mind; the client sees a fresh verdict, not a cached one),
+        assert_eq!(
+            health.eligible_candidates("paid", std::slice::from_ref(&local(9001))),
+            vec![local(9001)]
+        );
+        // ... other models on the same host are unaffected,
+        assert_eq!(health.eligible_candidates("free", &candidates), candidates);
+        // ... and the host's reputation is untouched: it is healthy, not failing.
+        assert_eq!(
+            health.snapshot(),
+            TargetHealthSnapshot {
+                cooling_targets: 1,
+                routes_avoided: 1,
+                reputation: TargetReputationStats::default(),
+            }
+        );
+
+        health.record_outcome(Some("paid"), &local(9001), TargetHealthOutcome::Success);
+        assert_eq!(health.eligible_candidates("paid", &candidates), candidates);
     }
 
     #[test]

@@ -85,21 +85,22 @@ async fn send_selected_route_denial(
     stream: &mut ClientStream,
     status: u16,
 ) -> transport::RouteDispatchOutcome {
+    let denied = matches!(status, 402 | 403);
     let body = json!({"error":{"message":"OpenAI plugin admission rejected the selected route",
-        "type": if status == 403 { "permission_error" } else { "service_unavailable" },
-        "code": if status == 403 { "plugin_policy_denied" } else { "plugin_hook_unavailable" }}})
+        "type": if denied { "permission_error" } else { "service_unavailable" },
+        "code": if denied { "plugin_policy_denied" } else { "plugin_hook_unavailable" }}})
     .to_string();
     let bytes = format!(
         "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        if status == 403 {
-            "Forbidden"
-        } else {
-            "Service Unavailable"
+        match status {
+            402 => "Payment Required",
+            403 => "Forbidden",
+            _ => "Service Unavailable",
         },
         body.len()
     );
     match stream.write_all(bytes.as_bytes()).await {
-        Ok(()) if status == 403 => transport::RouteDispatchOutcome::PolicyDenied,
+        Ok(()) if denied => transport::RouteDispatchOutcome::PolicyDenied,
         Ok(()) => transport::RouteDispatchOutcome::RequiredHookFailed,
         Err(_) => transport::RouteDispatchOutcome::Dropped("response_write_failed"),
     }

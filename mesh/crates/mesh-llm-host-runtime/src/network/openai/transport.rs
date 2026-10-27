@@ -961,6 +961,7 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
         RouteAttemptResult::RetryableTimeout => (None, Some("timeout")),
         RouteAttemptResult::RetryableUnavailable => (None, Some("unavailable")),
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_) => (None, Some("rejected")),
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
             (Some(*status_code), Some("upstream_stream_incomplete"))
@@ -1031,6 +1032,7 @@ fn handle_mesh_attempt_result(
             })
         }
         RouteAttemptResult::RetryableContextOverflow => handle_retryable_context_overflow(context),
+        RouteAttemptResult::RetryableGateUnsatisfied => handle_retryable_gate_unsatisfied(context),
         RouteAttemptResult::RetryableResponseQuality(failure) => {
             handle_retryable_mesh_response_quality(context, failure)
         }
@@ -1102,6 +1104,7 @@ fn terminal_outcome_for_mesh_route_result(
             crate::logging::TerminalOutcome::Cancelled(Some("client_disconnected".into()))
         }
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableUnavailable => {
@@ -1136,6 +1139,23 @@ fn handle_retryable_context_overflow(
     tracing::warn!(
         "Host {} rejected request with context overflow-style 400, trying next",
         context.target_host.fmt_short()
+    );
+    forget_failed_target_cache_leases(context);
+    context.state.last_retryable = true;
+    MeshAttemptDisposition::Continue
+}
+
+fn handle_retryable_gate_unsatisfied(
+    context: &mut MeshAttemptResultContext<'_>,
+) -> MeshAttemptDisposition {
+    // The 402 was never relayed; `record_target_outcome` has already cached
+    // the (model, host) verdict, so the next request skips this host while an
+    // alternative exists. Routing diagnostics are the only place a plugin-less
+    // operator ever sees a gate: "peer answered 402, trying next".
+    tracing::info!(
+        "Host {} answered 402 for {:?} (gate unsatisfied), trying next",
+        context.target_host.fmt_short(),
+        context.effective_model
     );
     forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
@@ -1662,6 +1682,7 @@ pub async fn route_to_target(
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
             node.record_routed_request(
@@ -1779,6 +1800,7 @@ pub async fn route_http_endpoint_request(
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
             node.record_routed_request(

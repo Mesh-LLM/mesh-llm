@@ -238,6 +238,15 @@ async fn begin_exchange(
         ctx.route.requested_by_node_id.is_some(),
     );
     event["node_endpoint_id"] = serde_json::json!(ctx.route.node.id().to_string());
+    if let Some(peer) = ctx.route.requested_by_node_id.as_deref() {
+        // The QUIC-authenticated mesh peer that sent this request, lowercase
+        // hex — the identity a gate plugin keys its own per-peer state on at
+        // admission time. Same name and value as the host-served terminal's
+        // `serving_provenance.requested_by_node_id`, so one key pairs the two
+        // phases. Never an HTTP header: it comes from the tunnel connection's
+        // `remote_id()`, so nothing the request carries can set or spoof it.
+        event["requested_by_node_id"] = serde_json::json!(peer);
+    }
     event["emission_boundary"] = serde_json::json!("socket_write_accept");
     event["dispatch_path"] = serde_json::json!(if ctx.route.requested_by_node_id.is_some() {
         "remote_mesh"

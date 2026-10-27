@@ -146,8 +146,8 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
     route_observer: OpenAiRouteObserver<'_>,
     anthropic: bool,
 ) -> Result<RouteAttemptResult> {
-    if retry_policy.context_overflow && probe.retryable_context_overflow {
-        return Ok(RouteAttemptResult::RetryableContextOverflow);
+    if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
+        return Ok(result);
     }
 
     if !(200..300).contains(&probe.status_code) {

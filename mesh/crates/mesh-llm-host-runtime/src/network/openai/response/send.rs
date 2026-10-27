@@ -71,6 +71,8 @@ async fn send_json_with_status_and_headers_inner(
     let status = match code {
         200 => "OK",
         400 => "Bad Request",
+        402 => "Payment Required",
+        403 => "Forbidden",
         404 => "Not Found",
         410 => "Gone",
         409 => "Conflict",
@@ -150,6 +152,7 @@ async fn send_openai_error(
     let status = match code {
         200 => "OK",
         401 => "Unauthorized",
+        402 => "Payment Required",
         403 => "Forbidden",
         404 => "Not Found",
         410 => "Gone",
@@ -167,7 +170,7 @@ async fn send_openai_error(
         let kind = match code {
             400 | 422 => "invalid_request_error",
             401 => "authentication_error",
-            403 => "permission_error",
+            402 | 403 => "permission_error",
             404 => "not_found_error",
             413 => "request_too_large",
             429 => "rate_limit_error",

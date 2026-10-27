@@ -115,8 +115,8 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
     route_observer: OpenAiRouteObserver<'_>,
     anthropic: bool,
 ) -> Result<RouteAttemptResult> {
-    if retry_policy.context_overflow && probe.retryable_context_overflow {
-        return Ok(RouteAttemptResult::RetryableContextOverflow);
+    if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
+        return Ok(result);
     }
 
     if !anthropic && !(200..300).contains(&probe.status_code) {
@@ -198,8 +198,8 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<RouteAttemptResult> {
-    if retry_policy.context_overflow && probe.retryable_context_overflow {
-        return Ok(RouteAttemptResult::RetryableContextOverflow);
+    if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
+        return Ok(result);
     }
 
     if !(200..300).contains(&probe.status_code) {

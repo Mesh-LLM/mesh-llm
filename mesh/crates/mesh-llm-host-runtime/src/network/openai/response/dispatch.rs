@@ -50,8 +50,8 @@ pub(in crate::network::openai::response) async fn relay_probed_response<R: Async
         return Ok(result);
     }
 
-    if retry_policy.context_overflow && probe.retryable_context_overflow {
-        return Ok(RouteAttemptResult::RetryableContextOverflow);
+    if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
+        return Ok(result);
     }
     if !(200..300).contains(&probe.status_code) {
         if tcp_stream.is_anthropic() {

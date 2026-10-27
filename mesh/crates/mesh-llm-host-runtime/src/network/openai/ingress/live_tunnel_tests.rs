@@ -291,6 +291,18 @@ async fn installed_lifecycle_quic_gateway_and_server_share_exchange_identity() {
     assert_eq!(buyer_received["observation_point"], "gateway_ingress");
     assert_eq!(seller_received["observation_point"], "serving_host_ingress");
     assert!(buyer_received["exchange_id"].as_str().is_some());
+    // The seller's gate learns WHO is asking at admission time, from the QUIC
+    // connection (never a header), and its terminal names the same peer, so a
+    // gate plugin can key per-peer state on one identity across both phases.
+    // The gateway side names no peer: its client is a local HTTP caller.
+    let buyer_hex = serde_json::json!(hex::encode(buyer_id.as_bytes()));
+    assert_eq!(seller_received["requested_by_node_id"], buyer_hex);
+    assert!(buyer_received.get("requested_by_node_id").is_none());
+    let seller_terminal = seller_events
+        .iter()
+        .find(|event| event["phase"] == "exchange_finished")
+        .unwrap();
+    assert_eq!(seller_terminal["requested_by_node_id"], buyer_hex);
     for events in [&buyer_events, &seller_events] {
         for event in events.iter().filter(|event| {
             event["phase"] == "request_received" || event["phase"] == "exchange_finished"
