@@ -1,65 +1,125 @@
-//! Retain native KV extent observations before the server removes its runtime directory.
+//! Retain only numeric native KV observations from the standalone Skippy CLI.
 use std::{
     fs::File,
-    io::{self, BufRead, BufReader, BufWriter, ErrorKind, Seek, SeekFrom, Write},
+    io::{self, BufWriter, ErrorKind, Write},
     path::Path,
 };
 
-const MAX_READ_BYTES: u64 = 32 * 1024 * 1024;
+use crate::process::{ObservedLine, Stream, retained::MemberId};
 
-pub(super) fn capture(runtime_root: &Path, server_pid: u32, output: &Path) -> io::Result<usize> {
-    let source = runtime_root
-        .join(server_pid.to_string())
-        .join("logs/skippy-native.log");
-    let mut native_log = File::open(&source)?;
-    let offset = native_log.metadata()?.len().saturating_sub(MAX_READ_BYTES);
-    native_log.seek(SeekFrom::Start(offset))?;
-    let mut reader = BufReader::new(native_log);
-    if offset > 0 {
-        let mut partial = String::new();
-        reader.read_line(&mut partial)?;
-    }
+const MAX_OBSERVATIONS: usize = 100_000;
 
-    let mut retained = BufWriter::new(File::create(output.join("native-kv-span.log"))?);
-    let mut count = 0usize;
-    for line in reader.lines() {
-        let line = line?;
-        if line.contains("find_slot: stream[") {
-            retained.write_all(line.as_bytes())?;
-            retained.write_all(b"\n")?;
-            count += 1;
+#[derive(Clone, Copy)]
+struct Observation {
+    stream: u32,
+    n: u32,
+    used: u32,
+    head: u32,
+    size: u32,
+    n_swa: u32,
+}
+
+#[derive(Default)]
+pub(super) struct NativeKvSpan {
+    observations: Vec<Observation>,
+    overflowed: bool,
+}
+
+impl NativeKvSpan {
+    pub(super) fn observe(&mut self, member: MemberId, line: &ObservedLine<'_>) {
+        if member != MemberId::Seed || line.stream != Stream::Stderr {
+            return;
+        }
+        let Some(observation) = parse_observation(line.bytes) else {
+            return;
+        };
+        if self.observations.len() == MAX_OBSERVATIONS {
+            self.overflowed = true;
+        } else {
+            self.observations.push(observation);
         }
     }
-    retained.flush()?;
-    if count == 0 {
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            "native KV span log had no find_slot observations",
-        ));
+
+    pub(super) fn save(&self, output: &Path) -> io::Result<usize> {
+        if self.observations.is_empty() || self.overflowed {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "native KV span observations absent or exceeded the bounded capture",
+            ));
+        }
+        let mut retained = BufWriter::new(File::create(output.join("native-kv-span.log"))?);
+        for observation in &self.observations {
+            writeln!(
+                retained,
+                "find_slot: stream[{}], n = {}, used = {}, head = {}, size = {}, n_swa = {}",
+                observation.stream,
+                observation.n,
+                observation.used,
+                observation.head,
+                observation.size,
+                observation.n_swa,
+            )?;
+        }
+        retained.flush()?;
+        Ok(self.observations.len())
     }
-    Ok(count)
+}
+
+fn parse_observation(bytes: &[u8]) -> Option<Observation> {
+    let line = std::str::from_utf8(bytes).ok()?;
+    let (_, values) = line.split_once("find_slot: stream[")?;
+    let (stream, values) = values.split_once("], n =")?;
+    let (n, values) = values.split_once(", used =")?;
+    let (used, values) = values.split_once(", head =")?;
+    let (head, values) = values.split_once(", size =")?;
+    let (size, values) = values.split_once(", n_swa =")?;
+    Some(Observation {
+        stream: stream.trim().parse().ok()?,
+        n: n.trim().parse().ok()?,
+        used: used.trim().parse().ok()?,
+        head: head.trim().parse().ok()?,
+        size: size.trim().parse().ok()?,
+        n_swa: values.trim().parse().ok()?,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::LineEnding;
 
     #[test]
-    fn preserves_only_native_kv_extents_before_runtime_cleanup() {
+    fn saves_only_numeric_standalone_native_observations() {
         let dir = tempfile::tempdir().unwrap();
-        let runtime = dir.path().join("runtime/42/logs");
-        std::fs::create_dir_all(&runtime).unwrap();
-        std::fs::write(
-            runtime.join("skippy-native.log"),
-            "model metadata\nfind_slot: stream[0], n = 256, used = 128, head = 256, size = 4096, n_swa = 0\nother debug\nfind_slot: stream[0], n = 512, used = 256, head = 512, size = 4096, n_swa = 0\n",
-        )
-        .unwrap();
-        assert_eq!(
-            capture(&dir.path().join("runtime"), 42, dir.path()).unwrap(),
-            2
+        let mut span = NativeKvSpan::default();
+        let native =
+            b"find_slot: stream[0], n = 256, used = 128, head = 256, size = 4096, n_swa = 0";
+        span.observe(
+            MemberId::Seed,
+            &ObservedLine {
+                stream: Stream::Stderr,
+                bytes: native,
+                ending: LineEnding::Lf,
+            },
         );
+        span.observe(
+            MemberId::WorkerOne,
+            &ObservedLine {
+                stream: Stream::Stderr,
+                bytes: native,
+                ending: LineEnding::Lf,
+            },
+        );
+        span.observe(
+            MemberId::Seed,
+            &ObservedLine {
+                stream: Stream::Stderr,
+                bytes: b"find_slot: stream[secret], n = prompt",
+                ending: LineEnding::Lf,
+            },
+        );
+        assert_eq!(span.save(dir.path()).unwrap(), 1);
         let saved = std::fs::read_to_string(dir.path().join("native-kv-span.log")).unwrap();
-        assert_eq!(saved.lines().count(), 2);
-        assert!(!saved.contains("model metadata"));
+        assert_eq!(saved.trim(), std::str::from_utf8(native).unwrap());
     }
 }
