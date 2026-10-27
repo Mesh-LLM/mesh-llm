@@ -27,10 +27,14 @@ pub(super) struct NativeKvSpan {
 
 impl NativeKvSpan {
     pub(super) fn observe(&mut self, member: MemberId, line: &ObservedLine<'_>) {
-        if member != MemberId::Seed || line.stream != Stream::Stderr {
+        if member != MemberId::Seed {
             return;
         }
-        let Some(observation) = parse_observation(line.bytes) else {
+        let observation = match line.stream {
+            Stream::Stdout => parse_jsonl_observation(line.bytes),
+            Stream::Stderr => parse_observation(line.bytes),
+        };
+        let Some(observation) = observation else {
             return;
         };
         if self.observations.len() == MAX_OBSERVATIONS {
@@ -63,6 +67,20 @@ impl NativeKvSpan {
         retained.flush()?;
         Ok(self.observations.len())
     }
+}
+
+fn parse_jsonl_observation(bytes: &[u8]) -> Option<Observation> {
+    if !std::str::from_utf8(bytes)
+        .ok()?
+        .contains("find_slot: stream[")
+    {
+        return None;
+    }
+    let event: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    if event.get("type")?.as_str()? != "native_log" {
+        return None;
+    }
+    parse_observation(event.pointer("/data/message")?.as_str()?.as_bytes())
 }
 
 fn parse_observation(bytes: &[u8]) -> Option<Observation> {
@@ -121,5 +139,32 @@ mod tests {
         assert_eq!(span.save(dir.path()).unwrap(), 1);
         let saved = std::fs::read_to_string(dir.path().join("native-kv-span.log")).unwrap();
         assert_eq!(saved.trim(), std::str::from_utf8(native).unwrap());
+    }
+
+    #[test]
+    fn captures_native_kv_spans_from_standalone_jsonl_stdout() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut span = NativeKvSpan::default();
+        let native = br#"{"data":{"message":"find_slot: stream[0], n = 256, used = 128, head = 256, size = 4096, n_swa = 0\n"},"schema_version":1,"sequence":17,"type":"native_log"}"#;
+        for (member, bytes) in [
+            (MemberId::Seed, native.as_slice()),
+            (MemberId::WorkerOne, native.as_slice()),
+            (MemberId::Seed, br#"{"data":{"message":"find_slot: stream[1], n = 1, used = 1, head = 1, size = 1, n_swa = 0"},"type":"status"}"#.as_slice()),
+        ] {
+            span.observe(
+                member,
+                &ObservedLine {
+                    stream: Stream::Stdout,
+                    bytes,
+                    ending: LineEnding::Lf,
+                },
+            );
+        }
+        assert_eq!(span.save(dir.path()).unwrap(), 1);
+        let saved = std::fs::read_to_string(dir.path().join("native-kv-span.log")).unwrap();
+        assert_eq!(
+            saved.trim(),
+            "find_slot: stream[0], n = 256, used = 128, head = 256, size = 4096, n_swa = 0"
+        );
     }
 }
