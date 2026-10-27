@@ -795,6 +795,24 @@ Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
 
+## Proving a lane change before merge
+
+PR entrypoints call the protected default-branch lanes
+(`ci-<platform>-lane.yml@main`), so a PR that edits a lane, slice, or local
+action does **not** execute its own change in its PR checks; the first real
+execution is the next `main` push after merge. Do not describe a PR's green
+lanes as evidence for such a change.
+
+For CI-plumbing PRs, attach lane-dispatch evidence from the branch instead:
+generate a plan locally (`cargo xtool ci plan --manifest-root .` with the PR's
+changed files and the `pr-ready` profile), project the lane exactly as
+`.github/actions/plan-ci` does, narrow its matrices to the rows under test,
+and run `gh workflow run ci-<platform>-lane.yml --ref <branch>` with
+`lane_plan_json`, `plan_digest`, `source_sha` (the branch head) and
+`original_event_name=workflow_dispatch`. Where the change is a new gate, run
+it twice — once on a branch without the fix it is meant to catch (expected
+red) and once with it (expected green) — and link both runs in the PR.
+
 ## Rolling previews
 
 The main-only rolling-preview dispatcher reuses the canonical release pipeline,
