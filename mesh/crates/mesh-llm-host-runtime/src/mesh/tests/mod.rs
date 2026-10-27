@@ -12,6 +12,7 @@ include!("endpoint_shutdown.rs");
 include!("protocol_compat.rs");
 include!("owner_control.rs");
 include!("stage_transport.rs");
+include!("stage_control_identity.rs");
 include!("peer_state.rs");
 include!("protocol_frames.rs");
 include!("admission.rs");
