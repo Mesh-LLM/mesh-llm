@@ -7,6 +7,7 @@ use sha2::Digest;
 
 use crate::{
     archive::{ExtractedPluginArchive, extract_plugin_archive},
+    asset::PluginAsset,
     catalog::PluginCatalog,
     github::{GitHubReleaseAsset, GitHubReleaseClient},
     select_plugin_asset,
@@ -248,6 +249,43 @@ struct ResolvedInstallSource {
     version: Option<PluginVersion>,
 }
 
+/// Suffix the Mesh-LLM org uses to mark a repository as a plugin.
+///
+/// It belongs to the repository name only: a plugin keeps publishing its
+/// release assets, archive directory and executable under its own name, so the
+/// suffix is not part of the installed identity.
+const PLUGIN_REPOSITORY_SUFFIX: &str = "-plugin";
+
+/// Pick the release asset and the plugin identity it belongs to.
+///
+/// An `owner/repo` install takes its identity from the repository name, while a
+/// catalog install takes it from the catalog entry. Repositories that follow the
+/// `<plugin>-plugin` naming convention still publish assets as `<plugin>-*`, so
+/// when no asset matches the repository name we retry once with that suffix
+/// removed. A repository that does publish `<repo>-*` assets keeps its name as
+/// the identity, so existing plugins are unaffected.
+fn select_install_asset(
+    requested_name: &str,
+    version: &PluginVersion,
+    target: &PluginTarget,
+    asset_names: &[String],
+) -> Result<(String, PluginAsset)> {
+    let requested = select_plugin_asset(requested_name, Some(version), target, asset_names);
+    let requested_error = match requested {
+        Ok(asset) => return Ok((requested_name.to_string(), asset)),
+        Err(error) => error,
+    };
+    let Some(identity) = requested_name.strip_suffix(PLUGIN_REPOSITORY_SUFFIX) else {
+        return Err(requested_error);
+    };
+    match select_plugin_asset(identity, Some(version), target, asset_names) {
+        Ok(asset) => Ok((identity.to_string(), asset)),
+        // Neither name has a usable asset: report the release as missing the
+        // plugin the caller asked for, not a name they never mentioned.
+        Err(_) => Err(requested_error),
+    }
+}
+
 async fn resolve_install_source(
     parsed: PluginInstallRef,
     options: &PluginInstallOptions,
@@ -277,7 +315,7 @@ async fn resolve_install_source(
 }
 
 async fn install_resolved_plugin(
-    resolved: ResolvedInstallSource,
+    mut resolved: ResolvedInstallSource,
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
     current: Option<InstalledPluginMetadata>,
@@ -307,12 +345,13 @@ async fn install_resolved_plugin(
         target: options.target.triple().to_string(),
     });
     let asset_names = release.asset_names();
-    let selected = select_plugin_asset(
+    let (plugin_name, selected) = select_install_asset(
         &resolved.plugin_name,
-        Some(&PluginVersion::new(release.tag_name.clone())?),
+        &PluginVersion::new(release.tag_name.clone())?,
         &options.target,
         &asset_names,
     )?;
+    resolved.plugin_name = plugin_name;
     let asset = release
         .asset_by_name(&selected.name)
         .with_context(|| format!("selected asset '{}' missing from release", selected.name))?;
@@ -921,5 +960,71 @@ mod tests {
             );
             assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
         }
+    }
+
+    fn asset_names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn a_plugin_repository_suffix_is_not_part_of_the_installed_identity() {
+        let target = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
+        let version = PluginVersion::new("v0.1.0").unwrap();
+        let assets = asset_names(&[
+            "agents-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+            "agents-x86_64-unknown-linux-gnu.tar.gz",
+            "agents-x86_64-pc-windows-msvc.zip",
+        ]);
+
+        let (identity, asset) =
+            select_install_asset("agents-plugin", &version, &target, &assets).unwrap();
+
+        assert_eq!(identity, "agents");
+        assert_eq!(asset.name, "agents-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+    }
+
+    #[test]
+    fn a_repository_that_publishes_its_own_assets_keeps_its_name() {
+        let target = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
+        let version = PluginVersion::new("v0.1.0").unwrap();
+        let assets = asset_names(&[
+            "cool-plugin-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+            "cool-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+        ]);
+
+        let (identity, asset) =
+            select_install_asset("cool-plugin", &version, &target, &assets).unwrap();
+
+        assert_eq!(identity, "cool-plugin");
+        assert_eq!(
+            asset.name,
+            "cool-plugin-v0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+        );
+    }
+
+    #[test]
+    fn a_plain_repository_name_still_matches_its_own_assets() {
+        let target = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
+        let version = PluginVersion::new("v0.1.0").unwrap();
+        let assets = asset_names(&["metrics-v0.1.0-x86_64-unknown-linux-gnu.tar.gz"]);
+
+        let (identity, asset) =
+            select_install_asset("metrics", &version, &target, &assets).unwrap();
+
+        assert_eq!(identity, "metrics");
+        assert_eq!(asset.name, "metrics-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+    }
+
+    #[test]
+    fn an_unmatched_name_reports_the_name_the_caller_asked_for() {
+        let target = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
+        let version = PluginVersion::new("v0.1.0").unwrap();
+        let assets = asset_names(&["something-else-v0.1.0-x86_64-unknown-linux-gnu.tar.gz"]);
+
+        let error = select_install_asset("missing-plugin", &version, &target, &assets).unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("missing-plugin"), "{message}");
+        assert!(message.contains("x86_64-unknown-linux-gnu"), "{message}");
     }
 }

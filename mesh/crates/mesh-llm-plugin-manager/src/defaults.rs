@@ -121,7 +121,7 @@ impl DefaultPlugin {
 pub const DEFAULT_PLUGINS: &[DefaultPlugin] = &[DefaultPlugin {
     name: "capsules",
     version: "0.1.4",
-    repository: "Mesh-LLM/capsules",
+    repository: "Mesh-LLM/capsules-plugin",
     sha256: &[
         (
             "aarch64-apple-darwin",

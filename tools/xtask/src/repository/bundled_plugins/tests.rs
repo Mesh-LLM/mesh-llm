@@ -66,7 +66,7 @@ fn the_shipped_defaults_parse() {
         assert_eq!(default.bundle_line("x86_64-pc-windows-msvc"), None);
     }
     let capsules = defaults.iter().find(|d| d.name == "capsules").unwrap();
-    assert_eq!(capsules.repository, "Mesh-LLM/capsules");
+    assert_eq!(capsules.repository, "Mesh-LLM/capsules-plugin");
 }
 
 #[test]
