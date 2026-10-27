@@ -142,7 +142,7 @@ positions. It excludes raw prompts, cache keys and arbitrary telemetry fields;
 `server.stderr.log` remains sanitized and size-limited, so it is not a complete
 cache-decision trace.
 With `SKIPPY_EXACT_STATE_DIAGNOSTICS=1`, `exact_state_events` counts every
-recognized resident-checkpoint drop, demotion, publication and eviction.
+recognized resident-checkpoint change, demotion, publication and eviction.
 `exact_state_samples` retains
 at most 512 of those events with sequence numbers and allowlisted numeric
 positions, byte sizes and limits; `omitted_exact_state_samples` counts any
