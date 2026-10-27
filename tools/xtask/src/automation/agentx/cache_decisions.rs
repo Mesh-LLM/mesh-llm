@@ -12,6 +12,15 @@ pub(super) struct CacheDecisions {
     events: Vec<CacheDecision>,
     omitted_events: u64,
     exact_state_events: BTreeMap<&'static str, u64>,
+    exact_state_samples: Vec<ExactStateSample>,
+    omitted_exact_state_samples: u64,
+}
+
+#[derive(Serialize)]
+struct ExactStateSample {
+    event: &'static str,
+    sequence: Option<u64>,
+    fields: BTreeMap<&'static str, u64>,
 }
 
 #[derive(Serialize)]
@@ -27,7 +36,7 @@ struct CacheDecision {
 impl CacheDecisions {
     pub(super) fn new() -> Self {
         Self {
-            schema_version: 3,
+            schema_version: 4,
             ..Self::default()
         }
     }
@@ -38,10 +47,20 @@ impl CacheDecisions {
         }
         let exact_state = match line.stream {
             Stream::Stdout => exact_state_jsonl_event(line.bytes),
-            Stream::Stderr => exact_state_event(line.bytes),
+            Stream::Stderr => exact_state_event(line.bytes).map(|event| ExactStateSample {
+                event,
+                sequence: None,
+                fields: BTreeMap::new(),
+            }),
         };
-        if let Some(event) = exact_state {
-            *self.exact_state_events.entry(event).or_default() += 1;
+        if let Some(sample) = exact_state {
+            *self.exact_state_events.entry(sample.event).or_default() += 1;
+            if self.exact_state_samples.len() < MAX_EVENTS {
+                self.exact_state_samples.push(sample);
+            } else {
+                self.omitted_exact_state_samples =
+                    self.omitted_exact_state_samples.saturating_add(1);
+            }
             return;
         }
         if line.stream != Stream::Stderr {
@@ -58,7 +77,7 @@ impl CacheDecisions {
     }
 }
 
-fn exact_state_jsonl_event(line: &[u8]) -> Option<&'static str> {
+fn exact_state_jsonl_event(line: &[u8]) -> Option<ExactStateSample> {
     if !std::str::from_utf8(line)
         .ok()?
         .contains("Skippy exact-state ")
@@ -69,7 +88,38 @@ fn exact_state_jsonl_event(line: &[u8]) -> Option<&'static str> {
     if event.get("type")?.as_str()? != "info" {
         return None;
     }
-    exact_state_event(event.pointer("/data/message")?.as_str()?.as_bytes())
+    let kind = exact_state_event(event.pointer("/data/message")?.as_str()?.as_bytes())?;
+    let fields = event
+        .pointer("/data/context")
+        .and_then(Value::as_str)
+        .map(exact_state_numeric_fields)
+        .unwrap_or_default();
+    Some(ExactStateSample {
+        event: kind,
+        sequence: event.get("sequence").and_then(Value::as_u64),
+        fields,
+    })
+}
+
+fn exact_state_numeric_fields(context: &str) -> BTreeMap<&'static str, u64> {
+    context
+        .split_whitespace()
+        .filter_map(|field| {
+            let (key, value) = field.split_once('=')?;
+            let name = match key {
+                "position" => "position",
+                "logical_bytes" => "logical_bytes",
+                "physical_bytes" => "physical_bytes",
+                "limit_bytes" => "limit_bytes",
+                "max_entries" => "max_entries",
+                "kv_bytes" => "kv_bytes",
+                "recurrent_bytes" => "recurrent_bytes",
+                "pending_bytes" => "pending_bytes",
+                _ => return None,
+            };
+            Some((name, value.parse().ok()?))
+        })
+        .collect()
 }
 
 fn exact_state_event(line: &[u8]) -> Option<&'static str> {
@@ -260,7 +310,7 @@ mod tests {
     fn counts_standalone_jsonl_exact_state_events_without_retaining_context() {
         let mut decisions = CacheDecisions::new();
         for bytes in [
-            br#"{"data":{"context":"position=155509 secret=private-prompt","message":"Skippy exact-state demotion_byte_full"},"schema_version":1,"sequence":17,"type":"info"}"#.as_slice(),
+            br#"{"data":{"context":"position=155509 logical_bytes=123 physical_bytes=456 limit_bytes=789 secret=private-prompt","message":"Skippy exact-state demotion_byte_full"},"schema_version":1,"sequence":17,"type":"info"}"#.as_slice(),
             br#"{"data":{"message":"Skippy exact-state demotion_queued"},"type":"info"}"#.as_slice(),
             br#"{"data":{"message":"Skippy exact-state demotion_credit_full"},"type":"native_log"}"#.as_slice(),
         ] {
@@ -276,8 +326,38 @@ mod tests {
         let projected = serde_json::to_string(&decisions).unwrap();
         assert!(projected.contains("\"demotion_byte_full\":1"));
         assert!(projected.contains("\"demotion_queued\":1"));
+        assert_eq!(decisions.exact_state_samples[0].sequence, Some(17));
+        assert_eq!(decisions.exact_state_samples[0].fields["position"], 155509);
+        assert_eq!(
+            decisions.exact_state_samples[0].fields["logical_bytes"],
+            123
+        );
+        assert_eq!(
+            decisions.exact_state_samples[0].fields["physical_bytes"],
+            456
+        );
+        assert_eq!(decisions.exact_state_samples[0].fields["limit_bytes"], 789);
         assert!(!projected.contains("demotion_credit_full"));
         assert!(!projected.contains("private-prompt"));
+    }
+
+    #[test]
+    fn bounds_exact_state_samples_while_counting_every_event() {
+        let raw = br#"{"data":{"context":"position=42","message":"Skippy exact-state evicted_l1_soft"},"type":"info"}"#;
+        let mut decisions = CacheDecisions::new();
+        for _ in 0..=MAX_EVENTS {
+            decisions.observe(
+                MemberId::Seed,
+                ObservedLine {
+                    stream: Stream::Stdout,
+                    bytes: raw,
+                    ending: crate::process::LineEnding::Lf,
+                },
+            );
+        }
+        assert_eq!(decisions.exact_state_samples.len(), MAX_EVENTS);
+        assert_eq!(decisions.omitted_exact_state_samples, 1);
+        assert_eq!(decisions.exact_state_events["evicted_l1_soft"], 513);
     }
 
     #[test]
