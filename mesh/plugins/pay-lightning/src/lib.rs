@@ -1,4 +1,5 @@
 //! Credit-first plugin protocol. A prepared admission is single-use and owner-bound.
+pub mod diagnostics;
 mod tickets;
 pub mod wallet_child;
 mod wallet_transport;
@@ -47,6 +48,21 @@ pub enum Message {
     Abandoned {
         id: String,
     },
+}
+
+impl Message {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Hello { .. } => "hello",
+            Self::Quote => "quote",
+            Self::Admission { .. } => "admission",
+            Self::Paid { .. } => "paid",
+            Self::Ready { .. } => "ready",
+            Self::Settlement { .. } => "settlement",
+            Self::Recover { .. } => "recover",
+            Self::Abandoned { .. } => "abandoned",
+        }
+    }
 }
 
 pub struct Engine {

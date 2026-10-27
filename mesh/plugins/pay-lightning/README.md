@@ -77,3 +77,17 @@ The wallet state lives at `$PAY_LIGHTNING_DATA/wallet`. Its wallet identity is d
 - Recovery runs on PEER_UP. There is no general periodic reconnect/retry coordinator yet; malformed/failed messages need operator inspection, not blind money-moving retries.
 - This spike has no plugin UI/config schema, generic wallet operations, portable Windows wallet-child transport, release archive, or migration. It is not production ready.
 - Unit/channel tests and a real **mock** wallet subprocess validate C. Real Lexe money movement, host-installed paid inference, two-node cooldown/failover, and crash/disconnect timing remain slice D validation.
+
+### Opt-in latency diagnostics
+
+Set `PAY_LIGHTNING_TIMING_LOG` to an absolute, plugin-owned JSONL file path
+on each role. Records contain wall-clock microseconds, process id, phase,
+operation, begin/end boundary and monotonic elapsed microseconds. They cover
+channel send calls, channel handler execution and wallet operation/startup calls.
+No invoice, payment hash, peer identity, response or error payload is recorded.
+An unset variable produces no output; write failures do not change payments.
+Handler begin is **not** transport receipt: time queued in the host or plugin
+runtime precedes it. Send end acknowledges the local send API, not remote receipt.
+End records also occur on error/cancellation and do not imply success. These
+boundaries narrow transport-versus-handler delays but do not measure wire transit
+or identify a specific exchange when same-kind operations overlap.

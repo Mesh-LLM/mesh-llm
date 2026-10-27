@@ -114,6 +114,10 @@ async fn main() -> Result<()> {
                 let result: Result<()> = async {
                     ensure!(message.channel == CHANNEL, "unexpected channel");
                     let message_body: Message = serde_json::from_slice(&message.body)?;
+                    let _timing = mesh_pay_lightning::diagnostics::Timing::start(
+                        "channel_receive_handler",
+                        message_body.kind(),
+                    );
                     let ready = match &message_body {
                         Message::Ready { id } => Some(id.clone()),
                         _ => None,
@@ -215,6 +219,7 @@ async fn main() -> Result<()> {
 }
 
 async fn send(context: &mut PluginContext<'_>, peer: &str, message: &Message) -> Result<()> {
+    let _timing = mesh_pay_lightning::diagnostics::Timing::start("channel_send", message.kind());
     context
         .send_json_channel(CHANNEL, peer, "payment", message)
         .await

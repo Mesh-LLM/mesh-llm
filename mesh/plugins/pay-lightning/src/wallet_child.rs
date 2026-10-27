@@ -23,6 +23,7 @@ impl ChildWallet {
         mut command: tokio::process::Command,
         directory: &Path,
     ) -> Result<Arc<Self>> {
+        let _timing = crate::diagnostics::Timing::start("wallet", "startup");
         // Fail on a corrupt pin before invoking a potentially provisioning process.
         let pinned = WalletPin::load(directory)?;
         tokio::fs::create_dir_all(directory).await?;
@@ -109,6 +110,7 @@ impl ChildWallet {
         operation: &str,
         input: &T,
     ) -> Result<R> {
+        let _timing = crate::diagnostics::Timing::start("wallet", operation);
         let reply = self
             .exchange(proto::envelope::Payload::InvokeServiceRequest(
                 proto::InvokeServiceRequest {
