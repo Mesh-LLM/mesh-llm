@@ -82,9 +82,12 @@ The adjudicator publishes, per model:
 
 ## Audit corpus
 
-- Versioned. A hash commitment to each version is published before it is used.
-- Prompts stay private while the version is in use and are published when it is
-  retired, so every record from that period becomes re-checkable.
+- Versioned. A hash commitment to each version is published before it is used;
+  it covers the version number, the prompts and the version's digest key
+  (below).
+- Prompts stay private while the version is in use. At retirement the prompts
+  and the key are published next to the commitment, so anyone can check them
+  against it, and every record from that period becomes re-checkable.
 - Records exchanged while a version is live carry a keyed prompt digest
   (HMAC-SHA-256 with a per-version key revealed at retirement), so a node cannot
   match its incoming requests against published digests. Provisional until the
@@ -102,5 +105,6 @@ The adjudicator publishes, per model:
 
 ## Re-checking a verdict
 
-With the retired corpus, the reference files and the records, anyone can render
-the same prompt, run the same prefill and recompute the score.
+With the retired corpus and its key, the reference files and the records,
+anyone can match each record to its prompt by recomputing the keyed digest,
+render the same prompt, run the same prefill and recompute the score.
