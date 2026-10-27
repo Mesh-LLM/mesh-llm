@@ -111,6 +111,8 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use std::net::TcpStream;
+    #[cfg(target_os = "linux")]
+    use std::os::fd::FromRawFd;
 
     fn loopback_accepted() -> TcpStream {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
