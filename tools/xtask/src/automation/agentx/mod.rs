@@ -13,6 +13,7 @@ mod hardware;
 mod inputs;
 mod lifecycle;
 mod memory;
+mod native_kv_span;
 mod overlap;
 mod phase_outcome;
 mod results;
