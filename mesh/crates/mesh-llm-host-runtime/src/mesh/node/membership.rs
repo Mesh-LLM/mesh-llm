@@ -376,6 +376,7 @@ impl Node {
             // Renewed in memory, never saved: the ownership file is the main
             // node's.
             owner_attestation_path: None,
+            unsaved_owner_attestation: Arc::default(),
             owner_summary: Arc::new(Mutex::new(owner_summary)),
             trust_store: Arc::new(Mutex::new(trust_store)),
             trust_policy: TrustPolicy::Allowlist,

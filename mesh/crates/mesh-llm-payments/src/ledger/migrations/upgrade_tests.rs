@@ -117,6 +117,39 @@ fn current_metered_records_survive_reopen() -> Result<()> {
     Ok(())
 }
 
+/// `metered_requests` as schema 5 created it, before `model`.
+const V5_METERED_REQUESTS: &str = "CREATE TABLE metered_requests(
+    id TEXT PRIMARY KEY, peer TEXT NOT NULL,
+    pricing TEXT NOT NULL,
+    require_deposit INTEGER NOT NULL, deposit_msat INTEGER NOT NULL,
+    dispatched INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL, outcome TEXT, bill_msat INTEGER,
+    deposit_paid_msat INTEGER NOT NULL DEFAULT 0, remaining_msat INTEGER NOT NULL DEFAULT 0
+);";
+
+#[test]
+fn schema_5_metered_records_gain_an_empty_model() -> Result<()> {
+    let mut c = Connection::open_in_memory()?;
+    // The old table first; the rest of the schema is unchanged since 5.
+    c.execute_batch(V5_METERED_REQUESTS)?;
+    c.execute_batch(include_str!("../schema.sql"))?;
+    admit(&c)?;
+    c.pragma_update(None, "user_version", 5)?;
+    initialize(&mut c)?;
+    initialize(&mut c)?;
+    assert_eq!(version(&c), VERSION);
+    let (model, deposit, floor): (String, i64, i64) = c.query_row(
+        "SELECT model,deposit_msat,min_payment_msat FROM metered_requests WHERE id='new'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    assert_eq!((model.as_str(), deposit, floor), ("", 1000, 1000));
+    assert!(tests::has_table(&c, "model_deposits"));
+    let count: u32 = c.query_row("SELECT COUNT(*) FROM metered_invoices", [], |r| r.get(0))?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
 #[test]
 fn corrupt_file_is_not_replaced() -> Result<()> {
     let dir = tempfile::tempdir()?;

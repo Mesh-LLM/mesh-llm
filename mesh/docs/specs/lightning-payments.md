@@ -21,7 +21,8 @@ full narrative is in this file's git history.
 
 Settled protocol rules (not open design choices):
 
-- Cold peers pay a flat **1 sat deposit**, deducted from the final bill.
+- Cold peers pay a flat deposit, **1 sat** by default, deducted from the
+  final bill.
 - After deduction, every positive remainder below **1 sat** produces a
   1-sat invoice; zero owes nothing and larger remainders preserve exact msat.
 - Invoice creation, like payment, has no host IPC deadline and is not
@@ -49,8 +50,9 @@ allowance terms, delivery watermarks, receivables or refunds.
    issued and unpaid final invoices.
 3. The provider replies `Admission` with frozen `AdmissionTerms` (`id`,
    `model`, `pricing`, `deposit_msat`). Unless the peer is
-   in the provider's trust cache, the terms carry a deposit invoice for a
-   flat 1 sat (1000 msat). It only proves the buyer can pay before backend
+   in the provider's trust cache, the terms carry a deposit invoice for the
+   seller's admission deposit (1 sat by default; see "Prices, fees, and token
+   accounting"). It only proves the buyer can pay before backend
    work starts. The deposit is applied against the final bill; it is not an
    extra fee, a reservation or an input-token claim.
 4. The payer validates the terms against its request and its local admission policy,
@@ -140,7 +142,7 @@ request is abandoned.
 
 Before first opening an old ledger, stop its owning payment service and back up
 `payments.sqlite3` together with any `payments.sqlite3-wal` and
-`payments.sqlite3-shm` sidecars. This is a one-way schema upgrade to version 5;
+`payments.sqlite3-shm` sidecars. This is a one-way schema upgrade to version 6;
 older binaries reject the newer version. Rollback requires the pre-upgrade
 backup, not changing `user_version` by hand.
 
@@ -153,7 +155,12 @@ backup, not changing `user_version` by hand.
   admission/payee settings, fail before migration writes. Records and schema
   version are retained; matching SQL shapes cannot identify billing semantics. Use a backup
   and a compatible binary or an explicit migration; never delete financial
-  records just to make startup pass. Fresh schema-5 ledgers use the current metered billing rules.
+  records just to make startup pass. Fresh schema-6 ledgers use the current metered billing rules.
+- Version 5: metered records gain the model each request was admitted for,
+  which binds a reused request ID to its model, and the minimum payment
+  recorded at admission; per-model deposits get their own table. Rows admitted
+  before the upgrade get an empty model and the 1-sat minimum; a request still
+  admitted then is abandoned at startup, as after any restart.
 - Corrupt/non-SQLite files and future schema versions fail to open; they are
   not replaced with an empty ledger.
 
@@ -452,7 +459,7 @@ tokens. Free serving is the default. Charges use wide integer arithmetic and
 ceiling division to the msat. Bills are recorded to the msat, but every
 Lightning payment has a minimum payment, default 1 sat (`PAYMENT_FLOOR_MSAT`):
 live Lexe payments of 60 and 90 msat found no route while 1000 msat and above
-settled. The deposit is exactly the minimum. The final remainder is invoiced
+settled. The final remainder is invoiced
 exact to the msat; every positive remainder below the minimum is raised to it.
 A zero remainder has no final invoice. Both sides derive it from
 `final_invoice_msat`, so this rounding is part of the `/mesh/payment/v3` wire
@@ -461,9 +468,30 @@ contract. Operators override the minimum with `mesh-llm wallet min-payment
 `AdmissionTerms.min_payment_msat`, omitted at the 1-sat default so older peers
 still parse the terms. A buyer refuses admission when the seller's minimum is
 above its own configured minimum, so raising it needs buyers to opt in. The
-seller reads its current minimum at admission and again at settlement; changing
-it while a request is in flight can make that request's final invoice fail the
-buyer's check. The deprecated
+seller records its minimum when it admits a request and uses that value for the
+request's replayed terms and final invoice, so changing it affects only new
+admissions.
+
+The admission deposit, what a peer outside the trust cache pays the inferencer
+before it serves, is a separate setting: `mesh-llm wallet admission-deposit
+--sats N` (1..=1000, ledger setting). Unset, it equals the minimum payment;
+`--default` unsets it again.
+A priced model can ask its own deposit with `mesh-llm wallet pricing MODEL
+--deposit-sats N`; `--default-deposit` returns it to the node-wide one, and
+pricing the model free drops it. Model deposits are keyed by the priced name,
+like rates, and are not gossiped: a buyer learns the amount at admission. A
+deposit is never below the minimum payment in force when the request is
+admitted, because the deposit is itself a Lightning payment; raising the
+minimum above a configured deposit raises the deposit with it. The seller
+records the deposit with the minimum at admission and the request keeps both,
+so a change affects only new admissions. The amount travels as
+`AdmissionTerms.deposit_msat`, which has always been on the wire. A buyer
+refuses admission when the seller's deposit is above its own node-wide
+admission deposit (its model deposits play no part as a buyer), the same
+opt-in as the minimum; a deposit larger than the bill is
+kept, so a larger deposit is what a buyer risks per unserved or tiny request.
+Releases before this setting require the deposit to equal the minimum, so a
+seller whose deposit differs from its minimum cannot admit them. The deprecated
 `LightningOffer.minimum_invoice_msat` gossip field is sent as 1 and ignored
 on read. The seller
 refuses admission when the pricing in the `Request` differs from its current
@@ -664,6 +692,11 @@ mesh-llm wallet pricing MODEL --input-msat-per-million 500 --output-msat-per-mil
 mesh-llm wallet pricing MODEL --free
 mesh-llm wallet min-payment
 mesh-llm wallet min-payment --sats 2
+mesh-llm wallet admission-deposit
+mesh-llm wallet admission-deposit --sats 10
+mesh-llm wallet admission-deposit --default
+mesh-llm wallet pricing MODEL --deposit-sats 50
+mesh-llm wallet pricing MODEL --default-deposit
 ```
 
 `balance`, `transactions`, and `fund` are aliases. `wallet --port PORT` selects
@@ -679,8 +712,9 @@ Applications POST JSON to `/api/wallet` on the local management port:
 
 Commands are `balance`, `transactions` (`limit`), `fund`, `inspect_invoice`
 (`invoice`), `send` (`invoice`, optional `amount_msat`, `max_fee_msat`), `pending`,
-`blocked`, `unblock` (`peer`), `unpin`, `policy` (optional `value`), `pricing`, and
-`set_pricing`
+`blocked`, `unblock` (`peer`), `unpin`, `policy` (optional `value`), `min_payment` and
+`admission_deposit` (optional `value_msat`, or `reset`), `set_model_admission_deposit`
+(`model`, nullable `value_msat`), `pricing`, and `set_pricing`
 (`model`, nullable `value`). `expected_pid` and `expected_directory` are optional
 local destination checks. The balance response exposes `spendable_msat` and
 `available_for_inference_msat` after policy and recorded settled spending. `pending` returns

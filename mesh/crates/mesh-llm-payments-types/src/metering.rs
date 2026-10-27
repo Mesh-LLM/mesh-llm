@@ -47,8 +47,9 @@ impl MeteredUsage {
 /// value travels in [`crate::metered_wire::AdmissionTerms`].
 pub const PAYMENT_FLOOR_MSAT: u64 = 1_000;
 
-/// Largest minimum payment an operator may configure (1000 sats), so a typo
-/// cannot turn every tiny request into a large charge.
+/// Largest minimum payment or deposit an operator may configure (1000 sats),
+/// so a typo cannot turn every tiny request into a large charge. A deposit is
+/// kept even when it exceeds the bill, so this also bounds what one costs a buyer.
 pub const MAX_PAYMENT_FLOOR_MSAT: u64 = 1_000_000;
 
 /// Reject a minimum payment outside `1..=MAX_PAYMENT_FLOOR_MSAT` msat.
@@ -60,10 +61,19 @@ pub fn validate_payment_floor(floor_msat: u64) -> Result<()> {
     Ok(())
 }
 
+/// Reject a deposit outside `1..=MAX_PAYMENT_FLOOR_MSAT` msat. A seller that asks
+/// no deposit states 0 in the admission terms instead.
+pub fn validate_deposit(deposit_msat: u64) -> Result<()> {
+    anyhow::ensure!(
+        (1..=MAX_PAYMENT_FLOOR_MSAT).contains(&deposit_msat),
+        "deposit must be 1..={MAX_PAYMENT_FLOOR_MSAT} msat"
+    );
+    Ok(())
+}
+
 /// What the seller invoices after the deposit: `bill - deposit`, exact to the
 /// msat. Only a remainder below the minimum payment is rounded: every positive
-/// remainder under `floor_msat` is raised to `floor_msat`. The flat deposit a
-/// peer outside the trust cache pays is also `floor_msat`.
+/// remainder under `floor_msat` is raised to `floor_msat`.
 /// Buyer and seller both derive the invoice from this one function.
 pub fn final_invoice_msat(bill_msat: u64, deposit_applied_msat: u64, floor_msat: u64) -> u64 {
     let remaining = bill_msat.saturating_sub(deposit_applied_msat);
