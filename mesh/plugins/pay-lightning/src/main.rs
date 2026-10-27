@@ -11,7 +11,11 @@ use std::{path::PathBuf, sync::Arc};
 
 fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
     let mut hook = mesh_llm_plugin::openai_exchange::openai_exchange_hook("payment_gate");
-    hook.phases = vec!["request_received".into(), "exchange_finished".into()];
+    hook.phases = vec![
+        "request_received".into(),
+        "backend_selected".into(),
+        "exchange_finished".into(),
+    ];
     hook.required = true;
     hook.admission = true;
     hook.headers = vec![header.into()];
@@ -171,6 +175,29 @@ async fn main() -> Result<()> {
                     });
                     return Ok(Default::default());
                 }
+                if event["phase"] == "backend_selected"
+                    && let Some(peer) = event["target_peer_id"].as_str()
+                    && engine.cap_msat > 0
+                    && engine.buy_peers.contains(peer)
+                {
+                    let result: Result<_> = async {
+                        let model = event["model"].as_str().context("selected model missing")?;
+                        tokio::time::timeout(std::time::Duration::from_secs(28), async {
+                            for message in engine.peer_up(peer).await? {
+                                send(&mut context, peer, &message).await?;
+                            }
+                            engine
+                                .buyer_wait(peer, model, std::time::Duration::from_secs(28))
+                                .await
+                        })
+                        .await
+                        .context("seller admission deadline exceeded")?
+                    }
+                    .await;
+                    return result.map_err(|error| {
+                        mesh_llm_plugin::PluginError::internal(error.to_string())
+                    });
+                }
                 engine
                     .gate_wait(&event, std::time::Duration::from_secs(28))
                     .await
@@ -209,7 +236,10 @@ mod tests {
         let hook = manifest.openai_exchange_hook.unwrap();
         assert!(hook.required && hook.admission && hook.metadata);
         assert!(!hook.request_body && !hook.response_body && !hook.delegate_signing_key);
-        assert_eq!(hook.phases, vec!["request_received", "exchange_finished"]);
+        assert_eq!(
+            hook.phases,
+            vec!["request_received", "backend_selected", "exchange_finished"]
+        );
         assert_eq!(manifest.mesh_channels.len(), 1);
         assert_eq!(manifest.mesh_channels[0].name, CHANNEL);
     }

@@ -52,6 +52,8 @@ pub enum Message {
 pub struct Engine {
     known: std::sync::Mutex<BTreeSet<String>>,
     vouched: std::sync::Mutex<BTreeSet<String>>,
+    ready_seen: std::sync::Mutex<BTreeSet<String>>,
+    buyer_ready: std::sync::Mutex<BTreeSet<(String, String)>>,
     changed: tokio::sync::Notify,
     pub service: Arc<PaymentService>,
     tickets: tickets::Tickets,
@@ -70,6 +72,8 @@ impl Engine {
         Ok(Self {
             known: Default::default(),
             vouched: Default::default(),
+            ready_seen: Default::default(),
+            buyer_ready: Default::default(),
             changed: Default::default(),
             service,
             tickets: tickets::Tickets::open(directory)?,
@@ -205,16 +209,24 @@ impl Engine {
                 self.service.finish_metered(&id).await?;
                 Ok(vec![Message::Quote])
             }
-            Message::Ready { id } => {
-                let terms = self
-                    .service
-                    .ledger
-                    .request_terms(&id)?
-                    .context("unknown ready ticket")?;
-                ensure!(terms.peer == peer, "ready from wrong seller");
-                Ok(vec![])
-            }
+            Message::Ready { id } => self.receive_ready(peer, id),
         }
+    }
+    fn receive_ready(&self, peer: &str, id: String) -> Result<Vec<Message>> {
+        let terms = self
+            .service
+            .ledger
+            .request_terms(&id)?
+            .context("unknown ready ticket")?;
+        ensure!(terms.peer == peer, "ready from wrong seller");
+        if self.ready_seen.lock().unwrap().insert(id) {
+            self.buyer_ready
+                .lock()
+                .unwrap()
+                .insert((peer.into(), terms.model));
+            self.changed.notify_waiters();
+        }
+        Ok(vec![])
     }
     pub async fn peer_up(&self, peer: &str) -> Result<Vec<Message>> {
         if !self.buy_peers.contains(peer) || self.cap_msat == 0 {
@@ -305,6 +317,33 @@ impl Engine {
             .context("unknown ready ticket")?;
         ensure!(terms.peer == peer, "ready from wrong seller");
         Ok(self.vouched.lock().unwrap().insert(id.into()))
+    }
+    /// Only an authenticated seller's Ready permits dispatch, never Hello timing.
+    pub async fn buyer_wait(
+        &self,
+        peer: &str,
+        model: &str,
+        deadline: std::time::Duration,
+    ) -> Result<OpenAiExchangeDecision> {
+        ensure!(self.buy_peers.contains(peer), "seller not authorized");
+        ensure!(self.buying.contains_key(model), "model not authorized");
+        let key = (peer.to_owned(), model.to_owned());
+        let until = tokio::time::Instant::now() + deadline;
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.buyer_ready.lock().unwrap().remove(&key) {
+                return Ok(OpenAiExchangeDecision::default());
+            }
+            if tokio::time::timeout_at(until, notified).await.is_err() {
+                return Ok(OpenAiExchangeDecision {
+                    decision: Decision::Deny,
+                    status: Some(402),
+                    ..Default::default()
+                });
+            }
+        }
     }
     pub async fn gate_wait(
         &self,

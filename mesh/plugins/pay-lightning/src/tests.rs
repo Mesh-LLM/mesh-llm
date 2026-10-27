@@ -468,3 +468,52 @@ async fn buyer_vouches_only_once_for_ready_ticket() {
     assert!(f.buyer.vouch_once("seller", &id).unwrap());
     assert!(!f.buyer.vouch_once("seller", &id).unwrap());
 }
+
+#[tokio::test]
+async fn selected_buyer_waits_for_authenticated_ready_and_consumes_it_once() {
+    let f = Fixture::new();
+    let wait = f
+        .buyer
+        .buyer_wait("seller", "model", std::time::Duration::from_secs(2));
+    let deliver = async {
+        tokio::task::yield_now().await;
+        let admission = f
+            .seller
+            .channel("buyer", Message::Quote)
+            .await
+            .unwrap()
+            .remove(0);
+        let paid = f
+            .buyer
+            .channel("seller", admission)
+            .await
+            .unwrap()
+            .remove(0);
+        let ready = f.seller.channel("buyer", paid).await.unwrap().remove(0);
+        let Message::Ready { id } = &ready else {
+            panic!("missing ready")
+        };
+        let id = id.clone();
+        assert!(
+            f.buyer
+                .channel("impostor", Message::Ready { id: id.clone() })
+                .await
+                .is_err()
+        );
+        f.buyer.channel("seller", ready).await.unwrap();
+        id
+    };
+    let (decision, id) = tokio::join!(wait, deliver);
+    assert_ne!(decision.unwrap().decision, Decision::Deny);
+    f.buyer
+        .channel("seller", Message::Ready { id })
+        .await
+        .unwrap();
+    let denied = f
+        .buyer
+        .buyer_wait("seller", "model", std::time::Duration::from_millis(10))
+        .await
+        .unwrap();
+    assert_eq!(denied.decision, Decision::Deny);
+    assert_eq!(denied.status, Some(402));
+}

@@ -32,7 +32,7 @@ allow_peer_blocks = true
 
 [plugin.openai_exchange_grant]
 endpoints = ["chat_completions", "completions", "responses"]
-phases = ["request_received", "exchange_finished"]
+phases = ["request_received", "backend_selected", "exchange_finished"]
 headers = ["x-plugin-7061792d6c696768746e696e67-pay-terms"]
 admission = true
 metadata = true
