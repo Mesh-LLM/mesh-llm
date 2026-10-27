@@ -1,14 +1,13 @@
-//! Runner identity command arguments: exact named options, attached long-option
-//! values, and one required subcommand that receives its own arguments.
+//! Typed arguments for `ci-ops runner-identity`.
 
 use crate::ci_operations::runner_identity_help::{PROG, TOP_USAGE, top_help};
 use crate::ci_operations::runner_identity_subargs::parse_subcommand;
 use crate::repository::check_report::CheckReport;
-use crate::repository::text::repr;
 
 const COMMANDS: [&str; 6] = [
     "validate", "check", "diagnose", "lookup", "seed-key", "bind",
 ];
+
 #[derive(Debug, Default)]
 pub(crate) struct Args {
     pub(crate) root: Option<String>,
@@ -35,54 +34,6 @@ fn top_error(message: &str) -> CheckReport {
     error(TOP_USAGE, PROG, message)
 }
 
-/// Recognize an option string: a dash
-/// prefix that is neither a lone `-`, a negative number, nor spaced text.
-pub(crate) fn is_optional(arg: &str) -> bool {
-    let Some(rest) = arg.strip_prefix('-') else {
-        return false;
-    };
-    let negative_number = match rest.split_once('.') {
-        Some((whole, fraction)) => {
-            whole.bytes().all(|b| b.is_ascii_digit())
-                && !fraction.is_empty()
-                && fraction.bytes().all(|b| b.is_ascii_digit())
-        }
-        None => !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()),
-    };
-    !rest.is_empty() && !negative_number && !arg.contains(' ')
-}
-
-/// Resolve an exact option, splitting an attached long-option value.
-pub(crate) fn resolve<'o>(arg: &str, options: &[&'o str]) -> Option<(&'o str, Option<String>)> {
-    let (name, inline) = match arg.split_once('=') {
-        Some((name, value)) if arg.starts_with("--") => (name, Some(value.to_owned())),
-        _ => (arg, None),
-    };
-    options
-        .iter()
-        .find(|option| **option == name)
-        .map(|exact| (*exact, inline))
-}
-
-pub(crate) struct Cursor<'a> {
-    pub(crate) args: &'a [String],
-    pub(crate) index: usize,
-}
-
-impl Cursor<'_> {
-    pub(crate) fn value(&mut self, inline: Option<String>) -> Option<String> {
-        if inline.is_some() {
-            return inline;
-        }
-        let next = self.args.get(self.index)?;
-        if is_optional(next) || next == "--" {
-            return None;
-        }
-        self.index += 1;
-        Some(next.clone())
-    }
-}
-
 pub(crate) enum Parsed {
     Run(Args),
     Report(CheckReport),
@@ -97,48 +48,68 @@ pub(crate) fn parse(args: &[String]) -> Parsed {
 
 fn parse_inner(args: &[String]) -> Result<Args, CheckReport> {
     let mut parsed = Args::default();
-    let mut extras: Vec<String> = Vec::new();
-    let mut cursor = Cursor { args, index: 0 };
+    let mut extras = Vec::new();
+    let mut index = 0;
     let mut positional_only = false;
-    while let Some(arg) = args.get(cursor.index) {
-        cursor.index += 1;
+
+    while let Some(arg) = args.get(index) {
+        index += 1;
         if !positional_only && arg == "--" {
             positional_only = true;
             continue;
         }
-        if positional_only || !is_optional(arg) {
-            let command = arg.as_str();
-            if !COMMANDS.contains(&command) {
-                let choices = COMMANDS
-                    .iter()
-                    .map(|name| repr(name))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(top_error(&format!(
-                    "argument command: invalid choice: {} (choose from {choices})",
-                    repr(command)
-                )));
+        if positional_only || !arg.starts_with('-') || arg == "-" {
+            if !COMMANDS.contains(&arg.as_str()) {
+                return Err(top_error(&format!("unknown command: {arg}")));
             }
-            parsed.command = command.to_owned();
-            parse_subcommand(&mut parsed, &args[cursor.index..], &mut extras)?;
+            parsed.command = arg.clone();
+            parse_subcommand(&mut parsed, &args[index..], &mut extras)?;
             return finish(parsed, &extras);
         }
-        match resolve(arg, &["-h", "--help", "--root", "--catalog"]) {
-            Some(("-h" | "--help", _)) => return Err(CheckReport::success(top_help())),
-            Some((option, inline)) => {
-                let value = cursor.value(inline).ok_or_else(|| {
-                    top_error(&format!("argument {option}: expected one argument"))
-                })?;
-                if option == "--root" {
-                    parsed.root = Some(value);
-                } else {
-                    parsed.catalog = Some(value);
-                }
+        if arg == "-h" || arg == "--help" {
+            return Err(CheckReport::success(top_help()));
+        }
+
+        let (option, attached) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(name, value)| {
+                (name, Some(value.to_owned()))
+            });
+        let value = match option {
+            "--root" | "--catalog" => Some(take_value(option, attached, args, &mut index)?),
+            _ => {
+                extras.push(arg.clone());
+                None
             }
-            None => extras.push(arg.clone()),
+        };
+        match (option, value) {
+            ("--root", Some(value)) => parsed.root = Some(value),
+            ("--catalog", Some(value)) => parsed.catalog = Some(value),
+            _ => {}
         }
     }
-    Err(top_error("the following arguments are required: command"))
+    Err(top_error(
+        "a command is required: validate, check, diagnose, lookup, seed-key, or bind",
+    ))
+}
+
+fn take_value(
+    option: &str,
+    attached: Option<String>,
+    args: &[String],
+    index: &mut usize,
+) -> Result<String, CheckReport> {
+    if let Some(value) = attached {
+        return Ok(value);
+    }
+    let Some(value) = args.get(*index) else {
+        return Err(top_error(&format!("{option} requires a value")));
+    };
+    if value == "--" || value.starts_with('-') {
+        return Err(top_error(&format!("{option} requires a value")));
+    }
+    *index += 1;
+    Ok(value.clone())
 }
 
 fn finish(parsed: Args, extras: &[String]) -> Result<Args, CheckReport> {
@@ -149,5 +120,49 @@ fn finish(parsed: Args, extras: &[String]) -> Result<Args, CheckReport> {
             "unrecognized arguments: {}",
             extras.join(" ")
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Parsed, parse};
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn parses_command_and_attached_values() {
+        let Parsed::Run(parsed) = parse(&args(&[
+            "--root",
+            "/workspace",
+            "--catalog=images.json",
+            "lookup",
+            "ui-quality",
+            "--field=reference",
+        ])) else {
+            panic!("valid runner identity arguments should parse");
+        };
+        assert_eq!(parsed.root.as_deref(), Some("/workspace"));
+        assert_eq!(parsed.catalog.as_deref(), Some("images.json"));
+        assert_eq!(parsed.command, "lookup");
+        assert_eq!(parsed.role, "ui-quality");
+        assert_eq!(parsed.field.as_deref(), Some("reference"));
+    }
+
+    #[test]
+    fn rejects_unknown_options_and_commands() {
+        for input in [
+            args(&["--roo=/workspace", "validate"]),
+            args(&["bogus"]),
+            args(&["lookup", "role", "--f=reference"]),
+        ] {
+            let Parsed::Report(error) = parse(&input) else {
+                panic!("unknown arguments should be rejected");
+            };
+            assert_eq!(error.code, 2);
+            assert!(error.stdout.is_empty());
+            assert!(!error.stderr.is_empty());
+        }
     }
 }

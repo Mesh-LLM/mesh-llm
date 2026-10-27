@@ -341,10 +341,11 @@ case "$LLAMA_BACKEND" in
       echo "CUDA toolkit compiler was not found; set CUDACXX, CMAKE_CUDA_COMPILER, NVCC, or put nvcc on PATH" >&2
       exit 1
     fi
-    # The pinned CUDA graph-capture path can abort on a warmed multi-request
-    # workload while updating the captured graph. Keep staged runtimes on the
-    # ordinary CUDA execution path until that upstream path is safe again.
-    CMAKE_ARGS+=(-DGGML_CUDA=ON -DGGML_CUDA_GRAPHS=OFF)
+    # CUDA graphs were turned off at the 26394b4e67 pin, whose graph-capture
+    # path could abort while updating a captured graph under a warmed
+    # multi-request workload (#1977). Built in, they can still be turned off
+    # on a node at run time with GGML_CUDA_DISABLE_GRAPHS=1 (#2202).
+    CMAKE_ARGS+=(-DGGML_CUDA=ON -DGGML_CUDA_GRAPHS=ON)
     if [[ -n "${CUDACXX:-}" ]]; then
       CMAKE_ARGS+=(-DCMAKE_CUDA_COMPILER="$CUDACXX")
     fi

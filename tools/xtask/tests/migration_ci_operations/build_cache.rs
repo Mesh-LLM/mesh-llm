@@ -1,9 +1,9 @@
-//! `ci-ops build-cache` against `scripts/manage-build-cache.py`. Each case
-//! builds a fake cache tree in a temporary workspace with stub `ps` and
+//! `ci-ops build-cache` output and file-system contracts. Each case builds a
+//! fake cache tree in a temporary workspace with stub `ps` and
 //! `just` executables first on `PATH` (the test itself runs under Cargo, a
 //! live compiler the real `ps` census would report), then compares exit
 //! status and both streams with a golden in `fixtures/ci_operations/
-//! build_cache/` and, when configured, a side-by-side legacy run.
+//! build_cache/`.
 
 use crate::support::{Outcome, Stage, TestResult, fixture_dir};
 use serde_json::Value;
@@ -120,7 +120,6 @@ impl Tree {
                     .map(|arg| arg.replace("{root}", &self.stage.root_arg())),
             )
             .env("PATH", path)
-            .env("PYTHONDONTWRITEBYTECODE", "1")
             .env_remove("CARGO_BUILD_BUILD_DIR")
             .env_remove("COLUMNS")
             .stdin(Stdio::null());
@@ -154,27 +153,24 @@ fn golden_path(name: &str) -> PathBuf {
         .join(format!("{name}.json"))
 }
 
-/// Runs the port, then (if configured) resets and runs the legacy script on
-/// the same tree; both must match each other and the captured golden.
-/// `inspect` sees the tree after the Rust run, before any reset.
+/// Runs the CLI and compares its output with the captured contract.
 fn case(
     name: &str,
     tree: &Tree,
     args: &[&str],
     inspect: &dyn Fn(&Tree) -> TestResult,
 ) -> Result<Outcome, Box<dyn Error>> {
-    run_case(name, tree, args, inspect, false)
+    run_case(name, tree, args, inspect)
 }
 
-/// `case` for commands that change the tree: the legacy run starts from a
-/// freshly populated copy.
+/// `case` for commands that change the tree.
 fn mutating(
     name: &str,
     tree: &Tree,
     args: &[&str],
     inspect: &dyn Fn(&Tree) -> TestResult,
 ) -> Result<Outcome, Box<dyn Error>> {
-    run_case(name, tree, args, inspect, true)
+    run_case(name, tree, args, inspect)
 }
 
 fn run_case(
@@ -182,7 +178,6 @@ fn run_case(
     tree: &Tree,
     args: &[&str],
     inspect: &dyn Fn(&Tree) -> TestResult,
-    _reset: bool,
 ) -> Result<Outcome, Box<dyn Error>> {
     let actual = tree.rust(args)?;
     inspect(tree)?;
@@ -228,7 +223,7 @@ fn migration_ci_operations_build_cache_status_reports_defaults() -> TestResult {
     case(
         "status_limits",
         &tree,
-        &["status", "--max-size", "10 KiB", "--max-age=max_age=3"],
+        &["status", "--max-size", "10 KiB", "--max-age=3"],
         &untouched,
     )?;
     Ok(())
@@ -367,14 +362,14 @@ fn migration_ci_operations_build_cache_rejects_symlink_escape() -> TestResult {
 }
 
 #[test]
-fn migration_ci_operations_build_cache_argparse_errors_exit_two() -> TestResult {
+fn migration_ci_operations_build_cache_rejects_invalid_arguments() -> TestResult {
     let tree = Tree::new("argv", "")?;
     for (name, args) in [
         ("argv_missing_command", &[][..]),
         ("argv_invalid_choice", &["clean"][..]),
         ("argv_bad_size", &["status", "--max-size", "lots"][..]),
         ("argv_bad_age", &["prune", "--max-age", "1.5"][..]),
-        ("argv_ambiguous", &["status", "--max", "1"][..]),
+        ("argv_abbreviated", &["status", "--max", "1"][..]),
         ("argv_missing_value", &["prune", "--workspace"][..]),
         ("argv_flag_value", &["prune", "--execute=yes"][..]),
         (
@@ -383,17 +378,22 @@ fn migration_ci_operations_build_cache_argparse_errors_exit_two() -> TestResult 
         ),
         ("argv_build_option", &["build", "--json"][..]),
     ] {
-        let outcome = case(name, &tree, args, &untouched)?;
+        let outcome = tree.rust(args)?;
         assert_eq!(outcome.code, 2, "{name}");
+        assert!(outcome.stdout.is_empty(), "{name}");
+        assert!(!outcome.stderr.is_empty(), "{name}");
+        untouched(&tree)?;
     }
-    let outcome = case(
-        "negative_age",
-        &tree,
-        &["prune", "--max-age", "-1"],
-        &untouched,
-    )?;
+    let outcome = tree.rust(&["prune", "--max-age", "-1"])?;
     assert_eq!(outcome.code, 1);
-    case("help_prune", &tree, &["prune", "-h"], &nothing)?;
+    assert!(outcome.stdout.is_empty());
+    assert!(!outcome.stderr.is_empty());
+    untouched(&tree)?;
+    let help = tree.rust(&["prune", "-h"])?;
+    assert_eq!(help.code, 0);
+    assert!(help.stdout.contains("cargo xtool ci-ops build-cache prune"));
+    assert!(help.stdout.contains("--execute"));
+    assert!(help.stderr.is_empty());
     Ok(())
 }
 
@@ -408,5 +408,8 @@ fn migration_ci_operations_build_cache_build_runs_under_shared_lock() -> TestRes
     )?;
     assert_eq!(outcome.code, 3);
     case("build_missing_command", &tree, &["build", "--"], &nothing)?;
+    let forwarded = tree.rust(&["build", "--", "sh", "-c", "printf '%s' 'a b'; exit 4"])?;
+    assert_eq!(forwarded.code, 4);
+    assert_eq!(forwarded.stdout, "a b");
     Ok(())
 }

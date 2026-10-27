@@ -198,6 +198,12 @@ impl Node {
             // names our own id (#1699).
             return Ok(());
         }
+        if !self
+            .admits_mesh_peer(peer_id, remote, ann.mesh_id.as_deref())
+            .await?
+        {
+            return Ok(());
+        }
         if peer_id == remote {
             if !context.direct_peer_requirements_validated
                 && let Err(reason) = self

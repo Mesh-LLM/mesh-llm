@@ -14,7 +14,26 @@ fn sdk_console_resolves_standard_escaped_asset_paths() -> TestResult {
 }
 
 #[test]
-fn sdk_console_rejects_unknown_named_entity() -> TestResult {
+fn sdk_console_resolves_common_named_asset_references() -> TestResult {
+    let scratch = fixture(
+        "<img src='assets/a&copy;.js'>",
+        "index.html\nassets/a©.js\n",
+    )?;
+    scratch.write("console/assets/a©.js", b"named entity")?;
+    verified(&scratch)
+}
+
+#[test]
+fn sdk_console_rejects_unknown_named_asset_references() -> TestResult {
+    let scratch = fixture("<img src='assets/a&vendor;.js'>", "index.html\n")?;
+    let output = invocation(&scratch, "sdk-console-verify").run(scratch.path())?;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    Ok(())
+}
+
+#[test]
+fn sdk_console_rejects_missing_asset_after_decoding_character_reference() -> TestResult {
     let scratch = fixture("<img src='assets/a&copy;.js'>", "index.html\n")?;
     let output = invocation(&scratch, "sdk-console-verify").run(scratch.path())?;
     assert_eq!(output.status.code(), Some(1));

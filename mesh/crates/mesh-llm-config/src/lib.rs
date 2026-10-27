@@ -28,11 +28,12 @@ pub use env_overrides::{
     CONFIG_OVERRIDE_ENV_NAMES, ConfigValueSource, EventSystemTrialMode,
     LifecycleLogParserSelection, MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV, MESH_LLM_CONFIG_ENV,
     MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV, MESH_LLM_LIFECYCLE_LOG_PARSER_ENV,
-    MESH_LLM_NO_UPDATE_CHECK_ENV, apply_env_overrides, benchmark_tune_trial_enabled,
-    event_system_off, event_system_progress_diagnostic_bypass_enabled, event_system_trial_mode,
+    MESH_LLM_NO_RUNTIME_DOWNLOAD_ENV, MESH_LLM_NO_UPDATE_CHECK_ENV, apply_env_overrides,
+    benchmark_tune_trial_enabled, env_override_in_child_for_test, event_system_off,
+    event_system_progress_diagnostic_bypass_enabled, event_system_trial_mode,
     resolve_benchmark_tune_trial_gate, resolve_event_system_trial_mode,
-    resolve_lifecycle_log_parser_override, resolve_no_update_check_override,
-    with_env_override_for_test,
+    resolve_lifecycle_log_parser_override, resolve_no_runtime_download_override,
+    resolve_no_update_check_override, with_env_override_for_test,
 };
 pub use local_model_path::{
     LocalModelPathError, check_local_model_path, local_model_path_diagnostics,
@@ -304,6 +305,34 @@ selection = "cuda12"
             config.runtime.native_runtime.selection.as_deref(),
             Some("cuda12")
         );
+    }
+
+    #[test]
+    fn native_runtime_download_is_on_unless_the_config_turns_it_off() {
+        let parse = |toml: &str| parse_config_toml(toml).unwrap();
+        assert!(parse("").runtime.native_runtime.download_enabled());
+        assert!(
+            parse("[runtime.native_runtime]\ndownload = true\n")
+                .runtime
+                .native_runtime
+                .download_enabled()
+        );
+        let config = parse("[runtime.native_runtime]\ndownload = false\n");
+        assert!(!config.runtime.native_runtime.download_enabled());
+
+        let reloaded = parse(&config_to_toml(&config).unwrap());
+        assert_eq!(reloaded.runtime.native_runtime.download, Some(false));
+    }
+
+    #[test]
+    fn native_runtime_download_override_wins_but_is_never_saved() {
+        let mut config = parse_config_toml("[runtime.native_runtime]\ndownload = true\n").unwrap();
+        config.runtime.native_runtime.download_override = Some(false);
+        assert!(!config.runtime.native_runtime.download_enabled());
+
+        let reloaded = parse_config_toml(&config_to_toml(&config).unwrap()).unwrap();
+        assert_eq!(reloaded.runtime.native_runtime.download, Some(true));
+        assert_eq!(reloaded.runtime.native_runtime.download_override, None);
     }
 
     #[test]
@@ -1112,6 +1141,7 @@ gpu_id = "pci:0000:65:00.0"
             "gpu_id_from_legacy_shim",
             "lifecycle_log_parser_source",
             "lifecycle_log_parser_override",
+            "download_override",
             "models",
             "plugins",
             "settings",
