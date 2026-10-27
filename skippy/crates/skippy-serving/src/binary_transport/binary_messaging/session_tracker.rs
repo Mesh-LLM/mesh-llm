@@ -69,7 +69,11 @@ impl SessionLease {
 }
 
 impl ConnectionSessionOwnership {
-    pub(super) fn claim(self: &Arc<Self>, session_key: &str, connection_id: u64) -> SessionLease {
+    pub(super) fn claim(
+        self: &Arc<Self>,
+        session_key: &str,
+        connection_id: u64,
+    ) -> Result<SessionLease> {
         let sessions = self
             .sessions
             .lock()
@@ -80,13 +84,26 @@ impl ConnectionSessionOwnership {
                 matches!(sessions.get(session_key), Some(SessionState::Releasing(_)))
             })
             .expect("binary session ownership registry lock poisoned");
+        // Never seize ownership from another live connection. Nonzero wire
+        // session ids become session keys, so an observing peer could
+        // otherwise replay a victim's live session id on its own connection
+        // and take over the victim's session state. Reclaiming a session this
+        // connection already owns, or claiming one the previous owner fully
+        // released, remains allowed.
+        let seized_live_owner = matches!(
+            sessions.get(session_key),
+            Some(SessionState::Owned(owner)) if *owner != connection_id
+        );
+        if seized_live_owner {
+            bail!("stage session is owned by another live connection");
+        }
         sessions.insert(session_key.to_string(), SessionState::Owned(connection_id));
         drop(sessions);
-        SessionLease {
+        Ok(SessionLease {
             ownership: self.clone(),
             session_key: session_key.to_string(),
             connection_id,
-        }
+        })
     }
 
     fn begin_release(&self, session_key: &str, connection_id: u64) -> bool {
@@ -165,12 +182,13 @@ impl ConnectionSessionTracker {
         }
     }
 
-    pub(super) fn touch(&mut self, session_key: &str) {
+    pub(super) fn touch(&mut self, session_key: &str) -> Result<()> {
         if self.active.contains_key(session_key) {
-            return;
+            return Ok(());
         }
-        let lease = self.ownership.claim(session_key, self.connection_id);
+        let lease = self.ownership.claim(session_key, self.connection_id)?;
         self.active.insert(session_key.to_string(), lease);
+        Ok(())
     }
 
     pub(super) fn session_lease(&self, session_key: &str) -> &SessionLease {
@@ -305,9 +323,9 @@ mod tests {
     fn tracker_drains_sessions_that_never_saw_a_stop() {
         let ownership = Arc::new(ConnectionSessionOwnership::default());
         let mut tracker = tracker(1, &ownership);
-        tracker.touch("session-a");
-        tracker.touch("session-a");
-        tracker.touch("session-b");
+        tracker.touch("session-a").unwrap();
+        tracker.touch("session-a").unwrap();
+        tracker.touch("session-b").unwrap();
         tracker.stopped("session-b");
 
         let orphaned = tracker.drain();
@@ -320,7 +338,7 @@ mod tests {
     fn tracker_reclaims_nothing_after_graceful_stop() {
         let ownership = Arc::new(ConnectionSessionOwnership::default());
         let mut tracker = tracker(1, &ownership);
-        tracker.touch("session-a");
+        tracker.touch("session-a").unwrap();
         tracker.stopped("session-a");
         assert!(tracker.drain().is_empty());
         assert_eq!(ownership.owner_count(), 0);
@@ -330,7 +348,7 @@ mod tests {
     fn stopped_session_removes_released_owner_from_registry() {
         let ownership = Arc::new(ConnectionSessionOwnership::default());
         let mut tracker = tracker(1, &ownership);
-        tracker.touch("session-a");
+        tracker.touch("session-a").unwrap();
         let lease = tracker.session_lease("session-a");
         drop(lease.begin_release().unwrap());
 
@@ -343,7 +361,7 @@ mod tests {
     #[test]
     fn dropping_release_guard_marks_the_lease_released() {
         let ownership = Arc::new(ConnectionSessionOwnership::default());
-        let lease = ownership.claim("session-a", 1);
+        let lease = ownership.claim("session-a", 1).unwrap();
 
         drop(lease.begin_release().unwrap());
 
@@ -357,12 +375,16 @@ mod tests {
         let mut replacement = tracker(2, &ownership);
         let accumulated = Mutex::new(BTreeMap::new());
 
-        old.touch("shared-session");
+        old.touch("shared-session").unwrap();
         accumulated
             .lock()
             .unwrap()
             .insert("shared-session".to_string(), vec![1, 2]);
-        replacement.touch("shared-session");
+        {
+            let lease = old.session_lease("shared-session");
+            drop(lease.begin_release().unwrap());
+        }
+        replacement.touch("shared-session").unwrap();
         accumulated
             .lock()
             .unwrap()
@@ -396,7 +418,7 @@ mod tests {
         let mut old = tracker(1, &ownership);
         let mut replacement = tracker(2, &ownership);
         let accumulated = Mutex::new(BTreeMap::from([("shared-session".to_string(), vec![1, 2])]));
-        old.touch("shared-session");
+        old.touch("shared-session").unwrap();
         let orphaned = old.drain();
         let lease = &orphaned["shared-session"];
 
@@ -412,7 +434,7 @@ mod tests {
         assert!(lease.is_released());
         drop(orphaned);
 
-        replacement.touch("shared-session");
+        replacement.touch("shared-session").unwrap();
         accumulated
             .lock()
             .unwrap()
@@ -436,7 +458,7 @@ mod tests {
             "shared-session".to_string(),
             vec![1, 2],
         )])));
-        old.touch("shared-session");
+        old.touch("shared-session").unwrap();
         let old_lease = old.drain().remove("shared-session").unwrap();
         let release_started = Arc::new(Barrier::new(2));
         let (finish_release, finish_release_rx) = mpsc::channel();
@@ -461,7 +483,7 @@ mod tests {
         let replacement_started = claim_started.clone();
         let claim = thread::spawn(move || {
             replacement_started.wait();
-            replacement_ownership.claim("shared-session", 2)
+            replacement_ownership.claim("shared-session", 2).unwrap()
         });
         claim_started.wait();
 
@@ -485,7 +507,7 @@ mod tests {
             vec![1, 2],
         )])));
         let runtime_session = Arc::new(Mutex::new(Some("old")));
-        old.touch("shared-session");
+        old.touch("shared-session").unwrap();
         let old_lease = old.drain().remove("shared-session").unwrap();
         let cleanup_started = Arc::new(Barrier::new(2));
         let (finish_cleanup, finish_cleanup_rx) = mpsc::channel();
@@ -511,7 +533,7 @@ mod tests {
         let replacement_runtime = runtime_session.clone();
         let (replacement_done, replacement_done_rx) = mpsc::channel();
         let replacement = thread::spawn(move || {
-            let lease = replacement_ownership.claim("shared-session", 2);
+            let lease = replacement_ownership.claim("shared-session", 2).unwrap();
             replacement_tokens
                 .lock()
                 .unwrap()
@@ -550,7 +572,7 @@ mod tests {
             ("session-a".to_string(), vec![1, 2, 3]),
             ("other-connection".to_string(), vec![6]),
         ]));
-        tracker.touch("session-a");
+        tracker.touch("session-a").unwrap();
         let orphaned = tracker.drain();
         let mut runtime_drop_called = false;
 
@@ -578,7 +600,7 @@ mod tests {
         let ownership = Arc::new(ConnectionSessionOwnership::default());
         let mut tracker = tracker(1, &ownership);
         let accumulated = Mutex::new(BTreeMap::from([("session-a".to_string(), vec![1, 2, 3])]));
-        tracker.touch("session-a");
+        tracker.touch("session-a").unwrap();
         let orphaned = tracker.drain();
         let lease = &orphaned["session-a"];
 
@@ -590,7 +612,7 @@ mod tests {
         assert!(lease.is_released());
         assert_eq!(ownership.owner_count(), 0);
         drop(orphaned);
-        let replacement = ownership.claim("session-a", 2);
+        let replacement = ownership.claim("session-a", 2).unwrap();
         assert!(replacement.still_owns());
     }
 
@@ -614,5 +636,25 @@ mod tests {
 
         assert!(message.contains("connection failed"));
         assert!(message.contains("orphan cleanup failed"));
+    }
+
+    #[test]
+    fn second_connection_cannot_claim_a_live_owned_session() {
+        let ownership = Arc::new(ConnectionSessionOwnership::default());
+        let mut owner = tracker(1, &ownership);
+        let mut claimant = tracker(2, &ownership);
+
+        owner.touch("7").unwrap();
+        assert!(claimant.touch("7").is_err());
+
+        assert!(
+            owner.session_lease("7").still_owns(),
+            "a second connection must not seize ownership of a live session"
+        );
+        assert!(ownership.claim("7", 2).is_err());
+        assert!(
+            claimant.active.is_empty(),
+            "denied session must never be tracked for processing"
+        );
     }
 }
