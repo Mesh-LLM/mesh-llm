@@ -81,6 +81,31 @@ export async function fetchRuntimeControlConfig(): Promise<RuntimeControlConfigR
   return { bootstrap: { ...bootstrap, endpoint }, schema, snapshot, controlState }
 }
 
+type PluginCommandSource = {
+  plugin?: ReadonlyArray<{ name?: string; command?: string }>
+} | null | undefined
+
+// Plugins whose command executable this apply adds or changes; the host
+// rejects an apply whose declared approvals do not cover this diff.
+export function changedPluginCommandApprovals(
+  previous: PluginCommandSource,
+  next: PluginCommandSource
+): Array<{ plugin: string; command: string }> {
+  const previousCommands = new Map<string, string | null>()
+  for (const plugin of previous?.plugin ?? []) {
+    if (plugin.name) previousCommands.set(plugin.name, plugin.command ?? null)
+  }
+  const approvals: Array<{ plugin: string; command: string }> = []
+  for (const plugin of next?.plugin ?? []) {
+    const command = plugin.command ?? null
+    if (!plugin.name || !command) continue
+    if (previousCommands.get(plugin.name) !== command) {
+      approvals.push({ plugin: plugin.name, command })
+    }
+  }
+  return approvals
+}
+
 export async function applyRuntimeControlConfig(
   endpoint: string,
   snapshot: RuntimeControlConfigSnapshot,
@@ -93,13 +118,15 @@ export async function applyRuntimeControlConfig(
     controlState
   })
   const token = await getOwnerControlToken()
+  const approvals = changedPluginCommandApprovals(snapshot.config, config)
   const response = await fetch(`${env.managementApiUrl}/api/runtime/control/apply-config`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       endpoint,
       expected_revision: snapshot.revision,
-      config
+      config,
+      ...(approvals.length > 0 ? { plugin_command_approvals: approvals } : {})
     })
   })
   const payload = await expectJson<RuntimeControlApplyResponse>(response)
