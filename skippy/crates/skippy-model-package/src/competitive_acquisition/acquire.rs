@@ -9,13 +9,15 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, io::Write as _, path::Path, time::Instant};
 pub(crate) fn client(token: String, cache: &Path) -> Result<HFClient> {
     skippy_model_hf::configure_hf_tls_provider();
-    let http = reqwest::Client::builder()
-        .no_proxy()
-        .https_only(true)
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .read_timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|_| anyhow::anyhow!("HF client refused"))?;
+    // A builder, not a built client, so the no-redirect client behind file
+    // metadata and cache downloads gets the same transport settings.
+    let http = || {
+        reqwest::Client::builder()
+            .no_proxy()
+            .https_only(true)
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .read_timeout(std::time::Duration::from_secs(30))
+    };
     let mut builder = HFClient::builder().endpoint("https://huggingface.co");
     if token.is_empty() {
         if std::env::var("HF_HUB_DISABLE_IMPLICIT_TOKEN").as_deref() != Ok("true") {
@@ -27,7 +29,7 @@ pub(crate) fn client(token: String, cache: &Path) -> Result<HFClient> {
     builder
         .cache_dir(cache)
         .cache_enabled(false)
-        .client(http)
+        .client_builder(http)
         .retry_max_attempts(0)
         .build()
         .map_err(|_| anyhow::anyhow!("native HF client refused"))

@@ -479,6 +479,7 @@ async fn make_test_node_with_requirements(
         model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
         memberships: super::node::MeshMemberships::default(),
         owner_attestation_path: None,
+        unsaved_owner_attestation: Arc::default(),
         local_endpoints: super::node::LocalEndpoints::default(),
         is_membership: false,
     };
