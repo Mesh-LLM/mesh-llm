@@ -258,7 +258,7 @@ fn server(
                 "--prefix-cache",
                 "on",
                 "--prefix-cache-budget",
-                "8GiB",
+                "16GiB",
                 "--kv-cache-disk",
                 "off",
                 "--chat-template-kwargs",
