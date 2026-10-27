@@ -340,7 +340,6 @@ fn planned_trial_launch(
     )
 }
 
-
 #[test]
 fn trial_config_includes_runtime_native_runtime() {
     let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
