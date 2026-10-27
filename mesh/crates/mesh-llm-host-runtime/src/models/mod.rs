@@ -34,11 +34,11 @@ pub use local::{
     HuggingFaceModelIdentity, InstalledModelArtifact, find_mmproj_path, find_model_path,
     huggingface_hub_cache_dir, huggingface_identity_for_path, layered_package_layer_count_for_path,
     layered_package_total_bytes_for_path, mesh_llm_cache_dir, model_ref_for_path,
-    scan_installed_artifacts_in, scan_installed_models, scan_installed_models_in,
-    scan_local_models,
+    remember_model_ref_path, scan_installed_artifacts_in, scan_installed_models,
+    scan_installed_models_in, scan_local_models,
 };
 pub use maintenance::{run_update, warn_about_updates_for_paths};
-pub(crate) use profile::served_model_metadata_for_model;
+pub(crate) use profile::{served_model_metadata_for_model, served_model_metadata_for_path};
 pub use resolve::{
     ModelDetails, ShowVariantsProgress, canonicalize_interest_model_ref,
     download_model_ref_with_progress_details, download_model_ref_with_progress_details_direct,

@@ -35,7 +35,10 @@ fn model_ref_paths() -> &'static Mutex<HashMap<String, PathBuf>> {
     MODEL_REF_PATHS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn remember_model_ref_path(model_ref: &str, path: &Path) {
+/// Record that `model_ref` resolves to `path` so [`find_model_path`] can map a
+/// runtime-minted ref (for example the content-addressed `local-gguf/sha256-…`
+/// id mesh-llm serves a loaded GGUF under) back to the file it was loaded from.
+pub fn remember_model_ref_path(model_ref: &str, path: &Path) {
     if let Ok(mut paths) = model_ref_paths().lock() {
         match paths.get(model_ref) {
             Some(existing)
@@ -1057,6 +1060,26 @@ mod tests {
         restore_env("HF_HUB_CACHE", prev_hub_cache);
         restore_env("HF_HOME", prev_hf_home);
         restore_env("XDG_CACHE_HOME", prev_xdg);
+    }
+
+    #[test]
+    #[serial]
+    fn find_model_path_honours_a_remembered_runtime_minted_ref() {
+        if let Ok(mut paths) = model_ref_paths().lock() {
+            paths.clear();
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let gguf = temp.path().join("weights.gguf");
+        std::fs::write(&gguf, b"GGUF").unwrap();
+        // A content-addressed id carries no path information, so only the
+        // registration can map it back to the loaded file.
+        let model_ref = format!("local-gguf/sha256-{}", "ab".repeat(32));
+
+        assert_ne!(find_model_path(&model_ref), gguf);
+
+        remember_model_ref_path(&model_ref, &gguf);
+
+        assert_eq!(find_model_path(&model_ref), gguf);
     }
 
     #[test]
