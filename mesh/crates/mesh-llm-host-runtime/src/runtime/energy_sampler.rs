@@ -178,7 +178,8 @@ mod apple {
     const SOURCE: &str = "macmon";
 
     /// macmon blocks for each one-second reading, so it gets its own thread.
-    /// It ends quietly where macmon can't read the SoC, as on an Intel Mac.
+    /// It ends quietly where macmon can't read the SoC, as on an Intel Mac,
+    /// or reads the GPU at 0 W, as in a VM.
     pub(super) fn start() {
         let spawned = std::thread::Builder::new()
             .name("gpu-energy-sampler".into())
@@ -190,11 +191,24 @@ mod apple {
                         return;
                     }
                 };
+                let mut measured = false;
                 loop {
                     match sampler.get_metrics(1000) {
-                        Ok(metrics) => {
+                        Ok(metrics) if metrics.gpu_power > 0.0 => {
+                            measured = true;
                             super::super::energy::record_power(SOURCE, f64::from(metrics.gpu_power))
                         }
+                        // An Apple GPU never draws 0 W, but a VM without IOReport's
+                        // GPU channels (macOS CI runners) reads it so. A first 0 W
+                        // reading means there is no source, as a first missed round
+                        // does for nvidia-smi; a later one is skipped like a missed round.
+                        Ok(_) if !measured => {
+                            tracing::debug!(
+                                "Apple GPU energy sampling unavailable: the GPU reads 0 W"
+                            );
+                            return;
+                        }
+                        Ok(_) => {}
                         Err(error) => {
                             tracing::debug!("Apple GPU energy sampling stopped: {error}");
                             return;

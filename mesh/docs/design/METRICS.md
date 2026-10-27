@@ -167,7 +167,8 @@ absent until a power reading exists, so nodes with neither an NVIDIA GPU nor
 Apple Silicon never report it, and neither do nodes with a GPU that reports
 no board power, such as
 a Jetson's integrated GPU: the sampler stops after its first round if a GPU
-missed its reading, and logs why. Stages of a split model
+missed its reading, and logs why. A macOS VM, which reads its GPU at 0 W, is
+stopped the same way. Stages of a split model
 that have no front end of their own count their work as idle, and models served
 through a plugin endpoint are not counted.
 
