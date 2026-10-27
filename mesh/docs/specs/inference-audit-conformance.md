@@ -83,15 +83,15 @@ The adjudicator publishes, per model:
   adjudication record is signed with that owner key. Two records score the same
   audit when they cite the same sender record (its request digest, response
   digest and nonce together) and the same corpus version; they agree when they
-  give the same verdict, and operators differ when their owner identities
-  differ.
+  give the same verdict and, for `contradicted`, name the same
+  `contradicted_party`. Operators differ when their owner identities differ.
 
 ## Audit corpus
 
 - Versioned. A SHA-256 commitment to each version is published before it is
   used; it covers the version number, the prompts and the version's digest key
   (below). Its exact byte encoding is settled with the record mapping (open
-  point below).
+  points below).
 - Prompts stay private while the version is in use. At retirement the prompts
   and the key are published next to the commitment, so anyone can check them
   against it, and every record from that period becomes re-checkable.
@@ -106,12 +106,18 @@ The adjudicator publishes, per model:
   identity hash, weights digest, request and response digests, nonce and its
   source).
 - Adjudicator side: the AAC judge record family (adjudication/v1,
-  sample-manifest/v1, calibration-summary/v1).
+  sample-manifest/v1, calibration-summary/v1), as of
+  [agent-action-capsule@062e89bd145d](https://github.com/action-state-group/agent-action-capsule/tree/062e89bd145d/schemas/judge).
 - Both sides name the corpus version the prompt came from, which also tells a
   re-checker which retired key applies.
-- Open point: AAC's `prompt_digest` allows only plain SHA-256 today, so the
-  keyed digest above needs either an allowed `HMAC-SHA-256` algorithm with a key
-  id or a sibling field, and the corpus commitment needs a fixed encoding.
+- Open points for the record mapping:
+  - AAC's `prompt_digest` allows only plain SHA-256 today, so the keyed digest
+    above needs either an allowed `HMAC-SHA-256` algorithm with a key id or a
+    sibling field.
+  - adjudication/v1 has no citation slot for the calibration-summary/v1 and
+    sample-manifest/v1 records its threshold comes from, so the mapping needs a
+    digest citation or a wrapper.
+  - The corpus commitment needs a fixed encoding.
 
 ## Re-checking a verdict
 
