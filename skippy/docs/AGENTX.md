@@ -82,9 +82,11 @@ Build time is outside the measured cells.
 For a native KV-span diagnostic, set `AGENTX_SKIPPY_KV_SPAN_DEBUG=1` on the
 `agentx run` process. It launches Skippy with verbose native logging and
 `LLAMA_KV_CACHE_DEBUG=1`; the per-decode `llama_kv_cache::find_slot` lines report
-the highest occupied KV cell and the occupied-cell count. This option is
-Skippy-only, appears in `launch.json`, and is intentionally excluded from
-performance qualification because the extra logging changes timing.
+the highest occupied KV cell and the occupied-cell count. Before stopping the
+server, the harness saves those lines in `native-kv-span.log` in the cell
+artifact. This option is Skippy-only, appears in `launch.json`, and is
+intentionally excluded from performance qualification because the extra
+logging changes timing.
 
 For a controlled llama KV-layout diagnostic, set `AGENTX_LLAMA_KV_UNIFIED=1`
 to append `--kv-unified`, or `=0` to append `--no-kv-unified`. Leave it unset
