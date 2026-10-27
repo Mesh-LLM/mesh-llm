@@ -191,6 +191,11 @@ pub struct Node {
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     /// Peers this node's operator chose to stop routing to (local only).
     pub(crate) peer_blocks: crate::network::peer_blocks::PeerBlocks,
+    /// The route-health table the serving surface routes with, registered by
+    /// [`crate::network::affinity::AffinityRouter::for_node`], so a plugin
+    /// vouching for a peer (an UNBLOCK) can lift that peer's cooldowns.
+    pub(crate) route_target_health:
+        Arc<std::sync::OnceLock<crate::network::target_health::TargetHealth>>,
     /// Plugin public keys this node announces, and the verified ones its
     /// directly-connected peers announce (`mesh::plugin_keys`).
     pub(crate) plugin_keys: crate::mesh::plugin_keys::PluginKeys,
@@ -906,6 +911,7 @@ impl Node {
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
             config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
             peer_blocks: crate::network::peer_blocks::PeerBlocks::for_this_node(),
+            route_target_health: Arc::new(std::sync::OnceLock::new()),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
@@ -1092,6 +1098,7 @@ impl Node {
                 crate::runtime::config_state::ConfigState::default(),
             )),
             peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
+            route_target_health: Arc::new(std::sync::OnceLock::new()),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)

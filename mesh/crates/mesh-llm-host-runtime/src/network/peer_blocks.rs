@@ -515,6 +515,17 @@ pub(crate) async fn apply_plugin_request(
     })
     .await
     .map_err(|error| request_error(format!("peer block worker failed: {error}")))??;
+    if choice.change == RoutingChange::Unblock {
+        // The plugin vouches for this peer: whatever made the router skip it
+        // (a gate it has since satisfied, a transient failure) is over from the
+        // plugin's point of view, so try the peer again on the next request.
+        if let (Some(health), Ok(peer)) = (
+            node.route_target_health.get(),
+            choice.peer.parse::<iroh::EndpointId>(),
+        ) {
+            health.lift_cooldowns(&crate::inference::election::InferenceTarget::Remote(peer));
+        }
+    }
     publish(node, &choice).await;
     let choice_json =
         serde_json::to_string(&choice).map_err(|error| request_error(error.to_string()))?;

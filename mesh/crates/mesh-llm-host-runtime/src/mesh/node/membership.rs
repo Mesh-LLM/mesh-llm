@@ -412,6 +412,7 @@ impl Node {
             gpu_compute_tflops_fp16: host_figure(&self.gpu_compute_tflops_fp16),
             config_state: self.config_state.clone(),
             peer_blocks: self.peer_blocks.clone(),
+            route_target_health: self.route_target_health.clone(),
             config_revision_tx: self.config_revision_tx.clone(),
             activity_policy_guard: self.activity_policy_guard.clone(),
             drain_timeout_secs: self.drain_timeout_secs,

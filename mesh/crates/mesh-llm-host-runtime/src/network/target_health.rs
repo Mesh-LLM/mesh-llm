@@ -174,6 +174,20 @@ impl TargetHealth {
         }
     }
 
+    /// A local plugin vouched for `target` (a peer UNBLOCK): end every
+    /// cooldown on it now, for every model, so the next request tries it
+    /// again. Failure counts and reputation are untouched — the vouch says
+    /// "my gate state changed", not "the host got healthier".
+    pub(crate) fn lift_cooldowns(&self, target: &InferenceTarget) {
+        let now = Instant::now();
+        let mut state = self.inner.lock().unwrap();
+        for (key, entry) in state.entries.iter_mut() {
+            if &key.target == target && entry.cool_until > now {
+                entry.cool_until = now;
+            }
+        }
+    }
+
     pub(crate) fn eligible_candidates(
         &self,
         model: &str,
@@ -542,6 +556,50 @@ mod tests {
 
         health.record_outcome(Some("paid"), &local(9001), TargetHealthOutcome::Success);
         assert_eq!(health.eligible_candidates("paid", &candidates), candidates);
+    }
+
+    #[test]
+    fn a_vouch_lifts_every_cooldown_on_that_target_only() {
+        let health = TargetHealth::default();
+        let candidates = vec![local(9001), local(9002)];
+        health.record_outcome(
+            Some("paid"),
+            &local(9001),
+            TargetHealthOutcome::GateUnsatisfied,
+        );
+        health.record_outcome(
+            Some("other"),
+            &local(9001),
+            TargetHealthOutcome::GateUnsatisfied,
+        );
+        health.record_outcome(
+            Some("paid"),
+            &local(9002),
+            TargetHealthOutcome::GateUnsatisfied,
+        );
+
+        health.lift_cooldowns(&local(9001));
+
+        assert!(
+            health
+                .eligible_candidates("paid", &candidates)
+                .contains(&local(9001))
+        );
+        assert!(
+            health
+                .eligible_candidates("other", &candidates)
+                .contains(&local(9001))
+        );
+        // The other target's cooldown stands.
+        assert_eq!(
+            health.eligible_candidates("paid", std::slice::from_ref(&local(9002))),
+            vec![local(9002)],
+            "sole candidate is still tried"
+        );
+        assert_eq!(
+            health.eligible_candidates("paid", &candidates),
+            vec![local(9001)]
+        );
     }
 
     #[test]
