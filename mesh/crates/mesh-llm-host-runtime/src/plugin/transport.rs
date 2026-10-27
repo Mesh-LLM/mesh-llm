@@ -1,3 +1,4 @@
+mod model_requirements;
 use super::runtime::PluginRuntime;
 use super::{PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary, proto};
 use anyhow::{Context, Result, anyhow, bail};
@@ -152,6 +153,9 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         outbound_tx.clone(),
                                     );
                                 }
+Some(super::proto::envelope::Payload::ModelRequirementRequest(request)) => {
+    model_requirements::forward_request(plugin_name.clone(), request_id, request, mesh_tx.clone(), outbound_tx.clone());
+}
                                 Some(super::proto::envelope::Payload::PluginKeyRequest(request)) => {
                                     // Announced under the connection's own name,
                                     // so one plugin cannot set another's key.
@@ -217,6 +221,14 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
             };
 
             if was_active_runtime {
+                let _ = mesh_tx
+                    .send_timeout(
+                        PluginMeshEvent::ModelRequirementsWithdraw {
+                            plugin_id: plugin_name.clone(),
+                        },
+                        Duration::from_secs(1),
+                    )
+                    .await;
                 if let Err(err) = result {
                     tracing::warn!(
                         plugin = %plugin_name,

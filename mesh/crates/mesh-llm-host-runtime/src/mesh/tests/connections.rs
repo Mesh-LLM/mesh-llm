@@ -460,6 +460,7 @@ async fn make_test_node_with_requirements(
         peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
         route_target_health: Arc::new(std::sync::OnceLock::new()),
         plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
+        model_requirements: Default::default(),
         config_revision_tx: {
             let (tx, _rx) = tokio::sync::watch::channel(0u64);
             Arc::new(tx)
@@ -595,7 +596,7 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
     let text_model = "Qwen3-8B-Q4_K_M".to_string();
 
     node.set_serving_models(vec![vision_model.clone()]).await;
-    node.upsert_served_model_descriptor(ServedModelDescriptor {
+    node.upsert_served_model_descriptor(ServedModelDescriptor { requires: Vec::new(),
         identity: ServedModelIdentity {
             model_name: vision_model.clone(),
             is_primary: true,

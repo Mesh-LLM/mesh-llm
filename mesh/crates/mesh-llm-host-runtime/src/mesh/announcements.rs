@@ -126,7 +126,7 @@ impl Node {
             models,
             model_source: self.model_source.lock().await.clone(),
             serving_models,
-            hosted_models,
+            hosted_models: hosted_models.clone(),
             available_models: self.available_models.lock().await.clone(),
             requested_models: self.requested_models.lock().await.clone(),
             explicit_model_interests: self.explicit_model_interests.lock().await.clone(),
@@ -138,7 +138,7 @@ impl Node {
             direct_admission_proof,
             available_model_metadata: Vec::new(),
             available_model_sizes: HashMap::new(),
-            served_model_descriptors: self.served_model_descriptors.lock().await.clone(),
+            served_model_descriptors: self.descriptors_with_requirements(&hosted_models).await,
             served_model_runtime: self.model_runtime_descriptors.lock().await.clone(),
             owner_attestation: self.owner_attestation.lock().await.clone(),
             // A membership carries no stage transport, so no artifacts either.

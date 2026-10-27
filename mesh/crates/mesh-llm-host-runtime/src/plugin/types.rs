@@ -10,6 +10,12 @@ use tokio::sync::oneshot;
 #[derive(Debug)]
 pub enum PluginMeshEvent {
     /// Host-private identity services use the authenticated connection name.
+    ModelRequirementsWithdraw { plugin_id: String },
+    ModelRequirement {
+        plugin_id: String,
+        request: proto::ModelRequirementRequest,
+        response_tx: oneshot::Sender<Result<proto::ModelRequirementResponse, proto::ErrorResponse>>,
+    },
     IdentityService {
         plugin_id: String,
         request: proto::RpcRequest,

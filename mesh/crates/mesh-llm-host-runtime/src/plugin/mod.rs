@@ -1365,6 +1365,16 @@ impl PluginManager {
     /// manifest, so this doubles as an "already running" check: a stopped or
     /// never-started plugin has no cached manifest and returns `None` here.
     async fn manifest_snapshot(&self, plugin_name: &str) -> Option<proto::PluginManifest> {
+        #[cfg(test)]
+        if self.is_test_bridge_enabled(plugin_name) {
+            return self
+                .inner
+                .test_manifests
+                .lock()
+                .await
+                .get(plugin_name)
+                .cloned();
+        }
         self.inner
             .plugins
             .get(plugin_name)?

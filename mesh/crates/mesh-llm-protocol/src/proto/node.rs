@@ -669,6 +669,15 @@ pub struct ServedModelDescriptor {
     pub capabilities_known: ::core::option::Option<bool>,
     #[prost(message, optional, tag = "5")]
     pub metadata: ::core::option::Option<ServedModelMetadata>,
+    #[prost(message, repeated, tag = "6")]
+    pub requires: ::prost::alloc::vec::Vec<ChannelRequirement>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChannelRequirement {
+    #[prost(string, tag = "1")]
+    pub channel: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub terms: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServedModelMetadata {

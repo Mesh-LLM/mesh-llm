@@ -816,6 +816,7 @@ max_tokens = 222
 #[test]
 fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capabilities() {
     let existing = mesh::ServedModelDescriptor {
+        requires: Vec::new(),
         identity: mesh::ServedModelIdentity {
             model_name: "Qwen3VL-2B-Instruct-Q4_K_M".into(),
             is_primary: false,

@@ -37,6 +37,7 @@ pub(crate) fn infer_remote_served_descriptors(
                 unknown_identity(model_name)
             };
             ServedModelDescriptor {
+                requires: Vec::new(),
                 identity,
                 capabilities_known: false,
                 capabilities: crate::models::ModelCapabilities::default(),

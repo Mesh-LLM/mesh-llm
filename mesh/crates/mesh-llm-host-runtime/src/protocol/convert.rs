@@ -814,6 +814,14 @@ pub(crate) fn local_ann_to_proto_ann(
         .map(|descriptor| crate::proto::node::ServedModelDescriptor {
             identity: Some(descriptor_identity_to_proto(&descriptor.identity)),
             capabilities_known: Some(descriptor.capabilities_known),
+            requires: descriptor
+                .requires
+                .iter()
+                .map(|r| crate::proto::node::ChannelRequirement {
+                    channel: r.channel.clone(),
+                    terms: r.terms.clone(),
+                })
+                .collect(),
             capabilities: Some(crate::proto::node::ModelCapabilities {
                 vision: local_capability_level_to_proto(descriptor.capabilities.vision),
                 reasoning: local_capability_level_to_proto(descriptor.capabilities.reasoning),

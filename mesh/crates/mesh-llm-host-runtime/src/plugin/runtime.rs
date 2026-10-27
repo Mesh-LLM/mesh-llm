@@ -344,6 +344,7 @@ impl ExternalPlugin {
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                     host_capabilities: vec![
+                        mesh_llm_plugin::host_capabilities::MODEL_REQUIREMENTS.to_string(),
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
                         mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),

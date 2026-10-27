@@ -388,6 +388,7 @@ mod tests {
         capabilities: crate::models::ModelCapabilities,
     ) -> mesh::ServedModelDescriptor {
         mesh::ServedModelDescriptor {
+            requires: Vec::new(),
             capabilities_known: true,
             capabilities,
             ..local_gguf_descriptor(model_name)

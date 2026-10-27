@@ -103,9 +103,17 @@ async fn main() -> Result<()> {
     let plugin = SimplePlugin::new(metadata)
         // After the handshake: opening a wallet must not consume the host's
         // initialize-response timeout. Manifest inspection never reaches here.
-        .on_initialized(move |_context| {
+        .on_initialized(move |context| {
             let engine = startup.clone();
-            Box::pin(async move { engine.start().await })
+            let mut context = context.owned();
+            Box::pin(async move {
+                for model in engine.service.ledger.pricing()?.keys() {
+                    context
+                        .require_channels_for_model(model, &[(CHANNEL, &[])])
+                        .await?;
+                }
+                engine.start().await
+            })
         })
         .on_channel_message(move |message, context| {
             let engine = messages.clone();

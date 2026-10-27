@@ -430,6 +430,13 @@ message ServedModelDescriptor {
   optional ModelTopology topology = 3;
   optional bool capabilities_known = 4;
   optional ServedModelMetadata metadata = 5;
+  // Local clients must speak every named plugin channel. Empty means ungated.
+  repeated ChannelRequirement requires = 6;
+}
+
+message ChannelRequirement {
+  string channel = 1;
+  bytes terms = 2;
 }
 
 message ServedModelMetadata {

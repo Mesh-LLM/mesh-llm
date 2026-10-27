@@ -88,6 +88,7 @@ mod gossip;
 mod heartbeat;
 mod host_role_claims;
 pub(crate) mod model_identity;
+mod model_requirements;
 mod node;
 mod node_identity;
 mod node_requirements;
@@ -175,8 +176,8 @@ pub(crate) use node::{
 };
 pub(crate) use peer_state::{
     ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, http_routable_models,
-    peer_has_observed_liveness, resolve_peer_leaving, routable_models, routes_http_model,
-    routes_model,
+    peer_has_observed_liveness, public_model_id_for_routable_model, resolve_peer_leaving,
+    routable_models, routes_http_model, routes_model,
 };
 #[expect(
     unused_imports,

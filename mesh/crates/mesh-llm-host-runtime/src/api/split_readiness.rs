@@ -34,6 +34,7 @@ pub(crate) struct SplitReadinessNodeInput {
     /// stages receive the user's content, so a blocked peer is never a
     /// candidate.
     pub(crate) blocked: bool,
+    pub(crate) unavailable_channel_models: Vec<String>,
     pub(crate) stage_path: SplitStagePathSnapshot,
 }
 
@@ -143,6 +144,7 @@ impl MeshApi {
             stage_protocol_generation_supported: true,
             artifact_transfer_supported: true,
             blocked: false,
+            unavailable_channel_models: Vec::new(),
             stage_path: SplitStagePathSnapshot::unknown(),
         };
         let mut peers = Vec::new();
@@ -150,7 +152,20 @@ impl MeshApi {
         for peer in node.peers().await {
             let blocked = node.peer_blocks.is_blocked(&peer.id, blocked_now_ms);
             let stage_path = node.split_stage_path_snapshot(peer.id).await;
-            peers.push(peer_readiness_input(peer, stage_path, blocked));
+            let supported = node
+                .supported_model_channels(std::slice::from_ref(&peer))
+                .await;
+            let unavailable = peer
+                .served_model_descriptors
+                .iter()
+                .filter(|d| d.requires.iter().any(|ch| !supported.contains(&ch.channel)))
+                .map(|d| {
+                    crate::mesh::public_model_id_for_routable_model(&peer, &d.identity.model_name)
+                })
+                .collect();
+            let mut input = peer_readiness_input(peer, stage_path, blocked);
+            input.unavailable_channel_models = unavailable;
+            peers.push(input);
         }
         let active_topology_count = node.stage_topologies().await.len();
         let active_stage_count = node
@@ -230,6 +245,7 @@ fn peer_readiness_input(
         stage_protocol_generation_supported: peer.stage_protocol_generation_supported,
         artifact_transfer_supported: peer.artifact_transfer_supported,
         blocked,
+        unavailable_channel_models: Vec::new(),
         stage_path,
     }
 }
@@ -246,6 +262,13 @@ fn split_node_exclusion_reason(
     model_ref: &str,
     node: &SplitReadinessNodeInput,
 ) -> Option<SplitReadinessExclusionReason> {
+    if node
+        .unavailable_channel_models
+        .iter()
+        .any(|m| model_matches(m, model_ref))
+    {
+        return Some(SplitReadinessExclusionReason::RequiresChannel);
+    }
     if node.blocked {
         return Some(SplitReadinessExclusionReason::Blocked);
     }
@@ -590,9 +613,10 @@ fn split_capacity_shortfall_blocker(
     })
 }
 
-const fn split_readiness_exclusion_reason_order() -> [SplitReadinessExclusionReason; 10] {
+const fn split_readiness_exclusion_reason_order() -> [SplitReadinessExclusionReason; 11] {
     [
         SplitReadinessExclusionReason::Blocked,
+        SplitReadinessExclusionReason::RequiresChannel,
         SplitReadinessExclusionReason::StageControlUnreachable,
         SplitReadinessExclusionReason::PackageManifestMismatch,
         SplitReadinessExclusionReason::ArtifactTransferUnavailable,
@@ -734,6 +758,7 @@ fn model_matches(candidate: &str, model_ref: &str) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SplitReadinessExclusionReason {
     Blocked,
+    RequiresChannel,
     Client,
     MissingVram,
     MissingModelInterest,
@@ -749,6 +774,7 @@ impl SplitReadinessExclusionReason {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Blocked => "blocked",
+            Self::RequiresChannel => "requires_channel",
             Self::Client => "client",
             Self::MissingVram => "missing_vram",
             Self::MissingModelInterest => "missing_model_interest",
@@ -763,6 +789,7 @@ impl SplitReadinessExclusionReason {
 
     const fn recommendation(self) -> &'static str {
         match self {
+            Self::RequiresChannel => "A required plugin channel is unavailable locally",
             Self::Blocked => {
                 "Unblock this peer, or remove the plugin block, to let it join split serving."
             }
@@ -838,6 +865,7 @@ mod tests {
             stage_protocol_generation_supported: true,
             artifact_transfer_supported: true,
             blocked: false,
+            unavailable_channel_models: Vec::new(),
             stage_path: crate::mesh::SplitStagePathSnapshot::direct(Some(4)),
         }
     }

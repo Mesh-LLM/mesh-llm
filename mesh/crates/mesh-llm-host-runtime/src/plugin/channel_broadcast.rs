@@ -56,6 +56,12 @@ impl PluginManager {
     /// when nobody on [`Self::broadcast_channel_message`]'s per-plugin filter
     /// would have kept the message anyway.
     pub async fn any_plugin_declares_mesh_channel(&self, channel: &str) -> bool {
+        #[cfg(test)]
+        for plugin_id in &self.inner.bridged_plugins {
+            if self.plugin_declares_mesh_channel(plugin_id, channel).await {
+                return true;
+            }
+        }
         for plugin_id in self.inner.plugins.keys() {
             if self.plugin_declares_mesh_channel(plugin_id, channel).await {
                 return true;

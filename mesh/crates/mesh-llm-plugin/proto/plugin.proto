@@ -34,6 +34,8 @@ message Envelope {
     PeerBlockResponse peer_block_response = 33;
     PluginKeyRequest plugin_key_request = 34;
     PluginKeyResponse plugin_key_response = 35;
+    ModelRequirementRequest model_requirement_request = 36;
+    ModelRequirementResponse model_requirement_response = 37;
   }
 }
 
@@ -770,4 +772,18 @@ message OpenAiExchangeHookManifest {
   bool delegate_signing_key = 17;
   repeated string signing_scopes = 18;
   uint64 max_delegation_ttl_secs = 19;
+}
+
+// Replaces this plugin's requirements for one exact advertised model id.
+// Empty requires withdraws. The host authenticates the plugin name
+// and accepts only channels declared by that plugin's initialized manifest.
+message ModelRequirementRequest {
+  string model = 1;
+  repeated ChannelRequirement requires = 2;
+}
+message ModelRequirementResponse {}
+
+message ChannelRequirement {
+  string channel = 1;
+  bytes terms = 2;
 }
