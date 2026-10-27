@@ -768,6 +768,7 @@ fn build_model_payload_from_catalog_entry(
         } else {
             "cold".into()
         },
+        workload_class: served_metadata.and_then(|metadata| metadata.workload_class),
         node_count,
         mesh_vram_gb,
         size_gb,
