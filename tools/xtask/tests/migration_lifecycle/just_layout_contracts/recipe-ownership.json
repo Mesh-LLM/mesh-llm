@@ -60,6 +60,7 @@
       "skippy-layer-package-fetch",
       "skippy-layer-package-inspect",
       "skippy-native-full-replay",
+      "skippy-native-mtp-probes-build",
       "skippy-native-tests",
       "skippy-openai-smoke",
       "skippy-package-reference",

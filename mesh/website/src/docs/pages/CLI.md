@@ -256,7 +256,7 @@ Switches:
 ### Common runtime options
 
 - `--join <TOKEN>`: join a specific mesh using an invite token (repeatable).
-- `--discover [NAME]`: discover a mesh via Nostr and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`.
+- `--discover[=NAME]`: discover a mesh via Nostr and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`. The name must be `=`-attached (`--discover=alice`), so the next token is never mistaken for it (`--discover status` runs `status`).
 - `--mesh-discovery-mode <nostr|mdns>`: choose public Nostr or LAN mDNS discovery. mDNS is LAN-scoped and still requires an invite token for joining.
 - `--auto`: auto-join the best discovered mesh.
 - `--model <MODEL>`: model to serve (catalog id from `models recommended`, HF ref/URL, or path).
@@ -591,6 +591,12 @@ next to the Windows binary) no longer hides the downloadable GPU runtimes of
 the release catalog. `--installed` is the explicit compatibility spelling for
 the default local-discovery behavior.
 
+At startup `mesh-llm` also fetches the release catalog and installs a missing
+runtime. Set `runtime.native_runtime.download = false` in `config.toml` (or
+`MESH_LLM_NO_RUNTIME_DOWNLOAD=1` for one process) to use only bundled and
+installed runtimes, for example when a package manager ships them.
+`mesh-llm runtime install` is not affected.
+
 Use `--json` for machine-readable output. Runtime selection is constrained by
 the running Mesh version, platform, backend, and Skippy ABI.
 
@@ -694,7 +700,10 @@ Use this to inspect local GPU identity and capacity, including per-device VRAM, 
 ### `config validate`
 
 Use this to validate a mesh-llm config file before starting a node or applying
-the file through owner-control.
+the file through owner-control. A `hardware.model_path` that `serve` would
+refuse on this machine (relative, missing, or a symlink) is reported as a
+warning rather than an error, because the file may be applied to a different
+node, where that path can exist.
 
 Usage:
 

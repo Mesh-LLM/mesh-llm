@@ -80,7 +80,7 @@ skippy-model = { path = "../../../skippy/crates/skippy-model", version = "0.78.0
 skippy-serving = { path = "../../../skippy/crates/skippy-serving", version = "0.78.0"  }
 skippy-topology = { path = "../../../skippy/crates/skippy-topology", version = "0.78.0"  }
 skippy-package-format = { path = "../../../skippy/crates/skippy-package-format", version = "0.78.0"  }
-iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs", "unstable-net-report"] }
+iroh = { version = "1.4.1", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs", "unstable-net-report"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -164,5 +164,5 @@ mesh-llm-membership = { path = "../mesh-llm-membership", version = "0.78.0", fea
 # with AccessConfig::Restricted, then build a real iroh::Endpoint from our
 # relay_map_from_urls output and verify --relay-auth tokens reach the relay
 # on the WebSocket upgrade (and that the wrong token is rejected).
-iroh = { version = "1.0.3", features = ["test-utils"] }
-iroh-relay = { version = "1.0.3", features = ["server", "test-utils"] }
+iroh = { version = "1.4.1", features = ["test-utils"] }
+iroh-relay = { version = "1.4.1", features = ["server", "test-utils"] }

@@ -470,6 +470,69 @@ fn distribution_build_keeps_runpath_and_skips_model_package_tool() {
 }
 
 #[test]
+fn distribution_build_suffixes_the_runtime_id_and_takes_the_rank_from_the_environment() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.path().join("build/libllama.so"),
+        b"\x7fELFinert-runtime",
+    )
+    .unwrap();
+    fixture.tool(
+        "cargo",
+        "[[ ${1:-} == xtool ]] || exit 96\nshift\nexec \"$AUTOMATION\" \"$@\"",
+    );
+    fixture.tool("readelf", "printf 'Version needs section GLIBC_2.17\\n'");
+    fixture.tool(
+        "patchelf",
+        "if [[ $1 == --print-rpath ]]; then printf '/opt/deps/lib\\n'; fi",
+    );
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../skippy/scripts/package-native-runtime.sh");
+    let environment = [
+        ("PACKAGE_SCRIPT", script.to_string_lossy().into_owned()),
+        (
+            "LLAMA_STAGE_BUILD_DIR",
+            fixture.path().join("build").to_string_lossy().into_owned(),
+        ),
+        (
+            "LLAMA_WORKDIR",
+            fixture
+                .path()
+                .join("absent-owned-source")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "MESH_NATIVE_RUNTIME_MODEL_PACKAGE_TOOL",
+            "/usr/bin/true".into(),
+        ),
+        ("MESH_LLM_NATIVE_RUNTIME_RANK", "1000".into()),
+    ];
+    let body = "\"$PACKAGE_SCRIPT\" --backend cpu --target x86_64-unknown-linux-gnu --out \"$TEST_ROOT/output\" --keep-runpath --no-model-package-tool --id-suffix nixpkgs";
+    let (ok, _, error) = fixture.run(body, &environment);
+    assert!(ok, "{error}");
+    let artifact = "meshllm-native-runtime-linux-x86_64-cpu-nixpkgs";
+    let stage = fixture.path().join("output").join(artifact);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(stage.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["runtime"]["id"], serde_json::json!(artifact));
+    assert_eq!(manifest["runtime"]["rank"], serde_json::json!(1000));
+    assert!(
+        fixture
+            .path()
+            .join(format!("output/{artifact}.tar.gz"))
+            .is_file()
+    );
+
+    let body = "\"$PACKAGE_SCRIPT\" --backend cpu --target x86_64-unknown-linux-gnu --out \"$TEST_ROOT/rejected\" --keep-runpath --no-model-package-tool --id-suffix 'Nix Pkgs'";
+    let (ok, _, error) = fixture.run(body, &environment);
+    assert!(!ok);
+    assert!(error.contains("invalid --id-suffix"), "{error}");
+    assert!(!fixture.path().join("rejected").exists());
+    fixture.directory.close().unwrap();
+}
+
+#[test]
 fn package_runtime_version_reads_product_file_instead_of_differing_workspace_version() {
     let fixture = Fixture::new();
     let product = fixture.path().join("skippy/crates/skippy-native-runtime");

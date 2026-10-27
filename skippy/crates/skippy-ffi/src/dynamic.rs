@@ -6,7 +6,8 @@ use std::{
 
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
-    ActivationDesc, BackendDevice, CacheGenRecordV1, Error, GenerationSignalWindow,
+    ActivationDesc, AsrAbortCallback, AsrInfoV1, AsrModel, AsrResult, AsrSegmentV1,
+    AsrTranscribeParamsV1, BackendDevice, CacheGenRecordV1, Error, GenerationSignalWindow,
     IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
     LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo,
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
@@ -16,8 +17,8 @@ use crate::{
     Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
     SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
     StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
-    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenSignal,
-    WorkloadInfoV1, runtime_abi_supported,
+    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenLogprobs,
+    TokenSignal, WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -199,6 +200,17 @@ dynamic_symbols! {
     skippy_laya_model_info_v1(model: *const LayaModel, out_info: *mut LayaInfoV1, out_error: *mut *mut Error) -> Status;
     skippy_laya_tokenize(model: *const LayaModel, text: *const c_char, text_len: usize, out_tokens: *mut i32, capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_laya_read(model: *mut LayaModel, tokens: *const i32, token_count: usize, marker_positions: *const i32, marker_count: usize, sequences: *const LayaSequence, sequence_count: usize, out_logits: *mut f32, logits_capacity: usize, out_act_logits: *mut f32, act_logits_capacity: usize, out_error: *mut *mut Error) -> Status;
+    skippy_asr_model_open(model_path: *const c_char, device: *const c_char, out_model: *mut *mut AsrModel, out_error: *mut *mut Error) -> Status;
+    skippy_asr_model_free(model: *mut AsrModel);
+    skippy_asr_model_info_v1(model: *const AsrModel, out_info: *mut AsrInfoV1, out_error: *mut *mut Error) -> Status;
+    skippy_asr_decode_audio(data: *const u8, len: usize, out_samples: *mut *mut f32, out_sample_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_asr_samples_free(samples: *mut f32);
+    skippy_asr_transcribe(model: *mut AsrModel, samples: *const f32, sample_count: usize, params: *const AsrTranscribeParamsV1, abort_callback: AsrAbortCallback, abort_user_data: *mut c_void, out_result: *mut *mut AsrResult, out_error: *mut *mut Error) -> Status;
+    skippy_asr_result_segment_count(result: *const AsrResult) -> usize;
+    skippy_asr_result_segment_v1(result: *const AsrResult, index: usize, out_segment: *mut AsrSegmentV1, out_error: *mut *mut Error) -> Status;
+    skippy_asr_result_language(result: *const AsrResult) -> *const c_char;
+    skippy_asr_result_duration_seconds(result: *const AsrResult) -> f64;
+    skippy_asr_result_free(result: *mut AsrResult);
     skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_create_from_resident_prefix(model: *mut Model, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
@@ -231,6 +243,7 @@ dynamic_symbols! {
     skippy_verify_tokens_frame_sampled(session: *mut Session, token_ids: *const i32, token_count: usize, sampling: *const SamplingConfig, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, max_draft_tokens: usize, out_mtp_draft: *mut NativeMtpDraft, out_error: *mut *mut Error) -> Status;
     skippy_session_copy_output_activation_frame(session: *mut Session, token_count: usize, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_session_last_token_signal(session: *mut Session, out_signal: *mut TokenSignal, out_error: *mut *mut Error) -> Status;
+    skippy_session_take_token_logprobs(session: *mut Session, out_entries: *mut TokenLogprobs, capacity: usize, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_session_signal_window(session: *mut Session, window_tokens: u32, out_window: *mut GenerationSignalWindow, out_error: *mut *mut Error) -> Status;
     skippy_trim_session(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_retire_verify_checkpoint(session: *mut Session, token_start: u64, token_count: u64, out_error: *mut *mut Error) -> Status;

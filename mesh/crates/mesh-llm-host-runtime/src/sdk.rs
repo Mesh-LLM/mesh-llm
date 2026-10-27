@@ -23,10 +23,12 @@ mod embedded_config;
 #[cfg(test)]
 mod embedded_lifecycle_tests;
 pub(crate) mod embedded_logging;
+mod embedded_memberships;
 mod embedded_openai;
 pub(crate) mod embedded_shutdown;
 mod embedded_startup;
 
+pub use crate::runtime::{MeshMembershipConfig, MeshMembershipStatus};
 pub use embedded_config::*;
 pub use embedded_openai::{EmbeddedOpenAiResponse, EmbeddedOpenAiStream, EmbeddedSseEvent};
 
@@ -349,7 +351,7 @@ async fn wait_for_embedded_status(
 }
 
 async fn fetch_json(url: &str) -> Result<serde_json::Value> {
-    let response = reqwest::Client::new()
+    let response = crate::network::local_http::local_http_client()
         .get(url)
         .send()
         .await

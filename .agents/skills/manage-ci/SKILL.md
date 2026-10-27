@@ -44,6 +44,15 @@ measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
 Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
+Preflight and build require `[self-hosted, macOS, ARM64, jy-managed,
+family-certify, accelerator-memory-128plus]`; family and infrastructure-retry
+jobs replace the final label with the controller's `matrix.memory_tier`.
+JY owns machine eligibility through attribute selectors: macOS Apple M1 Ultra
+with exactly 128 GiB or Apple M3 Ultra with exactly 256 GiB, with mounted model
+storage. Never select a node name. The JY runner groups must allow only these
+two canary workflows at their protected `main` references. Provision through
+MDM and register the labeled runners before merging the workflow switch;
+unavailable managed capacity queues rather than falling back to another pool.
 They check runner prerequisites before compiling automation or preparing SDK
 dependencies and fail if any are absent. Tool installation and upgrades belong
 to runner provisioning: never invoke Rust, Just, or Homebrew installers from
@@ -87,6 +96,27 @@ not templates for new tooling. Existing isolated compatibility or upstream
 fixtures may be retained only with an explicit maintainer decision; new Python
 tooling requires an explicit maintainer decision to change that policy. Do not claim the required path is
 Python-free or remove legacy validation before its Rust replacement passes.
+
+Retained external Python dependencies have bounded owners: the admitted external
+Python SDK and its locked client environments, llama.cpp's upstream Jinja tests
+using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
+an immutable default source commit. These interfaces do not authorize new
+repository Python implementations. The canary Jinja environment belongs to its
+run's state directory and must use a preinstalled interpreter; dependency
+restoration must not download an interpreter or skip upstream tests. Freeze the
+Jinja project before selecting historical source checkouts so older sources do
+not need to contain the dependency manifest.
+
+`just ci-crate-lists`, selected by the normal Quality validation gate, also
+checks repository Python tooling. Its typed policy is
+`ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
+and executable invocation exceptions must retain their documented owners and
+reviewed occurrence counts. The census includes tracked and new nonignored
+files, including hidden directories. Python sources, shebangs, unapproved
+package inputs and direct interpreter invocations fail validation. Archived
+receipts and documentation examples remain data. Literal process checks are
+bounded static analysis; native caller tests must continue to reject the
+retired parser behavior, and source review still owns semantic emulation.
 
 ## Required procedure
 
@@ -750,3 +780,13 @@ Also run what applies:
 Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
+
+## Rolling previews
+
+The main-only rolling-preview dispatcher reuses the canonical release pipeline,
+never a parallel packaging implementation. Preview versions must contain
+`-preview.` and leave main unchanged; all producer checkouts use metadata's
+frozen source SHA. Publish verified assets as a draft before exposing the
+complete prerelease, without marking it latest or invoking stable registries.
+Keep immutable preview tags and previous downloads; no automated deletion is
+part of the initial rollout. The schedule is Tuesday/Friday 03:23 UTC.

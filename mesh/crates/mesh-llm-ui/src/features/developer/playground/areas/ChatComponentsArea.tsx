@@ -185,7 +185,11 @@ export function ChatComponentsArea({ state }: { state: DeveloperPlaygroundState 
                     ))}
                   </div>
                   <div className="border-t border-border-soft bg-panel px-4 py-3">
-                    <Composer value={state.prompt} onChange={state.setPrompt} onSend={() => state.setPrompt('')} />
+                    <Composer
+                      value={state.prompt}
+                      onChange={(value) => state.setPrompt(typeof value === 'function' ? value(state.prompt) : value)}
+                      onSend={() => state.setPrompt('')}
+                    />
                   </div>
                 </section>
               </div>

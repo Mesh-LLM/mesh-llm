@@ -34,11 +34,11 @@ Add another machine when:
 Start every serving machine with the same private mesh name:
 
 ```sh
-mesh-llm serve --discover my-private-mesh --model <model-ref>
+mesh-llm serve --discover=my-private-mesh --model <model-ref>
 ```
 
 Join from an API-only laptop:
 
 ```sh
-mesh-llm client --discover my-private-mesh
+mesh-llm client --discover=my-private-mesh
 ```

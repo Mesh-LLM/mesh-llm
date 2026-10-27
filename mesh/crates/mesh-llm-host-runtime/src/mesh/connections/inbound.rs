@@ -34,6 +34,14 @@ impl Node {
         if self.handle_stage_alpn(&alpn, conn.clone(), remote).await {
             return Ok(());
         }
+        if self.local_endpoints.contains(remote) {
+            // Another mesh this node serves: peering would merge the meshes.
+            conn.close(0u32.into(), b"same-node-mesh");
+            anyhow::bail!(
+                "refused {}: another mesh this node serves",
+                remote.fmt_short()
+            );
+        }
         tracing::info!("Inbound connection from {}", remote.fmt_short());
 
         // Store connection for stream dispatch (tunneling, route requests, etc.)

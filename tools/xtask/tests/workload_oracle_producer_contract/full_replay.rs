@@ -55,6 +55,9 @@ impl Replay {
         for (key, value) in [
             ("LLAMA_STAGE_LINK_MODE", "static".into()),
             ("LLAMA_STAGE_BACKEND", backend.into()),
+            // The stubbed build stays offline and produces no whisper.cpp
+            // archive.
+            ("SKIPPY_SPEECH_RECOGNITION", "OFF".into()),
             (
                 "LLAMA_STAGE_FULL_REPLAY",
                 if replay { "ON" } else { "OFF" }.into(),

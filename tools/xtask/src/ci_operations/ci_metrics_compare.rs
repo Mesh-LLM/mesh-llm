@@ -10,7 +10,7 @@ use crate::ci_operations::ci_metrics_markdown_format::field;
 use crate::ci_operations::ci_metrics_observe::{
     MIN_HEURISTIC_SAMPLES, QUEUE_CONTAMINATION_SECONDS, QUEUE_WARN_SECONDS,
 };
-use crate::ci_operations::ci_metrics_stats::round;
+use crate::ci_operations::ci_metrics_stats::round_decimal;
 use crate::ci_operations::ci_metrics_value::{Value, display, object};
 use std::collections::BTreeSet;
 
@@ -116,7 +116,7 @@ fn strings(values: impl IntoIterator<Item = String>) -> Value {
 /// `{baseline, candidate, delta}` of one p95 series.
 fn p95_delta(baseline: &Value, candidate: &Value) -> Value {
     let delta = match (number(baseline), number(candidate)) {
-        (Some(base), Some(next)) => Some(round(next - base, 3)),
+        (Some(base), Some(next)) => Some(round_decimal(next - base, 3)),
         _ => None,
     };
     object([

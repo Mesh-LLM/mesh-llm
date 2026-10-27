@@ -229,7 +229,7 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
                     reasoning_content: parsed.reasoning_content,
                     tool_calls: parsed.tool_calls,
                 },
-                logprobs: None,
+                logprobs: chat_logprobs(output),
                 finish_reason: Some(finish_reason),
             }],
             output.usage(),
@@ -237,26 +237,78 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
         );
     }
 
-    ChatCompletionResponse::new_with_reason(
+    let mut response = ChatCompletionResponse::new_with_reason(
         model,
         output.text.clone(),
         output.usage(),
         output.finish_reason,
     )
-    .with_timings(output.timings())
+    .with_timings(output.timings());
+    if let Some(choice) = response.choices.first_mut() {
+        choice.logprobs = chat_logprobs(output);
+    }
+    response
+}
+
+/// OpenAI chat `logprobs`: one entry per completion token.
+fn chat_logprobs(output: &GeneratedText) -> Option<Value> {
+    let candidate = |candidate: &super::GeneratedLogprobCandidate| {
+        json!({
+            "token": candidate.text,
+            "logprob": candidate.logprob,
+            "bytes": candidate.bytes,
+        })
+    };
+    let content = output
+        .token_logprobs
+        .as_ref()?
+        .iter()
+        .map(|entry| {
+            let mut value = candidate(&entry.token);
+            value["top_logprobs"] = Value::Array(entry.top.iter().map(candidate).collect());
+            value
+        })
+        .collect::<Vec<_>>();
+    Some(json!({ "content": content, "refusal": null }))
 }
 
 pub(in crate::frontend) fn completion_response_from_generated_text(
     model: String,
     output: &GeneratedText,
 ) -> skippy_inference_api::CompletionResponse {
-    skippy_inference_api::CompletionResponse::new_with_reason(
+    let mut response = skippy_inference_api::CompletionResponse::new_with_reason(
         model,
         output.text.clone(),
         output.usage(),
         output.finish_reason,
     )
-    .with_timings(output.timings())
+    .with_timings(output.timings());
+    if let Some(choice) = response.choices.first_mut() {
+        choice.logprobs = completion_logprobs(output);
+    }
+    response
+}
+
+/// OpenAI legacy completion `logprobs`: parallel lists, with the alternatives
+/// keyed by token text (the first, most likely, wins a repeated text).
+/// `text_offset` is left out: it only matters with `echo`, which is not supported.
+fn completion_logprobs(output: &GeneratedText) -> Option<Value> {
+    let entries = output.token_logprobs.as_ref()?;
+    let tokens = entries.iter().map(|entry| json!(entry.token.text));
+    let token_logprobs = entries.iter().map(|entry| json!(entry.token.logprob));
+    let top_logprobs = entries.iter().map(|entry| {
+        let mut top = serde_json::Map::new();
+        for candidate in &entry.top {
+            top.entry(candidate.text.clone())
+                .or_insert(json!(candidate.logprob));
+        }
+        Value::Object(top)
+    });
+    Some(json!({
+        "tokens": tokens.collect::<Vec<_>>(),
+        "token_logprobs": token_logprobs.collect::<Vec<_>>(),
+        "top_logprobs": top_logprobs.collect::<Vec<_>>(),
+    }))
 }
 
 pub(in crate::frontend) fn parsed_chat_message_from_json(

@@ -66,6 +66,11 @@ impl StageOpenAiBackend {
             ));
         }
         if prompt.has_media() {
+            if sampling.top_logprobs.is_some() {
+                return Err(InferenceError::unsupported(
+                    "logprobs are not implemented yet for requests with media",
+                ));
+            }
             return self.generate_multimodal_text(
                 prompt,
                 max_tokens,
@@ -93,6 +98,11 @@ impl StageOpenAiBackend {
         };
         let workload = self.model_workload()?;
         if workload == ModelWorkload::EncoderDecoder {
+            if sampling.top_logprobs.is_some() {
+                return Err(InferenceError::unsupported(
+                    "logprobs are not implemented yet for encoder-decoder models",
+                ));
+            }
             let mut collector =
                 TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
                     .with_ignore_eos(sampling.ignore_eos);
@@ -202,6 +212,24 @@ impl StageOpenAiBackend {
             &gated_speculative,
             self.runahead_governor.as_deref(),
         );
+        // Speculative windows and native MTP sample or accept tokens outside
+        // the one-token-per-sample path that records logprobs.
+        let gated_speculative = if sampling.top_logprobs.is_some() {
+            let mut stood_down = gated_speculative.into_owned();
+            stood_down.ngram = None;
+            stood_down.extension = None;
+            stood_down.native_mtp.enabled = false;
+            std::borrow::Cow::Owned(stood_down)
+        } else {
+            gated_speculative
+        };
+        if sampling.top_logprobs.is_some()
+            && !matches!(self.mode, InferenceBackendMode::LocalRuntime)
+        {
+            return Err(InferenceError::unsupported(
+                "logprobs are not implemented yet for split (multi-stage) serving",
+            ));
+        }
 
         let cache_stats = match self.mode.clone() {
             InferenceBackendMode::LocalRuntime => self.generate_local_tokens(
@@ -316,7 +344,9 @@ impl StageOpenAiBackend {
             generation_timer,
             summary_attrs,
         );
-        self.record_speculation_outcome(&output, speculating);
+        // A logprobs request ran with speculation stood down above: its decode
+        // rate must not count toward the speculative window.
+        self.record_speculation_outcome(&output, speculating && sampling.top_logprobs.is_none());
         Ok(output)
     }
 }

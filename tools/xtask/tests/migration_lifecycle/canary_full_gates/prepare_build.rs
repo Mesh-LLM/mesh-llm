@@ -134,42 +134,59 @@ fn actual_full_build_preserves_arm64_generators_full_crates_and_both_oracle_envi
             "laya"
         ]
     );
+    let jinja_project = fixture
+        .root
+        .join("ci/llama-canary/jinja")
+        .display()
+        .to_string();
+    let jinja_python = "python3";
+    let locked_jinja_run = vec![
+        "run".to_owned(),
+        "--locked".to_owned(),
+        "--no-python-downloads".to_owned(),
+        "--python".to_owned(),
+        jinja_python.to_owned(),
+        "--project".to_owned(),
+        jinja_project,
+        "--".to_owned(),
+        "arch".to_owned(),
+        "-arm64".to_owned(),
+        "bash".to_owned(),
+    ];
+    let mut first_jinja_run = locked_jinja_run.clone();
+    first_jinja_run.extend([
+        "scripts/build-llama.sh".to_owned(),
+        "--build-only".to_owned(),
+        "-DCMAKE_OSX_ARCHITECTURES=arm64".to_owned(),
+        "-DGGML_METAL_EMBED_LIBRARY=ON".to_owned(),
+    ]);
+    assert_eq!(fixture.args("uv-1"), first_jinja_run);
+    let dependency_project = super::fixture::repository().join("ci/llama-canary/jinja");
+    let pyproject = fs::read_to_string(dependency_project.join("pyproject.toml")).unwrap();
+    let lock = fs::read_to_string(dependency_project.join("uv.lock")).unwrap();
+    assert!(pyproject.contains("jinja2==3.1.6"));
+    assert!(lock.contains("name = \"jinja2\"\nversion = \"3.1.6\""));
+    assert!(lock.contains("name = \"markupsafe\""));
+    assert!(lock.contains("hash = \"sha256:"));
+    let expected_jinja_environment = fixture.root.join("jinja-env").display().to_string();
     assert_eq!(
-        fixture.args("uv-1"),
-        [
-            "run",
-            "--no-project",
-            "--with",
-            "jinja2==3.1.6",
-            "--",
-            "arch",
-            "-arm64",
-            "bash",
-            "scripts/build-llama.sh",
-            "--build-only",
-            "-DCMAKE_OSX_ARCHITECTURES=arm64",
-            "-DGGML_METAL_EMBED_LIBRARY=ON"
-        ]
+        fixture.values("uv-environment-1"),
+        [expected_jinja_environment.as_str()]
     );
     assert_eq!(
         fs::read(fixture.root.join("upstream-tests")).unwrap(),
         b"ON"
     );
     assert_eq!(fixture.args("generated"), ["--full-native-suite"]);
+    let mut second_jinja_run = locked_jinja_run;
+    second_jinja_run.extend([
+        "scripts/check-skippy-generated-family-patch.sh".to_owned(),
+        "--full-native-suite".to_owned(),
+    ]);
+    assert_eq!(fixture.args("uv-2"), second_jinja_run);
     assert_eq!(
-        fixture.args("uv-2"),
-        [
-            "run",
-            "--no-project",
-            "--with",
-            "jinja2==3.1.6",
-            "--",
-            "arch",
-            "-arm64",
-            "bash",
-            "scripts/check-skippy-generated-family-patch.sh",
-            "--full-native-suite"
-        ]
+        fixture.values("uv-environment-2"),
+        [expected_jinja_environment.as_str()]
     );
     assert_eq!(
         fixture.args("archive"),
@@ -276,5 +293,65 @@ fn actual_full_build_preserves_arm64_generators_full_crates_and_both_oracle_envi
             .unwrap()
             .contains("candidate native archive must be arm64")
     );
+    fixture.finish();
+}
+
+#[test]
+fn actual_full_build_uses_controller_jinja_project_for_historical_source_without_manifest() {
+    let fixture = Fixture::new();
+    fixture.build_tools();
+    let controller_manifest = fixture.root.join("ci/llama-canary/jinja/pyproject.toml");
+    fs::create_dir_all(controller_manifest.parent().unwrap()).unwrap();
+    fs::write(
+        &controller_manifest,
+        "[project]\nname = \"controller-jinja\"\n",
+    )
+    .unwrap();
+    let historical_source = fixture.root.join("historical-source");
+    fs::create_dir_all(&historical_source).unwrap();
+    assert!(
+        !historical_source
+            .join("ci/llama-canary/jinja/pyproject.toml")
+            .exists()
+    );
+
+    let source = super::fixture::source();
+    let project_binding = source
+        .find("JINJA_PROJECT=\"$TRUSTED_ROOT/ci/llama-canary/jinja\"")
+        .unwrap();
+    let selected_root_switch = source.find("ROOT=\"${CANARY_SOURCE_ROOT:").unwrap();
+    assert!(project_binding < selected_root_switch);
+
+    let mut names = COMMON.to_vec();
+    names.push("run_full_build");
+    let report = fixture.run(
+        "pinned-build",
+        &names,
+        "ROOT=\"$ROOT/historical-source\"",
+        "run_full_build",
+        &[],
+    );
+    assert_eq!(
+        report.process.status.unwrap().code(),
+        Some(0),
+        "{}",
+        fixture.diagnostic(&report)
+    );
+
+    let controller_project = fixture
+        .root
+        .join("ci/llama-canary/jinja")
+        .display()
+        .to_string();
+    assert!(controller_manifest.is_file());
+    for invocation in ["uv-1", "uv-2"] {
+        let args = fixture.args(invocation);
+        let project_path = args
+            .iter()
+            .position(|argument| argument == "--project")
+            .and_then(|index| args.get(index + 1));
+        assert_eq!(project_path, Some(&controller_project));
+    }
+    assert_eq!(fixture.args("generated"), ["--full-native-suite"]);
     fixture.finish();
 }

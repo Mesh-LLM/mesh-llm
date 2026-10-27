@@ -258,8 +258,8 @@ mesh-llm serve --model Qwen3-8B-Q4_K_M --publish --mesh-name "lab-a"
 Join a named mesh:
 
 ```bash
-mesh-llm serve --discover "lab-a"
-mesh-llm client --discover "lab-a"
+mesh-llm serve --discover=lab-a
+mesh-llm client --discover=lab-a
 ```
 
 Without `--publish`, `--mesh-name` is only a local/friendly label. The name does
@@ -368,6 +368,19 @@ mesh-llm auth trust add <owner-id>
 mesh-llm auth trust list
 mesh-llm auth trust remove <owner-id>
 ```
+
+## Serve one model into several meshes
+
+An embedded node can be a member of further meshes while it serves, without
+loading its models again: the Rust SDK's `MeshNode::add_membership`, described
+in the [SDK README](../crates/mesh-llm-sdk/README.md#serve-into-further-meshes).
+Each membership is a separate node identity with its own owner allowlist
+(always enforced), peers, gossip and loopback API port, sharing the serving
+node's models and hardware. It never peers with the serving node or its other
+memberships, and refuses peers that announce a different mesh, so its peers do
+not see the serving node's own mesh or its other memberships. Requests from them
+run on the local model only. Memberships do not carry split-stage transport,
+plugins or owner control.
 
 ## Networking notes
 

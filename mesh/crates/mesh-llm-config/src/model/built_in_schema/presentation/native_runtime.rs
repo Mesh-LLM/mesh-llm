@@ -35,6 +35,15 @@ pub(super) fn native_runtime_presentation(rendered: &str) -> Option<SettingPrese
             )
             .hint("text"),
         ),
+        "runtime.native_runtime.download" => Some(
+            sp(
+                "Download native runtimes",
+                "Let startup fetch the release catalog and download a missing runtime. Turn off when bundled or installed runtimes must be used, e.g. when a package manager ships them. `mesh-llm runtime install` ignores it; `MESH_LLM_NO_RUNTIME_DOWNLOAD` overrides it.",
+                RUNTIME_CATEGORY,
+                130,
+            )
+            .hint("toggle"),
+        ),
         _ => None,
     }
 }
@@ -49,6 +58,7 @@ mod tests {
             ("runtime.native_runtime.selection", 100),
             ("runtime.native_runtime.mesh_version", 110),
             ("runtime.native_runtime.skippy_abi", 120),
+            ("runtime.native_runtime.download", 130),
         ] {
             let descriptor = built_in_config_schema_descriptor(
                 &ConfigPath::parse_rendered(path).expect("valid config path"),

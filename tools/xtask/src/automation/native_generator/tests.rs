@@ -4,17 +4,10 @@ use super::*;
 mod real_git;
 
 fn raw_fixture() -> PathBuf {
-    std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(format!(
-            "migration_raw_capture_fixture{}",
-            std::env::consts::EXE_SUFFIX
-        ))
+    crate::fixture_paths::examples_dir().join(format!(
+        "migration_raw_capture_fixture{}",
+        std::env::consts::EXE_SUFFIX
+    ))
 }
 
 #[test]
@@ -108,9 +101,7 @@ fn combined_output_survives_when_optional_map_is_invalid() {
 #[test]
 fn git_adapter_preserves_sensitive_hunks_and_exact_legacy_argv() {
     let root = tempfile::tempdir().unwrap();
-    let executable = std::env::current_exe().unwrap();
-    let profile = executable.parent().unwrap().parent().unwrap();
-    let fixture = profile.join("examples").join(format!(
+    let fixture = crate::fixture_paths::examples_dir().join(format!(
         "migration_raw_capture_fixture{}",
         std::env::consts::EXE_SUFFIX
     ));
@@ -138,17 +129,10 @@ fn git_adapter_preserves_sensitive_hunks_and_exact_legacy_argv() {
 #[test]
 fn raw_invalid_utf8_reaches_encoder_without_diagnostic_translation() {
     let root = tempfile::tempdir().unwrap();
-    let executable = std::env::current_exe().unwrap();
-    let fixture = executable
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(format!(
-            "migration_raw_capture_fixture{}",
-            std::env::consts::EXE_SUFFIX
-        ));
+    let fixture = crate::fixture_paths::examples_dir().join(format!(
+        "migration_raw_capture_fixture{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     std::fs::write(root.path().join("input.diff"), b"token\0\xff\r\n").unwrap();
     let input = GitDiff {
         executable: fixture,

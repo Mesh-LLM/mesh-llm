@@ -5,17 +5,10 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 fn fixture() -> PathBuf {
-    std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(format!(
-            "migration_generator_fixture{}",
-            std::env::consts::EXE_SUFFIX
-        ))
+    crate::fixture_paths::examples_dir().join(format!(
+        "migration_generator_fixture{}",
+        std::env::consts::EXE_SUFFIX
+    ))
 }
 
 pub(super) fn setup(root: &Path) -> options::Options {

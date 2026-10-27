@@ -4,7 +4,13 @@
 pub mod embedded_node;
 
 #[cfg(feature = "serving")]
-pub use embedded_node::{MeshNode, MeshNodeBuilder, MeshNodeStatus, OpenAiClient};
+pub mod live_transcription;
+
+#[cfg(feature = "serving")]
+pub use embedded_node::{
+    MeshMembershipConfig, MeshMembershipStatus, MeshNode, MeshNodeBuilder, MeshNodeStatus,
+    OpenAiClient,
+};
 
 #[cfg(feature = "serving")]
 pub use mesh_llm_embedded_runtime::initialize_host_runtime;
