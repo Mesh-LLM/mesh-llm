@@ -3,9 +3,9 @@ use crate::{
     binary_transport::binary_kv::take_shared_prefill_tokens,
     frontend::iteration_scheduler::IterationScheduler,
     kv_integration::KvStageIntegration,
-    telemetry::{lifecycle_attrs, Telemetry},
+    telemetry::{Telemetry, lifecycle_attrs},
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::StageConfig;
 use std::{
@@ -297,8 +297,8 @@ pub(super) fn combine_connection_and_cleanup_results(
 #[cfg(test)]
 mod tests {
     use super::{
-        combine_connection_and_cleanup_results, reclaim_orphaned_session,
         ConnectionSessionOwnership, ConnectionSessionTracker,
+        combine_connection_and_cleanup_results, reclaim_orphaned_session,
     };
     use anyhow::anyhow;
     use std::{
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn replacement_claim_waits_for_cleanup_and_then_owns_session() {
-        use std::sync::{mpsc, Barrier};
+        use std::sync::{Barrier, mpsc};
         use std::thread;
 
         let ownership = Arc::new(ConnectionSessionOwnership::default());
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn combined_resource_takeover_waits_until_old_cleanup_finishes() {
-        use std::sync::{mpsc, Barrier};
+        use std::sync::{Barrier, mpsc};
         use std::thread;
         use std::time::Duration;
 
