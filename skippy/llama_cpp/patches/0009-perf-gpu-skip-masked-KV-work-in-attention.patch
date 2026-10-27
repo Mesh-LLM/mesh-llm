@@ -385,7 +385,7 @@ index 57a285565..d84ea1fb0 100644
 +            bool contributes = false;
 +#pragma unroll
 +            for (int j = 0; j < ncols; ++j) {
-+                contributes |= KQ[j*nthreads + k] != 0.0f;
++                contributes |= static_cast<float>(KQ[j*nthreads + k]) != 0.0f;
 +            }
 +            if (!contributes) {
 +                continue; // Never multiply a zero weight by stale or uninitialized V data.
@@ -399,7 +399,7 @@ index 57a285565..d84ea1fb0 100644
  #pragma unroll
                      for (int j = 0; j < ncols; ++j) {
 -                        VKQ[j][i_VKQ_0/nthreads_V + i_VKQ_1] += tmp[i_VKQ_1]*KQ_k[j];
-+                        if (KQ[j*nthreads + k] != 0.0f) {
++                        if (static_cast<float>(KQ[j*nthreads + k]) != 0.0f) {
 +                            VKQ[j][i_VKQ_0/nthreads_V + i_VKQ_1] += tmp[i_VKQ_1]*KQ_k[j];
 +                        }
                      }
