@@ -129,8 +129,8 @@ use self::publication::*;
 pub use self::run_auto::load_resolved_plugins;
 use self::run_auto::*;
 pub(crate) use self::run_auto::{
-    EmbeddedRuntimeDiscoveryMode, EmbeddedRuntimeMode, EmbeddedRuntimeOptions, run, run_cli,
-    run_embedded_runtime,
+    EmbeddedRuntimeDiscoveryMode, EmbeddedRuntimeMode, EmbeddedRuntimeOptions,
+    EmbeddedRuntimeReadiness, run, run_cli, run_embedded_runtime,
 };
 use self::runtime_registry::*;
 use self::serving_surface::*;

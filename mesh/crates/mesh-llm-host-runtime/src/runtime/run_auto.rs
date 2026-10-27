@@ -82,6 +82,18 @@ pub(crate) enum EmbeddedRuntimeDiscoveryMode {
     Mdns,
 }
 
+/// In-process evidence that the embedded runtime worker itself bound its
+/// required listeners, emitted by the worker after a successful bind so
+/// startup readiness cannot be spoofed by an unaffiliated HTTP service that
+/// already answers `/api/status` on the console port (#2147).
+#[derive(Debug)]
+pub(crate) struct EmbeddedRuntimeReadiness {
+    pub(crate) invite_token: Option<String>,
+}
+
+pub(crate) type EmbeddedReadinessTx =
+    std::sync::mpsc::Sender<Result<EmbeddedRuntimeReadiness, String>>;
+
 pub(crate) struct EmbeddedRuntimeOptions {
     pub(crate) mode: EmbeddedRuntimeMode,
     pub(crate) models: Vec<String>,
@@ -113,6 +125,7 @@ pub(crate) struct EmbeddedRuntimeOptions {
     pub(crate) log_format: LogFormat,
     pub(crate) headless: bool,
     pub(crate) control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    pub(crate) embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 }
 
 impl EmbeddedRuntimeOptions {
@@ -167,7 +180,7 @@ pub(super) fn write_runtime_owner_metadata(
 
 pub(crate) async fn run() -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(RuntimeOptions::default(), None, None, None).await
+    run_runtime_cli(RuntimeOptions::default(), None, None, None, None).await
 }
 
 pub(crate) async fn run_cli(
@@ -176,7 +189,7 @@ pub(crate) async fn run_cli(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(options, explicit_surface, legacy_warning, None).await
+    run_runtime_cli(options, explicit_surface, legacy_warning, None, None).await
 }
 
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
@@ -186,8 +199,16 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
 
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
+    let embedded_readiness_tx = options.embedded_readiness_tx.take();
     let options = options_from_embedded_options(options);
-    run_runtime_cli(options, Some(surface), None, control_rx).await
+    run_runtime_cli(
+        options,
+        Some(surface),
+        None,
+        control_rx,
+        embedded_readiness_tx,
+    )
+    .await
 }
 
 pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
@@ -270,6 +291,7 @@ pub(super) async fn run_runtime_cli(
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 ) -> Result<()> {
     // Register termination-signal handling before any startup work. Startup
     // publishes readiness well before the serving loops await the signal, so a
@@ -426,6 +448,7 @@ pub(super) async fn run_runtime_cli(
         runtime,
         auto_join_candidates,
         embedded_control_rx,
+        embedded_readiness_tx,
     })
     .await
 }
@@ -1595,6 +1618,7 @@ pub(super) struct RunAutoContext {
     pub(super) auto_join_candidates: Vec<(String, Option<String>)>,
     pub(super) embedded_control_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    pub(super) embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 }
 
 /// Installs the mesh-serve path's runtime-event stack -- engine,
@@ -1749,6 +1773,7 @@ async fn run_auto_inner(
         runtime,
         auto_join_candidates,
         mut embedded_control_rx,
+        embedded_readiness_tx,
     } = ctx;
     // Do not create the mesh node or detached role watchers until a slow
     // termination-signal observer has either registered every required stream
@@ -1913,6 +1938,7 @@ async fn run_auto_inner(
         interactive_started: &interactive_started,
         console_state: console_state.as_ref(),
         model_name_for_console: &model_name_for_console,
+        embedded_readiness_tx,
     })
     .await?;
 
@@ -2142,6 +2168,7 @@ mod tests {
             runtime: None,
             auto_join_candidates: Vec::new(),
             embedded_control_rx: None,
+            embedded_readiness_tx: None,
         })
         .await;
 
