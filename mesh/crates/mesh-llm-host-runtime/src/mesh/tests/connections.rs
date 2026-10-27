@@ -596,7 +596,8 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
     let text_model = "Qwen3-8B-Q4_K_M".to_string();
 
     node.set_serving_models(vec![vision_model.clone()]).await;
-    node.upsert_served_model_descriptor(ServedModelDescriptor { requires: Vec::new(),
+    node.upsert_served_model_descriptor(ServedModelDescriptor {
+        requires: Vec::new(),
         identity: ServedModelIdentity {
             model_name: vision_model.clone(),
             is_primary: true,

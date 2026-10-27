@@ -153,9 +153,15 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         outbound_tx.clone(),
                                     );
                                 }
-Some(super::proto::envelope::Payload::ModelRequirementRequest(request)) => {
-    model_requirements::forward_request(plugin_name.clone(), request_id, request, mesh_tx.clone(), outbound_tx.clone());
-}
+                                Some(super::proto::envelope::Payload::ModelRequirementRequest(request)) => {
+                                    model_requirements::forward_request(
+                                        plugin_name.clone(),
+                                        request_id,
+                                        request,
+                                        mesh_tx.clone(),
+                                        outbound_tx.clone(),
+                                    );
+                                }
                                 Some(super::proto::envelope::Payload::PluginKeyRequest(request)) => {
                                     // Announced under the connection's own name,
                                     // so one plugin cannot set another's key.

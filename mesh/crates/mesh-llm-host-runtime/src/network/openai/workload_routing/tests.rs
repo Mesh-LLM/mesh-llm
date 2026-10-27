@@ -9,7 +9,6 @@ fn unknown_workloads_never_inherit_legacy_admission() {
     .unwrap();
     assert_eq!(metadata.workload_class, Some(ModelWorkloadClass::Unknown));
     let descriptors = [mesh::ServedModelDescriptor {
-        requires: Vec::new(),
         metadata: Some(metadata),
         ..local_gguf_descriptor("future")
     }];

@@ -72,6 +72,13 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
     peer.hosted_models = vec!["gated".into(), "free".into()];
     peer.serving_models = peer.hosted_models.clone();
     peer.served_model_descriptors = ann.served_model_descriptors;
+    let gated = peer
+        .served_model_descriptors
+        .iter_mut()
+        .find(|d| d.identity.model_name == "gated")
+        .unwrap();
+    gated.capabilities.vision = crate::models::capabilities::CapabilityLevel::Supported;
+    gated.capabilities.audio = crate::models::capabilities::CapabilityLevel::Supported;
     peer.rtt_ms = Some(1);
     buyer.state.lock().await.test_peer_liveness.insert(peer.id);
     buyer.state.lock().await.peers.insert(peer.id, peer.clone());
@@ -99,6 +106,22 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
             .contains(&"gated".into()),
         "raw advertisement retained"
     );
+    assert!(
+        crate::inference::consult::find_vision_peer(&buyer, "")
+            .await
+            .is_none()
+    );
+    assert!(
+        crate::inference::consult::find_audio_peer(&buyer, "")
+            .await
+            .is_none()
+    );
+    assert!(
+        buyer.routable_peers().await[0]
+            .served_model_descriptors
+            .iter()
+            .all(|d| d.identity.model_name != "gated")
+    );
     buyer.set_hosted_models(vec!["gated".into()]).await;
     assert!(
         buyer.models_being_served().await.contains(&"gated".into()),
@@ -108,6 +131,14 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
     *buyer.plugin_manager.lock().await = Some(manager().await);
     assert!(buyer.models_being_served().await.contains(&"gated".into()));
     assert_eq!(buyer.hosts_for_model("gated").await, vec![seller.id()]);
+    assert_eq!(
+        crate::inference::consult::find_vision_peer(&buyer, "").await,
+        Some(seller.id())
+    );
+    assert_eq!(
+        crate::inference::consult::find_audio_peer(&buyer, "").await,
+        Some(seller.id())
+    );
     *buyer.plugin_manager.lock().await = None;
     assert!(
         !buyer.models_being_served().await.contains(&"gated".into()),
@@ -148,6 +179,20 @@ async fn requirement_owner_validation_size_limit_and_exit() {
             .await
             .is_err()
     );
+    let mut oversized = request(vec![0; 512]);
+    oversized.requires = vec![oversized.requires[0].clone(); 9];
+    assert!(
+        node.apply_model_requirement("gate", oversized.clone())
+            .await
+            .is_err()
+    );
+    oversized.requires.truncate(8);
+    oversized.requires[0].terms.push(0);
+    assert!(
+        node.apply_model_requirement("gate", oversized)
+            .await
+            .is_err()
+    );
     node.apply_model_requirement("gate", request(vec![0; 1024]))
         .await
         .unwrap();
@@ -166,5 +211,47 @@ async fn requirement_owner_validation_size_limit_and_exit() {
     .await
     .unwrap();
     assert!(node.model_requirements.lock().await.is_empty());
+    node.close_endpoint().await;
+}
+
+#[tokio::test]
+async fn requirement_attaches_by_public_model_id() {
+    let node = super::make_test_node(NodeRole::Worker).await.unwrap();
+    *node.plugin_manager.lock().await = Some(manager().await);
+    let descriptor = ServedModelDescriptor {
+        identity: ServedModelIdentity {
+            model_name: "local-gguf/sha256-adc287a9".into(),
+            source_kind: ModelSourceKind::HuggingFace,
+            repository: Some("unsloth/Qwen3-0.6B-GGUF".into()),
+            artifact: Some("Qwen3-0.6B-Q4_K_M.gguf".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let public_id = public_model_id_from_identity(&descriptor.identity).unwrap();
+    node.upsert_served_model_descriptor(descriptor).await;
+    node.set_hosted_models(vec!["local-gguf/sha256-adc287a9".into()])
+        .await;
+    let mut requirement = request(vec![42]);
+    assert_eq!(public_id, "unsloth/Qwen3-0.6B-GGUF:Q4_K_M");
+    requirement.model = public_id.clone();
+    node.apply_model_requirement("gate", requirement)
+        .await
+        .unwrap();
+    let descriptors = node
+        .descriptors_with_requirements(&["local-gguf/sha256-adc287a9".into()])
+        .await;
+    assert_eq!(descriptors[0].requires.len(), 1);
+    assert_eq!(descriptors[0].requires[0].terms, vec![42]);
+    let mut peer = super::make_test_peer_info(node.id());
+    peer.hosted_models = vec!["local-gguf/sha256-adc287a9".into()];
+    peer.serving_models = peer.hosted_models.clone();
+    peer.served_model_descriptors = descriptors;
+    let mut projected = vec![peer.clone()];
+    *node.plugin_manager.lock().await = None;
+    assert!(node.model_channels_unavailable(&peer, &public_id).await);
+    node.filter_model_requirements(&mut projected).await;
+    assert!(projected[0].served_model_descriptors.is_empty());
+    assert!(projected[0].hosted_models.is_empty());
     node.close_endpoint().await;
 }

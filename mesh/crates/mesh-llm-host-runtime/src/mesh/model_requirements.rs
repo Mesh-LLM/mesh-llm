@@ -26,7 +26,13 @@ impl Node {
         };
         if request.model.trim().is_empty()
             || request.model.len() > 1024
-            || request.requires.len() > 32
+            || request.requires.len() > 8
+            || request
+                .requires
+                .iter()
+                .map(|r| r.terms.len())
+                .sum::<usize>()
+                > 4096
         {
             return Err(invalid("invalid model requirement"));
         }
@@ -86,7 +92,13 @@ impl Node {
         let requirements = self.model_requirements.lock().await;
         for descriptor in &mut descriptors {
             for owned in requirements.values() {
-                if let Some(channels) = owned.get(&descriptor.identity.model_name) {
+                for (model, channels) in owned {
+                    if model != &descriptor.identity.model_name
+                        && super::public_model_id_from_identity(&descriptor.identity).as_ref()
+                            != Some(model)
+                    {
+                        continue;
+                    }
                     descriptor.requires.extend(channels.iter().cloned());
                 }
             }
@@ -94,6 +106,20 @@ impl Node {
                 .requires
                 .sort_by(|a, b| a.channel.cmp(&b.channel).then(a.terms.cmp(&b.terms)));
             descriptor.requires.dedup();
+        }
+        for (plugin, owned) in requirements.iter() {
+            for model in owned.keys() {
+                if !descriptors.iter().any(|d| {
+                    &d.identity.model_name == model
+                        || super::public_model_id_from_identity(&d.identity).as_ref() == Some(model)
+                }) {
+                    tracing::warn!(
+                        plugin,
+                        model,
+                        "Model requirement matched no hosted descriptor"
+                    );
+                }
+            }
         }
         descriptors
     }
@@ -145,6 +171,8 @@ fn filter_peer_models(peer: &mut PeerInfo, supported: &HashSet<String>) {
         .map(|d| d.identity.model_name.clone())
         .collect();
     // This is a disposable routing snapshot, never written back into membership.
+    peer.served_model_descriptors
+        .retain(|d| !excluded.contains(&d.identity.model_name));
     peer.hosted_models.retain(|m| !excluded.contains(m));
     peer.serving_models.retain(|m| !excluded.contains(m));
 }
