@@ -2294,3 +2294,7 @@ mod served_terminal_nonce;
 #[cfg(test)]
 #[path = "ingress_tests/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ingress_tests/telemetry_rejection.rs"]
+mod telemetry_rejection;
