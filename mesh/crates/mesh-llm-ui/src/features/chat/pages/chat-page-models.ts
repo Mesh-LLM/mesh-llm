@@ -20,6 +20,17 @@ export function modelStatusBadge(model: ModelSummary): ModelSelectOption['status
   return { label: 'Warm', tone: 'good' }
 }
 
+/**
+ * The workload classes `/v1/responses` admits a chat turn to. This mirrors
+ * `class_is_compatible(CausalGeneration, _)` in the host's workload routing so
+ * the picker never offers a model the endpoint would refuse. An unadvertised
+ * class is a peer that predates workload advertisement and stays offered, the
+ * same way the host still admits it; every other class, including a
+ * decision-only System One model such as Laya, is not a chat model.
+ */
+const CHAT_CAPABLE_WORKLOAD_CLASSES = new Set(['causal_generation', 'encoder_decoder'])
+
 export function isChatSelectableModel(model: ModelSummary): boolean {
-  return model.status === 'ready' || model.status === 'warm'
+  if (model.status !== 'ready' && model.status !== 'warm') return false
+  return model.workloadClass == null || CHAT_CAPABLE_WORKLOAD_CLASSES.has(model.workloadClass)
 }
