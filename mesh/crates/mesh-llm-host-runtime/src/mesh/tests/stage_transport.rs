@@ -225,6 +225,60 @@ fn stage_transport_is_limited_to_topology_participants() {
     ));
 }
 
+#[test]
+fn stage_transport_edge_check_rejects_non_predecessor_participants() {
+    // Three-stage topology: the owner of a later stage is an admitted run
+    // participant but holds no transport edge into the middle stage.
+    let stage0 = make_test_endpoint_id(0xb1);
+    let stage1 = make_test_endpoint_id(0xb2);
+    let stage2 = make_test_endpoint_id(0xb3);
+    let assignment = |stage_id: &str, stage_index: u32, node_id: EndpointId| StageAssignment {
+        stage_id: stage_id.to_string(),
+        stage_index,
+        node_id,
+        layer_start: stage_index,
+        layer_end: stage_index + 1,
+        endpoint: StageEndpoint {
+            bind_addr: String::new(),
+        },
+    };
+    let topology = StageTopologyInstance {
+        topology_id: "topology-b".to_string(),
+        run_id: "run-b".to_string(),
+        model_id: "model-b".to_string(),
+        package_ref: String::new(),
+        manifest_sha256: String::new(),
+        admissions: Default::default(),
+        stages: vec![
+            assignment("stage-0", 0, stage0),
+            assignment("stage-1", 1, stage1),
+            assignment("stage-2", 2, stage2),
+        ],
+    };
+    let allowed = |requester: EndpointId, stage_id: &str| {
+        stage_transport_allowed_by_topology(
+            std::slice::from_ref(&topology),
+            requester,
+            &skippy_protocol::proto::stage::StageTransportOpen {
+                r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+                requester_id: requester.as_bytes().to_vec(),
+                topology_id: "topology-b".to_string(),
+                run_id: "run-b".to_string(),
+                stage_id: stage_id.to_string(),
+            },
+        )
+    };
+    // The assigned predecessor (coordinator) and the final stage's return
+    // edge into stage 0 are the only edges into each stage.
+    assert!(allowed(stage0, "stage-1"));
+    assert!(allowed(stage1, "stage-2"));
+    assert!(allowed(stage2, "stage-0"));
+    // A participant without an edge into the target stage is rejected.
+    assert!(!allowed(stage2, "stage-1"));
+    assert!(!allowed(stage0, "stage-2"));
+    assert!(!allowed(stage1, "stage-1"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn artifact_transfer_stream_uses_mesh_subprotocol_and_rejects_dedicated_alpn() -> Result<()> {
@@ -980,18 +1034,12 @@ async fn spawn_stage_echo_listener() -> (String, tokio::sync::mpsc::UnboundedRec
             tokio::spawn(async move {
                 stream.set_nodelay(true).unwrap();
                 let mut chunk = [0u8; 4096];
-                loop {
-                    let Ok(n) = stream.read(&mut chunk).await else {
-                        break;
-                    };
+                while let Ok(n) = stream.read(&mut chunk).await {
                     if n == 0 {
                         break;
                     }
                     let taken = chunk[..n].to_vec();
-                    if stream.write_all(&taken).await.is_err() {
-                        break;
-                    }
-                    if tx.send(taken).is_err() {
+                    if stream.write_all(&taken).await.is_err() || tx.send(taken).is_err() {
                         break;
                     }
                 }
