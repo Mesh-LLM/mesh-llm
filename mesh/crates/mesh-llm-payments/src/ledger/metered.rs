@@ -4,8 +4,9 @@
 //! → `billed` (backend-reported usage priced at the admitted rates, deposit
 //! applied, remainder on one final invoice) or `abandoned` (no usage, no bill,
 //! no debt). There are no reservations, exposure sums or credits: the deposit
-//! is a flat 1 sat applied to the bill; every positive remainder has a 1 sat
-//! payment floor, and nothing is refunded or carried forward.
+//! is the operator's flat amount (default 1 sat) applied to the bill; every
+//! positive remainder is raised to the minimum payment, and nothing is
+//! refunded or carried forward.
 //!
 //! The deposit and final invoices live in `metered_invoices`
 //! ([`super::metered_invoices`]). A buyer is blocked only by [`STRIKE_LIMIT`]
@@ -26,12 +27,14 @@ pub const STRIKE_LIMIT: u64 = 3;
 const UNPAID_FINALS: &str =
     "SELECT COUNT(*) FROM metered_invoices WHERE peer=?1 AND kind='final' AND state='unpaid'";
 
-/// Admission inputs. The deposit is the flat minimum payment when
+/// Admission inputs. The deposit is the operator's deposit for `model` when
 /// `require_deposit`; the provider skips it for peers in its trust cache.
 #[derive(Clone, Copy, Debug)]
 pub struct MeteredRequest<'a> {
     pub id: &'a str,
     pub peer: &'a str,
+    /// The priced model name; selects a per-model deposit.
+    pub model: &'a str,
     pub pricing: &'a Pricing,
     pub require_deposit: bool,
 }
@@ -71,18 +74,25 @@ pub struct MeteredSettlement {
 
 impl Ledger {
     /// Record one metered admission in a single IMMEDIATE txn and return the
-    /// deposit to request. Rates are frozen here; `metered_finalize` accepts
-    /// usage only. Replaying the same arguments is idempotent; reusing the ID
-    /// with different terms fails. Refuses peers at the strike limit.
+    /// deposit to request. Rates, the deposit and the minimum payment are
+    /// frozen here; `metered_finalize` accepts usage only. Replaying the same
+    /// arguments is idempotent and returns the recorded deposit, even if the
+    /// operator has since changed it; reusing the ID with different terms
+    /// fails. Refuses peers at the strike limit.
     pub fn metered_admit(&self, request: &MeteredRequest<'_>) -> Result<u64> {
         let MeteredRequest {
             id,
             peer,
+            model,
             pricing,
             require_deposit,
         } = *request;
+        // Read before taking the connection: the settings read locks it too.
+        // One floor read for both values, so the deposit is never below the
+        // minimum recorded with it.
+        let floor_msat = self.min_payment_msat()?;
         let deposit = if require_deposit {
-            self.min_payment_msat()?
+            self.model_admission_deposit_msat(model)?.max(floor_msat)
         } else {
             0
         };
@@ -90,20 +100,28 @@ impl Ledger {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Identity is the exact admitted terms, not the rounded msat amounts:
-        // different token terms can round to the same charge at low rates.
-        let existing: Option<(String, String, bool)> = tx
+        // different token terms can round to the same charge at low rates. The
+        // model is part of it because models can ask different deposits.
+        let existing: Option<(String, String, String, bool, u64)> = tx
             .query_row(
-                "SELECT peer,pricing,require_deposit FROM metered_requests WHERE id=?",
+                "SELECT peer,model,pricing,require_deposit,deposit_msat FROM metered_requests WHERE id=?",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, read_amount(r, 4)?)),
             )
             .optional()?;
-        if let Some(row) = existing {
+        if let Some((row_peer, row_model, row_pricing, row_require_deposit, row_deposit)) = existing
+        {
             ensure!(
-                row == (peer.to_owned(), pricing_json, require_deposit),
+                (row_peer, row_model, row_pricing, row_require_deposit)
+                    == (
+                        peer.to_owned(),
+                        model.to_owned(),
+                        pricing_json,
+                        require_deposit
+                    ),
                 "request identity reused with different metered terms"
             );
-            return Ok(deposit);
+            return Ok(row_deposit);
         }
         let unpaid: u64 = tx.query_row(UNPAID_FINALS, [peer], |r| read_amount(r, 0))?;
         ensure!(
@@ -111,32 +129,61 @@ impl Ledger {
             "buyer has {unpaid} unpaid final invoices"
         );
         tx.execute(
-            "INSERT INTO metered_requests(id,peer,pricing,require_deposit,deposit_msat,state) VALUES (?1,?2,?3,?4,?5,'admitted')",
+            "INSERT INTO metered_requests(id,peer,model,pricing,require_deposit,deposit_msat,min_payment_msat,state) VALUES (?1,?2,?3,?4,?5,?6,?7,'admitted')",
             params![
                 id,
                 peer,
+                model,
                 pricing_json,
                 require_deposit,
-                sql_amount(deposit)?
+                sql_amount(deposit)?,
+                sql_amount(floor_msat)?
             ],
         )?;
         tx.commit()?;
         Ok(deposit)
     }
 
+    /// The minimum payment recorded when `id` was admitted: the amount its
+    /// final remainder is raised to, whatever the setting is now.
+    pub fn metered_min_payment_msat(&self, id: &str) -> Result<u64> {
+        self.lock()?
+            .query_row(
+                "SELECT min_payment_msat FROM metered_requests WHERE id=?",
+                [id],
+                |r| read_amount(r, 0),
+            )
+            .optional()?
+            .ok_or_else(|| anyhow::anyhow!("unknown metered request"))
+    }
+
     /// Finalize once, atomically: price the reported usage, apply the received
     /// deposit and record what the final invoice must carry. Replaying the same
     /// outcome returns the stored settlement; a different outcome fails.
     pub fn metered_finalize(&self, id: &str, outcome: MeteredOutcome) -> Result<MeteredSettlement> {
-        // Read before taking the connection: the settings read locks it too.
-        let floor_msat = self.min_payment_msat()?;
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (pricing, deposit, state, stored_outcome): (String, u64, String, Option<String>) = tx
+        // The floor is the one recorded at admission, so the buyer's check of
+        // the final invoice holds even if the operator has changed it since.
+        let (pricing, deposit, floor_msat, state, stored_outcome): (
+            String,
+            u64,
+            u64,
+            String,
+            Option<String>,
+        ) = tx
             .query_row(
-                "SELECT pricing,deposit_msat,state,outcome FROM metered_requests WHERE id=?",
+                "SELECT pricing,deposit_msat,min_payment_msat,state,outcome FROM metered_requests WHERE id=?",
                 [id],
-                |r| Ok((r.get(0)?, read_amount(r, 1)?, r.get(2)?, r.get(3)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        read_amount(r, 1)?,
+                        read_amount(r, 2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                    ))
+                },
             )
             .optional()?
             .ok_or_else(|| anyhow::anyhow!("unknown metered request"))?;
@@ -234,7 +281,7 @@ impl Ledger {
     /// dispatches hears about it. If that reply is lost, the request is never
     /// dispatched and stays `admitted` until it is abandoned. Recovery never
     /// re-dispatches it, which is the safe direction. The buyer pays at most
-    /// the 1-sat deposit and receives no output.
+    /// the deposit and receives no output.
     pub fn metered_claim_dispatch(&self, id: &str, peer: &str) -> Result<bool> {
         let mut connection = self.lock()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;

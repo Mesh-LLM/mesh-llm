@@ -17,6 +17,7 @@ fn cli(endpoint: &str, args: &[&str]) -> Output {
     let home = tempfile::tempdir().unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_promote-layer-package-snapshot"))
         .env_clear()
+        .envs(child_env::ca_certificates())
         .env("HF_ENDPOINT", endpoint)
         .env("HF_HOME", home.path())
         .env("HOME", home.path())
@@ -344,14 +345,9 @@ fn embedded_prepare_stops_on_failed_child_even_with_two_plausible_state_lines() 
         "set -euo pipefail\n{}\nprintf 'CALLER_CONTINUED\\n'\n",
         &source[start..end]
     );
-    let bash = if std::path::Path::new("/opt/homebrew/bin/bash").exists() {
-        "/opt/homebrew/bin/bash"
-    } else {
-        "bash"
-    };
-    let child = Command::new(bash)
+    let child = Command::new(child_env::bash())
         .env_clear()
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", child_env::path())
         .env("REPUBLISH", "true")
         .env("SNAPSHOT_PROMOTER", promoter)
         .env("TARGET_REPO", "fixture/model")
@@ -430,9 +426,9 @@ fn embedded_native_helper_survives_build_workspace_cleanup() {
         &source[start..end],
         cleanup
     );
-    let output = Command::new("/bin/bash")
+    let output = Command::new(child_env::bash())
         .env_clear()
-        .env("PATH", format!("{}:/usr/bin:/bin", fixtures.display()))
+        .env("PATH", child_env::path_with(&fixtures))
         .env("CARGO_TARGET_DIR", &target)
         .env("TOOL_DIR", &tool_dir)
         .env(
@@ -465,6 +461,9 @@ fn embedded_native_helper_survives_build_workspace_cleanup() {
 #[cfg(unix)]
 #[path = "snapshot_promotion_cli/publisher_helper.rs"]
 mod publisher_helper;
+
+#[path = "snapshot_promotion_cli/child_env.rs"]
+mod child_env;
 
 #[path = "snapshot_promotion_cli/layer_job.rs"]
 mod layer_job;

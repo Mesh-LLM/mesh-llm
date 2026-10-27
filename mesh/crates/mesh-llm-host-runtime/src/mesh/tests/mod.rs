@@ -4,6 +4,7 @@ use crate::mesh::node::LocalRequestMetricsSampler;
 use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 
 mod control_listener;
+mod memberships;
 
 include!("connections.rs");
 include!("admission/helpers.rs");

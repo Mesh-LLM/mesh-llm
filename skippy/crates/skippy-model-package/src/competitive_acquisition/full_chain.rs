@@ -94,13 +94,11 @@ fn clients(endpoint: &str, explicit: bool) -> NativeClients {
         .endpoint(endpoint)
         .cache_enabled(false)
         .retry_max_attempts(0)
-        .client(
+        .client_builder(|| {
             reqwest::Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(2))
-                .build()
-                .unwrap(),
-        );
+        });
     if explicit {
         builder = builder.token("finite-fixture-authorized");
     } else {

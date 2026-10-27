@@ -103,6 +103,9 @@ fn startup_virtual_model_lookup_rejects_concrete_collisions() {
     );
 }
 
+// The tests that check everything `resolve_plugins` returns are serial: it
+// also lists the store `MESH_LLM_PLUGIN_DIR` names, and the serial plugin
+// store tests point that variable at stores of their own while they run.
 #[test]
 #[serial_test::serial]
 fn resolves_default_builtin_plugins() {

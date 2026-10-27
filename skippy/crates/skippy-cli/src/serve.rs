@@ -479,6 +479,19 @@ fn readiness_addr(bind_addr: SocketAddr) -> SocketAddr {
     }
 }
 
+/// The client that polls this process's own API until the model is served.
+/// It only speaks plain HTTP to a local address, so it trusts no roots: building
+/// it then doesn't load the system's CA certificates, and serving a local model
+/// works where there are none. That address never redirects, so it doesn't
+/// follow redirects either.
+fn readiness_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .tls_certs_only([])
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(1))
+        .build()
+}
+
 async fn wait_for_ready(
     api_base: &str,
     model_id: &str,
@@ -487,9 +500,7 @@ async fn wait_for_ready(
     model_open_events: Option<&ModelOpenEventQueue>,
     shutdown_requested: &AtomicBool,
 ) -> Result<ReadinessOutcome> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(1))
-        .build()?;
+    let client = readiness_client()?;
     let deadline = Instant::now() + startup_timeout;
     loop {
         if let Some(queue) = model_open_events {
@@ -590,6 +601,89 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use clap::Parser;
+
+    const READINESS_CLIENT_CHILD: &str = "SKIPPY_TEST_READINESS_CLIENT_CHILD";
+
+    // Without CA certificates, building a client that loads the system's roots
+    // fails ("No CA certificates were loaded from the system"), which stopped
+    // `skippy serve` right after it started listening. SSL_CERT_FILE and
+    // SSL_CERT_DIR point the root loading at an empty file and directory on
+    // Linux; they are set on a child test process only.
+    #[test]
+    fn readiness_client_needs_no_ca_certificates() {
+        let temp = tempfile::tempdir().unwrap();
+        let empty_file = temp.path().join("empty.pem");
+        std::fs::write(&empty_file, "").unwrap();
+        let empty_dir = temp.path().join("certs");
+        std::fs::create_dir(&empty_dir).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "serve::tests::readiness_client_child",
+                "--nocapture",
+            ])
+            .env(READINESS_CLIENT_CHILD, "1")
+            .env("SSL_CERT_FILE", &empty_file)
+            .env("SSL_CERT_DIR", &empty_dir)
+            .output()
+            .expect("spawn readiness client child");
+        assert!(
+            output.status.success(),
+            "readiness client child failed: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "child test filter must execute its assertion"
+        );
+    }
+
+    // The responder answers its first request with a redirect to itself. A
+    // client that followed it would connect again, which the listener sees as
+    // a second pending connection.
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_client_does_not_follow_redirects() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let responder = listener.try_clone().unwrap();
+        let location = url.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = responder.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            while std::io::BufRead::read_line(&mut reader, &mut line).unwrap() > 2 {
+                line.clear();
+            }
+            let response = format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            std::io::Write::write_all(&mut stream, response.as_bytes()).unwrap();
+        });
+
+        let response = readiness_client()
+            .unwrap()
+            .get(&url)
+            .send()
+            .await
+            .expect("the redirect response itself is the result");
+        server.join().unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().map(|_| ()).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the client must not send a second request"
+        );
+    }
+
+    #[test]
+    fn readiness_client_child() {
+        if std::env::var_os(READINESS_CLIENT_CHILD).is_none() {
+            return;
+        }
+        readiness_client().expect("the readiness client must build without CA certificates");
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn readiness_distinguishes_requested_shutdown_from_premature_completion() {

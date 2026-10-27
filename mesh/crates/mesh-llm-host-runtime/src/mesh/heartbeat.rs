@@ -25,17 +25,6 @@ use prost::Message;
 
 const DIRECT_RESCUE_CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// Writes a renewed ownership certificate where `mesh-llm auth` reads it. The
-/// running node already uses it, so a failed write is only logged.
-fn save_renewed_owner_attestation(renewed: &super::SignedNodeOwnership) {
-    let saved = super::default_node_ownership_path()
-        .map_err(anyhow::Error::from)
-        .and_then(|path| super::save_node_ownership(&path, renewed).map_err(anyhow::Error::from));
-    if let Err(error) = saved {
-        tracing::warn!("could not save the renewed ownership certificate: {error:#}");
-    }
-}
-
 pub(crate) fn selected_connection_is_direct(conn: &Connection) -> bool {
     conn.paths()
         .iter()
@@ -530,11 +519,35 @@ impl Node {
                     expires_at_unix_ms = renewed.claim.expires_at_unix_ms,
                     "renewed this node's ownership certificate"
                 );
-                save_renewed_owner_attestation(&renewed);
+                if self.owner_attestation_path.is_some() {
+                    *self.unsaved_owner_attestation.lock().await = Some(renewed);
+                }
             }
             Ok(None) => {}
             Err(error) => tracing::warn!(
                 "could not renew this node's ownership certificate, retrying on the next heartbeat: {error:#}"
+            ),
+        }
+        self.save_renewed_owner_attestation().await;
+    }
+
+    /// Writes a renewed ownership certificate where `mesh-llm auth` reads it.
+    /// The running node already uses it, so a failed write is logged and kept
+    /// for the next heartbeat rather than waiting for the next renewal. Only a
+    /// node with an ownership file has anything to write; a mesh membership
+    /// never touches the node's file.
+    async fn save_renewed_owner_attestation(&self) {
+        let Some(path) = &self.owner_attestation_path else {
+            return;
+        };
+        let mut unsaved = self.unsaved_owner_attestation.lock().await;
+        let Some(renewed) = unsaved.as_ref() else {
+            return;
+        };
+        match super::save_node_ownership(path, renewed) {
+            Ok(()) => *unsaved = None,
+            Err(error) => tracing::warn!(
+                "could not save the renewed ownership certificate, retrying on the next heartbeat: {error:#}"
             ),
         }
     }
