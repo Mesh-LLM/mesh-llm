@@ -78,10 +78,11 @@ fn evict_lowest_recompute_value(
     radix: &mut UnifiedRadixCache<RadixResidentEntry, RadixExactEntry>,
 ) -> Option<RadixEviction<RadixExactEntry>> {
     let candidates = radix.recurrent_eviction_candidates();
+    let superseded_prefixes = superseded_recurrent_prefixes(&candidates);
     let (mut superseded, mut other): (Vec<_>, Vec<_>) = candidates
         .iter()
         .enumerate()
-        .partition(|(_, candidate)| superseded_recurrent_prefix(candidate, &candidates));
+        .partition(|(index, _)| superseded_prefixes[*index]);
     let ranked = [&mut superseded, &mut other].map(|group| {
         let mut ranked = group
             .iter()
@@ -101,18 +102,59 @@ fn evict_lowest_recompute_value(
     })
 }
 
-fn superseded_recurrent_prefix(
-    candidate: &RadixEvictionCandidate<RadixExactEntry>,
+/// Sorted token paths keep every descendant adjacent to its ancestors. Close
+/// each path once and propagate its newest use to the nearest retained prefix.
+fn superseded_recurrent_prefixes(
     candidates: &[RadixEvictionCandidate<RadixExactEntry>],
-) -> bool {
-    candidate.value.payload.kind() == ExactStatePayloadKind::KvRecurrent
-        && candidates.iter().any(|other| {
-            other.namespace == candidate.namespace
-                && other.value.payload.kind() == ExactStatePayloadKind::KvRecurrent
-                && other.tokens.len() > candidate.tokens.len()
-                && other.last_used >= candidate.last_used
-                && other.tokens.starts_with(&candidate.tokens)
+) -> Vec<bool> {
+    let mut order = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            (candidate.value.payload.kind() == ExactStatePayloadKind::KvRecurrent).then_some(index)
         })
+        .collect::<Vec<_>>();
+    order.sort_unstable_by(|&left, &right| {
+        candidates[left]
+            .namespace
+            .cmp(&candidates[right].namespace)
+            .then_with(|| candidates[left].tokens.cmp(&candidates[right].tokens))
+    });
+    let mut newest_use = candidates
+        .iter()
+        .map(|entry| entry.last_used)
+        .collect::<Vec<_>>();
+    let mut superseded = vec![false; candidates.len()];
+    let mut path: Vec<usize> = Vec::new();
+    for index in order {
+        while path.last().is_some_and(|&ancestor| {
+            candidates[ancestor].namespace != candidates[index].namespace
+                || !candidates[index]
+                    .tokens
+                    .starts_with(&candidates[ancestor].tokens)
+                || candidates[index].tokens.len() == candidates[ancestor].tokens.len()
+        }) {
+            close_recurrent_path(&mut path, candidates, &mut newest_use, &mut superseded);
+        }
+        path.push(index);
+    }
+    while !path.is_empty() {
+        close_recurrent_path(&mut path, candidates, &mut newest_use, &mut superseded);
+    }
+    superseded
+}
+
+fn close_recurrent_path(
+    path: &mut Vec<usize>,
+    candidates: &[RadixEvictionCandidate<RadixExactEntry>],
+    newest_use: &mut [u64],
+    superseded: &mut [bool],
+) {
+    let Some(child) = path.pop() else { return };
+    if let Some(&parent) = path.last() {
+        superseded[parent] |= newest_use[child] >= candidates[parent].last_used;
+        newest_use[parent] = newest_use[parent].max(newest_use[child]);
+    }
 }
 
 #[cfg(test)]
@@ -218,6 +260,50 @@ mod tests {
         let evicted = evict_lowest_recompute_value(&mut radix).unwrap();
         assert_eq!(evicted.tokens, unique);
         assert!(radix.recurrent_exact("stage", &short).is_some());
+    }
+
+    #[test]
+    fn deep_descendant_recency_preserves_the_recent_middle_checkpoint() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4096));
+        let short = vec![1; 25];
+        let middle = vec![1; 50];
+        let long = vec![1; 75];
+        insert_recurrent(&radix, &blobs, &short, 80, 1);
+        insert_recurrent(&radix, &blobs, &middle, 100, 2);
+        radix
+            .lock()
+            .unwrap()
+            .lookup_recurrent("stage", &short)
+            .unwrap();
+        insert_recurrent(&radix, &blobs, &long, 120, 3);
+        radix
+            .lock()
+            .unwrap()
+            .lookup_recurrent("stage", &middle)
+            .unwrap();
+
+        let candidates = radix.lock().unwrap().recurrent_eviction_candidates();
+        let superseded = superseded_recurrent_prefixes(&candidates);
+        let at = |tokens: &[i32]| {
+            let index = candidates
+                .iter()
+                .position(|candidate| candidate.tokens == tokens)
+                .unwrap();
+            superseded[index]
+        };
+        assert!(
+            at(&short),
+            "the newer middle checkpoint covers the short path"
+        );
+        assert!(
+            !at(&middle),
+            "the long descendant predates the middle reuse"
+        );
+        assert!(
+            !at(&long),
+            "the terminal descendant has no longer checkpoint"
+        );
     }
 
     #[test]
