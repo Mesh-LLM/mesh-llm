@@ -80,7 +80,19 @@ impl ConnectionSessionOwnership {
                 matches!(sessions.get(session_key), Some(SessionState::Releasing(_)))
             })
             .expect("binary session ownership registry lock poisoned");
-        sessions.insert(session_key.to_string(), SessionState::Owned(connection_id));
+        // Never seize ownership from another live connection. Nonzero wire
+        // session ids become session keys, so an observing peer could
+        // otherwise replay a victim's live session id on its own connection
+        // and take over the victim's session state. Reclaiming a session this
+        // connection already owns, or claiming one the previous owner fully
+        // released, remains allowed.
+        let seized_live_owner = matches!(
+            sessions.get(session_key),
+            Some(SessionState::Owned(owner)) if *owner != connection_id
+        );
+        if !seized_live_owner {
+            sessions.insert(session_key.to_string(), SessionState::Owned(connection_id));
+        }
         drop(sessions);
         SessionLease {
             ownership: self.clone(),
@@ -362,6 +374,10 @@ mod tests {
             .lock()
             .unwrap()
             .insert("shared-session".to_string(), vec![1, 2]);
+        {
+            let lease = old.session_lease("shared-session");
+            drop(lease.begin_release().unwrap());
+        }
         replacement.touch("shared-session");
         accumulated
             .lock()
@@ -614,5 +630,24 @@ mod tests {
 
         assert!(message.contains("connection failed"));
         assert!(message.contains("orphan cleanup failed"));
+    }
+
+    #[test]
+    fn second_connection_cannot_claim_a_live_owned_session() {
+        let ownership = Arc::new(ConnectionSessionOwnership::default());
+        let mut owner = tracker(1, &ownership);
+        let mut claimant = tracker(2, &ownership);
+
+        owner.touch("7");
+        claimant.touch("7");
+
+        assert!(
+            owner.session_lease("7").still_owns(),
+            "a second connection must not seize ownership of a live session"
+        );
+        assert!(
+            !claimant.session_lease("7").still_owns(),
+            "a claim for a session owned by another live connection must be denied"
+        );
     }
 }
