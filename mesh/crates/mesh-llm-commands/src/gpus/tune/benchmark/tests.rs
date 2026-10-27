@@ -1051,7 +1051,6 @@ fn new_streaming_report_marks_streaming_v1_and_records_trial_unit() {
     );
 }
 
-
 /// In-process reproduction of issue #2192: what MTP verify path does a tune
 /// trial request select, versus the manual-request form?
 ///
