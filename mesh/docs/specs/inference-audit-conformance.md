@@ -81,15 +81,17 @@ The adjudicator publishes, per model:
   operators agree. An operator is an owner identity
   ([NODE_OWNER_IDENTITY.md](../design/NODE_OWNER_IDENTITY.md)), and each
   adjudication record is signed with that owner key. Two records score the same
-  audit when they cite the same response digest from the sender record; they
-  agree when they give the same verdict, and operators differ when their owner
-  identities differ.
+  audit when they cite the same sender record (its request digest, response
+  digest and nonce together) and the same corpus version; they agree when they
+  give the same verdict, and operators differ when their owner identities
+  differ.
 
 ## Audit corpus
 
-- Versioned. A hash commitment to each version is published before it is used;
-  it covers the version number, the prompts and the version's digest key
-  (below).
+- Versioned. A SHA-256 commitment to each version is published before it is
+  used; it covers the version number, the prompts and the version's digest key
+  (below). Its exact byte encoding is settled with the record mapping (open
+  point below).
 - Prompts stay private while the version is in use. At retirement the prompts
   and the key are published next to the commitment, so anyone can check them
   against it, and every record from that period becomes re-checkable.
@@ -104,9 +106,12 @@ The adjudicator publishes, per model:
   identity hash, weights digest, request and response digests, nonce and its
   source).
 - Adjudicator side: the AAC judge record family (adjudication/v1,
-  sample-manifest/v1, calibration-summary/v1). Open point: its `prompt_digest`
-  allows only plain SHA-256 today, so the keyed digest above needs either an
-  allowed `HMAC-SHA-256` algorithm with a key id or a sibling field.
+  sample-manifest/v1, calibration-summary/v1).
+- Both sides name the corpus version the prompt came from, which also tells a
+  re-checker which retired key applies.
+- Open point: AAC's `prompt_digest` allows only plain SHA-256 today, so the
+  keyed digest above needs either an allowed `HMAC-SHA-256` algorithm with a key
+  id or a sibling field, and the corpus commitment needs a fixed encoding.
 
 ## Re-checking a verdict
 
