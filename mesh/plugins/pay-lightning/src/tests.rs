@@ -14,6 +14,7 @@ struct Network {
     next: AtomicU8,
     received: Mutex<BTreeMap<String, Transaction>>,
     sends: AtomicUsize,
+    balances: AtomicUsize,
 }
 struct Wallet(Arc<Network>, bool);
 pub(crate) fn invoice(number: u8, amount: u64) -> Invoice {
@@ -34,6 +35,7 @@ pub(crate) fn invoice(number: u8, amount: u64) -> Invoice {
 #[async_trait]
 impl WalletProvider for Wallet {
     async fn balance(&self) -> Result<Balance> {
+        self.0.balances.fetch_add(1, Ordering::SeqCst);
         Ok(Balance {
             spendable_msat: 1_000_000,
         })
@@ -521,6 +523,7 @@ async fn selected_buyer_waits_for_authenticated_ready_and_consumes_it_once() {
 struct StartupFactory {
     opens: AtomicUsize,
     fail: bool,
+    network: Arc<Network>,
 }
 #[async_trait]
 impl mesh_llm_wallet::provisioning::WalletFactory for StartupFactory {
@@ -530,7 +533,7 @@ impl mesh_llm_wallet::provisioning::WalletFactory for StartupFactory {
     async fn open(&self, _: &std::path::Path) -> Result<Arc<dyn WalletProvider>> {
         self.opens.fetch_add(1, Ordering::SeqCst);
         ensure!(!self.fail, "offline startup failure");
-        Ok(Arc::new(Wallet(Arc::new(Network::default()), false)))
+        Ok(Arc::new(Wallet(self.network.clone(), false)))
     }
 }
 
@@ -541,6 +544,7 @@ async fn startup_opens_wallet_once_for_both_roles_without_payment() {
         let factory = Arc::new(StartupFactory {
             opens: AtomicUsize::new(0),
             fail: false,
+            network: Arc::new(Network::default()),
         });
         let service =
             Arc::new(PaymentService::with_factory(directory.path(), factory.clone()).unwrap());
@@ -551,6 +555,8 @@ async fn startup_opens_wallet_once_for_both_roles_without_payment() {
         second.unwrap();
         engine.service.wallet().await.unwrap();
         assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(factory.network.balances.load(Ordering::SeqCst), 2);
+        assert_eq!(factory.network.sends.load(Ordering::SeqCst), 0);
         assert!(engine.service.ledger.requests().unwrap().is_empty());
     }
 }
@@ -561,6 +567,7 @@ async fn startup_propagates_wallet_failure() {
     let factory = Arc::new(StartupFactory {
         opens: AtomicUsize::new(0),
         fail: true,
+        network: Arc::new(Network::default()),
     });
     let service =
         Arc::new(PaymentService::with_factory(directory.path(), factory.clone()).unwrap());

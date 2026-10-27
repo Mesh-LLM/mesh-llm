@@ -111,42 +111,48 @@ async fn main() -> Result<()> {
             let engine = messages.clone();
             let mut context = context.owned();
             Box::pin(async move {
-                let result: Result<()> = async {
-                    ensure!(message.channel == CHANNEL, "unexpected channel");
-                    let message_body: Message = serde_json::from_slice(&message.body)?;
-                    let _timing = mesh_pay_lightning::diagnostics::Timing::start(
-                        "channel_receive_handler",
-                        message_body.kind(),
-                    );
-                    let ready = match &message_body {
-                        Message::Ready { id } => Some(id.clone()),
-                        _ => None,
-                    };
-                    for reply in engine
-                        .channel(&message.source_peer_id, message_body)
-                        .await?
-                    {
-                        send(&mut context, &message.source_peer_id, &reply).await?;
+                let detached = serde_json::from_slice::<Message>(&message.body)
+                    .is_ok_and(|body| matches!(body, Message::Settlement { .. }));
+                let work = async move {
+                    let result: Result<()> = async {
+                        ensure!(message.channel == CHANNEL, "unexpected channel");
+                        let message_body: Message = serde_json::from_slice(&message.body)?;
+                        let _timing = mesh_pay_lightning::diagnostics::Timing::start(
+                            "channel_receive_handler",
+                            message_body.kind(),
+                        );
+                        let ready = match &message_body {
+                            Message::Ready { id } => Some(id.clone()),
+                            _ => None,
+                        };
+                        for reply in engine
+                            .channel(&message.source_peer_id, message_body)
+                            .await?
+                        {
+                            send(&mut context, &message.source_peer_id, &reply).await?;
+                        }
+                        if let Some(id) = ready
+                            && engine.vouch_once(&message.source_peer_id, &id)?
+                        {
+                            context
+                                .request_peer_block(mesh_llm_plugin::proto::PeerBlockRequest {
+                                    change:
+                                        mesh_llm_plugin::proto::peer_block_request::Change::Unblock
+                                            as i32,
+                                    peer_id: message.source_peer_id.clone(),
+                                    ..Default::default()
+                                })
+                                .await?;
+                        }
+                        Ok(())
                     }
-                    if let Some(id) = ready
-                        && engine.vouch_once(&message.source_peer_id, &id)?
-                    {
-                        context
-                            .request_peer_block(mesh_llm_plugin::proto::PeerBlockRequest {
-                                change: mesh_llm_plugin::proto::peer_block_request::Change::Unblock
-                                    as i32,
-                                peer_id: message.source_peer_id.clone(),
-                                ..Default::default()
-                            })
-                            .await?;
+                    .await;
+                    if let Err(error) = &result {
+                        record_error(error);
                     }
-                    Ok(())
-                }
-                .await;
-                if let Err(error) = &result {
-                    record_error(error);
-                }
-                result
+                    result
+                };
+                dispatch_channel_work(detached, work).await
             })
         })
         .on_mesh_event(move |event, context| {
@@ -218,6 +224,19 @@ async fn main() -> Result<()> {
     PluginRuntime::run(plugin).await
 }
 
+async fn dispatch_channel_work(
+    detached: bool,
+    work: impl std::future::Future<Output = Result<()>> + Send + 'static,
+) -> Result<()> {
+    if detached {
+        // Charges are durable; submissions retain the service payment lock.
+        tokio::spawn(work);
+        Ok(())
+    } else {
+        work.await
+    }
+}
+
 async fn send(context: &mut PluginContext<'_>, peer: &str, message: &Message) -> Result<()> {
     let _timing = mesh_pay_lightning::diagnostics::Timing::start("channel_send", message.kind());
     context
@@ -241,6 +260,29 @@ fn record_error(error: &anyhow::Error) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn settlement_does_not_hold_ordered_handler() {
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        let (finished, completion) = tokio::sync::oneshot::channel();
+        dispatch_channel_work(true, async move {
+            blocked.await?;
+            let _ = finished.send(());
+            Ok(())
+        })
+        .await
+        .unwrap();
+        dispatch_channel_work(false, async { Ok(()) })
+            .await
+            .unwrap();
+        release.send(()).unwrap();
+        completion.await.unwrap();
+        assert!(
+            dispatch_channel_work(false, async { anyhow::bail!("failure") })
+                .await
+                .is_err()
+        );
+    }
+
     #[test]
     fn manifest_requests_only_required_gate_metadata_and_channel() {
         let manifest = manifest("x-plugin-7061792d6c696768746e696e67-pay-terms");

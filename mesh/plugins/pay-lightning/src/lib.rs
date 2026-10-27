@@ -105,7 +105,10 @@ impl Engine {
         self.service
             .wallet()
             .await
-            .context("opening payment wallet at startup")?;
+            .context("opening payment wallet at startup")?
+            .balance()
+            .await
+            .context("warming payment wallet at startup")?;
         Ok(())
     }
     pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
