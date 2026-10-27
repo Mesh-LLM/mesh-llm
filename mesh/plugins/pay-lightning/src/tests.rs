@@ -413,7 +413,7 @@ async fn peer_reconnect_recovers_debt_before_new_quote() {
     let f = Fixture::new();
     let id = f.prepare().await;
     let messages = f.buyer.peer_up("seller").await.unwrap();
-    assert!(matches!(&messages[0],Message::Recover{id:recovered} if recovered==&id));
+    assert!(matches!(&messages[1],Message::Recover{id:recovered} if recovered==&id));
     assert!(matches!(messages.last().unwrap(), Message::Quote));
     assert!(f.buyer.peer_up("attacker").await.unwrap().is_empty());
 }
@@ -426,4 +426,45 @@ async fn gateway_terminal_cannot_settle_sellers_ticket() {
     let mut event = terminal("x", json!({"prompt_tokens":9000,"completion_tokens":9000}));
     event["ingress_observation_point"] = json!("gateway_ingress");
     assert!(f.seller.terminal(&event).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn known_buyer_waits_for_inflight_deposit_unknown_buyer_does_not() {
+    let f = Fixture::new();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: vec!["model".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let event = gate("cold-wait", "buyer");
+    let (decision, _) = tokio::join!(
+        f.seller
+            .gate_wait(&event, std::time::Duration::from_secs(1)),
+        f.prepare()
+    );
+    assert_eq!(decision.unwrap().decision, Decision::Allow);
+    assert_eq!(
+        f.seller
+            .gate_wait(
+                &gate("unknown", "stranger"),
+                std::time::Duration::from_secs(1)
+            )
+            .await
+            .unwrap()
+            .status,
+        Some(402)
+    );
+}
+#[tokio::test]
+async fn buyer_vouches_only_once_for_ready_ticket() {
+    let f = Fixture::new();
+    let id = f.prepare().await;
+    assert!(f.buyer.vouch_once("attacker", &id).is_err());
+    assert!(f.buyer.vouch_once("seller", &id).unwrap());
+    assert!(!f.buyer.vouch_once("seller", &id).unwrap());
 }

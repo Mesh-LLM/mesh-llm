@@ -22,6 +22,10 @@ pub const CHANNEL: &str = "pay.ln.v1";
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Message {
+    Hello {
+        version: u32,
+        models: Vec<String>,
+    },
     Quote,
     Admission {
         terms: AdmissionTerms,
@@ -46,6 +50,9 @@ pub enum Message {
 }
 
 pub struct Engine {
+    known: std::sync::Mutex<BTreeSet<String>>,
+    vouched: std::sync::Mutex<BTreeSet<String>>,
+    changed: tokio::sync::Notify,
     pub service: Arc<PaymentService>,
     tickets: tickets::Tickets,
     pub header: String,
@@ -61,6 +68,9 @@ impl Engine {
         directory: &std::path::Path,
     ) -> Result<Self> {
         Ok(Self {
+            known: Default::default(),
+            vouched: Default::default(),
+            changed: Default::default(),
             service,
             tickets: tickets::Tickets::open(directory)?,
             header: format!("x-plugin-{namespace}-pay-terms"),
@@ -70,7 +80,12 @@ impl Engine {
         })
     }
     pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
+        self.known.lock().unwrap().insert(peer.into());
         match message {
+            Message::Hello { version, .. } => {
+                ensure!(version == 1, "unsupported channel version");
+                Ok(vec![])
+            }
             Message::Quote => self.quote(peer).await,
             Message::Admission { terms, invoice } => {
                 ensure!(self.cap_msat > 0, "buyer payments disabled");
@@ -145,6 +160,7 @@ impl Engine {
                     && !self.tickets.consumed(&id, peer)?
                 {
                     self.tickets.ready(&id, peer)?;
+                    self.changed.notify_waiters();
                 }
                 let mut replies = vec![Message::Ready { id }];
                 if matches!(settlement, ServeRecoverResponse::Billed { .. }) {
@@ -189,7 +205,15 @@ impl Engine {
                 self.service.finish_metered(&id).await?;
                 Ok(vec![Message::Quote])
             }
-            Message::Ready { .. } => Ok(vec![]),
+            Message::Ready { id } => {
+                let terms = self
+                    .service
+                    .ledger
+                    .request_terms(&id)?
+                    .context("unknown ready ticket")?;
+                ensure!(terms.peer == peer, "ready from wrong seller");
+                Ok(vec![])
+            }
         }
     }
     pub async fn peer_up(&self, peer: &str) -> Result<Vec<Message>> {
@@ -203,6 +227,13 @@ impl Engine {
                 messages.push(Message::Recover { id: terms.id });
             }
         }
+        messages.insert(
+            0,
+            Message::Hello {
+                version: 1,
+                models: self.buying.keys().cloned().collect(),
+            },
+        );
         messages.push(Message::Quote);
         Ok(messages)
     }
@@ -265,6 +296,37 @@ impl Engine {
             replies.push(message);
         }
         Ok(replies)
+    }
+    pub fn vouch_once(&self, peer: &str, id: &str) -> Result<bool> {
+        let terms = self
+            .service
+            .ledger
+            .request_terms(id)?
+            .context("unknown ready ticket")?;
+        ensure!(terms.peer == peer, "ready from wrong seller");
+        Ok(self.vouched.lock().unwrap().insert(id.into()))
+    }
+    pub async fn gate_wait(
+        &self,
+        event: &Value,
+        deadline: std::time::Duration,
+    ) -> Result<OpenAiExchangeDecision> {
+        let until = tokio::time::Instant::now() + deadline;
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let decision = self.gate(event)?;
+            let peer = event["requested_by_node_id"].as_str();
+            if decision.status != Some(402)
+                || !peer.is_some_and(|peer| self.known.lock().unwrap().contains(peer))
+            {
+                return Ok(decision);
+            }
+            if tokio::time::timeout_at(until, notified).await.is_err() {
+                return Ok(decision);
+            }
+        }
     }
     pub fn gate(&self, event: &Value) -> Result<OpenAiExchangeDecision> {
         if event["observation_point"] != "serving_host_ingress"

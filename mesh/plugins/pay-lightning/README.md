@@ -28,6 +28,7 @@ Use the same plugin name on both ends: `pay-lightning`. The required metadata/ad
 name = "pay-lightning"
 command = "/absolute/path/to/mesh-pay-lightning"
 enabled = true
+allow_peer_blocks = true
 
 [plugin.openai_exchange_grant]
 endpoints = ["chat_completions", "completions", "responses"]

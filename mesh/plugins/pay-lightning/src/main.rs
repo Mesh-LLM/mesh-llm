@@ -103,11 +103,27 @@ async fn main() -> Result<()> {
                 let result: Result<()> = async {
                     ensure!(message.channel == CHANNEL, "unexpected channel");
                     let message_body: Message = serde_json::from_slice(&message.body)?;
+                    let ready = match &message_body {
+                        Message::Ready { id } => Some(id.clone()),
+                        _ => None,
+                    };
                     for reply in engine
                         .channel(&message.source_peer_id, message_body)
                         .await?
                     {
                         send(&mut context, &message.source_peer_id, &reply).await?;
+                    }
+                    if let Some(id) = ready
+                        && engine.vouch_once(&message.source_peer_id, &id)?
+                    {
+                        context
+                            .request_peer_block(mesh_llm_plugin::proto::PeerBlockRequest {
+                                change: mesh_llm_plugin::proto::peer_block_request::Change::Unblock
+                                    as i32,
+                                peer_id: message.source_peer_id.clone(),
+                                ..Default::default()
+                            })
+                            .await?;
                     }
                     Ok(())
                 }
@@ -156,7 +172,8 @@ async fn main() -> Result<()> {
                     return Ok(Default::default());
                 }
                 engine
-                    .gate(&event)
+                    .gate_wait(&event, std::time::Duration::from_secs(28))
+                    .await
                     .map_err(|error| mesh_llm_plugin::PluginError::internal(error.to_string()))
             })
         });
