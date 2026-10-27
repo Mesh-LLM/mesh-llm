@@ -9,8 +9,10 @@ re-check a behavioural verdict on a node. Context and measurements:
 ## Roles
 
 - **Sender:** sends an audit request to one peer, pinned with `x-mesh-target`,
-  and checks that `x-mesh-served-by` names that peer. Senders should be many and
-  not recognisable (hosts of the same model, at a low random rate).
+  and keeps the answer as audit evidence only if the response succeeded (HTTP
+  200 with a completion in the body) and `x-mesh-served-by` names that peer.
+  Senders should be many and not recognisable (hosts of the same model, at a
+  low random rate).
 - **Adjudicator:** scores the answer against pinned reference weights. Scoring is
   one prefill over the prompt and the answer; the adjudicator never talks to the
   audited node, so it can be a known, stable operator.
@@ -19,13 +21,20 @@ re-check a behavioural verdict on a node. Context and measurements:
 
 ## Reference identity
 
-- A model is identified by its content, not its name. For a model pulled from
-  Hugging Face this is the `local-gguf/sha256-…` id the host advertises: the
-  sha256 of the canonical JSON of repository, resolved commit, and the path,
-  size and sha256 of each file. Anyone can recompute it from Hugging Face's
-  published digests without downloading the weights.
+- A model is identified by its content, not its name. A GGUF model pulled from
+  Hugging Face is announced to peers under the internal name
+  `local-gguf/sha256-<digest>` (in `serving_models`); its public name, derived
+  from the repository and selector, is linked to it by `source_ref` in
+  `/api/models`.
+- The digest is the lower-case hex SHA-256 of this JSON, serialised compactly
+  with the keys in this order: `schema_version` (1), `source`
+  (`"hugging-face-gguf"`), `repository`, `revision` (the resolved 40-character
+  commit, lower case) and `files`, one `{path, bytes, sha256}` entry per GGUF
+  part in part order (`huggingface_identity_sha256` in `skippy-api`). Anyone
+  can recompute it from Hugging Face's published digests without downloading
+  the weights.
 - The adjudicator loads exactly those files and publishes the id and the sha256
-  of each file. An audit of a node advertising another id is void.
+  of each file. An audit of a node advertising another id is inconclusive.
 
 ## Scoring setup
 
@@ -78,7 +87,8 @@ The adjudicator publishes, per model:
   retired, so every record from that period becomes re-checkable.
 - Records exchanged while a version is live carry a keyed prompt digest
   (HMAC-SHA-256 with a per-version key revealed at retirement), so a node cannot
-  match its incoming requests against published digests.
+  match its incoming requests against published digests. Provisional until the
+  record mapping below settles how that digest is carried.
 
 ## Records
 
