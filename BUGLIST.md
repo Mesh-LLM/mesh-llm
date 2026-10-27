@@ -318,7 +318,7 @@ confirmation or disposition comment.
 | 30 | [#2217](https://github.com/Mesh-LLM/mesh-llm/issues/2217) | CONFIRMED | `fix/30-2217-stage-control-coordinator-auth` | [#2621](https://github.com/Mesh-LLM/mesh-llm/pull/2621) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2217#issuecomment-6428331830) |
 | 31 | [#2218](https://github.com/Mesh-LLM/mesh-llm/issues/2218) | FIXED | `fix/31-2218-stage-transport-budgets` | [#2622](https://github.com/Mesh-LLM/mesh-llm/pull/2622) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2218#issuecomment-6428881530) |
 | 32 | [#2206](https://github.com/Mesh-LLM/mesh-llm/issues/2206) | CONFIRMED | `fix/32-2206-inference-connection-bounds` | [#2624](https://github.com/Mesh-LLM/mesh-llm/pull/2624) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2206#issuecomment-6429715273) |
-| 33 | [#2207](https://github.com/Mesh-LLM/mesh-llm/issues/2207) | TODO | — | — | — |
+| 33 | [#2207](https://github.com/Mesh-LLM/mesh-llm/issues/2207) | CONFIRMED | `fix/33-2207-stage-tunnel-authz` | [#2625](https://github.com/Mesh-LLM/mesh-llm/pull/2625) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2207#issuecomment-6430399570) |
 | 34 | [#2208](https://github.com/Mesh-LLM/mesh-llm/issues/2208) | TODO | — | — | — |
 | 35 | [#2193](https://github.com/Mesh-LLM/mesh-llm/issues/2193) | TODO | — | — | — |
 | 36 | [#2192](https://github.com/Mesh-LLM/mesh-llm/issues/2192) | TODO | — | — | — |
