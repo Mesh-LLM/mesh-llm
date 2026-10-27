@@ -859,6 +859,36 @@ async fn stage_transport_bridge_publish_aborts_handle_when_reservation_was_stopp
 }
 
 #[tokio::test]
+async fn non_coordinator_stop_of_absent_stage_preserves_transport_bridge() -> Result<()> {
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    let key = stage_runtime_status_key("absent-topology", "absent-run", "absent-stage");
+    let owner = node.reserve_stage_transport_bridge_for_test(key.clone()).await;
+    let handle = tokio::spawn(std::future::pending::<()>());
+    assert!(node.publish_stage_transport_bridge(key.clone(), owner, handle).await);
+    let control = crate::inference::skippy::spawn_stage_control_loop(Default::default());
+    *node.stage_control_tx.lock().await = Some(control.sender());
+
+    node.authorize_resolve_and_execute_stage_control(
+        make_test_endpoint_id(0xD1),
+        "Stop",
+        crate::inference::skippy::StageControlRequest::Stop(
+            crate::inference::skippy::StageStopRequest {
+                topology_id: "absent-topology".into(),
+                run_id: "absent-run".into(),
+                stage_id: "absent-stage".into(),
+                coordinator_term: 1,
+                shutdown_generation: 1,
+            },
+        ),
+    ).await?;
+
+    assert!(node.stage_transport_bridge_is_running(&key).await);
+    node.stop_stage_transport_bridge("absent-topology", "absent-run", "absent-stage").await;
+    control.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stage_transport_bridge_cleanup_removes_only_owning_reservation() -> Result<()> {
     let node = make_test_node(super::NodeRole::Worker).await?;
     let key = stage_runtime_status_key("topology-cleanup", "run-cleanup", "stage-cleanup");

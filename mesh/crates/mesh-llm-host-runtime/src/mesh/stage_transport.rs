@@ -890,6 +890,7 @@ impl Node {
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request: crate::inference::skippy::StageControlRequest::Status(filter),
+            requester: self.endpoint.id(),
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
@@ -925,14 +926,32 @@ impl Node {
         let Some(tx) = control_tx else {
             anyhow::bail!("stage control is not available");
         };
+        let stop_bridge_target = match &request {
+            crate::inference::skippy::StageControlRequest::Stop(stop) => Some((
+                stop.topology_id.clone(),
+                stop.run_id.clone(),
+                stop.stage_id.clone(),
+            )),
+            _ => None,
+        };
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request,
+            requester: self.endpoint.id(),
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
         let response = wait_local_stage_control_response(resp_rx, timeout).await?;
         drop(control_tx_guard);
+        // The stage-to-stage transport bridge is aborted only after the
+        // stage-control loop removed a running stage (#2217).
+        if let Some((topology_id, run_id, stage_id)) = stop_bridge_target
+            && let crate::inference::skippy::StageControlResponse::Ready(ready) = &response
+            && ready.removed_running_stage
+        {
+            self.stop_stage_transport_bridge(&topology_id, &run_id, &stage_id)
+                .await;
+        }
         match &response {
             crate::inference::skippy::StageControlResponse::Ready(ready) => {
                 self.record_stage_status(Some(self.endpoint.id()), ready.status.clone())

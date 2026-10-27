@@ -1452,7 +1452,11 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
     tokio::spawn(async move {
         while let Some(command) = control_rx.recv().await {
             let (request, resp) = match command {
-                skippy::StageControlCommand::Execute { request, resp } => (request, resp),
+                skippy::StageControlCommand::Execute {
+                    request,
+                    requester: _,
+                    resp,
+                } => (request, resp),
                 skippy::StageControlCommand::ValidateLoad { resp, .. } => {
                     let _ = resp.send(None);
                     continue;
@@ -1476,6 +1480,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                 skippy::StageControlRequest::Load(load) => Ok(skippy::StageControlResponse::Ready(
                     skippy::StageReadyResponse {
                         accepted: true,
+                        removed_running_stage: false,
                         status: test_stage_status_from_load(load, skippy::StageRuntimeState::Ready),
                         error: None,
                     },
@@ -1483,6 +1488,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                 skippy::StageControlRequest::Stop(stop) => Ok(skippy::StageControlResponse::Ready(
                     skippy::StageReadyResponse {
                         accepted: true,
+                        removed_running_stage: true,
                         status: test_stage_status_from_stop(stop),
                         error: None,
                     },

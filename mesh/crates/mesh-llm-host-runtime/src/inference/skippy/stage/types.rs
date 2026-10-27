@@ -6,6 +6,11 @@ use tokio::sync::oneshot;
 pub(crate) enum StageControlCommand {
     Execute {
         request: StageControlRequest,
+        /// Authenticated sender of the command: the QUIC peer identity on the
+        /// remote stage-control stream, the local endpoint on the in-process
+        /// control channel. Stage transitions bind terms and shutdown to it
+        /// (#2217).
+        requester: iroh::EndpointId,
         resp: oneshot::Sender<Result<StageControlResponse>>,
     },
     ValidateLoad {
@@ -232,6 +237,8 @@ pub(crate) enum StageRuntimeState {
 #[derive(Clone, Debug)]
 pub(crate) struct StageReadyResponse {
     pub(crate) accepted: bool,
+    /// Local control-loop evidence; never inferred from an idempotent stop ACK.
+    pub(crate) removed_running_stage: bool,
     pub(crate) status: StageStatusSnapshot,
     pub(crate) error: Option<String>,
 }

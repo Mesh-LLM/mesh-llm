@@ -23,6 +23,7 @@ async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
                     run_id: None,
                     stage_id: None,
                 }),
+                requester: coordinator_id(),
                 resp,
             })
             .is_err(),
@@ -231,7 +232,7 @@ async fn accepted_coordinator_claim_allows_fenced_load() {
     let claim = coordinator_claim_from_load(&load, coordinator_id);
     let mut state = StageControlState::default();
 
-    let ack = state.claim(claim).await.unwrap();
+    let ack = state.claim(claim, coordinator_id).await.unwrap();
     assert!(ack.accepted);
 
     assert_eq!(state.validate_load_claim(&load), None);
@@ -632,7 +633,7 @@ async fn unavailable_native_runtime_rejects_remote_and_local_stage_loads() {
         StageControlRequest::Load(load_request()),
         StageControlRequest::LoadLocal(load_request()),
     ] {
-        let response = state.handle(request).await.unwrap();
+        let response = state.handle(request, coordinator_id()).await.unwrap();
         let StageControlResponse::Ready(response) = response else {
             panic!("load must return a readiness response");
         };

@@ -284,6 +284,8 @@ fn strict_local_load_uses_distinct_fail_closed_proto_command() {
     let requester = make_test_endpoint_id(0x85);
     let digest = "a".repeat(64);
     let mut load = test_stage_load_request();
+    // The load must be issued by the coordinator identity it names (#2217).
+    load.coordinator_id = Some(requester);
     load.package_ref = format!("local-gguf://sha256/{digest}");
     load.source_model_sha256 = Some(digest);
     load.local_source_required = true;
@@ -317,6 +319,8 @@ fn local_load_command_strengthens_a_stale_fallback_domain_flag() {
     let requester = make_test_endpoint_id(0x8c);
     let digest = "f".repeat(64);
     let mut load = test_stage_load_request();
+    // The load must be issued by the coordinator identity it names (#2217).
+    load.coordinator_id = Some(requester);
     load.package_ref = format!("local-gguf://sha256/{digest}");
     load.source_model_sha256 = Some(digest);
     load.local_source_required = false;
