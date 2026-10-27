@@ -1037,6 +1037,14 @@ impl OperationBuilder {
         self.inner.output_schema_json = Some(schema_json::<Output>());
         self
     }
+
+    /// How long the host may wait for this operation before it gives up on it.
+    /// Without this the host applies its default request deadline; `0` asks the
+    /// host to wait as long as the caller does.
+    pub fn timeout_secs(mut self, secs: u32) -> Self {
+        self.inner.timeout_secs = Some(secs);
+        self
+    }
 }
 
 impl From<OperationBuilder> for ManifestEntry {

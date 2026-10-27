@@ -96,7 +96,7 @@ async fn operator_settings_reach_the_plugin_initialize_request() {
 async fn a_plugin_without_settings_gets_an_empty_settings_payload() {
     let initialize = initialize_request_seen_by(&[]).await;
     assert!(
-        initialize.contains(r#""settings_json":""#),
-        "a plugin with no settings must still get a well-formed empty payload: {initialize}"
+        initialize.contains(r#""settings_json":"{}""#),
+        "a plugin with no settings must still get a well-formed empty JSON object: {initialize}"
     );
 }

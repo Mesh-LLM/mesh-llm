@@ -905,7 +905,14 @@ impl ServerHandler for PluginMcpServer {
 
 fn operation_result_to_call_tool_result(result: plugin::ToolCallResult) -> CallToolResult {
     let mut call_result = match serde_json::from_str::<Value>(&result.content_json) {
-        Ok(value) => CallToolResult::structured(value),
+        Ok(value) => {
+            let mut structured = CallToolResult::structured(value);
+            // `structured` writes the text block from the value it parsed, and
+            // a parsed `serde_json::Value` has already sorted the plugin's
+            // keys. The text block carries the plugin's JSON as it arrived.
+            structured.content = vec![ContentBlock::text(result.content_json.clone())];
+            structured
+        }
         Err(_) => CallToolResult::success(vec![ContentBlock::text(result.content_json)]),
     };
     call_result.is_error = Some(result.is_error);

@@ -1,7 +1,7 @@
 //! Request replay policy at the transport boundary, before any restart can
 //! turn a lost payment reply into a fresh process's `not_open` response.
 
-use super::{ExternalPlugin, plugin_error, proto};
+use super::{ExternalPlugin, PluginTimeout, plugin_error, proto};
 use crate::plugin::ToolCallResult;
 use crate::plugin::operations::TransportReplay;
 use anyhow::{Result, bail};
@@ -100,7 +100,13 @@ impl ExternalPlugin {
                 .await
             {
                 Ok(response) => return Ok(response),
-                Err(err) if attempt == 0 && replay == TransportReplay::Allow => {
+                // A deadline expiring is not a lost connection: the plugin has
+                // the request. Replaying it would run the same operation twice.
+                Err(err)
+                    if attempt == 0
+                        && replay == TransportReplay::Allow
+                        && !err.is::<PluginTimeout>() =>
+                {
                     tracing::debug!(
                         plugin = %self.spec.name,
                         error = %err,

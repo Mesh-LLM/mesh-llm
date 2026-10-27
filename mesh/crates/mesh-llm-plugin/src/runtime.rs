@@ -76,6 +76,15 @@ pub struct PluginInitializeRequest {
     /// Empty for a host older than this field.
     #[serde(default)]
     pub host_capabilities: Vec<String>,
+    /// The operator's `[plugin.settings]` for this plugin as a JSON object,
+    /// validated against the manifest's `config_schema`. `"{}"` when the
+    /// operator set nothing or the host is older than this field.
+    #[serde(default = "empty_settings_json")]
+    pub settings_json: String,
+}
+
+fn empty_settings_json() -> String {
+    "{}".to_string()
 }
 
 impl From<proto::InitializeRequest> for PluginInitializeRequest {
@@ -86,7 +95,17 @@ impl From<proto::InitializeRequest> for PluginInitializeRequest {
             host_info_json: value.host_info_json,
             mesh_visibility: MeshVisibility::from_proto(value.mesh_visibility),
             host_capabilities: value.host_capabilities,
+            settings_json: settings_json_or_default(value.settings_json),
         }
+    }
+}
+
+/// An older host sends nothing here; a plugin should see an empty object.
+fn settings_json_or_default(settings_json: String) -> String {
+    if settings_json.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        settings_json
     }
 }
 

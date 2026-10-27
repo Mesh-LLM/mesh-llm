@@ -96,7 +96,7 @@ use self::health::{endpoint_declared_capabilities, endpoint_record_from_plugin_s
 pub use self::in_process::{InProcessPluginRunner, InProcessPlugins};
 use self::runtime::ExternalPlugin;
 pub use self::startup::{PluginStartupOptions, PluginStartupSummary};
-pub(crate) use self::support::parse_optional_json;
+pub(crate) use self::support::{PluginRpcFailure, parse_optional_json};
 use self::support::{format_args_for_log, format_slice_for_log, format_tool_names_for_log};
 #[cfg(all(test, unix))]
 use self::transport::unix_socket_path;
