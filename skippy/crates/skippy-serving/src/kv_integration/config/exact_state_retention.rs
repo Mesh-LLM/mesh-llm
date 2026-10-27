@@ -37,7 +37,7 @@ pub(super) fn evict_exact_entries_over(
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             (radix.stats().recurrent_entries > floor)
-                .then(|| evict_lowest_recompute_value(&mut radix))
+                .then(|| evict_lowest_recompute_value(&mut radix, None))
                 .flatten()
         };
         let Some(evicted) = evicted else {
@@ -70,13 +70,19 @@ pub(super) fn evict_exact_entries_over(
 /// that work per logical snapshot byte, then recency, using the same policy
 /// as resident KV capacity. Recheck physical bytes after each release because
 /// deduplicated blocks may not free their full logical size.
-fn evict_lowest_recompute_value(
+pub(super) fn evict_lowest_recompute_value(
     radix: &mut UnifiedRadixCache<RadixResidentEntry, RadixExactEntry>,
+    protected: Option<(&str, &[i32])>,
 ) -> Option<RadixEviction<RadixExactEntry>> {
     let candidates = radix.recurrent_eviction_candidates();
     let mut ranked = candidates
         .iter()
         .enumerate()
+        .filter(|(_, candidate)| {
+            protected.is_none_or(|(namespace, tokens)| {
+                candidate.namespace != namespace || candidate.tokens != tokens
+            })
+        })
         .map(|(index, candidate)| EvictableCacheEntry {
             id: index.to_string(),
             units: candidate.logical_bytes,
@@ -166,5 +172,33 @@ mod tests {
         assert!(radix.recurrent_exact("stage", &long).is_some());
         assert!(radix.recurrent_exact("stage", &[2, 3]).is_none());
         assert!(radix.release_recurrent("stage", &long));
+    }
+
+    #[test]
+    fn count_pressure_evicts_cheap_short_state_before_older_long_state() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4096));
+        let long = vec![1; 100];
+        insert(&radix, &blobs, &long, 60, 1);
+        insert(&radix, &blobs, &[2, 3], 6, 2);
+        insert(&radix, &blobs, &[4, 5], 6, 3);
+        let evicted =
+            evict_lowest_recompute_value(&mut radix.lock().unwrap(), Some(("stage", &[4, 5])))
+                .unwrap();
+        assert_eq!(evicted.tokens, [2, 3]);
+        assert!(
+            radix
+                .lock()
+                .unwrap()
+                .recurrent_exact("stage", &long)
+                .is_some()
+        );
+        assert!(
+            radix
+                .lock()
+                .unwrap()
+                .recurrent_exact("stage", &[4, 5])
+                .is_some()
+        );
     }
 }

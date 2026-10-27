@@ -5,9 +5,10 @@ use std::{
 
 use anyhow::Result;
 use skippy_cache::{
-    CacheBlobStore, GeometryBlock, GeometryKind, L3CacheManager, L3Tier, PayloadGeometry,
-    ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy, StoreLimits,
-    UnifiedRadixCache, exact_state_identity_for_stage, numerical_model_identity_for_stage,
+    CacheBlobStore, ExactStatePayloadKind, GeometryBlock, GeometryKind, L3CacheManager, L3Tier,
+    PayloadGeometry, ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy,
+    StoreLimits, UnifiedRadixCache, exact_state_identity_for_stage,
+    numerical_model_identity_for_stage,
 };
 use skippy_protocol::{StageConfig, StageKvCacheCodec, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::{ModelStateKind, RuntimeKvPageDesc};
@@ -710,6 +711,7 @@ fn store_exact_radix_record_with_codec(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     );
+    let ranked_count_eviction = payload.kind() == ExactStatePayloadKind::KvRecurrent;
     // Publish the serving tier before optional lower-tier work. `payload` and
     // the radix value share Arc-backed blocks, so L2/L3 can retain the exact
     // bytes without delaying an immediate repeat request's L1 lookup.
@@ -737,7 +739,18 @@ fn store_exact_radix_record_with_codec(
                     released.push(replaced.payload);
                 }
                 while radix.stats().recurrent_entries > max_entries {
-                    let Some(evicted) = radix.evict_lru_recurrent() else {
+                    let victim = if ranked_count_eviction {
+                        exact_state_retention::evict_lowest_recompute_value(
+                            &mut radix,
+                            Some((&namespace, &token_ids)),
+                        )
+                        .or_else(|| {
+                            exact_state_retention::evict_lowest_recompute_value(&mut radix, None)
+                        })
+                    } else {
+                        radix.evict_lru_recurrent()
+                    };
+                    let Some(evicted) = victim else {
                         break;
                     };
                     count_evictions.push((evicted.tokens.len() as u64, evicted.logical_bytes));
