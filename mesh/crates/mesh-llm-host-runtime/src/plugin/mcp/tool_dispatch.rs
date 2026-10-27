@@ -933,6 +933,20 @@ mod tests {
     use rmcp::model::Tool;
     use serde_json::json;
 
+    /// The plugin's own JSON must reach the MCP caller in the order the plugin
+    /// wrote it, not re-sorted on the way through the host.
+    #[test]
+    fn mcp_tool_result_text_keeps_the_plugin_key_order() {
+        let result = operation_result_to_call_tool_result(plugin::ToolCallResult {
+            content_json: r#"{"zeta":1,"alpha":{"b":1,"a":2}}"#.to_string(),
+            is_error: false,
+        });
+        let ContentBlock::Text(text) = &result.content[0] else {
+            panic!("expected a text content block");
+        };
+        assert_eq!(text.text, r#"{"zeta":1,"alpha":{"b":1,"a":2}}"#);
+    }
+
     #[test]
     fn normalize_tool_schema_makes_empty_input_schema_object() {
         let mut tool = Tool::new("bad", "Bad schema", Arc::new(Default::default()));

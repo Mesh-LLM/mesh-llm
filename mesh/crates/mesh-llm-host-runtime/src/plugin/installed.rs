@@ -123,6 +123,7 @@ pub(crate) fn configured_external_plugin_spec(
         args: entry.args.clone(),
         url: url.map(str::to_owned),
         env: BTreeMap::new(),
+        settings: Default::default(),
         startup,
         web_ui_enabled: entry.web_ui_enabled,
         web_ui_primary_tab: entry.web_ui_primary_tab,
@@ -204,6 +205,7 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         args: Vec::new(),
         url: None,
         env: BTreeMap::new(),
+        settings: Default::default(),
         startup: PluginStartupOptions {
             optional: metadata.default_managed,
             ..PluginStartupOptions::default()

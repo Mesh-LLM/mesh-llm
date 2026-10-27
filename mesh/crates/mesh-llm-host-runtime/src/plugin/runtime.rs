@@ -28,10 +28,14 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 mod exchange_request;
 #[cfg(test)]
 mod exchange_request_tests;
+#[cfg(test)]
+mod exit_tests;
 mod identity_artifact;
 mod lifecycle_readiness;
 #[cfg(test)]
 mod restart_tests;
+#[cfg(test)]
+mod settings_tests;
 mod shutdown;
 mod socket_auth;
 
@@ -345,6 +349,7 @@ impl ExternalPlugin {
                     host_version: crate::VERSION.to_string(),
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
+                    settings_json: String::new(),
                     host_capabilities: vec![
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
@@ -1130,6 +1135,7 @@ pub(crate) mod tests {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: Default::default(),
             web_ui_enabled,
             web_ui_primary_tab: None,
@@ -1192,6 +1198,7 @@ pub(crate) mod tests {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: Default::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,
@@ -1328,6 +1335,7 @@ pub(crate) mod tests {
                 input_schema_json: r#"{"type":"object"}"#.into(),
                 output_schema_json: None,
                 title: None,
+                timeout_secs: None,
             }],
             ..proto::PluginManifest::default()
         }

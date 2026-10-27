@@ -1022,6 +1022,7 @@ pub fn operation<Input: JsonSchema>(
             input_schema_json: schema_json::<Input>(),
             output_schema_json: None,
             title: None,
+            timeout_secs: None,
         },
     }
 }

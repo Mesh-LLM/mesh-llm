@@ -12,6 +12,7 @@ fn observer() -> ExternalPlugin {
         args: Vec::new(),
         url: None,
         env: Default::default(),
+        settings: Default::default(),
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
