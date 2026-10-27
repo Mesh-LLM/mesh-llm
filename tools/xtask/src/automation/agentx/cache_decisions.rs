@@ -18,6 +18,7 @@ pub(super) struct CacheDecisions {
 struct CacheDecision {
     kind: &'static str,
     decision: &'static str,
+    source: Option<&'static str>,
     at_unix_nanos: u64,
     position: Option<u64>,
     runtime_position: Option<u64>,
@@ -26,7 +27,7 @@ struct CacheDecision {
 impl CacheDecisions {
     pub(super) fn new() -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             ..Self::default()
         }
     }
@@ -104,15 +105,31 @@ fn parse(line: &[u8]) -> Option<CacheDecision> {
     Some(CacheDecision {
         kind,
         decision,
+        source: attrs
+            .get("skippy.exact_cache.source")
+            .and_then(Value::as_str)
+            .and_then(allowed_source),
         at_unix_nanos: event.get("start_time_unix_nanos")?.as_u64()?,
         position: attrs
             .get("skippy.exact_cache.recorded_tokens")
+            .or_else(|| attrs.get("skippy.exact_cache.restored_tokens"))
             .or_else(|| attrs.get("skippy.kv.checkpoint_token_count"))
             .and_then(Value::as_u64),
         runtime_position: attrs
             .get("skippy.kv.runtime_token_count")
             .and_then(Value::as_u64),
     })
+}
+
+fn allowed_source(value: &str) -> Option<&'static str> {
+    match value {
+        "resident_recurrent" => Some("resident_recurrent"),
+        "radix" => Some("radix"),
+        "l2" => Some("l2"),
+        "l3" => Some("l3"),
+        "l3-cachegen" => Some("l3-cachegen"),
+        _ => None,
+    }
 }
 
 fn allowed_decision(value: &str) -> &'static str {
@@ -195,6 +212,24 @@ mod tests {
         }
         let projected = serde_json::to_string(&decisions).unwrap();
         assert!(!projected.contains("token secret"));
+    }
+
+    #[test]
+    fn projects_exact_hit_tier_and_restored_position_without_page_identity() {
+        let raw = br#"{"event":"stage.openai_kv_lookup_decision","attributes":{"skippy.kv.decision":"exact_hit","skippy.exact_cache.source":"resident_recurrent","skippy.exact_cache.restored_tokens":26938,"skippy.exact_cache.hit_page_id":"secret-page"},"start_time_unix_nanos":123}"#;
+        let mut decisions = CacheDecisions::new();
+        decisions.observe(
+            MemberId::Seed,
+            ObservedLine {
+                stream: Stream::Stderr,
+                bytes: raw,
+                ending: crate::process::LineEnding::Lf,
+            },
+        );
+        let projected = serde_json::to_string(&decisions).unwrap();
+        assert!(projected.contains("\"source\":\"resident_recurrent\""));
+        assert!(projected.contains("\"position\":26938"));
+        assert!(!projected.contains("secret-page"));
     }
 
     #[test]
