@@ -982,6 +982,7 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
         ),
         RouteAttemptResult::RetryableTimeout => (None, Some("timeout")),
         RouteAttemptResult::RetryableUnavailable => (None, Some("unavailable")),
+        RouteAttemptResult::RetryablePaymentRequired => (None, Some("payment_required")),
         RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_) => (None, Some("rejected")),
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
@@ -1058,6 +1059,7 @@ fn handle_mesh_attempt_result(
         }
         RouteAttemptResult::RetryableTimeout => handle_retryable_mesh_timeout(context),
         RouteAttemptResult::RetryableUnavailable => handle_retryable_mesh_unavailable(context),
+        RouteAttemptResult::RetryablePaymentRequired => handle_retryable_mesh_unavailable(context),
         RouteAttemptResult::CommittedStreamFailure { .. } => {
             MeshAttemptDisposition::Return(attempt_result)
         }
@@ -1124,6 +1126,7 @@ fn terminal_outcome_for_mesh_route_result(
             crate::logging::TerminalOutcome::Cancelled(Some("client_disconnected".into()))
         }
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryablePaymentRequired
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableUnavailable => {
@@ -1711,7 +1714,8 @@ pub async fn route_to_target(
             .await;
             response_outcome(504, result)
         }
-        RouteAttemptResult::RetryableContextOverflow
+        RouteAttemptResult::RetryablePaymentRequired
+        | RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
             node.record_routed_request(
@@ -1829,6 +1833,7 @@ pub async fn route_http_endpoint_request(
             delivered_outcome(status_code, usage, output_digests)
         }
         RouteAttemptResult::RetryableTimeout
+        | RouteAttemptResult::RetryablePaymentRequired
         | RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
