@@ -4,10 +4,14 @@ use crate::repository::text::repr;
 pub(super) struct PurePath {
     root: String,
     parts: Vec<String>,
+    /// Whether this path parsed with the Windows flavour (`PureWindowsPath`),
+    /// stored separately from the root: drive-less Windows paths keep their
+    /// flavour for comparisons and display.
+    windows: bool,
 }
 
 impl PurePath {
-    /// Parses with the host's path flavour: Windows paths (`C:\\a\\b`)
+    /// Parses with the host's path flavour: Windows paths (`C:\a\b`)
     /// behave like Python's `PureWindowsPath`, everything else like
     /// `PurePosixPath`. The composer receives native paths from
     /// `package-release.ps1`, so a POSIX-only parse broke Windows releases.
@@ -16,40 +20,37 @@ impl PurePath {
     }
 
     fn parse(text: &str, windows: bool) -> Self {
+        let mut path = Self {
+            root: String::new(),
+            parts: Vec::new(),
+            windows,
+        };
         if !windows {
-            let root = if text.starts_with('/') { "/" } else { "" };
-            let parts = text
-                .split('/')
-                .filter(|part| !part.is_empty() && *part != ".")
-                .map(str::to_owned)
-                .collect();
-            return Self {
-                root: root.to_owned(),
-                parts,
+            path.root = if text.starts_with('/') {
+                "/".to_owned()
+            } else {
+                String::new()
             };
+            path.parts = path_parts(text);
+            return path;
         }
         let normalized = text.replace('\\', "/");
         let mut rest = normalized.as_str();
-        let mut root = String::new();
         let bytes = rest.as_bytes();
         if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-            root.push(bytes[0].to_ascii_uppercase() as char);
-            root.push(':');
+            path.root.push(bytes[0].to_ascii_uppercase() as char);
+            path.root.push(':');
             rest = &rest[2..];
         }
         if rest.starts_with('/') {
-            root.push('/');
+            path.root.push('/');
         }
-        let parts = rest
-            .split('/')
-            .filter(|part| !part.is_empty() && *part != ".")
-            .map(str::to_owned)
-            .collect();
-        Self { root, parts }
+        path.parts = path_parts(rest);
+        path
     }
 
     fn windows_flavour(&self) -> bool {
-        self.root.contains(':')
+        self.windows
     }
 
     /// `str(path)`: the root and the parts, or `.` for an empty relative path.
@@ -71,6 +72,7 @@ impl PurePath {
         Self {
             root: self.root.clone(),
             parts,
+            windows: self.windows,
         }
     }
 
@@ -106,6 +108,15 @@ impl PurePath {
             rest.join("/")
         })
     }
+}
+
+/// `pathlib` parts: the path body without empty and `.` components. Both
+/// flavours split bodies on `/`; the Windows parser splits the root off first.
+fn path_parts(body: &str) -> Vec<String> {
+    body.split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .map(str::to_owned)
+        .collect()
 }
 
 #[cfg(test)]
@@ -157,5 +168,19 @@ mod tests {
             PurePath::parse(r"C:\a", true).join("m.json").display(),
             r"C:\a\m.json"
         );
+    }
+
+    /// Regression: the Windows flavour used to be inferred from a `:` in
+    /// the root, so drive-less Windows paths lost Windows comparison and
+    /// display.
+    #[test]
+    fn windows_flavour_survives_drive_less_paths() {
+        assert_eq!(
+            win(r"Bundle\mesh-llm.exe", "bundle").as_deref(),
+            Ok("mesh-llm.exe")
+        );
+        assert_eq!(win(r"\foo\m.exe", r"\FOO").as_deref(), Ok("m.exe"));
+        assert_eq!(PurePath::parse(r"\foo", true).display(), r"\foo");
+        assert_eq!(PurePath::parse(r"Bundle\x", true).display(), r"Bundle\x");
     }
 }
