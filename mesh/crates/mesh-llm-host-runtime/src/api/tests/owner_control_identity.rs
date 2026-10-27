@@ -199,10 +199,10 @@ async fn owner_control_get_config_rejects_loopback_caller_without_owner_capabili
     server.task.abort();
 }
 
-/// Until the caller proves ownership, the snapshot payload must not carry
-/// secret configuration values. Today `local_control_snapshot_payload`
-/// serializes the full owner-control config, so the telemetry authorization
-/// header leaks verbatim to any loopback account.
+/// The get-config snapshot must never carry secret configuration values:
+/// an unauthenticated caller gets no snapshot at all, and an authenticated
+/// owner receives the snapshot with telemetry header values replaced by the
+/// redaction sentinel.
 #[tokio::test]
 #[serial]
 async fn owner_control_snapshot_redacts_secret_config_values() {
@@ -252,4 +252,59 @@ authorization = "Bearer {SECRET}"
         !response.contains(SECRET),
         "owner-control snapshot leaked the secret telemetry authorization header to a caller without owner capability: {response}"
     );
+}
+
+/// The authenticated owner receives the snapshot, with telemetry header
+/// values replaced by the redaction sentinel instead of the real credential.
+#[tokio::test]
+#[serial]
+async fn owner_control_snapshot_serves_redacted_snapshot_to_owner() {
+    const SECRET: &str = "sk-owner-secret-0f3b9c4d2e";
+    let temp = tempfile::tempdir().unwrap();
+    let _home_guard = HomeEnvGuard::set(temp.path());
+    let keystore_path = seeded_owner_keypair(&temp);
+
+    let config_toml = format!(
+        r#"version = 1
+
+[telemetry]
+enabled = true
+service_name = "mesh-llm"
+endpoint = "http://127.0.0.1:4317"
+
+[telemetry.headers]
+authorization = "Bearer {SECRET}"
+"#
+    );
+    let server = spawn_owner_control_snapshot_test_server(config_toml).await;
+    let state = build_test_mesh_api().await;
+    state.set_owner_key_path(Some(keystore_path)).await;
+    seed_owner_control_token(&state).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let request_body = json!({ "endpoint": server.endpoint_token }).to_string();
+    let response = send_management_request(
+        addr,
+        management_post_request_with_owner_control(
+            "/api/runtime/control/get-config",
+            &request_body,
+        ),
+    )
+    .await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "get-config rejected the authenticated owner: {response}"
+    );
+    assert!(
+        response.contains(crate::protocol::config_redaction::REDACTED_TELEMETRY_HEADER_VALUE),
+        "owner-control snapshot did not carry the redaction sentinel for the telemetry header: {response}"
+    );
+    assert!(
+        !response.contains(SECRET),
+        "owner-control snapshot leaked the secret telemetry authorization header to the owner: {response}"
+    );
+
+    handle.await.unwrap().unwrap();
+    server.task.abort();
 }

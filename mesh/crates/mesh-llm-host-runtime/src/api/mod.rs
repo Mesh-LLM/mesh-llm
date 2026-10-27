@@ -57,6 +57,7 @@ mod model_target_capacity;
 mod model_targets;
 mod network_diagnostics;
 pub(crate) mod owner_control_token;
+pub(crate) mod peer_identity;
 pub(crate) mod routes;
 mod server;
 mod split_readiness;

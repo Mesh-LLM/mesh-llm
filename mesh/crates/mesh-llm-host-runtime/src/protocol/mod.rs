@@ -7,6 +7,7 @@ use crate::mesh::NodeRole;
 use crate::mesh::PeerAnnouncement;
 
 pub(crate) mod config_diagnostic;
+pub(crate) mod config_redaction;
 pub(crate) mod convert;
 pub(crate) mod node_record;
 use anyhow::Result;
