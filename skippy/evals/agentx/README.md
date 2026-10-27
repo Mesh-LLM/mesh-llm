@@ -141,6 +141,12 @@ positions. It excludes raw prompts, cache keys and arbitrary telemetry fields;
 `omitted_events` reports if the bound was reached. The ordinary
 `server.stderr.log` remains sanitized and size-limited, so it is not a complete
 cache-decision trace.
+With `SKIPPY_EXACT_STATE_DIAGNOSTICS=1`, `exact_state_events` counts every
+recognized demotion, publication and eviction. `exact_state_samples` retains
+at most 512 of those events with sequence numbers and allowlisted numeric
+positions, byte sizes and limits; `omitted_exact_state_samples` counts any
+additional events. This diagnostic is separate from the 512 record/lookup
+decision limit.
 Leave it unset for paired performance results because debug event emission can
 perturb latency.
 Use `--only-concurrency 2` with `automation agentx run` to isolate a failing

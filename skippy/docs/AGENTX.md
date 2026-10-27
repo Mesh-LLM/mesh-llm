@@ -230,8 +230,9 @@ per-request cache-read tokens alongside such a result.
 Set `SKIPPY_EXACT_STATE_DIAGNOSTICS=1` on a diagnostic Skippy server to
 record numeric-only exact-state demotion, L1 publication, and eviction events
 in the server log. With `AGENTX_SKIPPY_DEBUG_TELEMETRY=1`, the harness also
-counts these event types in `cache-decisions.json`, beyond the 64 KiB stderr
-receipt limit. This opt-in trace identifies whether a missing long prefix
+counts all recognized event types and retains up to 512 numeric event samples
+in `cache-decisions.json`, beyond the 64 KiB stderr receipt limit. This opt-in
+trace identifies whether a missing long prefix
 was rejected before export, queued but not published, or evicted after
 publication. It records token counts and byte sizes, never token content or
 cache identities. Leave it unset for timing comparisons.
