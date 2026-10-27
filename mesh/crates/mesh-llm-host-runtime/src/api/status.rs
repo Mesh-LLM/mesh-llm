@@ -392,66 +392,13 @@ pub(crate) struct StatusPayload {
     /// state has been initialized so older consumers retain their prior shape.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) logging: Option<LoggingStatusPayload>,
-    /// Snapshots plugins published over their local connections, each as a
-    /// top-level field named by the host's name for the plugin; see
-    /// [`PluginStatusPayload`]. Local-only, and absent while no plugin
-    /// contributes, so the shape is unchanged. A plugin named like one of
-    /// [`CORE_STATUS_FIELDS`] cannot contribute.
-    #[serde(flatten)]
+    /// `plugins`: snapshots plugins published over their local connections,
+    /// by the host's name for each plugin; see [`PluginStatusPayload`].
+    /// Local-only, and omitted while no plugin contributes, so the shape is
+    /// unchanged.
+    #[serde(rename = "plugins", skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) plugin_status: BTreeMap<String, PluginStatusPayload>,
 }
-
-/// The fields of [`StatusPayload`] besides the plugins' contributions. A
-/// plugin by one of these names is refused, so it never shadows a core field.
-pub(crate) const CORE_STATUS_FIELDS: &[&str] = &[
-    "version",
-    "latest_version",
-    "node_id",
-    "owner",
-    "release_attestation",
-    "token",
-    "node_state",
-    "node_status",
-    "is_host",
-    "is_client",
-    "llama_ready",
-    "runtime",
-    "model_name",
-    "models",
-    "available_models",
-    "requested_models",
-    "wanted_model_refs",
-    "serving_models",
-    "hosted_models",
-    "draft_name",
-    "api_port",
-    "my_vram_gb",
-    "model_size_gb",
-    "peers",
-    "wakeable_nodes",
-    "local_instances",
-    "launch_pi",
-    "launch_goose",
-    "inflight_requests",
-    "mesh_id",
-    "mesh_name",
-    "mesh_discovery_mode",
-    "discovery_scope",
-    "discovery_source",
-    "nostr_discovery",
-    "publication_state",
-    "my_hostname",
-    "my_is_soc",
-    "my_memory",
-    "gpus",
-    "routing_affinity",
-    "routing_metrics",
-    "first_joined_mesh_ts",
-    "mesh_requirements",
-    "recent_mesh_rejections",
-    "plugin_frame_telemetry",
-    "logging",
-];
 
 /// One plugin's contribution to `/api/status`. The host owns everything but
 /// `data`, which is the plugin's own, in version `schema_version` of its own
@@ -974,26 +921,6 @@ pub(super) fn decode_runtime_model_path(path: &str, prefix: &str) -> Option<Stri
 mod tests {
     use super::*;
     use crate::ReleaseAttestationSummary;
-
-    #[test]
-    fn core_status_fields_name_every_field_but_the_plugins() {
-        // Read from the struct itself, so a new field cannot be left out and
-        // let a plugin of that name shadow it.
-        let fields = include_str!("status.rs")
-            .lines()
-            .skip_while(|line| !line.starts_with("pub(crate) struct StatusPayload {"))
-            .skip(1)
-            .take_while(|line| *line != "}")
-            .filter_map(|line| line.trim().strip_prefix("pub(crate) "))
-            .filter_map(|field| field.split_once(':').map(|(name, _)| name))
-            .filter(|name| *name != "plugin_status")
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(
-            fields,
-            CORE_STATUS_FIELDS.iter().copied().collect(),
-            "CORE_STATUS_FIELDS must list StatusPayload's fields"
-        );
-    }
 
     fn test_owner_payload() -> OwnershipPayload {
         OwnershipPayload {
