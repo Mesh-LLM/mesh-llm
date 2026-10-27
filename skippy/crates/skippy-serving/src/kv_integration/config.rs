@@ -779,7 +779,9 @@ fn store_exact_radix_record_with_codec(
     // working set past the soft cap (never more than the configured entry
     // limit) so concurrent sessions on a stage stop evicting each other, then
     // apply the hard limit so that allowance stays bounded apart from one
-    // indivisible snapshot. Neither pass evicts the last entry: a snapshot that
+    // indivisible snapshot. Do not choose the just-inserted checkpoint in the
+    // soft pass; that would report a record which no follow-up can reuse.
+    // Neither pass evicts the last entry: a snapshot that
     // self-evicts disables exact prefix caching for the stage entirely, which
     // is the regression this retention policy exists to prevent.
     evict_exact_entries_over(
@@ -788,17 +790,25 @@ fn store_exact_radix_record_with_codec(
         limits.soft_bytes,
         EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries),
         "soft",
+        Some((&namespace, &token_ids)),
     )?;
-    evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1, "hard")?;
-    emit_exact_state_diagnostic(
-        "published_l1",
-        &[
-            ("position", token_ids.len() as u64),
-            ("logical_bytes", logical_bytes),
-        ],
-    );
-    #[cfg(test)]
-    crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
+    evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1, "hard", None)?;
+    let resident = radix
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .peek_recurrent(&namespace, &token_ids)
+        .is_some_and(|entry| entry.matched_tokens == token_ids.len());
+    if resident {
+        emit_exact_state_diagnostic(
+            "published_l1",
+            &[
+                ("position", token_ids.len() as u64),
+                ("logical_bytes", logical_bytes),
+            ],
+        );
+        #[cfg(test)]
+        crate::frontend::capture_trace::log_stored_identity(&namespace, &token_ids);
+    }
 
     if let (Some(l2), Some(payload_digest)) = (l2, l2_promotion_digest.as_deref()) {
         let _ = l2.promote(&namespace, &token_ids, payload_digest, &payload, &extra);

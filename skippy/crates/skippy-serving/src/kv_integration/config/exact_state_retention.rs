@@ -21,6 +21,7 @@ pub(super) fn evict_exact_entries_over(
     limit_bytes: u64,
     min_retained_entries: usize,
     limit_kind: &'static str,
+    publishing: Option<(&str, &[i32])>,
 ) -> Result<()> {
     if limit_bytes == 0 {
         return Ok(());
@@ -39,7 +40,7 @@ pub(super) fn evict_exact_entries_over(
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             (radix.stats().recurrent_entries > floor)
-                .then(|| evict_lowest_recompute_value(&mut radix))
+                .then(|| evict_lowest_recompute_value(&mut radix, publishing))
                 .flatten()
         };
         let Some(evicted) = evicted else {
@@ -76,8 +77,17 @@ pub(super) fn evict_exact_entries_over(
 /// deduplicated blocks may not free their full logical size.
 fn evict_lowest_recompute_value(
     radix: &mut UnifiedRadixCache<RadixResidentEntry, RadixExactEntry>,
+    publishing: Option<(&str, &[i32])>,
 ) -> Option<RadixEviction<RadixExactEntry>> {
-    let candidates = radix.recurrent_eviction_candidates();
+    let candidates = radix
+        .recurrent_eviction_candidates()
+        .into_iter()
+        .filter(|candidate| {
+            publishing.is_none_or(|(namespace, tokens)| {
+                candidate.namespace != namespace || candidate.tokens != tokens
+            })
+        })
+        .collect::<Vec<_>>();
     let (mut superseded, mut other): (Vec<_>, Vec<_>) = candidates
         .iter()
         .enumerate()
@@ -202,7 +212,7 @@ mod tests {
             );
         }
 
-        evict_exact_entries_over(&radix, &blobs, 600, 4, "soft").unwrap();
+        evict_exact_entries_over(&radix, &blobs, 600, 4, "soft", None).unwrap();
 
         assert_eq!(blobs.lock().unwrap().physical_bytes(), 580);
         let mut radix = radix.lock().unwrap();
@@ -231,7 +241,7 @@ mod tests {
             );
         }
 
-        evict_exact_entries_over(&radix, &blobs, 300, 2, "soft").unwrap();
+        evict_exact_entries_over(&radix, &blobs, 300, 2, "soft", None).unwrap();
 
         let mut radix = radix.lock().unwrap();
         assert!(radix.recurrent_exact("stage", &unique).is_some());
@@ -265,7 +275,7 @@ mod tests {
                 .matched_tokens,
             50
         );
-        let evicted = evict_lowest_recompute_value(&mut radix).unwrap();
+        let evicted = evict_lowest_recompute_value(&mut radix, None).unwrap();
         assert_eq!(evicted.tokens, unique);
         assert!(radix.recurrent_exact("stage", &short).is_some());
     }
@@ -281,7 +291,7 @@ mod tests {
         insert(&radix, &blobs, &[2, 3, 4], 6, 3);
         insert(&radix, &blobs, &new_long, 60, 4);
 
-        evict_exact_entries_over(&radix, &blobs, 120, 1, "soft").unwrap();
+        evict_exact_entries_over(&radix, &blobs, 120, 1, "soft", None).unwrap();
 
         assert_eq!(blobs.lock().unwrap().physical_bytes(), 120);
         let mut radix = radix.lock().unwrap();
@@ -290,6 +300,27 @@ mod tests {
         assert!(radix.lookup_recurrent("stage", &new_long).is_some());
         assert!(radix.recurrent_exact("stage", &[1, 2]).is_none());
         assert!(radix.recurrent_exact("stage", &[2, 3, 4]).is_none());
+    }
+
+    #[test]
+    fn soft_pressure_does_not_evict_checkpoint_during_its_publication() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4096));
+        let old_a = vec![1; 100];
+        let old_b = vec![2; 120];
+        let publishing = vec![3; 10];
+        insert(&radix, &blobs, &old_a, 60, 1);
+        insert(&radix, &blobs, &old_b, 60, 2);
+        insert(&radix, &blobs, &publishing, 10, 3);
+
+        evict_exact_entries_over(&radix, &blobs, 120, 1, "soft", Some(("stage", &publishing)))
+            .unwrap();
+
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 70);
+        let mut radix = radix.lock().unwrap();
+        assert!(radix.recurrent_exact("stage", &publishing).is_some());
+        assert!(radix.recurrent_exact("stage", &old_a).is_none());
+        assert!(radix.recurrent_exact("stage", &old_b).is_some());
     }
 
     #[test]
@@ -307,7 +338,7 @@ mod tests {
                 .is_some()
         );
 
-        evict_exact_entries_over(&radix, &blobs, 5, 1, "hard").unwrap();
+        evict_exact_entries_over(&radix, &blobs, 5, 1, "hard", None).unwrap();
 
         assert_eq!(blobs.lock().unwrap().physical_bytes(), 60);
         let mut radix = radix.lock().unwrap();
