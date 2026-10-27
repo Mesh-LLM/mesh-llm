@@ -319,7 +319,7 @@ confirmation or disposition comment.
 | 31 | [#2218](https://github.com/Mesh-LLM/mesh-llm/issues/2218) | FIXED | `fix/31-2218-stage-transport-budgets` | [#2622](https://github.com/Mesh-LLM/mesh-llm/pull/2622) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2218#issuecomment-6428881530) |
 | 32 | [#2206](https://github.com/Mesh-LLM/mesh-llm/issues/2206) | CONFIRMED | `fix/32-2206-inference-connection-bounds` | [#2624](https://github.com/Mesh-LLM/mesh-llm/pull/2624) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2206#issuecomment-6429715273) |
 | 33 | [#2207](https://github.com/Mesh-LLM/mesh-llm/issues/2207) | CONFIRMED | `fix/33-2207-stage-tunnel-authz` | [#2625](https://github.com/Mesh-LLM/mesh-llm/pull/2625) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2207#issuecomment-6430399570) |
-| 34 | [#2208](https://github.com/Mesh-LLM/mesh-llm/issues/2208) | TODO | — | — | — |
+| 34 | [#2208](https://github.com/Mesh-LLM/mesh-llm/issues/2208) | CONFIRMED | `fix/34-2208-stage-session-claim-owner` | [#2626](https://github.com/Mesh-LLM/mesh-llm/pull/2626) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2208#issuecomment-6430632528) |
 | 35 | [#2193](https://github.com/Mesh-LLM/mesh-llm/issues/2193) | TODO | — | — | — |
 | 36 | [#2192](https://github.com/Mesh-LLM/mesh-llm/issues/2192) | TODO | — | — | — |
 | 37 | [#2383](https://github.com/Mesh-LLM/mesh-llm/issues/2383) | TODO | — | — | — |
