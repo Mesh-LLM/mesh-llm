@@ -130,7 +130,7 @@ async fn incomplete_effective_chunked_entity_cannot_silently_skip_admission() {
             &request,
             Some("m"),
             "external",
-            SelectedRouteTarget::MeshLabel("local"),
+            SelectedRouteTarget::Mesh(&crate::inference::election::InferenceTarget::Local(1)),
             1,
         )
         .is_err()

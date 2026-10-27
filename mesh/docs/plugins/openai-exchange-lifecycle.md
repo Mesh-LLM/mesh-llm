@@ -37,7 +37,11 @@ The first phase precedes downstream dispatch. The selected phase observes the
 effective request after core defaults and transformations, immediately before
 backend dispatch. The terminal phase reports the outcome, including denial,
 validation failure, cancellation, timeout, backend failure, and successful end.
-A request denied before selection has no selected phase.
+A request denied before selection has no selected phase. On a mesh route the
+selected phase names the backend in `target` and, for a remote peer, carries
+`target_peer_id`: the peer's endpoint id as lowercase hex, the same encoding the
+serving node's `request_received` and terminal events use for
+`requested_by_node_id`. It is absent for a local or URL backend.
 
 Both sides explicitly list allowed endpoints, phases, and headers. Independent
 booleans control `request_body`, `effective_request_body`, `response_body`,

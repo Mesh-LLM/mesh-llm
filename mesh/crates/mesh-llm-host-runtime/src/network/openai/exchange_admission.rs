@@ -6,7 +6,11 @@ use tokio::io::AsyncWriteExt;
 
 pub(super) enum SelectedRouteTarget<'a> {
     Url(&'a str),
-    MeshLabel(&'a str),
+    /// A mesh election target. A remote peer additionally publishes its
+    /// endpoint id as `target_peer_id`, the gateway-side counterpart of the
+    /// serving-side `requested_by_node_id` (same lowercase-hex encoding), so a
+    /// plugin can address the selected peer without parsing the `target` label.
+    Mesh(&'a crate::inference::election::InferenceTarget),
 }
 
 pub(super) async fn admit_selected_route(
@@ -74,7 +78,10 @@ fn selected_route_event(
     event["observation_point"] = json!("backend_dispatch");
     event["model"] = json!(model);
     event["provider"] = json!(provider);
-    event["target"] = json!(public_target(target));
+    event["target"] = json!(public_target(&target));
+    if let Some(peer) = target_peer_id(&target) {
+        event["target_peer_id"] = json!(peer);
+    }
     event["attempt"] = json!(attempt);
     event["effective_request_wire_digest"] = event["request_wire_digest"].take();
     event.as_object_mut().unwrap().remove("request_wire_digest");
@@ -105,10 +112,21 @@ async fn send_selected_route_denial(
     }
 }
 
-fn public_target(target: SelectedRouteTarget<'_>) -> String {
+/// Lowercase hex of the selected remote peer's endpoint id; absent for a local
+/// backend, a URL backend, or a bare label.
+fn target_peer_id(target: &SelectedRouteTarget<'_>) -> Option<String> {
+    match target {
+        SelectedRouteTarget::Mesh(crate::inference::election::InferenceTarget::Remote(peer)) => {
+            Some(hex::encode(peer.as_bytes()))
+        }
+        _ => None,
+    }
+}
+
+fn public_target(target: &SelectedRouteTarget<'_>) -> String {
     let target = match target {
-        SelectedRouteTarget::MeshLabel(label) => return label.to_owned(),
-        SelectedRouteTarget::Url(url) => url,
+        SelectedRouteTarget::Mesh(target) => return format!("{target:?}"),
+        SelectedRouteTarget::Url(url) => *url,
     };
     let Ok(url) = reqwest::Url::parse(target) else {
         return "<invalid-url>".to_owned();
@@ -132,19 +150,21 @@ mod tests {
     #[test]
     fn route_metadata_never_exposes_url_credentials() {
         assert_eq!(
-            public_target(SelectedRouteTarget::Url(
+            public_target(&SelectedRouteTarget::Url(
                 "https://operator:secret@example.com/v1?api_key=secret#private"
             )),
             "https://example.com"
         );
         assert_eq!(
-            public_target(SelectedRouteTarget::MeshLabel("local-native")),
-            "local-native"
+            public_target(&SelectedRouteTarget::Mesh(
+                &crate::inference::election::InferenceTarget::Local(3131)
+            )),
+            "Local(3131)"
         );
     }
 
     #[tokio::test]
-    async fn selected_event_redacts_malformed_urls_and_preserves_trusted_mesh_labels() {
+    async fn selected_event_redacts_malformed_urls_and_labels_mesh_targets() {
         let (mut reader, mut writer) = tokio::io::duplex(1024);
         writer.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
         let request = transport::read_http_request(&mut reader).await.unwrap();
@@ -173,18 +193,48 @@ mod tests {
                 );
             }
         }
-        for label in ["Local(3131)", "Peer(abc)"] {
-            let event = selected_route_event(
-                &request,
-                None,
-                "mesh",
-                SelectedRouteTarget::MeshLabel(label),
-                2,
-            )
-            .unwrap()
-            .unwrap();
-            assert_eq!(event["target"], label);
-        }
+        let local = crate::inference::election::InferenceTarget::Local(3131);
+        let event =
+            selected_route_event(&request, None, "mesh", SelectedRouteTarget::Mesh(&local), 2)
+                .unwrap()
+                .unwrap();
+        assert_eq!(event["target"], "Local(3131)");
+        assert!(event.get("target_peer_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn selected_event_names_a_remote_peer_by_endpoint_id_and_a_local_backend_by_none() {
+        use crate::inference::election::InferenceTarget;
+        let (mut reader, mut writer) = tokio::io::duplex(1024);
+        writer.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
+        let request = transport::read_http_request(&mut reader).await.unwrap();
+        let peer = iroh::SecretKey::from_bytes(&[7u8; 32]).public();
+        let remote = InferenceTarget::Remote(peer);
+        let event = selected_route_event(
+            &request,
+            Some("model"),
+            "mesh",
+            SelectedRouteTarget::Mesh(&remote),
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        // Same encoding as the serving side's `requested_by_node_id`, so one
+        // buyer-side key pairs with one seller-side key for the same exchange.
+        assert_eq!(event["target_peer_id"], hex::encode(peer.as_bytes()));
+        assert_eq!(event["target"], format!("{remote:?}"));
+        let local = InferenceTarget::Local(3131);
+        let event = selected_route_event(
+            &request,
+            Some("model"),
+            "mesh",
+            SelectedRouteTarget::Mesh(&local),
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(event.get("target_peer_id").is_none());
+        assert_eq!(event["target"], format!("{local:?}"));
     }
 }
 
