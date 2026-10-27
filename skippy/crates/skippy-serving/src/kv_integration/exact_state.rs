@@ -551,12 +551,21 @@ impl KvStageIntegration {
                     }
                     Err(error) => return Err(error),
                 };
-                let (kv_payload, kv_desc) =
-                    kv.map(|kv| (kv.payload, Some(kv.desc))).unwrap_or_default();
-                Ok((
-                    ExactStatePayload::kv_recurrent(kv_payload, recurrent),
-                    ExactStateExtra { kv_desc },
-                ))
+                Ok(match kv {
+                    Some(kv) => (
+                        ExactStatePayload::kv_recurrent(kv.payload, recurrent),
+                        ExactStateExtra {
+                            kv_desc: Some(kv.desc),
+                        },
+                    ),
+                    // A stage with recurrent memory but no attention page
+                    // still has a complete checkpoint. Keep its kind honest
+                    // so L3 can persist it without inventing missing KV.
+                    None => (
+                        ExactStatePayload::recurrent_only(recurrent),
+                        ExactStateExtra::default(),
+                    ),
+                })
             })(),
             StagePrefixCachePayload::Disabled | StagePrefixCachePayload::ResidentKv => {
                 #[cfg(test)]
@@ -996,7 +1005,9 @@ impl From<skippy_cache::ExactStatePayloadKind> for StagePrefixCachePayload {
         match kind {
             skippy_cache::ExactStatePayloadKind::FullState => Self::FullState,
             skippy_cache::ExactStatePayloadKind::KvRecurrent => Self::KvRecurrent,
-            skippy_cache::ExactStatePayloadKind::RecurrentOnly => Self::Disabled,
+            // Both composite and recurrent-only checkpoints restore through
+            // the same recurrent import path; the latter has no KV page.
+            skippy_cache::ExactStatePayloadKind::RecurrentOnly => Self::KvRecurrent,
         }
     }
 }
@@ -1020,12 +1031,21 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use skippy_cache::{L3Location, UnifiedRadixCache};
+    use skippy_cache::{ExactStatePayload, L3Location, UnifiedRadixCache};
 
     use super::{
-        is_native_kv_unavailable, preflight_l3_kv_location, resident_prefix_is_preferred,
-        try_touch_exact_state,
+        StagePrefixCachePayload, is_native_kv_unavailable, preflight_l3_kv_location,
+        resident_prefix_is_preferred, try_touch_exact_state,
     };
+
+    #[test]
+    fn recurrent_only_checkpoint_uses_the_recurrent_restore_path() {
+        let payload = ExactStatePayload::recurrent_only(vec![1, 2, 3]);
+        let route: StagePrefixCachePayload = payload.kind().into();
+        assert_eq!(route, StagePrefixCachePayload::KvRecurrent);
+        assert!(route.is_exact_state());
+        assert!(payload.kv_bytes().unwrap().is_none());
+    }
 
     type TestRadix = UnifiedRadixCache<
         crate::kv_integration::RadixResidentEntry,

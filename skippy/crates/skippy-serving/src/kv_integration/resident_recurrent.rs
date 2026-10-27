@@ -102,8 +102,9 @@ impl KvStageIntegration {
                     kv_desc: Some(page.desc),
                 },
             )),
+            // Pure recurrent stages have no attention page to export.
             Err(error) if super::exact_state::is_native_kv_unavailable(&error) => Ok((
-                ExactStatePayload::kv_recurrent(Vec::new(), recurrent),
+                ExactStatePayload::recurrent_only(recurrent),
                 ExactStateExtra::default(),
             )),
             Err(error) => Err(error),
