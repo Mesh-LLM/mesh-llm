@@ -126,6 +126,12 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
+    if crate::network::openai::response::common::withheld_payment_required_response(
+        retry_policy,
+        probe.status_code,
+    ) {
+        return Ok(RouteAttemptResult::RetryablePaymentRequired);
+    }
 
     if !anthropic && !(200..300).contains(&probe.status_code) {
         return relay_error_response(
@@ -218,6 +224,12 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
 ) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
+    }
+    if crate::network::openai::response::common::withheld_payment_required_response(
+        retry_policy,
+        probe.status_code,
+    ) {
+        return Ok(RouteAttemptResult::RetryablePaymentRequired);
     }
 
     if !(200..300).contains(&probe.status_code) {

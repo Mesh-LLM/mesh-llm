@@ -154,6 +154,12 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
+    if crate::network::openai::response::common::withheld_payment_required_response(
+        retry_policy,
+        probe.status_code,
+    ) {
+        return Ok(RouteAttemptResult::RetryablePaymentRequired);
+    }
 
     if !(200..300).contains(&probe.status_code) {
         route_observer.stream_error("upstream_status");

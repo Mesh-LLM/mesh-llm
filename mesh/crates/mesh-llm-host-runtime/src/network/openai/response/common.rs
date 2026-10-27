@@ -116,6 +116,10 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     },
     RetryableTimeout,
     RetryableUnavailable,
+    /// A peer refused to serve the request without payment. Another replica of
+    /// the same model may still serve it, so the response is withheld here,
+    /// before any byte reaches the caller, and the route loop moves on (#2059).
+    RetryablePaymentRequired,
     RetryableContextOverflow,
     RetryableResponseQuality(ResponseQualityFailure),
     CommittedStreamFailure {
@@ -128,6 +132,7 @@ pub(in crate::network::openai) enum RouteAttemptResult {
 pub(in crate::network::openai) struct ResponseRetryPolicy {
     pub(in crate::network::openai) context_overflow: bool,
     pub(in crate::network::openai) response_quality: bool,
+    pub(in crate::network::openai) payment_required: bool,
 }
 
 impl ResponseRetryPolicy {
@@ -135,8 +140,35 @@ impl ResponseRetryPolicy {
         Self {
             context_overflow: available,
             response_quality: available,
+            payment_required: available,
         }
     }
+
+    /// Aggregate payment refusals across multi-target model routes, including
+    /// the final attempt, so mixed failures keep their route-level status.
+    /// Single-target routes still relay a 402 directly to the caller.
+    pub(in crate::network::openai) fn model_route_attempt(
+        next_target_available: bool,
+        aggregate_payment_refusals: bool,
+    ) -> Self {
+        Self {
+            payment_required: next_target_available || aggregate_payment_refusals,
+            ..Self::next_target_available(next_target_available)
+        }
+    }
+}
+
+/// Withhold one peer's payment refusal while the route aggregates replica results.
+///
+/// A 402 refuses that serving endpoint, not necessarily the request. In a
+/// multi-target model route, deciding this before relay keeps the response
+/// uncommitted until every candidate has been tried. Single-target routes leave
+/// the response unmodified.
+pub(in crate::network::openai::response) fn withheld_payment_required_response(
+    retry_policy: ResponseRetryPolicy,
+    status_code: u16,
+) -> bool {
+    retry_policy.payment_required && status_code == 402
 }
 
 pub(in crate::network::openai) fn route_attempt_result_label(
@@ -146,6 +178,7 @@ pub(in crate::network::openai) fn route_attempt_result_label(
         RouteAttemptResult::Delivered { .. } => "delivered",
         RouteAttemptResult::RetryableTimeout => "retryable_timeout",
         RouteAttemptResult::RetryableUnavailable => "retryable_unavailable",
+        RouteAttemptResult::RetryablePaymentRequired => "retryable_payment_required",
         RouteAttemptResult::RetryableContextOverflow => "retryable_context_overflow",
         RouteAttemptResult::RetryableResponseQuality(_) => "retryable_response_quality",
         RouteAttemptResult::CommittedStreamFailure { .. } => "committed_stream_failure",
@@ -166,6 +199,8 @@ pub(in crate::network::openai) fn target_health_outcome_for_attempt(
         RouteAttemptResult::Delivered { .. } => TargetHealthOutcome::Rejected,
         RouteAttemptResult::RetryableTimeout => TargetHealthOutcome::Timeout,
         RouteAttemptResult::RetryableUnavailable => TargetHealthOutcome::Unavailable,
+        // The peer is healthy and willing; it simply charges for this model.
+        RouteAttemptResult::RetryablePaymentRequired => TargetHealthOutcome::Rejected,
         RouteAttemptResult::RetryableContextOverflow => TargetHealthOutcome::ContextOverflow,
         RouteAttemptResult::RetryableResponseQuality(_) => TargetHealthOutcome::Rejected,
         RouteAttemptResult::CommittedStreamFailure { .. } => TargetHealthOutcome::Unavailable,
@@ -331,6 +366,9 @@ pub(in crate::network::openai) fn attempt_outcome_for_result(
             delivered_attempt_outcome(*status_code)
         }
         RouteAttemptResult::RetryableTimeout => crate::network::metrics::AttemptOutcome::Timeout,
+        RouteAttemptResult::RetryablePaymentRequired => {
+            crate::network::metrics::AttemptOutcome::Rejected
+        }
         RouteAttemptResult::RetryableUnavailable => {
             crate::network::metrics::AttemptOutcome::Unavailable
         }
@@ -410,6 +448,27 @@ mod tests {
             route_attempt_result_label(&RouteAttemptResult::ClientDisconnected),
             "client_disconnected"
         );
+    }
+
+    #[test]
+    fn model_route_policy_aggregates_payment_refusals_only_for_multi_target_routes() {
+        let final_aggregated_attempt = ResponseRetryPolicy::model_route_attempt(false, true);
+        assert!(withheld_payment_required_response(
+            final_aggregated_attempt,
+            402
+        ));
+        assert!(!final_aggregated_attempt.context_overflow);
+        assert!(!final_aggregated_attempt.response_quality);
+        assert!(!withheld_payment_required_response(
+            final_aggregated_attempt,
+            503
+        ));
+
+        let single_target_attempt = ResponseRetryPolicy::model_route_attempt(false, false);
+        assert!(!withheld_payment_required_response(
+            single_target_attempt,
+            402
+        ));
     }
 
     #[test]
