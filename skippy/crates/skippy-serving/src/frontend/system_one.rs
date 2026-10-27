@@ -19,6 +19,7 @@ use skippy_runtime::{
 
 use crate::frontend::{InferenceBackendMode, StageOpenAiBackend};
 
+mod causal;
 mod laya;
 
 pub use laya::LayaSystemOneBackend;
@@ -103,7 +104,7 @@ fn validate_request_fields(request: &SystemOneRequest, model_id: &str) -> Infere
 
 /// Translates a Jev request into the model-neutral decision request, enforcing
 /// Jev's option bounds. Questions keep the frontend's key order.
-fn decision_request(request: &SystemOneRequest) -> InferenceResult<DecisionRequest> {
+pub(super) fn decision_request(request: &SystemOneRequest) -> InferenceResult<DecisionRequest> {
     let canonical = serde_json::to_vec(&(&request.state, &request.questions)).map_err(|error| {
         InferenceError::invalid_request(format!("serialize System One request: {error}"))
     })?;
@@ -206,6 +207,7 @@ fn decision_error(error: DecisionError) -> InferenceError {
     }
 }
 
+/// Build a legacy System One response without claiming causal readout evidence.
 fn response(
     request: SystemOneRequest,
     output: DecisionOutput,
@@ -213,9 +215,12 @@ fn response(
     Ok(SystemOneResponse {
         answers: answers(&request.questions, &output.probabilities)?,
         model: request.model,
+        readouts: BTreeMap::new(),
+        readout_usage: None,
         usage: SystemOneUsage {
             input_tokens: u32::try_from(output.input_tokens).unwrap_or(u32::MAX),
             output_tokens: 0,
+            cached_tokens: 0,
         },
     })
 }

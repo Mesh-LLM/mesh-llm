@@ -89,7 +89,11 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
      peer_state| {
         let authenticated_peer = peer_state.load(Ordering::Acquire);
         Box::pin(async move {
+            let observation =
+                super::inference_observation::subscription::ConnectionSubscription::default();
             let result: Result<()> = async {
+                // Started by the first status publication, if any.
+                let mut status_lane = None;
                 loop {
                     tokio::select! {
                         maybe_outbound = outbound_rx.recv() => {
@@ -163,6 +167,35 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         outbound_tx.clone(),
                                     );
                                 }
+                                Some(super::proto::envelope::Payload::PublishPluginStatusRequest(request)) => {
+                                    // Shown under the connection's own name,
+                                    // so one plugin cannot publish as another.
+                                    status_lane
+                                        .get_or_insert_with(|| {
+                                            super::runtime::status_publication::StatusLane::spawn(
+                                                plugin_name.clone(),
+                                                generation,
+                                                runtime.clone(),
+                                                mesh_tx.clone(),
+                                                outbound_tx.clone(),
+                                            )
+                                        })
+                                        .push(request_id, request);
+                                }
+                                Some(super::proto::envelope::Payload::SubscribeInferenceObservationRequest(_)) => {
+                                    super::inference_observation::subscription::spawn(
+                                        super::inference_observation::hub(),
+                                        super::inference_observation::subscription::SubscribeRequest {
+                                            plugin_name: plugin_name.clone(),
+                                            generation,
+                                            request_id,
+                                            runtime: runtime.clone(),
+                                            mesh_tx: mesh_tx.clone(),
+                                            outbound_tx: outbound_tx.clone(),
+                                            subscription: observation.clone(),
+                                        },
+                                    );
+                                }
                                 Some(super::proto::envelope::Payload::RpcRequest(request)) => {
                                     forward_plugin_request(
                                         plugin_name.clone(),
@@ -204,6 +237,7 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                 Ok(())
             }
             .await;
+            observation.end(&super::inference_observation::hub());
 
             let was_active_runtime = {
                 let mut runtime = runtime.lock().await;
@@ -238,6 +272,12 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                     summary.pid = None;
                     summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
                 }
+                drop(summary);
+                super::runtime::status_publication::announce_disconnected(
+                    &mesh_tx,
+                    &plugin_name,
+                    generation,
+                );
             }
 
             let mut pending = pending.lock().await;

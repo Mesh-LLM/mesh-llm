@@ -1,4 +1,6 @@
 //! Finite local HTTP responder: not a model and not frontend qualification.
+#[path = "causal_readout_fixture.rs"]
+mod causal_readout;
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
@@ -151,6 +153,7 @@ fn request(stream: &mut TcpStream) -> Option<(String, Value)> {
         serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap_or(Value::Null),
     ))
 }
+/// Return deterministic refusal or success fixtures for the contract server.
 fn refusal(method: &str, request: &Value) -> (u16, Value) {
     let (status, kind, code, message) =
         if method == "GET" {
@@ -196,12 +199,7 @@ fn refusal(method: &str, request: &Value) -> (u16, Value) {
                 "invalid options",
             )
         } else {
-            (
-                502,
-                "server_error",
-                "service_unavailable",
-                "System One requires DiffusionGemma",
-            )
+            return (200, causal_readout::response(request));
         };
     (
         status,
@@ -291,6 +289,7 @@ fn answer(request: &Value, index: usize, mutation: &str) -> Value {
     body
 }
 
+/// Inject a selected response defect for contract-validation tests.
 fn mutate_contract(status: u16, response: &mut Value, request: &Value, mutation: &str) -> u16 {
     if mutation == "wrong-code" {
         response["error"]["code"] = json!("wrong");
@@ -302,15 +301,8 @@ fn mutate_contract(status: u16, response: &mut Value, request: &Value, mutation:
     if mutation == "unsupported-code" && response["error"]["code"] == "unsupported_model_feature" {
         response["error"]["code"] = json!("service_unavailable");
     }
-    if mutation == "arch-success" && status == 502 {
-        return 200;
-    }
-    if status == 502 {
-        match mutation {
-            "arch-message" => response["error"]["message"] = json!("generic backend failure"),
-            "arch-envelope" => response["error"] = json!("untyped refusal"),
-            _ => (),
-        };
+    if response.get("readouts").is_some() {
+        return causal_readout::mutate(response, mutation);
     }
     let count = |key: &str, array: bool| -> Option<usize> {
         let criteria = &request["questions"][key]["criteria"];

@@ -1,3 +1,4 @@
+mod failure_diagnostics;
 mod http;
 mod parity;
 mod product;

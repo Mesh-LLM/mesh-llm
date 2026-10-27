@@ -6,7 +6,7 @@ mod activation;
 mod capability_probe;
 mod checkpoint;
 mod config;
-mod decision;
+pub mod decision;
 mod devices;
 mod error;
 mod gguf_writer;

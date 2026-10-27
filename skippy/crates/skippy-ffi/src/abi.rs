@@ -138,6 +138,16 @@ pub struct IterationRequest {
     pub input_desc: *const crate::ActivationDesc,
     pub input_payload: *const c_void,
     pub sample_last: bool,
+    pub readout: *const TokenScoreRequest,
+}
+
+/// Caller-owned buffers for an unsampled, final-row readout.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TokenScoreRequest {
+    pub token_ids: *const i32,
+    pub token_count: usize,
+    pub out_log_probabilities: *mut f32,
 }
 
 #[repr(C)]

@@ -1033,6 +1033,7 @@ impl MeshApi {
         };
         payload.logging =
             crate::logging_runtime_state().map(|state| LoggingStatusPayload::from(state.status()));
+        payload.plugin_status = runtime_data_collector.plugin_status_payloads();
         payload
     }
 

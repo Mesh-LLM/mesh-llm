@@ -4,10 +4,9 @@ use crate::StageActivationCodec;
 
 use super::invalid_data;
 
-// v16 replaces family-specific activation state bits with a typed multipart frontier frame.
-// Stage peers must be upgraded together because the activation payload now starts with its
-// descriptor directory rather than an implicit F32 tensor.
-pub const STAGE_STATE_VERSION: i32 = 16;
+// v17 adds unsampled prefill readouts and bounded selected-score replies.
+// Stage peers must be upgraded together; the Mesh gossip envelope stays additive.
+pub const STAGE_STATE_VERSION: i32 = 17;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_SAMPLERS: usize = 16;
 pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;
@@ -45,6 +44,7 @@ pub enum WireMessageKind {
     VerifyWindow = 21,
     RetireVerifyWindow = 22,
     DiscardStaleWindows = 23,
+    PrefillReadout = 24,
     StateExport = 13,
     ConfigureGeneration = 14,
     ProbePrefill = 15,
@@ -121,6 +121,7 @@ impl WireMessageKind {
 impl TryFrom<i32> for WireMessageKind {
     type Error = io::Error;
 
+    /// Decode a wire-message tag and reject unknown request kinds.
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::PrefillEmbd),
@@ -143,6 +144,7 @@ impl TryFrom<i32> for WireMessageKind {
             21 => Ok(Self::VerifyWindow),
             22 => Ok(Self::RetireVerifyWindow),
             23 => Ok(Self::DiscardStaleWindows),
+            24 => Ok(Self::PrefillReadout),
             _ => Err(invalid_data("unknown stage message kind")),
         }
     }
@@ -154,16 +156,19 @@ pub enum WireReplyKind {
     Ack = 1,
     PredictedToken = 2,
     PredictedTokens = 3,
+    TokenScores = 4,
 }
 
 impl TryFrom<i32> for WireReplyKind {
     type Error = io::Error;
 
+    /// Decode a wire-reply tag and reject unknown reply kinds.
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Ack),
             2 => Ok(Self::PredictedToken),
             3 => Ok(Self::PredictedTokens),
+            4 => Ok(Self::TokenScores),
             _ => Err(invalid_data("unknown stage reply kind")),
         }
     }
@@ -493,6 +498,8 @@ pub struct StageWireMessage {
     pub positions: Vec<i32>,
     pub activation: Vec<u8>,
     pub raw_bytes: Vec<u8>,
+    /// Selected final-row vocabulary ids for PrefillReadout only.
+    pub readout_tokens: Vec<i32>,
 }
 
 impl StageWireMessage {
@@ -507,6 +514,7 @@ impl StageWireMessage {
                 | WireMessageKind::DecodeReadout
                 | WireMessageKind::DecodeLightCtx
                 | WireMessageKind::VerifyWindow
+                | WireMessageKind::PrefillReadout
         ) {
             return None;
         }
@@ -525,6 +533,7 @@ impl StageWireMessage {
         (self.kind == WireMessageKind::VerifyWindow).then_some(self.token_count)
     }
 
+    /// Estimate the serialized message size including all sideband payloads.
     pub fn estimated_wire_bytes(&self) -> usize {
         let sampling_bytes = self.sampling.as_ref().map_or(0, |sampling| {
             STAGE_SAMPLING_CONFIG_BASE_BYTES
@@ -543,6 +552,11 @@ impl StageWireMessage {
             .saturating_add(sampling_bytes)
             .saturating_add(chat_metadata_bytes)
             .saturating_add(self.payload_wire_bytes())
+            .saturating_add(if self.kind == WireMessageKind::PrefillReadout {
+                4 + 4 * self.readout_tokens.len()
+            } else {
+                0
+            })
     }
 
     fn payload_wire_bytes(&self) -> usize {
@@ -574,6 +588,7 @@ impl StageWireMessage {
         Self::stop_with_identity(0, 0)
     }
 
+    /// Construct a stop request bound to the specified stage and session identity.
     pub fn stop_with_identity(request_id: u64, session_id: u64) -> Self {
         Self {
             kind: WireMessageKind::Stop,
@@ -587,10 +602,12 @@ impl StageWireMessage {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
 
+    /// Construct a generation-configuration control message for a stage session.
     pub fn configure_generation(
         request_id: u64,
         session_id: u64,
@@ -612,6 +629,7 @@ impl StageWireMessage {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
@@ -640,7 +658,7 @@ fn sampling_string_list_wire_bytes(values: &[String], maximum_count: usize) -> u
         .sum()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StageReply {
     pub kind: WireReplyKind,
     pub predicted: i32,
@@ -649,6 +667,8 @@ pub struct StageReply {
     pub native_mtp_draft: Option<StageNativeMtpDraft>,
     pub window: StageReplyWindow,
     pub stats: StageReplyStats,
+    /// Full-vocabulary log probabilities, in the request's selected-token order.
+    pub log_probabilities: Vec<f32>,
 }
 
 /// A native MTP proposal associated with a stage reply.
@@ -837,8 +857,10 @@ fn better_prefill_calibration_sample(
         > i128::from(current_us) * i128::from(candidate_tokens)
 }
 
+/// Return the execution phase implied by this message kind.
 fn expected_phase(kind: WireMessageKind) -> WireStagePhase {
     if kind.is_prefill()
+        || kind == WireMessageKind::PrefillReadout
         || matches!(
             kind,
             WireMessageKind::StateImport | WireMessageKind::StateExport

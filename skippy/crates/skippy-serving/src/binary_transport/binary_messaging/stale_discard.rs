@@ -115,6 +115,7 @@ mod tests {
         assert!(registry.is_discarded(MAX_TRACKED_REQUESTS as u64 + 3, 1, 5));
     }
 
+    /// Malformed discard requests cannot invalidate cached session state.
     #[test]
     fn malformed_discard_messages_are_ignored() {
         use skippy_protocol::binary::{StageStateHeader, WireMessageKind};
@@ -131,6 +132,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
         registry.record_message(&message);
