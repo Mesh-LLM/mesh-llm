@@ -125,6 +125,14 @@ fn allowed_decision(value: &str) -> &'static str {
         "prefill_checkpoint_skipped" => "prefill_checkpoint_skipped",
         "prefill_checkpoint_error" => "prefill_checkpoint_error",
         "prefill_checkpoint_scheduler_error" => "prefill_checkpoint_scheduler_error",
+        "shared_prefill_checkpoint_recorded" => "shared_prefill_checkpoint_recorded",
+        "shared_prefill_checkpoint_skipped" => "shared_prefill_checkpoint_skipped",
+        "shared_prefill_checkpoint_error" => "shared_prefill_checkpoint_error",
+        "shared_prefill_checkpoint_scheduler_error" => "shared_prefill_checkpoint_scheduler_error",
+        "chat_prefix_checkpoint_recorded" => "chat_prefix_checkpoint_recorded",
+        "chat_prefix_checkpoint_skipped" => "chat_prefix_checkpoint_skipped",
+        "chat_prefix_checkpoint_error" => "chat_prefix_checkpoint_error",
+        "chat_prefix_checkpoint_scheduler_error" => "chat_prefix_checkpoint_scheduler_error",
         "exact_hit" => "exact_hit",
         "resident_hit" => "resident_hit",
         "chain_restore_hit" => "chain_restore_hit",
@@ -157,6 +165,36 @@ mod tests {
         assert!(!projected.contains("private-value"));
         assert!(!projected.contains("token secret"));
         assert!(!projected.contains("authorization"));
+    }
+
+    #[test]
+    fn distinguishes_prefill_checkpoints_from_other_record_decisions() {
+        let mut decisions = CacheDecisions::new();
+        for (decision, expected) in [
+            (
+                "shared_prefill_checkpoint_recorded",
+                "shared_prefill_checkpoint_recorded",
+            ),
+            (
+                "chat_prefix_checkpoint_skipped",
+                "chat_prefix_checkpoint_skipped",
+            ),
+        ] {
+            let raw = format!(
+                r#"{{"event":"stage.openai_kv_record_decision","attributes":{{"skippy.kv.decision":"{decision}","prompt":"token secret"}},"start_time_unix_nanos":123}}"#
+            );
+            decisions.observe(
+                MemberId::Seed,
+                ObservedLine {
+                    stream: Stream::Stderr,
+                    bytes: raw.as_bytes(),
+                    ending: crate::process::LineEnding::Lf,
+                },
+            );
+            assert_eq!(decisions.events.last().unwrap().decision, expected);
+        }
+        let projected = serde_json::to_string(&decisions).unwrap();
+        assert!(!projected.contains("token secret"));
     }
 
     #[test]
