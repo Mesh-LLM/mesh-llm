@@ -1011,7 +1011,8 @@ model cadence, device gates and protected action references remain unchanged.
   registry-derived dense SmolLM2-135M Q8 and recurrent IBM Granite 4.0 H 350M
   Q4 pair once, then runs both through standalone inference, OpenAI client
   compatibility, and constrained-Tokio restart. The two-node split smoke uses
-  the same pair for dense KV and strict Granite `KvRecurrent` coverage. It
+  the same pair for dense KV and strict per-stage Granite checkpoint coverage:
+  `KvRecurrent` at stage 0 and `RecurrentOnly` at the attention-free tail. It
   persists strict-whitelist seed and worker status
   snapshots containing only node, mesh, and peer identity, plus runtime-stage
   and OpenAI model-list snapshots. The network-free reconciler fails closed
