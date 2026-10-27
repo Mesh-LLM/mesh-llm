@@ -712,6 +712,7 @@ impl crate::network::metrics::RoutingTelemetrySink for TestRoutingTelemetrySink 
         model: Option<&str>,
         target: &crate::network::metrics::AttemptTarget,
         outcome: crate::network::metrics::AttemptOutcome,
+        _attempt_ms: f64,
     ) {
         let target_kind = match target {
             crate::network::metrics::AttemptTarget::Local(_) => "local",

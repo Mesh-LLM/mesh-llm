@@ -300,6 +300,7 @@ pub(crate) trait RoutingTelemetrySink: Send + Sync {
         model: Option<&str>,
         target: &AttemptTarget,
         outcome: AttemptOutcome,
+        attempt_ms: f64,
     );
 
     fn record_prompt_shape(

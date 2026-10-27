@@ -711,6 +711,21 @@ async fn try_plugin_when_no_mesh_candidate_serves(
     Ok(try_route_plugin_model(ctx, tcp_stream, request, model_name, route_observer).await)
 }
 
+/// Count a request rejected before routing (404/503/409) in
+/// `mesh_llm_model_request_total` with a bounded outcome, so request
+/// telemetry reflects demand that never reached a routing attempt. A 409
+/// means the node refused to forward; anything else is a model or endpoint
+/// unavailability the caller can retry.
+fn record_pre_routing_rejection(ctx: &IngressRouteContext<'_>, model: Option<&str>, status: u16) {
+    let outcome = match status {
+        409 => crate::network::metrics::RequestOutcome::Rejected(
+            crate::network::metrics::RequestService::Local,
+        ),
+        _ => crate::network::metrics::RequestOutcome::Unavailable,
+    };
+    ctx.node.record_routed_request(model, 0, outcome);
+}
+
 /// Route a request whose model is not being served from local candidates
 /// (either genuinely absent locally, or forced away from local by
 /// `x-mesh-target`/`x-mesh-exclude` -- see `route_request`), trying remote
@@ -905,6 +920,7 @@ async fn route_missing_local_model(
     // (e.g., loading/draining/failed with all-None candidates). Return 503 for these cases so
     // clients can retry; return 404 only when the model truly doesn't exist anywhere.
     if has_local_unavailable_candidates(ctx.targets, model_name) {
+        record_pre_routing_rejection(ctx, Some(model_name), 503);
         return response_outcome(
             503,
             proxy::send_503_observed(
@@ -947,6 +963,7 @@ async fn route_missing_local_model(
 
     // Model not found anywhere — return 404. This replaces the old fallback behavior that would
     // route to an arbitrary target, which was confusing when no host served this model.
+    record_pre_routing_rejection(ctx, Some(model_name), 404);
     response_outcome(
         404,
         proxy::send_error_observed(
@@ -992,6 +1009,7 @@ async fn route_self_targeted_model(
                     %error,
                     "route_self_targeted_model: failed to resolve plugin endpoint for '{model_name}'"
                 );
+                record_pre_routing_rejection(ctx, Some(model_name), 503);
                 return response_outcome(
                     503,
                     proxy::send_503_observed(
@@ -1257,6 +1275,7 @@ async fn try_route_plugin_model(
     {
         Ok(stream) => tcp_stream = stream,
         Err(outcome) => {
+            record_pre_routing_rejection(ctx, Some(model_name), 503);
             route_observer.route_selected_with_metadata(
                 Some(model_name),
                 Some("plugin"),
@@ -1339,6 +1358,7 @@ async fn try_route_plugin_model(
                 Some("inference_endpoint"),
             );
             // Plugin manager exists but doesn't serve this model — send 404.
+            record_pre_routing_rejection(ctx, Some(model_name), 404);
             response_outcome(
                 404,
                 proxy::send_error_observed(
@@ -1364,6 +1384,7 @@ async fn try_route_plugin_model(
                 Some("inference_endpoint"),
             );
             // Plugin resolution failure — degrade gracefully with 503. The daemon stays alive; only the affected capability is degraded.
+            record_pre_routing_rejection(ctx, Some(model_name), 503);
             response_outcome(
                 503,
                 proxy::send_503_observed(
@@ -1409,6 +1430,7 @@ async fn route_request(
         let forced_remote = mesh_headers_force_remote(self_id, target, &excluded);
 
         if local_execution_only && forced_remote {
+            record_pre_routing_rejection(ctx, Some(model_name), 409);
             return response_outcome(
                 409,
                 proxy::send_409_observed(

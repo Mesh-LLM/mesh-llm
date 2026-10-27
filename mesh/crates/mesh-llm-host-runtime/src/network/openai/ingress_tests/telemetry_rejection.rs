@@ -3,7 +3,13 @@ use mesh_llm_events::logging::identifiers::RequestId;
 
 #[derive(Default)]
 struct PreRoutingRejectionSink {
-    requests: std::sync::Mutex<Vec<(Option<String>, usize, crate::network::metrics::RequestOutcome)>>,
+    requests: std::sync::Mutex<
+        Vec<(
+            Option<String>,
+            usize,
+            crate::network::metrics::RequestOutcome,
+        )>,
+    >,
 }
 
 impl crate::network::metrics::RoutingTelemetrySink for PreRoutingRejectionSink {
@@ -26,6 +32,7 @@ impl crate::network::metrics::RoutingTelemetrySink for PreRoutingRejectionSink {
         _model: Option<&str>,
         _target: &crate::network::metrics::AttemptTarget,
         _outcome: crate::network::metrics::AttemptOutcome,
+        _attempt_ms: f64,
     ) {
     }
 }

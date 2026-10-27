@@ -47,6 +47,7 @@ impl crate::network::metrics::RoutingTelemetrySink for PromptShapeSink {
         _model: Option<&str>,
         _target: &crate::network::metrics::AttemptTarget,
         _outcome: crate::network::metrics::AttemptOutcome,
+        _attempt_ms: f64,
     ) {
     }
 

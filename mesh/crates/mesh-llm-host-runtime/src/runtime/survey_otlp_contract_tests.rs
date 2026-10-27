@@ -32,9 +32,11 @@ fn the_resource_carries_a_distinct_per_process_instance_id() {
             .as_str(),
         "mesh-llm-test"
     );
-    assert!(resource
-        .get(&opentelemetry::Key::from_static_str("service.version"))
-        .is_some());
+    assert!(
+        resource
+            .get(&opentelemetry::Key::from_static_str("service.version"))
+            .is_some()
+    );
 }
 
 #[test]
@@ -43,8 +45,7 @@ fn a_failed_export_is_reported_instead_of_dropped() {
     config.plugins.clear();
     // Nothing listens on the discard port: every export attempt fails.
     config.telemetry.endpoint = Some("http://127.0.0.1:9".into());
-    let settings =
-        SurveySettings::from_config_with_env(&config, |_| None).expect("settings");
+    let settings = SurveySettings::from_config_with_env(&config, |_| None).expect("settings");
 
     let reported = Arc::new(Mutex::new(Vec::<String>::new()));
     let reporter = reported.clone();
@@ -104,10 +105,7 @@ fn token_histograms_declare_boundaries_beyond_sdk_defaults() {
     for event in queue.drain() {
         recorder.record(event);
     }
-    recorder
-        ._provider
-        .force_flush()
-        .expect("metric flush");
+    recorder._provider.force_flush().expect("metric flush");
 
     let exported = exporter.get_finished_metrics().expect("exported metrics");
     let mut token_bounds: Option<Vec<f64>> = None;
@@ -127,8 +125,7 @@ fn token_histograms_declare_boundaries_beyond_sdk_defaults() {
         }
     }
 
-    let bounds = token_bounds
-        .expect("the prompt token histogram must be exported");
+    let bounds = token_bounds.expect("the prompt token histogram must be exported");
     let highest = bounds.iter().cloned().fold(0.0, f64::max);
     assert!(
         highest >= 32_768.0,
@@ -153,25 +150,37 @@ fn route_attempts_export_a_request_duration_histogram() {
             AttemptOutcome::Success,
             test_source(),
         ),
+        attempt_ms: 123.0,
     });
-    recorder
-        ._provider
-        .force_flush()
-        .expect("metric flush");
+    recorder._provider.force_flush().expect("metric flush");
 
     let exported = exporter.get_finished_metrics().expect("exported metrics");
     let mut names = BTreeSet::new();
+    let mut duration_sum: Option<f64> = None;
     for metric in exported
         .iter()
         .flat_map(|resource| resource.scope_metrics())
         .flat_map(|scope| scope.metrics())
     {
         names.insert(metric.name().to_string());
+        if metric.name() == "mesh_llm_model_request_duration_ms"
+            && let opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(
+                opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram),
+            ) = metric.data()
+            && let Some(point) = histogram.data_points().next()
+        {
+            duration_sum = Some(point.sum());
+        }
     }
 
     assert!(
         names.contains("mesh_llm_model_request_duration_ms"),
         "route attempts must export a request duration histogram \
          (exported metrics: {names:?})"
+    );
+    assert_eq!(
+        duration_sum,
+        Some(123.0),
+        "the duration histogram must record the attempt duration"
     );
 }
