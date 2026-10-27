@@ -22,6 +22,7 @@ export function adaptModelsToSummary(models: MeshModelRaw[]): ModelSummary[] {
     size: formatModelSizeGB(model.size_gb),
     context: formatContext(model.context_length),
     status: mapModelStatus(model.status),
+    workloadClass: model.workload_class,
     tags: model.tags ?? [],
     nodeCount: model.node_count,
     fullId: model.name,

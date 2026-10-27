@@ -1062,6 +1062,95 @@ pub(crate) mod tests {
         assert_eq!(legacy.quantization, None);
     }
 
+    /// The console Chat picker can only leave a decision-only model out when
+    /// `/api/models` says which workload a warm model actually serves.
+    #[test]
+    fn runtime_data_model_snapshot_advertises_the_served_workload_class() {
+        let collector = RuntimeDataCollector::new();
+        let decision_model = "meshllm/laya-multilingual-F16-GGUF:F16".to_string();
+        let chat_model = "Chat-Model".to_string();
+        let legacy_model = "Legacy-Model".to_string();
+
+        let descriptor = |model_name: &str, workload_class| crate::mesh::ServedModelDescriptor {
+            identity: crate::mesh::ServedModelIdentity {
+                model_name: model_name.to_string(),
+                ..Default::default()
+            },
+            capabilities_known: true,
+            capabilities: crate::models::ModelCapabilities::default(),
+            topology: None,
+            metadata: Some(crate::mesh::ServedModelMetadata {
+                workload_class,
+                ..Default::default()
+            }),
+        };
+
+        let snapshot = collector.build_model_view(ModelViewInput {
+            peers: vec![],
+            catalog: vec![
+                MeshCatalogEntry {
+                    model_name: decision_model.clone(),
+                    descriptor: Some(descriptor(
+                        &decision_model,
+                        Some(crate::mesh::ModelWorkloadClass::Decision),
+                    )),
+                },
+                MeshCatalogEntry {
+                    model_name: chat_model.clone(),
+                    descriptor: Some(descriptor(
+                        &chat_model,
+                        Some(crate::mesh::ModelWorkloadClass::CausalGeneration),
+                    )),
+                },
+                MeshCatalogEntry {
+                    model_name: legacy_model.clone(),
+                    descriptor: Some(crate::mesh::ServedModelDescriptor {
+                        identity: crate::mesh::ServedModelIdentity {
+                            model_name: legacy_model.clone(),
+                            ..Default::default()
+                        },
+                        capabilities_known: false,
+                        capabilities: crate::models::ModelCapabilities::default(),
+                        topology: None,
+                        metadata: None,
+                    }),
+                },
+            ],
+            served_models: vec![
+                decision_model.clone(),
+                chat_model.clone(),
+                legacy_model.clone(),
+            ],
+            active_demand: HashMap::new(),
+            my_serving_models: vec![],
+            my_hosted_models: vec![],
+            local_inventory: LocalModelInventorySnapshot::default(),
+            node_hostname: Some("node.local".into()),
+            my_vram_gb: 24.0,
+            model_name: String::new(),
+            model_size_bytes: 0,
+            now_unix_secs: 1_700_000_000,
+        });
+
+        let json =
+            serde_json::to_value(mesh_models(snapshot)).expect("serialize mesh model payload");
+        let row = |name: &str| {
+            json.as_array()
+                .and_then(|rows| {
+                    rows.iter()
+                        .find(|row| row["name"].as_str() == Some(name))
+                        .cloned()
+                })
+                .unwrap_or_else(|| panic!("{name} should be exposed"))
+        };
+        assert_eq!(row(&decision_model)["workload_class"], "decision");
+        assert_eq!(row(&chat_model)["workload_class"], "causal_generation");
+        assert!(
+            row(&legacy_model).get("workload_class").is_none(),
+            "a peer that predates workload advertisement must not be classified"
+        );
+    }
+
     #[test]
     fn runtime_data_model_snapshot_prefers_local_inventory_over_gossiped_metadata() {
         let collector = RuntimeDataCollector::new();
