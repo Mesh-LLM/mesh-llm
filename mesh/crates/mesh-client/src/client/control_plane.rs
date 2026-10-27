@@ -8,10 +8,10 @@ use crate::proto::node::{
     OwnerControlErrorCode, OwnerControlGetConfigRequest, OwnerControlHandshake,
     OwnerControlKvCacheOperation, OwnerControlKvCacheRequest, OwnerControlKvCacheResponse,
     OwnerControlLoadModelRequest, OwnerControlLoadModelResponse, OwnerControlModelRef,
-    OwnerControlRefreshInventory, OwnerControlRefreshInventoryRequest, OwnerControlRequest,
-    OwnerControlResponse, OwnerControlUnloadModelRequest, OwnerControlUnloadModelResponse,
-    OwnerControlWatchAccepted, OwnerControlWatchConfigRequest, OwnerControlWatchConfigResponse,
-    SignedNodeOwnership,
+    OwnerControlPluginCommandApproval, OwnerControlRefreshInventory,
+    OwnerControlRefreshInventoryRequest, OwnerControlRequest, OwnerControlResponse,
+    OwnerControlUnloadModelRequest, OwnerControlUnloadModelResponse, OwnerControlWatchAccepted,
+    OwnerControlWatchConfigRequest, OwnerControlWatchConfigResponse, SignedNodeOwnership,
 };
 use crate::protocol::{
     ALPN_CONTROL_V1, ALPN_V1, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope,
@@ -485,6 +485,7 @@ impl OwnerControlClient {
         &self,
         expected_revision: u64,
         config: NodeConfigSnapshot,
+        plugin_command_approvals: Vec<OwnerControlPluginCommandApproval>,
     ) -> Result<OwnerControlApplyConfigResponse, ControlPlaneClientError> {
         let response = self
             .send_unary_request(
@@ -498,6 +499,7 @@ impl OwnerControlClient {
                         target_node_id,
                         expected_revision,
                         config: Some(config),
+                        plugin_command_approvals,
                     }),
                     refresh_inventory: None,
                     load_model: None,
