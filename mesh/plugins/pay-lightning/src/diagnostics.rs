@@ -2,8 +2,13 @@
 use std::{
     io::Write,
     path::PathBuf,
+    sync::Mutex,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
+
+// One plugin process owns its log path. Serialize appenders even if write_all
+// needs multiple OS writes; separate processes must use separate paths.
+static RECORD_WRITE: Mutex<()> = Mutex::new(());
 
 pub struct Timing {
     path: Option<PathBuf>,
@@ -38,6 +43,9 @@ impl Timing {
         };
         // Diagnostics must not affect payment results. No invoices, hashes,
         // peer identities, wallet responses, or errors are serialized here.
+        let Ok(_guard) = RECORD_WRITE.lock() else {
+            return;
+        };
         let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -51,7 +59,9 @@ impl Timing {
             "operation": self.operation, "boundary": boundary,
             "elapsed_us": self.started.elapsed().as_micros(),
         });
-        let _ = writeln!(file, "{record}");
+        let mut line = record.to_string().into_bytes();
+        line.push(b'\n');
+        let _ = file.write_all(&line);
     }
 }
 
@@ -64,6 +74,41 @@ impl Drop for Timing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn concurrent_records_remain_complete_json_lines() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("concurrent.jsonl");
+        std::thread::scope(|scope| {
+            for worker in 0..8 {
+                let path = &path;
+                scope.spawn(move || {
+                    for record in 0..100 {
+                        let _timing = Timing::with_path(
+                            Some(path.clone()),
+                            "test",
+                            format!("{worker}-{record}"),
+                        );
+                    }
+                });
+            }
+        });
+        let contents = std::fs::read_to_string(path).unwrap();
+        assert!(contents.ends_with('\n'));
+        let mut boundaries = std::collections::HashMap::new();
+        for line in contents.lines() {
+            let record: serde_json::Value = serde_json::from_str(line).unwrap();
+            let operation = record["operation"].as_str().unwrap().to_owned();
+            boundaries
+                .entry(operation)
+                .or_insert_with(Vec::new)
+                .push(record["boundary"].as_str().unwrap().to_owned());
+        }
+        assert_eq!(boundaries.len(), 800);
+        for values in boundaries.values() {
+            assert_eq!(values, &["begin", "end"]);
+        }
+    }
+
     #[test]
     fn records_boundaries_without_environment_mutation() {
         let directory = tempfile::tempdir().unwrap();

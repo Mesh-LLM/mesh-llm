@@ -86,6 +86,9 @@ operation, begin/end boundary and monotonic elapsed microseconds. They cover
 channel send calls, channel handler execution and wallet operation/startup calls.
 No invoice, payment hash, peer identity, response or error payload is recorded.
 An unset variable produces no output; write failures do not change payments.
+Complete-record appends are serialized within the plugin process, including
+concurrent settlement tasks. Each process must have its own log path; sharing
+one path across processes is not supported.
 Handler begin is **not** transport receipt: time queued in the host or plugin
 runtime precedes it. Send end acknowledges the local send API, not remote receipt.
 End records also occur on error/cancellation and do not imply success. These
