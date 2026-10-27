@@ -160,7 +160,10 @@ async fn installed_lifecycle_pipeline_admits_each_prepared_dispatch_and_never_fa
             ));
             session.finish("completed").await;
         } else {
-            assert_eq!(result, response::PipelineProxyResult::PolicyDenied);
+            assert_eq!(
+                result,
+                response::PipelineProxyResult::PolicyDenied { status_code: 403 }
+            );
             assert!(wire.starts_with(b"HTTP/1.1 403 "));
             session.finish("policy_denied").await;
         }

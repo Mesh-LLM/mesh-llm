@@ -146,6 +146,52 @@ async fn installed_lifecycle_quic_ingress_delivers_real_stream_and_denies_before
 
 #[tokio::test]
 #[ignore = "requires just package-openai-exchange-exemplar"]
+async fn installed_lifecycle_quic_gate_deny_answers_402_before_backend_and_in_the_terminal() {
+    // A gate plugin (the shape a payment plugin takes) denies with 402: the
+    // peer sees "Payment Required" on the wire, the backend never runs, and
+    // the serving host's own terminal event records 402 — not the 403 a
+    // plain policy deny carries — so an observer plugin and the ops log tell
+    // the same story as the wire.
+    let host = LiveHost::start_with_deny_status(true, true, 402).await;
+    let denied = quic_request(
+        &host,
+        br#"{"model":"blocked-model","messages":[{"role":"user","content":"pay me"}]}"#,
+    )
+    .await;
+    assert!(
+        denied.starts_with(b"HTTP/1.1 402 Payment Required"),
+        "{}",
+        String::from_utf8_lossy(&denied)
+    );
+    assert!(
+        host.requests.lock().await.is_empty(),
+        "402-gated QUIC request reached backend"
+    );
+    let events = completed_exchange_events(&host, 1).await;
+    let finished = events
+        .iter()
+        .find(|event| event["phase"] == "exchange_finished")
+        .unwrap();
+    assert_eq!(finished["status"], 402);
+    assert_eq!(finished["execution_outcome"], "policy_denied");
+    assert_eq!(finished["admission_denied"], true);
+    // An allowed model on the same host is untouched by the gate.
+    let allowed = quic_request(
+        &host,
+        br#"{"model":"allowed-model","messages":[{"role":"user","content":"hello"}]}"#,
+    )
+    .await;
+    assert!(
+        allowed.starts_with(b"HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&allowed)
+    );
+    assert_eq!(host.requests.lock().await.len(), 1);
+    host.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires just package-openai-exchange-exemplar"]
 async fn installed_lifecycle_quic_terminal_preserves_request_identity_and_reported_usage() {
     let host = LiveHost::start(true, true).await;
     let id = uuid::Uuid::new_v4();

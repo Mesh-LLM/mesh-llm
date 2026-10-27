@@ -100,8 +100,7 @@ async fn send_selected_route_denial(
         body.len()
     );
     match stream.write_all(bytes.as_bytes()).await {
-        Ok(()) if denied => transport::RouteDispatchOutcome::PolicyDenied,
-        Ok(()) => transport::RouteDispatchOutcome::RequiredHookFailed,
+        Ok(()) => transport::RouteDispatchOutcome::admission_rejected(status),
         Err(_) => transport::RouteDispatchOutcome::Dropped("response_write_failed"),
     }
 }

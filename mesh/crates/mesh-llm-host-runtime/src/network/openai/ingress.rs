@@ -523,7 +523,9 @@ async fn try_pipeline_proxy(
     )
     .await;
     match result {
-        proxy::PipelineProxyResult::PolicyDenied => Some(proxy::RouteDispatchOutcome::PolicyDenied),
+        proxy::PipelineProxyResult::PolicyDenied { status_code } => {
+            Some(proxy::RouteDispatchOutcome::PolicyDenied { status_code })
+        }
         proxy::PipelineProxyResult::RequiredHookFailed => {
             Some(proxy::RouteDispatchOutcome::RequiredHookFailed)
         }

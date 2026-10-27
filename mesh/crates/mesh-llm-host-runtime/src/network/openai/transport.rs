@@ -61,7 +61,12 @@ pub use route_model::route_model_request;
 /// transport failure from a client disconnect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RouteDispatchOutcome {
-    PolicyDenied,
+    /// A plugin denied the exchange and the client was told so. The status
+    /// is the one the denying plugin chose: 403 (never) or 402 (its gate can
+    /// be satisfied and the request retried).
+    PolicyDenied {
+        status_code: u16,
+    },
     RequiredHookFailed,
     Responded(u16),
     RespondedWithUsage {
@@ -141,7 +146,7 @@ pub(super) fn record_virtual_model_stream_lifecycle(
             status_code: 200..=299,
             ..
         } => observer.stream_completed(None),
-        RouteDispatchOutcome::PolicyDenied
+        RouteDispatchOutcome::PolicyDenied { .. }
         | RouteDispatchOutcome::RequiredHookFailed
         | RouteDispatchOutcome::Failed(_)
         | RouteDispatchOutcome::FailedWithStatus { .. }
@@ -153,11 +158,21 @@ pub(super) fn record_virtual_model_stream_lifecycle(
 }
 
 impl RouteDispatchOutcome {
+    /// The outcome of an admission rejection the client has already been sent:
+    /// a plugin deny (402 or 403) is `PolicyDenied`; anything else the host
+    /// synthesised because a required hook was unavailable.
+    pub(crate) const fn admission_rejected(status_code: u16) -> Self {
+        match status_code {
+            402 | 403 => Self::PolicyDenied { status_code },
+            _ => Self::RequiredHookFailed,
+        }
+    }
+
     pub(crate) const fn response_written(self) -> bool {
         matches!(
             self,
             Self::Responded(_)
-                | Self::PolicyDenied
+                | Self::PolicyDenied { .. }
                 | Self::RequiredHookFailed
                 | Self::RespondedWithUsage { .. }
                 | Self::RespondedWithDigests { .. }
@@ -166,10 +181,12 @@ impl RouteDispatchOutcome {
 
     pub(crate) fn terminal_outcome(self) -> crate::logging::TerminalOutcome {
         match self {
-            Self::PolicyDenied => crate::logging::TerminalOutcome::RejectedWithStatus {
-                reason: Some("plugin_policy_denied".into()),
-                status_code: 403,
-            },
+            Self::PolicyDenied { status_code } => {
+                crate::logging::TerminalOutcome::RejectedWithStatus {
+                    reason: Some("plugin_policy_denied".into()),
+                    status_code,
+                }
+            }
             Self::RequiredHookFailed => crate::logging::TerminalOutcome::FailedWithStatus {
                 error: "plugin_hook_unavailable".into(),
                 status_code: 503,
