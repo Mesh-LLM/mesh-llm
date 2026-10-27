@@ -30,6 +30,8 @@ mod exchange_request;
 mod exchange_request_tests;
 mod identity_artifact;
 mod lifecycle_readiness;
+#[cfg(test)]
+mod restart_tests;
 mod shutdown;
 mod socket_auth;
 mod start_announce;

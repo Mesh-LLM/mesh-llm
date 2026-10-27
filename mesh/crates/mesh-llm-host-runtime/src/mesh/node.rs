@@ -171,6 +171,9 @@ pub struct Node {
     /// `None` for a node whose certificate is not kept on disk: a mesh
     /// membership's, since the file is the main node's, and a test node's.
     pub(crate) owner_attestation_path: Option<std::path::PathBuf>,
+    /// A renewed certificate whose write to `owner_attestation_path` failed,
+    /// retried on every heartbeat until a write succeeds.
+    pub(crate) unsaved_owner_attestation: Arc<Mutex<Option<SignedNodeOwnership>>>,
     pub(crate) release_attestation: Arc<Mutex<Option<crate::ReleaseBuildAttestation>>>,
     pub(crate) release_attestation_summary: Arc<Mutex<crate::ReleaseAttestationSummary>>,
     pub(crate) owner_summary: Arc<Mutex<OwnershipSummary>>,
@@ -932,6 +935,7 @@ impl Node {
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
             owner_attestation_path: saved_owner_attestation_path(),
+            unsaved_owner_attestation: Arc::default(),
             local_endpoints: LocalEndpoints::default(),
             is_membership: false,
         };
@@ -1122,6 +1126,7 @@ impl Node {
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
             owner_attestation_path: None,
+            unsaved_owner_attestation: Arc::default(),
             local_endpoints: LocalEndpoints::default(),
             is_membership: false,
         }
