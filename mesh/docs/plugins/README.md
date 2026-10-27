@@ -1397,19 +1397,17 @@ clients see it without querying a plugin endpoint. It declares
 (`PluginManifest.plugin_status`), then publishes with
 `PluginContext::publish_status(&data, fresh_for)`, from `on_initialized` or any
 task holding an owned context. Each publication replaces the previous one;
-`withdraw_status` removes it. The host shows the latest one under the name it
-knows the plugin connection by, never a name the plugin claims, so one plugin
-cannot overwrite another's contribution or a core field:
+`withdraw_status` removes it. The host shows the latest one as a top-level
+field of the status, under the name it knows the plugin connection by, never a
+name the plugin claims, so one plugin cannot overwrite another's contribution:
 
 ```json
-"plugin_status": {
-  "powermetrics": {
-    "schema_version": 1,
-    "state": "ready",
-    "received_at_unix_ms": 1793404800000,
-    "fresh_until_unix_ms": 1793404860000,
-    "data": { "source": "macmon", "idle_watts": 8.2 }
-  }
+"powermetrics": {
+  "schema_version": 1,
+  "state": "ready",
+  "received_at_unix_ms": 1793404800000,
+  "fresh_until_unix_ms": 1793404860000,
+  "data": { "source": "macmon", "idle_watts": 8.2 }
 }
 ```
 
@@ -1426,7 +1424,8 @@ is the host's:
   missing sensor reading says so in `data`.
 
 The host refuses a publication from a plugin whose manifest does not declare
-`plugin_status`, from a connection that is no longer the plugin's current one,
+`plugin_status`, from a plugin named like a core status field such as `peers`
+or `runtime` (rename it in the node's config), from a connection that is no longer the plugin's current one,
 `data_json` that is not a JSON object or is larger than 16 KiB, and a snapshot
 sent less than 1 s after the previous one from the same connection. Refusals
 come back as an error and change nothing; a withdrawal is always accepted. A
@@ -1436,7 +1435,7 @@ host has read the plugin's manifest waits for it.
 Reads serve the host's copy: `/api/status` never starts, restarts or calls a
 plugin, so a hung plugin cannot slow it. Every accepted publication, and every
 change of state, wakes `/api/events`, which sends the new status. Without any
-contribution, `plugin_status` is omitted and the response is unchanged. It is
+contribution, the response is unchanged. It is
 local to this node, like the rest of `/api/status`: nothing is gossiped.
 
 The host advertises the `plugin_status.v1` host capability in its

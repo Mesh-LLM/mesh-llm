@@ -758,9 +758,9 @@ message PluginKeyResponse {
   bytes binding_signature = 2;
 }
 
-// A plugin publishes the snapshot shown at `/api/status.plugin_status.<name>`,
-// where `<name>` is the host's name for the plugin connection, never a name the
-// plugin claims. A later publication replaces it, and an empty `data_json`
+// A plugin publishes the snapshot shown at `/api/status.<name>`, where `<name>`
+// is the host's name for the plugin connection, never a name the plugin claims,
+// and never the name of a core status field. A later publication replaces it, and an empty `data_json`
 // withdraws it. The host keeps the latest one and owns its envelope: receipt
 // time and freshness. `/api/status` reads that copy and never calls the
 // plugin. Handled only by a host listing the `plugin_status.v1` capability,
