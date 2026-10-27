@@ -1197,7 +1197,7 @@ mesh-llm plugins install openai-endpoint
 You can also install directly from GitHub:
 
 ```bash
-mesh-llm plugins install Mesh-LLM/openai-endpoint
+mesh-llm plugins install Mesh-LLM/openai-endpoint-plugin
 ```
 
 Then enable the plugin in `~/.mesh-llm/config.toml`:

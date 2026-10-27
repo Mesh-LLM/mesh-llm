@@ -53,15 +53,15 @@ mesh-llm plugins install openai-endpoint
 
 The unversioned command selects the latest published release, not a negotiated
 protocol match. To select this version explicitly, use
-`mesh-llm plugins install Mesh-LLM/openai-endpoint@0.2.0`.
+`mesh-llm plugins install Mesh-LLM/openai-endpoint-plugin@0.2.0`.
 
 Already installed? Run `mesh-llm plugins update openai-endpoint`, remove any
 source-build `command` override, and restart your Mesh instance.
 
 Adapter **0.1.2 uses protocol 2 and is incompatible with Mesh 0.76.0**. Older
 protocol-2 hosts must retain it using
-`mesh-llm plugins install Mesh-LLM/openai-endpoint@0.1.2` rather than updating.
-See the [adapter source-build instructions](https://github.com/Mesh-LLM/openai-endpoint/blob/v0.2.0/README.md#build-from-source)
+`mesh-llm plugins install Mesh-LLM/openai-endpoint-plugin@0.1.2` rather than updating.
+See the [adapter source-build instructions](https://github.com/Mesh-LLM/openai-endpoint-plugin/blob/v0.2.0/README.md#build-from-source)
 if you prefer to build the pinned release yourself.
 
 ### 3. Set the URL once
@@ -198,7 +198,7 @@ namespace, not that other host/container.
 
 The adapter and host releases are incompatible, even if installation succeeded.
 Use a protocol-3 build for Mesh 0.76.0; retain adapter 0.1.2 for protocol-2 hosts.
-Do not bypass the handshake. See the [adapter compatibility notes](https://github.com/Mesh-LLM/openai-endpoint/blob/v0.2.0/README.md#compatibility).
+Do not bypass the handshake. See the [adapter compatibility notes](https://github.com/Mesh-LLM/openai-endpoint-plugin/blob/v0.2.0/README.md#compatibility).
 
 ### Does this split my provider's model across Mesh GPUs?
 

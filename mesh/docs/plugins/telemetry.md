@@ -4,7 +4,7 @@ mesh-llm exports metrics-only OTLP/HTTP telemetry from host runtime code when
 `[telemetry]` config enables an explicit endpoint. No collector or project-owned
 destination is hard-coded.
 
-The external `metrics` plugin lives at [Mesh-LLM/metrics](https://github.com/Mesh-LLM/metrics).
+The external `metrics` plugin lives at [Mesh-LLM/metrics-plugin](https://github.com/Mesh-LLM/metrics-plugin).
 It advertises metrics support through the plugin API, but it does not receive
 prompts, completions, logs, traces, endpoint URLs, or raw host identifiers.
 

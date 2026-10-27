@@ -212,7 +212,7 @@ by hand.
 ### Using the Lexe wallet
 
 Lexe is distributed as the external `lexe-wallet` plugin
-([Mesh-LLM/lexe-wallet](https://github.com/Mesh-LLM/lexe-wallet)), Lexe 0.1.24
+([Mesh-LLM/lexe-wallet-plugin](https://github.com/Mesh-LLM/lexe-wallet-plugin)), Lexe 0.1.24
 on mainnet. Build or install its binary, then register it like any external
 plugin in `config.toml`:
 

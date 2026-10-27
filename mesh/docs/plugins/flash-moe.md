@@ -1,6 +1,6 @@
 # Flash-MoE Plugin
 
-The external `flash-moe` plugin connects mesh-llm to a Flash-MoE OpenAI-compatible HTTP server. The plugin now lives at [Mesh-LLM/flash-moe](https://github.com/Mesh-LLM/flash-moe).
+The external `flash-moe` plugin connects mesh-llm to a Flash-MoE OpenAI-compatible HTTP server. The plugin now lives at [Mesh-LLM/flash-moe-plugin](https://github.com/Mesh-LLM/flash-moe-plugin).
 
 Use it for the SSD expert streaming roadmap path: a giant MoE model fits on one node's local NVMe, but not in RAM. The plugin owns Flash-MoE process lifecycle when configured for managed mode. Mesh-llm only launches the plugin through the plugin API, consumes its declared endpoint, and routes requests. Flash-MoE owns model execution.
 
@@ -19,7 +19,7 @@ mesh-llm plugins install flash-moe
 You can also install directly from GitHub:
 
 ```bash
-mesh-llm plugins install Mesh-LLM/flash-moe
+mesh-llm plugins install Mesh-LLM/flash-moe-plugin
 ```
 
 Install or build Flash-MoE separately from [danveloper/flash-moe](https://github.com/danveloper/flash-moe), prepare the model files with its tooling, then either:

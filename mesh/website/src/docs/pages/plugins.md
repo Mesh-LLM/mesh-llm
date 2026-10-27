@@ -14,11 +14,11 @@ The Mesh-LLM organization currently publishes six first-party plugin repositorie
 
 | Plugin | Use it for | Install |
 | --- | --- | --- |
-| [`blackboard`](https://github.com/Mesh-LLM/blackboard) | Share short-lived status, findings, questions, and tips across a mesh. The plugin also ships a Blackboard Agent Skill. | `mesh-llm plugins install blackboard` |
-| [`openai-endpoint`](https://github.com/Mesh-LLM/openai-endpoint) | Add an already-running OpenAI-compatible server such as Ollama, vLLM, LM Studio, TGI, or Lemonade Server. | `mesh-llm plugins install openai-endpoint` |
-| [`flash-moe`](https://github.com/Mesh-LLM/flash-moe) | Attach a Flash-MoE inference endpoint, or let the plugin supervise a local Flash-MoE process. | `mesh-llm plugins install flash-moe` |
-| [`metrics`](https://github.com/Mesh-LLM/metrics) | Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin. | `mesh-llm plugins install metrics` |
-| [`agents`](https://github.com/Mesh-LLM/agents) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install agents` |
+| [`blackboard`](https://github.com/Mesh-LLM/blackboard-plugin) | Share short-lived status, findings, questions, and tips across a mesh. The plugin also ships a Blackboard Agent Skill. | `mesh-llm plugins install blackboard` |
+| [`openai-endpoint`](https://github.com/Mesh-LLM/openai-endpoint-plugin) | Add an already-running OpenAI-compatible server such as Ollama, vLLM, LM Studio, TGI, or Lemonade Server. | `mesh-llm plugins install openai-endpoint` |
+| [`flash-moe`](https://github.com/Mesh-LLM/flash-moe-plugin) | Attach a Flash-MoE inference endpoint, or let the plugin supervise a local Flash-MoE process. | `mesh-llm plugins install flash-moe` |
+| [`metrics`](https://github.com/Mesh-LLM/metrics-plugin) | Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin. | `mesh-llm plugins install metrics` |
+| [`agents`](https://github.com/Mesh-LLM/agents-plugin) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install agents` |
 | [`ds4-plugin`](https://github.com/Mesh-LLM/ds4-plugin) | Run [DwarfStar (ds4)](https://github.com/antirez/ds4) models such as DeepSeek V4 Flash on Apple Silicon. Add `[[plugin]] name = "ds4-plugin"`, `args = ["serve", "--model", "ds4f-q2"]` to config; the model downloads on first start. [Setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/plugins/dwarfstar.md). | `mesh-llm plugins install Mesh-LLM/ds4-plugin` |
 
 The catalog can also contain community plugins. Search it before installing an unfamiliar integration:
@@ -42,11 +42,11 @@ mesh-llm plugins install openai-endpoint
 You can also install directly from a GitHub repository. This is useful when a plugin is not yet in the catalog or when you want to pin a release:
 
 ```bash
-mesh-llm plugins install Mesh-LLM/openai-endpoint
-mesh-llm plugins install Mesh-LLM/openai-endpoint@0.1.2 # protocol-2 hosts only
+mesh-llm plugins install Mesh-LLM/openai-endpoint-plugin
+mesh-llm plugins install Mesh-LLM/openai-endpoint-plugin@0.1.2 # protocol-2 hosts only
 ```
 
-Use the catalog name, such as `agents`, for catalog installs. Use the fully qualified `owner/repository` form, such as `Mesh-LLM/agents`, only when installing directly from GitHub.
+Use the catalog name, such as `agents`, for catalog installs. Use the fully qualified `owner/repository` form, such as `Mesh-LLM/agents-plugin`, only when installing directly from GitHub.
 
 Plugin authors can install a local release archive through the same validation
 boundary without publishing it first:
@@ -92,7 +92,7 @@ the short setup, provider-specific URLs, a completion check and troubleshooting.
 **Release compatibility:** published adapter 0.1.2 uses plugin protocol 2 and
 cannot initialize on Mesh 0.76.0 (protocol 3), despite installing successfully.
 Use adapter **0.2.0** (protocol 3) for that host. Check the
-[adapter compatibility/build instructions](https://github.com/Mesh-LLM/openai-endpoint/blob/v0.2.0/README.md#compatibility)
+[adapter compatibility/build instructions](https://github.com/Mesh-LLM/openai-endpoint-plugin/blob/v0.2.0/README.md#compatibility)
 before installing; do not assume “latest” means compatible. Older protocol-2
 hosts must retain a compatible adapter such as 0.1.2 rather than blindly updating.
 
@@ -116,7 +116,7 @@ enabled = true
 endpoint = "https://otel.example.com"
 ```
 
-For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-moe) for both existing-endpoint and managed-process examples. For agents, see the [agents repository](https://github.com/Mesh-LLM/agents) for agent definitions and runtime configuration.
+For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-moe-plugin) for both existing-endpoint and managed-process examples. For agents, see the [agents repository](https://github.com/Mesh-LLM/agents-plugin) for agent definitions and runtime configuration.
 
 ### Plugin fields
 
