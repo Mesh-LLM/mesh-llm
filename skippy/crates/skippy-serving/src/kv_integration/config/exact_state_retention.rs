@@ -9,6 +9,12 @@ use skippy_scheduler::{EvictableCacheEntry, rank_eviction_candidates};
 use super::super::exact_state_diagnostics::emit_exact_state_diagnostic;
 use super::super::{RadixExactEntry, RadixResidentEntry};
 
+#[derive(Clone, Copy)]
+pub(super) enum ExactStatePressure {
+    Bytes,
+    Entries,
+}
+
 /// Evict the least expensive exact entries above a byte limit, retaining at
 /// least `min_retained_entries`. Zero disables this limit. The numeric trace
 /// lets a diagnostic distinguish a rejected demotion from later L1 eviction
@@ -37,7 +43,7 @@ pub(super) fn evict_exact_entries_over(
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             (radix.stats().recurrent_entries > floor)
-                .then(|| evict_lowest_recompute_value(&mut radix, None))
+                .then(|| evict_lowest_recompute_value(&mut radix, None, ExactStatePressure::Bytes))
                 .flatten()
         };
         let Some(evicted) = evicted else {
@@ -67,12 +73,13 @@ pub(super) fn evict_exact_entries_over(
 }
 
 /// Within one stage, saved prefill work grows with prefix length. Rank by
-/// that work per logical snapshot byte, then recency, using the same policy
-/// as resident KV capacity. Recheck physical bytes after each release because
-/// deduplicated blocks may not free their full logical size.
+/// saved work per unit of the constrained capacity: logical bytes for a byte
+/// limit, or one slot for an entry limit. Recheck physical bytes after each
+/// release because deduplicated blocks may not free their full logical size.
 pub(super) fn evict_lowest_recompute_value(
     radix: &mut UnifiedRadixCache<RadixResidentEntry, RadixExactEntry>,
     protected: Option<(&str, &[i32])>,
+    pressure: ExactStatePressure,
 ) -> Option<RadixEviction<RadixExactEntry>> {
     let candidates = radix.recurrent_eviction_candidates();
     let mut ranked = candidates
@@ -85,7 +92,10 @@ pub(super) fn evict_lowest_recompute_value(
         })
         .map(|(index, candidate)| EvictableCacheEntry {
             id: index.to_string(),
-            units: candidate.logical_bytes,
+            units: match pressure {
+                ExactStatePressure::Bytes => candidate.logical_bytes,
+                ExactStatePressure::Entries => 1,
+            },
             recompute_cost: u64::try_from(candidate.tokens.len()).unwrap_or(u64::MAX),
             last_used: candidate.last_used,
         })
@@ -182,9 +192,12 @@ mod tests {
         insert(&radix, &blobs, &long, 60, 1);
         insert(&radix, &blobs, &[2, 3], 6, 2);
         insert(&radix, &blobs, &[4, 5], 6, 3);
-        let evicted =
-            evict_lowest_recompute_value(&mut radix.lock().unwrap(), Some(("stage", &[4, 5])))
-                .unwrap();
+        let evicted = evict_lowest_recompute_value(
+            &mut radix.lock().unwrap(),
+            Some(("stage", &[4, 5])),
+            ExactStatePressure::Entries,
+        )
+        .unwrap();
         assert_eq!(evicted.tokens, [2, 3]);
         assert!(
             radix
@@ -200,5 +213,23 @@ mod tests {
                 .recurrent_exact("stage", &[4, 5])
                 .is_some()
         );
+    }
+
+    #[test]
+    fn count_and_byte_pressure_use_their_respective_capacity_units() {
+        fn victim(pressure: ExactStatePressure) -> Vec<i32> {
+            let radix = Mutex::new(UnifiedRadixCache::new());
+            let blobs = Mutex::new(CacheBlobStore::new(4096));
+            let expensive_long = vec![1; 100];
+            let cheap_short = vec![2; 10];
+            insert(&radix, &blobs, &expensive_long, 200, 1);
+            insert(&radix, &blobs, &cheap_short, 1, 2);
+            evict_lowest_recompute_value(&mut radix.lock().unwrap(), None, pressure)
+                .unwrap()
+                .tokens
+        }
+
+        assert_eq!(victim(ExactStatePressure::Entries), vec![2; 10]);
+        assert_eq!(victim(ExactStatePressure::Bytes), vec![1; 100]);
     }
 }

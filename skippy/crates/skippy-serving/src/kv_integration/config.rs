@@ -743,9 +743,14 @@ fn store_exact_radix_record_with_codec(
                         exact_state_retention::evict_lowest_recompute_value(
                             &mut radix,
                             Some((&namespace, &token_ids)),
+                            exact_state_retention::ExactStatePressure::Entries,
                         )
                         .or_else(|| {
-                            exact_state_retention::evict_lowest_recompute_value(&mut radix, None)
+                            exact_state_retention::evict_lowest_recompute_value(
+                                &mut radix,
+                                None,
+                                exact_state_retention::ExactStatePressure::Entries,
+                            )
                         })
                     } else {
                         radix.evict_lru_recurrent()
