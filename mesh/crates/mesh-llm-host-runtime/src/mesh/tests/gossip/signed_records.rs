@@ -12,6 +12,9 @@ mod compatibility {
     include!("signed_record_compatibility.rs");
 }
 
+#[path = "bounded_exchange.rs"]
+mod bounded_exchange;
+
 fn signing_key(seed: u8) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
 }

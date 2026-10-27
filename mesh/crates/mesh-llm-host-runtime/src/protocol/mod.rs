@@ -121,7 +121,7 @@ pub(crate) struct OutboundGossip {
 }
 
 mod gossip_budget;
-pub(crate) use gossip_budget::GossipFrameBudgetExceeded;
+pub(crate) use gossip_budget::{GossipFrameBudgetExceeded, GossipFrameEncoder, MAX_GOSSIP_RECORDS};
 
 /// A decoded gossip frame before signed records are checked against the
 /// peer table.
@@ -137,13 +137,15 @@ pub(crate) async fn write_gossip_payload(
     outbound: &OutboundGossip,
     sender_id: EndpointId,
     own_plugin_keys: &[crate::proto::node::PluginKey],
+    encoder: &GossipFrameEncoder,
+    remote: EndpointId,
 ) -> Result<()> {
     let _ = protocol;
     let mut frame = build_gossip_frame(&outbound.announcements, sender_id);
     attach_own_plugin_keys(&mut frame, own_plugin_keys);
     frame.signed_records = outbound.signed_records.clone();
     frame.signed_cache_affinity = outbound.signed_cache_affinity.clone();
-    write_len_prefixed(send, &gossip_budget::encode_gossip(&frame)?).await?;
+    write_len_prefixed(send, &encoder.encode(frame, remote)?).await?;
     Ok(())
 }
 

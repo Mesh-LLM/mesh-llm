@@ -11,13 +11,15 @@ use mesh_llm_membership::signed_record::{
 use mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::Instant;
 
 const WINDOW: Duration = Duration::from_secs(10);
-const MAX_RECORDS: usize = 4096;
+const MAX_RECORDS: usize = crate::protocol::MAX_GOSSIP_RECORDS;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SENDERS: usize = 2048;
+const SLOT_WAIT: Duration = Duration::from_millis(250);
 
 struct Usage {
     since: Instant,
@@ -43,17 +45,22 @@ impl Default for VerificationGate {
 }
 
 impl VerificationGate {
-    pub(super) fn reserve(
+    /// Wait briefly for competing exchanges, then charge only admitted work.
+    /// Cancellation or timeout while queued must not consume a sender's quota.
+    pub(super) async fn reserve(
         &self,
         sender: EndpointId,
         records: usize,
         bytes: usize,
-        now: Instant,
     ) -> Option<OwnedSemaphorePermit> {
         if records > MAX_RECORDS || bytes > MAX_BYTES {
             return None;
         }
-        let permit = self.slots.clone().try_acquire_owned().ok()?;
+        let permit = tokio::time::timeout(SLOT_WAIT, self.slots.clone().acquire_owned())
+            .await
+            .ok()?
+            .ok()?;
+        let now = Instant::now();
         let mut senders = self.senders.lock().unwrap_or_else(|e| e.into_inner());
         senders.retain(|_, usage| now.saturating_duration_since(usage.since) < WINDOW);
         if !senders.contains_key(&sender) && senders.len() >= MAX_SENDERS {
@@ -107,7 +114,8 @@ impl Node {
             .fold(0usize, usize::saturating_add);
         let Some(permit) = self
             .gossip_verification
-            .reserve(remote, records, bytes, Instant::now())
+            .reserve(remote, records, bytes)
+            .await
         else {
             tracing::debug!(peer = %remote.fmt_short(), records, bytes, "gossip signature work budget exhausted");
             return None;
@@ -170,53 +178,153 @@ mod tests {
         iroh::SecretKey::from_bytes(&[seed; 32]).public()
     }
 
-    #[test]
-    fn quotas_are_per_sender_and_reset_only_after_the_window() {
+    #[tokio::test(start_paused = true)]
+    async fn quotas_are_per_sender_and_reset_only_after_the_window() {
         let gate = VerificationGate::default();
-        let now = Instant::now();
-        drop(gate.reserve(sender(1), MAX_RECORDS, 1, now).unwrap());
-        assert!(gate.reserve(sender(1), 1, 1, now + WINDOW / 2).is_none());
-        drop(gate.reserve(sender(2), 1, MAX_BYTES, now).unwrap());
-        assert!(gate.reserve(sender(2), 0, 1, now).is_none());
-        assert!(gate.reserve(sender(1), 1, 1, now + WINDOW).is_some());
+        drop(gate.reserve(sender(1), MAX_RECORDS, 1).await.unwrap());
+        tokio::time::advance(WINDOW / 2).await;
+        assert!(gate.reserve(sender(1), 1, 1).await.is_none());
+        drop(gate.reserve(sender(2), 1, MAX_BYTES).await.unwrap());
+        assert!(gate.reserve(sender(2), 0, 1).await.is_none());
+        tokio::time::advance(WINDOW / 2).await;
+        assert!(gate.reserve(sender(1), 1, 1).await.is_some());
     }
 
-    #[test]
-    fn concurrent_jobs_keep_their_slots_until_the_worker_releases_them() {
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_jobs_wait_for_a_worker_to_release_its_slot() {
         let gate = VerificationGate::default();
-        let now = Instant::now();
-        let first = gate.reserve(sender(1), 1, 1, now).unwrap();
-        let second = gate.reserve(sender(2), 1, 1, now).unwrap();
-        assert!(gate.reserve(sender(3), 1, 1, now).is_none());
+        let first = gate.reserve(sender(1), 1, 1).await.unwrap();
+        let second = gate.reserve(sender(2), 1, 1).await.unwrap();
+        let pending = gate.reserve(sender(3), MAX_RECORDS, MAX_BYTES);
+        tokio::pin!(pending);
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        tokio::time::advance(SLOT_WAIT / 2).await;
         drop(first);
-        assert!(gate.reserve(sender(3), MAX_RECORDS, 1, now).is_some());
+        assert!(pending.await.is_some());
         drop(second);
+        assert!(gate.reserve(sender(3), 1, 0).await.is_none());
     }
 
-    #[test]
-    fn oversized_batches_do_not_consume_a_slot_or_reset_existing_usage() {
+    #[tokio::test(start_paused = true)]
+    async fn slot_timeout_does_not_consume_quota() {
         let gate = VerificationGate::default();
-        let now = Instant::now();
-        assert!(gate.reserve(sender(1), MAX_RECORDS + 1, 0, now).is_none());
-        assert!(gate.reserve(sender(1), 0, MAX_BYTES + 1, now).is_none());
+        let workers = gate.slots.clone().acquire_many_owned(2).await.unwrap();
+        let started = Instant::now();
+        assert!(
+            gate.reserve(sender(1), MAX_RECORDS, MAX_BYTES)
+                .await
+                .is_none()
+        );
+        assert!(started.elapsed() >= SLOT_WAIT);
+        drop(workers);
+        assert!(
+            gate.reserve(sender(1), MAX_RECORDS, MAX_BYTES)
+                .await
+                .is_some()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_slot_wait_does_not_consume_quota_or_leak_a_permit() {
+        let gate = VerificationGate::default();
+        let workers = gate.slots.clone().acquire_many_owned(2).await.unwrap();
+        let mut pending = Box::pin(gate.reserve(sender(1), MAX_RECORDS, MAX_BYTES));
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        drop(pending);
+        drop(workers);
         drop(
-            gate.reserve(sender(1), MAX_RECORDS, MAX_BYTES, now)
+            gate.reserve(sender(1), MAX_RECORDS, MAX_BYTES)
+                .await
                 .unwrap(),
         );
-        assert!(gate.reserve(sender(1), 1, 1, now).is_none());
+        assert_eq!(gate.slots.available_permits(), 2);
     }
 
-    #[test]
-    fn sender_churn_cannot_evict_an_active_quota() {
+    #[tokio::test(start_paused = true)]
+    async fn quota_window_is_evaluated_after_the_slot_wait() {
         let gate = VerificationGate::default();
-        let now = Instant::now();
+        drop(
+            gate.reserve(sender(1), MAX_RECORDS, MAX_BYTES)
+                .await
+                .unwrap(),
+        );
+        tokio::time::advance(WINDOW - SLOT_WAIT / 2).await;
+        let workers = gate.slots.clone().acquire_many_owned(2).await.unwrap();
+        let pending = gate.reserve(sender(1), MAX_RECORDS, MAX_BYTES);
+        tokio::pin!(pending);
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        tokio::time::advance(SLOT_WAIT / 2).await;
+        drop(workers);
+        assert!(pending.await.is_some());
+    }
+
+    #[tokio::test]
+    async fn contended_verification_preserves_the_signed_payload() {
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let record = VerifiedRecord::sign(
+            NODE_RECORD,
+            &ed25519_dalek::SigningKey::from_bytes(&[1; 32]),
+            1,
+            mesh_llm_membership::requirements::current_time_unix_ms(),
+            &prost::Message::encode_to_vec(&NodeRecord::default()),
+        );
+        let mut inbound = InboundGossip {
+            announcements: Vec::new(),
+            signed_records: vec![SignedNodeRecord {
+                signed: record.signed_bytes().to_vec(),
+                signature: record.signature().to_vec(),
+                hop: None,
+            }],
+            signed_cache_affinity: Vec::new(),
+        };
+        let workers = node
+            .gossip_verification
+            .slots
+            .clone()
+            .acquire_many_owned(2)
+            .await
+            .unwrap();
+        let pending = node.prepare_gossip_records(sender(2), &mut inbound);
+        tokio::pin!(pending);
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        drop(workers);
+        let prepared = pending
+            .await
+            .expect("brief contention must not drop records");
+        assert_eq!(prepared.nodes.len(), 1);
+        assert_eq!(
+            prepared.nodes[0].record.signed_bytes(),
+            record.signed_bytes()
+        );
+        node.endpoint.close().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn oversized_batches_do_not_consume_a_slot_or_reset_existing_usage() {
+        let gate = VerificationGate::default();
+        assert!(gate.reserve(sender(1), MAX_RECORDS + 1, 0).await.is_none());
+        assert!(gate.reserve(sender(1), 0, MAX_BYTES + 1).await.is_none());
+        drop(
+            gate.reserve(sender(1), MAX_RECORDS, MAX_BYTES)
+                .await
+                .unwrap(),
+        );
+        assert!(gate.reserve(sender(1), 1, 1).await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sender_churn_cannot_evict_an_active_quota() {
+        let gate = VerificationGate::default();
         for index in 0..MAX_SENDERS {
             let mut seed = [0; 32];
             seed[..8].copy_from_slice(&(index as u64).to_be_bytes());
             let id = iroh::SecretKey::from_bytes(&seed).public();
-            drop(gate.reserve(id, 1, 1, now).unwrap());
+            drop(gate.reserve(id, 1, 1).await.unwrap());
         }
-        assert!(gate.reserve(sender(255), 1, 1, now).is_none());
-        assert!(gate.reserve(sender(255), 1, 1, now + WINDOW).is_some());
+        assert!(gate.reserve(sender(255), 1, 1).await.is_none());
+        tokio::time::advance(WINDOW).await;
+        assert!(gate.reserve(sender(255), 1, 1).await.is_some());
     }
 }

@@ -3,6 +3,9 @@
 use super::MAX_CONTROL_FRAME_BYTES;
 use prost::Message;
 
+mod selection;
+pub(crate) use selection::{GossipFrameEncoder, MAX_GOSSIP_RECORDS};
+
 #[derive(Debug)]
 pub(crate) struct GossipFrameBudgetExceeded {
     size: usize,

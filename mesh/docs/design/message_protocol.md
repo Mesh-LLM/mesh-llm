@@ -354,13 +354,22 @@ Each authenticated sender has a ten-second budget of 4,096 records and
 accounting table is bounded at 2,048 active entries and does not evict active
 quotas on churn. Exhaustion defers signed records without clearing previously
 verified records or enabling unsigned third-party fallback in strict mode.
-The blocking worker retains its concurrency permit even if its caller is
-cancelled.
+An exchange waits up to 250 ms for a verification slot. Sender quota is charged
+only after acquiring that slot; a timeout or cancellation while queued consumes
+no quota. The blocking worker retains its concurrency permit even if its caller
+is cancelled.
 
-Gossip still obeys the 8 MiB control-frame limit. A local payload exceeding
-that limit is rejected before encoding; heartbeats treat it as a deferred
-exchange, neither a peer failure nor proof of recovery. Malformed or oversized
-frames received from a peer remain protocol errors.
+Gossip still obeys the 8 MiB control-frame limit and carries at most 4,096 signed
+records per frame. Larger snapshots are sent in bounded portions, rotating
+origins independently for each destination. The sender's own entries stay in
+every frame; each relayed origin's unsigned compatibility entry, signed node
+record and signed cache evidence travel together without rewriting signed bytes.
+At most 2,048 destination cursors are retained; least-recently-used cursors may
+restart after eviction. An individually oversized relayed origin is skipped
+with a warning so other origins can progress. If the sender's own entries cannot
+fit, heartbeats still treat the local error as deferred, neither a peer failure
+nor proof of recovery. Malformed or oversized inbound frames remain protocol
+errors. Frames already within both limits preserve their existing encoding.
 
 ### PeerAnnouncement
 

@@ -896,6 +896,8 @@ impl Node {
             &outbound,
             self.endpoint.id(),
             &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+            &self.gossip_encoder,
+            remote,
         )
         .await?;
         send.finish()?;
@@ -976,6 +978,8 @@ impl Node {
             &outbound,
             self.endpoint.id(),
             &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+            &self.gossip_encoder,
+            remote,
         )
         .await?;
         send.finish()?;
