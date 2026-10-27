@@ -69,10 +69,28 @@ pub enum ControlCommand {
     },
     Pricing,
     /// Show, or set, the minimum Lightning payment in msat (default 1 sat):
-    /// the seller's deposit and the amount a smaller positive final is raised
-    /// to, and the largest seller minimum this node pays. Ledger-only.
+    /// the amount a smaller positive final is raised to, and the largest
+    /// seller minimum this node pays. Ledger-only.
     MinPayment {
         #[serde(default)]
+        value_msat: Option<u64>,
+    },
+    /// Show, or set, the node-wide admission deposit in msat (default: the
+    /// minimum payment, and never below it): what this seller asks peers
+    /// outside its trust cache for a model without its own deposit, and the
+    /// largest seller deposit this node pays. Shows per-model deposits too.
+    /// Ledger-only.
+    AdmissionDeposit {
+        #[serde(default)]
+        value_msat: Option<u64>,
+        /// Forget the set deposit so it follows the minimum payment again.
+        #[serde(default)]
+        reset: bool,
+    },
+    /// Set the admission deposit of one priced model, or with `None` return
+    /// it to the node-wide deposit. Ledger-only.
+    SetModelAdmissionDeposit {
+        model: String,
         value_msat: Option<u64>,
     },
     /// Patch only the cached-input discount of an already priced model.

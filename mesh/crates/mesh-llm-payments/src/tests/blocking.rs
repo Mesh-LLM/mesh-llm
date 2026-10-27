@@ -26,6 +26,7 @@ pub(super) fn unpaid_final(
     service.ledger.metered_admit(&MeteredRequest {
         id,
         peer,
+        model: "test-model",
         pricing: &pricing(),
         require_deposit: false,
     })?;
@@ -74,6 +75,7 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
             .metered_admit(&MeteredRequest {
                 id: "refused",
                 peer: PEER,
+                model: "test-model",
                 pricing: &pricing(),
                 require_deposit: true,
             })
@@ -82,6 +84,7 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
     service.ledger.metered_admit(&MeteredRequest {
         id: "admitted",
         peer: OTHER,
+        model: "test-model",
         pricing: &pricing(),
         require_deposit: true,
     })?;
@@ -119,6 +122,7 @@ async fn blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix(
     service.ledger.metered_admit(&MeteredRequest {
         id: "readmitted",
         peer: PEER,
+        model: "test-model",
         pricing: &pricing(),
         require_deposit: true,
     })?;
@@ -146,6 +150,7 @@ async fn unpaid_deposits_and_abandoned_requests_do_not_block() -> Result<()> {
         service.ledger.metered_admit(&MeteredRequest {
             id,
             peer: PEER,
+            model: "test-model",
             pricing: &pricing(),
             require_deposit: true,
         })?;
@@ -172,6 +177,7 @@ async fn unpaid_deposits_and_abandoned_requests_do_not_block() -> Result<()> {
     service.ledger.metered_admit(&MeteredRequest {
         id: "next",
         peer: PEER,
+        model: "test-model",
         pricing: &pricing(),
         require_deposit: true,
     })?;

@@ -9,7 +9,7 @@ use mesh_llm_payments_types::contract::{
 use mesh_llm_payments_types::metered_wire::AdmissionTerms;
 use mesh_llm_payments_types::metering::MeteredUsage;
 
-// 10 msat per token both ways; the deposit is the flat 1000 msat.
+// 10 msat per token both ways; the default deposit is the flat 1000 msat.
 fn rates() -> Pricing {
     Pricing {
         input_msat_per_million: 10_000_000,
@@ -70,12 +70,12 @@ fn settlement(
 }
 
 #[tokio::test]
-async fn an_admission_must_restate_the_terms_and_the_defined_deposit() {
+async fn an_admission_must_restate_the_terms_within_this_nodes_deposit() {
     let dir = tempfile::tempdir().unwrap();
     let (_, service) = open(dir.path());
     for (admission, reason) in [
-        (admission("other", 1000), "id"),
-        (admission("r", 999), "deposit share"),
+        (admission("other", 1000), "id mismatch"),
+        (admission("r", 1001), "deposit above this node's"),
     ] {
         assert!(
             service
@@ -86,7 +86,7 @@ async fn an_admission_must_restate_the_terms_and_the_defined_deposit() {
                 })
                 .await
                 .is_err(),
-            "{reason} mismatch must be refused"
+            "{reason} must be refused"
         );
     }
     assert!(service.ledger.requests().unwrap().is_empty());
@@ -475,6 +475,7 @@ async fn cached_discount_uses_frozen_price_and_same_seller_buyer_bill() -> Resul
     service.ledger.metered_admit(&MeteredRequest {
         id: "cached",
         peer: "peer",
+        model: "test-model",
         pricing: &price,
         require_deposit: false,
     })?;
@@ -526,6 +527,7 @@ async fn discounted_subsat_final_survives_both_restarts_and_pays_once() -> Resul
     seller.ledger.metered_admit(&MeteredRequest {
         id: "cached-floor",
         peer: "peer",
+        model: "test-model",
         pricing: &price,
         require_deposit: false,
     })?;
@@ -811,5 +813,44 @@ async fn a_buyer_pays_a_seller_minimum_up_to_its_own_and_refuses_a_higher_one() 
         .await
         .unwrap();
     assert_eq!(settled.payment.unwrap().amount_msat, 2000);
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_buyer_pays_a_seller_deposit_up_to_its_own_and_refuses_a_higher_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (wallet, service) = open(dir.path());
+    let request = |id: &str| AcceptAdmissionRequest {
+        billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
+        terms: local(id, 50_000),
+        admission: admission(id, 5000),
+    };
+    let refused = service.accept_admission(request("high")).await;
+    assert!(
+        refused.unwrap_err().to_string().contains("deposit"),
+        "a default buyer refuses a 5-sat seller deposit"
+    );
+    service.ledger.set_admission_deposit_msat(5000).unwrap();
+    service.accept_admission(request("r")).await.unwrap();
+    service
+        .pay_deposit(PayDepositRequest {
+            request_id: "r".into(),
+            invoice: invoice(1, 5000),
+        })
+        .await
+        .unwrap();
+    // A 5,500-msat bill leaves 500 after the deposit: the final is the
+    // seller's 1,000 minimum, which the deposit does not change.
+    let settled = service
+        .settle_final(settlement(
+            "r",
+            Some((300, 250)),
+            Some(5500),
+            5000,
+            Some(invoice(2, 1000)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settled.payment.unwrap().amount_msat, 1000);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 2);
 }

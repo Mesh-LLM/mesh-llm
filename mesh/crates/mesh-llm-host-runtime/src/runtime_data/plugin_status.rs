@@ -5,7 +5,7 @@
 //! plugin's data: receipt time, freshness and availability. Limits and the
 //! wire contract are in `mesh_llm_plugin::plugin_status`.
 
-use crate::api::status::{CORE_STATUS_FIELDS, PluginStatusPayload, PluginStatusState};
+use crate::api::status::{PluginStatusPayload, PluginStatusState};
 use crate::plugin::proto;
 use mesh_llm_plugin::plugin_status::{MAX_DATA_BYTES, MIN_PUBLISH_INTERVAL, effective_fresh_for};
 use std::collections::BTreeMap;
@@ -16,23 +16,14 @@ use tokio::time::Instant;
 /// Why the host refused a snapshot.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PluginStatusRejection {
-    /// The plugin's name is a core `/api/status` field.
-    CoreFieldName,
-    TooLarge {
-        bytes: usize,
-    },
+    TooLarge { bytes: usize },
     NotAnObject,
-    TooSoon {
-        retry_after: Duration,
-    },
+    TooSoon { retry_after: Duration },
 }
 
 impl PluginStatusRejection {
     pub(crate) fn message(&self, plugin_name: &str) -> String {
         match self {
-            Self::CoreFieldName => format!(
-                "plugin `{plugin_name}` is named like a core /api/status field, so it cannot publish a status; rename it in the node's config"
-            ),
             Self::TooLarge { bytes } => format!(
                 "status data from plugin `{plugin_name}` is {bytes} bytes; the limit is {MAX_DATA_BYTES}"
             ),
@@ -120,9 +111,6 @@ impl PluginStatusStore {
                 response: proto::PublishPluginStatusResponse::default(),
                 fresh_for: None,
             });
-        }
-        if CORE_STATUS_FIELDS.contains(&plugin_name) {
-            return Err(PluginStatusRejection::CoreFieldName);
         }
         if request.data_json.len() > MAX_DATA_BYTES {
             return Err(PluginStatusRejection::TooLarge {
@@ -324,19 +312,6 @@ mod tests {
             .publish("p", 2, 1, &request(r#"{"n":3}"#, 0), now + half, 3)
             .unwrap();
         assert_eq!(store.payloads(now)["p"].data, serde_json::json!({"n": 3}));
-    }
-
-    #[test]
-    fn a_plugin_named_like_a_core_field_cannot_publish() {
-        let mut store = PluginStatusStore::default();
-        let now = Instant::now();
-        assert_eq!(
-            store
-                .publish("peers", 1, 1, &request(r#"{"n":1}"#, 0), now, 1)
-                .err(),
-            Some(PluginStatusRejection::CoreFieldName)
-        );
-        assert!(store.payloads(now).is_empty(), "nothing was stored");
     }
 
     #[test]

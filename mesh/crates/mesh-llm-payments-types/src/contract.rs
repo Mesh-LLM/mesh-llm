@@ -63,7 +63,8 @@ pub mod ops {
     // Seller (serving) side: token-metered billing.
     /// Admit a buyer's request at the seller's current prices: refuse a buyer
     /// at the unpaid-final-invoice strike limit, otherwise state the deposit
-    /// (a flat 1 sat, applied to the final bill) or admit without one.
+    /// (the operator's admission deposit, applied to the final bill) or admit
+    /// without one.
     pub const SERVE_ADMIT: &str = "serve_admit";
     /// Wait for the admitted deposit to settle and claim the once-only
     /// backend dispatch. Nothing runs before this returns.

@@ -291,7 +291,7 @@ async fn status_shows_plugin_contributions_and_keeps_its_shape_without_them() {
 
     let status_body = request_management_json(state.clone(), "/api/status").await;
     assert!(
-        status_body.get("powermetrics").is_none(),
+        status_body.get("plugins").is_none(),
         "no contribution, no field"
     );
 
@@ -309,15 +309,15 @@ async fn status_shows_plugin_contributions_and_keeps_its_shape_without_them() {
         .await
         .expect("the snapshot is accepted");
     let pushed = read_until_contains(&mut events, b"\"idle_watts\":8.2", Duration::from_secs(2)).await;
-    assert!(String::from_utf8_lossy(&pushed).contains("\"powermetrics\":{"));
+    assert!(String::from_utf8_lossy(&pushed).contains("\"plugins\""));
 
     let status_body = request_management_json(state.clone(), "/api/status").await;
-    let contribution = &status_body["powermetrics"];
+    let contribution = &status_body["plugins"]["powermetrics"];
     assert_eq!(contribution["schema_version"], json!(1));
     assert_eq!(contribution["state"], json!("ready"));
     assert_eq!(contribution["data"], json!({"idle_watts": 8.2}));
     assert!(contribution["fresh_until_unix_ms"].as_u64() > contribution["received_at_unix_ms"].as_u64());
-    assert_eq!(status_body["other"]["data"], json!({"ok": true}));
+    assert_eq!(status_body["plugins"]["other"]["data"], json!({"ok": true}));
 
     node.forward_plugin_event(plugin::PluginMeshEvent::PluginDisconnected {
         plugin_id: "powermetrics".into(),
@@ -328,11 +328,11 @@ async fn status_shows_plugin_contributions_and_keeps_its_shape_without_them() {
     read_until_contains(&mut events, b"\"state\":\"unavailable\"", Duration::from_secs(2)).await;
     let status_body = request_management_json(state.clone(), "/api/status").await;
     assert_eq!(
-        status_body["powermetrics"]["state"],
+        status_body["plugins"]["powermetrics"]["state"],
         json!("unavailable")
     );
     assert_eq!(
-        status_body["powermetrics"]["data"],
+        status_body["plugins"]["powermetrics"]["data"],
         json!({"idle_watts": 8.2}),
         "the last snapshot stays, shown as unavailable"
     );
@@ -345,8 +345,7 @@ async fn status_shows_plugin_contributions_and_keeps_its_shape_without_them() {
         .unwrap();
     }
     let status_body = request_management_json(state.clone(), "/api/status").await;
-    assert!(status_body.get("powermetrics").is_none());
-    assert!(status_body.get("other").is_none());
+    assert!(status_body.get("plugins").is_none());
 
     drop(events);
     handle.abort();
@@ -372,14 +371,8 @@ async fn a_refused_plugin_status_says_why_and_changes_nothing() {
         .unwrap_err();
     assert!(error.message.contains("the limit is 16384"), "{}", error.message);
 
-    let error = publish_test_plugin_status(&node, "peers", r#"{"n":1}"#)
-        .await
-        .unwrap_err();
-    assert!(error.message.contains("core /api/status field"), "{}", error.message);
-
     let status_body = request_management_json(state, "/api/status").await;
-    assert!(status_body.get("powermetrics").is_none());
-    assert!(status_body["peers"].is_array(), "the core field is untouched");
+    assert!(status_body.get("plugins").is_none());
 }
 
 #[tokio::test]

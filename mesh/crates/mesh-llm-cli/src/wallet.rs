@@ -6,6 +6,14 @@ pub enum PaymentMode {
     Automatic,
 }
 
+/// `wallet pricing` flags that change rates, which a deposit change cannot be combined with.
+const PRICE_CHANGES: [&str; 4] = [
+    "input_msat_per_million",
+    "output_msat_per_million",
+    "cache_discount_percent",
+    "free",
+];
+
 #[derive(Debug, Subcommand)]
 pub enum WalletCommand {
     /// Show spendable balance in millisatoshis.
@@ -51,12 +59,21 @@ pub enum WalletCommand {
         #[arg(long, requires = "mode")]
         daily_budget_sats: Option<u64>,
     },
-    /// Show or set the minimum Lightning payment (default 1 sat). Sellers ask it as
-    /// the deposit and raise any smaller final remainder to it; buyers refuse sellers
-    /// whose minimum is above theirs.
+    /// Show or set the minimum Lightning payment (default 1 sat). Sellers raise any
+    /// smaller final remainder to it; buyers refuse sellers whose minimum is above theirs.
     MinPayment {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=1000))]
         sats: Option<u64>,
+    },
+    /// Show or set the admission deposit new peers pay this node before it serves them
+    /// (default: the minimum payment, and never below it), with any per-model deposits.
+    /// It is applied to the bill. Buyers refuse sellers whose deposit is above theirs.
+    AdmissionDeposit {
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=1000))]
+        sats: Option<u64>,
+        /// Follow the minimum payment again instead of a set deposit.
+        #[arg(long, conflicts_with = "sats")]
+        default: bool,
     },
     /// List seller rates, or enable an exact model (defaults: 500 input / 1500 output msat per million).
     Pricing {
@@ -71,6 +88,13 @@ pub enum WalletCommand {
         cache_discount_percent: Option<u8>,
         #[arg(long, requires = "model")]
         free: bool,
+        /// Ask new peers this admission deposit for the model instead of the node-wide
+        /// `admission-deposit`. The model must already be priced.
+        #[arg(long, requires = "model", conflicts_with_all = PRICE_CHANGES, value_parser = clap::value_parser!(u64).range(1..=1000))]
+        deposit_sats: Option<u64>,
+        /// Return the model to the node-wide admission deposit.
+        #[arg(long, requires = "model", conflicts_with_all = PRICE_CHANGES, conflicts_with = "deposit_sats")]
+        default_deposit: bool,
     },
 }
 
@@ -112,5 +136,60 @@ mod tests {
         ] {
             assert!(WalletCli::try_parse_from(args).is_err());
         }
+    }
+
+    #[test]
+    fn a_model_deposit_is_its_own_pricing_change() {
+        for args in [
+            vec!["wallet", "admission-deposit"],
+            vec!["wallet", "admission-deposit", "--sats", "5"],
+            vec!["wallet", "pricing", "m", "--deposit-sats", "5"],
+            vec!["wallet", "pricing", "m", "--default-deposit"],
+        ] {
+            assert!(WalletCli::try_parse_from(&args).is_ok(), "{args:?}");
+        }
+        for args in [
+            vec!["wallet", "admission-deposit", "--sats", "0"],
+            vec!["wallet", "pricing", "--deposit-sats", "5"],
+            vec!["wallet", "pricing", "m", "--deposit-sats", "5", "--free"],
+            vec![
+                "wallet",
+                "pricing",
+                "m",
+                "--deposit-sats",
+                "5",
+                "--default-deposit",
+            ],
+            vec![
+                "wallet",
+                "pricing",
+                "m",
+                "--default-deposit",
+                "--cache-discount-percent",
+                "5",
+            ],
+            vec![
+                "wallet",
+                "pricing",
+                "m",
+                "--input-msat-per-million",
+                "1",
+                "--output-msat-per-million",
+                "1",
+                "--deposit-sats",
+                "5",
+            ],
+        ] {
+            assert!(WalletCli::try_parse_from(&args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn admission_deposit_can_return_to_the_minimum() {
+        assert!(WalletCli::try_parse_from(["wallet", "admission-deposit", "--default"]).is_ok());
+        assert!(
+            WalletCli::try_parse_from(["wallet", "admission-deposit", "--default", "--sats", "5"])
+                .is_err()
+        );
     }
 }

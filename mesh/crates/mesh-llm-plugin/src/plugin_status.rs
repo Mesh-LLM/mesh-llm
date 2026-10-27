@@ -2,8 +2,8 @@
 //!
 //! A plugin declares [`plugin_status`] in its manifest and publishes snapshots
 //! with [`crate::PluginContext::publish_status`]. The host keeps the latest one
-//! and shows it as the top-level field named after the plugin in
-//! `GET /api/status`, inside an envelope the host owns:
+//! and shows it in `GET /api/status` under `plugins.<plugin name>`, inside an
+//! envelope the host owns:
 //!
 //! ```json
 //! {

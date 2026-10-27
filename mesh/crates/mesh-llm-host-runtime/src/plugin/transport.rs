@@ -258,9 +258,20 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                         "Plugin connection closed"
                     );
                 }
+                // The plugin went away by itself (it crashed or exited), so the
+                // supervisor starts it again on its next round. A shutdown or a
+                // disable that takes the runtime first never gets here; one that
+                // runs once it is gone finds nothing to stop and settles the
+                // status itself, which stays: a disabled plugin must stay down.
                 let mut summary = summary.lock().await;
-                summary.status = "stopped".into();
-                summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
+                if !matches!(
+                    summary.status.as_str(),
+                    "shutting down" | "stopped" | "disabled"
+                ) {
+                    summary.status = "restarting".into();
+                    summary.pid = None;
+                    summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
+                }
                 drop(summary);
                 super::runtime::status_publication::announce_disconnected(
                     &mesh_tx,
