@@ -35,17 +35,9 @@ impl PurePath {
             return path;
         }
         let normalized = text.replace('\\', "/");
-        let mut rest = normalized.as_str();
-        let bytes = rest.as_bytes();
-        if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-            path.root.push(bytes[0].to_ascii_uppercase() as char);
-            path.root.push(':');
-            rest = &rest[2..];
-        }
-        if rest.starts_with('/') {
-            path.root.push('/');
-        }
-        path.parts = path_parts(rest);
+        let (root, body) = split_windows_root(&normalized);
+        path.root = root;
+        path.parts = path_parts(body);
         path
     }
 
@@ -110,6 +102,54 @@ impl PurePath {
     }
 }
 
+/// `PureWindowsPath.splitroot`: the drive (`C:`), the UNC share
+/// (`//server/share`), or the root separator. Returns the root with its
+/// trailing separator and the remaining relative body. The drive letter is
+/// folded to uppercase; UNC hosts and shares keep their case, like Python.
+fn split_windows_root(normalized: &str) -> (String, &str) {
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        let drive = normalized[..1].to_ascii_uppercase();
+        return match normalized[2..].strip_prefix('/') {
+            Some(body) => (format!("{drive}:/"), body),
+            None => (format!("{drive}:"), &normalized[2..]),
+        };
+    }
+    if let Some(body) = normalized.strip_prefix("//")
+        && !body.starts_with('/')
+    {
+        return split_unc_root(normalized, body);
+    }
+    match normalized.strip_prefix('/') {
+        Some(body) => ("/".to_owned(), body),
+        None => (String::new(), normalized),
+    }
+}
+
+/// The UNC half of `PureWindowsPath.splitroot`: `//server/share[/body]` or
+/// the bare `//host`. A share keeps its trailing separator
+/// (`//server/share/`) so display, joins, and containment checks keep
+/// pointing filesystem operations at the share.
+fn split_unc_root<'a>(normalized: &'a str, body: &'a str) -> (String, &'a str) {
+    let host_end = body.find('/').map_or(body.len(), |index| index + 1);
+    let share = &body[host_end..];
+    if share.is_empty() {
+        return (format!("//{}", &body[..host_end]), &body[host_end..]);
+    }
+    let share_end = share.find('/').map_or(share.len(), |index| index + 1);
+    if share_end < share.len() {
+        let root_end = 2 + host_end + share_end;
+        return (normalized[..root_end].to_owned(), &normalized[root_end..]);
+    }
+    // The share ends the input; Python keeps a trailing separator on the
+    // UNC drive (`\\server\share\`), so a child still relates to the share.
+    let mut root = format!("//{body}");
+    if !root.ends_with('/') {
+        root.push('/');
+    }
+    (root, "")
+}
+
 /// `pathlib` parts: the path body without empty and `.` components. Both
 /// flavours split bodies on `/`; the Windows parser splits the root off first.
 fn path_parts(body: &str) -> Vec<String> {
@@ -123,17 +163,17 @@ fn path_parts(body: &str) -> Vec<String> {
 mod tests {
     use super::PurePath;
 
-    fn relative(path: &str, other: &str) -> Result<String, String> {
-        PurePath::new(path).relative_to(&PurePath::new(other))
-    }
-
     #[test]
     fn migration_product_pure_path_matches_python() {
-        assert_eq!(PurePath::new("a//./b/").display(), "a/b");
-        assert_eq!(PurePath::new("").display(), ".");
-        assert_eq!(PurePath::new("//a").display(), "/a");
-        assert_eq!(PurePath::new("///a").display(), "/a");
-        assert_eq!(PurePath::new(".").join("m").display(), "m");
+        // POSIX expectations, parsed explicitly: on a Windows host `new`
+        // is the Windows branch, whose behaviour has its own tests below.
+        let posix = |text: &str| PurePath::parse(text, false);
+        let relative = |path: &str, other: &str| posix(path).relative_to(&posix(other));
+        assert_eq!(posix("a//./b/").display(), "a/b");
+        assert_eq!(posix("").display(), ".");
+        assert_eq!(posix("//a").display(), "/a");
+        assert_eq!(posix("///a").display(), "/a");
+        assert_eq!(posix(".").join("m").display(), "m");
         assert_eq!(relative("./a", "a").as_deref(), Ok("."));
         assert_eq!(relative("a/b", ".").as_deref(), Ok("a/b"));
         assert_eq!(relative("a/b/../c", "a/b/..").as_deref(), Ok("c"));
@@ -182,5 +222,47 @@ mod tests {
         assert_eq!(win(r"\foo\m.exe", r"\FOO").as_deref(), Ok("m.exe"));
         assert_eq!(PurePath::parse(r"\foo", true).display(), r"\foo");
         assert_eq!(PurePath::parse(r"Bundle\x", true).display(), r"Bundle\x");
+    }
+
+    /// Regression: a UNC bundle (`\\server\share\bundle`) used to collapse
+    /// to a local `/` root, dropping the share from display, joins, and
+    /// containment checks, so filesystem operations left the share.
+    #[test]
+    fn windows_unc_share_roots_preserve_the_network_path() {
+        let bundle = PurePath::parse(r"\\server\share\bundle", true);
+        assert_eq!(bundle.display(), r"\\server\share\bundle");
+        assert_eq!(
+            bundle.join("mesh-llm.exe").display(),
+            r"\\server\share\bundle\mesh-llm.exe"
+        );
+        assert_eq!(
+            win(
+                r"\\server\share\bundle\mesh-llm.exe",
+                r"\\server\share\bundle"
+            )
+            .as_deref(),
+            Ok("mesh-llm.exe")
+        );
+        // Forward-slash UNC text parses the same, and comparisons fold case.
+        assert_eq!(
+            PurePath::parse("//Server/Share/bundle", true).display(),
+            r"\\Server\Share\bundle"
+        );
+        assert_eq!(
+            win(
+                r"\\SERVER\Share\bundle\product-manifest.json",
+                r"\\server\share\bundle"
+            )
+            .as_deref(),
+            Ok("product-manifest.json")
+        );
+        // A child also relates to the bare share, whose root keeps its own
+        // trailing separator like Python's UNC drive.
+        assert_eq!(
+            win(r"\\server\share\bundle", r"\\server\share").as_deref(),
+            Ok("bundle")
+        );
+        // A UNC share root is not a local drive root.
+        assert!(win(r"\\server\share\bundle\mesh-llm.exe", r"C:\bundle").is_err());
     }
 }
