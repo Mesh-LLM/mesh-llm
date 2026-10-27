@@ -385,6 +385,7 @@ fn local_workload_class_to_proto(workload: crate::mesh::ModelWorkloadClass) -> i
         Local::EncoderDecoder => Proto::EncoderDecoder as i32,
         Local::SpeechSynthesis => Proto::SpeechSynthesis as i32,
         Local::Decision => Proto::Decision as i32,
+        Local::SpeechRecognition => Proto::SpeechRecognition as i32,
         // Preserve explicit denial when relaying metadata. Zero is the legacy
         // unspecified value and must not erase an unknown workload.
         Local::Unknown => -1,
@@ -403,6 +404,7 @@ fn proto_workload_class_to_local(value: i32) -> Option<crate::mesh::ModelWorkloa
         Ok(Proto::EncoderDecoder) => Some(Local::EncoderDecoder),
         Ok(Proto::SpeechSynthesis) => Some(Local::SpeechSynthesis),
         Ok(Proto::Decision) => Some(Local::Decision),
+        Ok(Proto::SpeechRecognition) => Some(Local::SpeechRecognition),
         Ok(Proto::Unspecified) => None,
         Err(_) => Some(Local::Unknown),
     }
@@ -1475,6 +1477,7 @@ mod tests {
             crate::mesh::ModelWorkloadClass::EncoderDecoder,
             crate::mesh::ModelWorkloadClass::SpeechSynthesis,
             crate::mesh::ModelWorkloadClass::Decision,
+            crate::mesh::ModelWorkloadClass::SpeechRecognition,
             crate::mesh::ModelWorkloadClass::Unknown,
         ] {
             let local = crate::mesh::ServedModelMetadata {

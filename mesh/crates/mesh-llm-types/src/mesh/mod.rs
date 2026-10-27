@@ -79,6 +79,9 @@ pub enum ModelWorkloadClass {
     /// Typed System One decisions (`POST /systemone`) with no text generation,
     /// such as a Laya encoder + decision head.
     Decision,
+    /// Speech-to-text (`/v1/audio/transcriptions` and `/translations`) with no
+    /// chat generation, such as a Whisper model.
+    SpeechRecognition,
     /// Explicit metadata from a newer peer that this node cannot interpret.
     /// Unlike absent legacy metadata, this never authorizes inference.
     #[serde(other)]

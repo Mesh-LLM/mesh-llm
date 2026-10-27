@@ -1,6 +1,5 @@
-//! Numeric helpers of `collect-ci-metrics.py`: `summarize` with linear
-//! `percentile`, CPython's compensated float `sum`, `round(x, n)`, and the
-//! `(p95 or -1, mean or -1)` descending sort key.
+//! Numeric helpers for CI metric summaries: linear percentiles, compensated
+//! summation, decimal-place rounding, and the descending report sort key.
 
 use crate::ci_operations::ci_metrics_value::{Value, object};
 use std::cmp::Ordering;
@@ -53,7 +52,7 @@ mod ranking_tests {
     }
 }
 
-/// Python's `sorted(..., key=sort_key, reverse=True)`: stable descending.
+/// Stable descending order by the report's p95 and mean sort key.
 pub(crate) fn sort_descending<T>(items: &mut [T], key: impl Fn(&T) -> (f64, f64)) {
     items.sort_by(|a, b| {
         let (a, b) = (key(a), key(b));
@@ -69,8 +68,8 @@ pub(crate) fn sorted(mut values: Vec<f64>) -> Vec<f64> {
     values
 }
 
-/// CPython 3.13 `sum()` over floats (Neumaier compensation).
-pub(crate) fn float_sum(values: impl IntoIterator<Item = f64>) -> f64 {
+/// Neumaier compensated summation reduces error when magnitudes vary.
+pub(crate) fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
     let mut total = 0.0_f64;
     let mut compensation = 0.0_f64;
     for value in values {
@@ -88,8 +87,8 @@ pub(crate) fn float_sum(values: impl IntoIterator<Item = f64>) -> f64 {
     total
 }
 
-/// Python `round(value, digits)`: correctly rounded, ties to even.
-pub(crate) fn round(value: f64, digits: usize) -> f64 {
+/// Round to a fixed number of decimal places using Rust's fixed precision formatting.
+pub(crate) fn round_decimal(value: f64, digits: usize) -> f64 {
     if !value.is_finite() {
         return value;
     }
@@ -114,7 +113,7 @@ pub(crate) fn summarize(values: impl IntoIterator<Item = Option<f64>>) -> Summar
             stats: None,
         };
     }
-    let mean = float_sum(samples.iter().copied()) / samples.len() as f64;
+    let mean = compensated_sum(samples.iter().copied()) / samples.len() as f64;
     let stats = [
         samples[0],
         mean,
@@ -123,14 +122,14 @@ pub(crate) fn summarize(values: impl IntoIterator<Item = Option<f64>>) -> Summar
         percentile(&samples, 0.95),
         samples[samples.len() - 1],
     ]
-    .map(|value| round(value, 3));
+    .map(|value| round_decimal(value, 3));
     Summary {
         count: samples.len(),
         stats: Some(stats),
     }
 }
 
-/// A `collections.Counter` of strings in first-increment order.
+/// String counts kept in first-increment order.
 #[derive(Default)]
 pub(crate) struct Counter(pub(crate) Vec<(String, usize)>);
 
@@ -149,7 +148,7 @@ impl Counter {
             .map_or(0, |(_, count)| *count)
     }
 
-    /// `dict(sorted(counter.items()))`.
+    /// Return counts sorted by key.
     pub(crate) fn sorted_value(&self) -> Value {
         let mut entries = self.0.clone();
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -161,7 +160,7 @@ impl Counter {
         )
     }
 
-    /// `counter.most_common(limit)`: count descending, ties by insertion.
+    /// Return the most common entries, with insertion order for ties.
     pub(crate) fn most_common(&self, limit: usize) -> Vec<(String, usize)> {
         let mut entries = self.0.clone();
         entries.sort_by(|(_, a), (_, b)| b.cmp(a));
@@ -172,7 +171,7 @@ impl Counter {
 
 #[cfg(test)]
 mod tests {
-    use super::{float_sum, round, summarize};
+    use super::{compensated_sum, round_decimal, summarize};
 
     #[test]
     fn ci_metrics_linear_percentiles_and_empty_samples() {
@@ -181,9 +180,12 @@ mod tests {
         assert_eq!(summary.p95(), Some(38.5));
         assert_eq!(summary.stats.map(|stats| stats[3]), Some(37.0));
         assert_eq!(summary.mean(), Some(25.0));
-        assert_eq!(round(0.0625, 3), 0.062);
-        assert_eq!(round(1234.5675, 3), 1234.568);
-        assert_eq!(float_sum([0.1, 0.2, 0.3]), 0.6);
+        assert_eq!(round_decimal(0.0625, 3), 0.062);
+        assert_eq!(round_decimal(-0.0625, 3), -0.062);
+        assert_eq!(round_decimal(1234.5675, 3), 1234.568);
+        assert_eq!(round_decimal(f64::MAX, 3), f64::MAX);
+        assert_eq!(compensated_sum([0.1, 0.2, 0.3]), 0.6);
+        assert_eq!(compensated_sum([1.0e16, 1.0, -1.0e16]), 1.0);
         assert_eq!(summarize([None]).count, 0);
     }
 }

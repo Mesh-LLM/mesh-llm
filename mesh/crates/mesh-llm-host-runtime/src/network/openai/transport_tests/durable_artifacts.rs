@@ -457,3 +457,5 @@ async fn passive_body_parse_error_persists_a_response_only_after_complete_header
 
 #[path = "duplicate_alias_repro.rs"]
 mod duplicate_alias_repro;
+#[path = "membership_ingress.rs"]
+mod membership_ingress;

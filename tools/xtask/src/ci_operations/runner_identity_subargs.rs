@@ -1,10 +1,8 @@
-//! argparse emulation for the `runner-identity` subcommands: their options,
-//! required arguments, `--field` choices and the `lookup` positional.
+//! Exact options owned by the `runner-identity` subcommands.
 
-use crate::ci_operations::runner_identity_argv::{Args, Cursor, error, is_optional, resolve};
+use crate::ci_operations::runner_identity_argv::{Args, error};
 use crate::ci_operations::runner_identity_help::{PROG, sub_help, sub_usage};
 use crate::repository::check_report::CheckReport;
-use crate::repository::text::repr;
 
 const FIELDS: [&str; 4] = [
     "reference",
@@ -12,22 +10,6 @@ const FIELDS: [&str; 4] = [
     "receipt",
     "provenance",
 ];
-
-fn sub_options(command: &str) -> &'static [&'static str] {
-    match command {
-        "lookup" => &["-h", "--help", "--field"],
-        "seed-key" => &["-h", "--help", "--recipe-hash"],
-        "bind" => &[
-            "-h",
-            "--help",
-            "--image-id",
-            "--cohort",
-            "--anchor",
-            "--output",
-        ],
-        _ => &["-h", "--help"],
-    }
-}
 
 pub(crate) fn parse_subcommand(
     parsed: &mut Args,
@@ -38,27 +20,27 @@ pub(crate) fn parse_subcommand(
     let prog = format!("{PROG} {command}");
     let usage = sub_usage(&command);
     let fail = |message: &str| error(&usage, &prog, message);
-    let options = sub_options(&command);
-    let mut cursor = Cursor { args, index: 0 };
+    let mut index = 0;
     let mut role: Option<String> = None;
     let mut seen: Vec<&str> = Vec::new();
-    while let Some(arg) = args.get(cursor.index) {
-        cursor.index += 1;
+
+    while let Some(arg) = args.get(index) {
+        index += 1;
+        if arg == "-h" || arg == "--help" {
+            return Err(CheckReport::success(sub_help(&command)));
+        }
         if arg == "--" {
-            let rest = &args[cursor.index..];
-            match (command == "lookup" && role.is_none(), rest.split_first()) {
-                (true, Some((first, tail))) => {
-                    role = Some(first.clone());
-                    extras.extend(tail.iter().cloned());
-                }
-                _ => {
-                    extras.push(arg.clone());
-                    extras.extend(rest.iter().cloned());
-                }
+            if command == "lookup"
+                && role.is_none()
+                && let Some(value) = args.get(index)
+            {
+                role = Some(value.clone());
+                index += 1;
             }
+            extras.extend(args[index..].iter().cloned());
             break;
         }
-        if !is_optional(arg) {
+        if !arg.starts_with('-') || arg == "-" {
             if command == "lookup" && role.is_none() {
                 role = Some(arg.clone());
             } else {
@@ -66,19 +48,27 @@ pub(crate) fn parse_subcommand(
             }
             continue;
         }
-        let Some((option, inline)) = resolve(arg, options) else {
+
+        let (option, attached) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(name, value)| {
+                (name, Some(value.to_owned()))
+            });
+        let known = match command.as_str() {
+            "lookup" => option == "--field",
+            "seed-key" => option == "--recipe-hash",
+            "bind" => matches!(option, "--image-id" | "--cohort" | "--anchor" | "--output"),
+            _ => false,
+        };
+        if !known {
             extras.push(arg.clone());
             continue;
-        };
-        if matches!(option, "-h" | "--help") {
-            return Err(CheckReport::success(sub_help(&command)));
         }
-        let value = cursor
-            .value(inline)
-            .ok_or_else(|| fail(&format!("argument {option}: expected one argument")))?;
+        let value = take_value(option, attached, args, &mut index, &fail)?;
         store(parsed, option, value, &fail)?;
         seen.push(option);
     }
+
     let required: &[&str] = match command.as_str() {
         "seed-key" => &["--recipe-hash"],
         "bind" => &["--image-id", "--cohort", "--anchor", "--output"],
@@ -94,12 +84,32 @@ pub(crate) fn parse_subcommand(
     }
     if !missing.is_empty() {
         return Err(fail(&format!(
-            "the following arguments are required: {}",
+            "required arguments missing: {}",
             missing.join(", ")
         )));
     }
     parsed.role = role.unwrap_or_default();
     Ok(())
+}
+
+fn take_value(
+    option: &str,
+    attached: Option<String>,
+    args: &[String],
+    index: &mut usize,
+    fail: &dyn Fn(&str) -> CheckReport,
+) -> Result<String, CheckReport> {
+    if let Some(value) = attached {
+        return Ok(value);
+    }
+    let Some(value) = args.get(*index) else {
+        return Err(fail(&format!("{option} requires a value")));
+    };
+    if value == "--" || value.starts_with('-') {
+        return Err(fail(&format!("{option} requires a value")));
+    }
+    *index += 1;
+    Ok(value.clone())
 }
 
 fn store(
@@ -111,15 +121,9 @@ fn store(
     match option {
         "--field" => {
             if !FIELDS.contains(&value.as_str()) {
-                let choices = FIELDS
-                    .iter()
-                    .map(|name| repr(name))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(fail(&format!(
-                    "argument --field: invalid choice: {} (choose from {choices})",
-                    repr(&value)
-                )));
+                return Err(fail(
+                    "--field must be reference, native_toolchain_epoch, receipt, or provenance",
+                ));
             }
             parsed.field = Some(value);
         }
@@ -127,7 +131,8 @@ fn store(
         "--image-id" => parsed.image_id = value,
         "--cohort" => parsed.cohort = value,
         "--anchor" => parsed.anchor = value,
-        _ => parsed.output = value,
+        "--output" => parsed.output = value,
+        _ => unreachable!("only supported options reach store"),
     }
     Ok(())
 }

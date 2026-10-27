@@ -30,9 +30,9 @@ use self::requirements::{
     evaluate_direct_peer_admission, peer_release_attestation_status,
 };
 use crate::crypto::{
-    DEFAULT_NODE_CERT_LIFETIME_SECS, OwnershipSummary, SignedNodeOwnership, TrustPolicy,
-    TrustStore, default_node_ownership_path, save_node_ownership, sign_node_ownership,
-    verify_node_ownership,
+    DEFAULT_NODE_CERT_LIFETIME_SECS, DEFAULT_NODE_CERT_RENEW_WINDOW_SECS, OwnershipSummary,
+    SignedNodeOwnership, TrustPolicy, TrustStore, certificate_needs_renewal,
+    default_node_ownership_path, save_node_ownership, sign_node_ownership, verify_node_ownership,
 };
 use crate::protocol::*;
 
@@ -169,7 +169,10 @@ pub(crate) use mesh_llm_membership::{is_global_ipv4_candidate, is_public_ipv4_ca
 pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_local_fit_bytes,
 };
-pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
+pub(crate) use node::{
+    MembershipEntry, MembershipNodeConfig, PeerDownReport, membership_token_endpoint,
+    peer_down_endpoint_id,
+};
 pub(crate) use peer_state::{
     ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, http_routable_models,
     peer_has_observed_liveness, resolve_peer_leaving, routable_models, routes_http_model,

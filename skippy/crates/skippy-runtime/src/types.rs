@@ -547,6 +547,31 @@ pub struct TokenSignal {
     pub second_token: i32,
 }
 
+/// Log-probabilities recorded for one sampled token, under the model's raw
+/// distribution (temperature 1, before penalties or truncation).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TokenLogprobs {
+    pub token: i32,
+    /// `NaN` when the native runtime could not read the logits row.
+    pub logprob: f32,
+    /// Most likely alternatives, most likely first: `(token, logprob)`.
+    pub top: Vec<(i32, f32)>,
+}
+
+impl From<&skippy_ffi::TokenLogprobs> for TokenLogprobs {
+    fn from(raw: &skippy_ffi::TokenLogprobs) -> Self {
+        let count = (raw.top_count as usize).min(skippy_ffi::MAX_TOP_LOGPROBS);
+        Self {
+            token: raw.token,
+            logprob: raw.logprob,
+            top: raw.top[..count]
+                .iter()
+                .map(|entry| (entry.token, entry.logprob))
+                .collect(),
+        }
+    }
+}
+
 impl From<RawTokenSignal> for TokenSignal {
     fn from(raw: RawTokenSignal) -> Self {
         Self {
@@ -661,6 +686,10 @@ pub struct SamplingConfig {
     pub mirostat_learning_rate: f32,
     pub samplers: Vec<String>,
     pub reasoning_budget: ReasoningBudget,
+    /// Record each sampled token's log-probability and this many alternatives
+    /// (OpenAI `logprobs` / `top_logprobs`), read back with
+    /// `StageSession::take_token_logprobs`. `None` records nothing.
+    pub top_logprobs: Option<u32>,
 }
 
 /// Reasoning-token limit resolved after the prompt establishes the effective
@@ -762,6 +791,7 @@ impl Default for SamplingConfig {
                 "temperature".into(),
             ],
             reasoning_budget: ReasoningBudget::Unrestricted,
+            top_logprobs: None,
         }
     }
 }
@@ -811,6 +841,15 @@ impl SamplingConfig {
                 "sampling DRY sequence breaker exceeds the native byte limit"
             ));
         }
+        if self
+            .top_logprobs
+            .is_some_and(|count| count as usize > skippy_ffi::MAX_TOP_LOGPROBS)
+        {
+            return Err(anyhow!(
+                "sampling top_logprobs exceeds the native limit of {}",
+                skippy_ffi::MAX_TOP_LOGPROBS
+            ));
+        }
         let mut logit_bias = [RawLogitBias {
             token_id: 0,
             bias: 0.0,
@@ -837,8 +876,14 @@ impl SamplingConfig {
             target[..length].copy_from_slice(&bytes[..length]);
         }
         Ok(RawSamplingConfig {
-            version: 3,
-            flags: u32::from(self.enabled) | (u32::from(self.ignore_eos) << 1),
+            version: 4,
+            flags: u32::from(self.enabled)
+                | (u32::from(self.ignore_eos) << 1)
+                | if self.top_logprobs.is_some() {
+                    skippy_ffi::SAMPLING_FLAG_LOGPROBS
+                } else {
+                    0
+                },
             seed: self.seed,
             top_k: self.top_k,
             penalty_last_n: penalty_window(self.penalty_last_n),
@@ -869,6 +914,7 @@ impl SamplingConfig {
             dry_sequence_breakers,
             logit_bias,
             reasoning_budget_tokens: self.reasoning_budget.native_tokens()?,
+            top_logprobs: self.top_logprobs.unwrap_or(0),
         })
     }
 }

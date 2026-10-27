@@ -317,6 +317,9 @@ fn benchy_wrapper_actual_native_discovery_preserves_defaults_overrides_flags_and
     peer.close();
     assert!(report.process.status.unwrap().success());
     let argv = std::fs::read_to_string(&output).unwrap();
+    assert!(argv.starts_with(
+        "--from\ngit+https://github.com/eugr/llama-benchy@e9be344578cec17745066b220798b80a0d2686d3\nllama-benchy\n--base-url\n"
+    ));
     assert!(argv.contains("--model\nfirst\n--served-model-name\nfirst\n"));
     assert!(argv.contains("--pp\n128\n512\n--tg\n16\n32\n"));
     assert!(argv.contains("--tokenizer\ndeclared-tokenizer\n"));
@@ -325,17 +328,24 @@ fn benchy_wrapper_actual_native_discovery_preserves_defaults_overrides_flags_and
     environment.insert("MODEL".into(), Value::Public("override".into()));
     environment.insert("SERVED_MODEL_NAME".into(), Value::Public("alias".into()));
     environment.insert(
+        "LLAMA_BENCHY_FROM".into(),
+        Value::Public(
+            "git+https://github.com/example/llama-benchy@0123456789abcdef0123456789abcdef01234567"
+                .into(),
+        ),
+    );
+    environment.insert(
         "BASE_URL".into(),
         Value::Public("http://127.0.0.1:1/v1".into()),
     );
     command.environment = environment;
     let report = invoke(&command, &Cancellation::default());
     assert!(report.process.status.unwrap().success());
-    assert!(
-        std::fs::read_to_string(&output)
-            .unwrap()
-            .contains("--model\noverride\n--served-model-name\nalias\n")
-    );
+    let argv = std::fs::read_to_string(&output).unwrap();
+    assert!(argv.starts_with(
+        "--from\ngit+https://github.com/example/llama-benchy@0123456789abcdef0123456789abcdef01234567\nllama-benchy\n--base-url\n"
+    ));
+    assert!(argv.contains("--model\noverride\n--served-model-name\nalias\n"));
     command
         .environment
         .insert("BASE_URL".into(), Value::Public("--api-key".into()));

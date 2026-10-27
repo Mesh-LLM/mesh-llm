@@ -283,6 +283,21 @@ pub struct NativeRuntimeConfig {
     pub skippy_abi: Option<String>,
     #[serde(default)]
     pub selection: Option<String>,
+    /// Whether startup may fetch the release catalog and download a runtime.
+    /// Unset means yes; off, only bundled and installed runtimes load.
+    /// `mesh-llm runtime install` ignores it.
+    #[serde(default)]
+    pub download: Option<bool>,
+    /// Set by `MESH_LLM_NO_RUNTIME_DOWNLOAD` for this process only. Never
+    /// saved, so an applied config cannot write the variable into `config.toml`.
+    #[serde(skip)]
+    pub download_override: Option<bool>,
+}
+
+impl NativeRuntimeConfig {
+    pub fn download_enabled(&self) -> bool {
+        self.download_override.or(self.download) != Some(false)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

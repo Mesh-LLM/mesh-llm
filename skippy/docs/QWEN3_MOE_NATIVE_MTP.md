@@ -150,17 +150,19 @@ Mesh selects the declared strategy under `strategy = "auto"`. It drafts
 
 ## Verification
 
-`skippy/evals/native-mtp-parity` compares the runtime head with `MTPHead` on the
-same hidden states, tokens and weights. On Metal, with the head in f32, both
-depths agree with the reference on every top-1 token, with KL below 5e-5. A
-head whose `proj` halves are swapped fails the same check.
+The [native probes](../evals/native-mtp-parity/README.md) export head inputs,
+depth-one outputs and chained depth-two outputs for independent inspection.
+The former Python comparison against `MTPHead` is retired; these probes alone
+do not establish parity with an independent reference or detect swapped
+projection halves.
 
 Greedy text with speculation can differ from greedy text without it. That holds
 for every speculative mode, MTP or not. Batched verification is not
 bit-identical to single-token decode, and for this MoE small differences can
 flip expert routing. `batch_invariance_probe` measures that effect on the trunk
-alone. `divergence.py` shows whether each text difference starts at a
-numerical near-tie of the target or at a real error.
+alone. `margin_probe` reports the serial trunk logit gap between two candidate
+token IDs after a supplied prefix. It does not observe the speculative verify
+window's committed logits and cannot by itself establish an inference error.
 
 The synthetic CTest `skippy_qwen3moe_mtp` certifies the integrated stage program
 and chained drafts for qwen3moe.

@@ -161,7 +161,10 @@ and working Git/xcrun. The toolchain uses the canonical shared HF cache at
 `/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
 `HF_HUB_OFFLINE=0` so missing pinned models and trajectories can be downloaded.
 Pinned input verification uses the installed `hf download --format quiet` CLI
-for path-only stdout; it does not require Hugging Face in system Python. Model
+for path-only stdout; it does not require Hugging Face in system Python.
+The replay toolchain gate requires the installed `hf` CLI without separate
+`python3` or `uv` command checks; runner provisioning owns the CLI and its runtime.
+Model
 and trajectory downloads retain revision and SHA-256 checks. The native `trajectory-reader` supplies the compressed Parquet reader. The
 history existence probe uses the typed native HTTP owner and permits bootstrap
 only on 404.
@@ -1169,6 +1172,12 @@ Every product has three immutable layers:
 
 `compose-product-input` verifies checksums, manifests and host import policy,
 then composes exact producer bytes without compiling or substituting inputs.
+In release, `scripts/package-release.sh` then adds `plugins/` to the macOS and
+Linux bundles: the default plugin archives the host pins, downloaded from each
+plugin's own GitHub release and checked against the pinned SHA-256, after
+which the bundle's own host must install each one as a default
+(`repository bundled-plugins` and `repository bundled-plugins-check`; see
+`RELEASE.md`). Nothing builds those plugins in this repository.
 Smoke and SDK consumers download those artifacts and never rebuild a missing
 producer. PR and smoke artifacts retain for one day; caches are acceleration,
 not correctness contracts.
@@ -1420,8 +1429,8 @@ graph, and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix;
 its `Justfile` and `just/**` inputs are part of the exact seed key.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
-without changing execution. The existing Python test discovery verifies the
-catalog against workflow bindings and real planner rows. Historical tool
+without changing execution. The native `migration_ci_operations` contracts
+verify the catalog against workflow bindings and real planner rows. Historical tool
 receipts and source provenance remain unknown until qualified image receipts
 exist. Other consumer workload coverage remains unknown. The measured CPU
 runtime workload had zero seed hits in all three warm samples; the separate
@@ -1782,6 +1791,23 @@ placeholder directory. Neither change expands runner or cache authority.
 
 ### Canary memory admission and Python SDK
 
+Persistent canary jobs require `self-hosted`, `macOS`, `ARM64`, `jy-managed`
+and `family-certify`. Preflight and build also require
+`accelerator-memory-128plus`; family and infrastructure-retry jobs use the
+controller's existing memory-tier label. JY selects macOS Apple M1 Ultra
+128 GiB and Apple M3 Ultra 256 GiB machines by attributes, with mounted storage,
+without embedding node names in workflows. Both advertise the 128-plus tier;
+only the M3 Ultra advertises 256-plus.
+
+Roll out [the JY runner policies and Fleet provisioning](https://github.com/general-inference/monorepo/pull/244)
+before merging this placement change. The runner groups restrict access to
+`llama-upstream-canary.yml@refs/heads/main` and
+`llama-canary-family-pass.yml@refs/heads/main` in this repository. Verify MDM
+readiness, the runner account's Goose provider authentication and readable
+offline model cache, then register both profiles. No matching managed runner
+means queued jobs; there is no legacy-pool fallback. Repository validation does
+not establish live MDM convergence or hardware certification.
+
 The controller projects each immutable source plan onto `family-certify` plus
 `accelerator-memory-128plus` (115.2 GiB) or `accelerator-memory-256plus`
 (230.4 GiB), reserving 10% of physical RAM. The source plan and its digest are
@@ -1831,6 +1857,23 @@ The producer build uses it for the early embedding battery, and historical
 source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
+
+The canary build and generated-patch checks share the locked external Jinja
+project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
+selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
+state directory and uses the prepared SDK interpreter when available, otherwise
+the installed `python3`. Interpreter downloads are disabled. Both upstream
+Jinja tests remain selected by the complete native suite. The optional developer
+llama-benchy wrapper defaults to a full upstream source commit; explicit caller
+overrides remain available. Neither dependency adds repository Python code.
+
+The native Python-tooling census runs through `just ci-crate-lists` in normal
+Quality validation. `ci/python-tooling-policy.json` records exact retained
+external dependency inputs, source pins and invocation exceptions. It rejects
+repository Python source and shebangs, undeclared package inputs and direct
+interpreter invocations in maintained automation. Historical receipts remain
+data. Mutation tests cover added hidden files, suffixless scripts and inline
+process execution; static checks do not replace review of semantic emulation.
 
 ### Self-hosted job disk cleanup
 
@@ -2056,3 +2099,13 @@ configuration or prescribe attention/recurrent cache representations. Loaded
 native graphs and memory exporters own cache admission. Split correctness still
 uses genuine planner output and binary stage servers. Cache-hit assertions run
 on immediate repeated requests without publication sleeps or retries.
+
+## Rolling preview distribution
+
+`rolling-preview.yml` is a main-only scheduled (Tuesday/Friday 03:23 UTC) and
+manual dispatcher of `release.yml` with `preview=true`, the full GPU matrix and
+hosted runners. Unique run/attempt preview versions leave main unchanged. Release
+producers check out the metadata source SHA; publication stages a draft before
+exposing the complete immutable prerelease, never marking it latest. Stable
+package channels are untouched; retention is currently indefinite and unchanged
+source is not skipped. No runner settings or secrets are added.

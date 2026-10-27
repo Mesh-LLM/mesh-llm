@@ -19,7 +19,9 @@ mod local_laya;
 mod local_memory_plan;
 mod local_model_only;
 mod local_package;
+mod local_speech;
 mod local_split;
+mod memberships;
 mod model_lifecycle;
 mod model_presentation;
 pub(crate) mod model_reconciliation;
@@ -95,6 +97,7 @@ use self::local::{
     startup_runtime_plan, stop_split_generation_cleanup, withdraw_advertised_model,
 };
 use self::local_model_only::*;
+pub use self::memberships::{MeshMembershipConfig, MeshMembershipStatus};
 pub(crate) use self::model_reconciliation::{
     DesiredRuntimeIntent, IntentPersistence, IntentSource, ModelIntent,
     ModelTargetReconciliationAction, ModelTargetReconciliationCandidate,

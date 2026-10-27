@@ -11,7 +11,7 @@ use mesh_llm_payments_types::contract::{
     CancelRequest, CancelStage, Empty, RoutingBudgetRequest, RoutingBudgetResponse, ops,
 };
 use mesh_llm_payments_types::metered_wire::{self as wire, AdmissionTerms, Frame};
-use mesh_llm_payments_types::metering::validate_payment_floor;
+use mesh_llm_payments_types::metering::{validate_deposit, validate_payment_floor};
 use mesh_llm_payments_types::{RequestTerms, intent::PaymentIntent, pricing::Pricing};
 use tokio::io::{AsyncRead, AsyncWriteExt, DuplexStream};
 
@@ -325,7 +325,7 @@ async fn read_admission(recv: &mut (impl AsyncRead + Unpin)) -> Result<Frame> {
 }
 
 /// The admission must restate exactly what was asked, at the frozen price,
-/// with a deposit that is either absent or the single defined share.
+/// with a deposit that is either absent or within the configurable range.
 fn validate_admission(
     frame: Frame,
     request: &PaidRequest,
@@ -339,12 +339,12 @@ fn validate_admission(
         terms.id == id && terms.model == request.model && terms.pricing == *price,
         "admission terms mismatch"
     );
-    // The payment service also refuses a seller minimum above this node's own.
+    // The payment service also refuses a seller minimum or deposit above this
+    // node's own.
     validate_payment_floor(terms.min_payment_msat)?;
-    ensure!(
-        terms.deposit_msat == 0 || terms.deposit_msat == terms.min_payment_msat,
-        "deposit mismatch"
-    );
+    if terms.deposit_msat > 0 {
+        validate_deposit(terms.deposit_msat)?;
+    }
     match &invoice {
         Some(invoice) => {
             ensure!(
@@ -563,5 +563,61 @@ mod tests {
         cancel.send(true).expect("the receiver is alive");
         progress.observe_cancellation(&cancellation);
         assert!(!progress.paid_undelivered());
+    }
+    fn deposit_invoice(amount_msat: u64) -> mesh_llm_wallet::invoice::Invoice {
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+        use lightning_invoice::{Currency, InvoiceBuilder, PaymentHash, PaymentSecret};
+        let secret = SecretKey::from_slice(&[7; 32]).unwrap();
+        let bolt11 = InvoiceBuilder::new(Currency::Bitcoin)
+            .description("test".into())
+            .payment_hash(PaymentHash([9; 32]))
+            .payment_secret(PaymentSecret([42; 32]))
+            .current_timestamp()
+            .expiry_time(std::time::Duration::from_secs(3600))
+            .min_final_cltv_expiry_delta(144)
+            .amount_milli_satoshis(amount_msat)
+            .build_signed(|hash| Secp256k1::new().sign_ecdsa_recoverable(hash, &secret))
+            .unwrap()
+            .to_string();
+        mesh_llm_wallet::invoice::Invoice::parse(&bolt11).unwrap()
+    }
+
+    #[test]
+    fn a_seller_deposit_is_checked_against_the_cap_not_the_seller_minimum() -> Result<()> {
+        let price = Pricing {
+            input_msat_per_million: 1,
+            output_msat_per_million: 1,
+            cache_discount_percent: 0,
+        };
+        let request = PaidRequest {
+            model: "m".into(),
+            max_tokens: 1,
+            path: "/v1/completions".into(),
+            body: serde_json::Value::Null,
+            intent: None,
+        };
+        let admission = |deposit_msat: u64| Frame::Admission {
+            terms: AdmissionTerms {
+                id: "r".into(),
+                model: "m".into(),
+                pricing: price.clone(),
+                deposit_msat,
+                min_payment_msat: 1000,
+            },
+            invoice: (deposit_msat > 0).then(|| deposit_invoice(deposit_msat)),
+        };
+        // Releases before separate deposits required the two to be equal.
+        let (terms, invoice) = validate_admission(admission(50_000), &request, &price, "r")?;
+        assert_eq!(terms.deposit_msat, 50_000);
+        assert_eq!(
+            invoice.and_then(|invoice| invoice.amount_msat),
+            Some(50_000)
+        );
+        let cap = mesh_llm_payments_types::metering::MAX_PAYMENT_FLOOR_MSAT;
+        validate_admission(admission(cap), &request, &price, "r")?;
+        assert!(validate_admission(admission(cap + 1000), &request, &price, "r").is_err());
+        // No deposit at all is still valid.
+        validate_admission(admission(0), &request, &price, "r")?;
+        Ok(())
     }
 }

@@ -168,9 +168,8 @@ fn expand(text: &str, stage: &Stage) -> String {
 }
 
 /// Runs the Rust port on `stage` with `args` (after the subcommand), checks
-/// it against the captured golden `name`, and, when the legacy interpreter
-/// is configured, against a side-by-side legacy run on the same inputs.
-/// `reset` restores the stage between the two runs (for `bind`).
+/// it against the captured golden `name`. These historical output fixtures
+/// are data; the tests do not run a legacy interpreter or differential oracle.
 pub fn assert_case(
     name: &str,
     stage: &Stage,

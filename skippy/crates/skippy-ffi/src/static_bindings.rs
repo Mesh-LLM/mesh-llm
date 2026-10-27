@@ -11,7 +11,7 @@ use crate::{
     NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
     StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
     StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
-    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1,
+    SystemOneSlot, TensorInfo, TokenLogprobs, TokenSignal, WorkloadInfoV1,
 };
 
 unsafe extern "C" {
@@ -581,6 +581,14 @@ unsafe extern "C" {
     pub fn skippy_session_last_token_signal(
         session: *mut Session,
         out_signal: *mut TokenSignal,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_session_take_token_logprobs(
+        session: *mut Session,
+        out_entries: *mut TokenLogprobs,
+        capacity: usize,
+        out_count: *mut usize,
         out_error: *mut *mut Error,
     ) -> Status;
 

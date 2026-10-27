@@ -7,7 +7,7 @@ use crate::ci_operations::ci_metrics_aggregate::{
 };
 use crate::ci_operations::ci_metrics_analyze::Pass;
 use crate::ci_operations::ci_metrics_observe::Observation;
-use crate::ci_operations::ci_metrics_stats::{Summary, round, sort_descending, summarize};
+use crate::ci_operations::ci_metrics_stats::{Summary, round_decimal, sort_descending, summarize};
 use crate::ci_operations::ci_metrics_value::{Value, object};
 
 /// `slowest_observations`: the `top` longest jobs, ties in input order.
@@ -32,7 +32,7 @@ pub(crate) fn critical(pass: &Pass<'_>, top: usize) -> Value {
             object([
                 ("name", Value::text(&name)),
                 ("terminal_count", Value::count(count)),
-                ("share", Value::Float(round(share, 4))),
+                ("share", Value::Float(round_decimal(share, 4))),
             ])
         });
     Value::Array(entries.collect())

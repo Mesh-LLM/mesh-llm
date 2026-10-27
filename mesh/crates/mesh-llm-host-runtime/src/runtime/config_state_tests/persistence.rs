@@ -248,16 +248,21 @@ fn config_sync_state_apply_persists_integrated_fixture_sections_and_hashes_chang
 }
 
 #[test]
-#[serial_test::serial]
 fn config_sync_apply_does_not_persist_the_lifecycle_log_parser_env_override() {
+    if !mesh_llm_config::env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::config_sync_apply_does_not_persist_the_lifecycle_log_parser_env_override"
+        ),
+        "MESH_LLM_LIFECYCLE_LOG_PARSER",
+        "disabled",
+    ) {
+        return;
+    }
     let dir = test_dir();
     let config_path = dir.join("config.toml");
     std::fs::write(&config_path, "version = 1\n").expect("write config");
-    let mut state = mesh_llm_config::with_env_override_for_test(
-        "MESH_LLM_LIFECYCLE_LOG_PARSER",
-        "disabled",
-        || ConfigState::load(&config_path).expect("load"),
-    );
+    let mut state = ConfigState::load(&config_path).expect("load");
 
     // An owner fetches the snapshot, changes one setting and applies it.
     let mut pushed = crate::protocol::convert::proto_config_to_mesh(
