@@ -322,7 +322,7 @@ confirmation or disposition comment.
 | 34 | [#2208](https://github.com/Mesh-LLM/mesh-llm/issues/2208) | FIXED | `fix/34-2208-stage-session-claim-owner` | [#2626](https://github.com/Mesh-LLM/mesh-llm/pull/2626) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2208#issuecomment-6430632528) |
 | 35 | [#2193](https://github.com/Mesh-LLM/mesh-llm/issues/2193) | FIXED | `fix/35-2193-tune-lane-base-precedence` | [#2627](https://github.com/Mesh-LLM/mesh-llm/pull/2627) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2193#issuecomment-6430850666) |
 | 36 | [#2192](https://github.com/Mesh-LLM/mesh-llm/issues/2192) | FIXED | `fix/36-2192-tune-mtp-hook-routing` | [#2628](https://github.com/Mesh-LLM/mesh-llm/pull/2628) | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2192#issuecomment-6431117077) |
-| 37 | [#2383](https://github.com/Mesh-LLM/mesh-llm/issues/2383) | TODO | — | — | — |
+| 37 | [#2383](https://github.com/Mesh-LLM/mesh-llm/issues/2383) | CONFIRMED | `fix/37-2383-plugin-host-calls` | — | [confirmation](https://github.com/Mesh-LLM/mesh-llm/issues/2383#issuecomment-6433058292) |
 | 38 | [#2387](https://github.com/Mesh-LLM/mesh-llm/issues/2387) | TODO | — | — | — |
 | 39 | [#2151](https://github.com/Mesh-LLM/mesh-llm/issues/2151) | TODO | — | — | — |
 | 40 | [#1001](https://github.com/Mesh-LLM/mesh-llm/issues/1001) | TODO | — | — | — |
