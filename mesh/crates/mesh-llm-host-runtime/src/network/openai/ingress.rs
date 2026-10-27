@@ -56,7 +56,6 @@ use mesh_llm_events::audit::{audit_events, emit_audit};
 use mesh_llm_events::{OutputEvent, emit_event};
 
 enum AutoRouteResolution {
-    PaymentRequired(&'static str),
     Continue {
         effective_model: Option<String>,
         classification: Option<router::Classification>,
@@ -67,7 +66,6 @@ enum AutoRouteResolution {
 
 #[derive(Debug)]
 enum AutoRouteRejection {
-    PaymentRequired(&'static str),
     MediaUnsupported,
     WorkloadUnsupported(mesh::ModelWorkloadClass),
 }
@@ -348,7 +346,7 @@ async fn resolve_auto_routed_model(
     let Some(available) = router::filter_media_compatible_candidates(&available, &media) else {
         return AutoRouteResolution::MediaUnsupported;
     };
-    let (available, ready_models) = match auto_route::payment_admission::admitted_models(
+    let (available, ready_models) = auto_route::readiness::ready_models(
         node,
         Some(targets),
         request,
@@ -356,11 +354,7 @@ async fn resolve_auto_routed_model(
         required_tokens,
         affinity,
     )
-    .await
-    {
-        Ok(pool) => pool,
-        Err(reason) => return AutoRouteResolution::PaymentRequired(reason),
-    };
+    .await;
     let available = auto_route::pool_for_ready_models(&available, &ready_models);
 
     let classification = body_json.map_or_else(
@@ -519,7 +513,6 @@ async fn try_pipeline_proxy(
         node,
         &capsule_nonce,
         super::response::RouteAttemptLoggingContext {
-            exchange_id: None,
             request_id: request.request_id,
             response_adapter: request.response_adapter,
             retry_policy: super::response::ResponseRetryPolicy::next_target_available(false),
@@ -706,7 +699,6 @@ async fn route_missing_local_model(
                 request,
                 proxy::RouteModelRequestContext {
                     local_execution_only: false,
-                    exchange_id: Some(&exchange_id),
                     required_tokens,
                     affinity: ctx.affinity,
                     route_observer,
@@ -1360,7 +1352,6 @@ async fn route_request(
             request,
             proxy::RouteModelRequestContext {
                 local_execution_only,
-                exchange_id: announce.as_ref().map(|(_, id)| id.as_str()),
                 required_tokens,
                 affinity: ctx.affinity,
                 route_observer,
@@ -1506,9 +1497,6 @@ async fn prepare_auto_route_decision(
                 required_tokens,
             })
         }
-        AutoRouteResolution::PaymentRequired(reason) => {
-            Err(AutoRouteRejection::PaymentRequired(reason))
-        }
         AutoRouteResolution::MediaUnsupported => Err(AutoRouteRejection::MediaUnsupported),
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             Err(AutoRouteRejection::WorkloadUnsupported(workload))
@@ -1561,10 +1549,6 @@ async fn send_auto_route_rejection(
 ) -> proxy::RouteDispatchOutcome {
     proxy::release_request_objects(node, request_object_request_ids).await;
     match rejection {
-        AutoRouteRejection::PaymentRequired(reason) => response_outcome(
-            402,
-            proxy::send_error_observed(tcp_stream, 402, reason, route_observer).await,
-        ),
         AutoRouteRejection::MediaUnsupported => {
             send_media_unsupported(tcp_stream, route_observer).await
         }
@@ -1572,28 +1556,6 @@ async fn send_auto_route_rejection(
             send_workload_unsupported(tcp_stream, workload, path, route_observer).await
         }
     }
-}
-
-/// Build the sorted list of model names visible to the `/v1/models` endpoint:
-/// the remote-mesh callable set from `targets` merged with `local_models`
-/// (plugin-served and locally-launched models) with duplicates removed.
-/// The locally registered model name for a public model ID, as the free
-/// path's alias rewrite resolves it. A model served from a catalog or Hugging
-/// Face ref is registered under an internal ID (for example
-/// `local-gguf/sha256-…`) but advertised and priced under its public ID.
-#[cfg(feature = "payments")]
-pub(crate) async fn served_model_for_public_id(
-    node: &mesh::Node,
-    targets: &election::ModelTargets,
-    requested: &str,
-) -> String {
-    let callable = callable_models(targets);
-    if callable.iter().any(|model| model == requested) {
-        return requested.to_owned();
-    }
-    let descriptors = node.all_served_model_descriptors().await;
-    super::request_parse::internal_model_for_public_id(requested, &callable, &descriptors)
-        .unwrap_or_else(|| requested.to_owned())
 }
 
 async fn maybe_handle_control_request(

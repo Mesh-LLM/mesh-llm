@@ -1,7 +1,5 @@
 use super::super::config::{MeshConfig, PluginConfigEntry, resolve_plugins};
-use super::super::{
-    BLOBSTORE_PLUGIN_ID, MeshVisibility, PAYMENTS_PLUGIN_ID, PluginHostMode, PluginManager,
-};
+use super::super::{BLOBSTORE_PLUGIN_ID, MeshVisibility, PluginHostMode, PluginManager};
 use super::*;
 use mesh_llm_plugin_manager::InstalledPluginManifestMetadata;
 use tokio::sync::mpsc;
@@ -83,11 +81,7 @@ fn settings_only_entry_stays_off_after_plugins_disable() {
 async fn stays_off_after_plugins_disable(store: &Path) {
     let metadata = installed_capsules(store, false);
     let config = MeshConfig {
-        plugins: vec![
-            capsules_entry(None),
-            builtin_off(BLOBSTORE_PLUGIN_ID),
-            builtin_off(PAYMENTS_PLUGIN_ID),
-        ],
+        plugins: vec![capsules_entry(None), builtin_off(BLOBSTORE_PLUGIN_ID)],
         ..MeshConfig::default()
     };
 

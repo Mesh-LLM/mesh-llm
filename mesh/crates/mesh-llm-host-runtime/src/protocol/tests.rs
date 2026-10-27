@@ -184,8 +184,6 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         decode_batch_policy_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
 
         display_rtt: None,

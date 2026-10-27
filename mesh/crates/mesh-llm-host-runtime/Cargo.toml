@@ -9,13 +9,7 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
 
 [features]
-default = ["web-ui", "dynamic-native-runtime", "payments"]
-# Paid-inference ledger, gates and the `wallet.v1` plugin adapter. Never links
-# a wallet SDK: the wallet is a plugin process resolved by capability.
-# Consumers that reach host-runtime with `default-features = false` (e.g. via
-# the SDK serving path) stay payment-free and drop the rusqlite /
-# lightning-invoice / bitcoin stack unless they opt back in.
-payments = ["dep:mesh-llm-payments-types", "mesh-llm-payments-types/engine", "dep:mesh-llm-wallet", "mesh-llm-membership/payments"]
+default = ["web-ui", "dynamic-native-runtime"]
 # Embed the React web console into the binary. Default on; turn off for
 # lib-style / headless consumers that don't need the console assets.
 # Propagates to `mesh-llm-ui/embed-assets`.
@@ -43,8 +37,6 @@ mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78
 mesh-llm-transport = { path = "../mesh-llm-transport", version = "0.78.0" }
 skippy-api = { path = "../../../skippy/crates/skippy-api", version = "0.78.0" }
 skippy-events = { path = "../../../skippy/crates/skippy-events", version = "0.78.0" }
-mesh-llm-payments-types = { path = "../../plugins/pay-lightning/lib/mesh-llm-payments-types", version = "0.78.0", optional = true }
-mesh-llm-wallet = { path = "../../plugins/pay-lightning/lib/mesh-llm-wallet", version = "0.78.0", optional = true }
 bytes = "1"
 mesh-llm-build-info.workspace = true
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.78.0"  }
@@ -142,7 +134,6 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78.0", features = ["test-support"] }
-mesh-llm-payments = { path = "../../plugins/pay-lightning/lib/mesh-llm-payments", version = "0.78.0", features = ["plugin-server"] }
 # start_paused test clocks for the probe cooldown regression tests.
 tokio = { version = "1", features = ["full", "test-util"] }
 bitcoin = { version = "0.32", features = ["secp-recovery"] }

@@ -121,16 +121,6 @@ pub struct RebroadcastAnnouncements {
     pub filtered_old_version: usize,
 }
 
-#[cfg(feature = "payments")]
-fn lightning_offers_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
-    old.lightning_offers != new.lightning_offers
-}
-
-#[cfg(not(feature = "payments"))]
-fn lightning_offers_changed(_old: &PeerInfo, _new: &PeerInfo) -> bool {
-    false
-}
-
 pub fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
     old.addr != new.addr
         || old.mesh_id != new.mesh_id
@@ -155,7 +145,6 @@ pub fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.stage_status_list_supported != new.stage_status_list_supported
         || old.local_gguf_content_id_supported != new.local_gguf_content_id_supported
         || old.decode_batch_policy_supported != new.decode_batch_policy_supported
-        || lightning_offers_changed(old, new)
         || crate::advertised_state_changed(&old.cache_affinity, &new.cache_affinity)
         || old.version != new.version
         || old.owner_summary != new.owner_summary
@@ -253,16 +242,6 @@ pub fn apply_transitive_ann(
     // direction, so it may neither promote nor clear them. Direct announcements
     // update both fields authoritatively.
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
-    #[cfg(feature = "payments")]
-    {
-        // Admission is established only by direct gossip. Once the seller
-        // has spoken for itself, a relay cannot change its economics (including
-        // erasing offers when an older relay drops the additive payment field).
-        // Direct updates remain authoritative, including an intentional clear.
-        if !existing.is_admitted() {
-            existing.lightning_offers = ann.lightning_offers.clone();
-        }
-    }
     crate::merge_advertisement(
         &mut existing.cache_affinity,
         ann.cache_affinity.as_ref(),
@@ -342,8 +321,6 @@ pub fn announcement_from_peer(peer: &PeerInfo) -> PeerAnnouncement {
         local_gguf_content_id_supported: peer.local_gguf_content_id_supported,
         decode_batch_policy_supported: peer.decode_batch_policy_supported,
         advertised_model_throughput: peer.advertised_model_throughput.clone(),
-        #[cfg(feature = "payments")]
-        lightning_offers: peer.lightning_offers.clone(),
         cache_affinity: peer.cache_affinity.clone(),
         latency_ms: latency.latency_ms,
         latency_source: Some(match latency.source {
@@ -428,10 +405,6 @@ pub fn update_existing_direct_peer(
     existing.local_gguf_content_id_supported = ann.local_gguf_content_id_supported;
     existing.decode_batch_policy_supported = ann.decode_batch_policy_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
-    #[cfg(feature = "payments")]
-    {
-        existing.lightning_offers = ann.lightning_offers.clone();
-    }
     crate::merge_advertisement(
         &mut existing.cache_affinity,
         ann.cache_affinity.as_ref(),

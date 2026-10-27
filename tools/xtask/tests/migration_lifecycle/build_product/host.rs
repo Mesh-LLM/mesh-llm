@@ -30,7 +30,7 @@ fn neutral_release_host_features_are_backend_independent_of_legacy_wallet_select
                 ],
             );
             assert!(result.process.success(), "{backend}: {result:?}");
-            let expected: BTreeSet<_> = ["web-ui", "dynamic-native-runtime", "payments"]
+            let expected: BTreeSet<_> = ["web-ui", "dynamic-native-runtime"]
                 .into_iter()
                 .map(str::to_owned)
                 .collect();

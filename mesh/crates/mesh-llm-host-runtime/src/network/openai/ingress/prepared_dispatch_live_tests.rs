@@ -130,7 +130,6 @@ async fn installed_lifecycle_pipeline_admits_each_prepared_dispatch_and_never_fa
             &host.node,
             &nonce,
             response::RouteAttemptLoggingContext {
-                exchange_id: None,
                 request_id,
                 response_adapter: crate::network::openai::request_normalize::ResponseAdapter::None,
                 retry_policy: response::ResponseRetryPolicy::next_target_available(false),

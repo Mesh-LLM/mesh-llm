@@ -306,32 +306,6 @@ mod tests {
         assert!(!wire.contains("[DONE]"));
     }
 
-    #[cfg(feature = "payments")]
-    #[tokio::test]
-    async fn seller_replay_matches_payer_usage_and_digests() {
-        let body = frames(true);
-        let (_, result) = relay(body.clone()).await;
-        let RouteAttemptResult::Delivered {
-            usage,
-            output_digests,
-            ..
-        } = result.unwrap()
-        else {
-            panic!("not delivered")
-        };
-        let raw = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
-        );
-        let seller = crate::network::openai::response::served_outcome_of_raw_response(
-            raw.as_bytes(),
-            crate::network::openai::request_normalize::ResponseAdapter::OpenAiChatCompletionsStream,
-        )
-        .await;
-        let payer =
-            crate::network::openai::transport::delivered_outcome(200, usage, output_digests);
-        assert_eq!(seller, payer);
-    }
-
     #[tokio::test]
     async fn totals_before_finish_are_preserved_after_finish() {
         let body = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";

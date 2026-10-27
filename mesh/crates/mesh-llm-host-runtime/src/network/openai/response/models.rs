@@ -13,15 +13,6 @@ pub async fn send_models_list_with_descriptors(
     node: Option<&mesh::Node>,
 ) -> std::io::Result<()> {
     let body = models_list_json_with_virtual(models, descriptors, runtimes, virtual_models);
-    #[cfg(feature = "payments")]
-    let body = {
-        let mut body = body;
-        if let Some(node) = node {
-            super::model_prices::attach_prices(&mut body, models, descriptors, node).await;
-        }
-        body
-    };
-    #[cfg(not(feature = "payments"))]
     let _ = node;
     let body = body.to_string();
     let resp = format!(

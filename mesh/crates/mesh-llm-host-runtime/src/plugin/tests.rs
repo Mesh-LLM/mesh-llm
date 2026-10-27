@@ -130,37 +130,6 @@ fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
 }
 
 #[test]
-fn builtin_payments_is_served_in_process_and_can_be_switched_off() {
-    super::config::TEST_PAYMENTS_COMPILED_IN.with(|slot| *slot.borrow_mut() = Some(true));
-    let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
-    let payments = resolved
-        .externals
-        .iter()
-        .find(|spec| spec.name == PAYMENTS_PLUGIN_ID)
-        .expect("payments builtin registered");
-    assert!(
-        payments.command.is_empty(),
-        "served in-process, not re-exec'd"
-    );
-    assert!(payments.startup.optional);
-
-    let mut entry = wallet_entry(Some(false));
-    entry.name = PAYMENTS_PLUGIN_ID.into();
-    let config = MeshConfig {
-        plugins: vec![entry],
-        ..MeshConfig::default()
-    };
-    let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-    super::config::TEST_PAYMENTS_COMPILED_IN.with(|slot| *slot.borrow_mut() = None);
-    assert!(
-        resolved
-            .externals
-            .iter()
-            .all(|spec| spec.name != PAYMENTS_PLUGIN_ID)
-    );
-}
-
-#[test]
 fn builtin_plugin_arguments_follow_the_plugin_flag() {
     let spec = super::config::builtin_plugin_spec(
         BLOBSTORE_PLUGIN_ID,

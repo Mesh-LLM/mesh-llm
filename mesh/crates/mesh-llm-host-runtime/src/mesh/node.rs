@@ -195,11 +195,7 @@ pub struct Node {
     /// directly-connected peers announce (`mesh::plugin_keys`).
     pub(crate) plugin_keys: crate::mesh::plugin_keys::PluginKeys,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
-    #[cfg(feature = "payments")]
-    pub(crate) payments: crate::network::payments::PaymentsSlot,
     /// Stops the payment-recovery loop, which holds a `Node` clone.
-    #[cfg(feature = "payments")]
-    pub(crate) payment_recovery: crate::network::payments::PaymentRecoverySlot,
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
@@ -667,8 +663,6 @@ impl Node {
             close_endpoint_gracefully(&lifecycle.endpoint, "owner-control").await;
         }
         self.shutdown_stage_control().await;
-        #[cfg(feature = "payments")]
-        self.shutdown_payment_recovery().await;
     }
 
     async fn shutdown_stage_control(&self) {
@@ -916,10 +910,6 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
             },
-            #[cfg(feature = "payments")]
-            payments: Arc::new(tokio::sync::OnceCell::new()),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &activity_policy_config,
             ),
@@ -1106,10 +1096,6 @@ impl Node {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)
             },
-            #[cfg(feature = "payments")]
-            payments: Arc::new(tokio::sync::OnceCell::new()),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &mesh_llm_config::RuntimeActivityConfig::default(),
             ),
@@ -1654,10 +1640,7 @@ impl Node {
         *self.display_name.lock().await = Some(name);
     }
 
-    /// Removes the plugin manager from this node. The in-process payments
-    /// runner holds a `Node` clone, so a manager left installed forms a
-    /// Node -> manager -> runner -> Node cycle that keeps the payments engine
-    /// (and its `service.lock`) alive after an embedded stop.
+    /// Removes the plugin manager, releasing any runner references to this node.
     pub async fn take_plugin_manager(&self) -> Option<crate::plugin::PluginManager> {
         self.plugin_manager.lock().await.take()
     }

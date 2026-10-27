@@ -103,10 +103,6 @@ pub async fn send_400(stream: ClientStream, msg: &str) -> std::io::Result<()> {
 
 // Currently reached only by the paid-ingress rejection path; compiled out with
 // wallets. Ungate if a wallet-free caller needs a bare error response.
-#[cfg(feature = "payments")]
-pub async fn send_error(stream: ClientStream, code: u16, msg: &str) -> std::io::Result<()> {
-    send_openai_error(stream, code, msg, None).await
-}
 
 /// Write a locally generated bounded OpenAI JSON error and record the exact
 /// body only after the client write succeeds. The observer remains the narrow
@@ -297,22 +293,6 @@ mod tests {
             "value CRLF must be stripped; got {buf:?}"
         );
         assert_eq!(buf.matches("\r\n").count(), 1);
-    }
-
-    #[cfg(feature = "payments")]
-    #[tokio::test]
-    async fn test_send_error_429_includes_retry_after() {
-        let response = capture_proxy_error_response(|stream| async move {
-            super::send_error(stream, 429, "model not available").await
-        })
-        .await;
-        let body = response_json_body(&response);
-
-        assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
-        assert!(response.contains("Retry-After: 5\r\n"));
-        assert_eq!(body["error"]["message"], "model not available");
-        assert_eq!(body["error"]["type"], "rate_limit_error");
-        assert_eq!(body["error"]["code"], "rate_limit_exceeded");
     }
 
     #[tokio::test]

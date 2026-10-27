@@ -955,9 +955,6 @@ pub(super) async fn start_run_auto_node_and_plugins(
     let mut moa_spec = plugin::in_process_builtin_spec(plugin::MOA_PLUGIN_ID);
     moa_spec.startup.optional = false;
     resolved_plugins.externals.push(moa_spec);
-    #[cfg(feature = "payments")]
-    let in_process = crate::network::payments::in_process_plugins(&node);
-    #[cfg(not(feature = "payments"))]
     let in_process = plugin::InProcessPlugins::default();
     let moa_runner: plugin::InProcessPluginRunner =
         std::sync::Arc::new(|stream| Box::pin(mesh_llm_moa_plugin::run(stream)));
@@ -983,8 +980,6 @@ pub(super) async fn start_run_auto_node_and_plugins(
         .await;
     node.install_plugin_manager_with_exchange_grants(plugin_manager.clone())
         .await?;
-    #[cfg(feature = "payments")]
-    crate::network::payments::spawn_payment_recovery(&node).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
 }

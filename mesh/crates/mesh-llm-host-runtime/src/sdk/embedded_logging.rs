@@ -79,28 +79,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "payments")]
-    fn snapshots_preserve_each_profiles_payment_directory() {
-        let root = tempfile::tempdir().expect("temporary profiles");
-        for name in ["first", "second"] {
-            let profile = root.path().join(name);
-            let path = profile.join("config.toml");
-            // A new profile without a config must retain the same state root.
-            let snapshot = snapshot_validated_config(Some(&path)).expect("snapshot");
-            let state = crate::runtime::config_state::ConfigState::load(snapshot.path())
-                .expect("load snapshot");
-            assert_eq!(state.payment_directory(), profile.join("payments"));
-            assert!(
-                !path.exists(),
-                "snapshot must not replace the user's config"
-            );
-            let snapshot_path = snapshot.path().to_path_buf();
-            drop(snapshot);
-            assert!(!snapshot_path.exists(), "snapshot must be cleaned up");
-        }
-    }
-
-    #[test]
     fn invalid_config_does_not_leave_a_snapshot() {
         let profile = tempfile::tempdir().expect("temporary profile");
         let path = profile.path().join("config.toml");

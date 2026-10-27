@@ -1074,7 +1074,6 @@ gpu_id = "pci:0000:65:00.0"
         let occurrences = [
             ("MeshConfig", 1usize),
             ("OwnerControlConfig", 1),
-            ("PaymentsConfig", 1),
             ("GpuConfig", 1),
             ("RuntimeConfig", 1),
             ("NativeRuntimeConfig", 1),
@@ -1107,7 +1106,6 @@ gpu_id = "pci:0000:65:00.0"
             "GpuConfig",
             "MeshRequirementsConfig",
             "OwnerControlConfig",
-            "PaymentsConfig",
             "RuntimeConfig",
             "NativeRuntimeConfig",
             "RuntimeKvCacheConfig",

@@ -286,7 +286,6 @@ fn config_sync_state_revision_monotonic() {
         }],
         plugins: vec![],
         logging: Default::default(),
-        payments: Default::default(),
         extra: Default::default(),
     };
 
@@ -337,7 +336,6 @@ fn config_sync_state_hash_changes_on_different_config() {
         }],
         plugins: vec![],
         logging: Default::default(),
-        payments: Default::default(),
         extra: Default::default(),
     };
     state.apply(config_with_model, 0);

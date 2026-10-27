@@ -27,7 +27,7 @@ impl Drop for UntrustedManagementRequest {
     }
 }
 
-#[cfg(any(test, feature = "payments"))]
+#[cfg(test)]
 pub(crate) fn is_untrusted_management_request(address: SocketAddr) -> bool {
     // Poisoned origin tracking fails closed for wallet spending.
     connections()

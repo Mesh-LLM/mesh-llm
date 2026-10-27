@@ -35,7 +35,6 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "owner_control.advertise_addr",
             ConfigValueSchema::SocketAddr,
         ),
-        top_level_setting("payments.wallet", ConfigValueSchema::String),
         telemetry_setting("telemetry.enabled", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.service_name", ConfigValueSchema::String),
         telemetry_setting("telemetry.endpoint", ConfigValueSchema::Url),

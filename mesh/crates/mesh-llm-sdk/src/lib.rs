@@ -41,13 +41,6 @@ pub mod plugin {
     pub use mesh_llm_host_runtime::plugin::run_plugin_process;
 }
 
-/// Payment control and data types for driving the engine's payments over
-/// its control API: policy, pricing, invoices and wallet status.
-#[cfg(feature = "payments")]
-pub mod payments {
-    pub use mesh_llm_payments::{control, invoice, ledger, pricing, wallet};
-}
-
 /// Node identity keys on disk.
 #[cfg(feature = "identity")]
 pub use mesh_llm_identity as identity;

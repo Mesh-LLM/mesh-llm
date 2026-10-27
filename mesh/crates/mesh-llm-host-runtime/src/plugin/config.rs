@@ -4,8 +4,7 @@ use super::installed::{
 };
 use super::schema_validation::strict_plugin_schema_availability;
 use super::{
-    BLOBSTORE_PLUGIN_ID, PAYMENTS_PLUGIN_ID, PluginStartupOptions, PluginSummary,
-    RETIRED_WALLET_LEXE_PLUGIN_ID,
+    BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary, RETIRED_WALLET_LEXE_PLUGIN_ID,
 };
 use crate::{
     MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
@@ -299,7 +298,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
-    let mut payments_enabled = true;
     for entry in &config.plugins {
         if names.insert(entry.name.clone(), ()).is_some() {
             bail!("Duplicate plugin entry '{}'", entry.name);
@@ -328,11 +326,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
             });
             continue;
         }
-        if entry.name == PAYMENTS_PLUGIN_ID {
-            ensure_builtin_entry_only_toggles_enabled(entry)?;
-            payments_enabled = enabled;
-            continue;
-        }
         if !enabled {
             if let Some(summary) = configured_disabled_installed_plugin_summary(entry) {
                 inactive.push(summary);
@@ -350,10 +343,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     if blobstore_enabled {
         externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID, &[])?);
     }
-    if payments_enabled && payments_compiled_in() {
-        externals.push(in_process_builtin_spec(PAYMENTS_PLUGIN_ID));
-    }
-
     Ok(ResolvedPlugins {
         externals,
         inactive,
@@ -374,25 +363,6 @@ fn ensure_builtin_entry_only_toggles_enabled(entry: &PluginConfigEntry) -> Resul
         );
     }
     Ok(())
-}
-
-/// Whether this build carries the payments engine. Forced per thread under
-/// test and defaults to "absent", so the many resolver tests that count plugins
-/// are independent of the cargo features the test binary was built with.
-#[cfg(not(test))]
-fn payments_compiled_in() -> bool {
-    cfg!(feature = "payments")
-}
-
-#[cfg(test)]
-fn payments_compiled_in() -> bool {
-    TEST_PAYMENTS_COMPILED_IN.with(|slot| slot.borrow().unwrap_or(false))
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(super) static TEST_PAYMENTS_COMPILED_IN: std::cell::RefCell<Option<bool>> =
-        const { std::cell::RefCell::new(None) };
 }
 
 /// Spec for a builtin served as a task in this process: no command, so the

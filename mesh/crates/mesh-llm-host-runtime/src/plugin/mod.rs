@@ -115,9 +115,6 @@ pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
 /// with this name is ignored with a warning; Lexe now ships as the external
 /// `lexe-wallet` plugin.
 pub const RETIRED_WALLET_LEXE_PLUGIN_ID: &str = "wallet-lexe";
-/// Built-in payments engine, served in-process as the `payments.v1`
-/// capability. Registered only with the `payments` feature.
-pub const PAYMENTS_PLUGIN_ID: &str = "payments";
 pub const MOA_PLUGIN_ID: &str = mesh_llm_moa_plugin::PLUGIN_ID;
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const REQUEST_TIMEOUT_SECS: u64 = 30;

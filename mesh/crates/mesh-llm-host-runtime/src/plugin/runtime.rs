@@ -1926,7 +1926,3 @@ pub(crate) mod tests {
         drop(outbound_rx);
     }
 }
-
-#[cfg(all(test, feature = "payments"))]
-#[path = "runtime/payment_failure_tests.rs"]
-mod payment_failure_tests;

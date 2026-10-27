@@ -558,8 +558,6 @@ pub(crate) mod tests {
             local_gguf_content_id_supported: false,
             decode_batch_policy_supported: false,
             advertised_model_throughput: vec![],
-            #[cfg(feature = "payments")]
-            lightning_offers: Default::default(),
             cache_affinity: None,
             display_rtt: None,
             selected_path: None,
@@ -699,8 +697,6 @@ pub(crate) mod tests {
             local_gguf_content_id_supported: false,
             decode_batch_policy_supported: false,
             advertised_model_throughput: vec![],
-            #[cfg(feature = "payments")]
-            lightning_offers: Default::default(),
             cache_affinity: None,
             display_rtt: None,
             selected_path: None,
@@ -848,8 +844,6 @@ pub(crate) mod tests {
                 avg_tokens_per_second_milli: 13_400,
                 throughput_samples: 27,
             }],
-            #[cfg(feature = "payments")]
-            lightning_offers: Default::default(),
             cache_affinity: None,
             display_rtt: None,
             selected_path: None,

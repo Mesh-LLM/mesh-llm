@@ -967,7 +967,6 @@ mod tests {
             logging: Default::default(),
             defaults: None,
             runtime: Default::default(),
-            payments: Default::default(),
             extra: Default::default(),
         };
 

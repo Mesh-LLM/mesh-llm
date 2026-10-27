@@ -4673,7 +4673,6 @@ dependencies = [
  "mesh-llm-commands",
  "mesh-llm-events",
  "mesh-llm-host-runtime",
- "mesh-llm-payments",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
  "mesh-llm-system",
@@ -4789,7 +4788,6 @@ dependencies = [
  "mesh-llm-config",
  "mesh-llm-events",
  "mesh-llm-identity",
- "mesh-llm-payments",
  "mesh-llm-plugin-manager",
  "mesh-llm-system",
  "mesh-llm-tui",
@@ -4867,7 +4865,6 @@ version = "0.78.0"
 dependencies = [
  "anyhow",
  "mesh-llm-host-runtime",
- "mesh-llm-payments",
 ]
 
 [[package]]
@@ -4937,8 +4934,6 @@ dependencies = [
  "mesh-llm-membership",
  "mesh-llm-moa-plugin",
  "mesh-llm-node",
- "mesh-llm-payments",
- "mesh-llm-payments-types",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
  "mesh-llm-protocol",
@@ -4949,7 +4944,6 @@ dependencies = [
  "mesh-llm-transport",
  "mesh-llm-types",
  "mesh-llm-ui",
- "mesh-llm-wallet",
  "mesh-native-serving-plugin-host",
  "nostr-sdk",
  "opentelemetry",
@@ -5055,7 +5049,6 @@ dependencies = [
  "hex",
  "iroh",
  "mesh-llm-identity",
- "mesh-llm-payments-types",
  "mesh-llm-protocol",
  "mesh-llm-routing",
  "mesh-llm-types",
@@ -5237,7 +5230,6 @@ dependencies = [
  "mesh-llm-embedded-runtime",
  "mesh-llm-host-runtime",
  "mesh-llm-identity",
- "mesh-llm-payments",
  "mesh-llm-plugin-manager",
  "reqwest 0.13.5",
  "rustls",

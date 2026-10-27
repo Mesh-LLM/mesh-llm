@@ -214,6 +214,3 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod public_identity_tests;
-
-#[cfg(feature = "payments")]
-pub(crate) mod payments;

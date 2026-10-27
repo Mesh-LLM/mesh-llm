@@ -115,8 +115,6 @@ pub struct NodeRecord {
     pub admission_state: i32,
     #[prost(message, repeated, tag = "21")]
     pub throughput: ::prost::alloc::vec::Vec<AdvertisedModelThroughput>,
-    #[prost(message, repeated, tag = "22")]
-    pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
     #[prost(message, optional, tag = "23")]
     pub owner_attestation: ::core::option::Option<SignedNodeOwnership>,
     #[prost(message, optional, tag = "24")]
@@ -276,8 +274,6 @@ pub struct PeerAnnouncement {
     /// verify independently.
     #[prost(message, optional, tag = "51")]
     pub claimed_log_head: ::core::option::Option<ClaimedLogHead>,
-    #[prost(message, repeated, tag = "52")]
-    pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
     /// Public keys plugins on this node sign with, each bound to this node's key;
     /// see `PluginKey`. At most 16, one per plugin.
     #[prost(message, repeated, tag = "53")]
@@ -381,25 +377,6 @@ pub struct ClaimedLogHead {
     pub claimed_signature: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, tag = "6")]
     pub signature_algorithm: ::prost::alloc::string::String,
-}
-/// Presence means payment is required for this exact model, protocol v1.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct LightningOffer {
-    #[prost(string, tag = "1")]
-    pub model: ::prost::alloc::string::String,
-    #[prost(uint64, tag = "2")]
-    pub input_msat_per_million: u64,
-    #[prost(uint64, tag = "3")]
-    pub output_msat_per_million: u64,
-    #[prost(uint64, tag = "4")]
-    pub minimum_invoice_msat: u64,
-    /// Percentage discount for backend-reported cached input (0 = full price).
-    #[prost(uint32, tag = "5")]
-    pub cache_discount_percent: u32,
-    /// Payment protocol the seller accepts payment over (3 = metered v3).
-    /// Absent (0) on releases before v3; buyers skip such paid offers.
-    #[prost(uint32, tag = "6")]
-    pub payment_protocol: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignedMeshGenesisPolicy {

@@ -8,7 +8,6 @@ use crate::network::reservations::RoutingReservation;
 pub(crate) struct RouteModelRequestContext<'a> {
     /// Peer ingress may execute local targets only, never discover a fallback peer.
     pub(crate) local_execution_only: bool,
-    pub(crate) exchange_id: Option<&'a str>,
     pub(crate) required_tokens: Option<u32>,
     pub(crate) affinity: &'a AffinityRouter,
     pub(crate) route_observer: OpenAiRouteObserver<'a>,
@@ -80,7 +79,6 @@ pub async fn route_model_request(
         model,
         request,
         local_execution_only: context.local_execution_only,
-        exchange_id: context.exchange_id,
         required_tokens: context.required_tokens,
         affinity: context.affinity,
         route_observer: context.route_observer,
@@ -98,7 +96,6 @@ struct RouteModelRequestArgs<'a> {
     targets: &'a election::ModelTargets,
     model: &'a str,
     request: &'a BufferedHttpRequest,
-    exchange_id: Option<&'a str>,
     required_tokens: Option<u32>,
     affinity: &'a AffinityRouter,
     route_observer: OpenAiRouteObserver<'a>,
@@ -185,7 +182,6 @@ fn clear_peer_capsule(sink: Option<&PeerCapsuleIdSink>) {
 struct PreparedModelCandidates {
     ranked: RankedCandidates<election::InferenceTarget>,
     ordered_candidates: Vec<election::InferenceTarget>,
-    payment_ranked: bool,
 }
 
 struct ModelRouteRejection {
@@ -207,7 +203,7 @@ impl ModelRouteRejection {
     }
 }
 
-/// Prepare the context/payment/health eligible candidates before affinity and
+/// Prepare the context/health eligible candidates before affinity and
 /// reservation selection. A rejection carries the existing HTTP error boundary.
 async fn prepare_model_candidates(
     node: &mesh::Node,
@@ -220,19 +216,7 @@ async fn prepare_model_candidates(
 ) -> Result<PreparedModelCandidates, ModelRouteRejection> {
     let candidates =
         execution_candidates(node, model, request, targets, local_execution_only).await;
-    let mut ranked = rank_targets_by_context(node, model, required_tokens, &candidates).await;
-    let payment_ranked = crate::network::openai::payment_routing::rank(
-        node,
-        model,
-        u64::from(request.completion_tokens.unwrap_or(256)),
-        &mut ranked,
-        request.body_json.as_ref(),
-    )
-    .await
-    .map_err(|reason| ModelRouteRejection {
-        status: 402,
-        reason: reason.into(),
-    })?;
+    let ranked = rank_targets_by_context(node, model, required_tokens, &candidates).await;
     let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);
     if ordered_candidates.is_empty() {
         record_route_model_unavailable(node, model, 0);
@@ -244,7 +228,6 @@ async fn prepare_model_candidates(
     Ok(PreparedModelCandidates {
         ranked,
         ordered_candidates,
-        payment_ranked,
     })
 }
 
@@ -257,7 +240,6 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         request,
         local_execution_only,
         required_tokens,
-        exchange_id,
         affinity,
         route_observer,
         served_by_header,
@@ -269,7 +251,6 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     let PreparedModelCandidates {
         ranked,
         ordered_candidates,
-        payment_ranked,
     } = match prepare_model_candidates(
         &node,
         targets,
@@ -288,16 +269,8 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
 
     let affinity_body = super::super::workload_routing::affinity_body(request);
     let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body);
-    let cache_candidates = super::super::payment_routing::cache_candidates(
-        payment_ranked,
-        &ranked,
-        &ordered_candidates,
-    );
-
     let cache_target =
-        cache_target_for_request(&node, affinity, model, prefix_hash, cache_candidates).await;
-    let cache_target =
-        super::super::payment_routing::prefer_price_tier(payment_ranked, &ranked, cache_target);
+        cache_target_for_request(&node, affinity, model, prefix_hash, &ordered_candidates).await;
     let Some(ReservedModelRoute {
         selection,
         ordered,
@@ -360,7 +333,6 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             forwarding_raw,
             retry_policy,
             RouteAttemptLoggingContext {
-                exchange_id,
                 request_id: request.request_id,
                 retry_policy,
                 response_adapter: request.response_adapter,
@@ -1251,7 +1223,6 @@ mod tests {
             &request,
             RouteModelRequestContext {
                 local_execution_only: false,
-                exchange_id: None,
                 required_tokens: None,
                 affinity: &affinity,
                 route_observer: OpenAiRouteObserver::default(),
