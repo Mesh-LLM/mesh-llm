@@ -28,6 +28,10 @@ async fn completed_exchange_events(host: &LiveHost, count: usize) -> Vec<serde_j
 }
 
 async fn quic_request(host: &LiveHost, body: &[u8]) -> Vec<u8> {
+    quic_request_with_id(host, body, uuid::Uuid::new_v4()).await
+}
+
+async fn quic_request_with_id(host: &LiveHost, body: &[u8], exchange_id: uuid::Uuid) -> Vec<u8> {
     let caller = Box::pin(Node::new_for_tests(NodeRole::Worker))
         .await
         .unwrap();
@@ -66,7 +70,7 @@ async fn quic_request(host: &LiveHost, body: &[u8]) -> Vec<u8> {
     send.write_all(&[crate::protocol::STREAM_TUNNEL_HTTP])
         .await
         .unwrap();
-    send.write_all(format!("POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer must-stay-private\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+    send.write_all(format!("POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nx-request-id: {exchange_id}\r\nAuthorization: Bearer must-stay-private\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
     send.write_all(body).await.unwrap();
     let server_connection = serving.await.unwrap();
     let mut response = Vec::new();
@@ -138,4 +142,166 @@ async fn installed_lifecycle_quic_ingress_delivers_real_stream_and_denies_before
         2
     );
     host.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires just package-openai-exchange-exemplar"]
+async fn installed_lifecycle_quic_terminal_preserves_request_identity_and_reported_usage() {
+    let host = LiveHost::start(true, true).await;
+    let id = uuid::Uuid::new_v4();
+    let response = quic_request_with_id(
+        &host,
+        br#"{"model":"allowed-model","messages":[{"role":"user","content":"usage"}]}"#,
+        id,
+    )
+    .await;
+    assert!(response.starts_with(b"HTTP/1.1 200"));
+    let events = completed_exchange_events(&host, 1).await;
+    let received = events
+        .iter()
+        .find(|event| event["phase"] == "request_received")
+        .unwrap();
+    let terminal = events
+        .iter()
+        .find(|event| event["phase"] == "exchange_finished")
+        .unwrap();
+    assert_eq!(received["observation_point"], "serving_host_ingress");
+    assert_eq!(received["exchange_id"], id.to_string());
+    assert_eq!(terminal["exchange_id"], received["exchange_id"]);
+    assert_eq!(terminal["execution_outcome"], "completed");
+    assert_eq!(terminal["usage"]["prompt_tokens"], 2);
+    assert_eq!(terminal["usage"]["completion_tokens"], 1);
+    assert_eq!(terminal["usage"]["total_tokens"], 3);
+    assert_eq!(host.requests.lock().await.len(), 1);
+    host.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires just package-openai-exchange-exemplar"]
+async fn installed_lifecycle_quic_backend_abort_does_not_invent_terminal_usage() {
+    use crate::inference::election::InferenceTarget;
+    use tokio::{io::AsyncWriteExt, net::TcpListener};
+    let mut host = LiveHost::start(true, true).await;
+    let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    host.targets.targets.insert(
+        "allowed-model".into(),
+        vec![InferenceTarget::Local(backend.local_addr().unwrap().port())],
+    );
+    // Report a usage frame but truncate before [DONE] and before Content-Length.
+    // A settlement plugin must distinguish this from a completed response.
+    let responder = tokio::spawn(async move {
+        let (mut stream, _) = backend.accept().await.unwrap();
+        super::lifecycle_live_tests::read_entity_request(&mut stream).await;
+        let prefix = b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1,\"total_tokens\":3}}\n\n";
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", prefix.len() + 100).as_bytes()).await.unwrap();
+        stream.write_all(prefix).await.unwrap();
+        stream.shutdown().await.unwrap();
+    });
+    let response = quic_request(
+        &host,
+        br#"{"model":"allowed-model","stream":true,"messages":[{"role":"user","content":"abort"}]}"#,
+    ).await;
+    assert!(response.starts_with(b"HTTP/1.1 200"));
+    responder.await.unwrap();
+    let events = completed_exchange_events(&host, 1).await;
+    let terminal = events
+        .iter()
+        .find(|event| event["phase"] == "exchange_finished")
+        .unwrap();
+    assert!(
+        terminal["usage"].is_null(),
+        "aborted response supplied billable usage: {terminal}"
+    );
+    assert_ne!(terminal["execution_outcome"], "completed");
+    host.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires just package-openai-exchange-exemplar"]
+async fn installed_lifecycle_quic_gateway_and_server_share_exchange_identity() {
+    use crate::inference::election::InferenceTarget;
+    let seller = LiveHost::start(true, true).await;
+    let mut buyer = LiveHost::start(true, true).await;
+    let mut peer = super::tests::test_remote_peer(42, "allowed-model");
+    peer.id = seller.node.id();
+    peer.addr = seller.node.endpoint.addr();
+    buyer.node.insert_test_peer(peer).await;
+    buyer.targets.targets.insert(
+        "allowed-model".into(),
+        vec![InferenceTarget::Remote(seller.node.id())],
+    );
+    let (legacy_tx, legacy_rx) = tokio::sync::mpsc::channel(1);
+    let (http_tx, http_rx) = tokio::sync::mpsc::channel(1);
+    let (stage_tx, stage_rx) = tokio::sync::mpsc::channel(1);
+    let tunnels = Manager::start(seller.node.clone(), legacy_rx, http_rx, stage_rx)
+        .await
+        .unwrap();
+    let (_targets_tx, targets_rx) = tokio::sync::watch::channel(seller.targets.clone());
+    tunnels.set_http_ingress(targets_rx, AffinityRouter::new());
+    let serving_node = seller.node.clone();
+    let buyer_id = buyer.node.id();
+    let serving = tokio::spawn(async move {
+        let connection = serving_node.endpoint.accept().await.unwrap().await.unwrap();
+        let remote = connection.remote_id();
+        assert_eq!(remote, buyer_id);
+        let (send, mut recv) = connection.accept_bi().await.unwrap();
+        let mut marker = [0];
+        recv.read_exact(&mut marker).await.unwrap();
+        assert_eq!(marker[0], crate::protocol::STREAM_TUNNEL_HTTP);
+        http_tx.send((remote, send, recv)).await.unwrap();
+        connection
+    });
+    // Install the authenticated connection as an already-admitted peer, as the
+    // production gossip handshake does. This fixture tests exchange transport,
+    // not gossip admission.
+    let connection = buyer
+        .node
+        .endpoint
+        .connect(seller.node.endpoint.addr(), crate::protocol::ALPN_V1)
+        .await
+        .unwrap();
+    buyer
+        .node
+        .state
+        .lock()
+        .await
+        .connections
+        .insert(seller.node.id(), connection);
+    let response = buyer
+        .request(
+            "/v1/chat/completions",
+            br#"{"model":"allowed-model","messages":[{"role":"user","content":"hello"}]}"#,
+        )
+        .await;
+    assert!(
+        response.starts_with(b"HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+    let buyer_events = completed_exchange_events(&buyer, 1).await;
+    let seller_events = completed_exchange_events(&seller, 1).await;
+    let buyer_received = buyer_events
+        .iter()
+        .find(|event| event["phase"] == "request_received")
+        .unwrap();
+    let seller_received = seller_events
+        .iter()
+        .find(|event| event["phase"] == "request_received")
+        .unwrap();
+    assert_eq!(buyer_received["observation_point"], "gateway_ingress");
+    assert_eq!(seller_received["observation_point"], "serving_host_ingress");
+    assert!(buyer_received["exchange_id"].as_str().is_some());
+    for events in [&buyer_events, &seller_events] {
+        for event in events.iter().filter(|event| {
+            event["phase"] == "request_received" || event["phase"] == "exchange_finished"
+        }) {
+            assert_eq!(event["exchange_id"], buyer_received["exchange_id"]);
+        }
+    }
+    assert_eq!(buyer.requests.lock().await.len(), 0);
+    assert_eq!(seller.requests.lock().await.len(), 1);
+    serving.await.unwrap().close(0u32.into(), b"test complete");
+    drop((tunnels, legacy_tx, stage_tx));
+    buyer.stop().await;
+    seller.stop().await;
 }
