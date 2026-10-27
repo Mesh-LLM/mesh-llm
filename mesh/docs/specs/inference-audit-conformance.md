@@ -78,7 +78,12 @@ The adjudicator publishes, per model:
   count mismatch, `x-mesh-served-by` naming another peer, an answer too short
   for its threshold.
 - A contradiction counts only when adjudicators run by at least two different
-  operators agree.
+  operators agree. An operator is an owner identity
+  ([NODE_OWNER_IDENTITY.md](../design/NODE_OWNER_IDENTITY.md)), and each
+  adjudication record is signed with that owner key. Two records score the same
+  audit when they cite the same response digest from the sender record; they
+  agree when they give the same verdict, and operators differ when their owner
+  identities differ.
 
 ## Audit corpus
 
