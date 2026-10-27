@@ -14,6 +14,19 @@ impl PluginManager {
         Ok(models)
     }
 
+    /// Plugin models exposed by the chat-compatible `/v1/models` listing.
+    pub async fn chat_inference_models(&self) -> Result<Vec<String>> {
+        let mut models = Vec::new();
+        for endpoint in self.inference_endpoints().await? {
+            if endpoint.protocol.as_deref() != Some("document_ocr_v1") {
+                models.extend(endpoint.models);
+            }
+        }
+        models.sort();
+        models.dedup();
+        Ok(models)
+    }
+
     pub async fn inference_endpoint_for_model(
         &self,
         model: &str,
@@ -53,6 +66,35 @@ fn sort_endpoints(endpoints: &mut [InferenceEndpointRoute]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn chat_models_exclude_ocr_but_discovery_keeps_all_models() {
+        let manager = PluginManager::for_test_summaries(Vec::new());
+        let endpoints = [
+            (Some("document_ocr_v1"), vec!["ocr-only", "shared"]),
+            (Some("openai_compatible"), vec!["chat", "shared", "chat"]),
+            (None, vec!["legacy"]),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (protocol, models))| InferenceEndpointRoute {
+            plugin_name: format!("plugin-{index}"),
+            endpoint_id: "inference".into(),
+            protocol: protocol.map(str::to_string),
+            address: "http://127.0.0.1:1".into(),
+            models: models.into_iter().map(str::to_string).collect(),
+        })
+        .collect();
+        manager.set_test_inference_endpoints(endpoints).await;
+        assert_eq!(
+            manager.inference_models().await.unwrap(),
+            ["chat", "legacy", "ocr-only", "shared"]
+        );
+        assert_eq!(
+            manager.chat_inference_models().await.unwrap(),
+            ["chat", "legacy", "shared"]
+        );
+    }
 
     #[tokio::test]
     async fn request_selects_only_matching_ocr_protocol() {

@@ -151,6 +151,37 @@ async fn a_peer_assigned_session_runs_on_the_local_model_with_its_early_frames()
 }
 
 #[tokio::test]
+async fn a_public_alias_is_forwarded_as_the_resolved_model_through_quic() {
+    const PUBLIC: &str = "speech/whisper:live";
+    let (port, backend) = fake_speech_backend().await;
+    let (host, targets) = speech_host(port).await;
+    let mut descriptors = host.all_served_model_descriptors().await;
+    descriptors[0].identity.source_kind = mesh::ModelSourceKind::Catalog;
+    descriptors[0].identity.canonical_ref = Some(PUBLIC.into());
+    host.set_served_model_descriptors(descriptors).await;
+
+    // Local ingress resolves the public alias before assigning the session
+    // to a peer, which receives the internal model in its request target.
+    let resolved = super::resolve_model(&host, &targets, PUBLIC, false).await;
+    assert_eq!(resolved, MODEL);
+    let opening = super::upgrade_request(
+        &opening("speech%2Fwhisper%3Alive&intent=transcription&x=a%20b"),
+        &resolved,
+    );
+    let response = tunnel_from_peer(&host, targets, &opening).await;
+    assert!(response.starts_with(b"HTTP/1.1 101"));
+    assert!(response.ends_with(b"early"));
+    let head = backend.await.unwrap();
+    assert!(
+        head.starts_with(
+            "GET /v1/realtime?intent=transcription&x=a%20b&model=whisper-live HTTP/1.1\r\n"
+        ),
+        "{head}"
+    );
+    assert!(!head.contains("speech%2Fwhisper"), "{head}");
+}
+
+#[tokio::test]
 async fn a_peer_assigned_session_for_a_model_not_served_here_is_refused_not_forwarded() {
     let (port, _backend) = fake_speech_backend().await;
     let (host, targets) = speech_host(port).await;

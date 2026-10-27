@@ -367,7 +367,7 @@ async fn handle_mesh_control_request(
         let mut served = node.models_being_served().await;
         let virtual_models = match node.plugin_manager().await {
             Some(manager) => {
-                if let Ok(mut inference_models) = manager.inference_models().await {
+                if let Ok(mut inference_models) = manager.chat_inference_models().await {
                     served.append(&mut inference_models);
                 }
                 manager.virtual_models().await.unwrap_or_default()

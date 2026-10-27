@@ -200,7 +200,7 @@ async fn handle_models_list_request(
     let mut models = callable_models(targets);
     models.extend(node.models_being_served().await);
     if let Some(plugin_manager) = plugin_manager
-        && let Ok(mut external_models) = plugin_manager.inference_models().await
+        && let Ok(mut external_models) = plugin_manager.chat_inference_models().await
     {
         models.append(&mut external_models);
     }
