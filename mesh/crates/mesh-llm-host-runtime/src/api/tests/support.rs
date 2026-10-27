@@ -470,6 +470,25 @@ fn management_post_request(path: &str, body: &str) -> String {
     )
 }
 
+/// The owner-control bearer credential seeded into test console state.
+pub(super) const TEST_OWNER_CONTROL_TOKEN: &str = "test-owner-control-token-0123456789";
+
+async fn seed_owner_control_token(state: &MeshApi) {
+    state
+        .set_owner_control_token(Some(zeroize::Zeroizing::new(
+            TEST_OWNER_CONTROL_TOKEN.to_string(),
+        )))
+        .await;
+}
+
+fn management_post_request_with_owner_control(path: &str, body: &str) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TEST_OWNER_CONTROL_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
 fn full_mesh_config_fixture() -> crate::plugin::MeshConfig {
     serde_json::from_value(json!({
         "version": 1,

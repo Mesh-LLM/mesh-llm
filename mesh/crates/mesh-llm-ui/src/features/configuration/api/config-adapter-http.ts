@@ -25,6 +25,16 @@ async function expectJson<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>
 }
 
+let ownerControlToken: string | null = null
+
+async function getOwnerControlToken(): Promise<string> {
+  if (ownerControlToken) return ownerControlToken
+  const response = await fetch(`${env.managementApiUrl}/api/runtime/control/owner-control-token`)
+  const payload = await expectJson<{ token: string }>(response)
+  ownerControlToken = payload.token
+  return payload.token
+}
+
 export async function fetchRuntimeControlBootstrap(): Promise<RuntimeControlBootstrapPayload> {
   const response = await fetch(`${env.managementApiUrl}/api/runtime/control-bootstrap`)
   return expectJson<RuntimeControlBootstrapPayload>(response)
@@ -47,9 +57,10 @@ export async function fetchRuntimeConfigControlState(): Promise<RuntimeConfigCon
 }
 
 export async function fetchRuntimeControlConfigSnapshot(endpoint: string): Promise<RuntimeControlConfigSnapshot> {
+  const token = await getOwnerControlToken()
   const response = await fetch(`${env.managementApiUrl}/api/runtime/control/get-config`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ endpoint })
   })
   const payload = await expectJson<RuntimeControlConfigResponse>(response)
@@ -81,9 +92,10 @@ export async function applyRuntimeControlConfig(
     includeModelAssignments: true,
     controlState
   })
+  const token = await getOwnerControlToken()
   const response = await fetch(`${env.managementApiUrl}/api/runtime/control/apply-config`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       endpoint,
       expected_revision: snapshot.revision,
