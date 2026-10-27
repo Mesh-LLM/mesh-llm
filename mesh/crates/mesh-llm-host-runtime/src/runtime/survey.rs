@@ -35,6 +35,10 @@ mod survey_exact_head_tests;
 #[path = "survey_prompt_shape_tests.rs"]
 mod survey_prompt_shape_tests;
 
+#[cfg(test)]
+#[path = "survey_otlp_contract_tests.rs"]
+mod survey_otlp_contract_tests;
+
 const DEFAULT_SERVICE_NAME: &str = "mesh-llm";
 const DEFAULT_EXPORT_INTERVAL_SECS: u64 = 15;
 const DEFAULT_QUEUE_SIZE: usize = 2048;
@@ -1110,10 +1114,27 @@ struct SurveyRecorder {
     launch_duration_ms: Histogram<f64>,
     uptime_s: Histogram<f64>,
     loaded_count: u64,
+    on_export_failure: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+}
+
+/// Build the OTLP resource identity: the service name/version plus the
+/// attributes the exporter stamps on every exported stream.
+pub(crate) fn telemetry_resource(service_name: &str) -> Resource {
+    Resource::builder()
+        .with_service_name(service_name.to_string())
+        .with_attribute(KeyValue::new("service.version", crate::VERSION))
+        .build()
 }
 
 impl SurveyRecorder {
     fn otlp(settings: &SurveySettings) -> Result<Self> {
+        Self::otlp_with_hook(settings, None)
+    }
+
+    pub(crate) fn otlp_with_hook(
+        settings: &SurveySettings,
+        on_export_failure: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    ) -> Result<Self> {
         let exporter = opentelemetry_otlp::MetricExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)
@@ -1126,15 +1147,12 @@ impl SurveyRecorder {
             .with_interval(settings.export_interval)
             .build();
         let provider = SdkMeterProvider::builder()
-            .with_resource(
-                Resource::builder()
-                    .with_service_name(settings.service_name.clone())
-                    .with_attribute(KeyValue::new("service.version", crate::VERSION))
-                    .build(),
-            )
+            .with_resource(telemetry_resource(&settings.service_name))
             .with_reader(reader)
             .build();
-        Ok(Self::new(provider))
+        let mut recorder = Self::new(provider);
+        recorder.on_export_failure = on_export_failure;
+        Ok(recorder)
     }
 
     fn new(provider: SdkMeterProvider) -> Self {
@@ -1273,6 +1291,7 @@ impl SurveyRecorder {
                 .with_unit("s")
                 .build(),
             loaded_count: 0,
+            on_export_failure: None,
         }
     }
 
