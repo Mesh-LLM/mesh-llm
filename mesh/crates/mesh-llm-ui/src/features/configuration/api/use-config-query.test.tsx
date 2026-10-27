@@ -106,6 +106,9 @@ describe('useConfigQuery', () => {
           endpoint: 'control://owner'
         })
       }
+      if (url.endsWith('/api/runtime/control/owner-control-token')) {
+        return jsonResponse({ token: 'unit-owner-token' })
+      }
       if (url.endsWith('/api/runtime/config-schema')) return jsonResponse(CONFIG_SCHEMA_REFERENCE)
       if (url.endsWith('/api/runtime/config-control-state')) return jsonResponse({ settings: {} })
       if (url.endsWith('/api/runtime/control/get-config')) {
@@ -279,6 +282,9 @@ describe('useConfigQuery', () => {
           endpoint: 'control://owner'
         })
       }
+      if (url.endsWith('/api/runtime/control/owner-control-token')) {
+        return jsonResponse({ token: 'unit-owner-token' })
+      }
       if (url.endsWith('/api/runtime/config-schema')) return jsonResponse(CONFIG_SCHEMA_REFERENCE)
       if (url.endsWith('/api/runtime/config-control-state')) return jsonResponse({ settings: {} })
       if (url.endsWith('/api/runtime/control/get-config')) {
@@ -425,6 +431,9 @@ describe('useConfigQuery', () => {
           endpoint: 'control://owner'
         })
       }
+      if (url.endsWith('/api/runtime/control/owner-control-token')) {
+        return jsonResponse({ token: 'unit-owner-token' })
+      }
       if (url.endsWith('/api/runtime/config-schema')) return jsonResponse(CONFIG_SCHEMA_REFERENCE)
       if (url.endsWith('/api/runtime/config-control-state')) {
         controlStateFetches += 1
@@ -518,6 +527,9 @@ describe('useConfigQuery', () => {
           requires_explicit_remote_endpoint: false,
           endpoint: 'control://owner'
         })
+      }
+      if (url.endsWith('/api/runtime/control/owner-control-token')) {
+        return jsonResponse({ token: 'unit-owner-token' })
       }
       if (url.endsWith('/api/runtime/config-schema')) return jsonResponse(CONFIG_SCHEMA_REFERENCE)
       if (url.endsWith('/api/runtime/config-control-state')) return jsonResponse({ settings: {} })

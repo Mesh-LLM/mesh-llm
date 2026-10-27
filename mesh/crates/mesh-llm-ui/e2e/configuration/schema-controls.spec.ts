@@ -386,6 +386,9 @@ async function installConfigurationBackend(page: Page, configOverride: JsonRecor
         if (url.pathname === '/api/status') return jsonResponse(status)
         if (url.pathname === '/api/models') return jsonResponse(models)
         if (url.pathname === '/api/runtime/control-bootstrap') return jsonResponse(bootstrap)
+        if (url.pathname === '/api/runtime/control/owner-control-token') {
+          return jsonResponse({ token: 'config-e2e-owner-token' })
+        }
         if (url.pathname === '/api/runtime/config-schema') return jsonResponse(schema)
         if (url.pathname === '/api/runtime/config-control-state') return jsonResponse(controlState)
 
