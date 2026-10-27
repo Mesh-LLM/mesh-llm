@@ -1,4 +1,5 @@
 //! Bounded recurrent snapshots belonging to one lane's attention prefix.
+use crate::kv_integration::exact_state_diagnostics::emit_exact_state_diagnostic;
 use crate::kv_integration::{KvStageIntegration, PrefillKvIdentity, ResidentRecurrentPolicy};
 
 pub(super) struct ResidentRecurrentCheckpoint {
@@ -51,12 +52,21 @@ impl RecurrentCheckpoints {
                 && previous.policy.write_through_l3
         });
         self.entries.retain(|previous| {
-            previous.identity.namespace == entry.identity.namespace
+            let compatible = previous.identity.namespace == entry.identity.namespace
                 && entry
                     .identity
                     .token_ids
                     .starts_with(&previous.identity.token_ids)
-                && previous.identity.token_ids != entry.identity.token_ids
+                && previous.identity.token_ids != entry.identity.token_ids;
+            let replacing_same_identity = previous.identity.namespace == entry.identity.namespace
+                && previous.identity.token_ids == entry.identity.token_ids;
+            if !compatible && !replacing_same_identity {
+                emit_exact_state_diagnostic(
+                    "resident_branch_discarded",
+                    &[("position", previous.identity.token_ids.len() as u64)],
+                );
+            }
+            compatible
         });
         let mut displaced = Vec::new();
         while self.len() >= limit
@@ -70,7 +80,12 @@ impl RecurrentCheckpoints {
                 .find(|(_, entry)| !entry.policy.write_through_l3)
                 .map(|(index, _)| index)
                 .unwrap_or(usize::from(self.len() > 1));
-            displaced.push(self.entries.remove(index));
+            let checkpoint = self.entries.remove(index);
+            emit_exact_state_diagnostic(
+                "resident_capacity_displaced",
+                &[("position", checkpoint.identity.token_ids.len() as u64)],
+            );
+            displaced.push(checkpoint);
         }
         self.entries.push(entry);
         displaced
@@ -78,6 +93,12 @@ impl RecurrentCheckpoints {
 
     /// Later checkpoints refer to attention suffixes removed by this restore.
     pub fn restore(&mut self, index: usize) -> &ResidentRecurrentCheckpoint {
+        for checkpoint in self.entries.iter().skip(index + 1) {
+            emit_exact_state_diagnostic(
+                "resident_restore_suffix_discarded",
+                &[("position", checkpoint.identity.token_ids.len() as u64)],
+            );
+        }
         self.entries.truncate(index + 1);
         &self.entries[index]
     }

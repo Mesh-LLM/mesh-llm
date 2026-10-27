@@ -136,6 +136,9 @@ fn exact_state_event(line: &[u8]) -> Option<&'static str> {
         b"evicted_l1_soft" => Some("evicted_l1_soft"),
         b"evicted_l1_hard" => Some("evicted_l1_hard"),
         b"published_l1" => Some("published_l1"),
+        b"resident_branch_discarded" => Some("resident_branch_discarded"),
+        b"resident_capacity_displaced" => Some("resident_capacity_displaced"),
+        b"resident_restore_suffix_discarded" => Some("resident_restore_suffix_discarded"),
         _ => None,
     }
 }
@@ -312,6 +315,7 @@ mod tests {
         for bytes in [
             br#"{"data":{"context":"position=155509 logical_bytes=123 physical_bytes=456 limit_bytes=789 secret=private-prompt","message":"Skippy exact-state demotion_byte_full"},"schema_version":1,"sequence":17,"type":"info"}"#.as_slice(),
             br#"{"data":{"message":"Skippy exact-state demotion_queued"},"type":"info"}"#.as_slice(),
+            br#"{"data":{"context":"position=44805","message":"Skippy exact-state resident_branch_discarded"},"type":"info"}"#.as_slice(),
             br#"{"data":{"message":"Skippy exact-state demotion_credit_full"},"type":"native_log"}"#.as_slice(),
         ] {
             decisions.observe(
@@ -326,6 +330,7 @@ mod tests {
         let projected = serde_json::to_string(&decisions).unwrap();
         assert!(projected.contains("\"demotion_byte_full\":1"));
         assert!(projected.contains("\"demotion_queued\":1"));
+        assert!(projected.contains("\"resident_branch_discarded\":1"));
         assert_eq!(decisions.exact_state_samples[0].sequence, Some(17));
         assert_eq!(decisions.exact_state_samples[0].fields["position"], 155509);
         assert_eq!(

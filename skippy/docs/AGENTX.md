@@ -228,7 +228,8 @@ different cache-hit counts is not a decode-kernel comparison. Report the
 per-request cache-read tokens alongside such a result.
 
 Set `SKIPPY_EXACT_STATE_DIAGNOSTICS=1` on a diagnostic Skippy server to
-record numeric-only exact-state demotion, L1 publication, and eviction events
+record numeric-only resident-checkpoint drops, exact-state demotion, L1
+publication, and eviction events
 in the server log. With `AGENTX_SKIPPY_DEBUG_TELEMETRY=1`, the harness also
 counts all recognized event types and retains up to 512 numeric event samples
 in `cache-decisions.json`, beyond the 64 KiB stderr receipt limit. This opt-in
