@@ -32,11 +32,18 @@ impl CacheDecisions {
     }
 
     pub(super) fn observe(&mut self, member: MemberId, line: ObservedLine<'_>) {
-        if member != MemberId::Seed || line.stream != Stream::Stderr {
+        if member != MemberId::Seed {
             return;
         }
-        if let Some(event) = exact_state_event(line.bytes) {
+        let exact_state = match line.stream {
+            Stream::Stdout => exact_state_jsonl_event(line.bytes),
+            Stream::Stderr => exact_state_event(line.bytes),
+        };
+        if let Some(event) = exact_state {
             *self.exact_state_events.entry(event).or_default() += 1;
+            return;
+        }
+        if line.stream != Stream::Stderr {
             return;
         }
         let Some(event) = parse(line.bytes) else {
@@ -48,6 +55,20 @@ impl CacheDecisions {
             self.omitted_events = self.omitted_events.saturating_add(1);
         }
     }
+}
+
+fn exact_state_jsonl_event(line: &[u8]) -> Option<&'static str> {
+    if !std::str::from_utf8(line)
+        .ok()?
+        .contains("Skippy exact-state ")
+    {
+        return None;
+    }
+    let event: Value = serde_json::from_slice(line).ok()?;
+    if event.get("type")?.as_str()? != "info" {
+        return None;
+    }
+    exact_state_event(event.pointer("/data/message")?.as_str()?.as_bytes())
 }
 
 fn exact_state_event(line: &[u8]) -> Option<&'static str> {
@@ -159,6 +180,30 @@ mod tests {
         let projected = serde_json::to_string(&decisions).unwrap();
         assert!(projected.contains("\"demotion_credit_full\":2"));
         assert!(projected.contains("\"demotion_queued\":1"));
+        assert!(!projected.contains("private-prompt"));
+    }
+
+    #[test]
+    fn counts_standalone_jsonl_exact_state_events_without_retaining_context() {
+        let mut decisions = CacheDecisions::new();
+        for bytes in [
+            br#"{"data":{"context":"position=155509 secret=private-prompt","message":"Skippy exact-state demotion_byte_full"},"schema_version":1,"sequence":17,"type":"info"}"#.as_slice(),
+            br#"{"data":{"message":"Skippy exact-state demotion_queued"},"type":"info"}"#.as_slice(),
+            br#"{"data":{"message":"Skippy exact-state demotion_credit_full"},"type":"native_log"}"#.as_slice(),
+        ] {
+            decisions.observe(
+                MemberId::Seed,
+                ObservedLine {
+                    stream: Stream::Stdout,
+                    bytes,
+                    ending: crate::process::LineEnding::Lf,
+                },
+            );
+        }
+        let projected = serde_json::to_string(&decisions).unwrap();
+        assert!(projected.contains("\"demotion_byte_full\":1"));
+        assert!(projected.contains("\"demotion_queued\":1"));
+        assert!(!projected.contains("demotion_credit_full"));
         assert!(!projected.contains("private-prompt"));
     }
 
