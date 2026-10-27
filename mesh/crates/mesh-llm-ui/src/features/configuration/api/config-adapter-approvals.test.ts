@@ -28,17 +28,10 @@ describe('changedPluginCommandApprovals', () => {
   it('ignores unchanged commands and plugins without commands', () => {
     const approvals = changedPluginCommandApprovals(
       {
-        plugin: [
-          { name: 'metrics', command: '/usr/bin/same' },
-          { name: 'ui' }
-        ]
+        plugin: [{ name: 'metrics', command: '/usr/bin/same' }, { name: 'ui' }]
       },
       {
-        plugin: [
-          { name: 'metrics', command: '/usr/bin/same' },
-          { name: 'ui' },
-          { name: 'headless' }
-        ]
+        plugin: [{ name: 'metrics', command: '/usr/bin/same' }, { name: 'ui' }, { name: 'headless' }]
       }
     )
 
@@ -47,8 +40,8 @@ describe('changedPluginCommandApprovals', () => {
 
   it('handles missing plugin lists', () => {
     expect(changedPluginCommandApprovals(undefined, null)).toEqual([])
-    expect(
-      changedPluginCommandApprovals(null, { plugin: [{ name: 'scanner', command: '/bin/scan' }] })
-    ).toEqual([{ plugin: 'scanner', command: '/bin/scan' }])
+    expect(changedPluginCommandApprovals(null, { plugin: [{ name: 'scanner', command: '/bin/scan' }] })).toEqual([
+      { plugin: 'scanner', command: '/bin/scan' }
+    ])
   })
 })

@@ -81,9 +81,12 @@ export async function fetchRuntimeControlConfig(): Promise<RuntimeControlConfigR
   return { bootstrap: { ...bootstrap, endpoint }, schema, snapshot, controlState }
 }
 
-type PluginCommandSource = {
-  plugin?: ReadonlyArray<{ name?: string; command?: string }>
-} | null | undefined
+type PluginCommandSource =
+  | {
+      plugin?: ReadonlyArray<{ name?: string; command?: string }>
+    }
+  | null
+  | undefined
 
 // Plugins whose command executable this apply adds or changes; the host
 // rejects an apply whose declared approvals do not cover this diff.
