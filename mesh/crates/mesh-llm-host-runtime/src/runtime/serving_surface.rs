@@ -13,6 +13,7 @@ use crate::network::openai::accept::IngressListener;
 use crate::network::{affinity, discovery as mesh_discovery, nostr};
 use crate::plugin;
 use crate::runtime::interactive;
+use crate::runtime::run_auto::EmbeddedRuntimeReadiness;
 use crate::runtime::survey;
 use crate::runtime::{InstanceLifecycleRecord, InstanceLifecycleState};
 #[cfg(test)]
@@ -940,6 +941,7 @@ pub(super) struct RunAutoServingSurfaceContext<'a> {
     pub(super) interactive_started: &'a Arc<AtomicBool>,
     pub(super) console_state: Option<&'a api::MeshApi>,
     pub(super) model_name_for_console: &'a str,
+    pub(super) embedded_readiness_tx: Option<super::run_auto::EmbeddedReadinessTx>,
 }
 
 pub(super) struct RunAutoServingSurface {
@@ -1247,6 +1249,12 @@ pub(super) async fn setup_run_auto_serving_surface(
     let (ready_console_url, ready_console_port) =
         run_auto_ready_console_endpoint(&console_listener);
     emit_run_auto_builtin_endpoint_ready(ctx.options, &api_ready_url, ready_console_url.as_ref());
+    if let Some(readiness_tx) = ctx.embedded_readiness_tx {
+        let invite_token = ctx.node.invite_token().await;
+        let _ = readiness_tx.send(Ok(EmbeddedRuntimeReadiness {
+            invite_token: Some(invite_token),
+        }));
+    }
     let api_proxy_handle = spawn_run_auto_api_proxy(
         ctx.options,
         ctx.node,
