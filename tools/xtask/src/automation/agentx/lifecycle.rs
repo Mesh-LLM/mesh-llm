@@ -17,6 +17,7 @@ const LLAMA_CACHE_RAM_MIB_ENV: &str = "AGENTX_LLAMA_CACHE_RAM_MIB";
 const LLAMA_KV_UNIFIED_ENV: &str = "AGENTX_LLAMA_KV_UNIFIED";
 const SKIPPY_KV_UNIFIED_ENV: &str = "AGENTX_SKIPPY_KV_UNIFIED";
 const SKIPPY_MICROBATCH_TOKENS_ENV: &str = "AGENTX_SKIPPY_MICROBATCH_TOKENS";
+const SKIPPY_PREFIX_CACHE_BUDGET_GIB_ENV: &str = "AGENTX_SKIPPY_PREFIX_CACHE_BUDGET_GIB";
 const SKIPPY_GENERATION_CONCURRENCY_ENV: &str = "AGENTX_SKIPPY_GENERATION_CONCURRENCY";
 const BASELINE_MICROBATCH_TOKENS: usize = 512;
 const BATCH_TOKENS: usize = 2_048;
@@ -138,6 +139,25 @@ fn skippy_microbatch_tokens() -> DynResult<usize> {
     }
 }
 
+fn skippy_prefix_cache_budget(value: Option<&str>) -> DynResult<String> {
+    let gib = match value {
+        Some(value) => positive_override(SKIPPY_PREFIX_CACHE_BUDGET_GIB_ENV, value)?,
+        None => 8,
+    };
+    if gib > 64 {
+        return Err(format!("{SKIPPY_PREFIX_CACHE_BUDGET_GIB_ENV} must not exceed 64").into());
+    }
+    Ok(format!("{gib}GiB"))
+}
+
+fn skippy_prefix_cache_budget_override() -> DynResult<String> {
+    match std::env::var(SKIPPY_PREFIX_CACHE_BUDGET_GIB_ENV) {
+        Ok(value) => skippy_prefix_cache_budget(Some(&value)),
+        Err(std::env::VarError::NotPresent) => skippy_prefix_cache_budget(None),
+        Err(error) => Err(format!("{SKIPPY_PREFIX_CACHE_BUDGET_GIB_ENV}: {error}").into()),
+    }
+}
+
 fn skippy_diagnostic_arguments(generation_concurrency: Option<usize>) -> Vec<String> {
     let mut arguments = Vec::new();
     if let Some(permits) = generation_concurrency {
@@ -192,6 +212,11 @@ fn server(
         skippy_microbatch_tokens()?
     } else {
         BASELINE_MICROBATCH_TOKENS
+    };
+    let skippy_cache_budget = if engine == "skippy" {
+        skippy_prefix_cache_budget_override()?
+    } else {
+        String::new()
     };
     let (binary, mut args) = if engine == "llama" {
         (
@@ -258,7 +283,7 @@ fn server(
                 "--prefix-cache",
                 "on",
                 "--prefix-cache-budget",
-                "8GiB",
+                &skippy_cache_budget,
                 "--kv-cache-disk",
                 "off",
                 "--chat-template-kwargs",
@@ -620,6 +645,15 @@ mod tests {
         assert_eq!(parse_microbatch_tokens("256").unwrap(), 256);
         assert_eq!(parse_microbatch_tokens("2048").unwrap(), 2048);
         assert!(parse_microbatch_tokens("2049").is_err());
+    }
+
+    #[test]
+    fn cache_budget_probe_preserves_the_default_and_bounds_overrides() {
+        assert_eq!(skippy_prefix_cache_budget(None).unwrap(), "8GiB");
+        assert_eq!(skippy_prefix_cache_budget(Some("16")).unwrap(), "16GiB");
+        for value in ["", "0", "-1", "oops", "65"] {
+            assert!(skippy_prefix_cache_budget(Some(value)).is_err());
+        }
     }
     #[test]
     fn exact_state_diagnostics_reach_the_server_process() {
