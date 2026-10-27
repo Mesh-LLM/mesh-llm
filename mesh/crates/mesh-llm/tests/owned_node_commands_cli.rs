@@ -124,9 +124,31 @@ fn stderr(output: &Output) -> String {
 }
 
 fn serve_once(response_body: &'static str) -> (u16, JoinHandle<String>) {
+    // The CLI fetches the owner-control credential from the loopback token
+    // endpoint before the management call, so the stub serves that request
+    // first and records the management request.
     let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
     let port = listener.local_addr().unwrap().port();
     let server = thread::spawn(move || {
+        let (mut token_stream, _) = listener.accept().expect("token request should connect");
+        token_stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let token_request = read_http_request(&mut token_stream);
+        assert!(
+            String::from_utf8_lossy(&token_request)
+                .starts_with("GET /api/runtime/control/owner-control-token"),
+            "first request should be the owner-control token fetch: {}",
+            String::from_utf8_lossy(&token_request)
+        );
+        let token_body = r#"{"token":"test-token"}"#;
+        let token_response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            token_body.len(),
+            token_body
+        );
+        token_stream.write_all(token_response.as_bytes()).unwrap();
+
         let (mut stream, _) = listener.accept().expect("request should connect");
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -174,4 +196,10 @@ fn request_is_complete(request: &[u8]) -> bool {
 fn assert_scan_request(request: &str, path: &str) {
     assert!(request.starts_with(&format!("POST {path} HTTP/1.1\r\n")));
     assert!(request.contains(r#"{"endpoint":"endpoint-token"}"#));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-token"),
+        "management request must present the fetched owner-control credential"
+    );
 }
