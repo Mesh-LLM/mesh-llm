@@ -99,7 +99,14 @@ async fn main() -> Result<()> {
     .with_manifest(manifest);
     let messages = engine.clone();
     let events = engine.clone();
+    let startup = engine.clone();
     let plugin = SimplePlugin::new(metadata)
+        // After the handshake: opening a wallet must not consume the host's
+        // initialize-response timeout. Manifest inspection never reaches here.
+        .on_initialized(move |_context| {
+            let engine = startup.clone();
+            Box::pin(async move { engine.start().await })
+        })
         .on_channel_message(move |message, context| {
             let engine = messages.clone();
             let mut context = context.owned();

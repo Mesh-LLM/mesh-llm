@@ -83,6 +83,15 @@ impl Engine {
             buy_peers: BTreeSet::new(),
         })
     }
+    /// Open the configured wallet during plugin startup, for either role. The
+    /// service caches the provider, so concurrent admission uses the same open.
+    pub async fn start(&self) -> Result<()> {
+        self.service
+            .wallet()
+            .await
+            .context("opening payment wallet at startup")?;
+        Ok(())
+    }
     pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
         self.known.lock().unwrap().insert(peer.into());
         match message {

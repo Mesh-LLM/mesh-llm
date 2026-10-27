@@ -48,7 +48,7 @@ Environment inherited by the plugin (all paths absolute):
 | Variable | Meaning |
 | --- | --- |
 | `PAY_LIGHTNING_DATA` | Dedicated plugin-owned ledger/ticket directory; never the old host payments directory |
-| `PAY_LIGHTNING_WALLET` | Absolute native `lexe-wallet` child executable; child is opened lazily on a wallet operation |
+| `PAY_LIGHTNING_WALLET` | Absolute native `lexe-wallet` child executable; opened at plugin startup after the host handshake, for both roles (`--manifest` never opens it) |
 | `PAY_LIGHTNING_PRICES` | Seller JSON map model → `{input_msat_per_million,output_msat_per_million,cache_discount_percent}`; default `{}` |
 | `PAY_LIGHTNING_BUY_PRICES` | Buyer JSON map of authorized models and maximum input/output rates; discount is the minimum acceptable discount; default `{}` |
 | `PAY_LIGHTNING_BUY_PEERS` | Comma-separated exact authenticated seller endpoint IDs, explicitly authorized for automatic preflight deposits; default none |

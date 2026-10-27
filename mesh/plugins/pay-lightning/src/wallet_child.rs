@@ -203,7 +203,8 @@ impl WalletProvider for ChildWallet {
     }
 }
 
-/// Lazy factory: plugin startup, manifest and gate evaluation never open a wallet.
+/// Cached wallet construction. Plugin startup explicitly opens the provider;
+/// manifest inspection and factory discovery never do.
 pub struct ChildWalletFactory {
     pub executable: std::path::PathBuf,
     pub directory: std::path::PathBuf,

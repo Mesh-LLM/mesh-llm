@@ -517,3 +517,55 @@ async fn selected_buyer_waits_for_authenticated_ready_and_consumes_it_once() {
     assert_eq!(denied.decision, Decision::Deny);
     assert_eq!(denied.status, Some(402));
 }
+
+struct StartupFactory {
+    opens: AtomicUsize,
+    fail: bool,
+}
+#[async_trait]
+impl mesh_llm_wallet::provisioning::WalletFactory for StartupFactory {
+    fn is_provisioned(&self, _: &std::path::Path) -> bool {
+        false
+    }
+    async fn open(&self, _: &std::path::Path) -> Result<Arc<dyn WalletProvider>> {
+        self.opens.fetch_add(1, Ordering::SeqCst);
+        ensure!(!self.fail, "offline startup failure");
+        Ok(Arc::new(Wallet(Arc::new(Network::default()), false)))
+    }
+}
+
+#[tokio::test]
+async fn startup_opens_wallet_once_for_both_roles_without_payment() {
+    for cap in [0, 100_000] {
+        let directory = tempfile::tempdir().unwrap();
+        let factory = Arc::new(StartupFactory {
+            opens: AtomicUsize::new(0),
+            fail: false,
+        });
+        let service =
+            Arc::new(PaymentService::with_factory(directory.path(), factory.clone()).unwrap());
+        let engine = Engine::new(service, "startup", cap, directory.path()).unwrap();
+        assert_eq!(factory.opens.load(Ordering::SeqCst), 0);
+        let (first, second) = tokio::join!(engine.start(), engine.start());
+        first.unwrap();
+        second.unwrap();
+        engine.service.wallet().await.unwrap();
+        assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
+        assert!(engine.service.ledger.requests().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn startup_propagates_wallet_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let factory = Arc::new(StartupFactory {
+        opens: AtomicUsize::new(0),
+        fail: true,
+    });
+    let service =
+        Arc::new(PaymentService::with_factory(directory.path(), factory.clone()).unwrap());
+    let engine = Engine::new(service, "startup", 0, directory.path()).unwrap();
+    let error = engine.start().await.unwrap_err();
+    assert!(format!("{error:#}").contains("offline startup failure"));
+    assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
+}
