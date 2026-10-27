@@ -1027,7 +1027,12 @@ model cadence, device gates and protected action references remain unchanged.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
   focused Windows log-store privacy ACL checks, and the Windows CPU native
   Skippy probes (`windows-skippy-probes`, #2222 item 2). That row is selected
-  by the `native-abi` platform domain and on every main run. The `native-abi`
+  by the `native-abi` platform domain and on every main run. The macOS and
+  Windows unit rows filter their resolved package lists against the checked-out
+  workspace's `cargo metadata` members before the test loops consume them, so a
+  crate removed from the workspace is skipped with a `::warning::` instead of
+  aborting with a missing-package failure; that filter cannot distinguish an
+  intentional removal from an accidental one. The `native-abi`
   domain selects `static-abi`, `runtime-product`, `product-smoke`,
   `rust-tests`, and `platform-checks`; its `domain_rows` are `linux-cpu`,
   `windows-cpu`, and `windows-vulkan` for changes to the patch queue and llama

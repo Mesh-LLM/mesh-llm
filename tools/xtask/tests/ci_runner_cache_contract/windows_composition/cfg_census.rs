@@ -378,11 +378,11 @@ fn windows_unit_resolver_outputs_keep_shared_macos_owners_and_windows_only_plugi
     let environment = step.get("env").unwrap();
     assert_eq!(
         environment.get("WINDOWS_TEST_CRATES").and_then(Node::text),
-        Some("${{ steps.windows_packages.outputs.crates }}")
+        Some("${{ steps.windows_test_packages.outputs.windows_crates }}")
     );
     assert_eq!(
         environment.get("TEST_CRATES").and_then(Node::text),
-        Some("${{ steps.packages.outputs.crates }}")
+        Some("${{ steps.windows_test_packages.outputs.crates }}")
     );
     let run = step.get("run").and_then(Node::text).unwrap();
     for token in [
@@ -531,7 +531,7 @@ fn dynamic_request(document: &Node) -> Result<(&str, Vec<String>), String> {
         .get("env")
         .and_then(|env| env.get("WINDOWS_DYNAMIC_TEST_CRATES"))
         .and_then(Node::text)
-        != Some("${{ steps.windows_dynamic_packages.outputs.crates }}")
+        != Some("${{ steps.windows_test_packages.outputs.windows_dynamic_crates }}")
     {
         return Err("dynamic Windows loop must consume its resolver output".into());
     }
@@ -679,7 +679,7 @@ fn windows_dynamic_loop_mutations_refuse_detached_output_and_unfeatured_executio
     assert!(dynamic_request(&workflow_yaml::parse(&source).unwrap()).is_ok());
     for (before, after) in [
         (
-            "WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_dynamic_packages.outputs.crates }}",
+            "WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_test_packages.outputs.windows_dynamic_crates }}",
             "WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.packages.outputs.crates }}",
         ),
         (
