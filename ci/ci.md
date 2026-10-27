@@ -884,6 +884,8 @@ Quality allows 60 minutes for the job and 40 minutes for the complete native
 contract step. Trusted runner-image checks allow 45 minutes: automation
 preparation is bounded to 20 minutes before managed package work, package work
 to 15 minutes, cleanup to five minutes, and setup has a five-minute reserve.
+The neutral macOS host producer has a 60-minute job ceiling for cold Rust
+compilation.
 The three hardware-backed Linux Laya rows retain a larger caller timeout and
 otherwise use a 100-minute job floor: 20-minute automation preparation before
 artifact restoration, a 70-minute restore/read composite, five-minute cleanup,
