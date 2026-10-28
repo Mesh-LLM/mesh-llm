@@ -26,7 +26,13 @@
     var visible = false;
     var progress = null;
 
+    var bar = root.querySelector("[data-plugin-spot-bar]");
+    var indexLabel = root.querySelector("[data-plugin-spot-index]");
+    var prev = root.querySelector("[data-plugin-spot-prev]");
+    var next = root.querySelector("[data-plugin-spot-next]");
+
     tablist.hidden = false;
+    if (bar) bar.hidden = false;
     root.classList.add("is-interactive");
 
     function stopProgress() {
@@ -70,10 +76,13 @@
       if (animeApi && !reduceMotion.matches) {
         animeApi.animate(panels[index], { opacity: [0, 1], translateY: [8, 0], duration: 320, ease: "outQuad" });
       }
-      if (!fromUser) {
-        // Keep the active tab in view on narrow screens without moving the page.
-        var tab = tabs[index];
-        tablist.scrollTo({ left: tab.offsetLeft - tablist.offsetLeft, behavior: reduceMotion.matches ? "auto" : "smooth" });
+      if (indexLabel) indexLabel.textContent = String(index + 1);
+      // Bring the active card into the rail's view without moving the page.
+      var tab = tabs[index];
+      var left = tab.offsetLeft - tablist.offsetLeft;
+      var right = left + tab.offsetWidth;
+      if (left < tablist.scrollLeft || right > tablist.scrollLeft + tablist.clientWidth) {
+        tablist.scrollTo({ left: Math.max(0, left - 2), behavior: reduceMotion.matches ? "auto" : "smooth" });
       }
       runProgress();
     }
@@ -92,6 +101,9 @@
         tabs[next].focus();
       });
     });
+
+    if (prev) prev.addEventListener("click", function () { select((current - 1 + tabs.length) % tabs.length, true); });
+    if (next) next.addEventListener("click", function () { select((current + 1) % tabs.length, true); });
 
     // Pause while someone is reading the panel, not while the cursor merely crosses the tabs.
     var panelBox = root.querySelector(".plugin-spot-panels");

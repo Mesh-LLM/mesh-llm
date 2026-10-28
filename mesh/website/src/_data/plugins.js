@@ -15,44 +15,47 @@ const toHtml = (markdown) =>
 
 const groups = [
   { id: 'inference', title: 'Inference runtimes' },
-  { id: 'integration', title: 'Integrations' },
   { id: 'payments', title: 'Payments' },
-  { id: 'utility', title: 'Utilities' },
+  { id: 'tools', title: 'Tools and integrations' },
 ];
 
 const plugins = [
   {
     name: 'ds4',
+    icon: 'brain-circuit',
     repo: 'ds4-plugin',
     group: 'inference',
-    tagline: 'DeepSeek V4 Flash via DwarfStar',
+    tagline: 'DeepSeek V4 Flash on your Mac',
     summary:
-      'Run [DwarfStar (ds4)](https://github.com/antirez/ds4) models such as DeepSeek V4 Flash on Apple Silicon. The model downloads on first start. [Setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/plugins/dwarfstar.md).',
+      "Run DeepSeek V4 Flash, a large and powerful open model, locally with [DwarfStar (ds4)](https://github.com/antirez/ds4): antirez's small native inference engine built specifically for DeepSeek V4. The model downloads on first start. [Setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/plugins/dwarfstar.md).",
     install: 'mesh-llm plugins install Mesh-LLM/ds4-plugin',
     platforms: 'macOS arm64',
   },
   {
     name: 'uzu',
+    icon: 'zap',
     repo: 'uzu-runtime-plugin',
     group: 'inference',
-    tagline: 'Uzu Apple Silicon engine',
+    tagline: 'Super-fast, Metal-native Mac inference',
     summary:
-      "Experimental. Serve Uzu-converted models with [Uzu](https://github.com/trymirai/uzu)'s Apple Silicon inference engine. Requires macOS 26.4+.",
+      'Experimental. Very fast inference that runs natively on Apple Silicon GPUs through Metal, powered by the [Uzu](https://github.com/trymirai/uzu) engine. Serves Uzu-converted models; requires macOS 26.4+.',
     install: 'mesh-llm plugins install Mesh-LLM/uzu-runtime-plugin',
     platforms: 'macOS arm64',
   },
   {
     name: 'eredu',
+    icon: 'cpu',
     repo: 'eredu-plugin',
     group: 'inference',
-    tagline: 'Local MLX models',
+    tagline: 'MLX-powered local models',
     summary:
-      'Early access. Run a local MLX model with [Eredu](https://github.com/jbg/eredu) through the OpenAI-compatible API. Text chat and streaming.',
+      'Early access. Run MLX models on Apple Silicon with [Eredu](https://github.com/jbg/eredu), served through the normal OpenAI-compatible API. Text chat and streaming.',
     install: 'mesh-llm plugins install Mesh-LLM/eredu-plugin',
     platforms: 'macOS arm64',
   },
   {
     name: 'flash-moe',
+    icon: 'gauge',
     repo: 'flash-moe-plugin',
     group: 'inference',
     tagline: 'Flash-MoE endpoints',
@@ -63,6 +66,7 @@ const plugins = [
   },
   {
     name: 'openai-endpoint',
+    icon: 'plug',
     repo: 'openai-endpoint-plugin',
     group: 'inference',
     tagline: 'Ollama, vLLM, LM Studio',
@@ -73,8 +77,9 @@ const plugins = [
   },
   {
     name: 'blackboard',
+    icon: 'clipboard-list',
     repo: 'blackboard-plugin',
-    group: 'integration',
+    group: 'tools',
     tagline: 'Agent coordination',
     summary:
       'Share short-lived status, findings, questions, and tips across a mesh. Also ships a Blackboard Agent Skill.',
@@ -83,8 +88,9 @@ const plugins = [
   },
   {
     name: 'agents',
+    icon: 'bot',
     repo: 'agents-plugin',
-    group: 'integration',
+    group: 'tools',
     tagline: 'Mesh-native A2A agents',
     summary: 'Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint.',
     install: 'mesh-llm plugins install agents',
@@ -92,8 +98,9 @@ const plugins = [
   },
   {
     name: 'capsules',
+    icon: 'shield-check',
     repo: 'capsules-plugin',
-    group: 'integration',
+    group: 'tools',
     tagline: 'Signed exchange evidence',
     summary:
       'Keep a signed, hash-chained record of every exchange a node serves or requests, with an Evidence page in the console.',
@@ -102,6 +109,7 @@ const plugins = [
   },
   {
     name: 'lexe-wallet',
+    icon: 'wallet',
     repo: 'lexe-wallet-plugin',
     group: 'payments',
     tagline: 'Lightning wallet (preview)',
@@ -112,8 +120,9 @@ const plugins = [
   },
   {
     name: 'model-prices',
+    icon: 'tag',
     repo: 'model-price-plugin',
-    group: 'utility',
+    group: 'tools',
     tagline: 'Model prices in the console',
     summary:
       'Preview. Read-only console page showing model prices on a mesh. No wallet needed. Install from the release archive; see the [README](https://github.com/Mesh-LLM/model-price-plugin#readme).',
@@ -122,8 +131,9 @@ const plugins = [
   },
   {
     name: 'metrics',
+    icon: 'activity',
     repo: 'metrics-plugin',
-    group: 'utility',
+    group: 'tools',
     tagline: 'Telemetry support',
     summary:
       'Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin.',
@@ -136,6 +146,9 @@ const plugins = [
   groupTitle: groups.find((group) => group.id === plugin.group).title,
   summaryHtml: toHtml(plugin.summary),
 }));
+
+// Keep `all` in group order so carousel cards and panels line up with the grouped docs.
+plugins.sort((a, b) => groups.findIndex((g) => g.id === a.group) - groups.findIndex((g) => g.id === b.group));
 
 export default {
   groups: groups.map((group) => ({
