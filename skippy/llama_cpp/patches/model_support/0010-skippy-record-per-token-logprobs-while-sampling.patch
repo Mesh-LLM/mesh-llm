@@ -1,4 +1,4 @@
-From 772898c95835cb981bcb293039c92055149ff347 Mon Sep 17 00:00:00 2001
+From 842237d84843242384556809d0aca2907c480194 Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
 Subject: [PATCH] skippy: record per-token logprobs while sampling
@@ -143,7 +143,7 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index db4a3d8a4..97aafb91e 100644
+index 78e2c01f3..0d453a1e7 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -82,6 +82,7 @@ add_library(llama
@@ -255,7 +255,7 @@ index 000000000..43260dfc2
 +    return skippy_success(out_error);
 +}
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index 0003f3162..b87d09214 100644
+index f44e874d9..d5dc18f06 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
 @@ -140,6 +140,8 @@ struct skippy_session {
@@ -268,10 +268,10 @@ index 0003f3162..b87d09214 100644
      std::vector<int32_t> prefill_n_seq_ids;
      std::vector<llama_seq_id> prefill_seq_ids;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 035aa0747..5ae58b53c 100644
+index de5fa6ba5..22aaa6a30 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -423,6 +423,9 @@ static bool skippy_sampling_chain_is_reusable_for(
+@@ -426,6 +426,9 @@ static bool skippy_sampling_chain_is_reusable_for(
              session->sampling_backend_retired) {
          return false;
      }
@@ -281,7 +281,7 @@ index 035aa0747..5ae58b53c 100644
      if (sampling != nullptr &&
              skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
          return true;
-@@ -548,13 +551,14 @@ void skippy_refresh_backend_sampling(
+@@ -561,13 +564,14 @@ void skippy_refresh_backend_sampling(
              session->sampling_chain != nullptr &&
              !session->sampling_has_grammar &&
              !session->sampling_has_reasoning_budget &&
@@ -297,7 +297,7 @@ index 035aa0747..5ae58b53c 100644
          skippy_session * session,
          const skippy_sampling_config * sampling,
          int32_t logits_index) {
-@@ -584,6 +588,21 @@ llama_token skippy_sample_token_ith(
+@@ -597,6 +601,21 @@ llama_token skippy_sample_token_ith(
      return LLAMA_TOKEN_NULL;
  }
  
@@ -338,10 +338,10 @@ index 7bbf16016..81bc26ff5 100644
          skippy_session * session,
          const llama_token * token_ids,
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index e718b3e28..17cd13db1 100644
+index 36c972d92..3bd92390c 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -378,6 +378,7 @@ enum skippy_status skippy_session_reset(
+@@ -379,6 +379,7 @@ enum skippy_status skippy_session_reset(
          session->token_history.clear();
      }
      session->signal_history.clear();
@@ -362,7 +362,7 @@ index 0f9b3a27c..2eb002bd2 100644
      session->verify_checkpoints.clear();
      return skippy_success(out_error);
 diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
-index 82919e864..20d0e18cb 100644
+index d3de66cbe..3ca967bf3 100644
 --- a/src/skippy/workloads.cpp
 +++ b/src/skippy/workloads.cpp
 @@ -91,6 +91,7 @@ void skippy_prepare_non_chat_workload(skippy_session * session) {

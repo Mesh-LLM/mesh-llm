@@ -1,4 +1,4 @@
-From 831a4a9a0446d2b123c6d3d36ae53cc9c53795b5 Mon Sep 17 00:00:00 2001
+From fff93dbf9dd00992bb7e105b27a3222994f46f4e Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -18,12 +18,12 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  common/sampling.h                       |   50 +-
  common/tokenization.cpp                 |   58 ++
  src/skippy/abi.cpp                      |   59 ++
- src/skippy/activation.cpp               | 1014 +++++++++++++++++++
+ src/skippy/activation.cpp               | 1015 +++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
  src/skippy/activation_layout.cpp        |  156 +++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
- src/skippy/chat_sampling.cpp            |   64 ++
+ src/skippy/chat_sampling.cpp            |   75 ++
  src/skippy/chat_sampling.h              |    7 +
  src/skippy/devices.cpp                  |  106 ++
  src/skippy/environment.h                |   48 +
@@ -32,8 +32,8 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/events_internal.h            |   35 +
  src/skippy/executable_graph.cpp         |  329 +++++++
  src/skippy/executable_graph.h           |   37 +
- src/skippy/execution-batch.cpp          |  453 +++++++++
- src/skippy/execution-single.cpp         |  641 ++++++++++++
+ src/skippy/execution-batch.cpp          |  454 +++++++++
+ src/skippy/execution-single.cpp         |  642 ++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
  src/skippy/glm_dsa.h                    |   14 +
@@ -53,12 +53,12 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/package_tensor_binding.h     |   27 +
  src/skippy/rerank_template.h            |   36 +
  src/skippy/runtime_support.h            |   47 +
- src/skippy/runtime_types.h              |  182 ++++
- src/skippy/sampling.cpp                 |  589 +++++++++++
+ src/skippy/runtime_types.h              |  183 ++++
+ src/skippy/sampling.cpp                 |  602 ++++++++++++
  src/skippy/sampling_config.cpp          |  178 ++++
  src/skippy/sampling_internal.h          |   67 ++
  src/skippy/sampling_vocab.cpp           |   74 ++
- src/skippy/session.cpp                  |  519 ++++++++++
+ src/skippy/session.cpp                  |  521 ++++++++++
  src/skippy/speculative_decoding.cpp     |  568 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_execution_contract.cpp |   72 ++
@@ -75,9 +75,9 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/state_memory.h               |   16 +
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  256 +++++
- src/skippy/workloads.cpp                |  372 +++++++
+ src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 73 files changed, 16210 insertions(+), 395 deletions(-)
+ 73 files changed, 16241 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -1490,10 +1490,10 @@ index 000000000..ceed6e5d3
 +}
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 new file mode 100644
-index 000000000..6e76337b2
+index 000000000..e2ce28d12
 --- /dev/null
 +++ b/src/skippy/activation.cpp
-@@ -0,0 +1,1014 @@
+@@ -0,0 +1,1015 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -2002,6 +2002,7 @@ index 000000000..6e76337b2
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +    skippy_mark_context_work_pending(session->stage_model);
++    session->sampling_backend_row_invalid = false;
 +    session->n_past += static_cast<int32_t>(token_count);
 +    return skippy_success(out_error);
 +}
@@ -2884,10 +2885,10 @@ index 000000000..7c9aae114
 +        std::string & error);
 diff --git a/src/skippy/chat_sampling.cpp b/src/skippy/chat_sampling.cpp
 new file mode 100644
-index 000000000..459934fc7
+index 000000000..3c9fc758b
 --- /dev/null
 +++ b/src/skippy/chat_sampling.cpp
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,75 @@
 +#include "skippy/chat_sampling.h"
 +#include "skippy/runtime_types.h"
 +#include "skippy/runtime_support.h"
@@ -2901,6 +2902,8 @@ index 000000000..459934fc7
 +bool skippy_retire_backend_sampling(skippy_session * session, skippy_error ** out_error) {
 +    if (!session->sampling_backend_enabled) { return true; }
 +    try {
++        llama_synchronize(session->ctx);
++        skippy_mark_context_synchronized(session->stage_model);
 +        // Cloning preserves accepted history and RNG state, but gives the chain
 +        // fresh CPU nodes instead of the detached chain's offload-only nodes.
 +        auto * replacement = common_sampler_clone(session->sampler);
@@ -2910,6 +2913,7 @@ index 000000000..459934fc7
 +        session->sampling_chain = common_sampler_get(replacement);
 +        session->sampling_backend_enabled = false;
 +        session->sampling_backend_retired = true;
++        session->sampling_backend_row_invalid = true;
 +        return true;
 +    } catch (...) {
 +        session->reset_required = true;
@@ -2928,21 +2932,29 @@ index 000000000..459934fc7
 +}
 +
 +llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_index) {
-+    skippy_chat_accept_history(session);
++    const auto backend_token = llama_get_sampled_token_ith(session->ctx, logits_index);
++    const auto * backend_probs = llama_get_sampled_probs_ith(session->ctx, logits_index);
++    const auto * backend_logits = llama_get_sampled_logits_ith(session->ctx, logits_index);
++    const bool processed_row = backend_token != LLAMA_TOKEN_NULL || backend_probs != nullptr || backend_logits != nullptr;
++    // A changed or detached sampler cannot reinterpret its predecessor's
++    // processed row. Only a subsequent decode for this session renews it.
++    if (processed_row && (session->sampling_backend_row_invalid || !session->sampling_backend_enabled)) {
++        return LLAMA_TOKEN_NULL;
++    }
 +    if (session->sampling_backend_enabled) {
-+        const auto token = llama_get_sampled_token_ith(session->ctx, logits_index);
-+        if (token != LLAMA_TOKEN_NULL) {
++        if (backend_token != LLAMA_TOKEN_NULL) {
++            skippy_chat_accept_history(session);
 +            skippy_mark_context_synchronized(session->stage_model);
-+            return token;
++            return backend_token;
 +        }
 +        // The chain may have been attached after this row was decoded.
 +        if (!skippy_retire_backend_sampling(session, nullptr)) { return LLAMA_TOKEN_NULL; }
 +    }
-+    if (llama_get_sampled_probs_ith(session->ctx, logits_index) == nullptr &&
-+            llama_get_sampled_logits_ith(session->ctx, logits_index) == nullptr &&
++    if (backend_probs == nullptr && backend_logits == nullptr &&
 +            llama_get_logits_ith(session->ctx, logits_index) == nullptr) {
 +        return LLAMA_TOKEN_NULL;
 +    }
++    skippy_chat_accept_history(session);
 +    const auto token = common_sampler_sample(session->sampler, session->ctx, logits_index);
 +    skippy_mark_context_synchronized(session->stage_model);
 +    const auto * candidates = common_sampler_get_candidates(session->sampler, false);
@@ -3873,10 +3885,10 @@ index 000000000..aa02187d1
 +        std::string & error);
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
 new file mode 100644
-index 000000000..c45f66421
+index 000000000..901095cab
 --- /dev/null
 +++ b/src/skippy/execution-batch.cpp
-@@ -0,0 +1,453 @@
+@@ -0,0 +1,454 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -4260,6 +4272,7 @@ index 000000000..c45f66421
 +        if (out_output_payload_bytes != nullptr && output_descs != nullptr) {
 +            out_output_payload_bytes[request_index] = output_descs[request_index].payload_bytes;
 +        }
++        request.session->sampling_backend_row_invalid = false;
 +        request.session->n_past += static_cast<int32_t>(request.token_count);
 +        skippy_record_tokens(request.session, request.token_ids, request.token_count);
 +        if (request.sample_last && request_logits) {
@@ -4332,10 +4345,10 @@ index 000000000..c45f66421
 +} // extern "C"
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
 new file mode 100644
-index 000000000..6b6835f22
+index 000000000..4ce3d4ba9
 --- /dev/null
 +++ b/src/skippy/execution-single.cpp
-@@ -0,0 +1,641 @@
+@@ -0,0 +1,642 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -4575,6 +4588,7 @@ index 000000000..6b6835f22
 +
 +    for (int32_t i = 0; i < n_tokens; ++i) {
 +        skippy_session * session = sessions[i];
++        session->sampling_backend_row_invalid = false;
 +        session->n_past += 1;
 +        skippy_record_tokens(session, &token_ids[i], 1);
 +        const skippy_sampling_config * request_sampling = sampling != nullptr ? sampling[i] : nullptr;
@@ -10429,10 +10443,10 @@ index 000000000..d7e991307
 +        skippy_error ** out_error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 new file mode 100644
-index 000000000..296fad7f9
+index 000000000..f19a25b76
 --- /dev/null
 +++ b/src/skippy/runtime_types.h
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,183 @@
 +#pragma once
 +
 +#include "skippy.h"
@@ -10585,6 +10599,7 @@ index 000000000..296fad7f9
 +    llama_sampler * sampling_chain = nullptr;
 +    bool sampling_has_grammar = false;
 +    bool sampling_has_reasoning_budget = false;
++    bool sampling_backend_row_invalid = false;
 +    bool grammar_lazy = false;
 +    bool sampling_backend_enabled = false;
 +    // A sampler chain may be backend-initialized at most once
@@ -10617,10 +10632,10 @@ index 000000000..296fad7f9
 +};
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 new file mode 100644
-index 000000000..07708e65e
+index 000000000..6fd1240e3
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,589 @@
+@@ -0,0 +1,602 @@
 +#include "skippy/sampling.h"
 +#include "skippy/chat_sampling.h"
 +#include "skippy/errors.h"
@@ -10935,6 +10950,9 @@ index 000000000..07708e65e
 +        return;
 +    }
 +    if (session->ctx != nullptr) {
++        session->sampling_backend_row_invalid |= session->sampling_backend_enabled;
++        llama_synchronize(session->ctx);
++        skippy_mark_context_synchronized(session->stage_model);
 +        llama_set_sampler(session->ctx, session->seq_id, nullptr);
 +    }
 +    common_sampler_free(session->sampler);
@@ -11048,6 +11066,16 @@ index 000000000..07708e65e
 +    if (sampling != nullptr &&
 +            skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
 +        return true;
++    }
++    const auto explicit_bias = [](const skippy_sampling_config * config) {
++        return config != nullptr && (config->logit_bias_count != 0 || config->ignore_eos != 0 ||
++                (config->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0);
++    };
++    // Chat configuration honors explicit biases even when stochastic
++    // sampling is disabled; those chains are not interchangeable with greedy.
++    if (!session->chat_sampling_metadata.empty() &&
++            (explicit_bias(&session->sampling_config) || explicit_bias(sampling))) {
++        return false;
 +    }
 +    // Greedy-equivalent configurations all build the same one-node greedy
 +    // chain. Fields such as seed and top_p are semantically inactive while
@@ -11212,7 +11240,7 @@ index 000000000..07708e65e
 +}
 diff --git a/src/skippy/sampling_config.cpp b/src/skippy/sampling_config.cpp
 new file mode 100644
-index 000000000..b96b65745
+index 000000000..6be5559e2
 --- /dev/null
 +++ b/src/skippy/sampling_config.cpp
 @@ -0,0 +1,178 @@
@@ -11371,7 +11399,7 @@ index 000000000..b96b65745
 +
 +bool skippy_initialize_chat_sampler(skippy_session * session,
 +        const skippy_sampling_config * config, const json & metadata, skippy_error **) {
-+    auto params = sampling_params(config, !metadata.empty());
++    auto params = sampling_params(config, !session->chat_sampling_metadata.empty());
 +    const auto * model = session->stage_model->model;
 +    const auto * vocab = llama_model_get_vocab(model);
 +    chat_params(params, vocab, metadata, config != nullptr);
@@ -11549,10 +11577,10 @@ index 000000000..baf83db44
 +}
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..79bf1c8ae
+index 000000000..f1de95cc5
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,519 @@
+@@ -0,0 +1,521 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -11770,6 +11798,7 @@ index 000000000..79bf1c8ae
 +    if (g_skippy_external_decode_session == session) {
 +        g_skippy_external_decode_session = nullptr;
 +    }
++    session->sampling_backend_row_invalid = false;
 +    skippy_mark_context_work_pending(session->stage_model);
 +    return skippy_success(out_error);
 +}
@@ -11946,6 +11975,7 @@ index 000000000..79bf1c8ae
 +        skippy_clear_chat_sampling(session);
 +    }
 +    skippy_mtp_clear_session_state(session);
++    session->sampling_backend_row_invalid = true;
 +    session->reset_required = false;
 +    session->verify_checkpoints.clear();
 +    skippy_emit_kv_event(
@@ -17146,10 +17176,10 @@ index 000000000..0812485d7
 +} // extern "C"
 diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
 new file mode 100644
-index 000000000..82919e864
+index 000000000..d3de66cbe
 --- /dev/null
 +++ b/src/skippy/workloads.cpp
-@@ -0,0 +1,372 @@
+@@ -0,0 +1,373 @@
 +#include "skippy/workloads.h"
 +
 +#include "llama.h"
@@ -17279,6 +17309,7 @@ index 000000000..82919e864
 +        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +    skippy_mark_context_work_pending(session->stage_model);
++    session->sampling_backend_row_invalid = false;
 +
 +    const enum llama_pooling_type pooling   = llama_pooling_type(session->ctx);
 +    const float *                 embedding = pooling == LLAMA_POOLING_TYPE_NONE ?

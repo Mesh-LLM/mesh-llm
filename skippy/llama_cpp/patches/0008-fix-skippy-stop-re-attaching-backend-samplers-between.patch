@@ -1,4 +1,4 @@
-From 45aa5fbdcbf4de4bdcfb3624a521a725065862c8 Mon Sep 17 00:00:00 2001
+From 786e0119f47e1118a6cc8b7e5045e51f2d7cff02 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 18:34:14 +0100
 Subject: [PATCH] fix(skippy): stop re-attaching backend samplers between
@@ -23,10 +23,10 @@ resets, instead of attaching rebuilt chains to the backend.
  5 files changed, 20 insertions(+), 1 deletion(-)
 
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index b408cf690..0003f3162 100644
+index 38ebae8d7..f44e874d9 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -157,6 +157,11 @@ struct skippy_session {
+@@ -158,6 +158,11 @@ struct skippy_session {
      // detached -- e.g. so a sampled verify window can output every row --
      // it must never be re-attached; only building a fresh chain clears this.
      bool sampling_backend_retired = false;
@@ -39,7 +39,7 @@ index b408cf690..0003f3162 100644
      uint64_t sampling_rebuild_count = 0;
      skippy_sampling_config sampling_config = {};
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 07708e65e..035aa0747 100644
+index 6fd1240e3..de5fa6ba5 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -138,6 +138,7 @@ enum skippy_status skippy_verify_token_batch(
@@ -50,7 +50,7 @@ index 07708e65e..035aa0747 100644
  
      const int32_t n_tokens = static_cast<int32_t>(token_count);
      llama_batch batch = llama_batch_init(n_tokens, 0, 1);
-@@ -529,7 +530,8 @@ static bool skippy_ensure_plain_sampling_chain(
+@@ -542,7 +543,8 @@ static bool skippy_ensure_plain_sampling_chain(
  void skippy_refresh_backend_sampling(
          skippy_session * session,
          const skippy_sampling_config * sampling) {
@@ -61,22 +61,22 @@ index 07708e65e..035aa0747 100644
          // scheduler may reset and reuse the same chain on every iteration;
          // attaching it again violates llama_sampler_chain's one-shot init
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 79bf1c8ae..e718b3e28 100644
+index f1de95cc5..36c972d92 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -391,6 +391,7 @@ enum skippy_status skippy_session_reset(
+@@ -392,6 +392,7 @@ enum skippy_status skippy_session_reset(
          skippy_clear_chat_sampling(session);
      }
      skippy_mtp_clear_session_state(session);
 +    session->sampling_backend_verifying = false;
+     session->sampling_backend_row_invalid = true;
      session->reset_required = false;
      session->verify_checkpoints.clear();
-     skippy_emit_kv_event(
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
-index b75c3b75d..2b9cac5ef 100644
+index 21ac21c73..472f1d990 100644
 --- a/src/skippy/tests/runtime_events.cpp
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -433,9 +433,19 @@ int test_native_model_load_production(const char * fixture_path) {
+@@ -496,9 +496,19 @@ int test_native_model_load_production(const char * fixture_path) {
      CHECK(!session->sampling_backend_enabled);
      CHECK(session->sampling_backend_retired);
  

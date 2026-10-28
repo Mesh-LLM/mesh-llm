@@ -1,4 +1,4 @@
-From 92779ec91d460a402c10a3c57a8129a386a97b0c Mon Sep 17 00:00:00 2001
+From 8211ae0b61fdaf367d0136ae73bb321c530476b3 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -17,7 +17,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/profile_residency.cpp        |  258 +++
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
- src/skippy/tests/runtime_events.cpp           |  629 +++++++
+ src/skippy/tests/runtime_events.cpp           |  693 +++++++
  src/skippy/tests/sampling_history.cpp         |  459 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9842 insertions(+), 32 deletions(-)
+ 34 files changed, 9906 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5138,10 +5138,10 @@ index 000000000..31734bf56
 +}
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
 new file mode 100644
-index 000000000..b75c3b75d
+index 000000000..21ac21c73
 --- /dev/null
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -0,0 +1,629 @@
+@@ -0,0 +1,693 @@
 +#include "skippy.h"
 +
 +#include "../events_internal.h"
@@ -5155,6 +5155,7 @@ index 000000000..b75c3b75d
 +#include <cstdlib>
 +#include <cstring>
 +#include <chrono>
++#include <cmath>
 +#include <string>
 +#include <thread>
 +#include <vector>
@@ -5472,6 +5473,68 @@ index 000000000..b75c3b75d
 +    return 0;
 +}
 +
++void test_sampler_row_transitions(skippy_model * model) {
++    skippy_session * session = nullptr;
++    skippy_error * error = nullptr;
++    CHECK(skippy_session_create(model, &session, &error) == SKIPPY_STATUS_OK);
++    skippy_sampling_config config{};
++    config.version = 1;
++    config.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    config.repeat_penalty = 1.0f;
++    config.reasoning_budget_tokens = -1;
++    CHECK(skippy_session_configure_chat_sampling(session, &config, "{}", 0, &error) == SKIPPY_STATUS_OK);
++    size_t bytes = 0;
++    llama_token predicted = LLAMA_TOKEN_NULL;
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
++    CHECK(skippy_session_configure_chat_sampling(session, &config,
++            R"({"grammar":"root ::= \"2a\""})", 1, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_session_sample_current(session, &config, &predicted, &error) == SKIPPY_STATUS_RUNTIME_ERROR);
++    CHECK(predicted == LLAMA_TOKEN_NULL && session->sampling_accepted_token_count == 0);
++    skippy_error_free(error); error = nullptr;
++    CHECK(skippy_session_configure_chat_sampling(session, &config, "{}", 1, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
++    CHECK(skippy_session_sample_current(session, &config, &predicted, &error) == SKIPPY_STATUS_RUNTIME_ERROR);
++    CHECK(predicted == LLAMA_TOKEN_NULL && session->sampling_accepted_token_count == 0);
++    skippy_error_free(error); error = nullptr;
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++
++    config.flags = 0;
++    config.logit_bias_count = 1;
++    config.logit_bias[0] = {42, 100000.0f};
++    CHECK(skippy_session_configure_chat_sampling(session, &config, "{}", 1, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++    CHECK(predicted == 42);
++    config.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    config.logit_bias_count = 0;
++    CHECK(skippy_session_configure_chat_sampling(session, &config, "{}", 1, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
++
++    const llama_token token = 2;
++    float score = 0;
++    skippy_token_score_request readout{&token, 1, &score};
++    skippy_iteration_request request{};
++    request.session = session;
++    request.token_ids = &token;
++    request.token_count = 1;
++    request.sampling = &config;
++    request.readout = &readout;
++    size_t sampled = 0;
++    CHECK(skippy_iteration_batch_sampled(&request, 1, nullptr, nullptr, nullptr, nullptr,
++            nullptr, nullptr, 0, &sampled, &error) == SKIPPY_STATUS_OK);
++    CHECK(sampled == 0 && std::isfinite(score) && !session->sampling_backend_enabled);
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++    CHECK(predicted >= 0 && !session->sampling_backend_enabled);
++
++    CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
++}
++
 +int test_native_model_load_production(const char * fixture_path) {
 +    const char * old_detach_setting = std::getenv("SKIPPY_DETACH_SAMPLER_ON_RESET");
 +    const bool had_detach_setting = old_detach_setting != nullptr;
@@ -5615,6 +5678,7 @@ index 000000000..b75c3b75d
 +    CHECK(!session->sampling_backend_retired);
 +    CHECK(global.kv_cleared_events.load() > 0);
 +    CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
++    test_sampler_row_transitions(model);
 +    CHECK(skippy_model_free(model, &error) == SKIPPY_STATUS_OK);
 +    CHECK(global.unload_started_events.load() == 1);
 +    CHECK(global.unload_completed_events.load() == 1);
