@@ -1,8 +1,25 @@
 use clap::Parser;
 use mesh_llm_cli::Cli;
 use serde_json::json;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+fn dispatch_on_application_stack(cli: Cli) -> anyhow::Result<bool> {
+    std::thread::Builder::new()
+        .stack_size(crate::DEFAULT_THREAD_STACK_SIZE)
+        .spawn(move || {
+            let mut builder = tokio::runtime::Builder::new_current_thread();
+            builder.enable_all();
+            builder
+                .build()
+                .expect("test runtime")
+                .block_on(super::dispatch(&cli))
+        })
+        .expect("spawn dispatch thread")
+        .join()
+        .expect("dispatch thread")
+}
 
 fn parse_cli(args: &[&str]) -> Cli {
     let normalized = mesh_llm_cli::normalize_runtime_surface_args(args.iter().copied());
@@ -70,7 +87,10 @@ async fn load_sends_requested_context_size_and_lanes() {
         "1",
     ]);
 
-    super::dispatch(&cli).await.expect("load should succeed");
+    tokio::task::spawn_blocking(move || dispatch_on_application_stack(cli))
+        .await
+        .expect("dispatch task")
+        .expect("load should succeed");
 
     assert_eq!(
         server.await.expect("node task"),
@@ -84,7 +104,10 @@ async fn load_without_sizing_flags_sends_only_the_model() {
     let port_arg = port.to_string();
     let cli = parse_cli(&["mesh-llm", "load", "org/model", "--port", &port_arg]);
 
-    super::dispatch(&cli).await.expect("load should succeed");
+    tokio::task::spawn_blocking(move || dispatch_on_application_stack(cli))
+        .await
+        .expect("dispatch task")
+        .expect("load should succeed");
 
     assert_eq!(
         server.await.expect("node task"),
@@ -92,25 +115,27 @@ async fn load_without_sizing_flags_sends_only_the_model() {
     );
 }
 
-/// The node accepts the request and keeps loading past the client's
-/// timeout. Paused time lets the timeout elapse without waiting for it.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn load_that_outlasts_the_client_timeout_reports_still_loading() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let port_arg = listener
-        .local_addr()
-        .expect("local addr")
-        .port()
-        .to_string();
+    let port = listener.local_addr().expect("local addr").port();
     let node = tokio::spawn(async move {
         let (_stream, _) = listener.accept().await.expect("accept");
         std::future::pending::<()>().await;
     });
-    let cli = parse_cli(&["mesh-llm", "load", "org/model", "--port", &port_arg]);
 
-    let error = super::dispatch(&cli)
-        .await
-        .expect_err("an unanswered load should fail the client");
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        super::runtime::run_load_with_timeout(
+            "org/model",
+            port,
+            super::runtime::LoadSizing::default(),
+            Duration::from_millis(200),
+        ),
+    )
+    .await
+    .expect("the client timeout must end the load request")
+    .expect_err("an unanswered load should fail the client");
     node.abort();
 
     let text = format!("{error:#}");
@@ -129,8 +154,9 @@ async fn load_against_a_closed_port_reports_cannot_connect() {
     drop(listener);
     let cli = parse_cli(&["mesh-llm", "load", "org/model", "--port", &port_arg]);
 
-    let error = super::dispatch(&cli)
+    let error = tokio::task::spawn_blocking(move || dispatch_on_application_stack(cli))
         .await
+        .expect("dispatch task")
         .expect_err("a closed port should fail the client");
 
     let text = format!("{error:#}");

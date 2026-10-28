@@ -52,6 +52,7 @@ async fn local_runtime_model_routes_remain_the_lifecycle_api() {
                 spec,
                 config_model_id,
                 profile,
+                sizing: _,
                 resp,
             }) => {
                 assert_eq!(spec, "org/model:Q4_K_M");

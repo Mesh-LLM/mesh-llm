@@ -79,6 +79,7 @@ async fn model_target_reconciliation_replacement_unloads_before_loading() {
             spec,
             config_model_id,
             profile,
+            sizing: _,
             resp,
         }) => {
             assert_eq!(spec, "/models/large.gguf");

@@ -106,6 +106,8 @@ pub(crate) enum ModelIntent {
         spec: String,
         config_model_id: Option<String>,
         profile: String,
+        /// Caller-requested context and lanes; defaults keep the configured plan.
+        sizing: crate::api::RuntimeLoadSizing,
         source: IntentSource,
         /// If Some, caller awaits synchronous result via this channel.
         completion:

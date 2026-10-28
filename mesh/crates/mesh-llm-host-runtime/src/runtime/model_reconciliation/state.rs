@@ -473,7 +473,7 @@ impl ModelTargetReconciliationState {
         if let Some(key) = self.matching_pending_load_key(model_ref, profile)
             && let Some(mut pending) = self.pending_load_completions.remove(&key)
         {
-            let error = error.to_string();
+            let error = format!("{error:#}");
             while let Some(tx) = pending.completions.pop_front() {
                 let _ = tx.send(Err(anyhow::anyhow!(error.clone())));
             }
