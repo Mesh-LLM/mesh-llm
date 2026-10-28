@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Wed, 28 Oct 2026 18:38:38 +1100
+Subject: [PATCH] metal: GGML_METAL_MMA_ROWS_MAX experiment knob (measurement
+ only)
+
+Lets verify-sized batches above the threshold use mul_mm, which takes the
+tensor API on M5/M6 and A19+, instead of the few-row simdgroup MMA kernel.
+---
+ ggml/src/ggml-metal/ggml-metal-common.cpp | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-common.cpp b/ggml/src/ggml-metal/ggml-metal-common.cpp
+index 70fd551e3..8740be36a 100644
+--- a/ggml/src/ggml-metal/ggml-metal-common.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-common.cpp
+@@ -1,4 +1,6 @@
+ #include "ggml-metal-common.h"
++
++#include <cstdlib>
+ #include "ggml-metal-fusion.h"
+ 
+ #include "ggml.h"
+@@ -50,7 +52,22 @@ bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_sim
+ }
+ 
+ // the most src1 rows of the few-row MMA kernels
+-static constexpr int64_t GGML_METAL_MMA_ROWS_MAX = 16;
++// Largest src1 row count the few-row MMA kernel takes. Experiment knob:
++// GGML_METAL_MMA_ROWS_MAX (1..16) hands larger batches to mul_mm, which uses
++// the tensor API on devices that have it.
++static int64_t ggml_metal_mma_rows_max() {
++    static const int64_t rows_max = [] {
++        const char * env = getenv("GGML_METAL_MMA_ROWS_MAX");
++        if (env != nullptr) {
++            const long value = strtol(env, nullptr, 10);
++            if (value >= 1 && value <= 16) {
++                return (int64_t) value;
++            }
++        }
++        return (int64_t) 16;
++    }();
++    return rows_max;
++}
+ 
+ // src1 rows per 8x8 simdgroup matrix tile of the few-row MMA kernels
+ static constexpr int64_t GGML_METAL_MMA_TILE_ROWS = 8;
+@@ -148,7 +165,7 @@ bool ggml_metal_op_mul_mat_use_mma(const struct ggml_tensor * op) {
+     const bool batch_ok = src1->ne[2] <= INT16_MAX && src1->ne[2]/src0->ne[2] <= INT16_MAX && src1->ne[3]/src0->ne[3] <= INT16_MAX;
+ 
+     return ggml_metal_mul_mat_mma_type_ok(op) && batch_ok &&
+-        src1->type == GGML_TYPE_F32 && src1->ne[1] >= ggml_metal_mul_mv_mma_rows_min(src0->type) && src1->ne[1] <= GGML_METAL_MMA_ROWS_MAX &&
++        src1->type == GGML_TYPE_F32 && src1->ne[1] >= ggml_metal_mul_mv_mma_rows_min(src0->type) && src1->ne[1] <= ggml_metal_mma_rows_max() &&
+         !ggml_is_transposed(src0) && !ggml_is_transposed(src1) &&
+         src1->nb[0] == sizeof(float) && src1->nb[1] % 16 == 0 && src1->nb[2] % 16 == 0 && src1->nb[3] % 16 == 0;
+ }
