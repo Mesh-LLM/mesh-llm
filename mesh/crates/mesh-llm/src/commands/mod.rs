@@ -3,6 +3,8 @@ mod config;
 mod discover;
 mod doctor;
 mod download;
+#[cfg(test)]
+mod load_tests;
 mod models;
 mod plugin_cli;
 mod runtime;

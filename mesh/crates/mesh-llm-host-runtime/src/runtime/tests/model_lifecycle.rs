@@ -547,3 +547,26 @@ fn runtime_load_ctx_size_prefers_cli_override_over_model_override() {
         Some(8192)
     );
 }
+
+#[test]
+fn load_failure_reaches_waiting_callers_with_its_whole_cause_chain() {
+    let model = "org/model@main:model.gguf";
+    let mut state = ModelTargetReconciliationState::default();
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    state.stack_load_completion(model, "", tx);
+    let failure = anyhow::anyhow!("error loading model: tensor data is not within the file bounds")
+        .context("load Skippy runtime for model org/model");
+
+    state.notify_load_failure(model, "", &failure);
+
+    let reported = rx
+        .try_recv()
+        .expect("waiting caller is answered")
+        .expect_err("the load failed")
+        .to_string();
+    assert!(reported.contains("load Skippy runtime"), "{reported}");
+    assert!(
+        reported.contains("not within the file bounds"),
+        "{reported}"
+    );
+}
