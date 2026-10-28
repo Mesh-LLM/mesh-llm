@@ -69,6 +69,7 @@ const WORKSPACE_MEMBERS: &[&str] = &[
     "skippy-hf-hub",
     "skippy-model-resolver",
     "skippy-protocol",
+    "skippy-receipts",
     "skippy-events",
     "skippy-tokenizer",
     "skippy-coordinator",

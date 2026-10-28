@@ -61,6 +61,7 @@ WORKSPACE_MEMBERS=(
   "skippy-hf-hub"
   "skippy-model-resolver"
   "skippy-protocol"
+  "skippy-receipts"
   "skippy-events"
   "skippy-tokenizer"
   "skippy-coordinator"
