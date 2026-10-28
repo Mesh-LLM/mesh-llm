@@ -107,6 +107,14 @@ fn windows_runtime_producer_cannot_drop_its_callers_cache_policy() {
             "      with:\n        allow_depot_remote_cache: ${{ inputs.allow_depot_remote_cache }}\n        allow_native_github_cache: ${{ inputs.allow_native_github_cache }}\n",
             "",
         ),
+        (
+            "    default: \"false\"\n  allow_native_github_cache:",
+            "    default: \"true\"\n  allow_native_github_cache:",
+        ),
+        (
+            "    default: \"false\"\n\noutputs:",
+            "    default: \"true\"\n\noutputs:",
+        ),
     ] {
         assert!(source.contains(old), "mutation preimage missing: {old}");
         let mutated = workflow_yaml::parse(&source.replacen(old, new, 1)).unwrap();
