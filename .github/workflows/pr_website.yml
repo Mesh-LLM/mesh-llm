@@ -25,16 +25,18 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: 70238ad1048498b24c524453800599b591131d35
           fetch-depth: 0
           persist-credentials: false
       - name: Validate immutable PR identity
         id: identity
         env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          [[ "$BASE_REF" == 'release/0.78.1' ]] || { echo 'release executor requires release/0.78.1 base' >&2; exit 1; }
           if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "pull request source identity is malformed" >&2
             exit 1
@@ -68,7 +70,7 @@ jobs:
       checks: write
       contents: read
       packages: read
-    uses: Mesh-LLM/mesh-llm/.github/workflows/ci-website-lane.yml@main
+    uses: ./.github/workflows/ci-website-lane.yml
     with:
       lane_plan_json: ${{ needs.plan.outputs.lane_plan }}
       plan_digest: ${{ needs.plan.outputs.plan_digest }}

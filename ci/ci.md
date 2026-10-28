@@ -1425,3 +1425,14 @@ missing fixtures and registry dimension/MTP drift fail CI validation. The matrix
 checks admitted stage chains and explicit unsupported contracts without model
 weights; it does not confer real-model certification. See
 `ci/llama-canary/SYNTHETIC_GRAPH_CONTRACTS.md` for structural coverage and limits.
+
+### Release 0.78.1 CI exception
+
+PR #2632 uses same-commit hosted-only release lanes with planner/reporting
+from `70238ad1048498b24c524453800599b591131d35`; main remains runner-policy authority.
+GPU execution requires a main push. See manage-ci's maintainer-approved
+0.78.1 exception. No external runner configuration changes.
+
+The Linux hosted projection excludes only `core-cuda` and records its own
+digest separately from canonical-plan provenance. GPU diagnostics, including
+manual dispatch, are unavailable on this release exception; main push only.

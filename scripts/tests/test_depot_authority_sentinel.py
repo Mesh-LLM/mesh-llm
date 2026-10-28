@@ -627,7 +627,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
                 self.assertIn(f"name: Plan {plan_name}", plan)
                 self.assertIn("runs-on: ubuntu-24.04", plan)
                 self.assertIn(
-                    f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane_id}-lane.yml@main",
+                    f"uses: ./.github/workflows/ci-{lane_id}-lane.yml",
                     lane,
                 )
                 self.assertIn(f"name: {lane_name}", lane)

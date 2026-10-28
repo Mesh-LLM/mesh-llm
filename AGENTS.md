@@ -458,6 +458,13 @@ OpenAI-compatible HTTP frontend (`crates/openai-frontend/src/`):
 
 - `router.rs`, `chat.rs`, `completions.rs`, `responses.rs`, `models.rs`, `sse.rs`, `backend.rs` — OpenAI surface.
 
+## Peer Inference Execution Boundary
+
+- Local-user HTTP ingress may select a mesh host and retry eligible peers.
+- Incoming QUIC HTTP inference is already assigned to this host: execute the named local model (including a registered serving plugin) or return an error to the caller. Never forward it to another mesh peer, including on local failure, missing model, automatic/virtual model selection, or routing headers.
+- Preserve this transport-authenticated boundary through compatibility bridges. Headers are not proof of local origin. Model-name aliases and multiple hosts advertising the same model are normal and must not weaken the boundary.
+- Keep real-QUIC regression tests proving local execution, local-unavailable rejection without a second hop, and continued local-user HTTP routing when changing ingress or target selection.
+
 ## Mesh Protocol Compatibility
 
 Mesh compatibility across versions is critical. Nodes in the wild run different versions and must interoperate.

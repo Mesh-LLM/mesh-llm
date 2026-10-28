@@ -48,7 +48,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             self.assertIn("pull_request:", pr_workflow)
             self.assertEqual(1, pr_workflow.count("uses: ./.github/actions/plan-ci"))
             self.assertIn(
-                f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main",
+                f"uses: ./.github/workflows/ci-{lane}-lane.yml",
                 pr_workflow,
             )
             self.assertIn(f"name: PR / {'macOS' if lane == 'macos' else lane.title()}", pr_workflow)
@@ -120,7 +120,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn(f"name: {check}", workflow)
                 self.assertIn("uses: ./.github/actions/report-ci-lane", workflow)
                 self.assertIn(
-                    "ref: ${{ github.event.repository.default_branch }}",
+                    "ref: 70238ad1048498b24c524453800599b591131d35",
                     workflow,
                 )
 
@@ -645,7 +645,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
     def test_runner_contract_changes_force_all_pr_build_slices_hosted(self) -> None:
         signal = (
             "force_hosted: "
-            "${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}"
+            "true"
         )
         minimum_calls = {
             "ci-quality-lane.yml": 1,

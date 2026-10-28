@@ -91,7 +91,7 @@ jobs:
 
   core_cuda:
     name: CUDA inference smoke
-    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
     uses: ./.github/workflows/smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -139,7 +139,7 @@ jobs:
 
   laya_cuda:
     name: Laya smoke (Linux CUDA)
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-cuda') && contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-cuda') && contains(fromJson(inputs.smoke_matrix).*.id, 'core-cuda') }}
     runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia, mesh-llm-amd64]
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
@@ -214,7 +214,7 @@ jobs:
   laya_vulkan:
     name: Laya smoke (Linux Vulkan)
     needs: [gpu_runner_gate]
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.vulkan_enabled == 'true' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-vulkan') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.vulkan_enabled == 'true' }}
     runs-on: [self-hosted, Linux, X64, amd64, gpu-nvidia, mesh-llm-amd64]
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:
@@ -249,7 +249,7 @@ jobs:
   laya_rocm:
     name: Laya smoke (Linux ROCm)
     needs: [gpu_runner_gate]
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.rocm_enabled == 'true' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(fromJson(inputs.runtime_matrix).*.id, 'linux-rocm') && contains(fromJson(inputs.smoke_matrix).*.id, 'core') && needs.gpu_runner_gate.outputs.rocm_enabled == 'true' }}
     runs-on: [self-hosted, Linux, X64, amd64, gpu-amd, mesh-llm-amd64]
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:

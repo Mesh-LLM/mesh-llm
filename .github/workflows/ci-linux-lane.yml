@@ -62,7 +62,7 @@ jobs:
     with:
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      force_hosted: true
       artifact_name: ci-ui-dist-linux-${{ github.run_id }}
       retention_days: 1
 
@@ -73,7 +73,7 @@ jobs:
     with:
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      force_hosted: true
       backend: cpu
       target: x86_64-unknown-linux-gnu
       artifact_name: ci-static-abi-${{ github.run_id }}
@@ -89,7 +89,7 @@ jobs:
     with:
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      force_hosted: true
       rust_tests_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.rust_tests) }}
       static_abi_artifact_name: ci-static-abi-${{ github.run_id }}
       static_abi_toolchain_epoch: ${{ needs.static_abi.outputs.toolchain_epoch }}
@@ -104,7 +104,7 @@ jobs:
     with:
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      force_hosted: true
       hosts_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}
       ui_artifact_name: ci-ui-dist-linux-${{ github.run_id }}
       profile: release
@@ -119,7 +119,7 @@ jobs:
     with:
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      force_hosted: true
       runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
@@ -133,7 +133,7 @@ jobs:
     with:
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      force_hosted: true
       runtime_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}
       max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
@@ -146,7 +146,7 @@ jobs:
     with:
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      force_hosted: true
       backend: cpu
       target: x86_64-unknown-linux-gnu
       profile: release
@@ -205,7 +205,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: 70238ad1048498b24c524453800599b591131d35
           persist-credentials: false
       - name: Validate planned Linux jobs
         id: validate

@@ -61,7 +61,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             workflow = self.workflow(f"pr_{lane}.yml")
             self.assertIn("pull_request:", workflow)
             self.assertIn(
-                f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main",
+                f"uses: ./.github/workflows/ci-{lane}-lane.yml",
                 workflow,
             )
             self.assertNotIn("actions.createWorkflowDispatch", workflow)
@@ -97,10 +97,10 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             protected_calls = [
                 line.strip()
                 for line in workflow.splitlines()
-                if line.strip().startswith("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-")
+                if line.strip().startswith("uses: ./.github/workflows/ci-")
             ]
             self.assertEqual(
-                [f"uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"],
+                [f"uses: ./.github/workflows/ci-{lane}-lane.yml"],
                 protected_calls,
             )
             self.assertNotIn("paths:", workflow)

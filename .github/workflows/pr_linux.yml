@@ -23,20 +23,23 @@ jobs:
     outputs:
       source_sha: ${{ steps.identity.outputs.source_sha }}
       plan_digest: ${{ steps.plan.outputs.plan_digest }}
-      lane_plan: ${{ steps.plan.outputs.linux_lane_plan }}
+      lane_plan: ${{ steps.hosted_plan.outputs.lane_plan }}
+      hosted_projection_digest: ${{ steps.hosted_plan.outputs.projection_digest }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: 70238ad1048498b24c524453800599b591131d35
           fetch-depth: 0
           persist-credentials: false
       - name: Validate immutable PR identity
         id: identity
         env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          [[ "$BASE_REF" == 'release/0.78.1' ]] || { echo 'release executor requires release/0.78.1 base' >&2; exit 1; }
           if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "pull request source identity is malformed" >&2
             exit 1
@@ -61,6 +64,21 @@ jobs:
           draft: ${{ github.event.pull_request.draft || false }}
           changed_files: ${{ steps.changes.outputs.changed_files }}
           affected_crates: ${{ steps.changes.outputs.affected_crates }}
+      # Approved release exception: no GPU execution authority. Keep all hosted
+      # production rows; explicitly report the excluded hardware qualification.
+      - name: Project hosted-only release smoke coverage
+        id: hosted_plan
+        env:
+          LANE_PLAN: ${{ steps.plan.outputs.linux_lane_plan }}
+          CANONICAL_DIGEST: ${{ steps.plan.outputs.plan_digest }}
+        run: |
+          set -euo pipefail
+          hosted=$(jq -c '.matrices.smoke |= map(select(.id != "core-cuda"))' <<<"$LANE_PLAN")
+          echo "lane_plan=$hosted" >> "$GITHUB_OUTPUT"
+          projection_digest=$(printf '%s' "$hosted" | sha256sum | awk '{print $1}')
+          echo "projection_digest=$projection_digest" >> "$GITHUB_OUTPUT"
+          echo "Canonical plan provenance: $CANONICAL_DIGEST; effective hosted projection: $projection_digest" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Release CI exception: GPU inference qualification excluded; hosted build and smoke rows remain required.' >> "$GITHUB_STEP_SUMMARY"
       - name: Check out immutable PR source for Claude compatibility
         if: ${{ contains(steps.changes.outputs.affected_crates, 'openai-frontend') || contains(steps.changes.outputs.affected_crates, 'mesh-llm-host-runtime') }}
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -95,7 +113,7 @@ jobs:
       checks: write
       contents: read
       packages: read
-    uses: Mesh-LLM/mesh-llm/.github/workflows/ci-linux-lane.yml@main
+    uses: ./.github/workflows/ci-linux-lane.yml
     with:
       lane_plan_json: ${{ needs.plan.outputs.lane_plan }}
       plan_digest: ${{ needs.plan.outputs.plan_digest }}
@@ -116,9 +134,12 @@ jobs:
           LANE_RESULT: ${{ needs.lane.result }}
           PLAN_DIGEST: ${{ needs.plan.outputs.plan_digest }}
           PLAN_RESULT: ${{ needs.plan.result }}
+          HOSTED_PROJECTION_DIGEST: ${{ needs.plan.outputs.hosted_projection_digest }}
         run: |
           set -euo pipefail
           [[ "$PLAN_RESULT" == "success" ]]
+          [[ "$(printf '%s' "$LANE_PLAN" | sha256sum | awk '{print $1}')" == "$HOSTED_PROJECTION_DIGEST" ]]
+          echo "Effective hosted projection: $HOSTED_PROJECTION_DIGEST (canonical provenance: $PLAN_DIGEST)" >> "$GITHUB_STEP_SUMMARY"
           required=$(jq -r '.required' <<<"$LANE_PLAN")
           if [[ "$required" == "true" ]]; then
             [[ "$LANE_RESULT" == "success" ]]

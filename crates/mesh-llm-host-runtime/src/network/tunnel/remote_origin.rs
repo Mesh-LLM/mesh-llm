@@ -27,19 +27,18 @@ impl Drop for RemoteBridge {
     }
 }
 
-#[cfg(feature = "payments")]
 pub(crate) fn is_remote_bridge(address: SocketAddr) -> bool {
-    // Poisoned provenance fails closed for wallet spending.
+    // Poisoned provenance fails closed for peer execution and wallet spending.
     connections()
         .lock()
         .map_or(true, |connections| connections.contains(&address))
 }
 
-#[cfg(all(test, feature = "payments"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn payments_remote_provenance_follows_actual_bridge_socket_lifetime() {
+    async fn remote_provenance_follows_actual_bridge_socket_lifetime() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let bridge = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
             .await
