@@ -18,6 +18,17 @@
       ]
     }
   ],
+  "external_dependency_inputs": [
+    {
+      "manifest_path": "skippy/evals/agentx/pyproject.toml",
+      "lock_path": "skippy/evals/agentx/uv.lock",
+      "manifest_sha256": "fdb210ee85466c8365a4f5a41af1646383d8c0e6d47f9918bed4a39d696d9cbb",
+      "lock_sha256": "c45c0fae98e4593c16d9f7b081b71921819110f558a9a20d27273bae95b4c968",
+      "consumer_path": "just/skippy.just",
+      "consumer_line": "uv sync --locked --managed-python --python 3.12 --project skippy/evals/agentx",
+      "purpose": "locked upstream AgentX harness wheel and dependency closure; orchestration remains Rust-owned"
+    }
+  ],
   "external_source_descriptors": [
     {
       "descriptor_path": "ci/required-sdk-python/sdk-source.json",
@@ -44,6 +55,12 @@
     }
   ],
   "allowed_invocations": [
+    {
+      "path": "just/skippy.just",
+      "line": "uv sync --locked --managed-python --python 3.12 --project skippy/evals/agentx",
+      "occurrences": 1,
+      "purpose": "restore the exact hash-bound external AgentX harness environment"
+    },
     {
       "path": ".github/actions/setup-canary-runner/action.yml",
       "line": "for cmd in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs lipo brew xcrun; do",

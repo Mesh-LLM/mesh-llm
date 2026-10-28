@@ -17,10 +17,16 @@ use skippy_runtime::{
     WorkloadInfo, parse_cache_type,
 };
 
+mod context_capacity;
+mod execution_accounting;
 mod frame_operations;
+mod idle_retention;
+mod iteration_execution;
 mod lane_lifecycle;
 pub mod lifecycle;
 pub mod panic_recovery;
+mod recurrent_checkpoints;
+mod resident_recurrent;
 mod restore_transaction;
 mod state_transfer;
 
@@ -34,15 +40,15 @@ pub struct RuntimeLaunchOverrides {
 }
 
 pub struct RuntimeState {
+    execution_accounting: execution_accounting::ExecutionAccounting,
+    completed_execution: Option<execution_accounting::CompletedExecution>,
     pub model: StageModel,
     compute_meter: Arc<crate::compute_meter::StageComputeMeter>,
     layer_start: u32,
     layer_end: u32,
     lane_count: u32,
-    /// Size of the context's KV cell pool, in tokens (llama.cpp `n_ctx`). In
-    /// unified-KV mode every lane draws decode/prefill cells from this single
-    /// shared pool, so it is the real ceiling for scheduler admission — see
-    /// [`Self::kv_pool_tokens`].
+    /// Per-lane context limit. Native loading reserves this many tokens for
+    /// each lane; [`Self::kv_pool_tokens`] exposes their aggregate to admission.
     ctx_size: u32,
     /// High-water mark of lane indices ever handed out. Combined with
     /// [`Self::free_lane_indices`], the count of live lanes equals
@@ -67,6 +73,7 @@ pub struct RuntimeState {
     max_idle_sessions: Option<usize>,
     session_token_counts: BTreeMap<String, u64>,
     session_resident_prefixes: BTreeMap<String, ResidentLanePrefix>,
+    resident_recurrent_requests: BTreeSet<String>,
     session_lifecycle_observer: Option<Arc<dyn SessionLifecycleObserver>>,
     /// Sessions discarded by panic recovery whose requests have not cleaned
     /// up yet; see `panic_recovery`.
@@ -76,9 +83,11 @@ pub struct RuntimeState {
 }
 
 struct RuntimeLaneSession {
+    parked_at: Instant,
     index: usize,
     session: StageSession,
     resident_prefix: Option<ResidentLanePrefix>,
+    recurrent_prefixes: recurrent_checkpoints::RecurrentCheckpoints,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -233,8 +242,11 @@ impl RuntimeState {
             session_token_counts: BTreeMap::new(),
             sessions_reset_by_panic: BTreeSet::new(),
             session_resident_prefixes: BTreeMap::new(),
+            resident_recurrent_requests: BTreeSet::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
+            execution_accounting: Default::default(),
+            completed_execution: None,
             modelless_for_test: true,
         }
     }
@@ -281,16 +293,6 @@ impl RuntimeState {
         self.sessions.len()
     }
 
-    /// Total KV cell pool available to this context, in tokens (`n_ctx`).
-    ///
-    /// In unified-KV mode all lanes share this single pool, so it is the real
-    /// token budget the iteration scheduler must admit against. Returns 0 for
-    /// the modelless test runtime, in which case callers should fall back to a
-    /// configured default.
-    pub fn kv_pool_tokens(&self) -> u32 {
-        self.ctx_size
-    }
-
     #[cfg(test)]
     pub(crate) fn is_modelless_for_test(&self) -> bool {
         self.modelless_for_test
@@ -299,6 +301,7 @@ impl RuntimeState {
 
 impl Drop for RuntimeState {
     fn drop(&mut self) {
+        self.demote_idle_recurrent_on_unload();
         self.sessions.clear();
         self.idle_sessions.clear();
     }
@@ -387,8 +390,11 @@ fn runtime_from_loaded_model(
         session_token_counts: BTreeMap::new(),
         sessions_reset_by_panic: BTreeSet::new(),
         session_resident_prefixes: BTreeMap::new(),
+        resident_recurrent_requests: BTreeSet::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),
+        execution_accounting: Default::default(),
+        completed_execution: None,
         #[cfg(test)]
         modelless_for_test: false,
     })))

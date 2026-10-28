@@ -8,7 +8,6 @@ use crate::frontend::InferenceGuardrailsStatus;
 use crate::frontend::LinearProposalIngressConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::GenerationConcurrencyController;
-use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
@@ -347,7 +346,9 @@ fn embedded_openai_backend_with_scheduler(
         );
         args.telemetry.emit("stage.kv_payload_selected", attrs);
     }
-    let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
+    let prompt_model = Arc::new(super::prompt_model::CachedPromptModel::default());
+    prompt_model.initialize(&args.runtime);
+    let (ctx_size, generation_token_budget) = runtime_admission_capacity(&args.runtime);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
         None => IterationScheduler::new(
@@ -362,6 +363,7 @@ fn embedded_openai_backend_with_scheduler(
     let backend: Arc<dyn InferenceBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         workload: Default::default(),
+        prompt_model,
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),
         model_id: model_id.clone(),
@@ -407,11 +409,9 @@ fn embedded_openai_backend_with_scheduler(
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_queue_capacity,
         generation_admission_timeout: Duration::from_secs(args.generation_admission_timeout_secs),
-        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(
-            args.generation_concurrency,
-        )),
+        generation_service_estimator: iteration_scheduler.service_estimator(),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
-        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
+        generation_token_budget,
         hook_policy: args.hook_policy,
         generation_receipt: args.generation_receipt,
         generation_lifecycle: args.generation_lifecycle,
@@ -720,5 +720,48 @@ mod tests {
         assert!(super::bind_with_readiness(address, || writeln!(Refuse, "ready")).is_err());
         let rebound = std::net::TcpListener::bind(address).unwrap();
         drop(rebound);
+    }
+}
+
+/// Keep the per-request bound separate from the aggregate native allocation.
+fn runtime_admission_capacity(
+    runtime: &Arc<Mutex<RuntimeState>>,
+) -> (usize, Arc<GenerationTokenBudget>) {
+    let runtime = crate::runtime_state::panic_recovery::lock_runtime(runtime);
+    (
+        runtime.context_tokens_per_lane() as usize,
+        Arc::new(GenerationTokenBudget::new(runtime.kv_pool_tokens() as usize)),
+    )
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    use crate::frontend::admission::GenerationTokenBudgetRequest;
+
+    #[test]
+    fn server_capacity_admits_four_long_prompts_without_expanding_request_context() {
+        let runtime = Arc::new(Mutex::new(
+            RuntimeState::new_modelless_with_capacity_for_test(4, 131_072),
+        ));
+        let (context, budget) = runtime_admission_capacity(&runtime);
+        assert_eq!(context, 131_072);
+        assert_eq!(budget.capacity_tokens(), 524_288);
+        let reservations: Vec<_> = [64_122, 63_748, 64_624, 66_238]
+            .into_iter()
+            .map(|tokens| {
+                budget
+                    .try_reserve(GenerationTokenBudgetRequest::new(tokens, 512))
+                    .unwrap()
+                    .expect("all four lanes fit")
+            })
+            .collect();
+        drop(reservations);
+        assert!(
+            budget
+                .try_reserve(GenerationTokenBudgetRequest::new(524_288, 0))
+                .unwrap()
+                .is_some()
+        );
     }
 }

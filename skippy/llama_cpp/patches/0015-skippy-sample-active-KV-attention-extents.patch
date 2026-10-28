@@ -1,0 +1,59 @@
+From 77a7f282b38d0605bfed28dd08c51ece215be2be Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 28 Oct 2026 14:06:35 +1300
+Subject: [PATCH] skippy: sample active KV attention extents
+
+---
+ src/llama-kv-cache-extent.cpp | 29 ++++++++++++++++++++++++++++-
+ 1 file changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/src/llama-kv-cache-extent.cpp b/src/llama-kv-cache-extent.cpp
+index 70e082eb7..41633d80d 100644
+--- a/src/llama-kv-cache-extent.cpp
++++ b/src/llama-kv-cache-extent.cpp
+@@ -1,6 +1,8 @@
+ #include "llama-kv-cache.h"
++#include "llama-impl.h"
+ 
+ #include <algorithm>
++#include <cstdlib>
+ 
+ bool llama_kv_cache::supports_active_extent(const llama_ubatch & ubatch) const {
+     // Indexed attention can gather physical rows before masking. Keep its
+@@ -57,7 +59,32 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo, const llama_ubatch &
+         result = std::max(std::min(cells.size(), std::max(n_pad_cur, GGML_PAD(end, n_pad_cur))), result);
+     }
+ 
+-    return result - sinfo.kv_begin;
++    const uint32_t n_kv = result - sinfo.kv_begin;
++    static const bool profile_extent = std::getenv("LLAMA_KV_EXTENT_PROFILE") != nullptr;
++    if (profile_extent) {
++        static thread_local uint64_t sample_count = 0;
++        if (++sample_count % 256 == 0) {
++            uint64_t active_seq_cells_upper_bound = 0;
++            uint64_t occupied_cells = 0;
++            for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
++                occupied_cells += v_cells[sinfo.strm[s]].get_used();
++            }
++            if (active_extent) {
++                for (uint32_t i = 0; i < ubatch.n_seqs_unq; ++i) {
++                    const auto seq_id = ubatch.seq_id_unq[i];
++                    active_seq_cells_upper_bound += v_cells[seq_to_stream[seq_id]].seq_pos_get(seq_id).size();
++                }
++            }
++            LLAMA_LOG_INFO(
++                "kv_extent_sample: n_kv=%u begin=%u end=%u occupied=%llu active_seq_cells_upper_bound=%llu active_extent=%d n_seqs=%u n_streams=%u n_tokens=%u\n",
++                n_kv, sinfo.kv_begin, result,
++                static_cast<unsigned long long>(occupied_cells),
++                static_cast<unsigned long long>(active_seq_cells_upper_bound),
++                active_extent, ubatch.n_seqs_unq, sinfo.n_stream(), ubatch.n_tokens);
++        }
++    }
++
++    return n_kv;
+ }
+ 
+ uint32_t llama_kv_cache::get_n_kv_pos_contiguous(const slot_info & sinfo, const llama_ubatch & ubatch) const {
+-- 
+2.56.0
+

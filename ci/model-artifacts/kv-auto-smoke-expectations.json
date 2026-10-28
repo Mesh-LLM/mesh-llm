@@ -16,7 +16,7 @@
       "sha256": "0a8d6a7373602fadfba274a640ba784b86cc6847f1c67f1b0a90fa2ec266b7fb",
       "stages": [
         {"loaded_state_kind": "Hybrid", "resident": false, "kv_recurrent": true, "payload": "KvRecurrent", "reason": "loaded_graph_and_memory", "exact_payload_kind": "kv-recurrent"},
-        {"loaded_state_kind": "Hybrid", "resident": false, "kv_recurrent": true, "payload": "KvRecurrent", "reason": "loaded_graph_and_memory", "exact_payload_kind": "kv-recurrent"}
+        {"loaded_state_kind": "Hybrid", "resident": false, "kv_recurrent": true, "payload": "KvRecurrent", "reason": "loaded_graph_and_memory", "exact_payload_kind": "recurrent-only"}
       ]
     }
   }

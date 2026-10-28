@@ -198,6 +198,7 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--kv-cache-type-v` | `kv_cache_type_v` | Live value-cache precision: f16, q8_0, q4_0 |
 | `--flash-attention` | `flash_attention` | Flash Attention: auto, enabled, disabled |
 | `--kv-cache-offload` | `kv_cache_offload` | Offload live KV memory to the backend |
+| `--kv-cache-unified` | `kv_cache_unified` | Share KV across lanes; false selects separate KV where supported |
 | `--swa-full` | `swa_full` | Use a full cache window for sliding-window attention |
 | `--cache-idle-slots` | `cache_idle_slots` | Maximum retained idle sessions; zero retains none |
 | `--ctx-size` | `ctx_size` | See `skippy serve --help` for values and defaults. |

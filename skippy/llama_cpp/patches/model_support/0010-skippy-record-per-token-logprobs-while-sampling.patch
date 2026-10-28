@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 08fc2883fb0f8142562a64cb948df56de35dece7 Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
 Subject: [PATCH] skippy: record per-token logprobs while sampling
@@ -11,7 +11,9 @@ skippy_session_take_token_logprobs moves them out, oldest first; a session
 reset drops them. A logprobs request never attaches backend (in-graph)
 sampling, which skips copying the raw logits row; a token drawn while the
 lane still carried a backend sampler from an earlier request is recorded
-as unreadable instead of being read from a stale row. ABI 0.1.72 -> 0.1.73.
+as unreadable instead of being read from a stale row. ABI 0.1.72 -> 0.1.74.
+
+Co-authored-by: sol <6e6f9f687497a486f887a40f1270381aaca718090781f25867159edd4f553f49@generalinference.communities.buzz.xyz>
 ---
  include/skippy.h               |  1 +
  include/skippy/common.h        |  2 +-
@@ -42,7 +44,7 @@ index 4e33847d9..9497734b7 100644
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 53326a4e7..f233bb47f 100644
+index 53326a4e7..4214d0b89 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -143,10 +145,10 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 9fddadd3f..fe75f538d 100644
+index 95e58d874..92f335459 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -70,6 +70,7 @@ add_library(llama
+@@ -73,6 +73,7 @@ add_library(llama
              ../common/reasoning-budget.cpp
              skippy/sampling.cpp
              skippy/sampling_vocab.cpp
@@ -255,7 +257,7 @@ index 000000000..43260dfc2
 +    return skippy_success(out_error);
 +}
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index 44d7f7b55..edc423266 100644
+index 1bf1ba962..3d0f1a784 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
 @@ -138,6 +138,8 @@ struct skippy_session {
@@ -264,11 +266,11 @@ index 44d7f7b55..edc423266 100644
      std::vector<skippy_token_signal> signal_history;
 +    // Recorded by sampling with SKIPPY_SAMPLING_FLAG_LOGPROBS until the caller takes them.
 +    std::vector<skippy_token_logprobs> token_logprobs;
-     std::vector<llama_pos> prefill_positions;
-     std::vector<int32_t> prefill_n_seq_ids;
-     std::vector<llama_seq_id> prefill_seq_ids;
+     // Scratch belongs to the session and is reused only under the context's
+     // execution lock. Samplers may reorder candidates, so refill every row.
+     std::vector<llama_token_data> sampling_candidates;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 806f3b23b..cff146149 100644
+index b700815e2..3bd62487f 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -459,6 +459,10 @@ static bool skippy_sampling_chain_is_reusable_for(
@@ -340,10 +342,10 @@ index e48653520..287cd99af 100644
          skippy_session * session,
          const llama_token * token_ids,
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 1136d8fe5..9f9887091 100644
+index b57559ae5..40047ba19 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -398,6 +398,7 @@ enum skippy_status skippy_session_reset(
+@@ -408,6 +408,7 @@ enum skippy_status skippy_session_reset(
          session->token_history.clear();
      }
      session->signal_history.clear();
@@ -352,10 +354,10 @@ index 1136d8fe5..9f9887091 100644
      // makes the next sampled decode reattach the chain and mark the scheduler
      // for reserve, which rebuilds compute buffers at every request boundary.
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 0f9b3a27c..2eb002bd2 100644
+index 688554c03..6ada1e8be 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -1003,6 +1003,7 @@ enum skippy_status skippy_session_restore_prefix(
+@@ -889,6 +889,7 @@ enum skippy_status skippy_session_restore_prefix(
          session->token_history.assign(token_ids, token_ids + token_count);
      }
      session->signal_history.clear();
@@ -376,5 +378,5 @@ index 82919e864..20d0e18cb 100644
  
  namespace {
 -- 
-2.45.1.windows.1
+2.56.0
 

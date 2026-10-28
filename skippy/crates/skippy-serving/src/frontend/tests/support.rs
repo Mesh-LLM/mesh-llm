@@ -136,6 +136,7 @@ pub(super) fn local_openai_backend(
     Ok(StageOpenAiBackend {
         runtime,
         workload: Default::default(),
+        prompt_model: Default::default(),
         telemetry,
         config,
         model_id: model_id.into(),

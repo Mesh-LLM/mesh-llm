@@ -4,11 +4,11 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, DecodeFrameBatchRequest,
-        CheckpointQuantization, FlashAttentionType, GGML_TYPE_F16, GlmDsaPolicy,
+        ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, CheckpointQuantization,
+        DecodeFrameBatchRequest, FlashAttentionType, GGML_TYPE_F16, GlmDsaPolicy,
         IterationBatchPhase, IterationBatchRequest, ModelInfo, MtpSource, NativeMtpDraft,
-        RuntimeConfig, RuntimeLoadMode, SamplingConfig, SplitMode, StageModel, StageSession, Status,
-        TensorRole, format_skippy_error,
+        RuntimeConfig, RuntimeLoadMode, SamplingConfig, SplitMode, StageModel, StageSession,
+        Status, TensorRole, format_skippy_error,
     };
     use std::{
         env,
@@ -87,6 +87,16 @@ mod tests {
         ctx_size: u32,
         lane_count: u32,
     ) -> anyhow::Result<StageModel> {
+        open_correctness_model_with_layout(model_path, ctx_size, lane_count, None, 0)
+    }
+
+    fn open_correctness_model_with_layout(
+        model_path: &PathBuf,
+        ctx_size: u32,
+        lane_count: u32,
+        kv_unified: Option<bool>,
+        n_gpu_layers: i32,
+    ) -> anyhow::Result<StageModel> {
         let layer_end = infer_layer_end(model_path)?;
         let config = RuntimeConfig {
             stage_index: 0,
@@ -98,7 +108,7 @@ mod tests {
             n_ubatch: None,
             n_threads: None,
             n_threads_batch: None,
-            n_gpu_layers: 0,
+            n_gpu_layers,
             mmap: None,
             mlock: false,
             repack: false,
@@ -122,7 +132,7 @@ mod tests {
             mtp_source: MtpSource::Disabled,
             resident_tensor_names: Vec::new(),
             kv_offload: None,
-            kv_unified: None,
+            kv_unified,
             swa_full: None,
             op_offload: None,
             no_host_buffer: false,
@@ -138,6 +148,73 @@ mod tests {
     }
 
     #[test]
+    fn unified_kv_interleaved_prefills_match_serial_execution() -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        crate::test_support::require_native_runtime();
+        let n_gpu_layers = env::var("SKIPPY_CORRECTNESS_GPU_LAYERS")
+            .ok()
+            .map(|value| value.parse())
+            .transpose()?
+            .unwrap_or(0);
+        let model =
+            open_correctness_model_with_layout(&model_path, 512, 4, Some(true), n_gpu_layers)?;
+        let prompts = [
+            model.tokenize(
+                &"The shared cache must preserve the first sequence. ".repeat(12),
+                true,
+            )?,
+            model.tokenize(
+                &"A second sequence enters between prefill chunks. ".repeat(10),
+                true,
+            )?,
+        ];
+        assert!(prompts.iter().all(|prompt| prompt.len() > 32));
+        let mut interleaved = [model.create_session()?, model.create_session()?];
+        let mut serial = [model.create_session()?, model.create_session()?];
+        let mut interleaved_predictions = [0; 2];
+        let mut serial_predictions = [0; 2];
+        let chunk_tokens = 16;
+
+        for offset in (0..prompts.iter().map(Vec::len).max().unwrap()).step_by(chunk_tokens) {
+            for index in 0..2 {
+                let Some(chunk) =
+                    prompts[index].get(offset..prompts[index].len().min(offset + chunk_tokens))
+                else {
+                    continue;
+                };
+                if offset + chunk_tokens >= prompts[index].len() {
+                    interleaved_predictions[index] = interleaved[index]
+                        .prefill_chunk_frame_sampled(chunk, None, None, 0)?
+                        .0;
+                } else {
+                    interleaved[index].prefill_chunk(chunk)?;
+                }
+            }
+        }
+        for index in 0..2 {
+            let chunks = prompts[index].chunks(chunk_tokens);
+            for (offset, chunk) in chunks.enumerate() {
+                if (offset + 1) * chunk_tokens >= prompts[index].len() {
+                    serial_predictions[index] = serial[index]
+                        .prefill_chunk_frame_sampled(chunk, None, None, 0)?
+                        .0;
+                } else {
+                    serial[index].prefill_chunk(chunk)?;
+                }
+            }
+            assert_eq!(interleaved_predictions[index], serial_predictions[index]);
+            assert_eq!(
+                interleaved[index].decode_step(interleaved_predictions[index])?,
+                serial[index].decode_step(serial_predictions[index])?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn mixed_prefill_decode_matches_serial_when_model_is_configured() -> anyhow::Result<()> {
         let Some(model_path) = correctness_model() else {
             eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
@@ -149,7 +226,10 @@ mod tests {
             "Mixed scheduling keeps decode latency bounded while prompts continue arriving.",
             true,
         )?;
-        assert!(tokens.len() >= 3, "correctness prompt must produce three tokens");
+        assert!(
+            tokens.len() >= 3,
+            "correctness prompt must produce three tokens"
+        );
         let prefix = &tokens[..2];
         let long_prefill = &tokens[..tokens.len().min(6)];
         let short_prefill = &tokens[..3];
@@ -208,23 +288,29 @@ mod tests {
         serial[1].prefill_chunk_frame(long_prefill, None, 0)?;
         let (serial_short_prediction, _) =
             serial[2].prefill_chunk_frame_sampled(short_prefill, None, None, 0)?;
-        assert_eq!(mixed[0].last_token_signal()?, serial[0].last_token_signal()?);
-        assert_eq!(mixed[2].last_token_signal()?, serial[2].last_token_signal()?);
+        assert_eq!(
+            mixed[0].last_token_signal()?,
+            serial[0].last_token_signal()?
+        );
+        assert_eq!(
+            mixed[2].last_token_signal()?,
+            serial[2].last_token_signal()?
+        );
         assert_eq!(
             output
                 .samples
                 .iter()
                 .map(|sample| (sample.request_index, sample.predicted_token))
                 .collect::<Vec<_>>(),
-            [
-                (0, serial_decode_prediction),
-                (2, serial_short_prediction)
-            ]
+            [(0, serial_decode_prediction), (2, serial_short_prediction)]
         );
         assert_eq!(output.request_outputs.len(), 3);
         for index in 0..3 {
             assert_eq!(mixed[index].token_count(), serial[index].token_count());
-            assert_eq!(mixed[index].native_position()?, serial[index].native_position()?);
+            assert_eq!(
+                mixed[index].native_position()?,
+                serial[index].native_position()?
+            );
         }
         Ok(())
     }
@@ -238,7 +324,10 @@ mod tests {
         };
         let model = open_correctness_model_with_context_and_lanes(&model_path, 256, 4)?;
         let tokens = model.tokenize("Legacy batch sampling keeps token signals lazy.", true)?;
-        assert!(tokens.len() >= 2, "correctness prompt must produce two tokens");
+        assert!(
+            tokens.len() >= 2,
+            "correctness prompt must produce two tokens"
+        );
         let prefix = &tokens[..2];
         let mut batched = [model.create_session()?, model.create_session()?];
         let mut serial = [model.create_session()?, model.create_session()?];
@@ -289,7 +378,10 @@ mod tests {
             serial_outputs,
         );
         for index in 0..2 {
-            assert_eq!(batched[index].last_token_signal()?, serial[index].last_token_signal()?);
+            assert_eq!(
+                batched[index].last_token_signal()?,
+                serial[index].last_token_signal()?
+            );
         }
         Ok(())
     }
@@ -321,8 +413,8 @@ mod tests {
     }
 
     #[test]
-    fn detokenize_rejects_ids_outside_the_vocabulary_when_model_is_configured()
-    -> anyhow::Result<()> {
+    fn detokenize_rejects_ids_outside_the_vocabulary_when_model_is_configured() -> anyhow::Result<()>
+    {
         let Some(model_path) = correctness_model() else {
             eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
             return Ok(());

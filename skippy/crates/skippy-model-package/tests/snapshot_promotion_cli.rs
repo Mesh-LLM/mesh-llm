@@ -6,7 +6,9 @@ mod hub_fixture;
 use hub_fixture::Server;
 use std::{
     fs,
+    io::{self, Read},
     process::{Command, Output, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -28,20 +30,115 @@ fn cli(endpoint: &str, args: &[&str]) -> Output {
     finish_fixture_child(child)
 }
 
-fn finish_fixture_child(mut child: std::process::Child) -> Output {
-    let deadline = Instant::now() + Duration::from_secs(30);
+fn finish_fixture_child(child: std::process::Child) -> Output {
+    finish_fixture_child_with_deadline(child, Duration::from_secs(30))
+}
+
+const CAPTURE_LIMIT: u64 = 16 * 1024 * 1024;
+
+fn capture_stream<R: Read + Send + 'static>(
+    pipe: Option<R>,
+) -> mpsc::Receiver<io::Result<Vec<u8>>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = (|| {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                pipe.by_ref()
+                    .take(CAPTURE_LIMIT + 1)
+                    .read_to_end(&mut bytes)?;
+                // Keep draining after overflow so the owned child can exit; the
+                // parent rejects the oversized capture instead of certifying it.
+                if bytes.len() as u64 > CAPTURE_LIMIT {
+                    io::copy(&mut pipe, &mut io::sink())?;
+                }
+            }
+            Ok(bytes)
+        })();
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
+fn finish_fixture_child_with_deadline(mut child: std::process::Child, budget: Duration) -> Output {
+    let stdout = capture_stream(child.stdout.take());
+    let stderr = capture_stream(child.stderr.take());
+    let deadline = Instant::now() + budget;
+    let mut timed_out = false;
     while child.try_wait().unwrap().is_none() {
         if Instant::now() >= deadline {
             child.kill().unwrap();
-            let output = child.wait_with_output().unwrap();
-            panic!(
-                "snapshot CLI timed out: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            timed_out = true;
+            break;
         }
         thread::sleep(Duration::from_millis(10));
     }
-    child.wait_with_output().unwrap()
+    let status = child.wait().unwrap();
+    let collect = |receiver: mpsc::Receiver<io::Result<Vec<u8>>>| {
+        let bytes = receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("fixture child output reader did not finish")
+            .expect("fixture child output read failed");
+        assert!(
+            bytes.len() as u64 <= CAPTURE_LIMIT,
+            "fixture child output exceeds capture limit"
+        );
+        bytes
+    };
+    let output = Output {
+        status,
+        stdout: collect(stdout),
+        stderr: collect(stderr),
+    };
+    assert!(
+        !timed_out,
+        "snapshot CLI timed out: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+#[test]
+#[ignore = "subprocess-only output fixture"]
+fn large_output_fixture() {
+    use std::io::Write;
+    assert_eq!(
+        std::env::var("MESH_PACKAGE_OUTPUT_FIXTURE").as_deref(),
+        Ok("1")
+    );
+    std::io::stdout()
+        .write_all(&vec![b'@'; 1024 * 1024])
+        .unwrap();
+    std::io::stderr()
+        .write_all(&vec![b'%'; 1024 * 1024])
+        .unwrap();
+}
+
+#[test]
+fn fixture_child_drains_both_streams_before_waiting_for_exit() {
+    let child = Command::new(std::env::current_exe().unwrap())
+        .env_clear()
+        .env("MESH_PACKAGE_OUTPUT_FIXTURE", "1")
+        .args([
+            "--exact",
+            "large_output_fixture",
+            "--ignored",
+            "--nocapture",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let output = finish_fixture_child_with_deadline(child, Duration::from_secs(5));
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout.iter().filter(|byte| **byte == b'@').count(),
+        1024 * 1024
+    );
+    assert_eq!(
+        output.stderr.iter().filter(|byte| **byte == b'%').count(),
+        1024 * 1024
+    );
 }
 
 fn info() -> Vec<u8> {

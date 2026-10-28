@@ -1,0 +1,13 @@
+.git
+.deps
+target
+dist
+**/target
+**/node_modules
+**/.venv
+**/dist
+**/__pycache__
+.env
+.env.*
+*.tar.gz
+.DS_Store

@@ -113,6 +113,65 @@ fn success(output: Output) {
     );
 }
 
+fn attention_test_directory(fixture: &Fixture, backend: &str, architecture: &str) -> PathBuf {
+    let just = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|directory| directory.join("just"))
+        .find(|path| path.is_file())
+        .expect("Just is required for native build recipes");
+    let environment = fixture.command("Linux");
+    let mut command = Command::new(just);
+    for (name, value) in environment.get_envs() {
+        if let Some(value) = value {
+            command.env(name, value);
+        } else {
+            command.env_remove(name);
+        }
+    }
+    let output = command
+        .current_dir(environment.get_current_dir().unwrap())
+        .args(["--quiet", "skippy-attention-tests-dir", backend])
+        .env("LLAMA_STAGE_CUDA_ARCHITECTURES", architecture)
+        .env(
+            "MESH_LLM_LLAMA_BUILD_ROOT",
+            fixture.directory.path().join("native cache"),
+        )
+        .env("LLAMA_BUILD_DIR", &fixture.build)
+        .env("SKIPPY_LLAMA_BUILD_DIR", &fixture.build)
+        .output()
+        .unwrap();
+    let directory = String::from_utf8(output.stdout.clone()).unwrap();
+    success(output);
+    PathBuf::from(directory.trim())
+}
+
+#[test]
+fn attention_test_builds_isolate_native_revision_and_gpu_architecture() {
+    let fixture = Fixture::new(true);
+    let root = fixture.directory.path().join("native cache");
+    assert_eq!(
+        attention_test_directory(&fixture, "cuda", "121"),
+        root.join("build-stage-abi-static-cuda-sm121-000000000000-attention-tests")
+    );
+    fs::write(fixture.work.join(".mesh-llm-patched-sha"), "1".repeat(40)).unwrap();
+    assert_eq!(
+        attention_test_directory(&fixture, "cuda", "121"),
+        root.join("build-stage-abi-static-cuda-sm121-111111111111-attention-tests")
+    );
+    assert_eq!(
+        attention_test_directory(&fixture, "cuda", "90"),
+        root.join("build-stage-abi-static-cuda-sm90-111111111111-attention-tests")
+    );
+    assert_eq!(
+        attention_test_directory(&fixture, "metal", ""),
+        root.join("build-stage-abi-static-metal-111111111111-attention-tests")
+    );
+    assert!(fixture.build.join("marker").exists());
+    assert!(
+        !root.exists(),
+        "directory lookup must not configure or build"
+    );
+}
+
 #[test]
 fn default_macos_target_reaches_configure_and_stamp() {
     let fixture = Fixture::new(true);

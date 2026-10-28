@@ -238,6 +238,18 @@ fn validate_inputs(
             .into());
         }
     }
+    for input in &policy.external_dependency_inputs {
+        manifests.insert(input.manifest_path.clone());
+        manifests.insert(input.lock_path.clone());
+        policy::validate_pinned_dependency_input(repo_root, input)?;
+        if !paths.contains(&input.consumer_path) {
+            return Err(format!(
+                "external dependency consumer {} is not an active repository file",
+                input.consumer_path
+            )
+            .into());
+        }
+    }
     policy::validate_external_source_descriptors(repo_root, &policy.external_source_descriptors)?;
     policy::validate_external_script_pins(repo_root, &policy.external_script_pins)?;
     for source in &policy.external_source_descriptors {

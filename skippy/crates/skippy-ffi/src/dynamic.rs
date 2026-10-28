@@ -188,6 +188,7 @@ dynamic_symbols! {
     skippy_model_open_from_parts(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_open_from_source(metadata_gguf: *const c_void, metadata_gguf_size: usize, source: *const ModelTensorSourceV1, quantization_ftype: i32, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
+    skippy_model_execution_epoch(model: *const Model) -> u64;
     skippy_model_llama_model(model: *const Model) -> *const Opaque;
     skippy_model_output_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
     skippy_model_input_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
@@ -257,7 +258,10 @@ dynamic_symbols! {
     skippy_import_cachegen_kv_page_v1(session: *mut Session, desc: *const KvPageDesc, records: *const CacheGenRecordV1, record_count: usize, out_error: *mut *mut Error) -> Status;
     skippy_model_memory_cache_capabilities(model: *const Model) -> u32;
     skippy_export_recurrent_state(session: *mut Session, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_export_recurrent_cache_state(session: *mut Session, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_import_recurrent_cache_state(session: *mut Session, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
     skippy_import_recurrent_state(session: *mut Session, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_has_resident_recurrent_prefix(session: *const Session, token_count: u64) -> bool;
     skippy_session_save_prefix(session: *mut Session, cache_seq_id: i32, token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_session_restore_prefix(session: *mut Session, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_error: *mut *mut Error) -> Status;
     skippy_session_memory_used_cells(session: *mut Session, out_used_cells: *mut u64, out_error: *mut *mut Error) -> Status;

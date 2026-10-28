@@ -1,7 +1,9 @@
 use crate::command::DynResult;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub(super) const POLICY_PATH: &str = "ci/python-tooling-policy.json";
@@ -11,6 +13,8 @@ pub(super) const POLICY_PATH: &str = "ci/python-tooling-policy.json";
 pub(super) struct Policy {
     pub(super) schema_version: u32,
     pub(super) dependency_inputs: Vec<DependencyInput>,
+    #[serde(default)]
+    pub(super) external_dependency_inputs: Vec<PinnedDependencyInput>,
     pub(super) external_source_descriptors: Vec<ExternalSourceDescriptor>,
     pub(super) external_script_pins: Vec<ExternalScriptPin>,
     pub(super) allowed_invocations: Vec<AllowedInvocation>,
@@ -35,6 +39,20 @@ pub(super) struct DependencyInput {
 struct PackagePin {
     name: String,
     version: String,
+}
+
+/// An upstream wheel environment reviewed as complete immutable input files.
+/// Adjacent Python sources and other package inputs remain subject to the census.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PinnedDependencyInput {
+    pub(super) manifest_path: String,
+    pub(super) lock_path: String,
+    manifest_sha256: String,
+    lock_sha256: String,
+    pub(super) consumer_path: String,
+    consumer_line: String,
+    purpose: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +102,12 @@ pub(super) fn validate_policy_shape(policy: &Policy) -> DynResult<()> {
         )
         .chain(
             policy
+                .external_dependency_inputs
+                .iter()
+                .flat_map(|input| [&input.manifest_path, &input.lock_path, &input.consumer_path]),
+        )
+        .chain(
+            policy
                 .external_source_descriptors
                 .iter()
                 .map(|item| &item.descriptor_path),
@@ -125,6 +149,18 @@ pub(super) fn validate_policy_shape(policy: &Policy) -> DynResult<()> {
                 source.descriptor_path
             )
             .into());
+        }
+    }
+
+    for input in &policy.external_dependency_inputs {
+        if input.purpose.trim().is_empty()
+            || input.consumer_line.trim().is_empty()
+            || !is_hex_revision(&input.manifest_sha256, 64)
+            || !is_hex_revision(&input.lock_sha256, 64)
+        {
+            return Err(
+                "external dependency input needs exact hashes and a consumed command".into(),
+            );
         }
     }
 
@@ -171,6 +207,65 @@ fn unique_package_pins(pins: &[PackagePin], path: &str) -> DynResult<()> {
         }
     }
     Ok(())
+}
+
+pub(super) fn validate_pinned_dependency_input(
+    repo_root: &Path,
+    input: &PinnedDependencyInput,
+) -> DynResult<()> {
+    for (path, expected) in [
+        (&input.manifest_path, &input.manifest_sha256),
+        (&input.lock_path, &input.lock_sha256),
+    ] {
+        let actual = hex::encode(Sha256::digest(read_pinned_input(repo_root, path)?));
+        if actual.as_str() != expected.as_str() {
+            return Err(format!(
+                "external dependency input `{path}` differs from its reviewed hash"
+            )
+            .into());
+        }
+    }
+    let consumer = String::from_utf8(read_pinned_input(repo_root, &input.consumer_path)?)?;
+    if !consumer
+        .lines()
+        .any(|line| line.trim() == input.consumer_line)
+    {
+        return Err(format!(
+            "`{}` must retain the reviewed external dependency command",
+            input.consumer_path
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn read_pinned_input(root: &Path, relative: &str) -> DynResult<Vec<u8>> {
+    const MAXIMUM: u64 = 16 * 1024 * 1024;
+    let mut path = root.to_path_buf();
+    for component in Path::new(relative).components() {
+        path.push(component.as_os_str());
+        if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            return Err("external dependency input symlink refused".into());
+        }
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAXIMUM {
+        return Err("external dependency input must be a regular file at most 16 MiB".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAXIMUM + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAXIMUM {
+        return Err("external dependency input grew beyond 16 MiB".into());
+    }
+    Ok(bytes)
 }
 
 pub(super) fn validate_dependency_input(

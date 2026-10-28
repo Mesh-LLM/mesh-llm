@@ -1,7 +1,7 @@
-From 1080cfb4f1b265efa4a6347c5903c56e64fb0d88 Mon Sep 17 00:00:00 2001
+From 15c71f77549c29cfca2458d1ad932c832e8115b0 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
+Subject: [PATCH] build(skippy): wire native runtime and backend support
 
 ---
  CMakeLists.txt                             |  17 +
@@ -10,9 +10,9 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  common/chat-diff-analyzer.cpp              |  10 +-
  common/chat-peg-parser.cpp                 |  15 +-
  common/chat-peg-parser.h                   |   2 +-
- common/chat.cpp                            | 126 ++++-
+ common/chat.cpp                            | 126 +++-
  common/chat.h                              |   5 +-
- common/ngram-cache.cpp                     | 158 +++++-
+ common/ngram-cache.cpp                     | 158 ++++-
  common/peg-parser.cpp                      | 337 +++++++++++
  common/peg-parser.h                        |   8 +
  common/reasoning-budget.cpp                | 119 ++--
@@ -23,7 +23,8 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  ggml/src/ggml-backend.cpp                  |  25 +-
  ggml/src/ggml-cuda/cachegen.cu             | 223 ++++++++
  ggml/src/ggml-cuda/cachegen.cuh            |  27 +
- ggml/src/ggml-cuda/ggml-cuda.cu            | 344 ++++++++++-
+ ggml/src/ggml-cuda/ggml-cuda.cu            | 352 +++++++++++-
+ ggml/src/ggml-cuda/host-readback.cuh       | 101 ++++
  ggml/src/ggml-cuda/vendors/hip.h           |   1 +
  ggml/src/ggml-metal/CMakeLists.txt         |   1 +
  ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
@@ -31,14 +32,16 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 +++++++
- src/CMakeLists.txt                         | 629 ++++++++++++++++++++-
+ src/CMakeLists.txt                         | 633 ++++++++++++++++++++-
+ tests/CMakeLists.txt                       |   9 +
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3133 insertions(+), 127 deletions(-)
+ 33 files changed, 3255 insertions(+), 127 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
+ create mode 100644 ggml/src/ggml-cuda/host-readback.cuh
  create mode 100644 ggml/src/ggml-metal/kernels/cachegen.metal
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -2111,7 +2114,7 @@ index 000000000..7118c9aa9
 +
 +#endif // !defined(GGML_USE_MUSA)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 7c45d0d1f..f860e8035 100644
+index 7c45d0d1f..3c4e2f663 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -10,6 +10,7 @@
@@ -2122,7 +2125,15 @@ index 7c45d0d1f..f860e8035 100644
  #include "ggml-cuda/clamp.cuh"
  #include "ggml-cuda/col2im-1d.cuh"
  #include "ggml-cuda/concat.cuh"
-@@ -86,6 +87,7 @@
+@@ -28,6 +29,7 @@
+ #include "ggml-cuda/fattn.cuh"
+ #include "ggml-cuda/fwht.cuh"
+ #include "ggml-cuda/getrows.cuh"
++#include "ggml-cuda/host-readback.cuh"
+ #include "ggml-cuda/im2col.cuh"
+ #include "ggml-cuda/mmf.cuh"
+ #include "ggml-cuda/mmq.cuh"
+@@ -86,6 +88,7 @@
  #include <map>
  #include <memory>
  #include <mutex>
@@ -2130,7 +2141,21 @@ index 7c45d0d1f..f860e8035 100644
  #include <cstdarg>
  #include <cstdio>
  #include <cstdlib>
-@@ -5660,7 +5662,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+@@ -833,6 +836,13 @@ static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, co
+     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
+ 
+     ggml_cuda_set_device(ctx->device);
++#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
++    if (ggml_cuda_try_host_readback(ggml_cuda_get_physical_device(ctx->device), data,
++                                  static_cast<const char *>(tensor->data) + offset,
++                                  size, cudaStreamPerThread)) {
++        return;
++    }
++#endif
+     CUDA_CHECK(cudaMemcpyAsync(data, (const char *) tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
+     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+ }
+@@ -5660,7 +5670,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                  return false;
              }
          case GGML_OP_DUP:
@@ -2144,7 +2169,7 @@ index 7c45d0d1f..f860e8035 100644
          case GGML_OP_ARGMAX:
          case GGML_OP_COUNT_EQUAL:
              return true;
-@@ -6016,7 +6023,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6016,7 +6031,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
@@ -2158,7 +2183,7 @@ index 7c45d0d1f..f860e8035 100644
      #endif
  
      {
-@@ -6042,6 +6054,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6042,6 +6062,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      GGML_UNUSED(reg);
  }
  
@@ -2488,7 +2513,7 @@ index 7c45d0d1f..f860e8035 100644
  static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
      GGML_UNUSED(reg);
      if (strcmp(name, "ggml_backend_comm_init") == 0) {
-@@ -6062,6 +6397,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -6062,6 +6405,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
@@ -2500,6 +2525,113 @@ index 7c45d0d1f..f860e8035 100644
      return nullptr;
  }
  
+diff --git a/ggml/src/ggml-cuda/host-readback.cuh b/ggml/src/ggml-cuda/host-readback.cuh
+new file mode 100644
+index 000000000..9d4f07d63
+--- /dev/null
++++ b/ggml/src/ggml-cuda/host-readback.cuh
+@@ -0,0 +1,101 @@
++#pragma once
++
++#include "common.cuh"
++
++#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
++#include <algorithm>
++#include <array>
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++#include <thread>
++#include <vector>
++#include <exception>
++
++// Keep the extra pageable-host copy from serializing large snapshots on one CPU.
++inline void ggml_cuda_copy_readback_bytes(void * destination, const void * source, size_t size) {
++    const unsigned workers = std::min(std::thread::hardware_concurrency(), 8u);
++    if (size < 16 * 1024 * 1024 || workers < 2) {
++        std::memcpy(destination, source, size);
++        return;
++    }
++    auto * dst = static_cast<char *>(destination);
++    const auto * src = static_cast<const char *>(source);
++    const size_t chunk = size / workers;
++    std::vector<std::thread> threads;
++    try {
++        threads.reserve(workers - 1);
++        for (unsigned i = 0; i + 1 < workers; ++i) {
++            threads.emplace_back([=] { std::memcpy(dst + i * chunk, src + i * chunk, chunk); });
++        }
++        const size_t offset = (workers - 1) * chunk;
++        std::memcpy(dst + offset, src + offset, size - offset);
++    } catch (const std::exception &) {
++        for (auto & thread : threads) thread.join();
++        // A transient worker allocation failure retains the synchronous contract.
++        std::memcpy(destination, source, size);
++        return;
++    }
++    for (auto & thread : threads) thread.join();
++}
++
++// Bound locked host memory independently of snapshot size and caller threads.
++// Portable allocations let virtual devices sharing a physical GPU reuse it.
++class ggml_cuda_host_readback {
++    static constexpr size_t capacity = 64 * 1024 * 1024;
++    std::mutex mutex;
++    void * staging = nullptr;
++    bool allocation_failed = false;
++
++public:
++    ~ggml_cuda_host_readback() {
++        if (staging != nullptr) {
++            (void) cudaFreeHost(staging);
++        }
++    }
++
++    bool copy(void * destination, const void * source, size_t size, cudaStream_t stream) {
++        std::lock_guard<std::mutex> lock(mutex);
++        if (allocation_failed) {
++            return false;
++        }
++        if (staging == nullptr && cudaHostAlloc(&staging, capacity, cudaHostAllocPortable) != cudaSuccess) {
++            (void) cudaGetLastError();
++            allocation_failed = true;
++            return false;
++        }
++        for (size_t offset = 0; offset < size;) {
++            const size_t bytes = std::min(capacity, size - offset);
++            CUDA_CHECK(cudaMemcpyAsync(staging, static_cast<const char *>(source) + offset,
++                       bytes, cudaMemcpyDeviceToHost, stream));
++            // Neither the staging bytes nor the caller's snapshot may escape
++            // before capture completes; later inference may mutate the source.
++            CUDA_CHECK(cudaStreamSynchronize(stream));
++            ggml_cuda_copy_readback_bytes(static_cast<char *>(destination) + offset, staging, bytes);
++            offset += bytes;
++        }
++        return true;
++    }
++};
++
++inline bool ggml_cuda_try_host_readback(int physical_device, void * destination, const void * source,
++                                       size_t size, cudaStream_t stream) {
++    // Recurrent convolution checkpoints are 96 KiB on common hybrid models.
++    // They need the same pinned staging as larger state and logit reads.
++    if (size < 64 * 1024 || std::getenv("GGML_CUDA_NO_PINNED") != nullptr) {
++        return false;
++    }
++    cudaPointerAttributes attributes{};
++    if (cudaPointerGetAttributes(&attributes, destination) != cudaSuccess) {
++        (void) cudaGetLastError();
++        return false;
++    }
++    // Existing pinned/managed destinations already have a suitable transfer path.
++    if (attributes.type != cudaMemoryTypeUnregistered) {
++        return false;
++    }
++    static std::array<ggml_cuda_host_readback, GGML_CUDA_MAX_DEVICES> readbacks;
++    GGML_ASSERT(physical_device >= 0 && physical_device < GGML_CUDA_MAX_DEVICES);
++    return readbacks[physical_device].copy(destination, source, size, stream);
++}
++#endif
 diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
 index da7e3da0b..a867531b6 100644
 --- a/ggml/src/ggml-cuda/vendors/hip.h
@@ -2570,7 +2702,7 @@ index d1bce8bad..5b23ddf7f 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -180,6 +183,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -3395,10 +3527,20 @@ index 000000000..728899e4b
 +    }
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2e8..528edfa99 100644
+index 97250c2e8..ff0a97e34 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -47,6 +47,39 @@ set(LLAMA_CORE_SOURCES
+@@ -22,6 +22,9 @@ set(LLAMA_CORE_SOURCES
+     llama-impl.cpp
+     llama-io.cpp
+     llama-kv-cache.cpp
++    llama-kv-cache-extent.cpp
++    llama-kv-cache-views.cpp
++    llama-kv-cache-mask.cpp
+     llama-kv-cache-iswa.cpp
+     llama-kv-cache-dsa.cpp
+     llama-kv-cache-dsa-iswa.cpp
+@@ -47,6 +50,40 @@ set(LLAMA_CORE_SOURCES
  add_library(llama
              ../include/llama.h
              ${LLAMA_CORE_SOURCES}
@@ -3430,6 +3572,7 @@ index 97250c2e8..528edfa99 100644
 +            skippy/stage_realization.cpp
 +            skippy/stage_execution_contract.cpp
 +            skippy/state.cpp
++            skippy/recurrent_state.cpp
 +            skippy/state_memory.cpp
 +            skippy/state_effects.cpp
 +            skippy/speculative_decoding.cpp
@@ -3438,7 +3581,7 @@ index 97250c2e8..528edfa99 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -60,19 +93,611 @@ set_target_properties(llama PROPERTIES
+@@ -60,19 +97,611 @@ set_target_properties(llama PROPERTIES
  )
  
  # exclude non-model sources from unity build
@@ -4052,6 +4195,26 @@ index 97250c2e8..528edfa99 100644
 +    find_library(SKIPPY_ACCELERATE_FRAMEWORK Accelerate REQUIRED)
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 991bf5479..66226051e 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -178,6 +178,15 @@ set(LLAMA_CONTEXT_TEST_SRC
+ )
+ llama_build(${LLAMA_CONTEXT_TEST_SRC})
+ 
++if (GGML_CUDA)
++    llama_build_and_test(test-cuda-host-readback.cpp)
++    llama_test(test-cuda-host-readback NAME test-cuda-host-readback-unpinned)
++    set_tests_properties(test-cuda-host-readback test-cuda-host-readback-unpinned
++                         PROPERTIES SKIP_RETURN_CODE 77)
++    set_tests_properties(test-cuda-host-readback-unpinned
++                         PROPERTIES ENVIRONMENT "GGML_CUDA_NO_PINNED=1")
++endif()
++
+ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+     llama_build_and_test(test-unicode.cpp LINK llama)
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
 index 1b4ea60bf..2eebb90bd 100644
 --- a/tools/mtmd/mtmd-audio.cpp
@@ -4160,5 +4323,5 @@ index 7436230f0..f9fe048ff 100644
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

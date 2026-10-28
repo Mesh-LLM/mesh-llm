@@ -526,7 +526,7 @@ runner-contract update is active.
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, Windows log-store privacy ACL checks, and the Windows CPU native Skippy probes (`windows-skippy-probes`: selected by `native-abi` changes and on every main run; builds the static CPU ABI with tests, logs memory headroom, then runs every `^skippy_` test serially with the 64-bit ctest, each bounded at 15 minutes, within the row's 150-minute timeout, followed by the `skippy-runtime` and `skippy-serving` lib tests linked against that static ABI) |
-| `ci-{linux,macos,windows}-product-smoke-slice.yml` | Platform-local core, scripted, model-download, and Laya smokes. The pinned Laya Multilingual F16 GGUF runs startup plus the complete upstream golden `/systemone` battery on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm, macOS Metal, and Windows CPU; each row selects the exact native device name, so an unavailable backend fails at model load. Core CPU/CUDA/Metal restores the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once and runs both through standalone inference, OpenAI client compatibility, and constrained-Tokio restart. The CPU two-node split row uses the same pair for dense KV and strict recurrent `KvRecurrent` validation, persists strict-whitelist seed/worker identity and stage/model snapshots, reconciles two-observer topology and exact two-stage contiguous-cut agreement, then compares each loaded stage's Auto payload, reason, fallback, loaded state, and native capability against model-manifest-pinned expectations. A wrong second stage fails even when the first is correct. The row uploads evidence on every outcome. The Linux CPU row additionally preserves node cache roots across restart and requires an observable durable-L3 fill before status and clear verification. Product restore verifies the manifest backend and forces discovery through the bundled runtime. CUDA verifies the packaged dependency closure with `LD_LIBRARY_PATH` unset, runs inherited and strict device probes, installs no cudart or cuBLAS packages, and leaves the NVIDIA driver host-owned. Windows accelerator product targets remain build-only because CI has no Windows accelerator runners. There is no separate product-integration or Qwen migration lane. |
+| `ci-{linux,macos,windows}-product-smoke-slice.yml` | Platform-local core, scripted, model-download, and Laya smokes. The pinned Laya Multilingual F16 GGUF runs startup plus the complete upstream golden `/systemone` battery on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm, macOS Metal, and Windows CPU; each row selects the exact native device name, so an unavailable backend fails at model load. Core CPU/CUDA/Metal restores the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once and runs both through standalone inference, OpenAI client compatibility, and constrained-Tokio restart. The CPU two-node split row uses the same pair for dense KV and strict per-stage recurrent checkpoint validation (`KvRecurrent` at Granite stage 0, `RecurrentOnly` at its attention-free stage 1), persists strict-whitelist seed/worker identity and stage/model snapshots, reconciles two-observer topology and exact two-stage contiguous-cut agreement, then compares each loaded stage's Auto payload, reason, fallback, loaded state, and native capability against model-manifest-pinned expectations. A wrong second stage fails even when the first is correct. The row uploads evidence on every outcome. The Linux CPU row additionally preserves node cache roots across restart and requires an observable durable-L3 fill before status and clear verification. Product restore verifies the manifest backend and forces discovery through the bundled runtime. CUDA verifies the packaged dependency closure with `LD_LIBRARY_PATH` unset, runs inherited and strict device probes, installs no cudart or cuBLAS packages, and leaves the NVIDIA driver host-owned. Windows accelerator product targets remain build-only because CI has no Windows accelerator runners. There is no separate product-integration or Qwen migration lane. |
 | `.github/actions/run-laya-product-smoke` | Shared product restore plus Laya startup/read harness. Inputs are bounded to the supported backend/device/cadence combinations, and the fixture is resolved through `product-smoke.json`. The explicit Vulkan row enables the Vulkan profile for runners without `vulkaninfo`; model startup and reads still verify the device. Windows product restore emits LF-delimited manifest fields for Git Bash. |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
@@ -1597,6 +1597,11 @@ interpreter invocations in maintained automation. Historical receipts remain
 data. Mutation tests cover added hidden files, suffixless scripts and inline
 process execution; static checks do not replace review of semantic emulation.
 
+AgentX's existing upstream harness environment has exact manifest and lock
+SHA-256 bindings in that policy, plus one occurrence of its locked Just setup
+command. These bindings cover the fork wheel and complete dependency closure;
+they do not exempt repository Python sources or adjacent package inputs.
+
 ### Self-hosted job disk cleanup
 
 The persistent build and family jobs run `cargo xtool ci-ops runner-cleanup`
@@ -1846,6 +1851,69 @@ The protected ownership catalog retains its historical `skippy-bench` domain
 entries: PR admission requires byte-for-byte equality with main. Removing a
 workspace member does not require changing these domain mappings; catalog
 cleanup must follow the separate protected-catalog rollout procedure.
+
+## Jianyang AgentX templates
+
+The additional standalone `comparison` profile is version
+`agentx-1.0.12.post1-local-comparison-1`: four complete pinned traces,
+69 source requests and 18,713 output tokens per c=1/2/4 cell. It has no
+dispatch cutoff or accelerated warmup; source-turn and output-count equality
+is required before throughput is published. It does not add registered templates
+or change smoke 8 / full 7. See the [cohort contract](../../../../skippy/evals/agentx/README.md#fixed-work-comparison).
+
+`skippy/evals/agentx/templates.yaml` carries the repository-owned Jianyang inventory, replacing
+its `agentic-replay` entry with four `agentx-{engine}-{profile}` templates. Other entries are migrated unchanged.
+Its model choices are four pinned Q4_K_M cases: dense attention, hybrid dense,
+attention MoE and hybrid MoE; result keys include the quantization.
+Both profiles' harness version 3 sweeps 1, 2, 4, 8, 16, 32, 64 and 128 slots with
+262,144 context tokens per slot; version 1 varied only offered sessions.
+The benchmark executes in a source-labelled ARM64 CUDA Docker image on the
+leased Spark. JY's template owns image build and the Rust container lifecycle;
+there is no host-native benchmark fallback. The host's `HF_HOME` is mounted at
+the same path and owns all cached model, tokenizer and dataset downloads.
+See [AgentX](../../../../skippy/docs/AGENTX.md) for registration cutover, pinned
+inputs, smoke semantics and the distinction from GitHub trajectory qualification.
+
+`just skippy-attention-tests-build <backend>` builds the native attention
+reference harness, and `just skippy-attention-tests <backend> -b <device>` runs
+it on a leased GPU worker. CUDA uses `CUDA0`; Metal uses `MTL0`. The
+`skippy-attention-tests-dir` locator resolves a separate test directory from
+the canonical native revision/backend/configured GPU architecture identity.
+Build and run recipes share it to prevent stale objects after native changes.
+The `kv_bounds_pattern` filter selects unified-cache mask regressions; the unfiltered
+matrix also exercises backend-specific variants. These are explicit hardware
+qualification commands, not additional CPU-only CI coverage. Their ownership,
+along with `skippy-cuda-readback-test`, is recorded in the Just layout fixture.
+
+AgentX retains the four engine/profile template keys and sweeps
+1, 2 and 4 offered sessions with automatic context and Skippy parallelism (llama slots match offered sessions). Whole-job ABBAAB repeats are
+submitted per model on one Spark. Input cache misses fail offline; cancelled
+cells are excluded from serving points and failed cells retain evidence.
+Smoke harness version 8 bursts the first request on each lane using upstream
+`--burst-phase-starts`; later trace delays remain unchanged. Full benchmark
+version 7 retains upstream phase-start spacing.
+
+AgentX smoke version 8 and full benchmark version 7 apply the same upstream
+`--max-context-length 131072` filter to both engines before selecting traces.
+AgentX excludes a whole trace if any parent or subagent turn's recorded input
+plus requested output exceeds the limit (zero recorded output reserves one token).
+No retained requests, outputs, or subagent topology are truncated. The root
+`cohort.json` records every source trace's peak, digest, and eligibility; each
+cell records the selected cohort digest and excluded count. This is a common
+recorded-token budget, not a server-context override or a rendered chat-template
+token guarantee. Unexpected wire overflows still invalidate a cell. Compare
+only matching cohort digests and completed raw trace/turn sets. Older workload
+versions remain separate. Skippy keeps its automatic planner and 128K cap.
+
+AgentX smoke 8 and full 7 pin the MeshLLM AgentX 1.0.12.post1 fork, based on
+upstream 1.0.12 with late-return drain fixes at commit
+`8a37952a686d9fe49a2c7376b5b965e8f6480cc9`. The locked wheel is built with the
+upstream release builder and verified by SHA-256. Upstream PR #50 retires timers
+already pending at cutoff; the fork also retires delayed children and join timers
+created by later responses. In-flight requests drain normally and immediate DAG
+children retain the issuer's admission checks. Both engines use the same fork,
+whole-trace filter and recorded timing. No inter-turn delay cap is added.
+Earlier harness versions remain separate.
 
 ## Rolling preview distribution
 

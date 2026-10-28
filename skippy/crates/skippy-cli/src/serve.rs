@@ -145,6 +145,13 @@ async fn serve_public(args: ServeCommandArgs) -> Result<()> {
             &options.tuning,
         ));
     }
+    console::event(
+        "serving_capacity",
+        &serde_json::json!({
+            "context_tokens_per_lane": options.config.ctx_size,
+            "lanes": options.config.lane_count,
+        }),
+    )?;
     let model_open_events = ModelOpenEventQueue::new(skippy_runtime::next_operation_id());
     options.model_open_events = Some(Arc::clone(&model_open_events));
     let model_id = options

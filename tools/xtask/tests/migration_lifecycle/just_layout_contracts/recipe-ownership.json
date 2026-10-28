@@ -39,6 +39,10 @@
       "release-runtime-build"
     ],
     "just/skippy.just": [
+      "agentx",
+      "agentx-build",
+      "agentx-container-build",
+      "agentx-setup",
       "bench-corpus",
       "competitive-benchmark-build",
       "competitive-inputs-helper-build",
@@ -54,8 +58,12 @@
       "model-publisher-release-build",
       "mtp-checkpoint-helper-build",
       "skippy",
+      "skippy-attention-tests",
+      "skippy-attention-tests-build",
+      "skippy-attention-tests-dir",
       "skippy-cli-build",
       "skippy-cli-release-build",
+      "skippy-cuda-readback-test",
       "skippy-layer-package-cache",
       "skippy-layer-package-fetch",
       "skippy-layer-package-inspect",

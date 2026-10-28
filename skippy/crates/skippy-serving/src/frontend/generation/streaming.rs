@@ -17,8 +17,6 @@ use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
 use crate::frontend::util::trim_at_stop;
 use crate::frontend::util::valid_utf8_prefix_len;
-use crate::runtime_state::RuntimeState;
-use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionChunk;
 use skippy_inference_api::ChatCompletionRequest;
@@ -29,8 +27,6 @@ use skippy_inference_api::InferenceResult;
 use skippy_inference_api::Usage;
 use skippy_runtime::StageModelReader;
 use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Instant;
 
 pub(in crate::frontend) type GenerationStream = std::pin::Pin<
@@ -191,7 +187,7 @@ impl ChatOutputStreamParser {
     ) -> InferenceResult<Self> {
         let passthrough_content =
             chat_stream_can_passthrough_content(&request, &metadata, emit_reasoning);
-        let model = lock_runtime(&backend.runtime).model.reader();
+        let model = backend.prompt_model_reader();
         Ok(Self {
             backend,
             model,
@@ -376,7 +372,7 @@ where
     F: FnMut(&str) -> InferenceResult<()>,
 {
     pub(in crate::frontend) fn new(
-        runtime: Arc<Mutex<RuntimeState>>,
+        model: StageModelReader,
         stop_values: Vec<&'a str>,
         on_text_chunk: F,
     ) -> InferenceResult<Self> {
@@ -385,7 +381,6 @@ where
             .map(|value| value.len())
             .max()
             .unwrap_or(0);
-        let model = lock_runtime(&runtime).model.reader();
         Ok(Self {
             model,
             stop_values,

@@ -1011,7 +1011,8 @@ model cadence, device gates and protected action references remain unchanged.
   registry-derived dense SmolLM2-135M Q8 and recurrent IBM Granite 4.0 H 350M
   Q4 pair once, then runs both through standalone inference, OpenAI client
   compatibility, and constrained-Tokio restart. The two-node split smoke uses
-  the same pair for dense KV and strict Granite `KvRecurrent` coverage. It
+  the same pair for dense KV and strict per-stage Granite checkpoint coverage:
+  `KvRecurrent` at stage 0 and `RecurrentOnly` at the attention-free tail. It
   persists strict-whitelist seed and worker status
   snapshots containing only node, mesh, and peer identity, plus runtime-stage
   and OpenAI model-list snapshots. The network-free reconciler fails closed
@@ -1887,6 +1888,11 @@ interpreter invocations in maintained automation. Historical receipts remain
 data. Mutation tests cover added hidden files, suffixless scripts and inline
 process execution; static checks do not replace review of semantic emulation.
 
+AgentX's existing upstream harness environment has exact manifest and lock
+SHA-256 bindings in that policy, plus one occurrence of its locked Just setup
+command. These bindings cover the fork wheel and complete dependency closure;
+they do not exempt repository Python sources or adjacent package inputs.
+
 ### Self-hosted job disk cleanup
 
 The persistent build and family jobs run `cargo xtool ci-ops runner-cleanup`
@@ -2111,6 +2117,63 @@ configuration or prescribe attention/recurrent cache representations. Loaded
 native graphs and memory exporters own cache admission. Split correctness still
 uses genuine planner output and binary stage servers. Cache-hit assertions run
 on immediate repeated requests without publication sleeps or retries.
+
+## Jianyang AgentX
+
+The standalone `comparison` profile uses workload version
+`agentx-1.0.12.post1-local-comparison-1`, with four complete pinned traces,
+69 source requests and 18,713 output tokens per cell. It runs c=1/2/4 without
+a dispatch cutoff or accelerated warmup and validates the exact source-turn
+and output-count map before accepting throughput. ABBAAB runs stay on one host.
+This profile leaves registered templates and smoke 8 / full 7 unchanged; see
+the [cohort contract](../skippy/evals/agentx/README.md#fixed-work-comparison).
+
+The external Jianyang job inventory is now source-owned in
+[`skippy/evals/agentx/templates.yaml`](../skippy/evals/agentx/templates.yaml). Its four `agentx-{engine}-{profile}` templates run
+llama.cpp or Skippy with a smoke or full profile and pinned upstream harness.
+Each emits standard JY points through a real repository-template launch;
+engine and profile results have separate existing benchmark views.
+The four Q4_K_M model choices cover dense attention, hybrid dense, attention MoE
+and hybrid MoE, with distinct quantization-bearing result keys.
+Both profiles' harness version 3 matches generation slots to offered concurrency
+(1, 2, 4, 8, 16, 32, 64 and 128), preserving 262,144 context tokens per slot on both engines.
+JY builds and runs one source-labelled ARM64 CUDA Docker image on the Spark;
+both engines and the harness run inside it, with the host's NFS-backed `HF_HOME`
+bind-mounted at the same path and mounted JY artifacts,
+an immutable image ID, explicit container removal and an internal deadline.
+See [AgentX operations](../skippy/docs/AGENTX.md) for registration migration and
+validity. This replaces the Jianyang `agentic-replay` entry; the separately
+owned GitHub trajectory qualification workflow is unchanged.
+
+AgentX sweeps offered concurrency 1, 2 and 4 with automatic context and Skippy parallelism (llama slots match offered sessions).
+Smoke version 8 starts each lane immediately with upstream
+`--burst-phase-starts`, then preserves subsequent recorded delays. Full benchmark
+version 7 retains upstream phase-start spacing.
+Whole-sweep ABBAAB ordering uses six existing engine jobs per model; it does not
+add JY features or mix engines within a result series. Capacity failures retain
+cell evidence and do not erase earlier successful levels.
+
+AgentX smoke version 8 and full benchmark version 7 apply the same upstream
+`--max-context-length 131072` filter to both engines before selecting traces.
+AgentX excludes a whole trace if any parent or subagent turn's recorded input
+plus requested output exceeds the limit (zero recorded output reserves one token).
+No retained requests, outputs, or subagent topology are truncated. The root
+`cohort.json` records every source trace's peak, digest, and eligibility; each
+cell records the selected cohort digest and excluded count. This is a common
+recorded-token budget, not a server-context override or a rendered chat-template
+token guarantee. Unexpected wire overflows still invalidate a cell. Compare
+only matching cohort digests and completed raw trace/turn sets. Older workload
+versions remain separate. Skippy keeps its automatic planner and 128K cap.
+
+AgentX smoke 8 and full 7 pin the MeshLLM AgentX 1.0.12.post1 fork, based on
+upstream 1.0.12 with late-return drain fixes at commit
+`8a37952a686d9fe49a2c7376b5b965e8f6480cc9`. The locked wheel is built with the
+upstream release builder and verified by SHA-256. Upstream PR #50 retires timers
+already pending at cutoff; the fork also retires delayed children and join timers
+created by later responses. In-flight requests drain normally and immediate DAG
+children retain the issuer's admission checks. Both engines use the same fork,
+whole-trace filter and recorded timing. No inter-turn delay cap is added.
+Earlier harness versions remain separate.
 
 ## Rolling preview distribution
 

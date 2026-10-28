@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod export_admission_tests;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -27,6 +29,7 @@ mod cache_affinity;
 mod cache_payload;
 mod config;
 mod exact_state;
+pub(crate) mod exact_state_diagnostics;
 mod snapshot_validation;
 pub(crate) use exact_state::CaptureAdmission;
 mod identity;
@@ -35,6 +38,8 @@ pub mod lifecycle;
 mod output_tokens;
 mod records;
 mod resident_prefix;
+mod resident_recurrent;
+pub(crate) use resident_recurrent::ResidentRecurrentPolicy;
 
 pub use lifecycle::{KvLifecycleEvent, KvLifecycleObserver};
 pub use records::{
@@ -220,6 +225,7 @@ pub struct KvStageIntegration {
     /// lets one multi-GiB export sit next to another and doubles the RAM the
     /// cache can pin behind a request.
     pub(crate) exact_state_record_queue_bytes: Arc<AtomicU64>,
+    pub(crate) exact_state_record_queue_limit: u64,
     /// Optional bounded host-RAM tier. Qualified L3 fills enter L2; an L2 hit
     /// promotes back into L1 through the existing worker.
     pub(crate) l2: Option<l2_serving::StageL2>,
@@ -248,11 +254,11 @@ pub enum StagePrefixCachePayload {
     FullState,
 }
 
-/// Entry backstop on the record queue. The binding limit is
-/// [`EXACT_STATE_RECORD_QUEUE_BYTES`]; this only caps bookkeeping.
+/// Entry backstop on the record queue. Byte admission is stage-specific;
+/// this only caps bookkeeping.
 pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 8;
 
-/// Payload bytes the record queue may hold. A record that does not fit is
+/// Minimum payload bytes the record queue may hold. A record that does not fit is
 /// dropped, never delayed: recording is optional and inference is not. One
 /// record larger than the whole bound is still admitted when the queue is
 /// empty, or large models could never record at all.
@@ -570,7 +576,7 @@ fn enqueue_exact_state_record(
     queue_bytes: &AtomicU64,
     queue_bytes_cap: u64,
     worker_healthy: &AtomicBool,
-    pending: PendingExactStateRecord,
+    mut pending: PendingExactStateRecord,
 ) -> ExactStateRecordAdmission {
     if !worker_healthy.load(std::sync::atomic::Ordering::Acquire) {
         inflight_records
@@ -583,8 +589,18 @@ fn enqueue_exact_state_record(
     let bytes = pending.payload.byte_len();
     // Claim the bytes before the send so two producers cannot both see room.
     // Released on every non-queued path below, and by the worker on finish.
-    let held = queue_bytes.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
-    if !record_fits_queue(held, bytes, queue_bytes_cap) {
+    let reserved = pending
+        .admission_credit
+        .transfer_reserved_bytes(queue_bytes, bytes);
+    let held = if reserved {
+        queue_bytes
+            .load(std::sync::atomic::Ordering::Acquire)
+            .saturating_sub(bytes)
+    } else {
+        queue_bytes.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel)
+    };
+
+    if !reserved && !record_fits_queue(held, bytes, queue_bytes_cap) {
         queue_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Release);
         inflight_records
             .lock()
@@ -923,7 +939,7 @@ impl KvStageIntegration {
                 &self.exact_state_records_dropped,
                 &self.exact_state_records_pending,
                 &self.exact_state_record_queue_bytes,
-                EXACT_STATE_RECORD_QUEUE_BYTES,
+                self.exact_state_record_queue_limit,
                 &self.exact_state_record_worker_healthy,
                 pending,
             )

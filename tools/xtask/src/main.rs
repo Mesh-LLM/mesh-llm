@@ -203,6 +203,7 @@ fn run() -> DynResult<()> {
         }
         cli::CliCommand::NativeGenerator(rest) => automation::native_generator::run(rest),
         cli::CliCommand::SplitEvidence(rest) => automation::split_evidence::run(rest),
+        cli::CliCommand::Agentx(rest) => automation::agentx::run(rest),
         cli::CliCommand::ReplayMatrix(rest) => automation::run_replay_matrix(
             rest,
             explicit_root

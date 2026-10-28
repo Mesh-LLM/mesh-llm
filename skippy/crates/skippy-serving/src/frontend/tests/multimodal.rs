@@ -646,6 +646,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         runahead_governor: None,
         runtime,
         workload: Default::default(),
+        prompt_model: Default::default(),
         telemetry,
         config: stage0_config.clone(),
         model_id: "mm-smoke".to_string(),

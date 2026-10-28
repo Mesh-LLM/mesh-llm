@@ -365,120 +365,6 @@ impl RuntimeState {
         result
     }
 
-    /// Execute an ordinary runtime iteration batch with sampled-token outputs.
-    pub fn iteration_batch_sampled(
-        &mut self,
-        requests: &[RuntimeIterationBatchRequest<'_>],
-    ) -> Result<IterationBatchOutput> {
-        self.iteration_batch_with_readouts(requests, None)
-            .map(|(outputs, _)| outputs)
-    }
-
-    /// Execute a runtime iteration batch with selected-token scores instead of sampling.
-    pub fn iteration_batch_scored(
-        &mut self,
-        requests: &[RuntimeIterationBatchRequest<'_>],
-        selections: &[&[i32]],
-    ) -> Result<(IterationBatchOutput, Vec<Vec<f32>>)> {
-        anyhow::ensure!(
-            requests.len() == selections.len(),
-            "readout request count mismatch"
-        );
-        self.iteration_batch_with_readouts(requests, Some(selections))
-    }
-
-    /// Align runtime sessions, execute the batch and account for completed readouts.
-    fn iteration_batch_with_readouts(
-        &mut self,
-        requests: &[RuntimeIterationBatchRequest<'_>],
-        selections: Option<&[&[i32]]>,
-    ) -> Result<(IterationBatchOutput, Vec<Vec<f32>>)> {
-        if requests.is_empty() {
-            return Ok((
-                IterationBatchOutput {
-                    request_outputs: Vec::new(),
-                    samples: Vec::new(),
-                },
-                Vec::new(),
-            ));
-        }
-        let mut unique = std::collections::BTreeSet::new();
-        for request in requests {
-            if !unique.insert(request.session_id) {
-                bail!(
-                    "iteration contains duplicate session {}",
-                    request.session_id
-                );
-            }
-        }
-        let new_session_count = unique
-            .iter()
-            .filter(|session_id| !self.sessions.contains_key(**session_id))
-            .count();
-        let available_lanes = (self.lane_count as usize).saturating_sub(self.sessions.len());
-        ensure_iteration_session_capacity(new_session_count, available_lanes)?;
-        for request in requests {
-            self.session(request.session_id)?;
-        }
-
-        let mut lane_sessions = Vec::with_capacity(requests.len());
-        for request in requests {
-            let lane_session = self.sessions.remove(request.session_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "session {} was not active after admission",
-                    request.session_id
-                )
-            })?;
-            lane_sessions.push((request.session_id.to_string(), lane_session));
-        }
-
-        let result = {
-            let mut iteration_requests = lane_sessions
-                .iter_mut()
-                .zip(requests.iter())
-                .map(|((_, lane_session), request)| IterationBatchRequest {
-                    session: &mut lane_session.session,
-                    token_ids: request.token_ids,
-                    positions: request.positions,
-                    sampling: request.sampling,
-                    input: request.input,
-                    sample_last: request.sample_last,
-                    phase: request.phase,
-                })
-                .collect::<Vec<_>>();
-            match selections {
-                Some(selections) => {
-                    StageSession::iteration_batch_scored(&mut iteration_requests, selections)
-                }
-                None => StageSession::iteration_batch_sampled(&mut iteration_requests)
-                    .map(|outputs| (outputs, Vec::new())),
-            }
-        };
-
-        for (session_id, lane_session) in lane_sessions {
-            self.sessions.insert(session_id, lane_session);
-        }
-        match &result {
-            Ok(_) => {
-                for request in requests {
-                    self.add_session_tokens(request.session_id, request.token_ids.len() as u64);
-                }
-            }
-            Err(error) => {
-                // A one-at-a-time batch reports how far it got. Those sessions
-                // have already advanced natively and cannot be rolled back, so
-                // their tracked positions have to move with them.
-                if let Some(partial) = error.downcast_ref::<skippy_runtime::PartialBatchExecution>()
-                {
-                    for request in requests.iter().take(partial.executed()) {
-                        self.add_session_tokens(request.session_id, request.token_ids.len() as u64);
-                    }
-                }
-            }
-        }
-        result
-    }
-
     pub fn verify_frame(
         &mut self,
         session_id: &str,
@@ -646,12 +532,19 @@ impl RuntimeState {
     pub(super) fn session(&mut self, session_id: &str) -> Result<&mut StageSession> {
         if !self.sessions.contains_key(session_id) {
             self.ensure_not_reset_by_panic(session_id)?;
-            let lane_session = self.take_idle_session().map(Ok).unwrap_or_else(|| {
+            let mut lane_session = self.take_idle_session().map(Ok).unwrap_or_else(|| {
                 if self.sessions.len() >= self.lane_count as usize {
                     bail!("all execution lanes are busy");
                 }
                 self.create_lane_session()
             })?;
+            if !lane_session.recurrent_prefixes.is_empty() {
+                Self::demote_recurrent_lane(&mut lane_session, self.layer_start, self.layer_end);
+                if let Err(error) = lane_session.session.reset() {
+                    self.free_lane_indices.push(lane_session.index);
+                    return Err(error);
+                }
+            }
             self.sessions.insert(session_id.to_string(), lane_session);
             // Every active session must have a tracked position from the
             // moment it activates (both a fresh and a reused idle lane start
@@ -727,18 +620,6 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("rules"), "{error:#}");
     }
-}
-
-fn ensure_iteration_session_capacity(
-    new_session_count: usize,
-    available_lanes: usize,
-) -> Result<()> {
-    if new_session_count > available_lanes {
-        bail!(
-            "iteration requires {new_session_count} new sessions but only {available_lanes} execution lanes are available"
-        );
-    }
-    Ok(())
 }
 
 fn split_activation_frame(
@@ -975,12 +856,6 @@ fn combine_activation_frames(frames: &[ActivationFrame]) -> Result<ActivationFra
 #[cfg(test)]
 mod iteration_admission_tests {
     use super::*;
-
-    #[test]
-    fn rejects_batch_before_partial_session_admission() {
-        assert!(ensure_iteration_session_capacity(3, 2).is_err());
-        assert!(ensure_iteration_session_capacity(2, 2).is_ok());
-    }
 
     #[test]
     fn rejects_invalid_activation_axis_before_combining() {

@@ -98,21 +98,22 @@ impl RuntimeState {
         import_result
     }
 
-    pub fn export_recurrent_state(&mut self, session_id: &str) -> Result<Vec<u8>> {
+    pub fn export_recurrent_cache_state(&mut self, session_id: &str) -> Result<Vec<u8>> {
         let session = self.session(session_id)?;
-        let result = session.export_recurrent_state();
+        let result = session.export_recurrent_cache_state();
         self.notify_export_outcome(&result);
         result
     }
 
-    pub fn import_recurrent_state_for_token_count(
+    pub fn import_recurrent_cache_state_for_token_count(
         &mut self,
         session_id: &str,
         bytes: &[u8],
         token_count: u64,
     ) -> Result<()> {
         let session = self.session(session_id)?;
-        let import_result = session.import_recurrent_state_for_token_count(bytes, token_count);
+        let import_result =
+            session.import_recurrent_cache_state_for_token_count(bytes, token_count);
         if import_result.is_ok() {
             record_restored_session_token_count(
                 &mut self.session_token_counts,
@@ -141,7 +142,7 @@ impl RuntimeState {
     }
 
     /// Reports the real result of any runtime-state export call (`export_state`,
-    /// `export_full_state`, `export_recurrent_state`) to the attached observer.
+    /// `export_full_state`, `export_recurrent_cache_state`) to the attached observer.
     /// Never called before the native call returns, so success is only ever
     /// reported once native work has actually finished.
     fn notify_export_outcome<T>(&self, result: &Result<T>) {

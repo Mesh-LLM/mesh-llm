@@ -93,6 +93,125 @@ fn exact_external_project_and_pins_are_admitted() {
     check_fixture(&root).unwrap();
 }
 
+fn pinned_external_fixture() -> (TempDir, PathBuf) {
+    let (temporary, root) = fixture();
+    let manifest = "bench/harness/pyproject.toml";
+    let lock = "bench/harness/uv.lock";
+    let consumer = "just/harness.just";
+    let command = "uv sync --locked --project bench/harness";
+    write(
+        &root,
+        manifest,
+        "[project]\nname = \"upstream-harness\"\nversion = \"0.1.0\"\ndependencies = [\"example==1.2.3\"]\n",
+    );
+    write(
+        &root,
+        lock,
+        "version = 1\n[[package]]\nname = \"example\"\nversion = \"1.2.3\"\nsource = { url = \"https://example.test/example.whl\" }\nwheels = [{ hash = \"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }]\n",
+    );
+    write(&root, consumer, &format!("harness:\n    {command}\n"));
+    let digest = |path: &str| {
+        crate::product::digest::file_sha256(&root.join(path))
+            .map_err(|failure| failure.error)
+            .unwrap()
+    };
+    let mut policy: serde_json::Value = serde_json::from_str(POLICY).unwrap();
+    policy["external_dependency_inputs"] = serde_json::json!([{
+        "manifest_path": manifest,
+        "lock_path": lock,
+        "manifest_sha256": digest(manifest),
+        "lock_sha256": digest(lock),
+        "consumer_path": consumer,
+        "consumer_line": command,
+        "purpose": "locked upstream harness wheel and dependency closure"
+    }]);
+    policy["allowed_invocations"] = serde_json::json!([{
+        "path": consumer,
+        "line": command,
+        "occurrences": 1,
+        "purpose": "restore the reviewed external environment"
+    }]);
+    write(
+        &root,
+        POLICY_PATH,
+        &serde_json::to_string_pretty(&policy).unwrap(),
+    );
+    (temporary, root)
+}
+
+#[test]
+fn hash_bound_external_wheel_inputs_are_admitted_without_running_the_harness() {
+    let (_temporary, root) = pinned_external_fixture();
+    check_fixture(&root).unwrap();
+}
+
+#[test]
+fn external_wheel_manifest_and_lock_drift_require_reviewed_hashes() {
+    for path in ["bench/harness/pyproject.toml", "bench/harness/uv.lock"] {
+        let (_temporary, root) = pinned_external_fixture();
+        check_fixture(&root).unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(root.join(path))
+            .unwrap()
+            .write_all(b"\n# changed input\n")
+            .unwrap();
+        let error = check_fixture(&root).unwrap_err().to_string();
+        assert!(error.contains(path), "{error}");
+        assert!(error.contains("reviewed hash"), "{error}");
+    }
+}
+
+#[test]
+fn external_dependency_command_must_remain_exact_and_locked() {
+    let (_temporary, root) = pinned_external_fixture();
+    write(
+        &root,
+        "just/harness.just",
+        "harness:\n    uv sync --project bench/harness\n",
+    );
+    let error = check_fixture(&root).unwrap_err().to_string();
+    assert!(
+        error.contains("reviewed external dependency command"),
+        "{error}"
+    );
+}
+
+#[test]
+fn approved_external_inputs_do_not_admit_repository_python_implementations() {
+    let (_temporary, root) = pinned_external_fixture();
+    write(&root, "bench/harness/probe.py", "print('not admitted')\n");
+    let error = check_fixture(&root).unwrap_err().to_string();
+    assert!(
+        error.contains("repository Python source is forbidden"),
+        "{error}"
+    );
+}
+
+#[test]
+fn external_dependency_inputs_refuse_oversize_before_hashing() {
+    let (_temporary, root) = pinned_external_fixture();
+    fs::write(
+        root.join("bench/harness/uv.lock"),
+        vec![b'x'; 16 * 1024 * 1024 + 1],
+    )
+    .unwrap();
+    let error = check_fixture(&root).unwrap_err().to_string();
+    assert!(error.contains("at most 16 MiB"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn external_dependency_inputs_refuse_linked_approved_bytes() {
+    let (_temporary, root) = pinned_external_fixture();
+    let lock = root.join("bench/harness/uv.lock");
+    let original = root.join("original-lock");
+    fs::rename(&lock, &original).unwrap();
+    std::os::unix::fs::symlink(&original, &lock).unwrap();
+    let error = check_fixture(&root).unwrap_err().to_string();
+    assert!(error.contains("symlink refused"), "{error}");
+}
+
 #[test]
 fn locked_project_must_match_its_consumed_assignment() {
     let (_temporary, root) = fixture();

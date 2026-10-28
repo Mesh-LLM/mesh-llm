@@ -198,6 +198,8 @@ to an OTLP record.
 | `llama_stage.linear_proposal.source_queue_wait_us` | Skippy linear proposal source | Queue wait in microseconds; contains no request, session, token, or plugin identity. |
 | `llama_stage.linear_proposal.source_callback_us` | Skippy linear proposal source | Plugin callback duration in microseconds; contains no request, session, token, or plugin identity. |
 | `llama_stage.linear_proposal.source_outcome` | Skippy linear proposal source | Bounded outcome enum: `ready`, `abstained`, `host_deadline_exceeded`, `queue_full`, `deadline_exceeded_before_dispatch`, `deadline_exceeded_in_plugin`, `candidate_returned_too_late`, or `source_error`. Ready/abstained events use token-debug sampling; deadline, pressure, late-candidate, and source-error outcomes are emitted unconditionally. |
+| `skippy.scheduler.prefill_admission_wait_ms` | Skippy debug prefill summary | Time spent waiting for the shared-KV prefill turn, including waits after yielding; numeric duration only, with no prompt or session identity. |
+| `skippy.scheduler.prefill_admission_yields` | Skippy debug prefill summary | Count of times a prompt yielded its turn to another waiting prompt; numeric count only. |
 
 ## Runtime Event System Telemetry (v1)
 

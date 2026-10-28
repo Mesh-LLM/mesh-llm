@@ -201,7 +201,7 @@ impl StageOpenAiBackend {
         &self,
         request: EmbeddingsRequest,
     ) -> InferenceResult<Vec<Vec<i32>>> {
-        let reader = lock_runtime(&self.runtime).model.reader();
+        let reader = self.prompt_model_reader();
         match request.input {
             EmbeddingInput::Text(text) => reader
                 .tokenize(&text, true)

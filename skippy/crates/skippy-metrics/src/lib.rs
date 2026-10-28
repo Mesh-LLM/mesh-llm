@@ -42,6 +42,8 @@ pub mod attr {
         "skippy.kv.capacity_physical_evicted_tokens";
     pub const KV_CAPACITY_PREDICTED_RECOMPUTE_COST: &str =
         "skippy.kv.capacity_predicted_recompute_cost";
+    pub const PREFILL_ADMISSION_WAIT_MS: &str = "skippy.scheduler.prefill_admission_wait_ms";
+    pub const PREFILL_ADMISSION_YIELDS: &str = "skippy.scheduler.prefill_admission_yields";
     pub const VERIFY_WINDOW_DIRECT_RETURN_UPSTREAM_OPENED: &str =
         "llama_stage.verify_window.direct_return_upstream_opened";
     pub const VERIFY_WINDOW_DIRECT_RETURN_REVERSE_FALLBACK: &str =

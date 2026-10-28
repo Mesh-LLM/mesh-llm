@@ -434,12 +434,13 @@ async fn cancelling_a_capacity_waiter_leaks_neither_lane_nor_kv_reservation() {
 }
 
 #[tokio::test]
-async fn predicted_wait_rejection_preserves_queue_capacity() {
+async fn actual_wait_deadline_preserves_queue_capacity() {
     let controller = admission_controller(1, 2);
     let work = GenerationAdmissionWork::new(100, 100);
-    controller
-        .generation_service_estimator
-        .observe_completed(work, 100.0, 100.0);
+    controller.generation_service_estimator.observe_execution(
+        GenerationAdmissionWork::new(100, 0),
+        Duration::from_millis(100),
+    );
     let active = controller
         .acquire_work(
             &trusted_ids("agent-1"),
@@ -461,13 +462,7 @@ async fn predicted_wait_rejection_preserves_queue_capacity() {
             .await,
     );
 
-    assert!(
-        error
-            .body()
-            .error
-            .message
-            .contains("predicted generation wait")
-    );
+    assert!(error.body().error.message.contains("timed out waiting"));
     assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
     drop(active);
     assert_eq!(controller.generation_limit.available_permits(), 1);
@@ -1231,6 +1226,7 @@ pub(super) fn hooks_test_backend(
     StageOpenAiBackend {
         runtime: runtime.clone(),
         workload: Default::default(),
+        prompt_model: Default::default(),
         config: config.clone(),
         telemetry,
         model_id: "hooks-test-model".to_string(),
