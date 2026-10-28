@@ -446,8 +446,9 @@ fn plan_with_default_dflash_draft(
 }
 
 /// The draft the resolver will choose by default for this load, so the memory
-/// plan can hold room for its weights and rollback snapshots. Resolution
-/// errors surface later, when the load resolves for real.
+/// plan can hold room for its weights and rollback snapshots. `None` when no
+/// default applies or the draft is not cached yet. Resolution errors surface
+/// later, when the load resolves for real.
 fn planned_default_dflash_draft(
     spec: &LocalOpenAiModelStartSpec<'_>,
     model_name: &str,
@@ -465,6 +466,11 @@ fn planned_default_dflash_draft(
     .ok()?;
     let pairing = resolved.speculative.default_dflash?;
     let dflash = resolved.speculative.decode.dflash.as_ref()?;
+    // A draft that is not cached yet downloads in the background; this load
+    // plans no room for it and serves without it.
+    if !skippy::default_dflash_draft_cached(pairing) {
+        return None;
+    }
     Some(PlannedSpeculativeDraft {
         weight_bytes: pairing.draft.bytes,
         recurrent_rollback_tokens: dflash.recurrent_rollback_tokens(),
