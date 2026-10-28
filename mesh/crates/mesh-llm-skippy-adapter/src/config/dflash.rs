@@ -88,13 +88,17 @@ pub(super) fn choose_dflash_draft(
     Ok(pairing.map(|pairing| (pairing.draft.cache_path(), Some(pairing))))
 }
 
-/// A configured cap wins; otherwise the backend default.
-pub(super) fn dflash_max_draft_tokens(configured: u32) -> u32 {
+/// A configured cap wins; otherwise the backend default, held to what a
+/// default draft's block can propose.
+pub(super) fn dflash_max_draft_tokens(
+    configured: u32,
+    default_pairing: Option<&DFlashPairing>,
+) -> u32 {
     if configured > 0 {
-        configured
-    } else {
-        default_dflash_max_draft_tokens(cfg!(target_os = "macos"))
+        return configured;
     }
+    let backend = default_dflash_max_draft_tokens(cfg!(target_os = "macos"));
+    default_pairing.map_or(backend, |pairing| backend.min(pairing.max_draft_tokens))
 }
 
 impl ResolvedSpeculativeConfig {
