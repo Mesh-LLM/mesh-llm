@@ -1,8 +1,13 @@
 //! Synthetic L3 bookkeeping and retention screen; no model inference is measured.
 
-use std::{fs, hint::black_box, path::Path, time::Instant};
+use std::{
+    fs,
+    hint::black_box,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 use skippy_cache::{ExactStatePayload, L3CacheManager, L3Tier, StoreLimits};
 
@@ -176,6 +181,28 @@ fn retention(root: &Path, mib: u64, rows: &mut Vec<Observation>) -> Result<()> {
     Ok(())
 }
 
+/// Canonicalize a path whose own tail may not exist yet by resolving the
+/// deepest existing ancestor and re-appending the components that are missing.
+fn resolve_symlinks(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(resolved) = fs::canonicalize(current) {
+            return missing
+                .iter()
+                .rev()
+                .fold(resolved, |acc, part| acc.join(part));
+        }
+        match (current.file_name(), current.parent()) {
+            (Some(name), Some(parent)) => {
+                missing.push(name.to_os_string());
+                current = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
     ensure!(
@@ -193,6 +220,15 @@ fn main() -> Result<()> {
         "OUTPUT must live outside ROOT: cleanup removes ROOT recursively"
     );
     fs::create_dir_all(&root)?;
+    // A symlink can aim an unambiguous-looking OUTPUT at ROOT, which the
+    // lexical check above cannot see; cleanup would then delete the evidence
+    // after a successful run. Re-check both paths with symlinks resolved.
+    let root = fs::canonicalize(&root)?;
+    let output = resolve_symlinks(&output);
+    if output.starts_with(&root) {
+        let _ = fs::remove_dir_all(&root);
+        bail!("OUTPUT must live outside ROOT: cleanup removes ROOT recursively");
+    }
     let mut observations = Vec::new();
     for count in [16, 128, 512] {
         scaling(&root, count, &mut observations)?;
