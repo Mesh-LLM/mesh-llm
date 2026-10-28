@@ -169,6 +169,47 @@ static void audit_contracts(const std::string & auditor, const fs::path & root, 
           accepted.at("sampler_improves_at_least_five_percent") == false, "slower candidate passed gates");
 }
 
+static void qualification_contracts(const std::vector<std::string> & screen_command,
+                                    const std::string & auditor, const fs::path & root) {
+    json combined = json::array();
+    for (int first : {0, 10, 20}) {
+        auto command = screen_command;
+        const auto output = root / ("qualification-" + std::to_string(first));
+        command[7] = output.string();
+        command[8] = "qualification";
+        command[9] = std::to_string(first);
+        command[10] = "10";
+        check(run(command) == 0, "qualification chunk controller failed");
+        const auto rows = read_rows(output / "observations.jsonl");
+        check(rows.size() == 1600, "qualification chunk incomplete");
+        check(read_rows(output / "host-observations.jsonl").size() == 3280, "qualification host evidence incomplete");
+        for (const auto & row : rows) {
+            check(row.at("phase") == "qualification" && row.at("block") >= first && row.at("block") < first + 10,
+                  "qualification chunk changed phase or global range");
+            combined.push_back(row);
+        }
+    }
+    const auto rows_path = root / "qualification-combined.jsonl";
+    const auto output_path = root / "qualification-audit.json";
+    save_rows(rows_path, combined);
+    check(run({auditor, rows_path.string(), (root / "fixtures.json").string(), "30", output_path.string()}) == 0,
+          "combined qualification rejected");
+    json accepted;
+    std::ifstream(output_path) >> accepted;
+    check(accepted.at("rows") == 4800 && accepted.at("blocks") == 30 && accepted.at("qualified_speed") == true &&
+          accepted.at("screen_pass") == false, "combined qualification gate misclassified");
+    combined.erase(combined.begin() + 1600, combined.begin() + 3200);
+    save_rows(rows_path, combined);
+    check(run({auditor, rows_path.string(), (root / "fixtures.json").string(), "30", output_path.string()}) != 0,
+          "missing qualification chunk accepted");
+    auto invalid = screen_command;
+    invalid[7] = (root / "invalid-qualification").string();
+    invalid[8] = "qualification";
+    invalid[9] = "5";
+    invalid[10] = "10";
+    check(run(invalid) != 0, "non-preregistered qualification range accepted");
+}
+
 static void host_contracts(const fs::path & root) {
     const auto sensor = root / "sensors/hwmon0";
     fs::create_directories(sensor);
@@ -222,6 +263,7 @@ int main(int argc, char ** argv) {
         invalid[10] = "4";
         check(run(invalid) != 0, "controller accepted changed screen size");
         audit_contracts(fs::absolute(argv[2]).string(), root, rows);
+        qualification_contracts(command, fs::absolute(argv[2]).string(), root);
         fs::remove_all(root);
         std::cout << "Synthetic controller/completeness/bootstrap/gate contracts passed; no model or performance execution\n";
         return 0;

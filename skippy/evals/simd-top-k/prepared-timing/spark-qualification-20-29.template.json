@@ -1,0 +1,55 @@
+{
+  "spec": {
+    "name": "Heap filter v2 \u00b7 SPARK \u00b7 qualification-20-29 \u00b7 aa07158e",
+    "description": "Prepared qualification-20-29 for spark only; launch requires verified immutable dependencies in timing-stages.json. All original primary B, paired statistics, exact decisions, per-case within1%, aggregate 5% improvement and decode gates remain unchanged. No normalized comparisons or performance-based chunk stopping.",
+    "target": {
+      "executor": "lab",
+      "nodes": [
+        "spark-000907"
+      ],
+      "os": "linux"
+    },
+    "runtime": {
+      "model_package": {
+        "ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5#*Q4_K_M*",
+        "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        "egress": "lab_only"
+      },
+      "models": [
+        {
+          "ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5#*Q4_K_M*",
+          "env": "MODEL_DIR",
+          "delivery": "cache",
+          "pin": true
+        }
+      ],
+      "command": "set -eu\nretained=/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate\ninputs=/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2\nartifacts=\"$JIANYANG_ARTIFACT_DIR\"\ntest \"$(git -C \"$retained\" rev-parse HEAD)\" = aa07158ec01e56775599ddb918efddedb7154ed7\ntest \"$(git -C \"$retained/.deps/llama.cpp\" rev-parse 'HEAD^{tree}')\" = e4cc2b65b42834fe2ab257a2517afd969ba7f9c5\ncat > \"$artifacts/admitted-binary-hashes.txt\" <<'BINARY_HASHES'\n{{SPARK_B_GRAMMAR_SAMPLING_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-B/grammar-sampling\n{{SPARK_C_GRAMMAR_SAMPLING_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-C/grammar-sampling\n{{SPARK_C_GRAMMAR_VERIFICATION_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-C/grammar-verification\n{{SPARK_D_GRAMMAR_SAMPLING_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-D/grammar-sampling\n{{SPARK_D_GRAMMAR_VERIFICATION_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-D/grammar-verification\n{{SPARK_R_GRAMMAR_SAMPLING_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-R/grammar-sampling\n{{SPARK_R_GRAMMAR_VERIFICATION_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-R/grammar-verification\n{{SPARK_SIMD_CONTROLLER_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-controller\n{{SPARK_SIMD_AUDIT_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-audit\n{{SPARK_SIMD_CONTRACTS_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-contracts\n{{SPARK_SIMD_SAMPLE_STACKS_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-sample-stacks\nBINARY_HASHES\ncat > \"$artifacts/frozen-input-hashes.txt\" <<'INPUT_HASHES'\n{{SPARK_INPUT_CLOSING_DELIMITERS_AND_EOS_LOGITS_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/closing-delimiters-and-EOS.logits\n{{SPARK_INPUT_FIXTURES_JSON_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/fixtures.json\n{{SPARK_INPUT_LARGE_HTML_WRITE_ARGUMENT_LOGITS_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/large-HTML-write-argument.logits\n{{SPARK_INPUT_LAZY_BEFORE_TOOL_TRIGGER_LOGITS_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/lazy-before-tool-trigger.logits\n{{SPARK_INPUT_RESTRICTED_VALUES_AND_REJECTION_FALLBACK_LOGITS_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/restricted-values-and-rejection-fallback.logits\n{{SPARK_INPUT_UNICODE_AND_PARTIAL_UTF8_LOGITS_SHA256}}  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/Unicode-and-partial-UTF8.logits\nINPUT_HASHES\nsha256sum -c \"$artifacts/admitted-binary-hashes.txt\"\nsha256sum -c \"$artifacts/frozen-input-hashes.txt\"\nmodel_file=\"$MODEL_DIR\"\nif [ -d \"$model_file\" ]; then model_file=\"$model_file/Qwen3.5-9B-Q4_K_M.gguf\"; fi\nprintf '%s  %s\\n' 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8 \"$model_file\" | sha256sum -c - > \"$artifacts/model-hash.txt\"\n{ git -C \"$retained\" rev-parse HEAD; git -C \"$retained/.deps/llama.cpp\" rev-parse 'HEAD^{tree}'; c++ --version; uname -a; } > \"$artifacts/timing-identity.txt\"\noutput=/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-filter-v2-aa07158e/qualification-20-29\ntest ! -e \"$output\"\ncollect_timing() {\n    status=$?\n    trap - EXIT\n    printf '%s\\n' \"$status\" > \"$artifacts/timing-exit.txt\"\n    for filename in observations.jsonl admitted-fixtures.json host-observations.jsonl; do\n        if [ -f \"$output/$filename\" ]; then cp \"$output/$filename\" \"$artifacts/$filename\"; fi\n    done\n    exit \"$status\"\n}\ntrap collect_timing EXIT\nprintf 'Stage: qualification-20-29 global blocks 20..29\\n'\n\"$retained/.deps/simd-controller/simd-controller\" /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-B/grammar-sampling /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-C/grammar-sampling \"$retained/.deps/simd-D/grammar-sampling\" \"$retained/.deps/simd-R/grammar-sampling\" \"$model_file\" \"$inputs\" \"$output\" qualification 20 10 > \"$artifacts/measurement.log\" 2>&1\nsha256sum -c \"$artifacts/admitted-binary-hashes.txt\"\nsha256sum -c \"$artifacts/frozen-input-hashes.txt\"\n"
+    },
+    "harness": {
+      "name": "custom",
+      "version": "adhoc",
+      "trace": {
+        "kind": "synthetic",
+        "ref": "heap-filter-v2-spark-qualification-20-29"
+      },
+      "seed": 73,
+      "warmup_requests": 0,
+      "concurrency": [
+        1
+      ],
+      "request_count": 1
+    },
+    "budget": {
+      "max_usd": 0,
+      "max_duration_s": 7200,
+      "grace_s": 120
+    },
+    "retries": 0,
+    "labels": {
+      "campaign": "skippy-heap-filter-v2",
+      "phase": "qualification-20-29",
+      "hardware": "spark",
+      "protocol": "2"
+    }
+  }
+}

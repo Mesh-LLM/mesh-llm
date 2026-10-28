@@ -1,0 +1,278 @@
+{
+  "schema": 1,
+  "product_source": "aa07158ec01e56775599ddb918efddedb7154ed7",
+  "native_tree": "e4cc2b65b42834fe2ab257a2517afd969ba7f9c5",
+  "qualification_ranges": [
+    [
+      0,
+      9
+    ],
+    [
+      10,
+      19
+    ],
+    [
+      20,
+      29
+    ]
+  ],
+  "screen_blocks": 5,
+  "qualification_blocks": 30,
+  "gates": {
+    "correctness": "Verified same-source native/recovery/seeded/ISA audit and shared artifact readback before screen",
+    "qualification": "Verified screen, screen_passed=true, all original gates, metric/artifact readback, same hardware/source/binaries/inputs",
+    "chunks": "All three predetermined chunks; no per-chunk performance decisions. Later chunks wait for preceding execution/evidence audit; no omission or numerical early stopping.",
+    "aggregate": "All three chunk receipts and evidence audits verified; combine every raw row, no block renumbering, exclusions or normalization; native and independent audit all30 together",
+    "admission": "Prepared is not submitted. Refuse any unresolved binding, missing/false audit, changed source/input/binary, prior submission intent or mismatched gate artifact."
+  },
+  "lanes": {
+    "m6": {
+      "node": "macmini-gq7vhw",
+      "build_job_id": "job_cyz85ceffk2jame",
+      "build_mlflow_run_id": "c5304cf1415a4ea4a7543c0f95c61291",
+      "retained_workspace": "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate",
+      "input_root": "/Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-inputs",
+      "binary_manifest": {
+        "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-D/grammar-sampling": "f893116ac8b44c9252674cb4fbccdda1f2fc32f2388672d1b130375c9eb50be8",
+        "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-D/grammar-verification": "bff1bccc2e22fd3d86bbc0f1e84ba9925305c536304dc8143f84f0cdec45531f",
+        "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-R/grammar-sampling": "77ba9ccdae38a52e8a0759d7bcf4ec7a8f38346b8ae353e05d76d2118598422a",
+        "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-R/grammar-verification": "11c9df3a583378857954ce4b7e4781c3ec9b13eb0a16c6999c81c5409b71c522",
+        "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-controller/simd-controller": "aa7c796793b1732247be88735d05525d591ff53da256841fba2fe4593b059f30",
+        "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-controller/simd-audit": "ea93857ba1552da868c6ca39ed16e19237a9114dfda2b6e32ee97e2b1bfa9615",
+        "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-controller/simd-contracts": "0cd1b963c777c3e990e17dc34adc3e0612ae93242e29da1205340b4d7bacc2e5",
+        "/Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-A/grammar-sampling": "95ef73e7f71ed1f34adc5af2195b116462a149d4c73635a4d96528bbbdb3fec2",
+        "/Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-C/grammar-sampling": "d93d1643c2675f4f33e8bd8d720c639075448225fa5f6468e7f79c72033e12f1"
+      },
+      "input_manifest": {
+        "closing-delimiters-and-EOS.logits": "35b477aba0cc6cfa7a05ab1acdb7cd6bc2d8d4a1b9d0c4ebe2444a3a3ae6d6e3",
+        "fixtures.json": "a38e818a82528f625abb6b54d4fc19f38cdc86ad5b7db2baf2502f7c29c9eeff",
+        "large-HTML-write-argument.logits": "44c709d3cfa46469d959e51a5b2d3e33482d209efc8644a1c3df54423afb4be5",
+        "lazy-before-tool-trigger.logits": "e54c38032be91e85c89d2ffbe07d6d676c36d3f7df883dcd6d8241875e85a5df",
+        "restricted-values-and-rejection-fallback.logits": "9aba1aa800074cd0acbf419f64d86835f4472f795283eb2c1fd8a07eb8ddeae3",
+        "Unicode-and-partial-UTF8.logits": "046bb0e13276f34879dd1e0ff17aef98c6d78c2f5cd4199e30692be409eaf591"
+      },
+      "bindings_complete": true,
+      "stages": [
+        {
+          "stage": "screen",
+          "phase": "screen",
+          "first_block": 0,
+          "blocks": 5,
+          "global_range": [
+            0,
+            4
+          ],
+          "spec_file": "m6-screen.json",
+          "spec_sha256": "13ab5ce1d71e0b5a72db5a8e834a6b8acc2169da7ca7b61a5f2fcade6445b1e8",
+          "output_directory": "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/heap-filter-v2-aa07158e/screen",
+          "prerequisites": [
+            "full-correctness-and-ISA-shared-readback"
+          ],
+          "submitted": false
+        },
+        {
+          "stage": "qualification-00-09",
+          "phase": "qualification",
+          "first_block": 0,
+          "blocks": 10,
+          "global_range": [
+            0,
+            9
+          ],
+          "spec_file": "m6-qualification-00-09.json",
+          "spec_sha256": "949b73bc83036dfad0675ebeda5fce1782759de92ee3217f1def87b6d7769832",
+          "output_directory": "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/heap-filter-v2-aa07158e/qualification-00-09",
+          "prerequisites": [
+            "screen-pass-and-metric-artifact-readback",
+            "full-correctness-and-ISA-shared-readback"
+          ],
+          "submitted": false
+        },
+        {
+          "stage": "qualification-10-19",
+          "phase": "qualification",
+          "first_block": 10,
+          "blocks": 10,
+          "global_range": [
+            10,
+            19
+          ],
+          "spec_file": "m6-qualification-10-19.json",
+          "spec_sha256": "283454d03d43c21b6114bde6726e8b7ce029e2278b48b2318d2f4d11c263e3b4",
+          "output_directory": "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/heap-filter-v2-aa07158e/qualification-10-19",
+          "prerequisites": [
+            "screen-pass-and-metric-artifact-readback",
+            "full-correctness-and-ISA-shared-readback",
+            "qualification-00-09-evidence-readback"
+          ],
+          "submitted": false
+        },
+        {
+          "stage": "qualification-20-29",
+          "phase": "qualification",
+          "first_block": 20,
+          "blocks": 10,
+          "global_range": [
+            20,
+            29
+          ],
+          "spec_file": "m6-qualification-20-29.json",
+          "spec_sha256": "e8c37d5246d58f6dad8ccf63fd9930daeced94195423ac58b6dc86dbe27c09a7",
+          "output_directory": "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/heap-filter-v2-aa07158e/qualification-20-29",
+          "prerequisites": [
+            "screen-pass-and-metric-artifact-readback",
+            "full-correctness-and-ISA-shared-readback",
+            "qualification-10-19-evidence-readback"
+          ],
+          "submitted": false
+        },
+        {
+          "stage": "aggregate-30",
+          "phase": "aggregate-audit",
+          "first_block": 0,
+          "blocks": 30,
+          "global_range": [
+            0,
+            29
+          ],
+          "spec_file": "m6-aggregate-30.json",
+          "spec_sha256": "9de896bfd448c611b388e6e0505afb49f94609ee21bfec229bb725adc46c9079",
+          "output_directory": "/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/heap-filter-v2-aa07158e/aggregate-30",
+          "prerequisites": [
+            "screen-pass-and-metric-artifact-readback",
+            "full-correctness-and-ISA-shared-readback",
+            "qualification-00-09-evidence-readback",
+            "qualification-10-19-evidence-readback",
+            "qualification-20-29-evidence-readback"
+          ],
+          "submitted": false
+        }
+      ]
+    },
+    "spark": {
+      "node": "spark-000907",
+      "build_job_id": "job_32079fwnpd0a44p",
+      "build_mlflow_run_id": "522f45f993f3475ebdbef4a7375d984c",
+      "retained_workspace": "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate",
+      "input_root": "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2",
+      "binary_manifest": {
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-B/grammar-sampling": "{{SPARK_B_GRAMMAR_SAMPLING_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-C/grammar-sampling": "{{SPARK_C_GRAMMAR_SAMPLING_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-C/grammar-verification": "{{SPARK_C_GRAMMAR_VERIFICATION_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-D/grammar-sampling": "{{SPARK_D_GRAMMAR_SAMPLING_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-D/grammar-verification": "{{SPARK_D_GRAMMAR_VERIFICATION_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-R/grammar-sampling": "{{SPARK_R_GRAMMAR_SAMPLING_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-R/grammar-verification": "{{SPARK_R_GRAMMAR_VERIFICATION_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-controller": "{{SPARK_SIMD_CONTROLLER_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-audit": "{{SPARK_SIMD_AUDIT_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-contracts": "{{SPARK_SIMD_CONTRACTS_SHA256}}",
+        "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-sample-stacks": "{{SPARK_SIMD_SAMPLE_STACKS_SHA256}}"
+      },
+      "input_manifest": {
+        "closing-delimiters-and-EOS.logits": "{{SPARK_INPUT_CLOSING_DELIMITERS_AND_EOS_LOGITS_SHA256}}",
+        "fixtures.json": "{{SPARK_INPUT_FIXTURES_JSON_SHA256}}",
+        "large-HTML-write-argument.logits": "{{SPARK_INPUT_LARGE_HTML_WRITE_ARGUMENT_LOGITS_SHA256}}",
+        "lazy-before-tool-trigger.logits": "{{SPARK_INPUT_LAZY_BEFORE_TOOL_TRIGGER_LOGITS_SHA256}}",
+        "restricted-values-and-rejection-fallback.logits": "{{SPARK_INPUT_RESTRICTED_VALUES_AND_REJECTION_FALLBACK_LOGITS_SHA256}}",
+        "Unicode-and-partial-UTF8.logits": "{{SPARK_INPUT_UNICODE_AND_PARTIAL_UTF8_LOGITS_SHA256}}"
+      },
+      "bindings_complete": false,
+      "stages": [
+        {
+          "stage": "screen",
+          "phase": "screen",
+          "first_block": 0,
+          "blocks": 5,
+          "global_range": [
+            0,
+            4
+          ],
+          "spec_file": "spark-screen.template.json",
+          "spec_sha256": "662068b4b5f6503e5f1d4fdef0e8b971a758567cd71ca1a143ea6624aa2f4a28",
+          "output_directory": "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-filter-v2-aa07158e/screen",
+          "prerequisites": [
+            "full-correctness-and-ISA-shared-readback"
+          ],
+          "submitted": false
+        },
+        {
+          "stage": "qualification-00-09",
+          "phase": "qualification",
+          "first_block": 0,
+          "blocks": 10,
+          "global_range": [
+            0,
+            9
+          ],
+          "spec_file": "spark-qualification-00-09.template.json",
+          "spec_sha256": "1a08ed46cd04c190a1fa2de4f7d97165fb2ba0fa7e180c978902b5107335aa85",
+          "output_directory": "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-filter-v2-aa07158e/qualification-00-09",
+          "prerequisites": [
+            "screen-pass-and-metric-artifact-readback",
+            "full-correctness-and-ISA-shared-readback"
+          ],
+          "submitted": false
+        },
+        {
+          "stage": "qualification-10-19",
+          "phase": "qualification",
+          "first_block": 10,
+          "blocks": 10,
+          "global_range": [
+            10,
+            19
+          ],
+          "spec_file": "spark-qualification-10-19.template.json",
+          "spec_sha256": "54bac33f58736c9cc9bad774c2f9301e9d7211f92dde97145fa1b531511815ee",
+          "output_directory": "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-filter-v2-aa07158e/qualification-10-19",
+          "prerequisites": [
+            "screen-pass-and-metric-artifact-readback",
+            "full-correctness-and-ISA-shared-readback",
+            "qualification-00-09-evidence-readback"
+          ],
+          "submitted": false
+        },
+        {
+          "stage": "qualification-20-29",
+          "phase": "qualification",
+          "first_block": 20,
+          "blocks": 10,
+          "global_range": [
+            20,
+            29
+          ],
+          "spec_file": "spark-qualification-20-29.template.json",
+          "spec_sha256": "9d8f31e20ddc6c7d6731d396bb563a31a7452881bb592684e1915e01f57474be",
+          "output_directory": "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-filter-v2-aa07158e/qualification-20-29",
+          "prerequisites": [
+            "screen-pass-and-metric-artifact-readback",
+            "full-correctness-and-ISA-shared-readback",
+            "qualification-10-19-evidence-readback"
+          ],
+          "submitted": false
+        },
+        {
+          "stage": "aggregate-30",
+          "phase": "aggregate-audit",
+          "first_block": 0,
+          "blocks": 30,
+          "global_range": [
+            0,
+            29
+          ],
+          "spec_file": "spark-aggregate-30.template.json",
+          "spec_sha256": "9673d1a65a415e0c73690d549336ee2294276bda93c33d3453bb6dd46b8d70c4",
+          "output_directory": "/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-filter-v2-aa07158e/aggregate-30",
+          "prerequisites": [
+            "screen-pass-and-metric-artifact-readback",
+            "full-correctness-and-ISA-shared-readback",
+            "qualification-00-09-evidence-readback",
+            "qualification-10-19-evidence-readback",
+            "qualification-20-29-evidence-readback"
+          ],
+          "submitted": false
+        }
+      ]
+    }
+  }
+}

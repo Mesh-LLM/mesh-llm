@@ -1,0 +1,55 @@
+{
+  "spec": {
+    "name": "Heap filter v2 \u00b7 M6 \u00b7 screen \u00b7 aa07158e",
+    "description": "Prepared screen for m6 only; launch requires verified immutable dependencies in timing-stages.json. All original primary B, paired statistics, exact decisions, per-case within1%, aggregate 5% improvement and decode gates remain unchanged. No normalized comparisons or performance-based chunk stopping.",
+    "target": {
+      "executor": "lab",
+      "nodes": [
+        "macmini-gq7vhw"
+      ],
+      "os": "macos"
+    },
+    "runtime": {
+      "model_package": {
+        "ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5",
+        "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        "egress": "lab_only"
+      },
+      "models": [
+        {
+          "ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5",
+          "env": "MODEL_DIR",
+          "delivery": "cache",
+          "pin": true
+        }
+      ],
+      "command": "set -eu\nretained='/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate'\ninputs='/Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-inputs'\nartifacts=\"$JIANYANG_ARTIFACT_DIR\"\ntest \"$(git -C \"$retained\" rev-parse HEAD)\" = aa07158ec01e56775599ddb918efddedb7154ed7\ntest \"$(git -C \"$retained/.deps/llama.cpp\" rev-parse 'HEAD^{tree}')\" = e4cc2b65b42834fe2ab257a2517afd969ba7f9c5\ncat > \"$artifacts/admitted-binary-hashes.txt\" <<'BINARY_HASHES'\nf893116ac8b44c9252674cb4fbccdda1f2fc32f2388672d1b130375c9eb50be8  /Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-D/grammar-sampling\nbff1bccc2e22fd3d86bbc0f1e84ba9925305c536304dc8143f84f0cdec45531f  /Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-D/grammar-verification\n77ba9ccdae38a52e8a0759d7bcf4ec7a8f38346b8ae353e05d76d2118598422a  /Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-R/grammar-sampling\n11c9df3a583378857954ce4b7e4781c3ec9b13eb0a16c6999c81c5409b71c522  /Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-R/grammar-verification\naa7c796793b1732247be88735d05525d591ff53da256841fba2fe4593b059f30  /Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-controller/simd-controller\nea93857ba1552da868c6ca39ed16e19237a9114dfda2b6e32ee97e2b1bfa9615  /Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-controller/simd-audit\n0cd1b963c777c3e990e17dc34adc3e0612ae93242e29da1205340b4d7bacc2e5  /Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/simd-controller/simd-contracts\n95ef73e7f71ed1f34adc5af2195b116462a149d4c73635a4d96528bbbdb3fec2  /Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-A/grammar-sampling\nd93d1643c2675f4f33e8bd8d720c639075448225fa5f6468e7f79c72033e12f1  /Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-C/grammar-sampling\nBINARY_HASHES\ncat > \"$artifacts/frozen-input-hashes.txt\" <<'INPUT_HASHES'\n35b477aba0cc6cfa7a05ab1acdb7cd6bc2d8d4a1b9d0c4ebe2444a3a3ae6d6e3  /Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-inputs/closing-delimiters-and-EOS.logits\na38e818a82528f625abb6b54d4fc19f38cdc86ad5b7db2baf2502f7c29c9eeff  /Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-inputs/fixtures.json\n44c709d3cfa46469d959e51a5b2d3e33482d209efc8644a1c3df54423afb4be5  /Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-inputs/large-HTML-write-argument.logits\ne54c38032be91e85c89d2ffbe07d6d676c36d3f7df883dcd6d8241875e85a5df  /Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-inputs/lazy-before-tool-trigger.logits\n9aba1aa800074cd0acbf419f64d86835f4472f795283eb2c1fd8a07eb8ddeae3  /Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-inputs/restricted-values-and-rejection-fallback.logits\n046bb0e13276f34879dd1e0ff17aef98c6d78c2f5cd4199e30692be409eaf591  /Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-inputs/Unicode-and-partial-UTF8.logits\nINPUT_HASHES\nshasum -a 256 -c \"$artifacts/admitted-binary-hashes.txt\"\nshasum -a 256 -c \"$artifacts/frozen-input-hashes.txt\"\nmodel_file=\"$MODEL_DIR\"\nif [ -d \"$model_file\" ]; then model_file=\"$model_file/Qwen3.5-9B-Q4_K_M.gguf\"; fi\nprintf '%s  %s\\n' 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8 \"$model_file\" | shasum -a 256 -c - > \"$artifacts/model-hash.txt\"\n{ git -C \"$retained\" rev-parse HEAD; git -C \"$retained/.deps/llama.cpp\" rev-parse 'HEAD^{tree}'; c++ --version; uname -a; sysctl -n machdep.cpu.brand_string hw.memsize; } > \"$artifacts/timing-identity.txt\"\noutput='/Users/gi/Library/Application Support/jianyang/work/run_mtwqj3cny3jzsvg/workspace/candidate/.deps/heap-filter-v2-aa07158e/screen'\ntest ! -e \"$output\"\ncollect_timing() {\n    status=$?\n    trap - EXIT\n    printf '%s\\n' \"$status\" > \"$artifacts/timing-exit.txt\"\n    for filename in observations.jsonl admitted-fixtures.json host-observations.jsonl; do\n        if [ -f \"$output/$filename\" ]; then cp \"$output/$filename\" \"$artifacts/$filename\"; fi\n    done\n    exit \"$status\"\n}\ntrap collect_timing EXIT\nprintf 'Stage: screen global blocks 0..4\\n'\n\"$retained/.deps/simd-controller/simd-controller\" '/Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-A/grammar-sampling' '/Users/gi/Library/Application Support/jianyang/work/run_ack9y2jeqkhcn37/workspace/candidate/.deps/grammar-C/grammar-sampling' \"$retained/.deps/simd-D/grammar-sampling\" \"$retained/.deps/simd-R/grammar-sampling\" \"$model_file\" \"$inputs\" \"$output\" screen 0 5 > \"$artifacts/measurement.log\" 2>&1\n\"$retained/.deps/simd-controller/simd-audit\" \"$output/observations.jsonl\" \"$inputs/fixtures.json\" 5 \"$artifacts/native-statistical-audit.json\" > \"$artifacts/native-statistical-audit.log\" 2>&1\nshasum -a 256 -c \"$artifacts/admitted-binary-hashes.txt\"\nshasum -a 256 -c \"$artifacts/frozen-input-hashes.txt\"\n"
+    },
+    "harness": {
+      "name": "custom",
+      "version": "adhoc",
+      "trace": {
+        "kind": "synthetic",
+        "ref": "heap-filter-v2-m6-screen"
+      },
+      "seed": 73,
+      "warmup_requests": 0,
+      "concurrency": [
+        1
+      ],
+      "request_count": 1
+    },
+    "budget": {
+      "max_usd": 0,
+      "max_duration_s": 7200,
+      "grace_s": 120
+    },
+    "retries": 0,
+    "labels": {
+      "campaign": "skippy-heap-filter-v2",
+      "phase": "screen",
+      "hardware": "m6",
+      "protocol": "2"
+    }
+  }
+}
