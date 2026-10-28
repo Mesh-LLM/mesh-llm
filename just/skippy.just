@@ -181,7 +181,7 @@ sampler-simd-controller native:
 [unix]
 sampler-simd-native-tests build:
     cmake --build "{{ build }}" --parallel 4 --target skippy-sampling-history skippy-runtime-events-test skippy-model-fixture-generator test-skippy-verify-checkpoint-retirement test-skippy-sampling-suppress test-grammar-trigger-patterns test-grammar-parser test-grammar-integration test-sampler-highway
-    ctest --test-dir "{{ build }}/native" --output-on-failure --timeout 900 -R '^(skippy_sampling_history_|skippy_runtime_event_native_model_load_production|test-skippy-verify-checkpoint-retirement|test-skippy-sampling-suppress|test-grammar-trigger-patterns|test-grammar-parser|test-grammar-integration|test-sampler-highway)'
+    ctest --test-dir "{{ build }}/native" --output-on-failure --no-tests=error --timeout 900 --output-junit "{{ build }}/native-correctness.xml" -R '^(skippy_sampling_history_|skippy_runtime_event_native_model_load_production|test-skippy-verify-checkpoint-retirement|test-skippy-sampling-suppress|test-grammar-trigger-patterns|test-grammar-parser|test-grammar-integration|test-sampler-highway)'
 
 # Build only the diagnostic controller; its worker binaries remain frozen.
 [unix]
