@@ -15,6 +15,7 @@ struct Network {
     received: Mutex<BTreeMap<String, Transaction>>,
     sends: AtomicUsize,
     balances: AtomicUsize,
+    slow_lookup: Mutex<Option<String>>,
 }
 struct Wallet(Arc<Network>, bool);
 pub(crate) fn invoice(number: u8, amount: u64) -> Invoice {
@@ -78,6 +79,10 @@ impl WalletProvider for Wallet {
         Ok(payment)
     }
     async fn lookup(&self, hash: &str) -> Result<Option<Transaction>> {
+        let slow = self.0.slow_lookup.lock().unwrap().as_deref() == Some(hash);
+        if slow {
+            std::future::pending::<()>().await;
+        }
         Ok(self
             .0
             .received
@@ -790,5 +795,67 @@ async fn seller_restart_observes_receipts_without_a_peer_message() {
             .metered_unpaid_finals("buyer")
             .unwrap(),
         mesh_llm_payments::ledger::metered::STRIKE_LIMIT - 1
+    );
+}
+
+#[tokio::test]
+async fn slow_receipt_lookup_does_not_delay_another_paid_receipt() {
+    let f = Fixture::new();
+    seed_warm_standing(&f).await;
+    let mut bills = issue_unpaid_finals(&f).await;
+    bills.sort_by_key(|message| match message {
+        Message::Settlement { bill, .. } => bill.invoice.as_ref().unwrap().payment_hash.clone(),
+        _ => panic!("expected settlement invoice"),
+    });
+    let paid_bill = bills.pop().unwrap();
+    let _withheld_paid = f.buyer.channel("seller", paid_bill).await.unwrap();
+    let receipts = f.seller.service.ledger.unpaid_metered_invoices().unwrap();
+    let paid_hash = f
+        .network
+        .received
+        .lock()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    let slow_hash = receipts
+        .iter()
+        .map(|receipt| &receipt.invoice.payment_hash)
+        .filter(|hash| !paid_hash.contains(hash))
+        .min()
+        .unwrap()
+        .clone();
+    *f.network.slow_lookup.lock().unwrap() = Some(slow_hash);
+    // A blocked lookup may consume its one-second timeout, but an independent
+    // paid receipt must release admission before that timeout expires.
+    let refresh = f.seller.refresh_receipts();
+    let observe = async {
+        tokio::time::timeout(std::time::Duration::from_millis(500), async {
+            loop {
+                let changed = f.seller.changed.notified();
+                if f.seller
+                    .service
+                    .ledger
+                    .metered_unpaid_finals("buyer")
+                    .unwrap()
+                    == mesh_llm_payments::ledger::metered::STRIKE_LIMIT - 1
+                {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("paid receipt was blocked behind a slow lookup");
+    };
+    let (result, ()) = tokio::join!(refresh, observe);
+    assert!(result.is_err(), "the deliberately stuck lookup times out");
+    assert_eq!(
+        f.seller
+            .service
+            .ledger
+            .metered_unpaid_finals("buyer")
+            .unwrap(),
+        2
     );
 }

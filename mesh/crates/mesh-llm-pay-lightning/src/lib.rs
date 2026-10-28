@@ -143,21 +143,28 @@ impl Engine {
                 .map(|receipt| receipt.invoice.payment_hash.clone()),
             std::time::Instant::now(),
         );
-        let mut first_error = None;
+        let mut observations = tokio::task::JoinSet::new();
         for hash in due {
             let receipt = receipts
                 .iter()
                 .find(|receipt| receipt.invoice.payment_hash == hash)
-                .expect("scheduled invoice came from ledger");
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                self.service.refresh_invoice(receipt),
-            )
-            .await
-            .map_err(anyhow::Error::new)
-            .and_then(|result| result);
+                .expect("scheduled invoice came from ledger")
+                .clone();
+            let service = self.service.clone();
+            observations.spawn(async move {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    service.refresh_invoice(&receipt),
+                )
+                .await
+                .map_err(anyhow::Error::new)
+                .and_then(|result| result)
+            });
+        }
+        let mut first_error = None;
+        while let Some(result) = observations.join_next().await {
             self.changed.notify_waiters();
-            if let Err(error) = result {
+            if let Err(error) = result.map_err(anyhow::Error::new).and_then(|result| result) {
                 first_error.get_or_insert(error);
             }
         }
