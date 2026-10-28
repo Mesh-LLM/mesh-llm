@@ -13,6 +13,7 @@ scripts/prepare-llama.sh pinned
 test "$(git -C .deps/llama.cpp rev-parse 'HEAD^{tree}')" = c81b95e77324501872f9aac8acc2488d9365df63
 LLAMA_WORKDIR="$PWD/.deps/simd-B-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "$baseline/scripts/prepare-llama.sh" pinned
 LLAMA_WORKDIR="$PWD/.deps/simd-C-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "$current/scripts/prepare-llama.sh" pinned
+just sampler-simd-controller "$PWD/.deps/llama.cpp"
 architecture=()
 if [[ $backend == cuda ]]; then architecture=(-DCMAKE_CUDA_ARCHITECTURES=121); fi
 for arm in B C D R; do
@@ -30,7 +31,10 @@ for arm in B C D R; do
         "-DLLAMA_SAMPLER_HIGHWAY_DISABLED=$disabled" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "${architecture[@]}"
     cmake --build ".deps/simd-$arm" --parallel 4 --target simd-thermal-probe
     ".deps/simd-$arm/simd-thermal-probe"
-    cmake --build ".deps/simd-$arm" --parallel 4 --target grammar-sampling grammar-verification
+    cmake --build ".deps/simd-$arm" --parallel 4 --target grammar-sampling
+    if [[ $arm != B ]]; then
+        cmake --build ".deps/simd-$arm" --parallel 4 --target grammar-verification
+    fi
     if [[ $arm == D || $arm == R ]]; then
         cmake --build ".deps/simd-$arm" --parallel 4 --target test-sampler-highway
         ctest --test-dir ".deps/simd-$arm/native" --output-on-failure -R '^test-sampler-highway$'

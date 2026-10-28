@@ -39,3 +39,14 @@ and M6 results are never pooled; each stratum must qualify independently.
 ```sh
 just sampler-simd-spark-probe /absolute/model.gguf /absolute/artifacts
 ```
+
+The four-arm controller creates a fresh worker for each arm and block, with one
+resident model at a time. Every worker completes three whole warmup blocks before
+its measured block. Screen and qualification ranges and arm orders are fixed by
+the plan; it refuses to overwrite existing observations. Build it independently
+with `just sampler-simd-controller /absolute/native-source` so later orchestration
+changes cannot silently rebuild admitted worker binaries.
+
+The B build uses the original native sampler interface. ABI recovery verification
+is built for C, D and R, which expose the newer public implementation being tested.
+This harness selection does not alter the frozen B native source.

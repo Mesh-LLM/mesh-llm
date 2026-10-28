@@ -1,5 +1,7 @@
 #include "fixtures.h"
+#ifdef SKIPPY_EVAL_COMMON_SAMPLER
 #include "skippy/chat_sampling.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
