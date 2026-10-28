@@ -1217,6 +1217,26 @@ fn explicit_speculation_settings_win_over_the_default_dflash_draft() {
 }
 
 #[test]
+fn dropping_the_default_keeps_an_explicit_dflash_draft() {
+    let (_directory, model_path) = default_dflash_target();
+    let draft = temp_model_file_with_architecture("dflash");
+    let config = format!(
+        "[defaults.speculative]\nstrategy = \"dflash\"\ndraft_model_path = {}\ndraft_max_tokens = 5",
+        toml_path(draft.path())
+    );
+    let mut resolved =
+        resolve_default_dflash(&config, &model_path, &target_meta("qwen35", 32, 4096, 0));
+    assert!(resolved.speculative.default_dflash.is_none());
+
+    // The host drops the default whenever its memory plan holds no default draft.
+    resolved.speculative.drop_default_dflash();
+    let args = resolved.to_embedded_openai_args(0, false).unwrap();
+    let dflash = args.speculative.dflash.expect("explicit DFlash plan");
+    assert_eq!(dflash.draft_model_path, draft.path());
+    assert_eq!(dflash.max_draft_tokens, Some(5));
+}
+
+#[test]
 fn a_default_dflash_draft_is_served_only_once_fetched() {
     let (_directory, model_path) = default_dflash_target();
     let mut resolved = resolve_default_dflash(

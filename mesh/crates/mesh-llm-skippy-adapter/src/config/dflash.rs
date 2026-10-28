@@ -110,9 +110,12 @@ impl ResolvedSpeculativeConfig {
     }
 
     /// Serves without speculation when the default DFlash draft cannot be
-    /// fetched or does not fit the target.
+    /// fetched or does not fit the target. An explicitly configured DFlash
+    /// draft is not a default and is left in place.
     pub fn drop_default_dflash(&mut self) {
-        self.default_dflash = None;
+        if self.default_dflash.take().is_none() {
+            return;
+        }
         self.decode.dflash = None;
         self.decode.effective_strategy = "disabled".to_string();
     }
