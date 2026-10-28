@@ -12,6 +12,9 @@ mod exchange_admission;
 mod progress;
 mod stream_adapters;
 
+#[cfg(test)]
+mod workload_admission_tests;
+
 pub(crate) fn advertisable_routes(
     routes: Vec<crate::plugin::VirtualModelRoute>,
     concrete_models: &[String],
@@ -534,7 +537,11 @@ async fn virtual_model_candidates(
     virtual_ids: &std::collections::BTreeSet<String>,
     required_tokens: Option<u32>,
 ) -> Vec<VirtualModelCandidate> {
+    // Virtual inference sends chat completions, so its committee must obey the
+    // same workload admission policy as concrete chat routes.
+    const CHAT_PATH: &str = "/v1/chat/completions";
     let descriptors = node.all_served_model_descriptors().await;
+    let local_descriptors = node.served_model_descriptors().await;
     let local_models = node.hosted_models().await;
     let deprioritized_peers = node
         .peers()
@@ -555,9 +562,11 @@ async fn virtual_model_candidates(
 
     let mut candidates = Vec::new();
     for model_id in model_ids {
-        let descriptor = descriptors
-            .iter()
-            .find(|descriptor| descriptor.identity.model_name == model_id);
+        if !super::workload_routing::model_satisfies_request(&model_id, CHAT_PATH, &descriptors) {
+            continue;
+        }
+        let descriptor =
+            super::workload_routing::descriptor_for_request(&model_id, CHAT_PATH, &descriptors);
         let candidate_from = |target_node_id: Option<String>, context_length: Option<u32>| {
             let deprioritized = target_node_id
                 .as_ref()
@@ -580,7 +589,13 @@ async fn virtual_model_candidates(
             }
         };
         let has_local_instance = local_models.iter().any(|local| local == &model_id);
-        if has_local_instance {
+        if has_local_instance
+            && super::workload_routing::model_satisfies_request(
+                &model_id,
+                CHAT_PATH,
+                &local_descriptors,
+            )
+        {
             let context_length = node.local_model_context_length(&model_id).await;
             if context_can_satisfy(required_tokens, context_length) {
                 candidates.push(candidate_from(
@@ -598,6 +613,13 @@ async fn virtual_model_candidates(
         // become the direct route's non-retryable first choice.
         node.peer_blocks
             .retain_unblocked(&mut remote_hosts, crate::network::peer_blocks::now_ms());
+        let remote_hosts = super::workload_routing::eligible_remote_hosts(
+            node,
+            &model_id,
+            CHAT_PATH,
+            &remote_hosts,
+        )
+        .await;
         for host in remote_hosts {
             let context_length = node.peer_model_context_length(host, &model_id).await;
             if context_can_satisfy(required_tokens, context_length) {

@@ -167,7 +167,12 @@ test-all:
         --exclude skippy-package-builder \
         --exclude skippy-runtime \
         --exclude skippy-serving \
-        --exclude skippy-cli
+        --exclude skippy-cli \
+        --exclude xtask
+    # Automation fixtures own process-global signal scopes. Keep this harness
+    # serial without changing the environment of other packages' child tests.
+    echo "--- Repository automation tests ---"
+    just with-lld cargo test --package xtask -- --test-threads=1
     echo "--- Static Skippy package-builder tests ---"
     just with-lld cargo test --package skippy-package-builder --no-default-features
     echo "--- Static Skippy runtime tests ---"

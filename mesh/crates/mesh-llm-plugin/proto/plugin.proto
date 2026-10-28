@@ -34,7 +34,11 @@ message Envelope {
     PeerBlockResponse peer_block_response = 33;
     PluginKeyRequest plugin_key_request = 34;
     PluginKeyResponse plugin_key_response = 35;
-    // 36–40 are allocated on main to status and inference observation.
+    PublishPluginStatusRequest publish_plugin_status_request = 36;
+    PublishPluginStatusResponse publish_plugin_status_response = 37;
+    SubscribeInferenceObservationRequest subscribe_inference_observation_request = 38;
+    SubscribeInferenceObservationResponse subscribe_inference_observation_response = 39;
+    InferenceObservationBatch inference_observation_batch = 40;
     ModelRequirementRequest model_requirement_request = 41;
     ModelRequirementResponse model_requirement_response = 42;
   }
@@ -202,6 +206,31 @@ message PluginManifest {
   repeated VirtualModelManifest virtual_models = 13;
   // Optional, additive generation-3 lifecycle contract. Declarations are not grants.
   optional OpenAiExchangeHookManifest openai_exchange_hook = 14;
+  // This plugin publishes a snapshot shown in `GET /api/status`; see
+  // `PublishPluginStatusRequest`. A host takes publications only from a plugin
+  // that declares this.
+  optional PluginStatusManifest plugin_status = 15;
+  // This plugin subscribes to the local inference observation feed; see
+  // `SubscribeInferenceObservationRequest`. Declarations are not grants: the
+  // operator also sets `allow_inference_observation = true` for the plugin.
+  optional InferenceObservationManifest inference_observation = 16;
+}
+
+message InferenceObservationManifest {
+  // The feed contract the plugin reads; 1 is the only one.
+  uint32 contract_version = 1;
+  // Refuse to initialize on a host that does not list the
+  // `local_inference_observation.v1` capability.
+  bool required = 2;
+}
+
+message PluginStatusManifest {
+  // The version of the plugin's own snapshot schema, shown beside its data.
+  // At least 1.
+  uint32 schema_version = 1;
+  // Refuse to initialize on a host that does not list the `plugin_status.v1`
+  // capability, instead of running without a status contribution.
+  bool required = 2;
 }
 
 message VirtualModelManifest {
@@ -746,6 +775,29 @@ message PluginKeyResponse {
   bytes binding_signature = 2;
 }
 
+// A plugin publishes the snapshot that `GET /api/status` shows under
+// `plugins.<name>`, where `<name>` is the host's name for the plugin
+// connection, never a name the plugin claims. A later publication replaces it, and an empty `data_json`
+// withdraws it. The host keeps the latest one and owns its envelope: receipt
+// time and freshness. `/api/status` reads that copy and never calls the
+// plugin. Handled only by a host listing the `plugin_status.v1` capability,
+// for a plugin whose manifest declares `plugin_status`, from its current
+// connection.
+message PublishPluginStatusRequest {
+  // A JSON object, at most 16 KiB, in the plugin's own schema. Empty to withdraw.
+  string data_json = 1;
+  // How long the host shows the snapshot as `ready` before it turns `stale`.
+  // 0 means 60 s; the host keeps it between 1 s and 1 h.
+  uint64 fresh_for_ms = 2;
+}
+
+message PublishPluginStatusResponse {
+  // When the host accepted the snapshot, Unix milliseconds; 0 after a withdrawal.
+  uint64 received_at_unix_ms = 1;
+  // When it turns `stale`, Unix milliseconds; 0 after a withdrawal.
+  uint64 fresh_until_unix_ms = 2;
+}
+
 message ErrorResponse {
   int32 code = 1;
   string message = 2;
@@ -787,4 +839,129 @@ message ModelRequirementResponse {}
 message ChannelRequirement {
   string channel = 1;
   bytes terms = 2;
+}
+
+// A plugin asks for the local inference observation feed: what this node's
+// own inference frontends execute, requests from peers included, and never
+// work this node only forwards. Handled only by a host listing the
+// `local_inference_observation.v1` capability, for a plugin whose manifest
+// declares `inference_observation` and whose operator set
+// `allow_inference_observation = true`, from its current connection. The feed
+// carries activity and token counts only: no prompt, completion text,
+// header, admission decision or key. A later request replaces the
+// subscription and starts again from a new snapshot.
+message SubscribeInferenceObservationRequest {}
+
+message SubscribeInferenceObservationResponse {
+  InferenceObservationSnapshot snapshot = 1;
+}
+
+// Where the feed starts: the events that follow carry `next_sequence` and
+// later, and every execution already running is listed.
+message InferenceObservationSnapshot {
+  // Random per host start. A new value means sequences and execution ids
+  // from before no longer apply.
+  uint64 host_generation = 1;
+  uint64 next_sequence = 2;
+  // Host time when the snapshot was taken, Unix nanoseconds, on the clock the
+  // events use.
+  uint64 taken_at_unix_ns = 3;
+  // Local models whose frontends are serving.
+  repeated string ready_models = 4;
+  repeated ActiveInferenceExecution active = 5;
+}
+
+message ActiveInferenceExecution {
+  uint64 execution_id = 1;
+  string model = 2;
+  InferenceOperation operation = 3;
+  bool streaming = 4;
+  uint64 started_at_unix_ns = 5;
+  // The backend finished computing (a non-streaming request that is still
+  // being delivered, for example).
+  bool compute_finished = 6;
+}
+
+// Model execution only: listing models and counting tokens never start an
+// execution.
+enum InferenceOperation {
+  INFERENCE_OPERATION_UNSPECIFIED = 0;
+  INFERENCE_OPERATION_CHAT_COMPLETION = 1;
+  INFERENCE_OPERATION_COMPLETION = 2;
+  INFERENCE_OPERATION_RESPONSES = 3;
+  INFERENCE_OPERATION_MESSAGES = 4;
+  INFERENCE_OPERATION_EMBEDDINGS = 5;
+  INFERENCE_OPERATION_RERANK = 6;
+  INFERENCE_OPERATION_AUDIO_SPEECH = 7;
+  INFERENCE_OPERATION_AUDIO_TRANSCRIPTION = 8;
+  INFERENCE_OPERATION_AUDIO_TRANSLATION = 9;
+  INFERENCE_OPERATION_SYSTEM_ONE = 10;
+}
+
+enum InferenceExecutionOutcome {
+  INFERENCE_EXECUTION_OUTCOME_UNSPECIFIED = 0;
+  INFERENCE_EXECUTION_OUTCOME_COMPLETED = 1;
+  INFERENCE_EXECUTION_OUTCOME_FAILED = 2;
+  INFERENCE_EXECUTION_OUTCOME_CANCELLED = 3;
+  // The client went away before the response was delivered.
+  INFERENCE_EXECUTION_OUTCOME_DROPPED = 4;
+}
+
+message InferenceObservationEvent {
+  // One more than the previous event's, per host generation.
+  uint64 sequence = 1;
+  // When it happened on the host, Unix nanoseconds: taken where the frontend
+  // reports it, not when the plugin receives it.
+  uint64 at_unix_ns = 2;
+  // 0 for the model events.
+  uint64 execution_id = 3;
+  oneof kind {
+    InferenceExecutionStarted started = 10;
+    // A streaming execution produced its first output.
+    Empty first_output = 11;
+    // The backend finished computing. For a stream this is the end of
+    // generation, not the moment the stream opened.
+    Empty compute_finished = 12;
+    InferenceOutputUsage usage = 13;
+    InferenceExecutionEnded ended = 14;
+    string model_ready = 15;
+    string model_unloaded = 16;
+  }
+}
+
+message InferenceExecutionStarted {
+  string model = 1;
+  InferenceOperation operation = 2;
+  bool streaming = 3;
+}
+
+// At most one per execution.
+message InferenceOutputUsage {
+  uint32 prompt_tokens = 1;
+  optional uint32 cached_prompt_tokens = 2;
+  uint32 completion_tokens = 3;
+}
+
+// Exactly one per execution, last.
+message InferenceExecutionEnded {
+  InferenceExecutionOutcome outcome = 1;
+}
+
+// Host to plugin, unsolicited, after `SubscribeInferenceObservationResponse`.
+message InferenceObservationBatch {
+  uint64 host_generation = 1;
+  repeated InferenceObservationEvent events = 2;
+  // Every event at or before this host time has been delivered: a plugin can
+  // settle an interval that ends before it. Batches come at least once a
+  // second, empty if nothing happened, so it keeps advancing.
+  uint64 watermark_unix_ns = 3;
+  // Set when the host dropped events for this subscriber because it read too
+  // slowly; `resync` then says where the feed starts again.
+  optional InferenceObservationLoss loss = 4;
+  optional InferenceObservationSnapshot resync = 5;
+}
+
+message InferenceObservationLoss {
+  uint64 first_lost_sequence = 1;
+  uint64 lost_events = 2;
 }

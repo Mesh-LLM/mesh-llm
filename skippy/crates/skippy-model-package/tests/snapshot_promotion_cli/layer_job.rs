@@ -1,5 +1,5 @@
 #![cfg(unix)]
-use super::fixtures;
+use super::{child_env, fixtures};
 use std::{
     fs,
     path::Path,
@@ -34,6 +34,7 @@ fn invoke(manifest: &Path, source: &Path, output: &Path) -> Output {
     finish(
         Command::new(env!("CARGO_BIN_EXE_model-package-layer-job"))
             .env_clear()
+            .envs(child_env::ca_certificates())
             .args(["project", "--manifest"])
             .arg(manifest)
             .args([
@@ -113,14 +114,10 @@ fn layer_job_actual_embedded_projection_block_forwards_source_and_experimental_p
     let start = script.find("# The root/card projection").unwrap();
     let end = script[start..].find("SOURCE_IDENTITY=").unwrap() + start;
     let block = &script[start..end];
-    let bash = if std::path::Path::new("/opt/homebrew/bin/bash").exists() {
-        "/opt/homebrew/bin/bash"
-    } else {
-        "bash"
-    };
     let report = finish(
-        Command::new(bash)
+        Command::new(child_env::bash())
             .env_clear()
+            .env("PATH", child_env::path())
             .env("LAYER_JOB", env!("CARGO_BIN_EXE_model-package-layer-job"))
             .env("LOCAL_WORK_DIR", &root)
             .env("PACKAGE_DIR", package)
@@ -158,6 +155,7 @@ fn upload_admit(root: &Path, artifact: &Path, credential: &Path, output: &Path) 
     finish(
         Command::new(env!("CARGO_BIN_EXE_model-package-layer-job"))
             .env_clear()
+            .envs(child_env::ca_certificates())
             .args([
                 "upload",
                 "--admit-only",
@@ -249,7 +247,8 @@ fn layer_upload_actual_embedded_hook_preserves_scope_attempts_and_private_file_d
     let helper = root.join("helper");
     fs::write(
         &helper,
-        br##"#!/bin/bash
+        child_env::bash_script(
+            br##"#!/bin/bash
 set -euo pipefail
 [[ "$1" == upload && "$2" == --confirm ]]
 shift 2
@@ -273,6 +272,7 @@ mkdir "$output"
 printf '%s' '{"status":"inert-projection-only"}' > "$output/upload.json"
 printf '%s' "$credential" > "$JOB_TMP_DIR/credential-path"
 "##,
+        ),
     )
     .unwrap();
     fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
@@ -284,8 +284,9 @@ printf '%s' "$credential" > "$JOB_TMP_DIR/credential-path"
         + begin;
     let hook = root.join("upload-hook");
     let report = finish(
-        Command::new("/bin/bash")
+        Command::new(child_env::bash())
             .env_clear()
+            .env("PATH", child_env::path())
             .env("LAYER_JOB", &helper)
             .env("ARTIFACT_UPLOAD_HOOK", &hook)
             .args(["-euc", &script[begin..end]])
@@ -298,9 +299,9 @@ printf '%s' "$credential" > "$JOB_TMP_DIR/credential-path"
     let artifact = root.join("layer.gguf");
     fs::write(&artifact, b"finite artifact").unwrap();
     let report = finish(
-        Command::new("/bin/bash")
+        Command::new(child_env::bash())
             .env_clear()
-            .env("PATH", "/usr/bin:/bin")
+            .env("PATH", child_env::path())
             .env("LAYER_JOB", &helper)
             .env("JOB_TMP_DIR", &root)
             .env("HF_TOKEN", "private-fixture-token")
@@ -336,6 +337,7 @@ fn layer_repository_actual_cli_refuses_unconfirmed_or_invalid_scope_before_outpu
         let mut command = Command::new(env!("CARGO_BIN_EXE_model-package-layer-job"));
         command
             .env_clear()
+            .envs(child_env::ca_certificates())
             .args(["ensure-repo", "--repo", repo, "--credential-file"])
             .arg(root.join("missing-secret"))
             .arg("--output-directory")
@@ -368,6 +370,7 @@ fn layer_catalog_actual_cli_requires_confirmation_before_credentials_output_or_t
     let report = finish(
         Command::new(env!("CARGO_BIN_EXE_model-package-layer-job"))
             .env_clear()
+            .envs(child_env::ca_certificates())
             .args(["update-catalog", "--manifest"])
             .arg(root.join("missing.json"))
             .args([
@@ -404,7 +407,7 @@ fn layer_publication_actual_embedded_tail_preserves_manifest_staging_catalog_pr_
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let helper = root.join("helper");
-    fs::write(&helper,br##"#!/bin/bash
+    fs::write(&helper,child_env::bash_script(br##"#!/bin/bash
 set -euo pipefail
 command="$1"; shift
 printf '%s\n' "$command" >> "$LOCAL_WORK_DIR/calls"
@@ -428,7 +431,7 @@ case "$command" in
  prepare-card) printf '%s' 'finite inert card' > "$output/README.md";;
  *) exit 64;;
 esac
-"##).unwrap();
+"##)).unwrap();
     fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
     let package = root.join("package");
     fs::create_dir(&package).unwrap();
@@ -437,9 +440,9 @@ esac
     let start = script.find("# Shared native publication entry").unwrap();
     let end = script[start..].find("# ─── Summary").unwrap() + start;
     let report = finish(
-        Command::new("/bin/bash")
+        Command::new(child_env::bash())
             .env_clear()
-            .env("PATH", "/usr/bin:/bin")
+            .env("PATH", child_env::path())
             .env("LAYER_JOB", &helper)
             .env("LOCAL_WORK_DIR", &root)
             .env("JOB_TMP_DIR", &root)
@@ -484,6 +487,7 @@ fn layer_workspace_actual_cli_formats_supplied_observations_and_refuses_overflow
         let report = finish(
             Command::new(env!("CARGO_BIN_EXE_model-package-layer-job"))
                 .env_clear()
+                .envs(child_env::ca_certificates())
                 .args([verb, "--bytes", bytes])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -507,6 +511,7 @@ fn layer_projector_actual_cli_refuses_invalid_selection_before_credential_or_out
         let report = finish(
             Command::new(env!("CARGO_BIN_EXE_model-package-layer-job"))
                 .env_clear()
+                .envs(child_env::ca_certificates())
                 .args([
                     "projector",
                     "--repo",
@@ -543,7 +548,8 @@ fn layer_projector_actual_embedded_loop_preserves_literal_files_and_private_cred
     let helper = root.join("inert-helper");
     fs::write(
         &helper,
-        r#"#!/bin/bash
+        child_env::bash_script(
+            r#"#!/bin/bash
 set -eu
 printf '%s\n' "$@" >> "$CALLS"
 test "$1" = projector
@@ -563,6 +569,7 @@ mkdir "$output"
 printf GGUFfixture > "$output/projector.gguf"
 printf '%s\n' "$output/projector.gguf"
 "#,
+        ),
     )
     .unwrap();
     fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
@@ -579,9 +586,9 @@ printf '%s\n' "$output/projector.gguf"
         let calls = workspace.join("calls");
         let args = workspace.join("args");
         let report = finish(
-            Command::new("/bin/bash")
+            Command::new(child_env::bash())
                 .env_clear()
-                .env("PATH", "/usr/bin:/bin")
+                .env("PATH", child_env::path())
                 .env("LAYER_JOB", &helper)
                 .env("JOB_TMP_DIR", &workspace)
                 .env("SOURCE_REPO", "fixture/model")

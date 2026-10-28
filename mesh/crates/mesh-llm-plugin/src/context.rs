@@ -58,6 +58,7 @@ pub struct PluginContext<'a> {
     pub(crate) plugin_id: String,
     /// What the host listed in its `InitializeRequest`.
     pub(crate) host_capabilities: Arc<[String]>,
+    pub(crate) inference_observation: crate::inference_observation::FeedSlot,
     pub(crate) _marker: PhantomData<&'a mut ()>,
 }
 
@@ -72,6 +73,7 @@ impl<'a> PluginContext<'a> {
             pending_host_responses,
             plugin_id,
             host_capabilities: Arc::from([]),
+            inference_observation: Default::default(),
             _marker: PhantomData,
         }
     }
@@ -82,8 +84,17 @@ impl<'a> PluginContext<'a> {
             pending_host_responses: self.pending_host_responses.clone(),
             plugin_id: self.plugin_id.clone(),
             host_capabilities: self.host_capabilities.clone(),
+            inference_observation: self.inference_observation.clone(),
             _marker: PhantomData,
         }
+    }
+
+    pub(crate) fn with_inference_observation(
+        mut self,
+        slot: crate::inference_observation::FeedSlot,
+    ) -> Self {
+        self.inference_observation = slot;
+        self
     }
 
     pub(crate) fn with_host_capabilities(mut self, host_capabilities: Arc<[String]>) -> Self {
@@ -371,6 +382,134 @@ impl<'a> PluginContext<'a> {
         }
     }
 
+    /// Publish `data`, a JSON object of at most
+    /// [`crate::plugin_status::MAX_DATA_BYTES`], as this plugin's snapshot in
+    /// `GET /api/status`; it replaces the previous one. The host shows it as
+    /// `ready` for `fresh_for` (0 for the default), then `stale`. See
+    /// [`crate::plugin_status`].
+    ///
+    /// Fails at once, without sending anything, if the host does not list
+    /// [`crate::host_capabilities::PLUGIN_STATUS`]. The host refuses a snapshot
+    /// from a plugin whose manifest does not declare `plugin_status`, one that
+    /// is too large or not an object, and one sent sooner than
+    /// [`crate::plugin_status::MIN_PUBLISH_INTERVAL`] after the last.
+    pub async fn publish_status<T: Serialize>(
+        &mut self,
+        data: &T,
+        fresh_for: std::time::Duration,
+    ) -> Result<proto::PublishPluginStatusResponse> {
+        let request = proto::PublishPluginStatusRequest {
+            data_json: serde_json::to_string(data)?,
+            fresh_for_ms: u64::try_from(fresh_for.as_millis()).unwrap_or(u64::MAX),
+        };
+        self.publish_status_within(request, PEER_BLOCK_REQUEST_TIMEOUT)
+            .await
+    }
+
+    /// Remove this plugin's snapshot from `GET /api/status`.
+    pub async fn withdraw_status(&mut self) -> Result<()> {
+        self.publish_status_within(
+            proto::PublishPluginStatusRequest::default(),
+            PEER_BLOCK_REQUEST_TIMEOUT,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn publish_status_within(
+        &mut self,
+        request: proto::PublishPluginStatusRequest,
+        timeout: std::time::Duration,
+    ) -> Result<proto::PublishPluginStatusResponse> {
+        if !self.host_supports(crate::host_capabilities::PLUGIN_STATUS) {
+            bail!(
+                "status contributions are unsupported by this host: it does not list the `{}` capability",
+                crate::host_capabilities::PLUGIN_STATUS
+            );
+        }
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut pending_guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
+
+        self.send_payload(
+            proto::envelope::Payload::PublishPluginStatusRequest(request),
+            request_id,
+        )
+        .await?;
+
+        let Ok(response) = tokio::time::timeout(timeout, rx).await else {
+            bail!("status publication: the host did not answer within {timeout:?}");
+        };
+        let response = response??;
+        pending_guard.disarm();
+        match response.payload {
+            Some(proto::envelope::Payload::PublishPluginStatusResponse(response)) => Ok(response),
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected status publication response"),
+        }
+    }
+
+    /// Subscribe to the local inference observation feed: a snapshot of what
+    /// this node is executing, then its events in order. A later call
+    /// replaces the subscription. See [`crate::inference_observation`].
+    ///
+    /// Fails at once, without sending anything, if the host does not list
+    /// [`crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION`]. The host
+    /// refuses a plugin whose manifest does not declare
+    /// `inference_observation`, or whose operator has not set
+    /// `allow_inference_observation = true` for it.
+    pub async fn subscribe_inference_observation(
+        &mut self,
+    ) -> Result<crate::inference_observation::InferenceObservationFeed> {
+        self.subscribe_inference_observation_within(PEER_BLOCK_REQUEST_TIMEOUT)
+            .await
+    }
+
+    async fn subscribe_inference_observation_within(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<crate::inference_observation::InferenceObservationFeed> {
+        if !self.host_supports(crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION) {
+            bail!(
+                "local inference observation is unsupported by this host: it does not list the `{}` capability",
+                crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION
+            );
+        }
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut pending_guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
+        // Open before asking, so a batch the host sends right after its answer
+        // is kept even if it is read first.
+        let feed = self.inference_observation.open();
+        let feed_guard = FeedCloseGuard(self.inference_observation.clone(), true);
+
+        self.send_payload(
+            proto::envelope::Payload::SubscribeInferenceObservationRequest(
+                proto::SubscribeInferenceObservationRequest {},
+            ),
+            request_id,
+        )
+        .await?;
+
+        let Ok(response) = tokio::time::timeout(timeout, rx).await else {
+            bail!("inference observation subscription: the host did not answer within {timeout:?}");
+        };
+        let response = response??;
+        pending_guard.disarm();
+        match response.payload {
+            Some(proto::envelope::Payload::SubscribeInferenceObservationResponse(response)) => {
+                feed_guard.disarm();
+                Ok(feed.start(response.snapshot.unwrap_or_default()))
+            }
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected inference observation response"),
+        }
+    }
+
     pub async fn connect_mesh_stream(
         &mut self,
         request: proto::OpenMeshStreamRequest,
@@ -401,6 +540,23 @@ impl<'a> PluginContext<'a> {
             })
             .await
             .map_err(|_| anyhow::anyhow!("plugin host connection is closed"))
+    }
+}
+
+/// Closes a subscription the host did not grant, whatever the way out.
+struct FeedCloseGuard(crate::inference_observation::FeedSlot, bool);
+
+impl FeedCloseGuard {
+    fn disarm(mut self) {
+        self.1 = false;
+    }
+}
+
+impl Drop for FeedCloseGuard {
+    fn drop(&mut self) {
+        if self.1 {
+            self.0.close();
+        }
     }
 }
 
@@ -443,6 +599,7 @@ pub(crate) fn drain_pending_host_responses(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn context(
         host_capabilities: &[&str],
@@ -619,5 +776,198 @@ mod tests {
         assert_eq!(response.node_id, "ab".repeat(32));
         assert_eq!(response.binding_signature, vec![2; 64]);
         host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_status_publication_to_an_older_host_fails_at_once() {
+        let (mut context, mut outbound_rx, pending) = context(&[]);
+        let error = context
+            .publish_status(&serde_json::json!({"watts": 8.2}), Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("unsupported by this host"),
+            "{error}"
+        );
+        assert!(outbound_rx.try_recv().is_err(), "nothing was sent");
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_status_publication_the_host_never_answers_times_out() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::PLUGIN_STATUS]);
+        let error = context
+            .publish_status_within(
+                proto::PublishPluginStatusRequest {
+                    data_json: "{}".into(),
+                    fresh_for_ms: 0,
+                },
+                Duration::from_millis(20),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("did not answer"), "{error}");
+        assert!(outbound_rx.try_recv().is_ok(), "the publication was sent");
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_status_publication_sends_the_data_and_returns_the_host_answer() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::PLUGIN_STATUS]);
+        let host = tokio::spawn(async move {
+            let request = outbound_rx.recv().await.unwrap();
+            let Some(proto::envelope::Payload::PublishPluginStatusRequest(publication)) =
+                request.payload
+            else {
+                panic!("expected a status publication");
+            };
+            assert_eq!(publication.data_json, r#"{"watts":8.2}"#);
+            assert_eq!(publication.fresh_for_ms, 5_000);
+            let sender = remove_pending_host_response(&pending, request.request_id).unwrap();
+            sender
+                .send(Ok(proto::Envelope {
+                    request_id: request.request_id,
+                    payload: Some(proto::envelope::Payload::PublishPluginStatusResponse(
+                        proto::PublishPluginStatusResponse {
+                            received_at_unix_ms: 1_000,
+                            fresh_until_unix_ms: 6_000,
+                        },
+                    )),
+                    ..Default::default()
+                }))
+                .unwrap();
+        });
+        let response = context
+            .publish_status(&serde_json::json!({"watts": 8.2}), Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(response.fresh_until_unix_ms, 6_000);
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_withdrawal_sends_empty_data() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::PLUGIN_STATUS]);
+        let host = tokio::spawn(async move {
+            let request = outbound_rx.recv().await.unwrap();
+            assert!(matches!(
+                request.payload,
+                Some(proto::envelope::Payload::PublishPluginStatusRequest(ref publication))
+                    if publication.data_json.is_empty()
+            ));
+            let sender = remove_pending_host_response(&pending, request.request_id).unwrap();
+            sender
+                .send(Ok(proto::Envelope {
+                    request_id: request.request_id,
+                    payload: Some(proto::envelope::Payload::PublishPluginStatusResponse(
+                        proto::PublishPluginStatusResponse::default(),
+                    )),
+                    ..Default::default()
+                }))
+                .unwrap();
+        });
+        context.withdraw_status().await.unwrap();
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_observation_subscription_to_an_older_host_fails_at_once() {
+        let (mut context, mut outbound_rx, pending) = context(&[]);
+        let error = context
+            .subscribe_inference_observation()
+            .await
+            .err()
+            .expect("refused");
+        assert!(
+            error.to_string().contains("unsupported by this host"),
+            "{error}"
+        );
+        assert!(outbound_rx.try_recv().is_err(), "nothing was sent");
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_observation_subscription_keeps_the_batches_sent_with_its_answer() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION]);
+        let slot = context.inference_observation.clone();
+        let host = tokio::spawn(async move {
+            let request = outbound_rx.recv().await.unwrap();
+            assert!(matches!(
+                request.payload,
+                Some(proto::envelope::Payload::SubscribeInferenceObservationRequest(_))
+            ));
+            // The first batch is read before the answer reaches the plugin.
+            slot.deliver(proto::InferenceObservationBatch {
+                host_generation: 5,
+                watermark_unix_ns: 99,
+                ..Default::default()
+            });
+            remove_pending_host_response(&pending, request.request_id)
+                .unwrap()
+                .send(Ok(proto::Envelope {
+                    request_id: request.request_id,
+                    payload: Some(
+                        proto::envelope::Payload::SubscribeInferenceObservationResponse(
+                            proto::SubscribeInferenceObservationResponse {
+                                snapshot: Some(proto::InferenceObservationSnapshot {
+                                    host_generation: 5,
+                                    next_sequence: 1,
+                                    ..Default::default()
+                                }),
+                            },
+                        ),
+                    ),
+                    ..Default::default()
+                }))
+                .unwrap();
+        });
+        let mut feed = context.subscribe_inference_observation().await.unwrap();
+        host.await.unwrap();
+        assert_eq!(feed.snapshot().host_generation, 5);
+        let Some(crate::inference_observation::InferenceObservationItem::Batch(batch)) =
+            feed.next().await
+        else {
+            panic!("expected the early batch");
+        };
+        assert_eq!(batch.watermark_unix_ns, 99);
+    }
+
+    #[tokio::test]
+    async fn a_refused_observation_subscription_receives_nothing() {
+        let (mut context, mut outbound_rx, pending) =
+            context(&[crate::host_capabilities::LOCAL_INFERENCE_OBSERVATION]);
+        let slot = context.inference_observation.clone();
+        let host = tokio::spawn(async move {
+            let request = outbound_rx.recv().await.unwrap();
+            remove_pending_host_response(&pending, request.request_id)
+                .unwrap()
+                .send(Ok(proto::Envelope {
+                    request_id: request.request_id,
+                    payload: Some(proto::envelope::Payload::ErrorResponse(
+                        proto::ErrorResponse {
+                            message: "not granted".into(),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                }))
+                .unwrap();
+            slot
+        });
+        let error = context
+            .subscribe_inference_observation()
+            .await
+            .err()
+            .expect("refused");
+        assert!(error.to_string().contains("not granted"), "{error}");
+        let slot = host.await.unwrap();
+        // A batch arriving now has nowhere to go.
+        let mut probe = slot.open().start(Default::default());
+        slot.close();
+        assert!(probe.next().await.is_none());
     }
 }

@@ -9,6 +9,7 @@ mod event_cutover;
 mod inventory;
 use mesh_llm_control_api::status::metrics;
 mod model_labels;
+mod plugin_status;
 #[cfg(test)]
 mod plugin_tests;
 mod plugins;
@@ -496,6 +497,7 @@ pub(crate) mod tests {
             recent_mesh_rejections: vec![],
             plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
+            plugin_status: Default::default(),
         };
 
         assert_eq!(

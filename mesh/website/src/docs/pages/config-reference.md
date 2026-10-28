@@ -409,6 +409,7 @@ sampling at the backend when it selects mode `1` or `2`.
 | `plugin.<name>.web_ui_primary_tab` | boolean | unset (`false`; primary placement stays off until explicitly enabled) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.allow_peer_blocks` | boolean | unset (`false`; the plugin's peer block requests are refused until explicitly enabled) | plugin entry | applies dynamically | wired | none |
 | `plugin.<name>.operation_bindings` | array of objects | empty; operator-fixed provider/profile, setup JSON and operation allowlist | plugin entry | plugin process restart | wired | none |
+| `plugin.<name>.allow_inference_observation` | boolean | unset (`false`; the plugin's local inference observation subscription is refused until explicitly enabled) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.openai_exchange_grant.endpoints` | array of enum | absent grant denies access | plugin entry | applies dynamically | wired | none |
 | `plugin.<name>.openai_exchange_grant.phases` | array of enum | absent grant denies access | plugin entry | applies dynamically | wired | none |
 | `plugin.<name>.openai_exchange_grant.request_body` | boolean | absent grant denies access | plugin entry | applies dynamically | wired | none |

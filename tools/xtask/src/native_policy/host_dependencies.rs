@@ -89,11 +89,12 @@ pub(super) fn run(
     })
 }
 
-/// `Path.name` of a displayed path.
+/// `Path.name` of a displayed path. Windows displays paths with `\\`
+/// separators, so both separators delimit the final component.
 fn file_name(shown: &str) -> &str {
     match shown {
         "." | "/" => "",
-        _ => shown.rsplit('/').next().unwrap_or(shown),
+        _ => shown.rsplit(['/', '\\']).next().unwrap_or(shown),
     }
 }
 

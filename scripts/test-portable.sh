@@ -52,8 +52,10 @@ script_and_sdk_tests() {
     fi
 }
 
-check_names=(ui-lint ui-typecheck-build ui-unit website-build script-sdk)
-check_commands=(ui_lint ui_typecheck_and_build ui_unit_tests website_build script_and_sdk_tests)
+# SDK contracts and website CLI documentation both invoke Cargo. Join the
+# parallel UI/SDK phase before starting the website build.
+check_names=(ui-lint ui-typecheck-build ui-unit script-sdk)
+check_commands=(ui_lint ui_typecheck_and_build ui_unit_tests script_and_sdk_tests)
 check_pids=()
 
 for i in "${!check_names[@]}"; do
@@ -71,6 +73,14 @@ for i in "${!check_names[@]}"; do
     fi
     sed "s/^/[${check_names[$i]}] /" "$check_logs/${check_names[$i]}.log"
 done
+
+if (website_build) >"$check_logs/website-build.log" 2>&1; then
+    echo "PASS website-build"
+else
+    echo "FAIL website-build"
+    check_failed=1
+fi
+sed 's/^/[website-build] /' "$check_logs/website-build.log"
 
 if [[ "$check_failed" != "0" ]]; then
     exit 1

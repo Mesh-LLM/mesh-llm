@@ -37,12 +37,18 @@ sequenceDiagram
     S0-->>D: PredictedToken
 ```
 
-Activation payloads dominate the wire path. Protocol generation 11 carries a
+Activation payloads dominate the wire path. Protocol generation 11 introduced a
 versioned multipart directory with identity, dtype, dimensions, strides, and a
 token axis for every graph-frontier value. The selected frame codec applies to
 F32 parts; other typed parts remain byte-exact.
 
-Generation 10 requires mesh-subprotocol control, list-valued status responses,
+Current generation 12 adds unsampled `PrefillReadout` requests and bounded
+`TokenScores` replies. Only the terminal stage reads selected token log
+probabilities; full vocabulary logits stay in its native runtime. The scores
+return along the ordered stage chain, independently of sampled-token replies.
+All participants must advertise `stage-generation-12`; older peers fail closed.
+
+Admission requires mesh-subprotocol control, list-valued status responses,
 strict local-content identity, canonical stage-admission descriptors, and stale
 verify-window discard as one fail-closed capability bundle. Participants validate
 the descriptor while loading and echo it when ready; any package, plan, range,

@@ -29,6 +29,7 @@ pub fn send_reply_ack(mut writer: impl Write) -> io::Result<()> {
     send_reply_ack_with_stats(&mut writer, StageReplyStats::default())
 }
 
+/// Write an acknowledgement carrying accumulated stage execution statistics.
 pub fn send_reply_ack_with_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
     send_reply_message(
         &mut writer,
@@ -36,6 +37,7 @@ pub fn send_reply_ack_with_stats(mut writer: impl Write, stats: StageReplyStats)
             kind: WireReplyKind::Ack,
             predicted: 0,
             predicted_tokens: Vec::new(),
+            log_probabilities: Vec::new(),
             native_mtp_draft: None,
             window: StageReplyWindow::default(),
             stats,
@@ -131,9 +133,22 @@ pub fn send_reply_predicted_tokens_with_window_and_stats(
     write_reply_stats(&mut writer, stats)
 }
 
+/// Serialize a typed stage reply, including its bounded optional readout scores.
 pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Result<()> {
     if reply.predicted_tokens.len() > MAX_STAGE_PREDICTED_TOKENS {
         return Err(invalid_input("too many predicted tokens"));
+    }
+    if reply.kind == WireReplyKind::TokenScores {
+        if !reply.predicted_tokens.is_empty()
+            || reply.native_mtp_draft.is_some()
+            || reply.predicted != -1
+        {
+            return Err(invalid_input(
+                "readout reply cannot contain generated tokens",
+            ));
+        }
+    } else if !reply.log_probabilities.is_empty() {
+        return Err(invalid_input("scores require a readout reply"));
     }
     write_reply_header(
         &mut writer,
@@ -143,9 +158,14 @@ pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Res
         reply.window,
     )?;
     write_native_mtp_draft(&mut writer, reply.native_mtp_draft.as_ref())?;
-    write_reply_stats(&mut writer, reply.stats)
+    write_reply_stats(&mut writer, reply.stats)?;
+    if reply.kind == WireReplyKind::TokenScores {
+        super::readout::write_scores(&mut writer, &reply.log_probabilities)?;
+    }
+    Ok(())
 }
 
+/// Decode and validate a typed reply before exposing its payload to the caller.
 pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
     let kind = WireReplyKind::try_from(read_i32(&mut reader)?)?;
     let predicted = read_i32(&mut reader)?;
@@ -162,11 +182,20 @@ pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
     let window = read_reply_window(&mut reader)?;
     let native_mtp_draft = read_native_mtp_draft(&mut reader)?;
     let stats = read_reply_stats(&mut reader)?;
+    let log_probabilities = if kind == WireReplyKind::TokenScores {
+        if !predicted_tokens.is_empty() || native_mtp_draft.is_some() || predicted != -1 {
+            return Err(invalid_data("readout reply contains generated tokens"));
+        }
+        super::readout::read_scores(&mut reader)?
+    } else {
+        Vec::new()
+    };
     Ok(StageReply {
         kind,
         predicted,
         predicted_tokens,
         native_mtp_draft,
+        log_probabilities,
         window,
         stats,
     })
@@ -240,7 +269,20 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNative
     }
 }
 
+/// Serialize a validated current-generation stage message and its sidebands.
 pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -> io::Result<()> {
+    if message.kind == WireMessageKind::PrefillReadout {
+        if message.sampling.is_some()
+            || message.chat_sampling_metadata.is_some()
+            || message.pos_start < 0
+            || message.token_count <= 0
+            || message.tokens.len() != message.token_count as usize
+        {
+            return Err(invalid_input("invalid causal readout message"));
+        }
+    } else if !message.readout_tokens.is_empty() {
+        return Err(invalid_input("selected tokens require a readout message"));
+    }
     // Wire v4 fixed prefix, little-endian:
     // kind, pos_start, token_count, token_sideband_count, position_sideband_count (5 x i32);
     // StageStateHeader (10 x i32); activation wire byte count (1 x i32);
@@ -320,6 +362,9 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
         writer.write_all(bytes)?;
     }
 
+    if message.kind == WireMessageKind::PrefillReadout {
+        super::readout::write_tokens(&mut writer, &message.readout_tokens)?;
+    }
     if message.kind == WireMessageKind::StateImport {
         let raw_byte_count = usize::try_from(message.token_count)
             .map_err(|_| invalid_input("state import raw byte count mismatch"))?;
@@ -362,6 +407,7 @@ pub fn read_stage_message_for_codec_policy(
     read_stage_message_inner(reader, Some((configured_codec, policy)))
 }
 
+/// Decode a stage message with bounded payloads and kind-specific validation.
 fn read_stage_message_inner(
     mut reader: impl Read,
     expected_codec: Option<(StageActivationCodec, StageActivationCodecPolicy)>,
@@ -423,6 +469,19 @@ fn read_stage_message_inner(
     } else {
         None
     };
+    let readout_tokens = if kind == WireMessageKind::PrefillReadout {
+        if sampling.is_some()
+            || chat_sampling_metadata.is_some()
+            || pos_start < 0
+            || token_count <= 0
+            || token_sideband_count != token_count
+        {
+            return Err(invalid_data("invalid causal readout message"));
+        }
+        super::readout::read_tokens(&mut reader)?
+    } else {
+        Vec::new()
+    };
     if kind == WireMessageKind::Stop {
         return Ok(StageWireMessage {
             kind,
@@ -436,6 +495,7 @@ fn read_stage_message_inner(
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         });
     }
@@ -476,6 +536,7 @@ fn read_stage_message_inner(
             positions: Vec::new(),
             activation: Vec::new(),
             raw_bytes,
+            readout_tokens,
         });
     }
 
@@ -504,6 +565,7 @@ fn read_stage_message_inner(
         tokens,
         positions,
         activation,
+        readout_tokens,
         raw_bytes: Vec::new(),
     })
 }

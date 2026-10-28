@@ -103,7 +103,11 @@ fn startup_virtual_model_lookup_rejects_concrete_collisions() {
     );
 }
 
+// The tests that check everything `resolve_plugins` returns are serial: it
+// also lists the store `MESH_LLM_PLUGIN_DIR` names, and the serial plugin
+// store tests point that variable at stores of their own while they run.
 #[test]
+#[serial_test::serial]
 fn resolves_default_builtin_plugins() {
     let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
     assert_eq!(resolved.externals.len(), 1);
@@ -121,6 +125,7 @@ fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         allow_peer_blocks: None,
+        allow_inference_observation: None,
         openai_exchange_grant: None,
         command: None,
         args: Vec::new(),
@@ -160,6 +165,7 @@ async fn builtin_plugin_without_arguments_refuses_them() {
 }
 
 #[test]
+#[serial_test::serial]
 fn retired_builtin_wallet_stanza_is_ignored() {
     // The built-in Lexe wallet was removed; an old stanza must not break
     // startup, whatever it sets, and registers nothing.
@@ -185,6 +191,7 @@ fn retired_builtin_wallet_stanza_is_ignored() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_wallet_plugin_is_an_ordinary_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -194,6 +201,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("/opt/wallets/lexe-wallet".into()),
             args: Vec::new(),
@@ -211,6 +219,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_can_be_configured() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -220,6 +229,7 @@ fn external_plugin_can_be_configured() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("mesh-llm-plugin-demo".into()),
             args: vec!["--stdio".into()],
@@ -270,6 +280,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
 }
 
 #[test]
+#[serial_test::serial]
 fn blobstore_can_be_disabled() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -279,6 +290,7 @@ fn blobstore_can_be_disabled() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -295,6 +307,7 @@ fn blobstore_can_be_disabled() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_can_be_enabled_with_url() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -304,6 +317,7 @@ fn external_plugin_can_be_enabled_with_url() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
@@ -334,6 +348,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
@@ -360,6 +375,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -382,6 +398,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_can_be_enabled_with_command_args() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -391,6 +408,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("/opt/plugins/endpoint-plugin".into()),
             args: vec!["--verbose".into()],
@@ -411,6 +429,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_ignores_disabled_entry_without_install() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -420,6 +439,7 @@ fn external_plugin_ignores_disabled_entry_without_install() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -436,6 +456,7 @@ fn external_plugin_ignores_disabled_entry_without_install() {
 }
 
 #[test]
+#[serial_test::serial]
 fn default_builtins_are_resolved_on_public_meshes() {
     let resolved = resolve_plugins(
         &MeshConfig::default(),
@@ -450,6 +471,7 @@ fn default_builtins_are_resolved_on_public_meshes() {
 }
 
 #[test]
+#[serial_test::serial]
 fn resolves_external_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -459,6 +481,7 @@ fn resolves_external_plugin() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("/tmp/demo".into()),
             args: vec!["--flag".into()],
