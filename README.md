@@ -283,7 +283,7 @@ binary to `invalid`, but default startup still allows it.
 
 Native Windows CUDA works, including on CUDA 13.x drivers: GPU detection (`mesh-llm gpus`) and full-speed CUDA inference have been verified on driver 610.74 (CUDA UMD 13.3) with an RTX 4070 Ti. The earlier advice to switch to WSL2 when `mesh-llm` reported `0 GPUs` on CUDA 13 drivers predates the cuda12-runtime compatibility fix ([#1127](https://github.com/Mesh-LLM/mesh-llm/issues/1127)) and no longer applies to current releases.
 
-The stable release works natively: the installer puts the product bundle and its CPU runtime in place, then add the CUDA runtime for your release and serve. No prerelease and no `PATH` change are needed:
+The stable release works natively: the installer puts the product bundle and its CPU runtime in place, then add the CUDA runtime for your release and serve. No prerelease is needed, and no manual `PATH` edit for the runtime's DLLs:
 
 ```powershell
 irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
