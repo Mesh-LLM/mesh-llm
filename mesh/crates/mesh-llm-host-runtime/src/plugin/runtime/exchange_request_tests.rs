@@ -92,3 +92,64 @@ async fn cancelled_exchange_removes_only_its_pending_request() {
     drop(requests);
     assert_running_without_pending(&plugin).await;
 }
+
+#[tokio::test]
+async fn cancelled_control_request_cleans_pending_without_stopping_provider() {
+    let (plugin, mut outbound) = running_observer().await;
+    let (generation, sender, pending) = plugin.runtime_handles().await.unwrap();
+    let caller = plugin.clone();
+    let task = tokio::spawn(async move {
+        caller
+            .request_once(
+                generation,
+                sender,
+                pending,
+                super::proto::envelope::Payload::HealthRequest(super::proto::HealthRequest {}),
+                None,
+            )
+            .await
+    });
+    outbound.recv().await.unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_running_without_pending(&plugin).await;
+}
+
+#[tokio::test]
+async fn queued_control_request_has_no_pending_entry_before_admission() {
+    let (plugin, _outbound) = running_observer().await;
+    let (generation, sender, pending) = plugin.runtime_handles().await.unwrap();
+    for _ in 0..4 {
+        sender
+            .send(super::proto::Envelope::default())
+            .await
+            .unwrap();
+    }
+    let caller = plugin.clone();
+    let requests = pending.clone();
+    let task = tokio::spawn(async move {
+        caller
+            .request_once(
+                generation,
+                sender,
+                requests,
+                super::proto::envelope::Payload::HealthRequest(super::proto::HealthRequest {}),
+                None,
+            )
+            .await
+    });
+    // A bounded outer timeout proves the call cannot complete while saturated.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), async {
+            while !task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_err()
+    );
+    assert!(pending.lock().await.is_empty());
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_running_without_pending(&plugin).await;
+}
