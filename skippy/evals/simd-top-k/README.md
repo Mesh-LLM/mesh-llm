@@ -63,3 +63,7 @@ whole five-block controller, exact paired constant-ratio confidence bounds,
 failure gates, and rejection of missing/duplicate cells, unknown thermal state,
 changed ranges/orders, malformed timings and divergent token decisions. Their
 synthetic times are test data and never enter MLflow performance metrics.
+Variable ratios also have an independent closed-form check: five case factors
+and two doubled blocks give known case-balanced geometric means and binomial
+bootstrap quantiles. This checks aggregation and interval direction without
+copying the auditor's random-number or reduction implementation.

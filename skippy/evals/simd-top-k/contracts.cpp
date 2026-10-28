@@ -1,6 +1,7 @@
 #include "json.hpp"
 
 #include <cerrno>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -105,6 +106,35 @@ static void audit_contracts(const std::string & auditor, const fs::path & root, 
         for (const char * field : {"ratio", "lower_95", "upper_95"}) {
             const double actual = row.at("confidence").at(field);
             check(actual > expected - 1e-12 && actual < expected + 1e-12, "paired bootstrap changed a constant ratio");
+        }
+    }
+    auto varied = original;
+    for (auto & row : varied) {
+        if (row.at("arm") != "D") { continue; }
+        int factor = 1;
+        for (const auto & input : fixtures()) {
+            if (input.at("name") == row.at("case")) { break; }
+            ++factor;
+        }
+        const int multiplier = row.at("block").get<int>() >= 3 ? 2 : 1;
+        for (auto & time : row["times_ns"]) { time = 1000 * factor * multiplier; }
+    }
+    check(audit(varied) == 0, "valid variable-ratio rows rejected");
+    std::ifstream(output_path) >> accepted;
+    for (const auto & row : accepted.at("aggregate")) {
+        if (row.at("comparison") != "DC" && row.at("comparison") != "DB") { continue; }
+        // Independent binomial result: two of five blocks double each case's
+        // ratio. For five bootstrap draws, the 5/95% quantiles have 0/4 doubles.
+        const double base = std::pow(120.0, 0.2);
+        const double point = base * std::pow(2.0, 0.4);
+        const double upper = base * std::pow(2.0, 0.8);
+        const bool decode = row.at("scope") == "teacher-forced-native-decode";
+        for (const auto & expected : std::vector<std::pair<std::string, double>>{
+                 {"ratio", decode ? 1.0 / point : point},
+                 {"lower_95", decode ? 1.0 / upper : base},
+                 {"upper_95", decode ? 1.0 / base : upper}}) {
+            const double actual = row.at("confidence").at(expected.first);
+            check(std::abs(actual - expected.second) < 1e-12, "variable-ratio case-balanced bootstrap differs from binomial result");
         }
     }
     for (int mutation = 0; mutation < 8; ++mutation) {
