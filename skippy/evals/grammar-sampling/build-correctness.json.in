@@ -46,7 +46,7 @@
       "version": "adhoc",
       "trace": {
         "kind": "synthetic",
-        "ref": "grammar-sampling-correctness-r3"
+        "ref": "grammar-sampling-correctness-r4"
       },
       "seed": 73,
       "warmup_requests": 0,
@@ -64,7 +64,7 @@
     "labels": {
       "campaign": "max-grammar-sampling-abc-20261028",
       "phase": "build-correctness",
-      "protocol": "3"
+      "protocol": "4"
     }
   }
 }

@@ -45,3 +45,16 @@ source repairs require new immutable execution identities and fresh measurements
 The input corpus is entirely synthetic, authored for this campaign under the
 repository's license. No user documents, credentials or original Instruments
 trace are included. Do not run timing or inference on the developer's machine.
+
+Revision 3 completed all 30 qualification blocks and failed the sampler's 1% gate.
+It reduced sampling latency by 83.7% versus existing Skippy but remained 14.5%
+slower than llama.cpp. A JY/M6 Instruments profile and disassembly localized the
+remaining cost to a reference-capturing candidate-fill lambda: it reloaded the
+vocabulary size per token and compiled as a scalar loop. The same-binary reference
+control and sampled CPU core classes did not explain the gap.
+
+Revision 4 replaces that lambda with a helper receiving loop inputs by value. It
+requires fresh correctness checks, the existing five-block development screen,
+and 30 new qualification blocks with unchanged gates. Earlier timings cannot
+qualify the revised source. Revision 2's planned screen was stopped incomplete
+before outcome inspection; it contributed no accepted performance result.

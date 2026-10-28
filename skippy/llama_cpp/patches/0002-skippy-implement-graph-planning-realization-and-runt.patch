@@ -1,4 +1,4 @@
-From 173f92dccc746ca283ae969f5f53aaaf4aed9834 Mon Sep 17 00:00:00 2001
+From 42afe01b0e9f6871f272e11b96845cfe544b47b0 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -10,7 +10,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/activation_layout.cpp        |  156 +++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
- src/skippy/chat_sampling.cpp            |  134 +++
+ src/skippy/chat_sampling.cpp            |  137 +++
  src/skippy/chat_sampling.h              |    6 +
  src/skippy/devices.cpp                  |  106 ++
  src/skippy/environment.h                |   48 +
@@ -63,7 +63,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  372 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 59 files changed, 16123 insertions(+)
+ 59 files changed, 16126 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -1585,10 +1585,10 @@ index 000000000..7c9aae114
 +        std::string & error);
 diff --git a/src/skippy/chat_sampling.cpp b/src/skippy/chat_sampling.cpp
 new file mode 100644
-index 000000000..58094f98d
+index 000000000..88ebd7e05
 --- /dev/null
 +++ b/src/skippy/chat_sampling.cpp
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,137 @@
 +#include "skippy/chat_sampling.h"
 +#include "skippy/runtime_types.h"
 +#include "skippy/runtime_support.h"
@@ -1598,6 +1598,17 @@ index 000000000..58094f98d
 +#include <cmath>
 +#include <exception>
 +#include <vector>
++
++static llama_token_data_array skippy_chat_candidates_from_logits(
++        std::vector<llama_token_data> & candidates,
++        const float * logits,
++        int32_t n_vocab) {
++    candidates.resize(static_cast<size_t>(n_vocab));
++    for (llama_token token = 0; token < n_vocab; ++token) {
++        candidates[token] = { token, logits[token], 0.0f };
++    }
++    return {candidates.data(), candidates.size(), -1, false};
++}
 +
 +static bool skippy_chat_grammar_should_apply(const skippy_session * session) {
 +    if (session == nullptr || session->grammar_sampler == nullptr) {
@@ -1667,14 +1678,6 @@ index 000000000..58094f98d
 +        return skippy_greedy_sample_ith(session, logits_index);
 +    }
 +
-+    auto & candidates = session->sampling_candidates;
-+    candidates.resize(static_cast<size_t>(n_vocab));
-+    auto reset_logits = [&]() {
-+        for (llama_token token = 0; token < n_vocab; ++token) {
-+            candidates[token] = { token, logits[token], 0.0f };
-+        }
-+        return llama_token_data_array{candidates.data(), candidates.size(), -1, false};
-+    };
 +    auto apply_grammar = [&](llama_token_data_array & values) {
 +        try {
 +            llama_sampler_apply(session->grammar_sampler, &values);
@@ -1684,7 +1687,7 @@ index 000000000..58094f98d
 +            skippy_disable_chat_grammar_after_exception(session, "apply", nullptr);
 +        }
 +    };
-+    auto cur = reset_logits();
++    auto cur = skippy_chat_candidates_from_logits(session->sampling_candidates, logits, n_vocab);
 +    if (session->reasoning_budget_sampler != nullptr) {
 +        llama_sampler_apply(session->reasoning_budget_sampler, &cur);
 +    }
@@ -1709,7 +1712,7 @@ index 000000000..58094f98d
 +
 +    // Sampling mutates both the candidate set and RNG. Reload the original
 +    // logits and repeat the budget/grammar/chain order used by upstream fallback.
-+    cur = reset_logits();
++    cur = skippy_chat_candidates_from_logits(session->sampling_candidates, logits, n_vocab);
 +    if (session->reasoning_budget_sampler != nullptr) {
 +        llama_sampler_apply(session->reasoning_budget_sampler, &cur);
 +    }

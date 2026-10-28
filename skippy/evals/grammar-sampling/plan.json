@@ -1,8 +1,8 @@
 {
   "campaign": "max-grammar-sampling-abc-20261028",
-  "protocol_revision": 3,
+  "protocol_revision": 4,
   "question": "Can Skippy avoid full-vocabulary grammar filtering on valid proposals while matching llama.cpp performance and tool-call correctness?",
-  "proposal": "Use upstream's sampling-first, single-token grammar validation and grammar-first fallback in Skippy's native chat sampler. Preserve lazy triggers, reasoning-budget handling, accepted-token history and MTP rejection recovery. Reuse candidate storage where compatible; do not disable grammar or change Max tool policy.",
+  "proposal": "Use upstream's sampling-first, single-token grammar validation and grammar-first fallback in Skippy's native chat sampler. Preserve lazy triggers, reasoning-budget handling, accepted-token history and MTP rejection recovery. Initialize the reused candidate array in a helper with by-value loop inputs, avoiding the reference-capturing lambda that prevented M6 vectorization. Do not disable grammar or change Max tool policy.",
   "execution": {
     "measurement_location": "JY only",
     "local_measurements_permitted": false,
@@ -14,6 +14,7 @@
     "phases": [
       "verified-M6-probe-reuse",
       "build-and-correctness",
+      "development-screen",
       "qualification",
       "independent-audit-and-MLflow-readback"
     ],
@@ -96,7 +97,7 @@
     "Unicode_boundary": "The Unicode case includes a rare valid private-use code point. Admission verifies that at least one token piece begins with a UTF-8 continuation byte; a case name alone is not evidence of a split code point."
   },
   "statistics": {
-    "development_paired_blocks": 0,
+    "development_paired_blocks": 5,
     "qualification_paired_blocks": 30,
     "warmup_replays_per_arm_case": 3,
     "order": "Balanced Latin-square A/B/C order, fixed before execution; all three arms sequentially in each block",
@@ -114,7 +115,8 @@
     "decode_repetitions_per_cell": 1,
     "warmup_definition": "Three discarded complete blocks before each measurement phase, with the same per-cell repetition counts.",
     "development_overlap": "All five synthetic cases are shared between screening and qualification. The 30 qualification timing blocks are fresh; do not describe repeats as independent dataset samples.",
-    "development_reference": "Revision 2 provides a five-block diagnostic screen. Revision 3 goes directly from its fresh verified build/correctness to 30 new qualification blocks; no revision-2 speed is reused and no speed gate is relaxed."
+    "development_reference": "Revision 2's planned five-block screen was stopped incomplete before outcome inspection. Revision 3 completed 30 fresh blocks and failed the sampler gate despite improving existing Skippy. Revision 4 requires its own verified build/correctness and five-block screen before 30 new qualification blocks. No earlier timing is reused.",
+    "screen_advancement": "The five-block audit must pass within_one_percent and improves_existing. qualified_speed remains false until a separate 30-block qualification passes. Every original correctness, source, hardware, confidence and 1% gate remains mandatory."
   },
   "qualification": {
     "correctness": "All grammar/lazy-trigger/Unicode/fallback/EOS tests and MTP acceptance, rejection and checkpoint cleanup must pass. B/C seeded decision/state comparisons must pass under the admitted matching sampler configuration; any intentional semantic difference requires a new protocol revision before measurement.",
@@ -130,7 +132,8 @@
     "Latest upstream beyond the frozen baseline is outside the initial comparison",
     "The user selected Qwen3.5-9B Q4 for the 24 GB JY M6. This does not qualify 35B decode throughput.",
     "The original M1 Ultra job was only a completed model/toolchain probe; it contributes no performance evidence.",
-    "Revision 2 is diagnostic screening against the installed 2c82637 source. Final revision 3 qualifies current main 3947de0 plus the candidate, with fresh builds, correctness, screening and timing; do not mix the revisions.",
-    "Revision 2 used the reference sampler default perf counters. Revision 3 disables counters in all arms before qualification; no revision-2 performance is qualification evidence."
+    "Revision 2 was incomplete diagnostic screening against the installed 2c82637 source. Revisions 3 and 4 use the frozen 3947de0 baseline. Do not mix source revisions or reuse earlier qualification speed.",
+    "Revision 2 used the reference sampler default perf counters. Revisions 3 and 4 disable counters in all arms; no revision-2 performance is qualification evidence.",
+    "Revision 3 reduced aggregate sampler latency by 83.7% versus existing Skippy but remained 14.5% slower than llama.cpp. Its verified failed-gate result is retained in MLflow run f316392f8bf240bdbb906dbb5719a7b3. Instruments localized the residual to Skippy candidate initialization, whose scalar loop reloaded the captured vocabulary size per token while the reference used vector instructions."
   ]
 }
