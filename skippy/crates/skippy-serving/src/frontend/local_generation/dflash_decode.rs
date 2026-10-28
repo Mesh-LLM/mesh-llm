@@ -16,7 +16,8 @@ use crate::frontend::speculative::InferenceSpeculativeStats;
 use crate::frontend::util::openai_backend_error;
 
 use super::dflash_block_size::{
-    Acceptance, BlockCost, adaptive_enabled, choose_block, record_shared, shared_model,
+    Acceptance, BlockCost, adaptive_enabled, choose_block, record_shared, record_shared_serial,
+    shared_model,
 };
 use super::token_generation::DecodeState;
 
@@ -57,6 +58,9 @@ struct AdaptiveBlocks {
     acceptance: Acceptance,
     windows: u64,
     serial_since_probe: usize,
+    /// Set when this token was left to a serial step, so the next call can
+    /// time it.
+    serial_started: Option<Instant>,
 }
 
 impl AdaptiveBlocks {
@@ -65,14 +69,38 @@ impl AdaptiveBlocks {
         Self {
             draft_model_path,
             cost: shared.cost,
-            acceptance: shared.acceptance,
+            acceptance: shared.acceptance.capped(),
             windows: 0,
             serial_since_probe: 0,
+            serial_started: None,
         }
+    }
+
+    /// Times the serial step that ran since the previous call, if one did.
+    fn finish_serial_step(&mut self) {
+        let Some(started) = self.serial_started.take() else {
+            return;
+        };
+        let micros = started.elapsed().as_secs_f64() * 1_000_000.0;
+        self.cost.observe_serial(micros);
+        record_shared_serial(&self.draft_model_path, micros);
     }
 
     /// Drafts for the next window, or 0 to decode this token serially.
     fn next_drafts(&mut self, limit: usize) -> usize {
+        let drafts = self.choose_drafts(limit);
+        if drafts == 0 {
+            self.serial_started = Some(Instant::now());
+        }
+        drafts
+    }
+
+    fn choose_drafts(&mut self, limit: usize) -> usize {
+        // Measure plain steps once a window has run, so serial decoding is
+        // weighed against a measured cost.
+        if self.windows > 0 && !self.cost.serial_measured() {
+            return 0;
+        }
         let chosen = choose_block(&self.cost, &self.acceptance, limit, self.windows);
         if chosen > 0 {
             self.serial_since_probe = 0;
@@ -261,6 +289,9 @@ impl StageOpenAiBackend {
         let Some(dflash) = state.dflash.as_mut() else {
             return Ok(DFlashSpanProgress::NotUsed);
         };
+        if let Some(adaptive) = dflash.adaptive.as_mut() {
+            adaptive.finish_serial_step();
+        }
         // The adaptive chooser already weighs misses against serial steps.
         if dflash.adaptive.is_none() && dflash.backoff.take_serial_token() {
             return Ok(DFlashSpanProgress::NotUsed);
