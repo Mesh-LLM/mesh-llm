@@ -908,7 +908,7 @@ impl StageOpenAiBackend {
                 .kv
                 .as_ref()
                 .is_some_and(|kv| kv.payload_is_exact_state());
-            let checkpoints = self.deferred_exact_checkpoint_boundaries(
+            let checkpoints = self.deferred_checkpoint_boundaries(
                 request,
                 &prefill_tokens,
                 restored_prefill_tokens,
@@ -939,13 +939,35 @@ impl StageOpenAiBackend {
                 runtime_lock_acquires =
                     runtime_lock_acquires.saturating_add(checkpoint_prefill.chunk_count);
 
-                if self.enqueue_exact_state_record_at_tokens(
-                    session_id,
-                    request.ids,
-                    request.prompt_token_ids[..boundary].to_vec(),
-                    "shared_prefill_checkpoint",
-                    true,
-                ) {
+                if self
+                    .kv
+                    .as_ref()
+                    .is_some_and(|kv| kv.resident_recurrent_snapshots)
+                {
+                    let resident = self.record_resident_prefill_checkpoint(
+                        session_id,
+                        request.ids,
+                        &request.prompt_token_ids[..boundary],
+                        cache_operation_deadline,
+                        request.cancellation,
+                    )?;
+                    runtime_lock_wait_ms += resident.runtime_lock_wait_ms;
+                    runtime_lock_hold_ms += resident.runtime_lock_hold_ms;
+                    runtime_lock_acquires = runtime_lock_acquires.saturating_add(1);
+                    if resident.value {
+                        record.resident_recorded_pages =
+                            record.resident_recorded_pages.saturating_add(1);
+                    }
+                }
+                if exact_state
+                    && self.enqueue_exact_state_record_at_tokens(
+                        session_id,
+                        request.ids,
+                        request.prompt_token_ids[..boundary].to_vec(),
+                        "shared_prefill_checkpoint",
+                        true,
+                    )
+                {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
                 }

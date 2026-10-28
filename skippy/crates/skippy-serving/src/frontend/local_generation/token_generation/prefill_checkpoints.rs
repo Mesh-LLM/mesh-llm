@@ -2,13 +2,17 @@
 use super::*;
 
 impl StageOpenAiBackend {
-    pub(super) fn deferred_exact_checkpoint_boundaries(
+    pub(super) fn deferred_checkpoint_boundaries(
         &self,
         request: &LocalGeneration<'_>,
         prefill_tokens: &[i32],
         restored_prefill_tokens: usize,
     ) -> Vec<usize> {
-        let Some(kv) = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state()) else {
+        let Some(kv) = self
+            .kv
+            .as_ref()
+            .filter(|kv| kv.payload_is_exact_state() || kv.resident_recurrent_snapshots)
+        else {
             return Vec::new();
         };
         let shared_boundary = kv
@@ -28,9 +32,10 @@ impl StageOpenAiBackend {
         // Serialized full-state caches retain their existing single boundary.
         // Four slots leave room for both boundaries, prefill and continuation;
         // smaller configured caches keep their previous capture policy.
-        let retain_shortened_tail = kv.payload == StagePrefixCachePayload::KvRecurrent
-            && self.config.cache_idle_slots != Some(0)
-            && kv.resident_recurrent_limits().0 >= 4;
+        let retain_shortened_tail = kv.resident_recurrent_snapshots
+            || (kv.payload == StagePrefixCachePayload::KvRecurrent
+                && self.config.cache_idle_slots != Some(0)
+                && kv.resident_recurrent_limits().0 >= 4);
         checkpoint_boundaries(
             selected,
             chat_boundary,
@@ -45,6 +50,40 @@ impl StageOpenAiBackend {
         .into_iter()
         .filter(|&boundary| kv.meets_shared_prefix_min_tokens(boundary))
         .collect()
+    }
+
+    /// Capture a hybrid resident prefix while the native session is still at
+    /// the boundary. A detached task could run after the next suffix chunk.
+    pub(super) fn record_resident_prefill_checkpoint(
+        &self,
+        session_id: &str,
+        ids: &InferenceGenerationIds,
+        checkpoint_tokens: &[i32],
+        deadline: Instant,
+        cancellation: Option<&skippy_inference_api::CancellationToken>,
+    ) -> InferenceResult<crate::frontend::iteration_scheduler::SchedulerRuntimeOutcome<bool>> {
+        let backend = self.clone();
+        let session_id = session_id.to_string();
+        let ids = ids.clone();
+        let checkpoint_tokens = checkpoint_tokens.to_vec();
+        self.iteration_scheduler.execute_runtime_timed_bounded(
+            "feature-resident-prefill-checkpoint",
+            ids.request_id_string(),
+            deadline,
+            cancellation,
+            move |runtime| {
+                let kv = backend
+                    .kv
+                    .as_ref()
+                    .expect("resident checkpoint has KV integration");
+                let base = backend.local_kv_message_base(&session_id, &ids);
+                let identity = kv.prefill_identity(&backend.config, &base, 0, &checkpoint_tokens);
+                Ok(kv
+                    .record_resident_prefix(runtime, &session_id, &identity, &checkpoint_tokens)
+                    .map_err(openai_backend_error)?
+                    .is_some())
+            },
+        )
     }
 }
 
