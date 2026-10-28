@@ -1,0 +1,41 @@
+---
+layout: base.njk
+title: Plugins
+description: Released Mesh LLM plugins for inference runtimes, integrations, payments, and utilities.
+permalink: /plugins/index.html
+bodyClass: plugins-index
+---
+<header class="shell page-hero">
+  <h1>Plugins</h1>
+  <p class="lead">{{ plugins.count }} released first-party plugins. Each one runs as its own process next to mesh-llm and installs with one command. See <a href="/docs/pages/plugins/">Plugins docs</a> for configuration, or <a href="/docs/pages/developing-plugins/">write your own</a>.</p>
+</header>
+
+<main class="shell plugins-page">
+  <section class="plugins-page-spot" aria-label="Plugin spotlight">
+    {% include "components/plugin-spotlight.njk" %}
+  </section>
+
+  {% for group in plugins.groups %}
+  <section class="plugins-group" id="{{ group.id }}">
+    <h2>{{ group.title }}</h2>
+    <ul class="plugins-grid">
+      {% for p in group.plugins %}
+      <li class="plugins-card">
+        <div class="plugin-spot-meta"><span class="plugin-spot-platforms">{{ p.platforms }}</span></div>
+        <h3 class="mono"><a href="{{ p.url }}">{{ p.name }}</a></h3>
+        <p class="plugins-card-tagline">{{ p.tagline }}</p>
+        <p class="plugins-card-summary">{{ p.summaryHtml | safe }}</p>
+        {% if p.install %}
+        <div class="plugin-spot-install">
+          <code class="mono">{{ p.install }}</code>
+          <button class="plugin-spot-copy" type="button" data-copy-text="{{ p.install }}" aria-label="Copy install command for {{ p.name }}">Copy</button>
+        </div>
+        {% else %}
+        <div class="plugin-spot-install plugin-spot-install--note">Install from the <a href="{{ p.url }}/releases">release archive</a>.</div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+</main>

@@ -1,0 +1,41 @@
+{#- Selectable, auto-advancing plugin spotlight. Data: src/_data/plugins.js.
+    Without JS every panel is shown as a stacked list; plugin-spotlight.js turns
+    it into tabs, auto-advances (unless reduced motion) and stops once the user picks one. -#}
+<div class="plugin-spot" data-plugin-spotlight>
+  <div class="plugin-spot-tabs" role="tablist" aria-label="Mesh plugins" data-plugin-spot-tabs hidden>
+    {% for group in plugins.groups %}
+    <span class="plugin-spot-tab-heading" role="presentation">{{ group.title }}</span>
+    {% for p in group.plugins %}
+    <button class="plugin-spot-tab" type="button" role="tab" id="plugin-tab-{{ p.name }}" aria-controls="plugin-panel-{{ p.name }}" aria-selected="{{ 'true' if p.name == plugins.all[0].name else 'false' }}" tabindex="{{ '0' if p.name == plugins.all[0].name else '-1' }}" data-plugin-spot-tab>
+      <span class="plugin-spot-tab-name mono">{{ p.name }}</span>
+      <span class="plugin-spot-progress" aria-hidden="true"><span data-plugin-spot-progress></span></span>
+    </button>
+    {% endfor %}
+    {% endfor %}
+  </div>
+  <div class="plugin-spot-panels">
+    {% for p in plugins.all %}
+    <article class="plugin-spot-panel" role="tabpanel" id="plugin-panel-{{ p.name }}" aria-labelledby="plugin-tab-{{ p.name }}" data-plugin-spot-panel>
+      <div class="plugin-spot-meta">
+        <span class="plugin-spot-group">{{ p.groupTitle }}</span>
+        <span class="plugin-spot-platforms">{{ p.platforms }}</span>
+      </div>
+      <h3 class="plugin-spot-name mono">{{ p.name }}</h3>
+      <p class="plugin-spot-tagline">{{ p.tagline }}</p>
+      <p class="plugin-spot-summary">{{ p.summaryHtml | safe }}</p>
+      {% if p.install %}
+      <div class="plugin-spot-install">
+        <code class="mono">{{ p.install }}</code>
+        <button class="plugin-spot-copy" type="button" data-copy-text="{{ p.install }}" aria-label="Copy install command for {{ p.name }}">Copy</button>
+      </div>
+      {% else %}
+      <div class="plugin-spot-install plugin-spot-install--note">Install from the <a href="{{ p.url }}/releases">release archive</a>.</div>
+      {% endif %}
+      <div class="plugin-spot-links">
+        <a href="{{ p.url }}">Repository &rarr;</a>
+        <a href="{{ p.url }}/releases">Releases</a>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</div>

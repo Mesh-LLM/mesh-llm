@@ -3,6 +3,16 @@
 // Only add a plugin here once it has a release with installable archives.
 const repo = (name) => `https://github.com/Mesh-LLM/${name}`;
 
+const escapeHtml = (text) =>
+  text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+// Summaries use a tiny Markdown subset (links and inline code) so the same text
+// works in the docs table and in HTML components.
+const toHtml = (markdown) =>
+  escapeHtml(markdown)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+
 const groups = [
   { id: 'inference', title: 'Inference runtimes' },
   { id: 'integration', title: 'Integrations' },
@@ -120,7 +130,12 @@ const plugins = [
     install: 'mesh-llm plugins install metrics',
     platforms: 'macOS, Linux, Windows',
   },
-].map((plugin) => ({ ...plugin, url: repo(plugin.repo) }));
+].map((plugin) => ({
+  ...plugin,
+  url: repo(plugin.repo),
+  groupTitle: groups.find((group) => group.id === plugin.group).title,
+  summaryHtml: toHtml(plugin.summary),
+}));
 
 export default {
   groups: groups.map((group) => ({

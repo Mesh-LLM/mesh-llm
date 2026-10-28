@@ -1,0 +1,11 @@
+{% from "components/ui.njk" import sectionHead %}
+
+<section class="sec" id="plugin-spotlight">
+  <div class="shell">
+    {{ sectionHead(
+      '<span class="title-line">Plug in the runtime</span><br/><span class="title-line">your hardware wants.</span>',
+      plugins.count ~ " released plugins add inference engines, agent tools, payments, and console pages. Pick one to see what it does and how to install it. <a href=\"/plugins/\">Browse all plugins &rarr;</a>"
+    ) }}
+    {% include "components/plugin-spotlight.njk" %}
+  </div>
+</section>

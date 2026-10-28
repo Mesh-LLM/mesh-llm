@@ -63,6 +63,14 @@
             <a href="/docs/pages/sdk-kotlin/">Kotlin / Java</a>
           </nav>
         </div>
+        <div class="hero-sdk hero-plugins" aria-labelledby="hero-plugins-title">
+          <h2 id="hero-plugins-title">Extend Mesh</h2>
+          <p><strong>{{ plugins.count }} plugins.</strong> Add inference engines, agent tools, payments, and console pages.</p>
+          <a class="hero-sdk-link" href="/plugins/">Browse plugins <span aria-hidden="true">→</span></a>
+          <nav class="hero-sdk-languages" aria-label="Featured plugins">
+            {% for p in plugins.all %}{% if p.group == "inference" %}<a href="/plugins/#plugin-panel-{{ p.name }}">{{ p.name }}</a>{% endif %}{% endfor %}
+          </nav>
+        </div>
       </div>
 
       <div class="hero-sponsor shrink-0 items-center gap-3 text-sm text-subtle" aria-label="Sponsor slot">
