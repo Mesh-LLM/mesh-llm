@@ -936,7 +936,10 @@ model cadence, device gates and protected action references remain unchanged.
   backend-independent, so another backend would buy a duplicate of the same
   evidence.
 - `ci-{linux,macos,windows}-product-slice.yml` — composition-only consumers
-  that join only their matching immutable host and runtime artifacts.
+  that join only their matching immutable host and runtime artifacts. The
+  Windows row also runs the release packager (`package-release.ps1` in its
+  pre-stamped/pre-verified mode) on the composed product, so release-only
+  native-path failures surface in CI instead of hours into a release run.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
   focused Windows log-store privacy ACL checks, and the Windows CPU native
   Skippy probes (`windows-skippy-probes`, #2222 item 2). That row is selected

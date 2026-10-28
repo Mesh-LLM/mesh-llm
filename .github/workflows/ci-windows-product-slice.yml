@@ -140,6 +140,36 @@ jobs:
           backend: ${{ matrix.runtime.backend }}
           binary_name: mesh-llm.exe
           readiness_smoke: "true"
+      # Release parity: `release.yml` wraps this exact composed product in
+      # `package-release.ps1`, which hands native `C:\...` paths to the
+      # automation binary. The composer above reaches it only through bash
+      # forward-slash paths, so release-only packaging failures surfaced
+      # hours into a release run. Run the same packager here, with the same
+      # pre-stamped/pre-verified contract and a placeholder public key (the
+      # pre-verified path never reads it), so they fail in this slice instead.
+      - name: Package the composed product with the release packager
+        shell: pwsh
+        env:
+          PRODUCT_BACKEND: ${{ matrix.runtime.backend }}
+          MESH_LLM_PRECOMPOSED_PRODUCT_DIR: ${{ steps.compose.outputs.product_dir }}
+          MESH_RELEASE_HOST_PRESTAMPED: "1"
+          MESH_RELEASE_ATTESTATION_PREVERIFIED: "1"
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/ci-release-attestation-public-key.json
+        run: |
+          Set-Content -Path $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE -Value "ci-preverified-placeholder" -NoNewline
+          $manifestPath = Join-Path $env:MESH_LLM_PRECOMPOSED_PRODUCT_DIR "product-manifest.json"
+          $version = (Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).mesh_version
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "composed product manifest has no mesh_version: $manifestPath"
+          }
+          .\scripts\package-release.ps1 -Version $version -OutputDir ci-release-package -Flavor $env:PRODUCT_BACKEND
+          if ($LASTEXITCODE -ne 0) {
+            throw "release packager failed for the composed Windows $env:PRODUCT_BACKEND product with exit code $LASTEXITCODE"
+          }
+          $archives = @(Get-ChildItem -LiteralPath ci-release-package -File -Filter "*.zip")
+          if ($archives.Count -eq 0) {
+            throw "release packager produced no archive under ci-release-package"
+          }
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ci-product-windows-${{ matrix.runtime.architecture }}-${{ matrix.runtime.backend }}
