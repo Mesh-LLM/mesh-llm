@@ -59,36 +59,59 @@ fn compare_resident_restore(lanes: u32) -> Result<()> {
     let kv = warm.kv.as_ref().unwrap();
     let mut warm_runtime = warm.runtime.lock().unwrap();
     let mut cold_runtime = cold.runtime.lock().unwrap();
-    for session in &sessions {
-        warm_runtime.enable_resident_recurrent_request(session);
+    if !kv.resident_recurrent_snapshots {
+        for session in &sessions {
+            warm_runtime.enable_resident_recurrent_request(session);
+        }
     }
     // Both arms execute the same native shapes up to the retained boundary.
     // The warm arm then visits an obsolete tail before restoring it.
     fixed_prefill(&mut warm_runtime, &sessions, &prompts, 0, 128)?;
     fixed_prefill(&mut cold_runtime, &sessions, &prompts, 0, 128)?;
     for ((session, prompt), ids) in sessions.iter().zip(&prompts).zip(&ids) {
-        assert!(warm.record_exact_state_at_tokens(
-            &mut warm_runtime,
-            session,
-            ids,
-            &prompt[..128],
-            "shape_checkpoint",
-            true,
-        ));
+        if kv.resident_recurrent_snapshots {
+            let base = warm.local_kv_message_base(session, ids);
+            let identity = kv.prefill_identity(&warm.config, &base, 0, &prompt[..128]);
+            assert!(
+                kv.record_resident_prefix(&mut warm_runtime, session, &identity, prompt)?
+                    .is_some(),
+                "hybrid resident checkpoint must capture attention and recurrent state"
+            );
+        } else {
+            assert!(warm.record_exact_state_at_tokens(
+                &mut warm_runtime,
+                session,
+                ids,
+                &prompt[..128],
+                "shape_checkpoint",
+                true,
+            ));
+        }
     }
     fixed_prefill(&mut warm_runtime, &sessions, &prompts, 128, 192)?;
     for session in &sessions {
-        assert!(warm_runtime.park_resident_recurrent(session));
+        if kv.resident_recurrent_snapshots {
+            warm_runtime.drop_session_timed(session)?;
+        } else {
+            assert!(warm_runtime.park_resident_recurrent(session));
+        }
     }
     for ((session, prompt), ids) in sessions.iter().zip(&changed).zip(&ids) {
-        warm_runtime.enable_resident_recurrent_request(session);
         let base = warm.local_kv_message_base(session, ids);
         let identity = kv.prefill_identity(&warm.config, &base, 0, prompt);
-        let restored = warm_runtime
-            .restore_resident_recurrent(session, &[identity])?
-            .expect("resident checkpoint must be available");
-        assert_eq!(restored.token_count, 128);
-        assert_eq!(restored.source, "resident_recurrent");
+        if kv.resident_recurrent_snapshots {
+            let restored = kv
+                .restore_resident_prefix(&mut warm_runtime, session, &[identity], prompt)?
+                .expect("hybrid resident checkpoint must be available");
+            assert_eq!(restored.token_count, 128);
+        } else {
+            warm_runtime.enable_resident_recurrent_request(session);
+            let restored = warm_runtime
+                .restore_resident_recurrent(session, &[identity])?
+                .expect("resident checkpoint must be available");
+            assert_eq!(restored.token_count, 128);
+            assert_eq!(restored.source, "resident_recurrent");
+        }
     }
     let warm_output = fixed_continuation(&mut warm_runtime, &sessions, &changed)?;
     let cold_output = fixed_continuation(&mut cold_runtime, &sessions, &changed)?;
