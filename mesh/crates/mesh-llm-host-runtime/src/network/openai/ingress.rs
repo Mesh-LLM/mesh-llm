@@ -903,13 +903,16 @@ async fn route_missing_local_model(
     // Check if the model is known locally but unavailable
     // (e.g., loading/draining/failed with all-None candidates). Return 503 for these cases so
     // clients can retry; return 404 only when the model truly doesn't exist anywhere.
-    // A first load has no target yet, only its serving assignment.
-    let loading_locally = ctx
-        .node
-        .serving_models()
-        .await
-        .iter()
-        .any(|served| served == model_name);
+    // A first load has no target yet, only its serving assignment. A client
+    // that excluded this node gets the exclusion 409 below instead: retrying
+    // here would never help it.
+    let loading_locally = !excluded.contains(&ctx.node.id())
+        && ctx
+            .node
+            .serving_models()
+            .await
+            .iter()
+            .any(|served| served == model_name);
     if loading_locally || has_local_unavailable_candidates(ctx.targets, model_name) {
         record_pre_routing_rejection(ctx, Some(model_name), 503).await;
         return response_outcome(

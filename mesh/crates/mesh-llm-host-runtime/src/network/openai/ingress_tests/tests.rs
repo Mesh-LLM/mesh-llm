@@ -429,7 +429,11 @@ fn has_local_unavailable_returns_false_when_any_available() {
 
 /// Status line `route_missing_local_model` writes for a chat request naming
 /// `model` on a node with no targets, no peer and no plugin manager.
-async fn missing_local_model_status(node: &mesh::Node, model: &str) -> String {
+async fn missing_local_model_status(
+    node: &mesh::Node,
+    model: &str,
+    excluded: &[iroh::EndpointId],
+) -> String {
     use tokio::io::AsyncReadExt;
 
     let targets = election::ModelTargets::default();
@@ -475,7 +479,7 @@ async fn missing_local_model_status(node: &mesh::Node, model: &str) -> String {
         &ctx,
         model,
         None,
-        &[],
+        excluded,
         None,
         lifecycle.route_observer(),
     )
@@ -503,12 +507,28 @@ async fn route_missing_local_model_answers_503_while_the_first_load_runs() {
     node.set_serving_models(vec!["loading-model".into()]).await;
 
     assert_eq!(
-        missing_local_model_status(&node, "loading-model").await,
+        missing_local_model_status(&node, "loading-model", &[]).await,
         "HTTP/1.1 503 Service Unavailable"
     );
     assert_eq!(
-        missing_local_model_status(&node, "unknown-model").await,
+        missing_local_model_status(&node, "unknown-model", &[]).await,
         "HTTP/1.1 404 Not Found"
+    );
+    node.endpoint.close().await;
+}
+
+/// A client that excluded this node can't be served by its local load, so it
+/// keeps the exclusion 409 rather than a 503 it would retry forever.
+#[tokio::test]
+async fn route_missing_local_model_keeps_the_exclusion_409_while_the_first_load_runs() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.set_serving_models(vec!["loading-model".into()]).await;
+
+    assert_eq!(
+        missing_local_model_status(&node, "loading-model", &[node.id()]).await,
+        "HTTP/1.1 409 Conflict"
     );
     node.endpoint.close().await;
 }
