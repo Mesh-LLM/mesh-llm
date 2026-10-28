@@ -844,7 +844,12 @@ impl StageOpenAiBackend {
         let scheduler_ids = request.ids.clone();
         let scheduler_lookup_identities = Arc::clone(&lookup_identities);
         let scheduler_prefill_tokens = Arc::clone(&prefill_tokens);
-        let record_prefill_tokens = Arc::clone(&prefill_tokens);
+        // Deferred prefill evaluates the final prompt token before recording.
+        // Hybrid resident KV can only pair its attention cells with recurrent
+        // state at the native session's current position, so the final record
+        // must name that full prompt rather than the lookup's one-token-short
+        // prefix.
+        let record_prefill_tokens = Arc::<[i32]>::from(request.prompt_token_ids);
         let mut scheduler_cache_stats = std::mem::take(cache_stats);
         let cache_operation_deadline = cache_operation_deadline(
             self.generation_admission_timeout,

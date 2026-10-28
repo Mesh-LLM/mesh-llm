@@ -4,6 +4,36 @@ use std::sync::atomic::Ordering;
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_records_full_prompt_after_deferred_prefill() -> Result<()> {
+    let (backend, _) = recurrent_test_backend("full-prompt", "full-prompt", 256, (32, 32), 8, 256)?;
+    let prompt = (1..=64).collect::<Vec<_>>();
+    generate(&backend, &prompt, 8)?;
+    let kv = backend.kv.as_ref().unwrap();
+    anyhow::ensure!(
+        kv.resident_recurrent_snapshots,
+        "test requires hybrid resident KV"
+    );
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("recurrent-resume"),
+        true,
+        None,
+    );
+    let base = backend.local_kv_message_base("recurrent-resume", &ids);
+    let identity = kv.prefill_identity(&backend.config, &base, 0, &prompt);
+    assert!(
+        kv.radix
+            .lock()
+            .unwrap()
+            .resident_exact(&identity.namespace, &identity.token_ids)
+            .is_some(),
+        "the deferred record must retain the full prompt at the native session position"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
     let (wide, _) = recurrent_test_backend("wide", "wide", 256, (128, 32), 8, 256)?;
     let (narrow, _) = recurrent_test_backend("narrow", "narrow", 256, (32, 32), 8, 256)?;
