@@ -5,7 +5,7 @@ mod compact_meta;
 mod kv_cache;
 mod split_bundle;
 
-pub use compact_meta::scan_gguf_compact_meta;
+pub use compact_meta::{scan_gguf_compact_meta, scan_gguf_dflash_target_layers};
 pub use kv_cache::{GgufKvCacheQuant, GgufKvCacheType};
 pub use split_bundle::scan_gguf_bundle_total_parameters;
 
@@ -297,6 +297,10 @@ fn read_gguf_value_as_string_opt(
     }
 }
 
+/// Recurrent-state planes a native sequence holds by default: the current
+/// state plus two rollback snapshots (`n_rs_seq = 2`).
+pub const DEFAULT_RECURRENT_STATE_PLANES: u64 = 3;
+
 #[derive(Clone, Debug, Default)]
 pub struct GgufCompactMeta {
     pub architecture: String,
@@ -408,8 +412,22 @@ impl GgufCompactMeta {
     /// each live native sequence owns three state planes (current + two
     /// snapshots). Attention-only layers report zero.
     pub fn recurrent_bytes_per_native_sequence_by_layer(&self) -> Vec<u64> {
+        self.recurrent_plane_bytes_by_layer()
+            .into_iter()
+            .map(|bytes| bytes.saturating_mul(DEFAULT_RECURRENT_STATE_PLANES))
+            .collect()
+    }
+
+    /// F32 bytes of one recurrent-state plane (the state or one rollback
+    /// snapshot) for one native sequence, summed over layers.
+    pub fn recurrent_plane_bytes_per_native_sequence(&self) -> u64 {
+        self.recurrent_plane_bytes_by_layer()
+            .into_iter()
+            .fold(0, u64::saturating_add)
+    }
+
+    fn recurrent_plane_bytes_by_layer(&self) -> Vec<u64> {
         const F32_BYTES: u64 = 4;
-        const RECURRENT_STATE_PLANES: u64 = 3;
 
         let conv_width = u64::from(self.ssm_conv_kernel.saturating_sub(1));
         let inner = u64::from(self.ssm_inner_size);
@@ -418,10 +436,7 @@ impl GgufCompactMeta {
         let rolling = conv_width
             .saturating_mul(inner.saturating_add(groups.saturating_mul(state).saturating_mul(2)));
         let state = state.saturating_mul(inner);
-        let bytes = rolling
-            .saturating_add(state)
-            .saturating_mul(F32_BYTES)
-            .saturating_mul(RECURRENT_STATE_PLANES);
+        let bytes = rolling.saturating_add(state).saturating_mul(F32_BYTES);
 
         self.recurrent_layer_mask()
             .into_iter()
@@ -984,6 +999,10 @@ mod tests {
         assert_eq!(
             meta.recurrent_bytes_per_configured_lane_by_layer(),
             vec![expected * 2, expected * 2, expected * 2, 0]
+        );
+        assert_eq!(
+            meta.recurrent_plane_bytes_per_native_sequence(),
+            3 * base_elements * 4
         );
         let _ = std::fs::remove_file(path);
     }

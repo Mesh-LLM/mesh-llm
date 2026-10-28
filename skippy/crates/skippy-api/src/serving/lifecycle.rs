@@ -54,7 +54,8 @@ pub struct LoadedModelBackend {
 }
 
 impl ModelLoadRequest {
-    pub fn load(self) -> Result<LoadedModelBackend> {
+    pub fn load(mut self) -> Result<LoadedModelBackend> {
+        self.size_recurrent_rollback();
         let config = self.runtime.config.clone();
         ensure!(
             config.stage_index == 0 && config.layer_start == 0 && config.upstream.is_none(),
@@ -145,6 +146,19 @@ impl ModelLoadRequest {
     }
 }
 
+impl ModelLoadRequest {
+    /// The target context is sized when it opens, before the DFlash draft
+    /// attaches, so the plan's rollback depth must travel with the runtime.
+    fn size_recurrent_rollback(&mut self) {
+        if let Some(dflash) = &self.openai.speculative.dflash {
+            self.runtime.recurrent_rollback_tokens = self
+                .runtime
+                .recurrent_rollback_tokens
+                .max(dflash.recurrent_rollback_tokens());
+        }
+    }
+}
+
 fn resolve_hooks(
     factory: Option<&SharedModelServingHooksFactory>,
     runtime: &SkippyRuntimeHandle,
@@ -214,6 +228,7 @@ mod tests {
                 n_threads: None,
                 n_threads_batch: None,
                 mtp_source: skippy_runtime::MtpSource::Disabled,
+                recurrent_rollback_tokens: 0,
                 metrics_otlp_grpc: None,
                 telemetry_queue_capacity: 0,
                 telemetry_level: skippy_serving::telemetry::TelemetryLevel::Off,
@@ -229,6 +244,26 @@ mod tests {
             downstream_wire_condition: WireCondition::new(0.0, None).unwrap(),
             serving_telemetry: None,
             l3_manager: None,
+        }
+    }
+
+    #[test]
+    fn a_dflash_plan_sizes_the_target_rollback_to_its_window() {
+        let mut without_dflash = request();
+        without_dflash.size_recurrent_rollback();
+        assert_eq!(without_dflash.runtime.recurrent_rollback_tokens, 0);
+
+        for (cap, depth) in [(15, 16), (6, 7)] {
+            let mut request = request();
+            request.openai.speculative.dflash = Some(skippy_serving::DFlashProposalConfig {
+                draft_model_path: "draft-dflash.gguf".into(),
+                max_draft_tokens: Some(cap),
+            });
+            request.size_recurrent_rollback();
+            assert_eq!(
+                request.runtime.recurrent_rollback_tokens, depth,
+                "cap {cap}"
+            );
         }
     }
 

@@ -1,16 +1,22 @@
 //! DFlash draft resolution.
 //!
 //! A DFlash draft reads target hidden states, so it is not an ordinary draft
-//! model: the architecture pairing check would always reject it. It is only
-//! chosen explicitly with `speculative.strategy = "dflash"`. Under `auto` a
-//! DFlash draft still fails pairing, so speculation stays off until the native
-//! verify path is fast enough to select DFlash by default.
+//! model: the architecture pairing check would always reject it. It is chosen
+//! explicitly with `speculative.strategy = "dflash"` and a draft, or by default
+//! under `auto` when the target is one of the known pairings in
+//! [`super::dflash_catalog`] and nothing else in the configuration speaks for
+//! speculation. A DFlash draft named as an ordinary draft under `auto` still
+//! fails pairing.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use skippy_api::speculative::is_dflash_draft;
+use skippy_model_artifact::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
 use skippy_serving::{DFLASH_STRATEGY, DFlashProposalConfig, SpeculativeDecodeConfig};
+
+use super::dflash_catalog::{DFlashPairing, default_dflash_max_draft_tokens, pairing_for_target};
+use super::types::ResolvedSpeculativeConfig;
 
 /// What the resolver already decided before choosing DFlash.
 pub(super) struct DFlashSelection<'a> {
@@ -38,6 +44,73 @@ pub(super) fn select_dflash_draft<'a>(selection: &DFlashSelection<'a>) -> Result
         );
     };
     Ok(Some(path))
+}
+
+/// What else the resolver decided that keeps a known DFlash pairing from
+/// being the default.
+pub(super) struct DFlashDefaultSelection<'a> {
+    pub(super) auto_defaults_enabled: bool,
+    pub(super) native_mtp_enabled: bool,
+    pub(super) has_ngram_settings: bool,
+    pub(super) package_declares_speculation: bool,
+    pub(super) target_meta: Option<&'a GgufCompactMeta>,
+    pub(super) model_path: &'a Path,
+}
+
+/// The DFlash draft to attach and, when it was chosen by default, its known
+/// pairing. An explicit DFlash draft wins; otherwise a known target defaults
+/// to its draft unless the configuration, the package, or another proposer
+/// already decides.
+pub(super) fn choose_dflash_draft(
+    explicit: &DFlashSelection<'_>,
+    default: &DFlashDefaultSelection<'_>,
+) -> Result<Option<(PathBuf, Option<&'static DFlashPairing>)>> {
+    if let Some(path) = select_dflash_draft(explicit)? {
+        return Ok(Some((path.to_path_buf(), None)));
+    }
+    if explicit.strategy != "auto"
+        || explicit.mode != "auto"
+        || explicit.draft_model_path.is_some()
+        || !default.auto_defaults_enabled
+        || default.native_mtp_enabled
+        || default.has_ngram_settings
+        || default.package_declares_speculation
+    {
+        return Ok(None);
+    }
+    let pairing = match default.target_meta {
+        Some(meta) => pairing_for_target(meta),
+        None => scan_gguf_compact_meta(default.model_path)
+            .as_ref()
+            .and_then(pairing_for_target),
+    };
+    Ok(pairing.map(|pairing| (pairing.draft.cache_path(), Some(pairing))))
+}
+
+/// A configured cap wins; otherwise the backend default.
+pub(super) fn dflash_max_draft_tokens(configured: u32) -> u32 {
+    if configured > 0 {
+        configured
+    } else {
+        default_dflash_max_draft_tokens(cfg!(target_os = "macos"))
+    }
+}
+
+impl ResolvedSpeculativeConfig {
+    /// Points the default DFlash plan at its fetched draft.
+    pub fn set_default_dflash_draft(&mut self, path: &Path) {
+        if let Some(dflash) = self.decode.dflash.as_mut() {
+            dflash.draft_model_path = path.to_path_buf();
+        }
+    }
+
+    /// Serves without speculation when the default DFlash draft cannot be
+    /// fetched or does not fit the target.
+    pub fn drop_default_dflash(&mut self) {
+        self.default_dflash = None;
+        self.decode.dflash = None;
+        self.decode.effective_strategy = "disabled".to_string();
+    }
 }
 
 /// Turns a base plan (draft placement and gate settings already resolved)

@@ -471,6 +471,7 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_runtime::SplitMode::Auto,
+            recurrent_rollback_tokens: 0,
             selected_backend_device: None,
             load_mode,
             projector_path: None,

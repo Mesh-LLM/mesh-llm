@@ -304,6 +304,7 @@ fn open_full_model(args: &RemoteHandoffArgs, lane_count: u32) -> Result<StageMod
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_runtime::SplitMode::Auto,
+        recurrent_rollback_tokens: 0,
         selected_backend_device: None,
         load_mode: runtime_load_mode(args.runtime.stage_load_mode),
         projector_path: None,

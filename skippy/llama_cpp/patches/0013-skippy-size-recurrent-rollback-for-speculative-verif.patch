@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Wed, 28 Oct 2026 14:17:38 +1100
+Subject: [PATCH] skippy: size recurrent rollback for speculative verify
+
+Recurrent and hybrid targets verify a speculative window in place only when
+the context keeps a rollback snapshot per window token (n_rs_seq); otherwise
+verify falls back to a host copy. skippy_runtime_config gains
+recurrent_rollback_tokens so the caller can size n_rs_seq from its attached
+speculative plan instead of raising it for every model: each snapshot is
+another copy of the recurrent state per sequence. 0 keeps the default of 2,
+and SKIPPY_RS_SEQ still overrides it.
+
+Sampled verify also gets cheaper: a sampling chain retired by sampled verify
+stays retired until the session resets, and upstream's per-sequence
+backend-sampling output limit is restored.
+---
+ include/skippy/runtime.h     | 4 ++++
+ src/llama-context.cpp        | 7 ++++---
+ src/skippy/model_loading.cpp | 8 +++++++-
+ src/skippy/sampling.cpp      | 4 +++-
+ src/skippy/session.cpp       | 1 +
+ 5 files changed, 19 insertions(+), 5 deletions(-)
+
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index 799bdca2d..3364318fe 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -117,6 +117,10 @@ struct skippy_runtime_config {
+     int32_t main_gpu;
+     /** @brief How to split the model across multiple GPUs (mirrors upstream `llama_split_mode`). SKIPPY_TRISTATE_AUTO (-1) preserves llama.cpp's derived default; 0=none, 1=layer, 2=row, 3=tensor. */
+     int32_t split_mode;
++
++    // Speculative-decoding controls resolved from the attached plan.
++    /** @brief Recurrent-state rollback depth (mirrors upstream `n_rs_seq`) for recurrent and hybrid models. Verifying an N-token speculative window in place needs at least N. 0 keeps the default of 2; `SKIPPY_RS_SEQ` overrides either. */
++    uint32_t recurrent_rollback_tokens;
+ };
+ 
+ /** @brief Returns a C-safe runtime configuration with all derived-default controls set to auto. */
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 4d198295f..b5b6d0670 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2019,9 +2019,10 @@ int llama_context::decode(
+                 // are limited to one output row; a sampler on some other
+                 // sequence of this context must not reject a multi-output
+                 // batch (e.g. speculative verification) for this one.
+-                if (seq_output_count[seq_id] > 1 && sampling.samplers.count(seq_id) > 0) {
+-                    LLAMA_LOG_ERROR("%s: backend sampling requires at most one output token per sequence (seq_id %d had %d)\n",
+-                            __func__, seq_id, seq_output_count[seq_id]);
++                if (sampling.samplers.count(seq_id) > 0 &&
++                        seq_output_count[seq_id] > (int32_t) cparams.n_outputs_max_per_seq) {
++                    LLAMA_LOG_ERROR("%s: backend sampling supports at most %u outputs per sequence (seq_id %d had %d)\n",
++                            __func__, cparams.n_outputs_max_per_seq, seq_id, seq_output_count[seq_id]);
+                     return -1;
+                 }
+             }
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 60a27669f..17f9918b7 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -733,7 +733,13 @@ enum skippy_status skippy_finish_model_open(
+     }
+     if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
+         params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
+-        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
++        // Rollback snapshots for in-place speculative verify: a window of N
++        // tokens needs N, or verify falls back to a host copy. Each snapshot
++        // is another copy of the recurrent state per sequence, so the caller
++        // sizes it from its speculative plan. SKIPPY_RS_SEQ overrides it.
++        const uint32_t planned_rs_seq = config != nullptr ? config->recurrent_rollback_tokens : 0;
++        const uint32_t default_rs_seq = std::min<uint32_t>(std::max<uint32_t>(planned_rs_seq, 2), 64);
++        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, skippy_env_u32("SKIPPY_RS_SEQ", default_rs_seq, 2, 64));
+         params.kv_unified = true;
+     }
+     // Multi-lane activation exports rely on the shared KV pool's batch order.
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index de5fa6ba5..29115b72e 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -325,7 +325,9 @@ void skippy_clear_chat_sampling(skippy_session * session) {
+     session->sampling_has_reasoning_budget = false;
+     session->grammar_lazy = false;
+     session->sampling_backend_enabled = false;
+-    session->sampling_backend_retired = false;
++    // A chain retired by sampled verification stays retired until
++    // the session is reset, so speculative repair does not re-attach a backend
++    // sampler that the next verify window must detach (two reserves per window).
+     session->sampling_config = {};
+     session->sampling_config_valid = false;
+     session->chat_sampling_metadata.clear();
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 36c972d92..4741f55cb 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -390,6 +390,7 @@ enum skippy_status skippy_session_reset(
+             skippy_env_enabled("SKIPPY_DETACH_SAMPLER_ON_RESET");
+     if (detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)) {
+         skippy_clear_chat_sampling(session);
++        session->sampling_backend_retired = false;
+     }
+     skippy_mtp_clear_session_state(session);
+     session->sampling_backend_verifying = false;
+-- 
+2.54.0 (Apple Git-157)
+

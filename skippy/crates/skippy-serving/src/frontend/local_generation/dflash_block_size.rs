@@ -30,8 +30,14 @@ pub(super) const MIN_SERIAL_SAMPLES: f64 = 2.0;
 const SEED_ACCEPTANCE_WEIGHT: f64 = 4.0;
 
 /// Whether DFlash block lengths adapt instead of using the configured maximum.
+/// On by default: on every machine measured, adaptive matched or beat the best
+/// fixed length. `SKIPPY_DFLASH_ADAPTIVE=0` pins blocks at the maximum.
 pub(super) fn adaptive_enabled() -> bool {
-    std::env::var("SKIPPY_DFLASH_ADAPTIVE").is_ok_and(|value| value == "1")
+    adaptive_enabled_by(std::env::var("SKIPPY_DFLASH_ADAPTIVE").ok().as_deref())
+}
+
+fn adaptive_enabled_by(setting: Option<&str>) -> bool {
+    setting != Some("0")
 }
 
 /// Decayed least-squares fit of `time = intercept + slope * rows`, plus the
@@ -267,6 +273,13 @@ pub(super) fn record_shared(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adaptive_is_on_unless_turned_off() {
+        assert!(adaptive_enabled_by(None));
+        assert!(adaptive_enabled_by(Some("1")));
+        assert!(!adaptive_enabled_by(Some("0")));
+    }
 
     fn linear_cost(intercept: f64, slope: f64, draft: f64) -> BlockCost {
         let mut cost = BlockCost::default();

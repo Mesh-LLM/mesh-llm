@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 mod certification;
 mod deployment;
+mod dflash_draft;
 pub(crate) mod diagnostics;
 mod hooks;
 mod loading;
@@ -19,6 +20,7 @@ mod package;
 mod projector;
 #[cfg(test)]
 mod resolver_host_tests;
+pub(crate) use dflash_draft::materialize_default_dflash_draft;
 use mesh_llm_skippy_adapter::config as resolver;
 pub(crate) use projector::materialize_projector_url;
 pub(crate) mod runtime_events;
