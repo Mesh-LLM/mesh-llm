@@ -1,24 +1,26 @@
 use clap::Parser;
 use mesh_llm_cli::Cli;
 use serde_json::json;
+use std::future::Future;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-fn dispatch_on_application_stack(cli: Cli) -> anyhow::Result<bool> {
+fn run_on_application_stack<F, Fut>(test: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = ()>,
+{
     std::thread::Builder::new()
         .stack_size(crate::DEFAULT_THREAD_STACK_SIZE)
         .spawn(move || {
             let mut builder = tokio::runtime::Builder::new_current_thread();
             builder.enable_all();
-            builder
-                .build()
-                .expect("test runtime")
-                .block_on(super::dispatch(&cli))
+            builder.build().expect("test runtime").block_on(test())
         })
-        .expect("spawn dispatch thread")
+        .expect("spawn application-stack test thread")
         .join()
-        .expect("dispatch thread")
+        .expect("application-stack test should not panic");
 }
 
 fn parse_cli(args: &[&str]) -> Cli {
@@ -71,48 +73,46 @@ async fn spawn_loading_node() -> (u16, tokio::task::JoinHandle<serde_json::Value
     (port, server)
 }
 
-#[tokio::test]
-async fn load_sends_requested_context_size_and_lanes() {
-    let (port, server) = spawn_loading_node().await;
-    let port_arg = port.to_string();
-    let cli = parse_cli(&[
-        "mesh-llm",
-        "load",
-        "org/model",
-        "--port",
-        &port_arg,
-        "--ctx-size",
-        "8192",
-        "--parallel",
-        "1",
-    ]);
+#[test]
+fn load_sends_requested_context_size_and_lanes() {
+    run_on_application_stack(|| async {
+        let (port, server) = spawn_loading_node().await;
+        let port_arg = port.to_string();
+        let cli = parse_cli(&[
+            "mesh-llm",
+            "load",
+            "org/model",
+            "--port",
+            &port_arg,
+            "--ctx-size",
+            "8192",
+            "--parallel",
+            "1",
+        ]);
 
-    tokio::task::spawn_blocking(move || dispatch_on_application_stack(cli))
-        .await
-        .expect("dispatch task")
-        .expect("load should succeed");
+        super::dispatch(&cli).await.expect("load should succeed");
 
-    assert_eq!(
-        server.await.expect("node task"),
-        json!({"model": "org/model", "ctx_size": 8192, "parallel": 1})
-    );
+        assert_eq!(
+            server.await.expect("node task"),
+            json!({"model": "org/model", "ctx_size": 8192, "parallel": 1})
+        );
+    });
 }
 
-#[tokio::test]
-async fn load_without_sizing_flags_sends_only_the_model() {
-    let (port, server) = spawn_loading_node().await;
-    let port_arg = port.to_string();
-    let cli = parse_cli(&["mesh-llm", "load", "org/model", "--port", &port_arg]);
+#[test]
+fn load_without_sizing_flags_sends_only_the_model() {
+    run_on_application_stack(|| async {
+        let (port, server) = spawn_loading_node().await;
+        let port_arg = port.to_string();
+        let cli = parse_cli(&["mesh-llm", "load", "org/model", "--port", &port_arg]);
 
-    tokio::task::spawn_blocking(move || dispatch_on_application_stack(cli))
-        .await
-        .expect("dispatch task")
-        .expect("load should succeed");
+        super::dispatch(&cli).await.expect("load should succeed");
 
-    assert_eq!(
-        server.await.expect("node task"),
-        json!({"model": "org/model"})
-    );
+        assert_eq!(
+            server.await.expect("node task"),
+            json!({"model": "org/model"})
+        );
+    });
 }
 
 #[tokio::test]
@@ -143,22 +143,22 @@ async fn load_that_outlasts_the_client_timeout_reports_still_loading() {
     assert!(!text.contains("Can't connect"), "{text}");
 }
 
-#[tokio::test]
-async fn load_against_a_closed_port_reports_cannot_connect() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let port_arg = listener
-        .local_addr()
-        .expect("local addr")
-        .port()
-        .to_string();
-    drop(listener);
-    let cli = parse_cli(&["mesh-llm", "load", "org/model", "--port", &port_arg]);
+#[test]
+fn load_against_a_closed_port_reports_cannot_connect() {
+    run_on_application_stack(|| async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port_arg = listener
+            .local_addr()
+            .expect("local addr")
+            .port()
+            .to_string();
+        drop(listener);
+        let cli = parse_cli(&["mesh-llm", "load", "org/model", "--port", &port_arg]);
 
-    let error = tokio::task::spawn_blocking(move || dispatch_on_application_stack(cli))
-        .await
-        .expect("dispatch task")
-        .expect_err("a closed port should fail the client");
-
-    let text = format!("{error:#}");
-    assert!(text.contains("Can't connect"), "{text}");
+        let error = super::dispatch(&cli)
+            .await
+            .expect_err("a closed port should fail the client");
+        let text = format!("{error:#}");
+        assert!(text.contains("Can't connect"), "{text}");
+    });
 }
