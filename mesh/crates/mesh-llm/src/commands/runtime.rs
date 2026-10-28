@@ -427,21 +427,37 @@ pub(crate) async fn run_load_with_timeout(
         .connect_timeout(timeout.min(std::time::Duration::from_secs(5)))
         .timeout(timeout)
         .build()?;
+    let token = load_owner_control_token(port).await?;
     let url = format!("http://127.0.0.1:{port}/api/runtime/models");
     let resp = client
         .post(&url)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!(
-                "Bearer {}",
-                mesh_llm_commands::owner_control::owner_control_token(port).await?
-            ),
-        )
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
         .json(&build_load_request(model_name, sizing))
         .send()
         .await
         .map_err(|error| load_send_error(error, model_name, port))?;
     display_runtime_result(resp, model_name, "Loaded").await
+}
+
+/// The credential fetch is the first request `load` sends, so a node that is
+/// not running fails here. Report that the same way as a refused load request.
+async fn load_owner_control_token(port: u16) -> Result<String> {
+    mesh_llm_commands::owner_control::owner_control_token(port)
+        .await
+        .map_err(|error| {
+            let refused = error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<reqwest::Error>()
+                    .is_some_and(reqwest::Error::is_connect)
+            });
+            if refused {
+                error.context(format!(
+                    "Can't connect to mesh-llm on port {port}. Is it running?"
+                ))
+            } else {
+                error
+            }
+        })
 }
 
 /// The route answers only when the load ends, so a timeout after the node
