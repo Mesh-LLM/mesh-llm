@@ -1,0 +1,32 @@
+{
+  "revision": "spark-any-diagnostic-1",
+  "authorization": "Use any available Spark; replace the queued node-pinned diagnostic",
+  "target": {
+    "executor": "lab",
+    "selector": {
+      "os": {"family": "linux"},
+      "arch": {"in": ["aarch64"]},
+      "accelerator": {"backend": "cuda", "model": {"in": ["NVIDIA GB10"]}, "count": {"min": 1}},
+      "memory": {"system_gib": {"min": 120}, "unified": true},
+      "storage": {"mounted": true}
+    }
+  },
+  "supersedes_queued_job": "job_cwz16nkebb87gda",
+  "scope": "Source-identical diagnostic reproduction on newly selected hardware, not an exact-binary replay of the previous machine and not a replacement performance screen",
+  "native_tree": "c81b95e77324501872f9aac8acc2488d9365df63",
+  "references": {
+    "B": "3947de0cbc73fe5cbcaae548b297f03a401532d7",
+    "C": "a9b37b71bb9ebcff51e321e7fcedba323f7d9458"
+  },
+  "sequence": [
+    "Let JY select eligible capacity; no node list and no interference with other jobs",
+    "Check model hash, compiler, CUDA/driver/architecture, debugger and thermal prerequisites on the actual selected machine",
+    "Build the same B/C/D/R native sources and flags there; retain binary hashes, native trees, compilation databases and differential-test evidence",
+    "Independently audit and read back shared MLflow before admitting model-based follow-through",
+    "Capture once with the frozen B source on that machine, freeze all fixture/logit hashes and run affected correctness before diagnostic profiling",
+    "Record fresh diagnostic stacks as a separate hardware scope; do not pool them with prior performance results"
+  ],
+  "placement_after_selection": "Any later same-binary dependency must use the selected producer or an explicitly verified artifact handoff. Never assume a node-local retained path exists elsewhere.",
+  "unchanged": "M6 work, original Spark failed screen, frozen B primary, R diagnostic only, all correctness/numerical gates, and the prohibition on performance PRs before qualification",
+  "budget": {"max_duration_s": 7200, "max_usd": 0, "retries": 0}
+}
