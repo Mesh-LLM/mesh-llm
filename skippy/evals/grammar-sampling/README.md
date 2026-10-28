@@ -58,3 +58,17 @@ requires fresh correctness checks, the existing five-block development screen,
 and 30 new qualification blocks with unchanged gates. Earlier timings cannot
 qualify the revised source. Revision 2's planned screen was stopped incomplete
 before outcome inspection; it contributed no accepted performance result.
+
+Revision 4 restored vectorization but its five-block screen still failed: sampler
+C/B was 1.00893 overall (upper bound 1.01176), and 1.01853 before lazy trigger
+activation. Revision 5 leaves the native patch queue unchanged, moves evaluator
+validity assertions outside timing, and adds a diagnostic reference control in
+the candidate process. It runs all five cases in six balanced B/R/C blocks
+after three discarded warmup blocks, with 20 repetitions per cell. `R` is the
+real llama.cpp sampler inside the candidate binary, sharing its process with C.
+No decode or qualification claim is made from this diagnostic.
+
+Select `diagnostic` as the controller phase after the normal build/correctness
+prerequisites. Preserve the raw observations and independently audit C/B, R/B,
+and C/R comparisons. A later production change still requires its own fresh
+correctness, passing development screen, and 30-block qualification.

@@ -1,8 +1,8 @@
 {
   "campaign": "max-grammar-sampling-abc-20261028",
-  "protocol_revision": 4,
+  "protocol_revision": 5,
   "question": "Can Skippy avoid full-vocabulary grammar filtering on valid proposals while matching llama.cpp performance and tool-call correctness?",
-  "proposal": "Use upstream's sampling-first, single-token grammar validation and grammar-first fallback in Skippy's native chat sampler. Preserve lazy triggers, reasoning-budget handling, accepted-token history and MTP rejection recovery. Initialize the reused candidate array in a helper with by-value loop inputs, avoiding the reference-capturing lambda that prevented M6 vectorization. Do not disable grammar or change Max tool policy.",
+  "proposal": "Use upstream's sampling-first, single-token grammar validation and grammar-first fallback in Skippy's native chat sampler. Preserve lazy triggers, reasoning-budget handling, accepted-token history and MTP rejection recovery. Initialize the reused candidate array in a helper with by-value loop inputs, avoiding the reference-capturing lambda that prevented M6 vectorization. Do not disable grammar or change Max tool policy. Move evaluator grammar-validity assertions outside the timed interval. Before another production change, compare the unchanged revision-4 native sampler with llama.cpp in both baseline and candidate binaries using a diagnostic-only balanced control.",
   "execution": {
     "measurement_location": "JY only",
     "local_measurements_permitted": false,
@@ -75,7 +75,7 @@
       "temperature",
       "distribution"
     ],
-    "adapter": "Both native arms use the same llama_context configuration and directly exercise the production sampler entrypoints. Prompt history is settled before timing; generated history is settled inside the next timed sample. Matched decode is teacher-forced to remove output-length and logit-input confounds. This is not a Max end-to-end benchmark.",
+    "adapter": "Both native arms use the same llama_context configuration and directly exercise the production sampler entrypoints. Prompt history is settled before timing; generated history is settled inside the next timed sample. Matched decode is teacher-forced to remove output-length and logit-input confounds. This is not a Max end-to-end benchmark. Evaluator grammar-validity checks run after elapsed-time capture; failed checks still invalidate the job.",
     "resident_processes": "One baseline process serves A/B and one candidate process serves C. Both remain resident; only one computes at a time. This avoids model loading between paired blocks.",
     "native_sampler_perf_counters": "Disabled in all arms. Skippy uses llama_sampler_chain_default_params.no_perf=true; the reference explicitly sets common_params_sampling.no_perf=true. Only the evaluator monotonic timers measure sampling."
   },
@@ -115,7 +115,7 @@
     "decode_repetitions_per_cell": 1,
     "warmup_definition": "Three discarded complete blocks before each measurement phase, with the same per-cell repetition counts.",
     "development_overlap": "All five synthetic cases are shared between screening and qualification. The 30 qualification timing blocks are fresh; do not describe repeats as independent dataset samples.",
-    "development_reference": "Revision 2's planned five-block screen was stopped incomplete before outcome inspection. Revision 3 completed 30 fresh blocks and failed the sampler gate despite improving existing Skippy. Revision 4 requires its own verified build/correctness and five-block screen before 30 new qualification blocks. No earlier timing is reused.",
+    "development_reference": "Revision 2's planned five-block screen was stopped incomplete before outcome inspection. Revision 3 completed 30 fresh blocks and failed the sampler gate despite improving existing Skippy. Revision 4 requires its own verified build/correctness and five-block screen before 30 new qualification blocks. No earlier timing is reused. Revision 4 passed correctness but failed its five-block screen: aggregate sampler C/B 1.008926, upper 1.011759; lazy case 1.018528, upper 1.023724. Revision 5 first diagnoses unchanged native revision-4 code under the corrected timing boundary; no historical timing can qualify it.",
     "screen_advancement": "The five-block audit must pass within_one_percent and improves_existing. qualified_speed remains false until a separate 30-block qualification passes. Every original correctness, source, hardware, confidence and 1% gate remains mandatory."
   },
   "qualification": {
@@ -135,5 +135,34 @@
     "Revision 2 was incomplete diagnostic screening against the installed 2c82637 source. Revisions 3 and 4 use the frozen 3947de0 baseline. Do not mix source revisions or reuse earlier qualification speed.",
     "Revision 2 used the reference sampler default perf counters. Revisions 3 and 4 disable counters in all arms; no revision-2 performance is qualification evidence.",
     "Revision 3 reduced aggregate sampler latency by 83.7% versus existing Skippy but remained 14.5% slower than llama.cpp. Its verified failed-gate result is retained in MLflow run f316392f8bf240bdbb906dbb5719a7b3. Instruments localized the residual to Skippy candidate initialization, whose scalar loop reloaded the captured vocabulary size per token while the reference used vector instructions."
-  ]
+  ],
+  "diagnostic": {
+    "question": "Distinguish native sampler overhead from process/build history under a corrected symmetric timing boundary. Inspect the growing-buffer lazy-trigger hypothesis before changing production matching.",
+    "production_change": "None: the native patch queue is byte-identical to revision 4.",
+    "arms": {
+      "B": "Real llama.cpp sampler in baseline binary/process",
+      "R": "Real llama.cpp sampler in candidate binary/process",
+      "C": "Revision-4 Skippy sampler in the same candidate binary/process as R"
+    },
+    "cases": "All five admitted fixtures; unchanged captured inputs and sampler settings.",
+    "scope": "Fixed-input native sampler only; no decode or Max end-to-end qualification.",
+    "measured_blocks": 6,
+    "discarded_warmup_blocks": 3,
+    "orders": [
+      "BRC",
+      "RCB",
+      "CBR",
+      "CRB",
+      "BCR",
+      "RBC"
+    ],
+    "repetitions_per_cell": 20,
+    "qualification": "Diagnostic only. All six measured blocks and per-token observations retained. Report C/B, R/B and C/R paired ratios with confidence intervals; no PR or qualification claim follows from this diagnostic.",
+    "hypotheses": [
+      "B normalizes the preserved single-token WORD tool trigger to a token ID while Skippy retains a regex. Growing-buffer regex matching may explain the increasing lazy-case excess.",
+      "A/B shared process history can affect B. This diagnostic compares reference implementations across binaries without running A.",
+      "The former C/A-only timed assertion could allocate a temporary error string. Moving it outside timing removes that evaluator asymmetry; magnitude is not presumed."
+    ],
+    "next_candidate": "If supported, conservative literal substring matching for provably literal nonempty ASCII trigger patterns, preserving multi-piece text semantics. Keep any environment-guard reorder as a separate production change."
+  }
 }

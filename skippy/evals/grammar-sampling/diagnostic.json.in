@@ -1,0 +1,69 @@
+{
+  "spec": {
+    "name": "Grammar sampler \u2014 M6 residual B/R/C control",
+    "description": "Diagnostic only: unchanged revision-4 native patches with evaluator validity checks outside timing. Compare real llama.cpp in baseline and candidate binaries plus Skippy in the candidate process; six balanced blocks, three warmups, twenty repetitions, all five fixed-input cases. No decode or qualification claim.",
+    "target": {
+      "executor": "lab",
+      "nodes": [
+        "macmini-gq7vhw"
+      ],
+      "os": "macos"
+    },
+    "runtime": {
+      "model_package": {
+        "ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5",
+        "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        "egress": "lab_only"
+      },
+      "models": [
+        {
+          "ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5",
+          "env": "MODEL_DIR",
+          "delivery": "cache",
+          "pin": true
+        }
+      ],
+      "flags": {
+        "phase": "diagnostic",
+        "product_commit": "${product_sha}",
+        "baseline_commit": "3947de0cbc73fe5cbcaae548b297f03a401532d7",
+        "build_job_id": "${build_job_id}",
+        "build_run_id": "${build_run_id}",
+        "input_manifest_sha256": "${input_manifest_sha256}",
+        "binary_manifest_sha256": "${binary_manifest_sha256}"
+      },
+      "command": "set -eu\ncd \"${retained_workspace}\"\ntest \"$(git rev-parse HEAD)\" = '${product_sha}'\ntest -z \"$(git status --porcelain --untracked-files=no)\"\ncommand -v jq\nprintf '%s  %s\\n' '${binary_manifest_sha256}' .deps/grammar-receipts/binary-hashes.txt | shasum -a 256 -c -\nprintf '%s  %s\\n' '${input_manifest_sha256}' .deps/grammar-receipts/input-hashes.txt | shasum -a 256 -c -\nshasum -a 256 -c .deps/grammar-receipts/binary-hashes.txt\nshasum -a 256 -c .deps/grammar-receipts/input-hashes.txt\nprintf '%s  %s\\n' 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8 \"$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf\" | shasum -a 256 -c -\nmkdir -p \"$JIANYANG_ARTIFACT_DIR\"\nOUTPUT=$(mktemp -d \"$PWD/.deps/grammar-diagnostic.XXXXXX\")\n.deps/grammar-C/grammar-controller .deps/grammar-A/grammar-sampling .deps/grammar-C/grammar-sampling \"$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf\" \"$PWD/.deps/grammar-inputs\" \"$OUTPUT\" 'diagnostic' > \"$JIANYANG_ARTIFACT_DIR/measurement.log\" 2>&1\ncp \"$OUTPUT/\"*.json* \"$JIANYANG_ARTIFACT_DIR/\"\ncp .deps/grammar-receipts/*.txt \"$JIANYANG_ARTIFACT_DIR/\"\nshasum -a 256 \"$JIANYANG_ARTIFACT_DIR/\"* > \"$OUTPUT/artifact-hashes.txt\"\ncp \"$OUTPUT/artifact-hashes.txt\" \"$JIANYANG_ARTIFACT_DIR/\"\nprintf 'Diagnostic observations retained; no qualification claim\\n'"
+    },
+    "harness": {
+      "name": "custom",
+      "version": "grammar-sampling-r5-diagnostic",
+      "trace": {
+        "kind": "file",
+        "ref": "synthetic-tool-grammar-fixed-logits",
+        "sha256": "${input_manifest_sha256}"
+      },
+      "seed": 73,
+      "warmup_requests": 3,
+      "concurrency": [
+        1
+      ],
+      "request_count": 1,
+      "args": {
+        "phase": "diagnostic",
+        "measured_blocks": 6,
+        "sampler_repetitions_per_cell": 20
+      }
+    },
+    "budget": {
+      "max_usd": 0,
+      "max_duration_s": 1800,
+      "grace_s": 120
+    },
+    "retries": 0,
+    "labels": {
+      "campaign": "max-grammar-sampling-abc-20261028",
+      "phase": "diagnostic",
+      "protocol": "5"
+    }
+  }
+}

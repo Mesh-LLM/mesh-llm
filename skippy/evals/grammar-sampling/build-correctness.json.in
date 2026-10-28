@@ -1,6 +1,6 @@
 {
   "spec": {
-    "name": "Grammar sampler A/B/C — M6 build and correctness",
+    "name": "Grammar sampler A/B/C \u2014 M6 build and correctness",
     "description": "Build immutable existing Skippy and sampling-first candidate sources. Run native sampling/checkpoint tests and seeded B/C correctness on Qwen3.5-9B Q4_K_M. Capture fixed teacher-forced logits for subsequent measurements. No performance qualification in this phase.",
     "target": {
       "executor": "lab",
@@ -46,7 +46,7 @@
       "version": "adhoc",
       "trace": {
         "kind": "synthetic",
-        "ref": "grammar-sampling-correctness-r4"
+        "ref": "grammar-sampling-correctness-r5"
       },
       "seed": 73,
       "warmup_requests": 0,
@@ -64,7 +64,7 @@
     "labels": {
       "campaign": "max-grammar-sampling-abc-20261028",
       "phase": "build-correctness",
-      "protocol": "4"
+      "protocol": "5"
     }
   }
 }

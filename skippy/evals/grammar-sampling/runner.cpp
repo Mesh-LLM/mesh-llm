@@ -55,7 +55,6 @@ struct samplers {
             session.token_history.push_back(pending);
         }
         auto token = skippy_sample_token_ith(&session, &config, -1);
-        require(session.grammar_sampler != nullptr, "grammar unexpectedly disabled");
         return token;
     }
 };
@@ -155,6 +154,9 @@ static json measure(native_runtime & rt, const fixture & input, const std::files
                 rt.decode(input.continuation[i], static_cast<int>(input.prompt.size() + i));
             }
             const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - start).count();
+            if (!sample.upstream) {
+                require(sample.session.grammar_sampler != nullptr, "grammar unexpectedly disabled");
+            }
             require(selected >= 0 && selected < llama_vocab_n_tokens(rt.vocab), "invalid sampled token");
             times.push_back(ns);
             decisions.push_back(selected);
