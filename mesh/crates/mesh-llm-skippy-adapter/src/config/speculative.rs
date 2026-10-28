@@ -131,7 +131,7 @@ pub(super) fn resolve_speculative_config(
             model_path,
         },
     )? {
-        let draft_max_tokens = dflash_max_draft_tokens(configured_draft_max_tokens);
+        let draft_max_tokens = dflash_max_draft_tokens(configured_draft_max_tokens, default_dflash);
         let base = resolve_decode_config(DecodeResolutionInput {
             requested_strategy: "disabled",
             native_mtp_enabled: false,

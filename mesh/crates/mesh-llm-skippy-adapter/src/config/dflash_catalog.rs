@@ -40,6 +40,8 @@ pub struct DFlashDraftSource {
 pub struct DFlashPairing {
     pub target: DFlashTarget,
     pub draft: DFlashDraftSource,
+    /// Most draft tokens per block the draft can propose (its block size - 1).
+    pub max_draft_tokens: u32,
     /// Default the draft on only under Metal, where it measured faster.
     pub metal_only: bool,
 }
@@ -60,6 +62,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             sha256: "27b9d18e605aea9c50ef506e4b63921e0dc624cc91c63c60617a8295f153d436",
             bytes: 1_383_768_224,
         },
+        max_draft_tokens: 15,
         metal_only: false,
     },
     // Qwen3.6-27B; the draft reads target layers 2..=62 at width 5120.
@@ -77,9 +80,12 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1",
             bytes: 1_849_481_472,
         },
+        max_draft_tokens: 15,
         metal_only: false,
     },
-    // Qwen3.6-35B-A3B; the draft reads target layers 2..=38 at width 2048.
+    // Qwen3.6-35B-A3B; a DFlash2 draft (8-token blocks with a path selector)
+    // reading target layers 2..=38 at width 2048. On a DGX Spark it decodes
+    // 107.6 tok/s adaptive against 102.6 for the original DFlash draft.
     DFlashPairing {
         target: DFlashTarget {
             architecture: "qwen35moe",
@@ -88,12 +94,13 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             expert_count: 256,
         },
         draft: DFlashDraftSource {
-            repo: "Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp",
-            revision: "2aa57b642f211d2639083954c5b66d9c1ee503fc",
-            file: "Qwen3.6-35B-A3B-DFlash-Q8_0.gguf",
-            sha256: "724ac8a102763e0d896cd49bf558fdf5bfdb146ec9f7097d18b035e4a95eac3f",
-            bytes: 421_060_800,
+            repo: "aminya/Qwen3.6-35B-A3B-DFlash2-GGUF",
+            revision: "1e26e3499d865b9d2fc55e019d65b3f0e8ab6846",
+            file: "Qwen3.6-35B-A3B-DFlash2-Q8_0.gguf",
+            sha256: "69bc81f5344dfeb67bcfc09277dd9617500fca1823f72e6e08d5df92e73a8b44",
+            bytes: 570_468_544,
         },
+        max_draft_tokens: 7,
         metal_only: false,
     },
     // Qwen3-Coder-Next; the draft reads target layers 4..=44 at width 2048.
@@ -114,6 +121,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             sha256: "139081af2f9f634b3b8bce8f75a0449f92bcb75ae7a2e32abaf1bcdf6f4a7952",
             bytes: 509_674_720,
         },
+        max_draft_tokens: 15,
         metal_only: true,
     },
 ];
@@ -231,7 +239,7 @@ mod tests {
         );
         assert_eq!(
             repos(&target_meta("qwen35moe", 40, 2048, 256)),
-            Some("Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp")
+            Some("aminya/Qwen3.6-35B-A3B-DFlash2-GGUF")
         );
         assert_eq!(
             repos(&target_meta("qwen3next", 48, 2048, 512)),
@@ -289,6 +297,15 @@ mod tests {
     fn draft_cap_defaults_per_backend() {
         assert_eq!(default_dflash_max_draft_tokens(true), 6);
         assert_eq!(default_dflash_max_draft_tokens(false), 15);
+    }
+
+    #[test]
+    fn every_draft_cap_fits_its_block() {
+        let moe = pairing_for_target(&target_meta("qwen35moe", 40, 2048, 256)).unwrap();
+        assert_eq!(moe.max_draft_tokens, 7);
+        for pairing in DFLASH_PAIRINGS {
+            assert!((1..=15).contains(&pairing.max_draft_tokens));
+        }
     }
 
     #[test]
