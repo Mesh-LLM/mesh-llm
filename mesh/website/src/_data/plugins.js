@@ -1,6 +1,6 @@
 // First-party Mesh-LLM plugins with a published GitHub release.
 // Single source for the homepage plugin strip and the Plugins docs table.
-// Only add a plugin here once it has a release with installable archives.
+// Plugins without a release yet use `install: null` and link to their README.
 const repo = (name) => `https://github.com/Mesh-LLM/${name}`;
 
 const escapeHtml = (text) =>
@@ -65,11 +65,22 @@ const plugins = [
     platforms: 'macOS, Linux, Windows',
   },
   {
+    name: 'slotstream',
+    icon: 'hard-drive',
+    repo: 'slotstream-plugin',
+    group: 'inference',
+    tagline: 'Huge MoE models streamed from your SSD',
+    summary:
+      'Preview. Serve a [Slotstream](https://github.com/carloslfu/slotstream) server on the mesh. Slotstream streams mixture-of-experts weights from SSD, so a roughly 105 GB Qwen3.8-Flash-Next fits on a Mac without holding it all in memory. Install Slotstream and its model separately; see the [README](https://github.com/Mesh-LLM/slotstream-plugin#readme).',
+    install: null,
+    platforms: 'macOS arm64 (14+)',
+  },
+  {
     name: 'openai-endpoint',
     icon: 'plug',
     repo: 'openai-endpoint-plugin',
     group: 'inference',
-    tagline: 'Share any inference engine you have on the mesh',
+    tagline: 'Share your inference engine with the mesh',
     summary:
       'Add an already-running OpenAI-compatible server such as Ollama, vLLM, LM Studio, TGI, or Lemonade Server.',
     install: 'mesh-llm plugins install openai-endpoint',
@@ -125,7 +136,7 @@ const plugins = [
     group: 'tools',
     tagline: 'Model prices in the console',
     summary:
-      'Preview. Read-only console page showing model prices on a mesh. No wallet needed. Install from the release archive; see the [README](https://github.com/Mesh-LLM/model-price-plugin#readme).',
+      'Preview. A read-only console page showing model prices on a mesh. No wallet needed. Install from the release archive; see the [README](https://github.com/Mesh-LLM/model-price-plugin#readme).',
     install: null,
     platforms: 'macOS, Linux, Windows',
   },
@@ -147,14 +158,22 @@ const plugins = [
   summaryHtml: toHtml(plugin.summary),
 }));
 
-// Keep `all` in group order so carousel cards and panels line up with the grouped docs.
-plugins.sort((a, b) => groups.findIndex((g) => g.id === a.group) - groups.findIndex((g) => g.id === b.group));
+// Carousel order mixes groups so payments and newer engines show up early.
+// The docs table still groups plugins by `groups` above.
+const carouselOrder = [
+  'ds4', 'lexe-wallet', 'uzu', 'slotstream', 'openai-endpoint', 'eredu',
+  'blackboard', 'flash-moe', 'agents', 'model-prices', 'capsules', 'metrics',
+];
+const rank = (plugin) => {
+  const i = carouselOrder.indexOf(plugin.name);
+  return i === -1 ? carouselOrder.length : i;
+};
 
 export default {
   groups: groups.map((group) => ({
     ...group,
     plugins: plugins.filter((plugin) => plugin.group === group.id),
   })),
-  all: plugins,
+  all: [...plugins].sort((a, b) => rank(a) - rank(b)),
   count: plugins.length,
 };
