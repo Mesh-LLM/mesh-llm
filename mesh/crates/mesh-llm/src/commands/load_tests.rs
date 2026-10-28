@@ -53,10 +53,27 @@ async fn read_request_body(stream: &mut TcpStream) -> Vec<u8> {
     request[header_end..header_end + content_length].to_vec()
 }
 
+/// Answers the owner-control credential fetch that `load` makes before it
+/// posts, so the following load request reaches the node under test.
+async fn serve_owner_control_token(listener: &TcpListener) {
+    let (mut stream, _) = listener.accept().await.expect("accept token request");
+    let _ = read_request_body(&mut stream).await;
+    let reply = r#"{"token":"load-test-secret"}"#;
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{reply}",
+        reply.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .expect("write token response");
+}
+
 async fn spawn_loading_node() -> (u16, tokio::task::JoinHandle<serde_json::Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("local addr").port();
     let server = tokio::spawn(async move {
+        serve_owner_control_token(&listener).await;
         let (mut stream, _) = listener.accept().await.expect("accept");
         let body = read_request_body(&mut stream).await;
         let reply = r#"{"loaded":"org/model","instance_id":"runtime-1"}"#;
@@ -120,6 +137,7 @@ async fn load_that_outlasts_the_client_timeout_reports_still_loading() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("local addr").port();
     let node = tokio::spawn(async move {
+        serve_owner_control_token(&listener).await;
         let (_stream, _) = listener.accept().await.expect("accept");
         std::future::pending::<()>().await;
     });
