@@ -78,13 +78,13 @@ pub(super) fn choose_dflash_draft(
     {
         return Ok(None);
     }
+    let metal = cfg!(target_os = "macos");
     let pairing = match default.target_meta {
-        Some(meta) => pairing_for_target(meta),
+        Some(meta) => pairing_for_target(meta, metal),
         None => scan_gguf_compact_meta(default.model_path)
             .as_ref()
-            .and_then(pairing_for_target),
-    }
-    .filter(|pairing| pairing.default_on(cfg!(target_os = "macos")));
+            .and_then(|meta| pairing_for_target(meta, metal)),
+    };
     Ok(pairing.map(|pairing| (pairing.draft.cache_path(), Some(pairing))))
 }
 

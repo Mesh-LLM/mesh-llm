@@ -42,8 +42,17 @@ pub struct DFlashPairing {
     pub draft: DFlashDraftSource,
     /// Most draft tokens per block the draft can propose (its block size - 1).
     pub max_draft_tokens: u32,
-    /// Default the draft on only under Metal, where it measured faster.
-    pub metal_only: bool,
+    /// The backends this pairing is the default on.
+    pub backends: Backends,
+}
+
+/// Where a pairing applies, so one target can default to a different draft
+/// per backend.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Backends {
+    All,
+    Metal,
+    NotMetal,
 }
 
 pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
@@ -63,7 +72,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             bytes: 1_383_768_224,
         },
         max_draft_tokens: 15,
-        metal_only: false,
+        backends: Backends::All,
     },
     // Qwen3.6-27B; the draft reads target layers 2..=62 at width 5120.
     DFlashPairing {
@@ -81,7 +90,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             bytes: 1_849_481_472,
         },
         max_draft_tokens: 15,
-        metal_only: false,
+        backends: Backends::All,
     },
     // Qwen3.6-35B-A3B; a DFlash2 draft (8-token blocks with a path selector)
     // reading target layers 2..=38 at width 2048. On a DGX Spark it decodes
@@ -101,7 +110,26 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             bytes: 570_468_544,
         },
         max_draft_tokens: 7,
-        metal_only: false,
+        backends: Backends::NotMetal,
+    },
+    // Qwen3.6-35B-A3B under Metal keeps the original DFlash draft: at cap 6 an
+    // M3 Ultra decodes 168.5 tok/s with it against 160.9 with DFlash2.
+    DFlashPairing {
+        target: DFlashTarget {
+            architecture: "qwen35moe",
+            layer_count: 40,
+            embedding_length: 2048,
+            expert_count: 256,
+        },
+        draft: DFlashDraftSource {
+            repo: "Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp",
+            revision: "2aa57b642f211d2639083954c5b66d9c1ee503fc",
+            file: "Qwen3.6-35B-A3B-DFlash-Q8_0.gguf",
+            sha256: "724ac8a102763e0d896cd49bf558fdf5bfdb146ec9f7097d18b035e4a95eac3f",
+            bytes: 421_060_800,
+        },
+        max_draft_tokens: 15,
+        backends: Backends::Metal,
     },
     // Qwen3-Coder-Next; the draft reads target layers 4..=44 at width 2048.
     // With 512 experts, verifying 8 rows costs 2.4 decode steps on a DGX Spark
@@ -122,15 +150,18 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             bytes: 509_674_720,
         },
         max_draft_tokens: 15,
-        metal_only: true,
+        backends: Backends::Metal,
     },
 ];
 
-/// The known pairing for the target `meta` describes.
-pub(super) fn pairing_for_target(meta: &GgufCompactMeta) -> Option<&'static DFlashPairing> {
+/// The known pairing for the target `meta` describes on this backend.
+pub(super) fn pairing_for_target(
+    meta: &GgufCompactMeta,
+    metal: bool,
+) -> Option<&'static DFlashPairing> {
     DFLASH_PAIRINGS
         .iter()
-        .find(|pairing| pairing.target.matches(meta))
+        .find(|pairing| pairing.target.matches(meta) && pairing.applies_on(metal))
 }
 
 /// The default cap on DFlash draft tokens per block. Adaptive block sizing
@@ -143,8 +174,12 @@ pub(super) fn default_dflash_max_draft_tokens(metal: bool) -> u32 {
 
 impl DFlashPairing {
     /// Whether this pairing is a default on the given backend.
-    pub(super) fn default_on(&self, metal: bool) -> bool {
-        metal || !self.metal_only
+    fn applies_on(&self, metal: bool) -> bool {
+        match self.backends {
+            Backends::All => true,
+            Backends::Metal => metal,
+            Backends::NotMetal => !metal,
+        }
     }
 }
 
@@ -228,7 +263,7 @@ mod tests {
 
     #[test]
     fn targets_match_by_metadata_whatever_the_quant() {
-        let repos = |meta: &GgufCompactMeta| pairing_for_target(meta).map(|p| p.draft.repo);
+        let repos = |meta: &GgufCompactMeta| pairing_for_target(meta, false).map(|p| p.draft.repo);
         assert_eq!(
             repos(&target_meta("qwen35", 32, 4096, 0)),
             Some("AtomicChat/Qwen3.5-9B-DFlash-GGUF")
@@ -241,26 +276,36 @@ mod tests {
             repos(&target_meta("qwen35moe", 40, 2048, 256)),
             Some("aminya/Qwen3.6-35B-A3B-DFlash2-GGUF")
         );
-        assert_eq!(
-            repos(&target_meta("qwen3next", 48, 2048, 512)),
-            Some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF")
-        );
         // A NextN block appended to the trunk is not a decoder layer.
         let mut with_mtp = target_meta("qwen35", 33, 4096, 0);
         with_mtp.nextn_predict_layers = 1;
-        assert!(pairing_for_target(&with_mtp).is_some());
+        assert!(pairing_for_target(&with_mtp, false).is_some());
     }
 
     #[test]
-    fn coder_next_defaults_on_only_under_metal() {
-        let coder = pairing_for_target(&target_meta("qwen3next", 48, 2048, 512)).unwrap();
-        assert!(coder.default_on(true));
-        assert!(!coder.default_on(false));
-        for pairing in DFLASH_PAIRINGS
-            .iter()
-            .filter(|p| p.target.architecture != "qwen3next")
-        {
-            assert!(pairing.default_on(true) && pairing.default_on(false));
+    fn drafts_are_chosen_per_backend() {
+        let repo =
+            |meta: &GgufCompactMeta, metal| pairing_for_target(meta, metal).map(|p| p.draft.repo);
+        let coder = target_meta("qwen3next", 48, 2048, 512);
+        assert_eq!(
+            repo(&coder, true),
+            Some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF")
+        );
+        assert_eq!(repo(&coder, false), None);
+        let moe = target_meta("qwen35moe", 40, 2048, 256);
+        assert_eq!(
+            repo(&moe, false),
+            Some("aminya/Qwen3.6-35B-A3B-DFlash2-GGUF")
+        );
+        assert_eq!(
+            repo(&moe, true),
+            Some("Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp")
+        );
+        for dense in [
+            target_meta("qwen35", 32, 4096, 0),
+            target_meta("qwen35", 64, 5120, 0),
+        ] {
+            assert!(repo(&dense, true).is_some() && repo(&dense, false).is_some());
         }
     }
 
@@ -272,7 +317,8 @@ mod tests {
             target_meta("qwen35moe", 40, 2048, 128),
             target_meta("qwen3", 32, 4096, 0),
         ] {
-            assert_eq!(pairing_for_target(&meta), None, "{meta:?}");
+            assert_eq!(pairing_for_target(&meta, false), None, "{meta:?}");
+            assert_eq!(pairing_for_target(&meta, true), None, "{meta:?}");
         }
     }
 
@@ -301,7 +347,7 @@ mod tests {
 
     #[test]
     fn every_draft_cap_fits_its_block() {
-        let moe = pairing_for_target(&target_meta("qwen35moe", 40, 2048, 256)).unwrap();
+        let moe = pairing_for_target(&target_meta("qwen35moe", 40, 2048, 256), false).unwrap();
         assert_eq!(moe.max_draft_tokens, 7);
         for pairing in DFLASH_PAIRINGS {
             assert!((1..=15).contains(&pairing.max_draft_tokens));
