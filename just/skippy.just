@@ -177,6 +177,12 @@ sampler-simd-controller native:
     cmake --build .deps/simd-controller --parallel 4 --target simd-controller simd-audit simd-contracts
     ctest --test-dir .deps/simd-controller --output-on-failure -R '^simd-orchestration-contracts$'
 
+# Sample an immutable Spark worker through its own GDB child; no perf privileges.
+[unix]
+sampler-simd-profiler-build native:
+    cmake -S skippy/evals/simd-top-k -B .deps/simd-controller -G Ninja -DSIMD_CONTROLLER_ONLY=ON -DLLAMA_ROOT="{{ native }}"
+    cmake --build .deps/simd-controller --parallel 4 --target simd-sample-stacks
+
 # Reuse the predecessor's affected native suite against an admitted arm build.
 [unix]
 sampler-simd-native-tests build:

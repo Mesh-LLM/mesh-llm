@@ -1,0 +1,31 @@
+{
+  "revision": "spark-v1-failure-attribution-1",
+  "purpose": "Attribute the failed Highway prototype before choosing its replacement. This is not another screen or qualification attempt.",
+  "failed_candidate_native_tree": "c81b95e77324501872f9aac8acc2488d9365df63",
+  "failed_screen": "job_g5a4dx43rdgjaay",
+  "hardware": "Retained Spark spark-000280; queue behind other users and never interrupt them",
+  "hypotheses": [
+    "Full-vocabulary scalar key packing or initialization dominates the extra cost",
+    "Highway's packed-key partial sort costs more than llama's small-k partial_sort",
+    "Tie detection frequently discards completed Highway work and invokes the original selector"
+  ],
+  "method": {
+    "worker": "Exact immutable D executable from the failed screen; do not rebuild or relink it",
+    "inputs": "Exact captured Spark logits and five frozen fixtures, verified against existing manifests",
+    "execution": "Own-child GDB asynchronous interrupt/stack snapshots, 20 ms requested interval, at most 3000 snapshots and 180 seconds per case",
+    "workload": "Production replay mode C, all five cases, 100 repetitions each; no decode qualification or performance comparison",
+    "calibration": "First verify GDB MI sampling against an owned model-free child on JY; a profiler failure does not justify changing product code",
+    "evidence": "Full debugger transcripts, sampled frame addresses, disassembly and binary/source/input/model hashes",
+    "interpretation": "Sampling is intrusive and overhead is uncontrolled. Counts only identify executed hot paths; do not interpret debugger timings as unprofiled latency or qualifying speed.",
+    "tie_hypothesis": "A stack in the original selector establishes fallback execution, not its frequency. If sampling cannot distinguish a hypothesis, add a separately frozen diagnostic rather than inventing attribution."
+  },
+  "decision_map": {
+    "packing": "Design a bounded candidate prefilter that avoids packing the entire vocabulary, then freeze a new source revision and repeat affected correctness and fresh screens",
+    "selection": "Replace the unsuitable selection primitive only after inspecting its measured path; retain exact ordering and boundary-tie fallback",
+    "fallback": "Investigate safe early refusal or detection before expensive selection; never change tie semantics",
+    "inconclusive": "Retain evidence and report the unresolved mechanism; no favorable-repeat screen"
+  },
+  "recording_repair": "Future timing jobs must carry durable in-run placement/process and thermal evidence. A post-run snapshot cannot stand in for missing observations. Archive every failed attempt and keep all existing numeric gates.",
+  "budget": {"max_duration_s": 1800, "max_usd": 0, "retries": 0},
+  "unchanged": "Frozen B primary, R diagnostic, M6 and Spark separate; no Max, KV, deployment, agents or performance PR"
+}

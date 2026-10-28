@@ -67,3 +67,10 @@ Variable ratios also have an independent closed-form check: five case factors
 and two doubled blocks give known case-balanced geometric means and binomial
 bootstrap quantiles. This checks aggregation and interval direction without
 copying the auditor's random-number or reduction implementation.
+
+The first Spark prototype missed the speed gates. Its
+[failure-attribution plan](spark-diagnostic-plan.json) samples the exact retained
+worker through an owned GDB child, without elevated perf privileges or a product
+rebuild. Build the component with `just sampler-simd-profiler-build NATIVE_ROOT`.
+Debugger transcripts and stack addresses are diagnostic evidence; their timings
+cannot qualify the candidate. Keep the failed screen and monitoring gap visible.
