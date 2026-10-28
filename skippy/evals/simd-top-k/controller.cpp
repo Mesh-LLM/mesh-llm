@@ -1,4 +1,5 @@
 #include "../grammar-sampling/worker.h"
+#include "host-observation.h"
 
 #include <array>
 #include <filesystem>
@@ -12,13 +13,22 @@ static void require(bool value, const char * message) {
 }
 
 static void measure(worker & target, const json & fixtures, std::ofstream & output,
+                    std::ofstream & host_output,
                     const std::string & phase, int block, char arm, const std::string & order) {
     for (int iteration = -3; iteration <= 0; ++iteration) {
         for (const bool decode : {false, true}) {
             for (const auto & input : fixtures) {
+                // These durable observations bracket the entire worker call,
+                // outside all per-token timing, and survive a client outage.
+                host_output << json({{"event", "before-call"}, {"block", block}, {"arm", std::string(1, arm)},
+                    {"case", input.at("name")}, {"iteration", iteration}, {"decode", decode},
+                    {"host", sampler_host_observation(false)}}) << std::endl;
                 auto row = target.call({{"action", "measure"}, {"arm", std::string(1, arm)},
                     {"case", input.at("name")}, {"decode", decode},
                     {"repetitions", decode ? 1 : 4}, {"block", block}, {"warmup", iteration < 0}});
+                host_output << json({{"event", "after-call"}, {"block", block}, {"arm", std::string(1, arm)},
+                    {"case", input.at("name")}, {"iteration", iteration}, {"decode", decode},
+                    {"host", sampler_host_observation(false)}}) << std::endl;
                 require(row.at("arm") == std::string(1, arm), "worker arm mismatch");
                 require(row.at("case") == input.at("name"), "worker case mismatch");
                 require(row.at("block") == block && row.at("warmup") == (iteration < 0), "worker block mismatch");
@@ -49,8 +59,11 @@ int main(int argc, char ** argv) {
         std::ifstream manifest_file(std::filesystem::path(argv[6]) / "fixtures.json");
         const auto fixtures = json::parse(manifest_file);
         require(fixtures.is_array() && fixtures.size() == 5, "expected all five admitted fixtures");
+        require(!std::filesystem::exists(out / "host-observations.jsonl"), "refusing to overwrite host observations");
         std::ofstream results(out / "observations.jsonl");
         results.exceptions(std::ios::badbit | std::ios::failbit);
+        std::ofstream host_output(out / "host-observations.jsonl");
+        host_output.exceptions(std::ios::badbit | std::ios::failbit);
         std::ofstream admitted(out / "admitted-fixtures.json");
         admitted.exceptions(std::ios::badbit | std::ios::failbit);
         admitted << fixtures.dump(2) << '\n';
@@ -66,10 +79,14 @@ int main(int argc, char ** argv) {
                 worker target(argv[executable], argv[5], argv[6]);
                 require(processes.insert(target.pid).second, "worker PID reused");
                 require(target.ready.at("fixtures") == fixtures, "worker fixture identity mismatch");
-                measure(target, fixtures, results, phase, block, arm, order);
+                host_output << json({{"event", "arm-start"}, {"block", block}, {"arm", std::string(1, arm)},
+                    {"host", sampler_host_observation(true)}}) << std::endl;
+                measure(target, fixtures, results, host_output, phase, block, arm, order);
                 std::cerr << "completed phase=" << phase << " block=" << block << " arm=" << arm
                           << " pid=" << target.pid << std::endl;
                 target.finish();
+                host_output << json({{"event", "arm-end"}, {"block", block}, {"arm", std::string(1, arm)},
+                    {"host", sampler_host_observation(true)}}) << std::endl;
             }
         }
         return 0;

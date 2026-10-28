@@ -74,3 +74,13 @@ worker through an owned GDB child, without elevated perf privileges or a product
 rebuild. Build the component with `just sampler-simd-profiler-build NATIVE_ROOT`.
 Debugger transcripts and stack addresses are diagnostic evidence; their timings
 cannot qualify the candidate. Keep the failed screen and monitoring gap visible.
+
+The controller now saves `host-observations.jsonl` on the execution node. It
+brackets every worker request with timestamps and available temperature readings,
+and records readable JY process working directories at each arm boundary.
+These operations run outside token timing. Unavailable readings remain null;
+process visibility is explicitly partial and cannot prove complete exclusivity.
+The job must retain this file alongside observations even on failure. External
+JY placement checks apply only to snapshots inside the execution window; a
+post-run snapshot never establishes conditions during measurement. This is a
+new orchestration revision requiring fresh controller admission and measurements.

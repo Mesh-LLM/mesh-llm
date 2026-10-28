@@ -1,4 +1,5 @@
 #include "json.hpp"
+#include "host-observation.h"
 
 #include <cerrno>
 #include <cmath>
@@ -168,12 +169,32 @@ static void audit_contracts(const std::string & auditor, const fs::path & root, 
           accepted.at("sampler_improves_at_least_five_percent") == false, "slower candidate passed gates");
 }
 
+static void host_contracts(const fs::path & root) {
+    const auto sensor = root / "sensors/hwmon0";
+    fs::create_directories(sensor);
+    { std::ofstream out(sensor / "name"); out << "synthetic-sensor"; }
+    { std::ofstream out(sensor / "temp1_input"); out << "52000\n"; }
+    { std::ofstream out(sensor / "temp2_input"); out << "unavailable\n"; }
+    { std::ofstream out(sensor / "temp3_input"); out << "999999999\n"; }
+    const auto readings = temperature_sensor_readings(root / "sensors");
+    check(readings.at("healthy").is_null() && readings.at("readings").size() == 3, "sensor availability became a health claim");
+    int valid = 0, unknown = 0;
+    for (const auto & item : readings.at("readings")) {
+        if (item.at("millidegrees_celsius").is_null()) { ++unknown; }
+        else { check(item.at("millidegrees_celsius") == 52000, "wrong sensor units"); ++valid; }
+    }
+    check(valid == 1 && unknown == 2, "unavailable temperature became healthy");
+    const auto missing = temperature_sensor_readings(root / "missing-sensors");
+    check(!missing.at("directory_error").is_null() && missing.at("healthy").is_null(), "missing sensors silently accepted");
+}
+
 int main(int argc, char ** argv) {
     try {
         if (argc == 4 && std::string(argv[2]) == "serve") { return synthetic_worker(argv[0]); }
         check(argc == 3, "usage: simd-contracts CONTROLLER AUDITOR");
         const auto root = fs::temp_directory_path() / ("simd-synthetic-contracts-" + std::to_string(getpid()));
         check(fs::create_directory(root), "contract directory already exists");
+        host_contracts(root);
         save(root / "fixtures.json", fixtures());
         std::vector<std::string> command{fs::absolute(argv[1]).string()};
         for (char arm : std::string("BCDR")) {
@@ -185,6 +206,16 @@ int main(int argc, char ** argv) {
         check(run(command) == 0, "four-arm synthetic controller failed");
         const auto rows = read_rows(root / "screen/observations.jsonl");
         check(rows.size() == 800, "controller produced incomplete screen");
+        const auto hosts = read_rows(root / "screen/host-observations.jsonl");
+        check(hosts.size() == 1640, "missing durable call brackets or arm observations");
+        int before = 0, after = 0;
+        for (const auto & host : hosts) {
+            check(host.at("host").at("unix_ms").get<int64_t>() > 0, "missing host observation timestamp");
+            check(host.at("host").at("temperatures").at("healthy").is_null(), "unknown sensors became healthy");
+            before += host.at("event") == "before-call";
+            after += host.at("event") == "after-call";
+        }
+        check(before == 800 && after == 800, "worker calls lack durable host observations");
         check(run(command) != 0, "controller overwrote existing evidence");
         auto invalid = command;
         invalid[7] = (root / "wrong-range").string();
