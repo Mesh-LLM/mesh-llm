@@ -22,6 +22,7 @@ struct fixture {
     std::vector<llama_token> continuation;
     bool force_rejection = false;
     bool include_eos = false;
+    bool partial_utf8_boundary = false;
 };
 
 void require(bool condition, const std::string & detail);

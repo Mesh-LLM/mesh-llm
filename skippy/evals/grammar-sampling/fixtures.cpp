@@ -95,7 +95,7 @@ std::vector<fixture> make_fixtures(llama_model * model) {
     const std::vector<std::pair<std::string, std::string>> texts = {
         {"lazy-before-tool-trigger", "I will create a small todo app with a list, checkboxes, and an input field. The page will work without a server."},
         {"large-HTML-write-argument", open + html + close},
-        {"Unicode-and-partial-UTF8", open + "<h1>café 日本語 🚀</h1><p>naïve Ελληνικά Привет 🌍</p>" + close},
+        {"Unicode-and-partial-UTF8", open + "<h1>café 日本語 🚀</h1><p>naïve Ελληνικά Привет 🌍 \xF4\x8F\xBF\xBD</p>" + close},
         {"restricted-values-and-rejection-fallback", "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"},
         {"closing-delimiters-and-EOS", open + "<p>Done</p>" + close}
     };
@@ -108,6 +108,17 @@ std::vector<fixture> make_fixtures(llama_model * model) {
         // tool grammar. This is a native sampler experiment, not agent quality.
         f.prompt = common_tokenize(vocab, "Write a small todo app in HTML.\n", true, true);
         f.continuation = common_tokenize(vocab, text, false, true);
+        for (auto token : f.continuation) {
+            const auto piece = common_token_to_piece(vocab, token, true);
+            if (!piece.empty() && (static_cast<unsigned char>(piece.front()) & 0xc0) == 0x80) {
+                f.partial_utf8_boundary = true;
+            }
+        }
+        if (name == "Unicode-and-partial-UTF8") {
+            // A rare valid private-use code point forces byte-level pieces;
+            // verify the boundary rather than merely assuming emoji split.
+            require(f.partial_utf8_boundary, "Unicode fixture lacks a partial UTF-8 token boundary");
+        }
         f.force_rejection = name == "restricted-values-and-rejection-fallback";
         if (f.force_rejection) {
             f.metadata = {{"grammar", "root ::= (\"true\\n\"){8}"}, {"grammar_lazy", false}, {"generation_prompt", ""}};
@@ -184,7 +195,8 @@ json fixture_manifest(const std::vector<fixture> & inputs) {
     json out = json::array();
     for (const auto & input : inputs) {
         out.push_back({{"name", input.name}, {"metadata", input.metadata}, {"prompt_tokens", input.prompt},
-                       {"teacher_tokens", input.continuation}, {"force_rejection", input.force_rejection}, {"include_eos", input.include_eos}});
+                       {"teacher_tokens", input.continuation}, {"force_rejection", input.force_rejection}, {"include_eos", input.include_eos},
+                       {"partial_utf8_boundary", input.partial_utf8_boundary}});
     }
     return out;
 }

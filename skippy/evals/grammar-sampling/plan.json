@@ -1,6 +1,6 @@
 {
   "campaign": "max-grammar-sampling-abc-20261028",
-  "protocol_revision": 2,
+  "protocol_revision": 3,
   "question": "Can Skippy avoid full-vocabulary grammar filtering on valid proposals while matching llama.cpp performance and tool-call correctness?",
   "proposal": "Use upstream's sampling-first, single-token grammar validation and grammar-first fallback in Skippy's native chat sampler. Preserve lazy triggers, reasoning-budget handling, accepted-token history and MTP rejection recovery. Reuse candidate storage where compatible; do not disable grammar or change Max tool policy.",
   "execution": {
@@ -24,7 +24,7 @@
   "arms": {
     "A": {
       "name": "Existing Skippy",
-      "product_base": "2c82637ba4499b421b7703f6efeb80c0b90098d1",
+      "product_base": "3947de0cbc73fe5cbcaae548b297f03a401532d7",
       "policy": "Production Skippy full-vocabulary grammar-first chat sampling"
     },
     "B": {
@@ -34,7 +34,7 @@
     },
     "C": {
       "name": "Skippy sampling-first candidate",
-      "product_base": "2c82637ba4499b421b7703f6efeb80c0b90098d1",
+      "product_base": "3947de0cbc73fe5cbcaae548b297f03a401532d7",
       "policy": "Proposed fix; executed commit and binary hashes must be frozen before dispatch"
     }
   },
@@ -92,7 +92,8 @@
       "fixed-input native sampler replay",
       "matched native decode workload",
       "separate free-running tool-call correctness and MTP recovery"
-    ]
+    ],
+    "Unicode_boundary": "The Unicode case includes a rare valid private-use code point. Admission verifies that at least one token piece begins with a UTF-8 continuation byte; a case name alone is not evidence of a split code point."
   },
   "statistics": {
     "development_paired_blocks": 5,
@@ -127,6 +128,7 @@
     "A result within 1% on a single uncontrolled timing is insufficient",
     "Latest upstream beyond the frozen baseline is outside the initial comparison",
     "The user selected Qwen3.5-9B Q4 for the 24 GB JY M6. This does not qualify 35B decode throughput.",
-    "The original M1 Ultra job was only a completed model/toolchain probe; it contributes no performance evidence."
+    "The original M1 Ultra job was only a completed model/toolchain probe; it contributes no performance evidence.",
+    "Revision 2 is diagnostic screening against the installed 2c82637 source. Final revision 3 qualifies current main 3947de0 plus the candidate, with fresh builds, correctness, screening and timing; do not mix the revisions."
   ]
 }
