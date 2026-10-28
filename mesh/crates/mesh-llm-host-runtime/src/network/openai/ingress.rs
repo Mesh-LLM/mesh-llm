@@ -1992,7 +1992,11 @@ pub(crate) async fn bootstrap_proxy(
     affinity: affinity::AffinityRouter,
 ) {
     let addr = if listen_all { "0.0.0.0" } else { "127.0.0.1" };
-    let listener = match tokio::net::TcpListener::bind(format!("{addr}:{port}")).await {
+    let listener = match crate::network::exclusive_listener::bind_exclusive_tcp_listener(&format!(
+        "{addr}:{port}"
+    ))
+    .await
+    {
         Ok(l) => l,
         Err(e) => {
             tracing::error!("Bootstrap proxy: failed to bind to port {port}: {e}");
