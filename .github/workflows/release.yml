@@ -1731,6 +1731,7 @@ jobs:
           backend: cpu
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
       - name: Upload native runtime
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -1877,6 +1878,7 @@ jobs:
           backend: ${{ matrix.backend }}
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
       - name: Upload native runtime
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
