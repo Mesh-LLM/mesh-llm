@@ -1,0 +1,347 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Wed, 28 Oct 2026 20:34:27 +1100
+Subject: [PATCH 15/15] metal: few-row tensor mat-mul prototype behind
+ GGML_METAL_MUL_MM_FR (measurement only)
+
+kernel_mul_mm_fr: the tensor-API mul_mm with a small src1 tile for verify-sized
+batches of 2-16 rows, in three tile variants (a, b, c). Off unless
+GGML_METAL_MUL_MM_FR selects a variant.
+---
+ ggml/src/ggml-metal/ggml-metal-device.cpp |  61 ++++++++++
+ ggml/src/ggml-metal/ggml-metal-device.h   |   2 +
+ ggml/src/ggml-metal/ggml-metal-ops.cpp    |  83 ++++++++++++++
+ ggml/src/ggml-metal/kernels/mul_mm.metal  | 130 ++++++++++++++++++++++
+ 4 files changed, 276 insertions(+)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index 2c7972b0a..2f3b6e56e 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -983,6 +983,67 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
+     return res;
+ }
+ 
++// Few-row tensor mat-mul tile variant selected by GGML_METAL_MUL_MM_FR (a, b or
++// c); 0 when unset, which leaves the existing kernels in charge.
++char ggml_metal_mul_mm_fr_variant(void) {
++    static const char variant = [] {
++        const char * env = getenv("GGML_METAL_MUL_MM_FR");
++        return (env != nullptr && (env[0] == 'a' || env[0] == 'b' || env[0] == 'c')) ? env[0] : '\0';
++    }();
++    return variant;
++}
++
++ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_fr(ggml_metal_library_t lib, const ggml_tensor * op) {
++    char base[256];
++    char name[256];
++
++    const char variant = ggml_metal_mul_mm_fr_variant();
++    GGML_ASSERT(variant != '\0');
++
++    // <weight rows, src1 rows, K step, simdgroups> per variant, matching mul_mm.metal
++    const int nra = variant == 'b' ? 128 : 64;
++    const int nrb = variant == 'c' ? 8   : 16;
++    const int nk  = variant == 'b' ? 32  : 64;
++    const int nsg = 4;
++
++    const ggml_type tsrc0 = op->src[0]->type;
++    const ggml_type tsrc1 = op->src[1]->type;
++
++    const bool bc_inp = op->src[0]->ne[0] % 32 != 0;
++
++    GGML_ASSERT(op->src[1]->ne[2] <= INT16_MAX && op->src[1]->ne[3] <= INT16_MAX);
++    const int16_t ne12 = (int16_t) op->src[1]->ne[2];
++    const int16_t ne13 = (int16_t) op->src[1]->ne[3];
++    const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
++    const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
++
++    snprintf(base, 256, "kernel_mul_mm_fr%c_%s_%s", variant, ggml_type_name(tsrc0), ggml_type_name(tsrc1));
++    snprintf(name, 256, "%s_bci=%d_ne12=%d_ne13=%d_r2=%d_r3=%d", base, bc_inp, ne12, ne13, r2, r3);
++
++    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
++    if (!res.pipeline) {
++        ggml_metal_cv_t cv = ggml_metal_cv_init();
++
++        ggml_metal_cv_set_bool(cv, bc_inp, FC_MUL_MM + 0);
++        ggml_metal_cv_set_bool(cv, false,  FC_MUL_MM + 1);
++        ggml_metal_cv_set_int16(cv, ne12,  FC_MUL_MM + 2);
++        ggml_metal_cv_set_int16(cv, ne13,  FC_MUL_MM + 3);
++        ggml_metal_cv_set_int16(cv, r2,    FC_MUL_MM + 4);
++        ggml_metal_cv_set_int16(cv, r3,    FC_MUL_MM + 5);
++
++        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
++
++        ggml_metal_cv_free(cv);
++    }
++
++    res.nr0  = nra;
++    res.nr1  = nrb;
++    res.nsg  = nsg;
++    res.smem = (size_t) nra * nk * sizeof(ggml_fp16_t);
++
++    return res;
++}
++
+ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_metal_library_t lib, const ggml_tensor * op) {
+     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
+     GGML_TENSOR_LOCALS( int32_t, ne1, op->src[1], ne);
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index e51558652..2e7da44e5 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -139,6 +139,8 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ex
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_mma        (ggml_metal_library_t lib, const struct ggml_tensor * op, int nsg, int nt, int rt, bool add);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_mma_auto   (ggml_metal_library_t lib, const struct ggml_tensor * op, bool add);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm            (ggml_metal_library_t lib, const struct ggml_tensor * op);
++struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_fr         (ggml_metal_library_t lib, const struct ggml_tensor * op);
++char ggml_metal_mul_mm_fr_variant(void);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv            (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id_map0    (ggml_metal_library_t lib, int ne02, int ne20);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id_amax(ggml_metal_library_t lib);
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 53c981618..5bec8f4d9 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -2586,6 +2586,85 @@ static int ggml_metal_op_mul_mat_mv(ggml_metal_op_t ctx, int idx) {
+     return 1;
+ }
+ 
++// Whether the few-row tensor mat-mul (kernel_mul_mm_fr*) takes this op: a
++// variant is selected, src1 is a contiguous f32 batch of a few rows, and the
++// src0 type has an instantiation.
++static bool ggml_metal_op_mul_mat_use_fr(const ggml_tensor * op) {
++    if (ggml_metal_mul_mm_fr_variant() == '\0') {
++        return false;
++    }
++    const ggml_tensor * src0 = op->src[0];
++    const ggml_tensor * src1 = op->src[1];
++    switch (src0->type) {
++        case GGML_TYPE_F16:
++        case GGML_TYPE_Q4_0:
++        case GGML_TYPE_Q8_0:
++        case GGML_TYPE_Q4_K:
++        case GGML_TYPE_Q5_K:
++        case GGML_TYPE_Q6_K:
++        case GGML_TYPE_IQ4_XS:
++            break;
++        default:
++            return false;
++    }
++    return src1->type == GGML_TYPE_F32 &&
++        src1->ne[1] >= 2 && src1->ne[1] <= 16 &&
++        src0->ne[0] % 32 == 0 &&
++        !ggml_is_transposed(src0) && !ggml_is_transposed(src1) &&
++        src1->nb[0] == sizeof(float) && src1->nb[1] % sizeof(float) == 0 &&
++        ggml_is_contiguous(op) &&
++        src1->ne[2] <= INT16_MAX && src1->ne[3] <= INT16_MAX;
++}
++
++static int ggml_metal_op_mul_mat_fr(ggml_metal_op_t ctx, int idx) {
++    ggml_tensor * op = ctx->node(idx);
++
++    ggml_metal_library_t lib = ctx->lib;
++    ggml_metal_encoder_t enc = ctx->enc;
++
++    GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
++    GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
++    GGML_TENSOR_LOCALS( int32_t, ne1, op->src[1], ne);
++    GGML_TENSOR_LOCALS(uint64_t, nb1, op->src[1], nb);
++    GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
++
++    const int16_t r2 = ne12/ne02;
++    const int16_t r3 = ne13/ne03;
++
++    auto pipeline = ggml_metal_library_get_pipeline_mul_mm_fr(lib, op);
++
++    ggml_metal_kargs_mul_mm args = {
++        /*.ne00 =*/ ne00,
++        /*.ne02 =*/ ne02,
++        /*.nb01 =*/ nb01,
++        /*.nb02 =*/ nb02,
++        /*.nb03 =*/ nb03,
++        /*.ne12 =*/ ne12,
++        /*.nb10 =*/ nb10,
++        /*.nb11 =*/ nb11,
++        /*.nb12 =*/ nb12,
++        /*.nb13 =*/ nb13,
++        /*.ne0  =*/ ne0,
++        /*.ne1  =*/ ne1,
++        /*.r2   =*/ r2,
++        /*.r3   =*/ r3,
++    };
++
++    ggml_metal_encoder_set_pipeline(enc, pipeline);
++    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
++    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
++    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
++    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
++
++    ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
++
++    ggml_metal_encoder_dispatch_threadgroups(enc,
++        (ne11 + pipeline.nr1 - 1) / pipeline.nr1, (ne01 + pipeline.nr0 - 1) / pipeline.nr0, ne12 * ne13,
++        32, pipeline.nsg, 1);
++
++    return 1;
++}
++
+ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+     ggml_tensor * op = ctx->node(idx);
+ 
+@@ -2598,6 +2677,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
+         return ggml_metal_op_fwht(ctx, idx);
+     }
+ 
++    if (props_dev->has_tensor && ggml_metal_op_mul_mat_use_fr(op)) {
++        return ggml_metal_op_mul_mat_fr(ctx, idx);
++    }
++
+     if (props_dev->has_simdgroup_mm && ggml_metal_op_mul_mat_use_mma(op)) {
+         return ggml_metal_op_mul_mat_mma(ctx, idx);
+     }
+diff --git a/ggml/src/ggml-metal/kernels/mul_mm.metal b/ggml/src/ggml-metal/kernels/mul_mm.metal
+index dfa5102c5..b3fe3dbb4 100644
+--- a/ggml/src/ggml-metal/kernels/mul_mm.metal
++++ b/ggml/src/ggml-metal/kernels/mul_mm.metal
+@@ -146,6 +146,110 @@ kernel void kernel_mul_mm(
+     cT.store(tD);
+ }
+ 
++// Few-row tensor mat-mul: the tensor kernel above with a small src1 tile, for
++// batches of a few rows such as speculative verification. The src1 tile holds
++// FR_NRB rows instead of 128, and each threadgroup dequantizes FR_NRA weight
++// rows over FR_NK of K per step, so a weight block is decoded once and applied
++// to every row of the batch.
++template<
++    short FR_NRA, short FR_NRB, short FR_NK, short FR_NSG,
++    typename SA, typename SA_4x4,
++    typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread SA_4x4 &),
++    typename T0, typename T0_4x4, typename T1>
++kernel void kernel_mul_mm_fr(
++        constant ggml_metal_kargs_mul_mm & args,
++        device const char * srcA,
++        device const char * srcB,
++        device       char * dst,
++        threadgroup  char * shmem [[threadgroup(0)]],
++        uint3  tgpig [[threadgroup_position_in_grid]],
++        ushort tiitg [[thread_index_in_threadgroup]]) {
++    const int K = args.ne00;
++    const int M = args.ne0;
++    const int N = args.ne1;
++
++    const int im  = tgpig.z;
++    const int i12 = im % FC_mul_mm_ne12;
++    const int i13 = im / FC_mul_mm_ne12;
++
++    const uint64_t offset0 = (i12/FC_mul_mm_r2)*args.nb02 + (i13/FC_mul_mm_r3)*args.nb03;
++
++    const int ra = tgpig.y * FR_NRA;
++    const int rb = tgpig.x * FR_NRB;
++
++    threadgroup SA * sa = (threadgroup SA *)(shmem);
++
++    constexpr int K_CHUNKS    = FR_NK / 16;
++    constexpr int WORK_ITEMS  = FR_NRA * K_CHUNKS;
++    constexpr int NUM_THREADS = N_SIMDWIDTH * FR_NSG;
++
++    device T1 * ptrB = (device T1 *)(srcB + args.nb12*i12 + args.nb13*i13);
++    const int strideB = args.nb11 / sizeof(T1);
++    auto tB = tensor(ptrB, dextents<int32_t, 2>(K, N), array<int, 2>({1, strideB}));
++    auto tA = tensor(sa, dextents<int32_t, 2>(FR_NK, FR_NRA));
++
++    mpp::tensor_ops::matmul2d<
++        mpp::tensor_ops::matmul2d_descriptor(
++            FR_NRB, FR_NRA, static_cast<int>(dynamic_extent), false, true, true,
++            mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate),
++        execution_simdgroups<FR_NSG>> mm;
++
++    auto cT = mm.template get_destination_cooperative_tensor<decltype(tB), decltype(tA), float>();
++
++    for (int loop_k = 0; loop_k < K; loop_k += FR_NK) {
++        for (int work = tiitg; work < WORK_ITEMS; work += NUM_THREADS) {
++            const int   row     = work / K_CHUNKS;
++            const int   k_chunk = work % K_CHUNKS;
++            const int   k_pos   = loop_k + k_chunk * 16;
++            const short k_base  = k_chunk * 16;
++
++            if (ra + row < M && k_pos < K) {
++                if (is_same<T0_4x4, block_q>::value && FC_mul_mm_bc_inp) {
++                    device const T0 * row_ptr = (device const T0 *)(srcA + args.nb01 * (ra + row) + offset0);
++                    FOR_UNROLL (short i = 0; i < 16; i++) {
++                        sa[row * FR_NK + (k_base + i)] = (k_pos + i < K) ? (SA) row_ptr[k_pos + i] : (SA)0;
++                    }
++                } else {
++                    const int   block_idx = k_pos / (16 * nl);
++                    const short il        = (k_pos / 16) % nl;
++
++                    device const block_q * row_ptr = (device const block_q *)(srcA + args.nb01 * (ra + row) + offset0);
++
++                    SA_4x4 temp_a;
++                    dequantize_func(row_ptr + block_idx, il, temp_a);
++
++                    FOR_UNROLL (short i = 0; i < 16; i++) {
++                        sa[row * FR_NK + (k_base + i)] = (k_pos + i < K) ? temp_a[i/4][i%4] : (SA)0;
++                    }
++                }
++            } else {
++                FOR_UNROLL (short i = 0; i < 16; i++) {
++                    sa[row * FR_NK + (k_base + i)] = (SA)0;
++                }
++            }
++        }
++
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++
++        const int kExt = min((int) FR_NK, K - loop_k);
++
++        auto tAv = tensor(sa, dextents<int32_t, 2>(kExt, FR_NRA), array<int, 2>({1, FR_NK}));
++        auto tBv = tensor(ptrB + loop_k + rb * strideB, dextents<int32_t, 2>(kExt, N - rb), array<int, 2>({1, strideB}));
++
++        mm.run(tBv, tAv, cT);
++
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++    }
++
++    const int tileM = min((int) FR_NRA, M - ra);
++    const int tileN = min((int) FR_NRB, N - rb);
++
++    device float * dstTile = (device float *)dst + (uint64_t) im * N * M + (uint64_t) rb * M + ra;
++
++    auto tD = tensor(dstTile, dextents<int32_t, 2>(tileM, tileN), array<int, 2>({1, M}));
++    cT.store(tD);
++}
++
+ #else
+ 
+ template<
+@@ -1073,3 +1177,29 @@ template [[host_name("kernel_mul_mm_id_iq1_m_f16")]]   kernel mul_mm_id kernel_m
+ template [[host_name("kernel_mul_mm_id_iq4_nl_f16")]]  kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_iq4_nl,  2,     dequantize_iq4_nl,  float,  float4x4,  half, half2x4>;
+ template [[host_name("kernel_mul_mm_id_iq4_xs_f16")]]  kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_iq4_xs,  QK_NL, dequantize_iq4_xs,  float,  float4x4,  half, half2x4>;
+ template [[host_name("kernel_mul_mm_id_tq2_0_f16")]]   kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_tq2_0,   QK_NL, dequantize_tq2_0,   float,  float4x4,  half, half2x4>;
++
++#ifdef GGML_METAL_HAS_TENSOR
++// few-row tensor mat-mul tile variants: <weight rows, src1 rows, K step, simdgroups>
++typedef decltype(kernel_mul_mm_fr<64, 16, 64, 4, half, half4x4, block_q4_0, 2, dequantize_q4_0, float, float4x4, float>) mul_mm_fr_t;
++template [[host_name("kernel_mul_mm_fra_f16_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 16, 64, 4, half, half4x4, half4x4, 1, dequantize_f16, half, half4x4, float>;
++template [[host_name("kernel_mul_mm_fra_q4_0_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 16, 64, 4, half, half4x4, block_q4_0, 2, dequantize_q4_0, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_fra_q8_0_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 16, 64, 4, half, half4x4, block_q8_0, 2, dequantize_q8_0, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_fra_q4_K_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 16, 64, 4, half, half4x4, block_q4_K, QK_NL, dequantize_q4_K, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_fra_q5_K_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 16, 64, 4, half, half4x4, block_q5_K, QK_NL, dequantize_q5_K, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_fra_q6_K_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 16, 64, 4, half, half4x4, block_q6_K, QK_NL, dequantize_q6_K, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_fra_iq4_xs_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 16, 64, 4, half, half4x4, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frb_f16_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<128, 16, 32, 4, half, half4x4, half4x4, 1, dequantize_f16, half, half4x4, float>;
++template [[host_name("kernel_mul_mm_frb_q4_0_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<128, 16, 32, 4, half, half4x4, block_q4_0, 2, dequantize_q4_0, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frb_q8_0_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<128, 16, 32, 4, half, half4x4, block_q8_0, 2, dequantize_q8_0, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frb_q4_K_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<128, 16, 32, 4, half, half4x4, block_q4_K, QK_NL, dequantize_q4_K, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frb_q5_K_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<128, 16, 32, 4, half, half4x4, block_q5_K, QK_NL, dequantize_q5_K, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frb_q6_K_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<128, 16, 32, 4, half, half4x4, block_q6_K, QK_NL, dequantize_q6_K, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frb_iq4_xs_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<128, 16, 32, 4, half, half4x4, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frc_f16_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 8, 64, 4, half, half4x4, half4x4, 1, dequantize_f16, half, half4x4, float>;
++template [[host_name("kernel_mul_mm_frc_q4_0_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 8, 64, 4, half, half4x4, block_q4_0, 2, dequantize_q4_0, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frc_q8_0_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 8, 64, 4, half, half4x4, block_q8_0, 2, dequantize_q8_0, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frc_q4_K_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 8, 64, 4, half, half4x4, block_q4_K, QK_NL, dequantize_q4_K, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frc_q5_K_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 8, 64, 4, half, half4x4, block_q5_K, QK_NL, dequantize_q5_K, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frc_q6_K_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 8, 64, 4, half, half4x4, block_q6_K, QK_NL, dequantize_q6_K, float, float4x4, float>;
++template [[host_name("kernel_mul_mm_frc_iq4_xs_f32")]] kernel mul_mm_fr_t kernel_mul_mm_fr<64, 8, 64, 4, half, half4x4, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, float>;
++#endif // GGML_METAL_HAS_TENSOR

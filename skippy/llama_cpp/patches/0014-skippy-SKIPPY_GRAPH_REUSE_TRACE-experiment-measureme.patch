@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Wed, 28 Oct 2026 20:34:27 +1100
+Subject: [PATCH 14/15] skippy: SKIPPY_GRAPH_REUSE_TRACE experiment
+ (measurement only)
+
+Reports why compute graphs are rebuilt instead of reused, to find what makes
+skippy rebuild the graph on every decode.
+---
+ src/llama-context.cpp | 28 ++++++++++++++++++++++++++++
+ src/llama-graph.h     | 25 ++++++++++++++++++-------
+ 2 files changed, 46 insertions(+), 7 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 4665d7791..228a583ee 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1635,6 +1635,34 @@ llm_graph_result * llama_context::process_ubatch(
+     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+     const auto gparams = graph_params(res, ubatch, mctx, gtype, graph_build_inputs);
+ 
++    // Experiment: SKIPPY_GRAPH_REUSE_TRACE=1 reports why graphs are rebuilt.
++    static const bool reuse_trace = getenv("SKIPPY_GRAPH_REUSE_TRACE") != nullptr;
++    if (reuse_trace && !graph_reuse_disable) {
++        static int traced = 0;
++        static uint64_t decisions = 0, reused_count = 0;
++        const char * why = nullptr;
++        llm_graph_reuse_refusal() = "";
++        if (gf_res_prev_active != res) {
++            why = gf_res_prev_active == nullptr ? "no_previous_graph" : "previous_graph_not_active";
++        } else if (!res->get_params().allow_reuse(gparams)) {
++            why = llm_graph_reuse_refusal();
++        } else if (!res->can_reuse(gparams)) {
++            why = "input_refused";
++        }
++        ++decisions;
++        if (why == nullptr) {
++            ++reused_count;
++        } else if (traced < 40) {
++            ++traced;
++            fprintf(stderr, "skippy_graph_reuse: rebuild #%d reason=%s n_tokens=%u n_outputs=%d\n",
++                    traced, why, ubatch.n_tokens, n_outputs);
++        }
++        if (decisions % 256 == 0) {
++            fprintf(stderr, "skippy_graph_reuse: %llu decisions, %llu reused\n",
++                    (unsigned long long) decisions, (unsigned long long) reused_count);
++        }
++    }
++
+     if (!graph_reuse_disable && gf_res_prev_active == res && res->can_reuse(gparams)) {
+         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+ 
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index a4ffee4e5..fc782e42a 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -874,6 +874,12 @@ using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor
+ 
+ class llm_graph_result;
+ 
++// Experiment: last reason a graph could not be reused (SKIPPY_GRAPH_REUSE_TRACE).
++inline const char *& llm_graph_reuse_refusal() {
++    static thread_local const char * reason = "";
++    return reason;
++}
++
+ struct llm_graph_params {
+     llm_arch arch = LLM_ARCH_UNKNOWN;
+ 
+@@ -957,41 +963,46 @@ struct llm_graph_params {
+         }
+ 
+         if (!can_reuse_ubatch) {
+-            return false;
++            { llm_graph_reuse_refusal() = "ubatch"; return false; }
+         }
+ 
+         if (n_outputs != other.n_outputs) {
+-            return false;
++            { llm_graph_reuse_refusal() = "n_outputs"; return false; }
+         }
+ 
+         if (!build_inputs.topology_equal(other.build_inputs) ||
+                 activation_export_token_axes != other.activation_export_token_axes) {
+-            return false;
++            { llm_graph_reuse_refusal() = "topology"; return false; }
+         }
+ 
+         if (!samplers_equal(samplers, other.samplers)) {
+-            return false;
++            { llm_graph_reuse_refusal() = "samplers"; return false; }
+         }
+ 
+         if (samplers.size() > 0) {
+             if (!ubatch.data || !other.ubatch.data) {
+-                return false;
++                { llm_graph_reuse_refusal() = "sampler_outputs"; return false; }
+             }
+ 
+             // check that the outputs are the same for all samplers
+             for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                 if (ubatch.output[i]    != other.ubatch.output[i] ||
+                     ubatch.seq_id[i][0] != other.ubatch.seq_id[i][0]) {
+-                    return false;
++                    { llm_graph_reuse_refusal() = "sampler_outputs"; return false; }
+                 }
+             }
+         }
+ 
+         // TODO: https://github.com/ggml-org/llama.cpp/pull/24340#discussion_r3448035248
+         if (cparams.nextn_layer_offset != other.cparams.nextn_layer_offset) {
+-            return false;
++            { llm_graph_reuse_refusal() = "nextn_offset"; return false; }
+         }
+ 
++        if (cparams.embeddings != other.cparams.embeddings) llm_graph_reuse_refusal() = "cparams.embeddings";
++        else if (cparams.embeddings_nextn != other.cparams.embeddings_nextn) llm_graph_reuse_refusal() = "cparams.embeddings_nextn";
++        else if (cparams.causal_attn != other.cparams.causal_attn) llm_graph_reuse_refusal() = "cparams.causal_attn";
++        else if (computation_generation != other.computation_generation) llm_graph_reuse_refusal() = "computation_generation";
++        else llm_graph_reuse_refusal() = "cparams.other";
+         return
+             cparams.embeddings              == other.cparams.embeddings              &&
+             cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
