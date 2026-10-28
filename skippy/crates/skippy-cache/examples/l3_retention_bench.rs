@@ -138,8 +138,19 @@ fn retention(root: &Path, mib: u64, rows: &mut Vec<Observation>) -> Result<()> {
         rows.push(row);
     }
     // Reopening checks persistence and reconciliation without touching an existing user cache.
+    let mut survivors = Vec::new();
+    for id in 160..192 {
+        if tier.locate_longest(NAMESPACE, &tokens(id), 1)?.is_some() {
+            survivors.push(id);
+        }
+    }
+    ensure!(
+        !survivors.is_empty(),
+        "no live entries remained to verify across reopen"
+    );
     drop(tier);
     let tier = open(&path, budget)?;
+    let mut found_after_reopen = Vec::new();
     for id in 160..192 {
         let start = Instant::now();
         let location = tier.locate_longest(NAMESPACE, &tokens(id), 1)?;
@@ -147,6 +158,7 @@ fn retention(root: &Path, mib: u64, rows: &mut Vec<Observation>) -> Result<()> {
         if let Some(location) = location {
             let fill = tier.load(&location)?;
             ensure!(fill.payload.full_state_bytes_timed()?.0.as_ref() == payload(id));
+            found_after_reopen.push(id);
         }
         rows.push(observe(
             &tier,
@@ -157,6 +169,10 @@ fn retention(root: &Path, mib: u64, rows: &mut Vec<Observation>) -> Result<()> {
             hit,
         )?);
     }
+    ensure!(
+        survivors.iter().all(|id| found_after_reopen.contains(id)),
+        "reopen lost a live entry"
+    );
     Ok(())
 }
 
@@ -166,15 +182,23 @@ fn main() -> Result<()> {
         args.len() == 6,
         "usage: l3_retention_bench ROOT OUTPUT ARM REPEAT COMMIT"
     );
-    let root = Path::new(&args[1]);
-    ensure!(!root.exists(), "benchmark needs a fresh root");
-    fs::create_dir_all(root)?;
+    let root_arg = Path::new(&args[1]);
+    ensure!(!root_arg.exists(), "benchmark needs a fresh root");
+    // Tier acquisition expects an absolute cache root, and cleanup below
+    // removes it recursively, so pin both paths before any store is opened.
+    let root = std::path::absolute(root_arg)?;
+    let output = std::path::absolute(&args[2])?;
+    ensure!(
+        !output.starts_with(&root),
+        "OUTPUT must live outside ROOT: cleanup removes ROOT recursively"
+    );
+    fs::create_dir_all(&root)?;
     let mut observations = Vec::new();
     for count in [16, 128, 512] {
-        scaling(root, count, &mut observations)?;
+        scaling(&root, count, &mut observations)?;
     }
     for mib in [4, 8, 32] {
-        retention(root, mib, &mut observations)?;
+        retention(&root, mib, &mut observations)?;
     }
     let evidence = Evidence {
         schema: 1,
@@ -185,7 +209,7 @@ fn main() -> Result<()> {
         segment_bytes: SEGMENT_BYTES,
         observations,
     };
-    fs::write(&args[2], serde_json::to_vec_pretty(&evidence)?)?;
+    fs::write(&output, serde_json::to_vec_pretty(&evidence)?)?;
     fs::remove_dir_all(root)?;
     black_box(evidence);
     Ok(())
