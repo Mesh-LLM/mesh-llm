@@ -1,0 +1,24 @@
+{
+  "spec": {
+    "name": "Grammar sampler A/B/C — M6 build and correctness",
+    "description": "Build immutable existing Skippy and sampling-first candidate sources. Run native sampling/checkpoint tests and seeded B/C correctness on Qwen3.5-9B Q4_K_M. Capture fixed teacher-forced logits for subsequent measurements. No performance qualification in this phase.",
+    "target": {"executor": "lab", "nodes": ["macmini-gq7vhw"], "os": "macos"},
+    "runtime": {
+      "model_package": {"ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5", "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", "egress": "lab_only"},
+      "models": [{"ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5", "env": "MODEL_DIR", "delivery": "cache", "pin": true}],
+      "workspace": {
+        "repos": [
+          {"url": "https://github.com/Mesh-LLM/mesh-llm.git", "rev": "2c82637ba4499b421b7703f6efeb80c0b90098d1", "path": "baseline"},
+          {"url": "https://github.com/Mesh-LLM/mesh-llm.git", "rev": "${candidate_sha}", "path": "candidate"}
+        ],
+        "build": "set -eu\ncd candidate\njust grammar-sampling-build \"$(cd ../baseline && pwd)\"",
+        "retain": "always"
+      },
+      "command": "set -eu\ncd candidate\nmkdir -p \"$JIANYANG_ARTIFACT_DIR\"\n{ git rev-parse HEAD; clang++ --version; sw_vers; sysctl -n machdep.cpu.brand_string hw.memsize; shasum -a 256 .deps/grammar-A/grammar-sampling .deps/grammar-C/grammar-sampling .deps/grammar-C/grammar-controller .deps/grammar-C/grammar-audit skippy/evals/grammar-sampling/plan.json; shasum -a 256 \"$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf\"; } > \"$JIANYANG_ARTIFACT_DIR/identity.txt\"\ncp .deps/grammar-C/CMakeCache.txt \"$JIANYANG_ARTIFACT_DIR/candidate-build.txt\"\ncp .deps/grammar-A/CMakeCache.txt \"$JIANYANG_ARTIFACT_DIR/baseline-build.txt\"\njust grammar-sampling-tests > \"$JIANYANG_ARTIFACT_DIR/native-tests.log\" 2>&1\n.deps/grammar-C/grammar-controller .deps/grammar-A/grammar-sampling .deps/grammar-C/grammar-sampling \"$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf\" \"$PWD/.deps/grammar-inputs\" \"$PWD/.deps/grammar-prerequisite\" prerequisite > \"$JIANYANG_ARTIFACT_DIR/prerequisite.log\" 2>&1\ncp .deps/grammar-prerequisite/*.json \"$JIANYANG_ARTIFACT_DIR/\"\nshasum -a 256 .deps/grammar-inputs/* > \"$JIANYANG_ARTIFACT_DIR/input-hashes.txt\"\ntar -czf .deps/grammar-inputs.tar.gz -C .deps grammar-inputs\nsplit -b 16m .deps/grammar-inputs.tar.gz \"$JIANYANG_ARTIFACT_DIR/inputs.tar.gz.part-\"\nshasum -a 256 \"$JIANYANG_ARTIFACT_DIR/\"* > .deps/artifact-hashes.txt\ncp .deps/artifact-hashes.txt \"$JIANYANG_ARTIFACT_DIR/\"\ncat \"$JIANYANG_ARTIFACT_DIR/identity.txt\"\ncat \"$JIANYANG_ARTIFACT_DIR/native-tests.log\""
+    },
+    "harness": {"name": "custom", "version": "adhoc", "trace": {"kind": "synthetic", "ref": "grammar-sampling-correctness-r2"}, "seed": 73, "warmup_requests": 0, "concurrency": [1], "request_count": 1},
+    "budget": {"max_usd": 0, "max_duration_s": 7200, "grace_s": 120},
+    "retries": 0,
+    "labels": {"campaign": "max-grammar-sampling-abc-20261028", "phase": "build-correctness", "protocol": "2"}
+  }
+}

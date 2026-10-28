@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 109631bdce64aa306a025c0d7536b0c4be0c4aa1 Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
 Subject: [PATCH] skippy: record per-token logprobs while sampling
@@ -255,7 +255,7 @@ index 000000000..43260dfc2
 +    return skippy_success(out_error);
 +}
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index 44d7f7b55..edc423266 100644
+index c8e372a2d..7089b198b 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
 @@ -138,6 +138,8 @@ struct skippy_session {
@@ -268,10 +268,10 @@ index 44d7f7b55..edc423266 100644
      std::vector<int32_t> prefill_n_seq_ids;
      std::vector<llama_seq_id> prefill_seq_ids;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 806f3b23b..cff146149 100644
+index 04d6eaa5f..afc93f704 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -459,6 +459,10 @@ static bool skippy_sampling_chain_is_reusable_for(
+@@ -460,6 +460,10 @@ static bool skippy_sampling_chain_is_reusable_for(
              session->sampling_backend_retired) {
          return false;
      }
@@ -282,7 +282,7 @@ index 806f3b23b..cff146149 100644
      if (sampling != nullptr &&
              skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
          return true;
-@@ -812,6 +816,8 @@ void skippy_refresh_backend_sampling(
+@@ -813,6 +817,8 @@ void skippy_refresh_backend_sampling(
              session->sampling_chain != nullptr &&
              session->grammar_sampler == nullptr &&
              session->reasoning_budget_sampler == nullptr &&
@@ -291,8 +291,8 @@ index 806f3b23b..cff146149 100644
              skippy_sampling_is_greedy_equivalent(sampling)) {
          session->sampling_backend_enabled =
                  llama_set_sampler(session->ctx, session->seq_id, session->sampling_chain);
-@@ -1068,10 +1074,29 @@ static llama_token skippy_chat_sample_token(skippy_session * session, int32_t lo
-     return cur.data[cur.selected].id;
+@@ -971,10 +977,29 @@ bool skippy_init_chat_reasoning_budget_sampler(
+     return true;
  }
  
 +static llama_token skippy_sample_token_ith_impl(
@@ -376,5 +376,5 @@ index 82919e864..20d0e18cb 100644
  
  namespace {
 -- 
-2.45.1.windows.1
+2.56.0
 
