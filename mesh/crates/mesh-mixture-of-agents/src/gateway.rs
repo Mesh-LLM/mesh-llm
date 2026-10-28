@@ -11,7 +11,7 @@ use crate::resolve::resolve_decision;
 use crate::response::error_response;
 use crate::session::Session;
 use crate::tool_result::handle_tool_result;
-use crate::turn::{DecisionResolution, ForcedToolChoice, TurnKind, TurnResult};
+use crate::turn::{DecisionResolution, Draft, ForcedToolChoice, TurnKind, TurnResult};
 use crate::worker;
 use crate::{MOA_ERR_ALL_WORKERS_FAILED, session, tool_turn};
 use serde_json::{Value, json};
@@ -294,6 +294,7 @@ async fn handle_query(
             reducer_attempts: 0,
             turn_kind: TurnKind::Failed,
             elapsed_ms: start.elapsed().as_millis() as u64,
+            drafts: Vec::new(),
         };
     }
 
@@ -327,6 +328,7 @@ async fn handle_query(
         } else {
             decision
         };
+    let drafts: Vec<Draft> = outputs.iter().map(Draft::from_output).collect();
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
         DecisionResolution {
@@ -358,6 +360,7 @@ async fn handle_query(
         reducer_attempts,
         turn_kind,
         elapsed_ms: start.elapsed().as_millis() as u64,
+        drafts,
     }
 }
 
