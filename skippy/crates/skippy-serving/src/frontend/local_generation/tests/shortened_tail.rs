@@ -107,7 +107,16 @@ fn check_shortened_tail(demote: bool) -> Result<()> {
     let exports = kv
         .exact_state_records_queued
         .load(std::sync::atomic::Ordering::Relaxed);
-    if demote {
+    if kv.resident_recurrent_snapshots {
+        assert_eq!(
+            exports, 0,
+            "a resident-only hybrid cache must not export attention KV"
+        );
+        assert!(
+            kv.radix.lock().unwrap().stats().resident_entries > 0,
+            "idle lane eviction must preserve the shared resident prefix"
+        );
+    } else if demote {
         assert!(
             exports > 0,
             "eviction must offer checkpoints to lower tiers"
