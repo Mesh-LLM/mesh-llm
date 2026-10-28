@@ -187,12 +187,13 @@ impl PaymentService {
         Ok(payment)
     }
 
-    /// Record a metered invoice paid; a paid final invoice puts its buyer in
-    /// good standing for the next admission.
+    /// A confirmed cold deposit establishes standing immediately. Subsequent
+    /// work overlaps final settlement, bounded separately by unpaid finals.
     async fn record_received(&self, hash: &str) -> Result<()> {
         if let Some(receipt) = self.ledger.mark_metered_received(hash)?
-            && receipt.kind == MeteredInvoiceKind::Final
-            && self.ledger.metered_settlement(&receipt.request_id)?.status == MeteredStatus::Settled
+            && (receipt.kind == MeteredInvoiceKind::Deposit
+                || self.ledger.metered_settlement(&receipt.request_id)?.status
+                    == MeteredStatus::Settled)
         {
             self.note_settled(&receipt.peer).await;
         }

@@ -139,7 +139,7 @@ async fn deposit_then_final_invoice_for_the_remainder_settles_trust() {
     assert!(service.serve_abandon("r").is_err());
     assert_eq!(billed(service.serve_recover("r").await.unwrap()), bill);
     assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 1);
-    assert!(!service.metered_trusted("peer").await.unwrap());
+    assert!(service.metered_trusted("peer").await.unwrap());
 
     received(&wallet, &final_invoice);
     let recovered = billed(service.serve_recover("r").await.unwrap());
@@ -212,7 +212,7 @@ async fn covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_depos
         1000
     );
     assert_eq!(service.ledger.metered_unpaid_finals("other").unwrap(), 0);
-    assert!(!service.metered_trusted("other").await.unwrap());
+    assert!(service.metered_trusted("other").await.unwrap());
     assert!(service.serve_recover("unknown").await.is_err());
 }
 
@@ -429,7 +429,7 @@ async fn restart_abandons_in_flight_requests_and_never_redispatches() {
             .paid
     );
     assert_eq!(service.ledger.metered_unpaid_finals("peer").unwrap(), 0);
-    assert!(!service.metered_trusted("peer").await.unwrap());
+    assert!(service.metered_trusted("peer").await.unwrap());
 }
 
 #[tokio::test]

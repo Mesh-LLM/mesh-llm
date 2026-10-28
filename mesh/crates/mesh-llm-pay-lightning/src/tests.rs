@@ -606,7 +606,7 @@ async fn warm_refill_precedes_final_settlement_and_still_obeys_strikes() {
     f.prepare().await;
     let cold = gate("seed", "buyer");
     assert_eq!(f.seller.gate(&cold).unwrap().decision, Decision::Allow);
-    assert!(f.seller.replenish(&cold).await.unwrap().is_none());
+    assert!(f.seller.replenish(&cold).await.unwrap().is_some());
     let (_, bill) = f
         .seller
         .terminal(&terminal(
