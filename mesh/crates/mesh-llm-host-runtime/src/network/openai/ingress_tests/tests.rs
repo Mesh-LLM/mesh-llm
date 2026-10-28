@@ -427,6 +427,92 @@ fn has_local_unavailable_returns_false_when_any_available() {
     assert!(!has_local_unavailable_candidates(&targets, "partial-model"));
 }
 
+/// Status line `route_missing_local_model` writes for a chat request naming
+/// `model` on a node with no targets, no peer and no plugin manager.
+async fn missing_local_model_status(node: &mesh::Node, model: &str) -> String {
+    use tokio::io::AsyncReadExt;
+
+    let targets = election::ModelTargets::default();
+    let affinity = affinity::AffinityRouter::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback listener");
+    let addr = listener.local_addr().expect("local addr");
+    let (client_side, server_side) = tokio::join!(tokio::net::TcpStream::connect(addr), async {
+        listener.accept().await.map(|(stream, _)| stream)
+    });
+    let mut client_side = client_side.expect("connect client side");
+    let mut request = proxy::BufferedHttpRequest {
+        raw: Vec::new(),
+        method: "POST".to_owned(),
+        path: "/v1/chat/completions".to_owned(),
+        client_path: "/v1/chat/completions".to_owned(),
+        request_id: RequestId::default(),
+        body_json: None,
+        body_json_attempted: false,
+        body_bytes: None,
+        body_len_bytes: 0,
+        completion_tokens: None,
+        stream: None,
+        model_name: Some(model.to_owned()),
+        request_object_request_ids: Vec::new(),
+        response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
+        correlation_id: None,
+        exchange_observation_id: None,
+    };
+    let ctx = IngressRouteContext {
+        node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: None,
+        requested_by_node_id: None,
+        exchange_channel: None,
+    };
+    let lifecycle = OpenAiLifecycleAttachment::unowned();
+    route_missing_local_model(
+        server_side.expect("accept server side").into(),
+        &mut request,
+        &ctx,
+        model,
+        None,
+        &[],
+        None,
+        lifecycle.route_observer(),
+    )
+    .await;
+
+    let mut response = Vec::new();
+    client_side
+        .read_to_end(&mut response)
+        .await
+        .expect("read response");
+    String::from_utf8_lossy(&response)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A model's first load has a serving assignment but no target yet. Naming it
+/// meanwhile is retryable, not "not found".
+#[tokio::test]
+async fn route_missing_local_model_answers_503_while_the_first_load_runs() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.set_serving_models(vec!["loading-model".into()]).await;
+
+    assert_eq!(
+        missing_local_model_status(&node, "loading-model").await,
+        "HTTP/1.1 503 Service Unavailable"
+    );
+    assert_eq!(
+        missing_local_model_status(&node, "unknown-model").await,
+        "HTTP/1.1 404 Not Found"
+    );
+    node.endpoint.close().await;
+}
+
 #[test]
 fn callable_models_excludes_all_none_targets() {
     let mut targets = election::ModelTargets::default();
