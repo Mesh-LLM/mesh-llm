@@ -58,8 +58,10 @@ never opens a wallet. Do not copy or replace funded wallet state to change a pin
 Setup tolerates provider-startup ordering by retrying only requests that the host
 reports were not dispatched, for a bounded 90-second window. A provider error or
 uncertain setup fails closed. Repeated successful setup must be idempotent. A
-provider restart invalidates the utility's handle: currently restart the utility
-to reopen and revalidate the wallet identity; transparent reconnect is not claimed.
+provider restart invalidates the utility's handle; the utility then re-runs
+setup once (re-checking the pinned wallet identity) and retries the refused
+operation, including `wallet_pay`, because the host refused it before anything
+reached the provider. A second refusal fails closed.
 
 `prices` maps model IDs to `input_msat_per_million`, `output_msat_per_million` and
 `cache_discount_percent`. `buy_prices` uses the same shape for authorized ceilings;
