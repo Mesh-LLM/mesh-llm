@@ -183,6 +183,11 @@ sampler-simd-profiler-build native:
     cmake -S skippy/evals/simd-top-k -B .deps/simd-controller -G Ninja -DSIMD_CONTROLLER_ONLY=ON -DLLAMA_ROOT="{{ native }}"
     cmake --build .deps/simd-controller --parallel 4 --target simd-sample-stacks
 
+# Prove actual M6 dispatch with bounded Instruments execution, avoiding LLDB launch.
+[unix]
+sampler-simd-metal-isa retained qualified model artifacts:
+    bash skippy/evals/simd-top-k/profile-metal-candidate.sh "{{ retained }}" "{{ qualified }}" "{{ model }}" "{{ artifacts }}"
+
 # Reuse the predecessor's affected native suite against an admitted arm build.
 [unix]
 sampler-simd-native-tests build:

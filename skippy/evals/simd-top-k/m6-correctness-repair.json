@@ -1,0 +1,19 @@
+{
+  "revision": "m6-correctness-instruments-1",
+  "failed_job": "job_ke62mb558fma1wx",
+  "failure": "Retained LLDB transcript stops at run. It never reports launching the test; native/model correctness steps following it were never reached. JY ended the job at its original deadline.",
+  "scope": "Execution prerequisite repair, not a production sampler or performance-gate change",
+  "product": "Reuse the exact retained D/R binaries and original immutable B/C/model/input hashes",
+  "tools": "Fresh source includes independent variable-ratio contracts and durable host observations; record its SHA and resulting controller/auditor hashes",
+  "sequence": [
+    "Hash and identify all immutable dependencies",
+    "Compile and pass fresh model-free orchestration contracts",
+    "18 native tests and 32 controlled recovery cases per D/R arm",
+    "20 externally compared seeded records for each immutable C/D/R worker",
+    "Capture exact D production replay with Instruments, time limit 180 seconds, and export actual Highway frames",
+    "Recheck binary/input identities and independently audit all evidence"
+  ],
+  "isa_gate": "Require a sampled executed hwy::N_*::PartialSortKV64Desc frame in the Time Profiler export. Source support or a chosen-target name alone is insufficient. Failure or no frame blocks timing admission.",
+  "observability": "Emit each stage to JY log, retain individual logs and partial artifacts on failure, record this attempt separately from the failed LLDB attempt",
+  "performance": "No profiled latency qualifies speed. Frozen numerical gates, five-block screen and thirty fresh qualification blocks remain unchanged."
+}
