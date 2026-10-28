@@ -63,6 +63,9 @@ enum AutoRouteResolution {
     },
     MediaUnsupported,
     WorkloadUnsupported(mesh::ModelWorkloadClass),
+    /// Nothing is served yet (a model still loading, or every host gone):
+    /// transient, unlike a workload no served model supports.
+    NoModelReady,
 }
 
 #[derive(Debug)]
@@ -70,6 +73,7 @@ enum AutoRouteRejection {
     PaymentRequired(&'static str),
     MediaUnsupported,
     WorkloadUnsupported(mesh::ModelWorkloadClass),
+    NoModelReady,
 }
 
 struct IngressRouteContext<'a> {
@@ -343,6 +347,9 @@ async fn resolve_auto_routed_model(
     if available.is_empty()
         && let Some(workload) = required_request_workload(&request.client_path)
     {
+        if available_models.is_empty() {
+            return AutoRouteResolution::NoModelReady;
+        }
         return AutoRouteResolution::WorkloadUnsupported(workload);
     }
     let Some(available) = router::filter_media_compatible_candidates(&available, &media) else {
@@ -1513,6 +1520,7 @@ async fn prepare_auto_route_decision(
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             Err(AutoRouteRejection::WorkloadUnsupported(workload))
         }
+        AutoRouteResolution::NoModelReady => Err(AutoRouteRejection::NoModelReady),
     }
 }
 
@@ -1571,6 +1579,17 @@ async fn send_auto_route_rejection(
         AutoRouteRejection::WorkloadUnsupported(workload) => {
             send_workload_unsupported(tcp_stream, workload, path, route_observer).await
         }
+        // 503 rather than 422: OpenAI-compatible clients retry 5xx with
+        // backoff, so a request sent while a model loads still gets served.
+        AutoRouteRejection::NoModelReady => response_outcome(
+            503,
+            proxy::send_503_observed(
+                tcp_stream,
+                "no model is ready to serve this request yet; retry shortly",
+                route_observer,
+            )
+            .await,
+        ),
     }
 }
 
