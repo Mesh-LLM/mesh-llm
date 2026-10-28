@@ -52,12 +52,13 @@ fn descriptor_can_produce_lossless_id(identity: &mesh::ServedModelIdentity) -> b
 }
 
 fn public_model_id_from_local_path(model_name: &str) -> Option<String> {
-    // A runtime-minted `local-gguf/sha256-<digest>` id is already the public
-    // id the request resolver routes on. Now that `find_model_path` can map it
-    // back to its file, re-deriving a ref from that path would rename the
-    // model in `/v1/models` (to the path-hash form, or an HF ref) and break
-    // the round trip.
-    if model_name.starts_with("local-gguf/") {
+    // A ref the runtime registered at startup — a runtime-minted
+    // `local-gguf/sha256-<digest>` id, a `--model` alias, a configured alias —
+    // is already the public id the request resolver routes on. Since
+    // `find_model_path` maps it back to its file, re-deriving a ref from that
+    // path would rename the model in `/v1/models` (to a host-specific
+    // path-hash form, or an HF ref) and break the round trip.
+    if crate::models::is_served_model_ref(model_name) {
         return None;
     }
     let path = crate::models::find_model_path(model_name);

@@ -1246,18 +1246,22 @@ fn direct_gguf_model_id(identity: &skippy::SkippyPackageIdentity) -> String {
 ///
 /// The served ref is often not recoverable from the HF cache: the
 /// content-addressed `local-gguf/sha256-…` id above is derived from the weights
-/// digest, and a `--model-id` override is an arbitrary label. Without this
+/// digest, and a `--model` alias is an arbitrary label. Without this
 /// registration every later by-name lookup — `served_model_metadata_for_model`
 /// in particular — fell through to a non-existent path, so the node advertised
 /// its GGUF with no architecture, quant, or `parameter_count_b`, leaving
 /// size-based routing and the MoA small/big split blind to every such host.
+///
+/// The registration also marks the ref as served, so `/v1/models` keeps
+/// listing it verbatim instead of re-deriving a path-hash id from the file it
+/// now resolves to.
 ///
 /// HF-cache files resolve to extensionless `blobs/<sha>` paths, so this keys
 /// on "is a file", not on a `.gguf` suffix; layer-package directories are
 /// skipped because the GGUF scanner needs a single file.
 fn remember_served_gguf_path(model_ref: &str, resolved_path: &Path) {
     if resolved_path.is_file() {
-        models::remember_model_ref_path(model_ref, resolved_path);
+        models::remember_served_model_ref(model_ref, resolved_path);
     }
 }
 

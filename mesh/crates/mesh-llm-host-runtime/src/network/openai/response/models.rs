@@ -456,6 +456,52 @@ mod tests {
         );
     }
 
+    /// Startup registers every served ref against the GGUF it was loaded from
+    /// so by-name metadata lookups reach the file. That registration must not
+    /// let `/v1/models` re-derive a host-specific path-hash id from the file:
+    /// an explicit `--model` alias, a configured alias and a runtime-minted
+    /// content-addressed id all have to stay listed verbatim and keep routing
+    /// (the renamed id broke the Laya smoke; PR #2651 review found the alias
+    /// form of the same bug).
+    #[test]
+    fn served_refs_registered_against_a_real_gguf_keep_their_listed_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let served = [
+            ("my-model", "weights.gguf"),
+            ("configured/alias:Q4_K_M", "configured.gguf"),
+            (
+                "local-gguf/sha256-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "content-addressed.gguf",
+            ),
+        ];
+        for (model_ref, file_name) in served {
+            let gguf = temp.path().join(file_name);
+            std::fs::write(&gguf, b"GGUF").unwrap();
+            crate::models::remember_served_model_ref(model_ref, &gguf);
+
+            // The file now resolves by name, which is what the metadata scan
+            // needs, and would otherwise be re-derived into a path-hash ref.
+            assert_eq!(crate::models::find_model_path(model_ref), gguf);
+            assert!(crate::models::model_ref_for_path(&gguf).starts_with("local-gguf/sha256-"));
+
+            let descriptor = mesh::ServedModelDescriptor {
+                identity: mesh::ServedModelIdentity {
+                    model_name: model_ref.into(),
+                    source_kind: mesh::ModelSourceKind::LocalGguf,
+                    local_file_name: Some(file_name.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            assert_eq!(public_model_id(model_ref, Some(&descriptor), ""), model_ref);
+            assert_eq!(
+                public_model_id(model_ref, Some(&descriptor), "low-ctx"),
+                format!("{model_ref}#low-ctx")
+            );
+            assert_listing_round_trip(descriptor, model_ref);
+        }
+    }
+
     fn assert_listing_round_trip(descriptor: mesh::ServedModelDescriptor, public: &str) {
         use crate::network::openai::request_normalize::ResponseAdapter;
         use crate::network::openai::request_parse::{
