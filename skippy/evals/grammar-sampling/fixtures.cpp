@@ -151,7 +151,7 @@ common_params_sampling reference_config(const fixture & input, const llama_vocab
     params.min_keep = 0;
     params.samplers = {COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TOP_P,
                        COMMON_SAMPLER_TYPE_MIN_P, COMMON_SAMPLER_TYPE_TEMPERATURE};
-    params.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, input.metadata.at("grammar")};
+    params.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, input.metadata.at("grammar").get<std::string>()};
     params.grammar_lazy = input.metadata.value("grammar_lazy", false);
     params.generation_prompt = input.metadata.value("generation_prompt", std::string());
     common_sampling_add_preserved_tokens(params, vocab, input.metadata.value("preserved_tokens", std::vector<std::string>{}));

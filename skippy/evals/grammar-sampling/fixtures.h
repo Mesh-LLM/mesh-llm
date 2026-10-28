@@ -30,7 +30,7 @@ common_params_sampling reference_config(const fixture & input, const llama_vocab
 skippy_sampling_config skippy_config(uint32_t seed);
 void configure_session(skippy_session & session, const fixture & input, uint32_t seed);
 json fixture_manifest(const std::vector<fixture> & inputs);
-int thermal_state();
+extern "C" int thermal_state();
 
 struct native_runtime {
     llama_model * model = nullptr;

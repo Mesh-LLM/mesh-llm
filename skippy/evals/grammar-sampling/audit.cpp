@@ -45,6 +45,10 @@ int main(int argc, char ** argv) {
         check(input.good(), "missing observations");
         std::map<cell_key, std::map<std::string, json>> cells;
         std::set<std::string> cases;
+        const std::set<std::string> expected_cases{
+            "lazy-before-tool-trigger", "large-HTML-write-argument", "Unicode-and-partial-UTF8",
+            "restricted-values-and-rejection-fallback", "closing-delimiters-and-EOS"};
+        std::set<std::tuple<std::string, std::string, int, std::string>> warmups;
         std::string line;
         size_t warmup_rows = 0;
         while (std::getline(input, line)) {
@@ -52,16 +56,19 @@ int main(int argc, char ** argv) {
             const auto arm = row.at("arm").get<std::string>();
             check(arm == "A" || arm == "B" || arm == "C", "unknown arm");
             const int block = row.at("block");
+            const auto name = row.at("case").get<std::string>();
+            const auto scope = row.at("scope").get<std::string>();
+            check(expected_cases.count(name), "unknown case identity");
+            check(scope == "fixed-input-native-sampler" || scope == "teacher-forced-native-decode", "unknown scope");
+            check(row.at("repetitions").get<int>() == (scope == "fixed-input-native-sampler" ? 4 : 1), "wrong repetitions");
             check(row.at("thermal_before").get<int>() <= 1 && row.at("thermal_after").get<int>() <= 1, "thermal pressure");
             if (row.at("warmup").get<bool>()) {
                 check(block >= -3 && block < 0, "invalid warmup identity");
+                check(warmups.emplace(name, scope, block, arm).second, "duplicate warmup");
                 ++warmup_rows;
                 continue;
             }
             check(block >= 0 && block < blocks, "invalid block identity");
-            const auto name = row.at("case").get<std::string>();
-            const auto scope = row.at("scope").get<std::string>();
-            check(scope == "fixed-input-native-sampler" || scope == "teacher-forced-native-decode", "unknown scope");
             cases.insert(name);
             auto & arms = cells[{name, scope, block}];
             check(arms.emplace(arm, row).second, "duplicate arm/case/block");
