@@ -1,11 +1,12 @@
 {
-  "campaign": "skippy-highway-top-k-spark-v1",
+  "campaign": "skippy-highway-top-k-spark-v2",
   "purpose": "Replicate the B/C/D/R Highway top-k experiment as a separate Spark hardware stratum, explicitly authorized after the M6 plan was frozen.",
   "parent_plan": "plan.json",
   "parent_plan_sha256": "fc9b42c3d5bd83c9e6543fbc7c6b8396a78089be20ed446701bf754704ac308a",
   "hardware": {
-    "node": "spark-000468",
-    "reason": "Idle, not draining, observed without throttling, exact model already cached, model storage mounted. Never interrupt another job.",
+    "placement": "Any available DGX Spark selected by JY; record the selected node, then freeze that node for matched build/correctness and timing blocks.",
+    "selector": {"os": {"family": "linux"}, "arch": {"in": ["aarch64"]}, "accelerator": {"backend": "cuda", "model": {"in": ["NVIDIA GB10"]}}},
+    "reason": "User explicitly allows any Spark. Let JY select eligible available capacity with the exact cached model. Never interrupt another job.",
     "cpu": "Arm Cortex-X925/Cortex-A725, 20 cores, ARM64/NEON",
     "gpu": "NVIDIA GB10",
     "os": "Linux/CUDA",
