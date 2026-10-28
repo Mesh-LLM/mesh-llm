@@ -58,6 +58,7 @@ mod tests {
             args: vec!["--identity".into()],
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: Default::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,

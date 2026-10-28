@@ -111,6 +111,7 @@ async fn required_plugin_load_failure_stops_manager_startup() {
             args: vec!["--stdio".into()],
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,
@@ -181,6 +182,7 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
                 args: Vec::new(),
                 url: Some(format!("test+tcp://{address}")),
                 env: BTreeMap::new(),
+                settings: Default::default(),
                 startup: PluginStartupOptions::default(),
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
@@ -193,6 +195,7 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
                 args: Vec::new(),
                 url: None,
                 env: BTreeMap::new(),
+                settings: Default::default(),
                 startup: PluginStartupOptions::default(),
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
@@ -226,6 +229,7 @@ async fn optional_plugin_load_failure_becomes_inactive_summary() {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions {
                 optional: true,
                 ..PluginStartupOptions::default()
@@ -269,6 +273,7 @@ async fn remote_connect_failures_honor_required_and_optional_policy() {
         args: Vec::new(),
         url: Some(format!("tcp://{address}")),
         env: BTreeMap::new(),
+        settings: Default::default(),
         startup: PluginStartupOptions {
             optional,
             ..PluginStartupOptions::default()
@@ -317,6 +322,7 @@ async fn lazy_start_plugin_does_not_block_manager_startup() {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions {
                 optional: true,
                 lazy_start: true,

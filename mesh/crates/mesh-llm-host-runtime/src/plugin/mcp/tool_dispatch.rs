@@ -920,7 +920,14 @@ impl ServerHandler for PluginMcpServer {
 
 fn operation_result_to_call_tool_result(result: plugin::ToolCallResult) -> CallToolResult {
     let mut call_result = match serde_json::from_str::<Value>(&result.content_json) {
-        Ok(value) => CallToolResult::structured(value),
+        Ok(value) => {
+            let mut structured = CallToolResult::structured(value);
+            // `structured` writes the text block from the value it parsed, and
+            // a parsed `serde_json::Value` has already sorted the plugin's
+            // keys. The text block carries the plugin's JSON as it arrived.
+            structured.content = vec![ContentBlock::text(result.content_json.clone())];
+            structured
+        }
         Err(_) => CallToolResult::success(vec![ContentBlock::text(result.content_json)]),
     };
     call_result.is_error = Some(result.is_error);
@@ -947,6 +954,20 @@ mod tests {
     use crate::plugin::{PluginEndpointSummary, PluginManager, PluginRpcBridge, RpcResult};
     use rmcp::model::Tool;
     use serde_json::json;
+
+    /// The plugin's own JSON must reach the MCP caller in the order the plugin
+    /// wrote it, not re-sorted on the way through the host.
+    #[test]
+    fn mcp_tool_result_text_keeps_the_plugin_key_order() {
+        let result = operation_result_to_call_tool_result(plugin::ToolCallResult {
+            content_json: r#"{"zeta":1,"alpha":{"b":1,"a":2}}"#.to_string(),
+            is_error: false,
+        });
+        let ContentBlock::Text(text) = &result.content[0] else {
+            panic!("expected a text content block");
+        };
+        assert_eq!(text.text, r#"{"zeta":1,"alpha":{"b":1,"a":2}}"#);
+    }
 
     #[test]
     fn normalize_tool_schema_makes_empty_input_schema_object() {

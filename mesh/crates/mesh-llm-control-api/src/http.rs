@@ -111,6 +111,26 @@ fn replace_response_header(head: Vec<u8>, name: &str, value: &str) -> Vec<u8> {
 pub async fn respond_error(stream: &mut TcpStream, code: u16, msg: &str) -> anyhow::Result<()> {
     let body = serde_json::to_string(&serde_json::json!({"error": msg}))
         .unwrap_or_else(|_| r#"{"error":"internal error"}"#.to_string());
+    respond_error_body(stream, code, &body).await
+}
+
+/// `{"error": <detail>}` where `detail` is JSON text the caller already holds,
+/// so a plugin's own error object reaches the client as an object instead of
+/// as a string that has to be parsed again. Text that is not JSON is quoted.
+pub async fn respond_error_detail(
+    stream: &mut TcpStream,
+    code: u16,
+    detail_json: &str,
+) -> anyhow::Result<()> {
+    let detail = serde_json::from_str::<serde_json::Value>(detail_json)
+        .map(|_| detail_json.to_string())
+        .unwrap_or_else(|_| {
+            serde_json::to_string(detail_json).unwrap_or_else(|_| r#""internal error""#.to_string())
+        });
+    respond_error_body(stream, code, &format!(r#"{{"error":{detail}}}"#)).await
+}
+
+async fn respond_error_body(stream: &mut TcpStream, code: u16, body: &str) -> anyhow::Result<()> {
     let status = match code {
         400 => "Bad Request",
         403 => "Forbidden",

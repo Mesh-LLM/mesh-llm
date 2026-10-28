@@ -55,6 +55,10 @@ message InitializeRequest {
   string host_version = 2;
   string host_info_json = 3;
   MeshVisibility mesh_visibility = 4;
+  // JSON object of the operator's `[plugin.settings]` for this plugin,
+  // validated against its `config_schema`. Empty from a host older than this
+  // field, and for a plugin the operator gave no settings to.
+  string settings_json = 6;
   // Optional host features this host implements (see
   // `mesh_llm_plugin::host_capabilities`). A plugin checks one before using
   // the feature it names, so it fails clearly against an older host, which
@@ -575,6 +579,10 @@ message OperationManifest {
   string input_schema_json = 3;
   optional string output_schema_json = 4;
   optional string title = 5;
+  // Wall-clock seconds this operation may take before the host gives up on
+  // it. Unset means the host's default request deadline; 0 means the host
+  // waits for this operation for as long as the caller does.
+  optional uint32 timeout_secs = 6;
 }
 
 message ResourceManifest {

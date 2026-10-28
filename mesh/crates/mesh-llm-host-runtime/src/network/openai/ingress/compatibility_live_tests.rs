@@ -88,6 +88,7 @@ impl OldHost {
                 host_version: "generation-3-without-lifecycle".into(),
                 host_info_json: "{}".into(),
                 mesh_visibility: proto::MeshVisibility::Private as i32,
+                settings_json: String::new(),
                 host_capabilities: Vec::new(),
             }),
         )
