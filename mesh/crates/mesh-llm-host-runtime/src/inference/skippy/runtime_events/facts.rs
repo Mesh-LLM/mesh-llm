@@ -52,16 +52,23 @@ pub(super) fn synthetic_prefill_terminal() -> RuntimeFact {
     )
 }
 
-fn token_count_summaries(pairs: &[(&str, usize)]) -> BoundedNumericSummaries {
+fn unsigned_summaries(pairs: &[(&str, u64)]) -> BoundedNumericSummaries {
     let summaries = pairs
         .iter()
-        .filter_map(|(key, count)| {
+        .filter_map(|(key, value)| {
             let key = NumericSummaryKey::new(key).ok()?;
-            let value = NumericValue::Unsigned(u64::try_from(*count).unwrap_or(u64::MAX));
-            Some(NumericSummary::new(key, value))
+            Some(NumericSummary::new(key, NumericValue::Unsigned(*value)))
         })
         .collect();
     BoundedNumericSummaries::new(summaries).unwrap_or_default()
+}
+
+fn token_count_summaries(pairs: &[(&str, usize)]) -> BoundedNumericSummaries {
+    let converted: Vec<(&str, u64)> = pairs
+        .iter()
+        .map(|(key, count)| (*key, u64::try_from(*count).unwrap_or(u64::MAX)))
+        .collect();
+    unsigned_summaries(&converted)
 }
 
 fn micros_summary(key: &str, micros: u64) -> BoundedNumericSummaries {
@@ -77,17 +84,62 @@ fn micros_summary(key: &str, micros: u64) -> BoundedNumericSummaries {
         .unwrap_or_default()
 }
 
+/// Bounded native decode timing for the terminal per-request summary. `None`
+/// on a field means the generation could not support it (fewer than two
+/// tokens, or a zero-length decode span), so the summary reports only what was
+/// actually observed. The terminal fact is the durable carrier (#2199): the
+/// client-side usage frame is best-effort, so decode timing must not depend on
+/// it or on droppable per-token diagnostics.
+#[derive(Clone, Copy, Default)]
+pub(super) struct DecodeTiming {
+    pub(super) elapsed_us: Option<u64>,
+    pub(super) tokens_per_second_milli: Option<u64>,
+}
+
+impl DecodeTiming {
+    /// Derives decode timing from the first and last token availability
+    /// (microseconds since request start) and the generated token count: the
+    /// decode span is first to last token, and the rate is the token
+    /// intervals over that span.
+    pub(super) fn from_token_span(
+        request_to_first_token_us: Option<u64>,
+        request_to_last_token_us: Option<u64>,
+        generated_token_count: usize,
+    ) -> Self {
+        let (Some(first), Some(last)) = (request_to_first_token_us, request_to_last_token_us)
+        else {
+            return Self::default();
+        };
+        let intervals = u64::try_from(generated_token_count.saturating_sub(1)).unwrap_or(u64::MAX);
+        if intervals == 0 {
+            return Self::default();
+        }
+        let elapsed_us = last.saturating_sub(first);
+        Self {
+            elapsed_us: Some(elapsed_us),
+            tokens_per_second_milli: (elapsed_us > 0)
+                .then(|| intervals.saturating_mul(1_000_000_000) / elapsed_us),
+        }
+    }
+}
+
 /// Redacted, bounded projection of a [`GenerationReceipt`]: counts and
 /// timing only. Never carries token IDs, digests, or prompt content.
 struct RedactedReceiptSummary {
     generated_token_count: usize,
     prompt_token_count: usize,
+    decode: DecodeTiming,
 }
 
 fn redact_receipt(receipt: &GenerationReceipt) -> RedactedReceiptSummary {
     RedactedReceiptSummary {
         generated_token_count: receipt.generated_token_ids.len(),
         prompt_token_count: receipt.prompt_token_count,
+        decode: DecodeTiming::from_token_span(
+            receipt.request_to_token_emission_us.first().copied(),
+            receipt.request_to_token_emission_us.last().copied(),
+            receipt.request_to_token_emission_us.len(),
+        ),
     }
 }
 
@@ -110,6 +162,7 @@ pub(super) fn generation_completion_terminal_fact(
     termination: GenerationTermination,
     prompt_token_count: usize,
     generated_token_count: usize,
+    decode: DecodeTiming,
 ) -> RuntimeFact {
     let (kind, outcome) = match termination {
         GenerationTermination::Cancelled => {
@@ -117,12 +170,25 @@ pub(super) fn generation_completion_terminal_fact(
         }
         _ => (GenerationEventKind::GenerationCompleted, Outcome::Success),
     };
+    let mut pairs: Vec<(&str, u64)> = vec![
+        (
+            "generated_token_count",
+            u64::try_from(generated_token_count).unwrap_or(u64::MAX),
+        ),
+        (
+            "prompt_token_count",
+            u64::try_from(prompt_token_count).unwrap_or(u64::MAX),
+        ),
+    ];
+    if let Some(elapsed_us) = decode.elapsed_us {
+        pairs.push(("decode_elapsed_us", elapsed_us));
+    }
+    if let Some(milli) = decode.tokens_per_second_milli {
+        pairs.push(("decode_tokens_per_second_milli", milli));
+    }
     let data = FactData {
         outcome: Some(outcome),
-        numeric_summaries: token_count_summaries(&[
-            ("generated_token_count", generated_token_count),
-            ("prompt_token_count", prompt_token_count),
-        ]),
+        numeric_summaries: unsigned_summaries(&pairs),
         ..empty_data()
     };
     generation_fact(kind, data)
@@ -134,6 +200,7 @@ pub(super) fn receipt_terminal_fact(receipt: &GenerationReceipt) -> RuntimeFact 
         receipt.termination,
         redacted.prompt_token_count,
         redacted.generated_token_count,
+        redacted.decode,
     )
 }
 
