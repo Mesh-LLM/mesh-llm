@@ -1,0 +1,41 @@
+{
+  "status": "Unqualified prototype: remote build, correctness and all performance gates pending",
+  "native_source_tree": "c81b95e77324501872f9aac8acc2488d9365df63",
+  "native_owner_commit": "915be290806d4adf1a50cdba31a264e8ac06ef77",
+  "queue_owner": "0013-sampling-add-portable-Highway-top-k.patch",
+  "owner_reason": "A new portable top-k capability in upstream llama-sampler.cpp; no preceding patch owns top-k selection. It does not reorganize earlier Skippy implementation.",
+  "highway": {
+    "release": "1.4.0",
+    "commit": "2607d3b5b0113992fe84d3848859eae13b3b52c1",
+    "archive_sha256": "741d705781e0b3e406beda8f1f994fbae01321237ce8023a1ad90fbaf7940c25",
+    "operation": "VQPartialSort over integer ordered float keys plus original candidate indices; gather complete selected token records",
+    "model_rng": "No access to sampler RNG. Highway pivot RNG is independent."
+  },
+  "eligibility": {
+    "candidate_count_min": 1024,
+    "candidate_count_max": 4294967295,
+    "top_k_min": 1,
+    "top_k_max": 128,
+    "fallbacks": "Already sorted, small/unsupported sizes, NaN, positive infinity, or equal keys among selected k plus the boundary candidate. Signed zeros map to equal keys. Negative infinity remains supported but selected/boundary ties fall back. Original candidate records and descriptor are untouched until eligibility succeeds."
+  },
+  "configurations": {
+    "D": {"LLAMA_SAMPLER_HIGHWAY": "ON", "LLAMA_SAMPLER_HIGHWAY_DISABLED": "OFF"},
+    "R": {"LLAMA_SAMPLER_HIGHWAY": "ON", "LLAMA_SAMPLER_HIGHWAY_DISABLED": "ON"},
+    "B_C": {"LLAMA_SAMPLER_HIGHWAY": "OFF"},
+    "default_product_build": "OFF; this is an experiment until qualified"
+  },
+  "spark": {
+    "selected_probe_node": "spark-000280",
+    "cuda_toolkit": "13.0 V13.0.88",
+    "driver": "580.178.04",
+    "host_compiler": "GCC 13.3.0",
+    "cmake": "3.28.3",
+    "ninja": "1.11.1",
+    "cuda_architectures": "121",
+    "flags": "Release, C++17, identical per-arm flags other than the declared implementation/control definitions; save actual CMake caches and compilation databases",
+    "thermal_guard": "NVML current/supported clock-event reasons: refuse unknown required thermal support, thermal slowdown, hardware slowdown or power-brake slowdown. GPU idle and normal software power caps are recorded separately and are not thermal slowdown. CPU temperatures/counters are separate observations, not falsely labeled healthy.",
+    "rss_units": "Linux getrusage KiB converted to bytes before reporting",
+    "harness": "One portable harness source snapshot for all four Spark builds; native sources B/C stay frozen. No unknown thermal value can pass the worker guard."
+  },
+  "qualification": "Unchanged plan.json and spark-plan.json numerical, correctness, completeness and independent recording gates. No timings from builds or profiler jobs."
+}

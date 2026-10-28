@@ -142,7 +142,7 @@ static json measure(native_runtime & rt, const fixture & input, const std::files
     std::vector<int64_t> times;
     std::vector<llama_token> decisions;
     int before = thermal_state();
-    require(before <= 1, "thermal pressure before measurement");
+    require(before >= 0 && before <= 1, "thermal pressure or unavailable thermal guard before measurement");
     int64_t prefill_ns = 0;
     for (int repeat = 0; repeat < repetitions; ++repeat) {
         const auto prefill_start = clock_type::now();
@@ -172,13 +172,20 @@ static json measure(native_runtime & rt, const fixture & input, const std::files
         }
     }
     int after = thermal_state();
-    require(after <= 1, "thermal pressure during measurement");
+    require(after >= 0 && after <= 1, "thermal pressure or unavailable thermal guard during measurement");
     rusage usage{};
     require(getrusage(RUSAGE_SELF, &usage) == 0, "RSS unavailable");
+#ifdef __APPLE__
+    const auto peak_rss_bytes = usage.ru_maxrss;
+    const char * thermal_source = "NSProcessInfo process thermal state";
+#else
+    const auto peak_rss_bytes = static_cast<int64_t>(usage.ru_maxrss) * 1024;
+    const char * thermal_source = "NVML GPU thermal/hardware clock-event reasons; CPU observations separate";
+#endif
     return {{"arm", arm}, {"case", input.name}, {"scope", decode ? "teacher-forced-native-decode" : "fixed-input-native-sampler"},
             {"times_ns", times}, {"selected_tokens", decisions}, {"teacher_tokens", count}, {"repetitions", repetitions},
             {"prefill_ns", prefill_ns}, {"thermal_before", before}, {"thermal_after", after},
-            {"peak_rss_bytes", usage.ru_maxrss}};
+            {"peak_rss_bytes", peak_rss_bytes}, {"thermal_source", thermal_source}};
 }
 
 static json correctness(native_runtime & rt, const fixture & input, uint32_t seed) {

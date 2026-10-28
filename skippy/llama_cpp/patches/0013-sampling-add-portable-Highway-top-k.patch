@@ -1,0 +1,329 @@
+From 915be290806d4adf1a50cdba31a264e8ac06ef77 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 29 Oct 2026 07:14:54 +1300
+Subject: [PATCH] perf(sampling): add an opt-in Highway top-k selector with
+ exact fallback
+
+---
+ src/CMakeLists.txt             |  24 +++++++
+ src/llama-sampler-top-k.cpp    |  52 ++++++++++++++
+ src/llama-sampler-top-k.h      |  17 +++++
+ src/llama-sampler.cpp          |  14 ++++
+ tests/CMakeLists.txt           |   4 ++
+ tests/test-sampler-highway.cpp | 125 +++++++++++++++++++++++++++++++++
+ 6 files changed, 236 insertions(+)
+ create mode 100644 src/llama-sampler-top-k.cpp
+ create mode 100644 src/llama-sampler-top-k.h
+ create mode 100644 tests/test-sampler-highway.cpp
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 0d453a1e7..27d92004b 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -109,6 +109,30 @@ set_target_properties(llama PROPERTIES
+     UNITY_BUILD_BATCH_SIZE 16
+ )
+ 
++option(LLAMA_SAMPLER_HIGHWAY "Enable experimental portable SIMD top-k" OFF)
++option(LLAMA_SAMPLER_HIGHWAY_DISABLED "Keep the original selector in the Highway build control" OFF)
++if (LLAMA_SAMPLER_HIGHWAY)
++    include(FetchContent)
++    set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
++    set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
++    set(HWY_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
++    set(HWY_ENABLE_CONTRIB ON CACHE BOOL "" FORCE)
++    set(HWY_FORCE_STATIC_LIBS ON CACHE BOOL "" FORCE)
++    FetchContent_Declare(llama_highway
++        URL https://codeload.github.com/google/highway/tar.gz/2607d3b5b0113992fe84d3848859eae13b3b52c1
++        URL_HASH SHA256=741d705781e0b3e406beda8f1f994fbae01321237ce8023a1ad90fbaf7940c25)
++    FetchContent_MakeAvailable(llama_highway)
++    target_sources(llama PRIVATE llama-sampler-top-k.cpp)
++    set_source_files_properties(llama-sampler-top-k.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
++    target_link_libraries(llama PRIVATE hwy_contrib)
++    target_compile_definitions(llama PRIVATE LLAMA_SAMPLER_HIGHWAY=1)
++    if (LLAMA_SAMPLER_HIGHWAY_DISABLED)
++        target_compile_definitions(llama PRIVATE LLAMA_SAMPLER_HIGHWAY_ACTIVE=0)
++    else()
++        target_compile_definitions(llama PRIVATE LLAMA_SAMPLER_HIGHWAY_ACTIVE=1)
++    endif()
++endif()
++
+ # exclude non-model sources from unity build
+ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h ../common/reasoning-budget.cpp
+     ../common/sampling.cpp ../common/sampling-config.cpp ../common/sampling-timing.cpp
+diff --git a/src/llama-sampler-top-k.cpp b/src/llama-sampler-top-k.cpp
+new file mode 100644
+index 000000000..a0d56d445
+--- /dev/null
++++ b/src/llama-sampler-top-k.cpp
+@@ -0,0 +1,52 @@
++#include "llama-sampler-top-k.h"
++
++#include "hwy/contrib/sort/vqsort.h"
++
++#include <algorithm>
++#include <cstring>
++#include <limits>
++
++bool llama_sampler_top_k_highway(llama_top_k_scratch & scratch,
++                                llama_token_data_array * candidates,
++                                int32_t k, bool enabled) {
++    if (!enabled || candidates->sorted || k <= 0 || k > 128 ||
++            candidates->size < 1024 || candidates->size > UINT32_MAX ||
++            !std::numeric_limits<float>::is_iec559) {
++        return false;
++    }
++    const size_t selected = std::min(static_cast<size_t>(k), candidates->size);
++    // The extra key detects a tie across the selection boundary as well as
++    // ties inside the selected range. Native ordering stays authoritative.
++    const size_t checked = std::min(selected + 1, candidates->size);
++    scratch.keys.resize(candidates->size);
++    for (size_t i = 0; i < candidates->size; ++i) {
++        uint32_t bits;
++        static_assert(sizeof(bits) == sizeof(candidates->data[i].logit), "32-bit logits required");
++        std::memcpy(&bits, &candidates->data[i].logit, sizeof(bits));
++        const auto magnitude = bits & 0x7fffffffU;
++        // Preserve the existing implementation for NaN and positive infinity.
++        // Bit tests remain valid even under an aggressive floating-point build.
++        if (magnitude > 0x7f800000U || bits == 0x7f800000U) {
++            return false;
++        }
++        if (magnitude == 0) {
++            bits = 0; // Native float comparisons treat both signed zeros equally.
++        }
++        const uint32_t key = bits ^ ((bits & 0x80000000U) ? 0xffffffffU : 0x80000000U);
++        scratch.keys[i] = {static_cast<uint32_t>(i), key};
++    }
++    hwy::VQPartialSort(scratch.keys.data(), scratch.keys.size(), checked, hwy::SortDescending{});
++    for (size_t i = 1; i < checked; ++i) {
++        if (scratch.keys[i - 1].key == scratch.keys[i].key) {
++            return false;
++        }
++    }
++    scratch.selected.resize(selected);
++    for (size_t i = 0; i < selected; ++i) {
++        scratch.selected[i] = candidates->data[scratch.keys[i].value];
++    }
++    std::copy(scratch.selected.begin(), scratch.selected.end(), candidates->data);
++    candidates->size = selected;
++    candidates->sorted = true;
++    return true;
++}
+diff --git a/src/llama-sampler-top-k.h b/src/llama-sampler-top-k.h
+new file mode 100644
+index 000000000..01e9cffa6
+--- /dev/null
++++ b/src/llama-sampler-top-k.h
+@@ -0,0 +1,17 @@
++#pragma once
++
++#include "llama.h"
++#include "hwy/base.h"
++
++#include <cstdint>
++#include <vector>
++
++struct llama_top_k_scratch {
++    std::vector<hwy::K32V32> keys;
++    std::vector<llama_token_data> selected;
++};
++
++// False leaves the input untouched so the original selector owns all fallbacks.
++bool llama_sampler_top_k_highway(llama_top_k_scratch & scratch,
++                                llama_token_data_array * candidates,
++                                int32_t k, bool enabled);
+diff --git a/src/llama-sampler.cpp b/src/llama-sampler.cpp
+index 521c5718e..6ae3f79ae 100644
+--- a/src/llama-sampler.cpp
++++ b/src/llama-sampler.cpp
+@@ -3,6 +3,9 @@
+ #include "llama-impl.h"
+ #include "llama-vocab.h"
+ #include "llama-grammar.h"
++#ifdef LLAMA_SAMPLER_HIGHWAY
++#include "llama-sampler-top-k.h"
++#endif
+ 
+ #include "ggml-cpp.h"
+ 
+@@ -1445,6 +1448,9 @@ void llama_sampler_backend_begin(llama_sampler * sampler) {
+ 
+ struct llama_sampler_top_k : public llama_sampler_backend {
+     const int32_t k;
++#ifdef LLAMA_SAMPLER_HIGHWAY
++    llama_top_k_scratch scratch;
++#endif
+ };
+ 
+ static const char * llama_sampler_top_k_name(const struct llama_sampler * smpl) {
+@@ -1454,6 +1460,11 @@ static const char * llama_sampler_top_k_name(const struct llama_sampler * smpl)
+ 
+ static void llama_sampler_top_k_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+     auto * ctx = (llama_sampler_top_k *) smpl->ctx;
++#ifdef LLAMA_SAMPLER_HIGHWAY
++    if (llama_sampler_top_k_highway(ctx->scratch, cur_p, ctx->k, LLAMA_SAMPLER_HIGHWAY_ACTIVE)) {
++        return;
++    }
++#endif
+     llama_sampler_top_k_impl(cur_p, ctx->k);
+ }
+ 
+@@ -1534,6 +1545,9 @@ struct llama_sampler * llama_sampler_init_top_k(int32_t k) {
+         /* .ctx   = */ new llama_sampler_top_k {
+             ("top-k"),
+             /* .k = */ k,
++#ifdef LLAMA_SAMPLER_HIGHWAY
++            /* .scratch = */ {},
++#endif
+         }
+     );
+ }
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index def0ea7a6..e3cc947f8 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -404,6 +404,10 @@ if (NOT LLAMA_USE_SYSTEM_GGML)
+ endif()
+ 
+ llama_build(test-export-graph-ops.cpp)
++if (LLAMA_SAMPLER_HIGHWAY)
++    llama_build_and_test(test-sampler-highway.cpp LINK llama hwy_contrib)
++    target_include_directories(test-sampler-highway PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../src")
++endif()
+ if (TARGET gguf-model-data)
+     target_link_libraries(test-export-graph-ops PRIVATE gguf-model-data)
+     target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
+diff --git a/tests/test-sampler-highway.cpp b/tests/test-sampler-highway.cpp
+new file mode 100644
+index 000000000..38a6965f6
+--- /dev/null
++++ b/tests/test-sampler-highway.cpp
+@@ -0,0 +1,125 @@
++#include "llama-sampler-top-k.h"
++
++#include <algorithm>
++#include <cstring>
++#include <iostream>
++#include <limits>
++#include <random>
++#include <stdexcept>
++#include <vector>
++
++static void check(bool value, const char * message) {
++    if (!value) { throw std::runtime_error(message); }
++}
++
++static bool same(const std::vector<llama_token_data> & a, const std::vector<llama_token_data> & b) {
++    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(a[0])) == 0);
++}
++
++static std::vector<llama_token_data> input(size_t size, unsigned pattern) {
++    std::vector<llama_token_data> result(size);
++    for (size_t i = 0; i < size; ++i) {
++        const auto rank = static_cast<int64_t>(i) - static_cast<int64_t>(size / 2);
++        result[i] = {static_cast<llama_token>(i), static_cast<float>(rank), static_cast<float>(i % 17) / 17.0f};
++    }
++    if (pattern == 1) {
++        std::reverse(result.begin(), result.end());
++    } else if (pattern == 2) {
++        std::mt19937 rng(73);
++        std::shuffle(result.begin(), result.end(), rng);
++    } else if (pattern == 3) {
++        for (auto & token : result) { token.logit = 0.0f; }
++    }
++    return result;
++}
++
++static void differential(size_t size, int32_t k, unsigned pattern) {
++    auto original = input(size, pattern);
++    auto actual = original;
++    llama_top_k_scratch scratch;
++    llama_token_data_array candidates{actual.data(), actual.size(), -1, false};
++    const bool used = llama_sampler_top_k_highway(scratch, &candidates, k, true);
++    if (!used) {
++        check(same(original, actual), "fallback mutated input");
++        check(candidates.size == size && !candidates.sorted && candidates.selected == -1, "fallback mutated descriptor");
++        return;
++    }
++    check(k > 0 && k <= 128 && size >= 1024, "unsupported fast path");
++    const size_t count = std::min(size, static_cast<size_t>(k));
++    std::partial_sort(original.begin(), original.begin() + count, original.end(),
++                     [](const auto & a, const auto & b) { return a.logit > b.logit; });
++    original.resize(count); actual.resize(candidates.size);
++    check(candidates.sorted && candidates.selected == -1, "wrong descriptor");
++    check(same(original, actual), "selected records/order differ from native partial_sort");
++}
++
++static void exceptional_inputs() {
++    for (float exceptional : {std::numeric_limits<float>::quiet_NaN(),
++                              std::numeric_limits<float>::infinity(),
++                              -std::numeric_limits<float>::infinity(), -0.0f, 0.0f}) {
++        auto values = input(4096, 2);
++        values[17].logit = exceptional;
++        auto original = values;
++        llama_token_data_array candidates{values.data(), values.size(), -1, false};
++        llama_top_k_scratch scratch;
++        const bool used = llama_sampler_top_k_highway(scratch, &candidates, 40, true);
++        if (!used) {
++            check(same(values, original), "exceptional fallback mutated input");
++        } else {
++            std::partial_sort(original.begin(), original.begin() + 40, original.end(),
++                             [](const auto & a, const auto & b) { return a.logit > b.logit; });
++            original.resize(40); values.resize(candidates.size);
++            check(same(values, original), "exceptional selection mismatch");
++        }
++    }
++    for (size_t tied_rank : {size_t(0), size_t(38), size_t(39), size_t(40)}) {
++        auto values = input(4096, 1);
++        values[tied_rank + 1].logit = values[tied_rank].logit;
++        const auto original = values;
++        llama_top_k_scratch scratch;
++        llama_token_data_array candidates{values.data(), values.size(), -1, false};
++        const bool used = llama_sampler_top_k_highway(scratch, &candidates, 40, true);
++        if (tied_rank <= 39) { check(!used, "selected/boundary tie did not fall back"); }
++        if (!used) { check(same(values, original), "tie fallback mutated input"); }
++    }
++    auto values = input(4096, 2);
++    const auto original = values;
++    llama_top_k_scratch scratch;
++    llama_token_data_array candidates{values.data(), values.size(), -1, false};
++    check(!llama_sampler_top_k_highway(scratch, &candidates, 40, false), "disabled control used Highway");
++    check(same(values, original), "disabled control mutated input");
++    candidates.sorted = true;
++    check(!llama_sampler_top_k_highway(scratch, &candidates, 40, true), "sorted candidates reselected");
++    check(same(values, original), "sorted input mutated");
++}
++
++static void scratch_reuse() {
++    llama_top_k_scratch scratch;
++    for (size_t size : {size_t(248320), size_t(1024), size_t(4096)}) {
++        auto values = input(size, 2);
++        auto expected = values;
++        llama_token_data_array candidates{values.data(), values.size(), -1, false};
++        check(llama_sampler_top_k_highway(scratch, &candidates, 40, true), "unique input unexpectedly refused");
++        std::partial_sort(expected.begin(), expected.begin() + 40, expected.end(),
++                         [](const auto & a, const auto & b) { return a.logit > b.logit; });
++        expected.resize(40); values.resize(candidates.size);
++        check(same(values, expected), "reused scratch changed selected records");
++    }
++}
++
++int main() {
++    try {
++        for (size_t size : {0,1,3,4,7,8,15,16,31,32,39,40,41,127,128,129,1024,248320}) {
++            for (int32_t k : {-1,0,1,2,4,40,128,129,static_cast<int32_t>(size),static_cast<int32_t>(size + 1)}) {
++                for (unsigned pattern = 0; pattern != 4; ++pattern) { differential(size, k, pattern); }
++            }
++        }
++        exceptional_inputs();
++        scratch_reuse();
++        std::cout << "Highway top-k differential/edge/fallback/scratch checks passed\n";
++        return 0;
++    } catch (const std::exception & error) {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}
+-- 
+2.56.0
+
