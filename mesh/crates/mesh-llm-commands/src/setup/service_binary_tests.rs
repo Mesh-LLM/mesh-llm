@@ -1,7 +1,7 @@
 use super::service_binary::{service_binary_path, working_directory};
 use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 fn executable(path: &Path) {
@@ -80,13 +80,56 @@ fn falls_back_to_current_exe_when_the_invoked_name_is_not_found() {
 }
 
 #[test]
-fn skips_non_executable_files_and_relative_path_entries() {
+fn skips_non_executable_files() {
     let root = tempfile::tempdir().unwrap();
     let (bin, versioned) = linked_install(root.path());
     let plain = root.path().join("plain");
     fs::create_dir_all(&plain).unwrap();
     fs::write(plain.join("mesh-llm"), "not a program").unwrap();
-    let path_var = std::env::join_paths([PathBuf::from("bin"), plain, bin.clone()]).unwrap();
+    let path_var = std::env::join_paths([plain, bin.clone()]).unwrap();
+
+    let chosen = service_binary_path(
+        Some(OsString::from("mesh-llm").as_os_str()),
+        Some(&path_var),
+        None,
+        versioned,
+    );
+
+    assert_eq!(chosen, bin.join("mesh-llm"));
+}
+
+#[test]
+fn skips_files_only_other_accounts_may_execute() {
+    let root = tempfile::tempdir().unwrap();
+    // Root may execute any file with an execute bit.
+    if fs::metadata(root.path()).unwrap().uid() == 0 {
+        return;
+    }
+    let (bin, versioned) = linked_install(root.path());
+    let others = root.path().join("others");
+    fs::create_dir_all(&others).unwrap();
+    fs::write(others.join("mesh-llm"), "#!/bin/sh\n").unwrap();
+    fs::set_permissions(others.join("mesh-llm"), fs::Permissions::from_mode(0o001)).unwrap();
+    let path_var = std::env::join_paths([others, bin.clone()]).unwrap();
+
+    let chosen = service_binary_path(
+        Some(OsString::from("mesh-llm").as_os_str()),
+        Some(&path_var),
+        None,
+        versioned,
+    );
+
+    assert_eq!(chosen, bin.join("mesh-llm"));
+}
+
+#[test]
+fn a_relative_path_entry_is_searched_under_the_working_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let (bin, versioned) = linked_install(root.path());
+    let later = root.path().join("later");
+    fs::create_dir_all(&later).unwrap();
+    executable(&later.join("mesh-llm"));
+    let path_var = std::env::join_paths([PathBuf::from("bin"), later]).unwrap();
 
     let chosen = service_binary_path(
         Some(OsString::from("mesh-llm").as_os_str()),
@@ -96,6 +139,38 @@ fn skips_non_executable_files_and_relative_path_entries() {
     );
 
     assert_eq!(chosen, bin.join("mesh-llm"));
+}
+
+#[test]
+fn an_empty_path_entry_is_the_working_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let (bin, versioned) = linked_install(root.path());
+    let path_var = std::env::join_paths([PathBuf::new(), root.path().join("empty")]).unwrap();
+
+    let chosen = service_binary_path(
+        Some(OsString::from("mesh-llm").as_os_str()),
+        Some(&path_var),
+        Some(&bin),
+        versioned,
+    );
+
+    assert_eq!(chosen, bin.join("mesh-llm"));
+}
+
+#[test]
+fn a_relative_path_entry_is_skipped_without_a_working_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let (_, versioned) = linked_install(root.path());
+    let path_var = std::env::join_paths([PathBuf::from("bin")]).unwrap();
+
+    let chosen = service_binary_path(
+        Some(OsString::from("mesh-llm").as_os_str()),
+        Some(&path_var),
+        None,
+        versioned.clone(),
+    );
+
+    assert_eq!(chosen, versioned);
 }
 
 #[test]

@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 ///
 /// `current_exe` resolves a package manager's link or wrapper to the
 /// versioned binary behind it, which an upgrade removes. A bare name is
-/// looked up in `PATH`, a relative path joined to `cwd`, neither resolved.
+/// looked up in `PATH`, a relative path or `PATH` entry joined to `cwd`,
+/// neither resolved.
 pub(crate) fn service_binary_path(
     invoked: Option<&OsStr>,
     path_var: Option<&OsStr>,
@@ -59,8 +60,16 @@ fn invoked_binary_path(
         };
         return is_executable_file(&path).then_some(path);
     }
+    // As `execvp`: a relative entry, the empty one included, names a
+    // directory under the working directory.
     std::env::split_paths(path_var?)
-        .filter(|dir| dir.is_absolute())
+        .filter_map(|dir| {
+            if dir.is_absolute() {
+                Some(dir)
+            } else {
+                cwd.map(|cwd| cwd.join(dir))
+            }
+        })
         .map(|dir| dir.join(invoked))
         .find(|candidate| is_executable_file(candidate))
 }
@@ -74,9 +83,11 @@ fn invoked_binary_path(
     None
 }
 
+/// A file this user may execute: the mode bits alone also pass another
+/// account's `0700` binary.
 #[cfg(unix)]
 fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    use nix::unistd::{AccessFlags, access};
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+        && access(path, AccessFlags::X_OK).is_ok()
 }
