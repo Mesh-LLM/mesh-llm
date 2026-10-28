@@ -20,8 +20,8 @@ if [[ $# == 3 ]]; then
     LLAMA_WORKDIR="$PWD/.deps/simd-C-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "$current/scripts/prepare-llama.sh" pinned
 fi
 just sampler-simd-controller "$PWD/.deps/llama.cpp"
-architecture=()
-if [[ $backend == cuda ]]; then architecture=(-DCMAKE_CUDA_ARCHITECTURES=121); fi
+configuration=(-DCMAKE_EXPORT_COMPILE_COMMANDS=ON)
+if [[ $backend == cuda ]]; then configuration+=(-DCMAKE_CUDA_ARCHITECTURES=121); fi
 for arm in "${arms[@]}"; do
     native="$PWD/.deps/llama.cpp"
     upstream=ON
@@ -34,7 +34,7 @@ for arm in "${arms[@]}"; do
     cmake -S skippy/evals/simd-top-k -B ".deps/simd-$arm" -G Ninja \
         "-DLLAMA_ROOT=$native" "-DSIMD_BACKEND=$backend" \
         "-DSKIPPY_EVAL_COMMON_SAMPLER=$upstream" "-DLLAMA_SAMPLER_HIGHWAY=$highway" \
-        "-DLLAMA_SAMPLER_HIGHWAY_DISABLED=$disabled" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "${architecture[@]}"
+        "-DLLAMA_SAMPLER_HIGHWAY_DISABLED=$disabled" "${configuration[@]}"
     cmake --build ".deps/simd-$arm" --parallel 4 --target simd-thermal-probe
     ".deps/simd-$arm/simd-thermal-probe"
     cmake --build ".deps/simd-$arm" --parallel 4 --target grammar-sampling
