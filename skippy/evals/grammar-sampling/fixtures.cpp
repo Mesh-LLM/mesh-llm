@@ -154,6 +154,7 @@ skippy_sampling_config skippy_config(uint32_t seed) {
 
 common_params_sampling reference_config(const fixture & input, const llama_vocab * vocab, uint32_t seed) {
     common_params_sampling params;
+    params.no_perf = true;
     params.seed = seed;
     params.temp = 0.8f;
     params.top_k = 40;

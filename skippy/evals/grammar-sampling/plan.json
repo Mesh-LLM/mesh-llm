@@ -76,7 +76,8 @@
       "distribution"
     ],
     "adapter": "Both native arms use the same llama_context configuration and directly exercise the production sampler entrypoints. Prompt history is settled before timing; generated history is settled inside the next timed sample. Matched decode is teacher-forced to remove output-length and logit-input confounds. This is not a Max end-to-end benchmark.",
-    "resident_processes": "One baseline process serves A/B and one candidate process serves C. Both remain resident; only one computes at a time. This avoids model loading between paired blocks."
+    "resident_processes": "One baseline process serves A/B and one candidate process serves C. Both remain resident; only one computes at a time. This avoids model loading between paired blocks.",
+    "native_sampler_perf_counters": "Disabled in all arms. Skippy uses llama_sampler_chain_default_params.no_perf=true; the reference explicitly sets common_params_sampling.no_perf=true. Only the evaluator monotonic timers measure sampling."
   },
   "workloads": {
     "origin": "Synthetic tool-calling fixtures, including the todo-app HTML pattern from the diagnostic run; no private user documents or credentials",
@@ -129,6 +130,7 @@
     "Latest upstream beyond the frozen baseline is outside the initial comparison",
     "The user selected Qwen3.5-9B Q4 for the 24 GB JY M6. This does not qualify 35B decode throughput.",
     "The original M1 Ultra job was only a completed model/toolchain probe; it contributes no performance evidence.",
-    "Revision 2 is diagnostic screening against the installed 2c82637 source. Final revision 3 qualifies current main 3947de0 plus the candidate, with fresh builds, correctness, screening and timing; do not mix the revisions."
+    "Revision 2 is diagnostic screening against the installed 2c82637 source. Final revision 3 qualifies current main 3947de0 plus the candidate, with fresh builds, correctness, screening and timing; do not mix the revisions.",
+    "Revision 2 used the reference sampler default perf counters. Revision 3 disables counters in all arms before qualification; no revision-2 performance is qualification evidence."
   ]
 }
