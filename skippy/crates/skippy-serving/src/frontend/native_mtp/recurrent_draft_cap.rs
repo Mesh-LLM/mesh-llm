@@ -2,19 +2,46 @@ use skippy_runtime::ModelStateKind;
 
 use crate::frontend::SpeculativeDecodeConfig;
 
-/// Effective native MTP draft depth for the loaded model.
+const RECURRENT_NATIVE_MTP_MAX_DRAFT_TOKENS: usize = 1;
+
+/// Hybrid and recurrent models roll back at most two verify rows in place, so
+/// a wider native MTP window copies the whole recurrent state to host on every
+/// window (#2318). Cap them to one draft until rollback depth follows the
+/// speculative window.
 pub(in crate::frontend) fn native_mtp_draft_cap(
     requested: usize,
-    _state_kind: Option<ModelStateKind>,
+    state_kind: Option<ModelStateKind>,
 ) -> usize {
-    requested
+    match state_kind {
+        Some(ModelStateKind::Recurrent | ModelStateKind::Hybrid) => {
+            requested.min(RECURRENT_NATIVE_MTP_MAX_DRAFT_TOKENS)
+        }
+        _ => requested,
+    }
 }
 
-/// Applies [`native_mtp_draft_cap`] to a speculative plan.
 pub(in crate::frontend) fn apply_native_mtp_draft_cap(
-    _speculative: &mut SpeculativeDecodeConfig,
-    _state_kind: Option<ModelStateKind>,
+    speculative: &mut SpeculativeDecodeConfig,
+    state_kind: Option<ModelStateKind>,
 ) {
+    let requested = speculative.native_mtp.max_draft_tokens;
+    let capped = native_mtp_draft_cap(requested, state_kind);
+    if capped == requested {
+        return;
+    }
+    speculative.native_mtp.max_draft_tokens = capped;
+    speculative.native_mtp.min_draft_tokens = speculative.native_mtp.min_draft_tokens.min(capped);
+    if speculative.native_mtp.enabled {
+        tracing::warn!(
+            requested_draft_tokens = requested,
+            capped_draft_tokens = capped,
+            model_state_kind = ?state_kind,
+            "native MTP draft tokens capped from {requested} to {capped}: this model has \
+             recurrent state, and more than one draft token is about 7x slower on hybrid \
+             and recurrent models until the rollback depth is sized from the speculative \
+             window (#2318)"
+        );
+    }
 }
 
 #[cfg(test)]

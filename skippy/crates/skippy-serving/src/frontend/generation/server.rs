@@ -19,6 +19,7 @@ use crate::frontend::generation::generation_admission_lane_count;
 use crate::frontend::generation::open_draft_runner;
 use crate::frontend::generation::prewarm_generation_sessions;
 use crate::frontend::iteration_scheduler::IterationScheduler;
+use crate::frontend::native_mtp::apply_native_mtp_draft_cap;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::frontend::prefill::PrefillChunkPolicyArgs;
 use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_proposal_limit};
@@ -223,7 +224,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
 }
 
 fn embedded_openai_backend_with_scheduler(
-    args: EmbeddedOpenAiArgs,
+    mut args: EmbeddedOpenAiArgs,
     iteration_scheduler: Option<IterationScheduler>,
 ) -> Result<EmbeddedOpenAiBackend> {
     if args.prefill_chunk_size == 0 {
@@ -261,6 +262,10 @@ fn embedded_openai_backend_with_scheduler(
     {
         bail!("embedded OpenAI serving is only supported on stage 0");
     }
+    apply_native_mtp_draft_cap(
+        &mut args.speculative,
+        loaded_model_state_kind(Some(&args.runtime)),
+    );
     attach_native_mtp_draft_model(
         args.native_mtp_draft_model_path.as_deref(),
         &args.runtime,
