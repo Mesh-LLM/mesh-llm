@@ -1176,7 +1176,7 @@ fn a_configured_draft_cap_overrides_the_backend_default() {
 #[test]
 fn unknown_targets_do_not_default_to_dflash() {
     let (_directory, model_path) = default_dflash_target();
-    let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 64, 5120, 0));
+    let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 48, 5120, 0));
 
     assert!(resolved.speculative.default_dflash.is_none());
     assert!(resolved.speculative.decode.dflash.is_none());
