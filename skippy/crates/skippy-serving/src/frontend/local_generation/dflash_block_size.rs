@@ -23,6 +23,11 @@ const PRIOR_WEIGHT: f64 = 2.0;
 /// Every this many windows, the choice is nudged to keep the cost fit spread.
 const EXPLORE_EVERY: u64 = 8;
 const EXPLORE_STEP: usize = 2;
+/// Measured serial steps needed before serial decoding may be chosen.
+pub(super) const MIN_SERIAL_SAMPLES: f64 = 2.0;
+/// Weight, in windows, a request gives the shared acceptance it starts from,
+/// so its own text dominates within a few windows.
+const SEED_ACCEPTANCE_WEIGHT: f64 = 4.0;
 
 /// Whether DFlash block lengths adapt instead of using the configured maximum.
 pub(super) fn adaptive_enabled() -> bool {
@@ -30,7 +35,11 @@ pub(super) fn adaptive_enabled() -> bool {
 }
 
 /// Decayed least-squares fit of `time = intercept + slope * rows`, plus the
-/// mean cost of drafting one block.
+/// mean cost of drafting one block and of one measured serial step.
+///
+/// The serial step is measured rather than read off the fit: extrapolating a
+/// fit over verify windows down to one row is noisy, and a low estimate makes
+/// serial decoding look free.
 #[derive(Clone, Debug, Default)]
 pub(super) struct BlockCost {
     weight: f64,
@@ -40,9 +49,26 @@ pub(super) struct BlockCost {
     sum_rows_time: f64,
     draft_weight: f64,
     draft_time_sum: f64,
+    serial_weight: f64,
+    serial_time_sum: f64,
 }
 
 impl BlockCost {
+    pub(super) fn observe_serial(&mut self, micros: f64) {
+        self.serial_weight = self.serial_weight * DECAY + 1.0;
+        self.serial_time_sum = self.serial_time_sum * DECAY + micros;
+    }
+
+    /// Whether enough serial steps were measured to weigh serial decoding.
+    pub(super) fn serial_measured(&self) -> bool {
+        self.serial_weight >= MIN_SERIAL_SAMPLES * DECAY.powi(2)
+    }
+
+    fn serial_micros(&self) -> Option<f64> {
+        self.serial_measured()
+            .then(|| self.serial_time_sum / self.serial_weight)
+    }
+
     pub(super) fn observe_verify(&mut self, rows: usize, micros: f64) {
         let rows = rows as f64;
         self.weight = self.weight * DECAY + 1.0;
@@ -79,7 +105,9 @@ impl BlockCost {
         let covariance = self.sum_rows_time / self.weight - mean_rows * mean_time;
         // Verifying more rows never costs less; a negative slope is noise.
         let slope = (covariance / variance).max(0.0);
-        let intercept = mean_time - slope * mean_rows;
+        // A verify window always costs at least a fixed launch; a negative
+        // intercept is the fit overreaching outside the rows it has seen.
+        let intercept = (mean_time - slope * mean_rows).max(0.0);
         Some((intercept + slope * rows as f64).max(1.0))
     }
 }
@@ -112,6 +140,19 @@ impl Acceptance {
         }
     }
 
+    /// The same estimates carrying at most `max_weight` windows of evidence
+    /// per position, so a request starting from them adapts to its own text.
+    pub(super) fn capped(mut self) -> Self {
+        for (accepted, reached) in self.accepted.iter_mut().zip(self.reached.iter_mut()) {
+            if *reached > SEED_ACCEPTANCE_WEIGHT {
+                let scale = SEED_ACCEPTANCE_WEIGHT / *reached;
+                *accepted *= scale;
+                *reached = SEED_ACCEPTANCE_WEIGHT;
+            }
+        }
+        self
+    }
+
     fn conditional(&self, position: usize) -> f64 {
         let position = position.min(MAX_TRACKED_POSITIONS - 1);
         (self.accepted[position] / self.reached[position]).clamp(0.0, 1.0)
@@ -131,7 +172,8 @@ impl Acceptance {
 }
 
 /// Picks the block length with the best expected tokens per microsecond.
-/// Returns 0 when decoding serially beats every block.
+/// Returns 0 when a measured serial step beats every block; serial decoding is
+/// never chosen before serial steps were measured.
 pub(super) fn choose_block(
     cost: &BlockCost,
     acceptance: &Acceptance,
@@ -143,15 +185,16 @@ pub(super) fn choose_block(
     }
     // Before the fit has two row counts, alternate between short and full
     // blocks so it gets them.
-    let Some(serial) = cost.verify_micros(1) else {
+    if cost.verify_micros(1).is_none() {
         return if window_index.is_multiple_of(2) {
             max_drafts
         } else {
             max_drafts.div_ceil(2)
         };
-    };
+    }
     let draft = cost.draft_micros();
-    let mut best = (0, 1.0 / serial);
+    let serial_rate = cost.serial_micros().map_or(0.0, |serial| 1.0 / serial);
+    let mut best = (0, serial_rate);
     for drafts in 1..=max_drafts {
         let Some(verify) = cost.verify_micros(drafts + 1) else {
             continue;
@@ -191,6 +234,17 @@ pub(super) fn shared_model(draft_model_path: &Path) -> SharedBlockModel {
         .lock()
         .map(|models| models.get(draft_model_path).cloned().unwrap_or_default())
         .unwrap_or_default()
+}
+
+/// Folds one measured serial step into the shared estimates for a draft model.
+pub(super) fn record_shared_serial(draft_model_path: &Path, micros: f64) {
+    if let Ok(mut models) = registry().lock() {
+        models
+            .entry(draft_model_path.to_path_buf())
+            .or_default()
+            .cost
+            .observe_serial(micros);
+    }
 }
 
 /// Folds one window into the shared estimates for a draft model.
@@ -273,10 +327,46 @@ mod tests {
     }
 
     #[test]
-    fn hopeless_drafts_decode_serially() {
-        let cost = linear_cost(25_000.0, 4_000.0, 8_000.0);
+    fn hopeless_drafts_decode_serially_once_serial_steps_are_measured() {
+        let mut cost = linear_cost(25_000.0, 4_000.0, 8_000.0);
         let acceptance = uniform_acceptance(0.0);
+        assert!(
+            choose_block(&cost, &acceptance, 15, 0) > 0,
+            "an unmeasured serial step is never chosen"
+        );
+        cost.observe_serial(29_000.0);
+        cost.observe_serial(29_000.0);
         assert_eq!(choose_block(&cost, &acceptance, 15, 0), 0);
+    }
+
+    #[test]
+    fn a_steep_noisy_fit_does_not_make_serial_look_free() {
+        // Verify windows of 5 to 8 rows whose noise suggests a steep slope; the
+        // fitted one-row cost must not undercut the measured serial step.
+        let mut cost = BlockCost::default();
+        for (rows, micros) in [(5, 30_000.0), (8, 60_000.0), (5, 31_000.0), (8, 59_000.0)] {
+            cost.observe_verify(rows, micros);
+        }
+        assert!(cost.verify_micros(1).unwrap() >= 1.0);
+        cost.observe_serial(26_000.0);
+        cost.observe_serial(26_000.0);
+        let acceptance = uniform_acceptance(0.75);
+        assert!(choose_block(&cost, &acceptance, 7, 0) > 0);
+    }
+
+    #[test]
+    fn requests_start_from_lightly_weighted_shared_acceptance() {
+        let shared = Acceptance {
+            accepted: vec![90.0; MAX_TRACKED_POSITIONS],
+            reached: vec![100.0; MAX_TRACKED_POSITIONS],
+        };
+        let mut seeded = shared.capped();
+        assert!((seeded.conditional(0) - 0.9).abs() < 1e-9, "rate is kept");
+        // Three misses at the first position should pull it well below the seed.
+        for _ in 0..3 {
+            seeded.observe(8, 0);
+        }
+        assert!(seeded.conditional(0) < 0.6, "{}", seeded.conditional(0));
     }
 
     #[test]
