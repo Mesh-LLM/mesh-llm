@@ -11,6 +11,16 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
+/// The transport rejected this request before attempting any socket write.
+#[derive(Debug)]
+pub(crate) struct NotDispatched(pub(crate) &'static str);
+impl std::fmt::Display for NotDispatched {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for NotDispatched {}
+
 type Reply = oneshot::Sender<Result<proto::envelope::Payload>>;
 struct Request {
     id: u64,
@@ -40,7 +50,7 @@ impl Transport {
         self.tx
             .send(Request { id, payload, reply })
             .await
-            .context("wallet transport stopped")?;
+            .map_err(|_| NotDispatched("wallet transport stopped"))?;
         response.await.context("wallet transport lost response")?
     }
 }
@@ -64,7 +74,7 @@ async fn run(stream: LocalStream, mut rx: mpsc::Receiver<Request>, plugin: Strin
                 let Some(request) = request else { break; };
                 // The reader owns partial framing; cancelling this select never drops bytes.
                 if pending.len() >= 64 {
-                    let _ = request.reply.send(Err(anyhow::anyhow!("wallet in-flight limit")));
+                    let _ = request.reply.send(Err(NotDispatched("wallet in-flight limit").into()));
                     continue;
                 }
                 let envelope = proto::Envelope { protocol_version: PROTOCOL_VERSION, plugin_id: plugin.clone(),
@@ -100,6 +110,37 @@ async fn read_frame<R: AsyncRead + Unpin + ?Sized>(read: &mut R) -> Result<proto
 mod tests {
     use super::*;
     use mesh_llm_plugin::{read_envelope, write_envelope};
+    #[tokio::test]
+    async fn stopped_before_enqueue_is_definitely_not_dispatched() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let transport = Transport {
+            tx,
+            next: AtomicU64::new(1),
+        };
+        let error = transport
+            .exchange(proto::envelope::Payload::HealthRequest(Default::default()))
+            .await
+            .unwrap_err();
+        assert!(error.is::<NotDispatched>());
+    }
+
+    #[tokio::test]
+    async fn admitted_request_disconnect_remains_uncertain() {
+        let (client, server) = tokio::io::duplex(8192);
+        let transport = Transport::start(LocalStream::Memory(client), "mock-wallet".into());
+        let server = tokio::spawn(async move {
+            let mut stream = LocalStream::Memory(server);
+            read_envelope(&mut stream).await.unwrap();
+        });
+        let error = transport
+            .exchange(proto::envelope::Payload::HealthRequest(Default::default()))
+            .await
+            .unwrap_err();
+        assert!(!error.is::<NotDispatched>());
+        server.await.unwrap();
+    }
+
     #[tokio::test]
     async fn out_of_order_responses_are_correlated() {
         let (client, server) = tokio::io::duplex(8192);

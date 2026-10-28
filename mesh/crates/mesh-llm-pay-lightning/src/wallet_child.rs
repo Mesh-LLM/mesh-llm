@@ -198,6 +198,8 @@ impl WalletProvider for ChildWallet {
         .map_err(|error| {
             if let Some(structured) = error.downcast_ref::<WalletCallError>() {
                 structured.0.clone().into_pay_error()
+            } else if error.is::<crate::wallet_transport::NotDispatched>() {
+                PayError::NotSubmitted(error)
             } else {
                 PayError::Uncertain(error)
             }

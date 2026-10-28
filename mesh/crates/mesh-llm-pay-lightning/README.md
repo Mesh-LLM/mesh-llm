@@ -59,6 +59,12 @@ Cold clients pay a deposit. Warm tickets refill concurrently with inference,
 without waiting for the final wallet payment. The three-unpaid-final limit still
 bounds credit. An independent receipt sweep wakes admission even when a buyer's
 `Paid` message is delayed. Persisted invoice receipts reconcile after restart.
+Background receipt observation reserves at most eight invoices per sweep, with
+one-second lookup timeouts and per-invoice exponential backoff from 250 ms to
+60 seconds. Attempts are reserved before I/O so cancellation cannot hot-loop the
+same first invoice. Expired unpaid invoices remain debts and continue low-rate
+observation; expiry is never treated as payment or forgiveness. This bounds each
+sweep's wallet I/O, not the ledger scan or total scheduler memory.
 Uncertain submissions are observed by hash, never blindly retried. One outstanding
 ticket per buyer/model is supported; restart abandons interrupted work and drops
 unconsumed tickets rather than replaying inference.

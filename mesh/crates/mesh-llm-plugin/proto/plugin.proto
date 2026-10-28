@@ -34,8 +34,9 @@ message Envelope {
     PeerBlockResponse peer_block_response = 33;
     PluginKeyRequest plugin_key_request = 34;
     PluginKeyResponse plugin_key_response = 35;
-    ModelRequirementRequest model_requirement_request = 36;
-    ModelRequirementResponse model_requirement_response = 37;
+    // 36–40 are allocated on main to status and inference observation.
+    ModelRequirementRequest model_requirement_request = 41;
+    ModelRequirementResponse model_requirement_response = 42;
   }
 }
 

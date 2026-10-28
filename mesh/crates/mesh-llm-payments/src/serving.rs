@@ -306,7 +306,8 @@ impl PaymentService {
         first_error.map_or(Ok(()), Err)
     }
 
-    async fn refresh_invoice(&self, receipt: &MeteredInvoice) -> Result<()> {
+    /// Observe one issued invoice without altering an unpaid debt on expiry.
+    pub async fn refresh_invoice(&self, receipt: &MeteredInvoice) -> Result<()> {
         let Some(payment) = self
             .wallet()
             .await?

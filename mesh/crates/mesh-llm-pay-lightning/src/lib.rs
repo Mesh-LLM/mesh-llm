@@ -1,6 +1,7 @@
 //! Credit-first plugin protocol. A prepared admission is single-use and owner-bound.
 mod connections;
 pub mod diagnostics;
+mod receipt_schedule;
 mod runtime;
 mod tickets;
 #[cfg(unix)]
@@ -87,6 +88,7 @@ pub struct Engine {
     ready_seen: std::sync::Mutex<BTreeSet<String>>,
     buyer_ready: std::sync::Mutex<BTreeSet<(String, String)>>,
     changed: tokio::sync::Notify,
+    receipt_schedule: std::sync::Mutex<receipt_schedule::ReceiptSchedule>,
     pub service: Arc<PaymentService>,
     tickets: tickets::Tickets,
     pub header: String,
@@ -109,6 +111,7 @@ impl Engine {
             ready_seen: Default::default(),
             buyer_ready: Default::default(),
             changed: Default::default(),
+            receipt_schedule: Default::default(),
             service,
             tickets: tickets::Tickets::open(directory)?,
             header: format!("x-plugin-{namespace}-pay-terms"),
@@ -133,9 +136,32 @@ impl Engine {
     /// A partial sweep can record receipts before another lookup fails, so wake
     /// admission even on error. Durable invoice facts make repeated sweeps safe.
     pub(crate) async fn refresh_receipts(&self) -> Result<()> {
-        let result = self.service.metered_refresh_all().await;
-        self.changed.notify_waiters();
-        result
+        let receipts = self.service.ledger.unpaid_metered_invoices()?;
+        let due = self.receipt_schedule.lock().unwrap().reserve(
+            receipts
+                .iter()
+                .map(|receipt| receipt.invoice.payment_hash.clone()),
+            std::time::Instant::now(),
+        );
+        let mut first_error = None;
+        for hash in due {
+            let receipt = receipts
+                .iter()
+                .find(|receipt| receipt.invoice.payment_hash == hash)
+                .expect("scheduled invoice came from ledger");
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                self.service.refresh_invoice(receipt),
+            )
+            .await
+            .map_err(anyhow::Error::new)
+            .and_then(|result| result);
+            self.changed.notify_waiters();
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
