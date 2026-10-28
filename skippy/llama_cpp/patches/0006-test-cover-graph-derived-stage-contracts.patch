@@ -1,4 +1,4 @@
-From 8211ae0b61fdaf367d0136ae73bb321c530476b3 Mon Sep 17 00:00:00 2001
+From 2791bcb2a18231a52fd23d05150663ebba1f70d8 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -17,7 +17,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/profile_residency.cpp        |  258 +++
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
- src/skippy/tests/runtime_events.cpp           |  693 +++++++
+ src/skippy/tests/runtime_events.cpp           |  695 +++++++
  src/skippy/tests/sampling_history.cpp         |  459 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9906 insertions(+), 32 deletions(-)
+ 34 files changed, 9908 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5138,10 +5138,10 @@ index 000000000..31734bf56
 +}
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
 new file mode 100644
-index 000000000..21ac21c73
+index 000000000..cb420a561
 --- /dev/null
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -0,0 +1,693 @@
+@@ -0,0 +1,695 @@
 +#include "skippy.h"
 +
 +#include "../events_internal.h"
@@ -5490,11 +5490,13 @@ index 000000000..21ac21c73
 +    CHECK(session->sampling_backend_enabled);
 +    CHECK(skippy_session_configure_chat_sampling(session, &config,
 +            R"({"grammar":"root ::= \"2a\""})", 1, &error) == SKIPPY_STATUS_OK);
++    predicted = LLAMA_TOKEN_NULL;
 +    CHECK(skippy_session_sample_current(session, &config, &predicted, &error) == SKIPPY_STATUS_RUNTIME_ERROR);
 +    CHECK(predicted == LLAMA_TOKEN_NULL && session->sampling_accepted_token_count == 0);
 +    skippy_error_free(error); error = nullptr;
 +    CHECK(skippy_session_configure_chat_sampling(session, &config, "{}", 1, &error) == SKIPPY_STATUS_OK);
 +    CHECK(session->sampling_backend_enabled);
++    predicted = LLAMA_TOKEN_NULL;
 +    CHECK(skippy_session_sample_current(session, &config, &predicted, &error) == SKIPPY_STATUS_RUNTIME_ERROR);
 +    CHECK(predicted == LLAMA_TOKEN_NULL && session->sampling_accepted_token_count == 0);
 +    skippy_error_free(error); error = nullptr;
