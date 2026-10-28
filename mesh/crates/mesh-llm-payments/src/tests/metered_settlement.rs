@@ -48,6 +48,7 @@ fn req(id: &str, deposit: bool) -> MeteredRequest<'_> {
     MeteredRequest {
         id,
         peer: "peer",
+        model: "test-model",
         pricing: RATES.get_or_init(rates),
         require_deposit: deposit,
     }
@@ -201,6 +202,7 @@ fn admission_identity_is_the_exact_terms() {
     let mk = |require_deposit| MeteredRequest {
         id: "low",
         peer: "peer",
+        model: "test-model",
         pricing: &low,
         require_deposit,
     };

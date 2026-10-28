@@ -1,4 +1,5 @@
 //! Request qualification for an already running System One frontend, not readiness.
+mod causal_readout;
 mod contract;
 mod driver;
 mod full_read;

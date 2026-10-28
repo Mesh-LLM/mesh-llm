@@ -241,6 +241,7 @@ mod tests {
     };
     use crate::telemetry::TelemetryLevel;
 
+    /// Construct a forwarding fixture carrying explicit stage and session identity.
     fn message(kind: WireMessageKind, pos_start: i32) -> StageWireMessage {
         StageWireMessage {
             kind,
@@ -258,6 +259,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }

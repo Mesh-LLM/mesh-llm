@@ -91,7 +91,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
             .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST)
     );
     assert!(skippy.features.iter().any(|feature| feature
-        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11));
+        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12));
     assert_eq!(
         proto_pa
             .owner_attestation
@@ -454,18 +454,19 @@ fn proto_announcement_without_current_stage_generation_is_not_stage_compatible()
     assert!(ann.stage_status_list_supported);
 }
 
+/// Missing current-generation capabilities prevent stage compatibility.
 #[test]
 fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD0; 32]).public());
     for missing in [
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
     ] {
         let features = [
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
         ]
@@ -492,6 +493,7 @@ fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible
     }
 }
 
+/// Partial duplicate descriptors cannot combine into a valid capability bundle.
 #[test]
 fn partial_duplicate_stage_records_do_not_form_a_generation_bundle() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD1; 32]).public());
@@ -504,7 +506,7 @@ fn partial_duplicate_stage_records_do_not_form_a_generation_bundle() {
                 major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
                 features: vec![
                     skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
-                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11
+                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12
                         .to_string(),
                 ],
             },

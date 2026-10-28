@@ -8,7 +8,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Notify;
 
 const CHILD: &str = "MESH_EMBEDDED_LIFECYCLE_CHILD";
+// Child processes inherit the parent environment at spawn; serialize with
+// other environment fixtures so a concurrent test cannot supply their config.
 #[test]
+#[serial_test::serial]
 #[ignore = "real embedded serving; requires an installed compatible native runtime"]
 fn stop_during_download_releases_runtime_and_restarts() {
     isolated(
@@ -18,6 +21,7 @@ fn stop_during_download_releases_runtime_and_restarts() {
 }
 
 #[test]
+#[serial_test::serial]
 fn stop_during_join_releases_runtime_and_restarts() {
     isolated(
         "stop_during_join_releases_runtime_and_restarts",
@@ -26,6 +30,7 @@ fn stop_during_join_releases_runtime_and_restarts() {
 }
 
 #[test]
+#[serial_test::serial]
 fn cancelling_startup_releases_runtime_and_restarts() {
     isolated(
         "cancelling_startup_releases_runtime_and_restarts",
@@ -34,6 +39,7 @@ fn cancelling_startup_releases_runtime_and_restarts() {
 }
 
 #[test]
+#[serial_test::serial]
 #[ignore = "native inference; requires MESH_EMBEDDED_TEST_GGUF and an installed native runtime"]
 fn cancelled_download_can_restart_and_generate() {
     isolated(
@@ -119,11 +125,23 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         return;
     }
     let temp = tempfile::tempdir().unwrap();
+    let executable = std::env::current_exe().unwrap();
+    #[cfg(target_os = "macos")]
+    let executable = {
+        // CoreFoundation scans the executable's directory during initialization.
+        // A large Cargo deps directory can consume the lifecycle deadline before
+        // the node starts. Run identical bytes from this isolated fixture instead.
+        let isolated_executable = temp.path().join("host-runtime-tests");
+        std::fs::hard_link(&executable, &isolated_executable)
+            .or_else(|_| std::fs::copy(&executable, &isolated_executable).map(|_| ()))
+            .expect("stage the unchanged child test executable");
+        isolated_executable
+    };
     let log = std::fs::File::create(temp.path().join("child.log")).unwrap();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut child = Command::new(executable)
         .args([
             "--exact",
             &format!("sdk::embedded_lifecycle_tests::{name}"),
@@ -131,6 +149,8 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
             "--nocapture",
         ])
         .env(CHILD, temp.path())
+        // Lifecycle barriers use local fixtures, not the availability of GitHub.
+        .env(mesh_llm_config::MESH_LLM_NO_UPDATE_CHECK_ENV, "1")
         .env("HF_ENDPOINT", endpoint)
         .env(
             "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR",
@@ -280,12 +300,20 @@ async fn cancelled_startup_scenario() {
     let mut config = isolated_config();
     let (peer, token) = unresponsive_peer().await;
     config.network.join_tokens = vec![token];
-    let startup = tokio::spawn(start_embedded_node(config.clone()));
+    let mut startup = tokio::spawn(start_embedded_node(config.clone()));
     let mut packet = [0; 2048];
-    tokio::time::timeout(Duration::from_secs(10), peer.recv(&mut packet))
-        .await
-        .expect("startup is dialing the fixture")
-        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            result = &mut startup => match result {
+                Ok(Err(error)) => panic!("startup failed before dialing the fixture: {error:#}"),
+                Ok(Ok(_)) => panic!("startup returned before dialing the fixture"),
+                Err(error) => panic!("startup task failed before dialing the fixture: {error}"),
+            },
+            packet = peer.recv(&mut packet) => { packet.unwrap(); }
+        }
+    })
+    .await
+    .expect("startup is dialing the fixture");
     assert!(
         !startup.is_finished(),
         "fixture must hold startup before it returns a handle"

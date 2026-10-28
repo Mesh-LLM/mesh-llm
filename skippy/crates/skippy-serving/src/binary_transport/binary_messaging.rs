@@ -52,6 +52,7 @@ mod connection;
 mod control_messages;
 mod message_receive;
 mod prefill_recording;
+mod readout;
 pub(in crate::binary_transport) mod reply;
 mod session_lifecycle;
 mod session_tracker;
@@ -954,6 +955,7 @@ mod downstream_error_telemetry_tests {
     use crate::telemetry::{Telemetry, TelemetryLevel};
     use skippy_protocol::binary::{StageStateHeader, WireMessageKind};
 
+    /// Create the opening stage request for binary-connection tests.
     fn first_message() -> StageWireMessage {
         StageWireMessage {
             kind: WireMessageKind::VerifyWindow,
@@ -967,6 +969,7 @@ mod downstream_error_telemetry_tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
