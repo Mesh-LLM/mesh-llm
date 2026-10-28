@@ -13,9 +13,11 @@ diagnostic control, and each hardware lane qualifies independently.
 
 [timing-stages.json](timing-stages.json) records the exact dependencies, source,
 node, binary/input bindings, output directories and spec hashes. M6 bindings are
-resolved. Spark template hashes must be bound to the verified build and its new
-frozen-B CUDA capture before admission. Never submit a `.template.json` file or
-substitute an unverified executable, input manifest or node.
+resolved. Spark bindings now match its verified build and once-only frozen-B CUDA
+capture on `spark-000907`; [spark-bindings.json](spark-bindings.json) records the
+verified evidence and preserves the original template lineage. Both lanes still
+require correctness/ISA and screen gates before qualification. Never submit a
+`.template.json` file or substitute an unverified executable, input manifest or node.
 
 Before submission, require the shared correctness/ISA audit and its downloaded
 artifact to match the admitted source and binaries. Qualification additionally

@@ -1,0 +1,55 @@
+{
+  "spec": {
+    "name": "Heap filter v2 \u00b7 SPARK \u00b7 screen \u00b7 aa07158e",
+    "description": "Prepared screen for spark only; launch requires verified immutable dependencies in timing-stages.json. All original primary B, paired statistics, exact decisions, per-case within1%, aggregate 5% improvement and decode gates remain unchanged. No normalized comparisons or performance-based chunk stopping.",
+    "target": {
+      "executor": "lab",
+      "nodes": [
+        "spark-000907"
+      ],
+      "os": "linux"
+    },
+    "runtime": {
+      "model_package": {
+        "ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5#*Q4_K_M*",
+        "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        "egress": "lab_only"
+      },
+      "models": [
+        {
+          "ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5#*Q4_K_M*",
+          "env": "MODEL_DIR",
+          "delivery": "cache",
+          "pin": true
+        }
+      ],
+      "command": "set -eu\nretained=/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate\ninputs=/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2\nartifacts=\"$JIANYANG_ARTIFACT_DIR\"\ntest \"$(git -C \"$retained\" rev-parse HEAD)\" = aa07158ec01e56775599ddb918efddedb7154ed7\ntest \"$(git -C \"$retained/.deps/llama.cpp\" rev-parse 'HEAD^{tree}')\" = e4cc2b65b42834fe2ab257a2517afd969ba7f9c5\ncat > \"$artifacts/admitted-binary-hashes.txt\" <<'BINARY_HASHES'\n9fb5b165f5fc098d61c59e0b9cba7771e726ff4b81912c8b7195e36289212c5a  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-B/grammar-sampling\nad7ce1a07b8cffe7813e5a0789c551acd36c059ebd79afe3f90fec59d50c95f2  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-C/grammar-sampling\n90af95ece16391ba266a93d991ef1707390e5d75c84901f821b58d5deea06826  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-C/grammar-verification\n80fdc1a865d55991da6937bf3f4d6db15de2b17c87e84860685d9d32b1088586  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-D/grammar-sampling\n2527078d033ec5e3868853f36c1beb49ce73688f55f6359bcb30bee4744bad22  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-D/grammar-verification\n41d040e64c5ecd32ffaf0113b13f993de4764533327ff9dc23795e9255ff0328  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-R/grammar-sampling\n673313536281898c072dee2859a3195c08f33f3414aafc67976353679c5cfe96  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-R/grammar-verification\n7cf53f7295937e9a1e1f55b9016fb3248d5b5ac0d54ac2762af350e2e29daeb9  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-controller\nee9f84f656b1b679b72c8dbaef135f19705d0221684d371ea44ad86a103b421d  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-audit\n25903c48164c4c89d3cb1c852995595af877b27145a23359c99c4c681a5b4c0b  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-contracts\n52bfa4a752df376c87f25326c4a397ef63e8302eb5a6b3b7b2b2290075328f88  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-controller/simd-sample-stacks\nBINARY_HASHES\ncat > \"$artifacts/frozen-input-hashes.txt\" <<'INPUT_HASHES'\nfc2d15988adde0c6dc75226ec0840d98c609e1a1f1833638b5ad825617840fa6  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/closing-delimiters-and-EOS.logits\na38e818a82528f625abb6b54d4fc19f38cdc86ad5b7db2baf2502f7c29c9eeff  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/fixtures.json\n134c0d9c4c85355c216e32793d4a42c96f605bc9f27325cb9b0740a31b4de6b3  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/large-HTML-write-argument.logits\nb597005a0a67cc4e8c14e63dc63848e421e748166716ca4f91481a9ded0cdd2a  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/lazy-before-tool-trigger.logits\n9aba1aa800074cd0acbf419f64d86835f4472f795283eb2c1fd8a07eb8ddeae3  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/restricted-values-and-rejection-fallback.logits\n308d1d8965abee8a08241600dcf14f39c75e8c4ed97da30aca5e18b71cde61b3  /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-inputs-v2/Unicode-and-partial-UTF8.logits\nINPUT_HASHES\nsha256sum -c \"$artifacts/admitted-binary-hashes.txt\"\nsha256sum -c \"$artifacts/frozen-input-hashes.txt\"\nmodel_file=\"$MODEL_DIR\"\nif [ -d \"$model_file\" ]; then model_file=\"$model_file/Qwen3.5-9B-Q4_K_M.gguf\"; fi\nprintf '%s  %s\\n' 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8 \"$model_file\" | sha256sum -c - > \"$artifacts/model-hash.txt\"\n{ git -C \"$retained\" rev-parse HEAD; git -C \"$retained/.deps/llama.cpp\" rev-parse 'HEAD^{tree}'; c++ --version; uname -a; } > \"$artifacts/timing-identity.txt\"\noutput=/home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/heap-filter-v2-aa07158e/screen\ntest ! -e \"$output\"\ncollect_timing() {\n    status=$?\n    trap - EXIT\n    printf '%s\\n' \"$status\" > \"$artifacts/timing-exit.txt\"\n    for filename in observations.jsonl admitted-fixtures.json host-observations.jsonl; do\n        if [ -f \"$output/$filename\" ]; then cp \"$output/$filename\" \"$artifacts/$filename\"; fi\n    done\n    exit \"$status\"\n}\ntrap collect_timing EXIT\nprintf 'Stage: screen global blocks 0..4\\n'\n\"$retained/.deps/simd-controller/simd-controller\" /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-B/grammar-sampling /home/gi/.config/jianyang/work/run_tcgak181p8acmkg/workspace/candidate/.deps/simd-C/grammar-sampling \"$retained/.deps/simd-D/grammar-sampling\" \"$retained/.deps/simd-R/grammar-sampling\" \"$model_file\" \"$inputs\" \"$output\" screen 0 5 > \"$artifacts/measurement.log\" 2>&1\n\"$retained/.deps/simd-controller/simd-audit\" \"$output/observations.jsonl\" \"$inputs/fixtures.json\" 5 \"$artifacts/native-statistical-audit.json\" > \"$artifacts/native-statistical-audit.log\" 2>&1\nsha256sum -c \"$artifacts/admitted-binary-hashes.txt\"\nsha256sum -c \"$artifacts/frozen-input-hashes.txt\"\n"
+    },
+    "harness": {
+      "name": "custom",
+      "version": "adhoc",
+      "trace": {
+        "kind": "synthetic",
+        "ref": "heap-filter-v2-spark-screen"
+      },
+      "seed": 73,
+      "warmup_requests": 0,
+      "concurrency": [
+        1
+      ],
+      "request_count": 1
+    },
+    "budget": {
+      "max_usd": 0,
+      "max_duration_s": 7200,
+      "grace_s": 120
+    },
+    "retries": 0,
+    "labels": {
+      "campaign": "skippy-heap-filter-v2",
+      "phase": "screen",
+      "hardware": "spark",
+      "protocol": "2"
+    }
+  }
+}

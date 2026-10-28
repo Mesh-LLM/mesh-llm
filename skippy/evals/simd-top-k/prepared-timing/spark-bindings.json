@@ -1,0 +1,22 @@
+{
+  "scope": "Verified identity binding only; no job submitted, no correctness/qualification implied",
+  "product_source": "aa07158ec01e56775599ddb918efddedb7154ed7",
+  "native_tree": "e4cc2b65b42834fe2ab257a2517afd969ba7f9c5",
+  "node": "spark-000907",
+  "build_job_id": "job_32079fwnpd0a44p",
+  "build_mlflow_run_id": "522f45f993f3475ebdbef4a7375d984c",
+  "input_capture_job_id": "job_f92ygqvmq53agyt",
+  "input_capture_mlflow_run_id": "c952dbabc75541b5a8d2fd914b74d6f6",
+  "build_audit_sha256": "8d4b003e27c4bce89b6553f3282fe880c56634368b748ddee00541c580573455",
+  "input_audit_sha256": "c863bd929bd42970201cdef7095584a1756063e10db8325dd1e02debc573b99f",
+  "template_lineage_preserved": true,
+  "m6_definition_unchanged": true,
+  "gates_and_ranges_unchanged": true,
+  "specs": {
+    "spark-screen.json": "c11fbec334f8de365c2e89b97f5134b7f235c4e9b51043e85038fd2bf239b81a",
+    "spark-qualification-00-09.json": "ff38a7f8425eb51511f56c20a4f4aa0e3391104fa240d4b2d5a83d0efb2b5ef3",
+    "spark-qualification-10-19.json": "09c2694bbbdb32aacf6ad4835edff4751325d8bee0011e1b7299ac6e39ff2766",
+    "spark-qualification-20-29.json": "9f4ce989f85489c0ea7df51752886ad188f984e4a9037513bac9bad849480339",
+    "spark-aggregate-30.json": "6725ba3f5e8b4a82b0756116b3fee5f27a3f90e200a78e6363eb7f312d47dc85"
+  }
+}
