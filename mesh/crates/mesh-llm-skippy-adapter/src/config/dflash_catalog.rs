@@ -40,6 +40,8 @@ pub struct DFlashDraftSource {
 pub struct DFlashPairing {
     pub target: DFlashTarget,
     pub draft: DFlashDraftSource,
+    /// Default the draft on only under Metal, where it measured faster.
+    pub metal_only: bool,
 }
 
 pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
@@ -58,6 +60,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             sha256: "27b9d18e605aea9c50ef506e4b63921e0dc624cc91c63c60617a8295f153d436",
             bytes: 1_383_768_224,
         },
+        metal_only: false,
     },
     // Qwen3.6-35B-A3B; the draft reads target layers 2..=38 at width 2048.
     DFlashPairing {
@@ -74,8 +77,12 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             sha256: "724ac8a102763e0d896cd49bf558fdf5bfdb146ec9f7097d18b035e4a95eac3f",
             bytes: 421_060_800,
         },
+        metal_only: false,
     },
     // Qwen3-Coder-Next; the draft reads target layers 4..=44 at width 2048.
+    // With 512 experts, verifying 8 rows costs 2.4 decode steps on a DGX Spark
+    // (1.15 for Qwen3.5-9B), and every block size measured slower than plain
+    // decoding there (59 tok/s off; 38-55 with DFlash). An M3 Ultra gains 1.12x.
     DFlashPairing {
         target: DFlashTarget {
             architecture: "qwen3next",
@@ -90,6 +97,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             sha256: "139081af2f9f634b3b8bce8f75a0449f92bcb75ae7a2e32abaf1bcdf6f4a7952",
             bytes: 509_674_720,
         },
+        metal_only: true,
     },
 ];
 
@@ -106,6 +114,13 @@ pub(super) fn pairing_for_target(meta: &GgufCompactMeta) -> Option<&'static DFla
 /// against 135 at cap 15, and an M6 is level between them.
 pub(super) fn default_dflash_max_draft_tokens(metal: bool) -> u32 {
     if metal { 6 } else { 15 }
+}
+
+impl DFlashPairing {
+    /// Whether this pairing is a default on the given backend.
+    pub(super) fn default_on(&self, metal: bool) -> bool {
+        metal || !self.metal_only
+    }
 }
 
 impl DFlashTarget {
@@ -205,6 +220,16 @@ mod tests {
         let mut with_mtp = target_meta("qwen35", 33, 4096, 0);
         with_mtp.nextn_predict_layers = 1;
         assert!(pairing_for_target(&with_mtp).is_some());
+    }
+
+    #[test]
+    fn coder_next_defaults_on_only_under_metal() {
+        let coder = pairing_for_target(&target_meta("qwen3next", 48, 2048, 512)).unwrap();
+        assert!(coder.default_on(true));
+        assert!(!coder.default_on(false));
+        for pairing in &DFLASH_PAIRINGS[..2] {
+            assert!(pairing.default_on(true) && pairing.default_on(false));
+        }
     }
 
     #[test]
