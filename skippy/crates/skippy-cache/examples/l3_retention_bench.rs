@@ -13,7 +13,7 @@ use skippy_cache::{ExactStatePayload, L3CacheManager, L3Tier, StoreLimits};
 
 const PAYLOAD_BYTES: usize = 64 * 1024;
 const SEGMENT_BYTES: usize = 1024;
-const NAMESPACE: &str = "max-11-synthetic-v1";
+const NAMESPACE: &str = "l3-admission-synthetic-v1";
 
 #[derive(Serialize)]
 struct Observation {
@@ -67,7 +67,7 @@ fn spill(tier: &L3Tier, id: usize) -> Result<()> {
 
 fn open(root: &Path, budget: u64) -> Result<L3Tier> {
     Ok(L3CacheManager::acquire(root, StoreLimits::new(budget, 0))?
-        .tier("max-11-exact-state-v1".to_string(), SEGMENT_BYTES))
+        .tier("l3-admission-exact-state-v1".to_string(), SEGMENT_BYTES))
 }
 
 fn observe(
