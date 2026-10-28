@@ -592,6 +592,7 @@ pub(crate) struct GenerationLifecycleState {
     prompt_token_count: usize,
     generated_token_count: usize,
     request_to_first_token_us: Option<u64>,
+    request_to_last_token_us: Option<u64>,
     termination: Option<GenerationTermination>,
 }
 
@@ -613,6 +614,7 @@ impl GenerationLifecycleState {
             prompt_token_count,
             generated_token_count: 0,
             request_to_first_token_us: None,
+            request_to_last_token_us: None,
             termination: None,
         };
         if let Some(config) = config {
@@ -633,8 +635,10 @@ impl GenerationLifecycleState {
             return;
         };
         self.generated_token_count = self.generated_token_count.saturating_add(1);
+        let request_elapsed_us = u64::try_from(request_elapsed.as_micros()).unwrap_or(u64::MAX);
         self.request_to_first_token_us
-            .get_or_insert_with(|| u64::try_from(request_elapsed.as_micros()).unwrap_or(u64::MAX));
+            .get_or_insert(request_elapsed_us);
+        self.request_to_last_token_us = Some(request_elapsed_us);
         config.committed(GenerationCommit {
             request_id: self.request_id,
             session_id: self.session_id,
@@ -660,14 +664,17 @@ impl GenerationLifecycleState {
             return;
         };
         if generation_succeeded {
-            config.finished(GenerationCompletion::new(
-                self.request_id,
-                self.session_id,
-                self.prompt_token_count,
-                self.generated_token_count,
-                self.termination.unwrap_or(GenerationTermination::MaxTokens),
-                self.request_to_first_token_us,
-            ));
+            config.finished(
+                GenerationCompletion::new(
+                    self.request_id,
+                    self.session_id,
+                    self.prompt_token_count,
+                    self.generated_token_count,
+                    self.termination.unwrap_or(GenerationTermination::MaxTokens),
+                    self.request_to_first_token_us,
+                )
+                .with_request_to_last_token_us(self.request_to_last_token_us),
+            );
         } else {
             config.abort(GenerationAbort {
                 request_id: self.request_id,
@@ -1087,6 +1094,24 @@ mod tests {
         assert_eq!(completion.request_to_first_token_us, Some(7));
         assert_eq!(completion.termination, GenerationTermination::MaxTokens);
         assert_eq!(config.delivery_failures(), 0);
+    }
+
+    #[test]
+    fn lifecycle_only_completion_carries_the_last_token_stamp() {
+        let ingress = Arc::new(RecordingIngress::default());
+        let config = GenerationLifecycleConfig::from_ingress(ingress.clone());
+        let mut state = GenerationLifecycleState::new(Some(&config), 1, 2, None, None, &[3, 4]);
+        state.commit(5, Duration::from_micros(7));
+        state.commit(6, Duration::from_micros(19));
+        state.finish(true);
+
+        let observations = ingress.observations.lock().unwrap();
+        let Some(GenerationLifecycleObservation::Finished(completion)) = observations.last() else {
+            unreachable!("lifecycle state must finish with a summary");
+        };
+        assert_eq!(completion.generated_token_count, 2);
+        assert_eq!(completion.request_to_first_token_us, Some(7));
+        assert_eq!(completion.request_to_last_token_us, Some(19));
     }
 
     #[test]
