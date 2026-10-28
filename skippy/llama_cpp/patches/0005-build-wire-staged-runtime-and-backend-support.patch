@@ -1,7 +1,7 @@
-From 1080cfb4f1b265efa4a6347c5903c56e64fb0d88 Mon Sep 17 00:00:00 2001
+From 63ba0c77a543bafaf4ce2c4aa9de524538c77425 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
+Subject: [PATCH] build(skippy): wire native runtime and backend support
 
 ---
  CMakeLists.txt                             |  17 +
@@ -31,11 +31,11 @@ Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
  ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 +++++++
- src/CMakeLists.txt                         | 629 ++++++++++++++++++++-
+ src/CMakeLists.txt                         | 630 ++++++++++++++++++++-
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3133 insertions(+), 127 deletions(-)
+ 31 files changed, 3134 insertions(+), 127 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -2570,7 +2570,7 @@ index d1bce8bad..5b23ddf7f 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -180,6 +183,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -3395,10 +3395,10 @@ index 000000000..728899e4b
 +    }
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2e8..528edfa99 100644
+index 97250c2e8..e38fd87b4 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -47,6 +47,39 @@ set(LLAMA_CORE_SOURCES
+@@ -47,6 +47,40 @@ set(LLAMA_CORE_SOURCES
  add_library(llama
              ../include/llama.h
              ${LLAMA_CORE_SOURCES}
@@ -3424,6 +3424,7 @@ index 97250c2e8..528edfa99 100644
 +            skippy/package_tensor_binding.cpp
 +            ../common/reasoning-budget.cpp
 +            skippy/sampling.cpp
++            skippy/chat_sampling.cpp
 +            skippy/sampling_vocab.cpp
 +            skippy/stage_slice_plan.cpp
 +            skippy/stage_plan.cpp
@@ -3438,7 +3439,7 @@ index 97250c2e8..528edfa99 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -60,19 +93,611 @@ set_target_properties(llama PROPERTIES
+@@ -60,19 +94,611 @@ set_target_properties(llama PROPERTIES
  )
  
  # exclude non-model sources from unity build
@@ -4160,5 +4161,5 @@ index 7436230f0..f9fe048ff 100644
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

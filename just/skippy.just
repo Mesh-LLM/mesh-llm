@@ -132,7 +132,7 @@ grammar-sampling-build baseline:
     cmake -S skippy/evals/grammar-sampling -B .deps/grammar-A -G Ninja -DLLAMA_ROOT="$PWD/.deps/grammar-baseline-source"
     cmake --build .deps/grammar-A --parallel 8 --target grammar-sampling
     cmake -S skippy/evals/grammar-sampling -B .deps/grammar-C -G Ninja -DLLAMA_ROOT="$PWD/.deps/llama.cpp"
-    cmake --build .deps/grammar-C --parallel 8 --target grammar-sampling grammar-controller grammar-audit skippy-sampling-history skippy-model-fixture-generator test-skippy-verify-checkpoint-retirement test-skippy-sampling-suppress
+    cmake --build .deps/grammar-C --parallel 8 --target grammar-sampling grammar-controller grammar-audit grammar-verification skippy-sampling-history skippy-model-fixture-generator test-skippy-verify-checkpoint-retirement test-skippy-sampling-suppress
 
 [unix]
 grammar-sampling-tests:
