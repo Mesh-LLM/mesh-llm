@@ -2,6 +2,7 @@ mod decode;
 mod draft;
 mod hybrid;
 mod pipeline;
+mod recurrent_draft_cap;
 mod stats;
 mod verifier;
 mod verify_window;
