@@ -107,99 +107,69 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    pub fn process_comm(pid: u32) -> anyhow::Result<Option<String>> {
-        let output = std::process::Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "comm="])
-            .output()?;
-        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if s.is_empty() {
+    use std::io;
+
+    /// The process's executable path, as `ps -o comm=` reports it, from
+    /// `proc_pidpath`; `None` once no process has the id.
+    fn executable_path(pid: u32) -> anyhow::Result<Option<String>> {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
             return Ok(None);
+        };
+        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let size = u32::try_from(buffer.len())?;
+        // SAFETY: the buffer is writable for `size` bytes, and proc_pidpath
+        // writes at most that many.
+        let length = unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), size) };
+        if length <= 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(None);
+            }
+            anyhow::bail!("proc_pidpath({pid}) failed: {error}");
         }
-        let basename = std::path::Path::new(&s)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or(s);
-        Ok(Some(basename))
+        buffer.truncate(usize::try_from(length)?);
+        Ok(Some(String::from_utf8_lossy(&buffer).into_owned()))
+    }
+
+    pub fn process_comm(pid: u32) -> anyhow::Result<Option<String>> {
+        Ok(executable_path(pid)?.map(|path| {
+            std::path::Path::new(&path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or(path)
+        }))
     }
 
     pub fn process_started_at_unix(pid: u32) -> anyhow::Result<Option<i64>> {
-        let output = std::process::Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "lstart="])
-            .env("LANG", "C")
-            .env("LC_ALL", "C")
-            .output()?;
-        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if s.is_empty() {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
             return Ok(None);
+        };
+        // SAFETY: proc_bsdinfo is a C POD whose integer/byte fields admit zero.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = i32::try_from(std::mem::size_of_val(&info))?;
+        // SAFETY: the BSD-info flavor matches the aligned, writable info buffer.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        };
+        if read != size {
+            let error = io::Error::last_os_error();
+            if read == 0 && error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(None);
+            }
+            anyhow::bail!("proc_pidinfo({pid}) failed: {error}");
         }
-        super::parse_lstart(&s)
+        Ok(Some(i64::try_from(info.pbi_start_tvsec)?))
     }
 
     pub fn process_executable_name(pid: u32) -> anyhow::Result<Option<String>> {
         process_comm(pid)
     }
-}
-
-/// Parse the output of `ps -o lstart=` under `LANG=C`/`LC_ALL=C`, e.g.
-/// `Wed Sep  9 18:43:39 2026`: weekday, month, day, time, year, and convert
-/// it to a Unix timestamp in the local timezone.
-#[cfg(target_os = "macos")]
-fn parse_lstart(s: &str) -> anyhow::Result<Option<i64>> {
-    use chrono::{Local, TimeZone};
-
-    let Some(naive_dt) = parse_lstart_naive(s) else {
-        return Ok(None);
-    };
-
-    match Local.from_local_datetime(&naive_dt).single() {
-        Some(dt) => Ok(Some(dt.timestamp())),
-        None => Ok(None),
-    }
-}
-
-/// Parses the weekday/month/day/time/year fields into a naive (timezone-free)
-/// datetime. Split out of [`parse_lstart`] and out of the macOS-only platform
-/// module (its only real caller) so this field decoding is unit-tested on
-/// every CI runner rather than only a macOS one, and so the test doesn't
-/// depend on the runner's local timezone.
-#[cfg(any(test, target_os = "macos"))]
-fn parse_lstart_naive(s: &str) -> Option<chrono::NaiveDateTime> {
-    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
-
-    let parts: Vec<&str> = s.split_whitespace().collect();
-    if parts.len() != 5 {
-        return None;
-    }
-
-    let month: u32 = match parts[1] {
-        "Jan" => 1,
-        "Feb" => 2,
-        "Mar" => 3,
-        "Apr" => 4,
-        "May" => 5,
-        "Jun" => 6,
-        "Jul" => 7,
-        "Aug" => 8,
-        "Sep" => 9,
-        "Oct" => 10,
-        "Nov" => 11,
-        "Dec" => 12,
-        _ => return None,
-    };
-    let day: u32 = parts[2].parse().ok()?;
-    let year: i32 = parts[4].parse().ok()?;
-
-    let time_parts: Vec<&str> = parts[3].split(':').collect();
-    if time_parts.len() != 3 {
-        return None;
-    }
-    let hour: u32 = time_parts[0].parse().ok()?;
-    let min: u32 = time_parts[1].parse().ok()?;
-    let sec: u32 = time_parts[2].parse().ok()?;
-
-    let date = NaiveDate::from_ymd_opt(year, month, day)?;
-    let time = NaiveTime::from_hms_opt(hour, min, sec)?;
-    Some(NaiveDateTime::new(date, time))
 }
 
 #[cfg(windows)]
@@ -390,7 +360,7 @@ mod platform {
 
 /// Convert a Win32 `FILETIME`, 100-nanosecond ticks since 1601-01-01 UTC, to
 /// Unix seconds. Kept outside the Windows module so the arithmetic runs on
-/// every CI runner, the way `parse_lstart_naive` does for macOS.
+/// every CI runner.
 #[cfg(any(test, windows))]
 fn filetime_to_unix(high: u32, low: u32) -> i64 {
     const TICKS_PER_SECOND: i64 = 10_000_000;
@@ -559,52 +529,6 @@ pub fn current_process_start_time_unix() -> anyhow::Result<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_lstart_naive;
-    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
-
-    fn naive(year: i32, month: u32, day: u32, hour: u32, min: u32, sec: u32) -> NaiveDateTime {
-        NaiveDateTime::new(
-            NaiveDate::from_ymd_opt(year, month, day).unwrap(),
-            NaiveTime::from_hms_opt(hour, min, sec).unwrap(),
-        )
-    }
-
-    #[test]
-    fn parses_single_digit_day_padded_with_a_double_space() {
-        // macOS `ps -o lstart=` right-aligns the day to two columns, so a
-        // single-digit day leaves two spaces before it — exactly what F8
-        // observed (galaxy's process started on Sep 9).
-        let parsed = parse_lstart_naive("Wed Sep  9 18:43:39 2026").unwrap();
-
-        assert_eq!(parsed, naive(2026, 9, 9, 18, 43, 39));
-    }
-
-    #[test]
-    fn parses_double_digit_day() {
-        let parsed = parse_lstart_naive("Mon Jan 12 09:05:00 2026").unwrap();
-
-        assert_eq!(parsed, naive(2026, 1, 12, 9, 5, 0));
-    }
-
-    #[test]
-    fn does_not_transpose_a_month_number_larger_than_any_day() {
-        // Regression guard for the day/month swap: December (month 12) used
-        // to get read as if it were the day field.
-        let parsed = parse_lstart_naive("Thu Dec  3 00:00:00 2026").unwrap();
-
-        assert_eq!(parsed, naive(2026, 12, 3, 0, 0, 0));
-    }
-
-    #[test]
-    fn rejects_malformed_field_count() {
-        assert!(parse_lstart_naive("Sep 9 18:43:39 2026").is_none());
-    }
-
-    #[test]
-    fn rejects_unknown_month_name() {
-        assert!(parse_lstart_naive("Wed Foo 9 18:43:39 2026").is_none());
-    }
-
     #[test]
     fn filetime_ticks_at_the_unix_epoch_convert_to_zero() {
         // 1970-01-01T00:00:00Z is 116_444_736_000_000_000 ticks after
@@ -614,6 +538,45 @@ mod tests {
         assert_eq!(
             super::filetime_to_unix(0x019D_B1DE, 0xD53E_8000 + 10_000_000),
             1
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reports_the_current_process() {
+        let pid = std::process::id();
+        let comm = super::process_comm(pid)
+            .unwrap()
+            .expect("the current process must be visible to itself");
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(
+            Some(comm.as_str()),
+            exe.file_name().and_then(|n| n.to_str())
+        );
+        let started = super::process_started_at_unix(pid)
+            .unwrap()
+            .expect("the current process has a start time");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            (0..=3600).contains(&(now - started)),
+            "started {started}, now {now}"
+        );
+    }
+
+    // launchd runs as root. Its path is readable from any account, so
+    // liveness and the name check work; its start time is not, and an error
+    // keeps an identity check from taking it for one of ours.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reports_a_process_of_another_account() {
+        assert_eq!(super::process_comm(1).unwrap().as_deref(), Some("launchd"));
+        assert_eq!(super::process_liveness(1), super::Liveness::Alive);
+        assert_ne!(
+            super::pid_identity(1, "launchd", Some(0)),
+            super::PidIdentity::Recorded
         );
     }
 
