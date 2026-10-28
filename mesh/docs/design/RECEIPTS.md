@@ -1,7 +1,9 @@
 # Inference Receipts
 
-Status: proposal. The numbers below come from lab measurements. Nothing here
-is implemented in mesh or Skippy yet.
+Status: proposal. The numbers below come from lab measurements. A first,
+simpler version runs in Skippy split serving: see
+[RECEIPTS_PLAN.md](RECEIPTS_PLAN.md) for how it differs from this design and
+[skippy/RECEIPTS.md](../../../skippy/docs/RECEIPTS.md) for how to use it.
 
 Related:
 

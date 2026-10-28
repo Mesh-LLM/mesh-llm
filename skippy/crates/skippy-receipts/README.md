@@ -16,3 +16,7 @@ The crate owns:
 
 It does not own the native recorder and replay, serving routes, or the CLI.
 Those live in `skippy-runtime`, `skippy-serving`, and `skippy-commands`.
+
+Its consumers are `skippy-serving`, which records and commits on each stage,
+and `skippy-commands`, which runs `skippy audit-receipt`. To serve and audit
+receipts, see [skippy/docs/RECEIPTS.md](../../docs/RECEIPTS.md).

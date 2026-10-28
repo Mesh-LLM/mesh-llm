@@ -22,11 +22,14 @@ What it built:
   session and positions, and keeps the receipt under the request's
   `x-request-id`. Each stage serves `GET /receipts/{id}`,
   `POST /receipts/commit` and `POST /receipts/open`. An open for a layer of a
-  later stage is forwarded down the chain.
+  later stage is forwarded down the chain. The API binds only a loopback
+  address unless the operator passes `--receipts-allow-remote`.
 - **Auditor.** `skippy audit-receipt --claimed-model GGUF` sends a chat
   request, fetches the receipt, draws a challenge (one layer weighted by
   bytes, 16 positions), and checks Merkle paths and 16 random rows per matrix.
   It exits non-zero on failure.
+
+The operator guide is [skippy/RECEIPTS.md](../../../skippy/docs/RECEIPTS.md).
 
 Verified on a two-stage Qwen3-4B split on one RTX 5060 Ti:
 
@@ -53,7 +56,6 @@ Known limits of the demo:
   stopped after every matmul and copied its columns to the host.
 - Only binary split serving commits receipts. Single-stage `skippy serve` and
   Mesh-launched stages do not.
-- The receipts handle is process-wide state set at stage start.
 - On the last layer of the final stage, the attention output and FFN matmuls
   run only for output rows, so their leaves cover fewer positions. The
   verifier does not yet check that every expected matrix is present.
