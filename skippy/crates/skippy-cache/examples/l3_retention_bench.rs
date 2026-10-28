@@ -232,7 +232,12 @@ fn main() -> Result<()> {
         !output.starts_with(&root),
         "OUTPUT must live outside ROOT: cleanup removes ROOT recursively"
     );
-    fs::create_dir_all(&root)?;
+    // Create ROOT exclusively: two concurrent runs sharing a path must not
+    // both pass the freshness check, or one could delete the other's data.
+    if let Some(parent) = root.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::create_dir(&root)?;
     let root = fs::canonicalize(&root)?;
     // Evidence has to outlive the cleanup below, so resolve the path the run
     // will really write and refuse anything that lands inside ROOT.
