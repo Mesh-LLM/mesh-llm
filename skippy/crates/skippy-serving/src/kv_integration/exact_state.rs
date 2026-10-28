@@ -15,6 +15,8 @@ use super::{
 const MAX_PREFIX_PROBES: usize = 64;
 
 mod restore;
+#[cfg(test)]
+mod snapshot_headroom;
 
 fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Location) -> String {
     format!("{}:{}", l3.state_identity(), location.manifest_key)
