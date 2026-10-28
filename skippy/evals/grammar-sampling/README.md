@@ -85,3 +85,11 @@ Before screening, the revision-5 control must be independently verified and the
 baseline remains primary. A same-binary control cannot replace a failed baseline
 comparison. Native audit now enforces the aggregate gate explicitly as well as
 the per-case gates; the external verifier already required both.
+
+The verified revision-5 diagnostic requested the independent-process branch of
+`diagnostic-decisions.json`. `process-control.json` freezes the24-pair startup and
+A-history design. Build its controller with `just grammar-process-control-build
+<recorded-llama-vendor-directory>`; it executes the unchanged revision-5 worker
+binaries and input corpus. This control neither qualifies the literal candidate
+nor substitutes its same-binary reference for frozen baseline B. All observations,
+including preconditioning and discarded warmups, remain in the raw evidence.

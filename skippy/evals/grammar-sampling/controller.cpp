@@ -1,4 +1,4 @@
-#include "json.hpp"
+#include "worker.h"
 
 #include <array>
 #include <cerrno>
@@ -14,59 +14,6 @@
 
 using json = nlohmann::ordered_json;
 
-struct worker {
-    pid_t pid = -1;
-    FILE * input = nullptr;
-    FILE * output = nullptr;
-    json ready;
-
-    worker(const char * executable, const char * model, const char * directory) {
-        int to_child[2], from_child[2];
-        if (pipe(to_child) || pipe(from_child)) { throw std::runtime_error("pipe"); }
-        pid = fork();
-        if (pid < 0) { throw std::runtime_error("fork"); }
-        if (pid == 0) {
-            dup2(to_child[0], STDIN_FILENO);
-            dup2(from_child[1], STDOUT_FILENO);
-            close(to_child[0]); close(to_child[1]);
-            close(from_child[0]); close(from_child[1]);
-            execl(executable, executable, model, "serve", directory, static_cast<char *>(nullptr));
-            _exit(127);
-        }
-        close(to_child[0]); close(from_child[1]);
-        input = fdopen(to_child[1], "w");
-        output = fdopen(from_child[0], "r");
-        ready = read();
-        if (!ready.value("ready", false)) { throw std::runtime_error("worker not ready"); }
-    }
-
-    json read() {
-        char * line = nullptr;
-        size_t capacity = 0;
-        auto bytes = getline(&line, &capacity, output);
-        if (bytes < 0) { free(line); throw std::runtime_error("worker exited without result"); }
-        auto value = json::parse(line, line + bytes);
-        free(line);
-        return value;
-    }
-
-    json call(const json & request) {
-        auto text = request.dump();
-        if (fprintf(input, "%s\n", text.c_str()) < 0 || fflush(input)) {
-            throw std::runtime_error("worker command failed");
-        }
-        return read();
-    }
-
-    ~worker() {
-        if (input) { fclose(input); }
-        if (output) { fclose(output); }
-        if (pid > 0) {
-            int status = 0;
-            waitpid(pid, &status, 0);
-        }
-    }
-};
 
 int main(int argc, char ** argv) {
     try {

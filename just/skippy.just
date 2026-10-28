@@ -138,6 +138,12 @@ grammar-sampling-build baseline:
 grammar-sampling-tests:
     ctest --test-dir .deps/grammar-C/native --output-on-failure --timeout 900 -R '^(skippy_sampling_history_|test-skippy-verify-checkpoint-retirement|test-skippy-sampling-suppress|test-grammar-trigger-patterns|test-grammar-parser|test-grammar-integration)'
 
+# Build only the diagnostic controller; its worker binaries remain frozen.
+[unix]
+grammar-process-control-build vendor:
+    mkdir -p .deps/grammar-process-control
+    c++ -std=c++17 -O3 -Wall -Wextra -Werror -I "{{ vendor }}" skippy/evals/grammar-sampling/process_control.cpp -o .deps/grammar-process-control/controller
+
 # Build the opt-in native MTP developer probes against the local runtime.
 [unix]
 skippy-native-mtp-probes-build:
