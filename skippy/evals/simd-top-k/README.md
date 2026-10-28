@@ -1,0 +1,32 @@
+# Portable SIMD top-k investigation
+
+This is a separate experiment on top of the qualified upstream-backed sampler.
+It changes top-k selection only, using Highway as the portable SIMD candidate.
+Grammar caching and other arithmetic changes are separate hypotheses.
+
+[plan.json](plan.json) freezes the arms, controls, workload and gates. B is the
+original frozen llama reference; C is the current qualified implementation;
+D changes top-k; R disables that change in the candidate build and is diagnostic
+only. All timing and model execution run through JY on the admitted Apple M6.
+
+First profile the exact qualified C binary across all five existing grammar
+cases, verify the stack exports and inspect the selection instructions. This
+phase produces no qualifying timing result and needs no candidate rebuild:
+
+```sh
+just sampler-simd-profile /absolute/qualified-workspace /absolute/model.gguf /absolute/artifacts
+```
+
+The launch must be recorded and read back in shared MLflow before JY dispatch.
+The job account must be able to read the retained immutable workspace and model.
+Only exported sampled stacks and disassembly leave the profiling job; raw trace
+bundles remain private on the node. The profiler/target environment is scrubbed.
+
+The candidate source, Highway source pin, build flags and correctness fixtures
+must be frozen before build admission. Every required correctness check must pass
+before a five-block screen. Only a passing screen admits 30 fresh qualification
+blocks; R never replaces either primary comparator or normalizes their results.
+
+The predecessor's source, captured inputs and historical results stay immutable.
+Its [qualified figures](../grammar-sampling/figures/README.md) describe the earlier
+comparison, not evidence that this proposed SIMD change is faster.

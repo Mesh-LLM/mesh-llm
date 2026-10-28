@@ -1,0 +1,102 @@
+{
+  "campaign": "skippy-highway-top-k-m6-v1",
+  "question": "Does Highway top-k reduce current native sampler latency by at least 5% while preserving exact token decisions and the frozen llama performance gates?",
+  "changed_variable": "Top-k selection only. No grammar cache, numeric approximation, sampler order, RNG, model, KV, or backend changes.",
+  "execution": {
+    "location": "JY only; no local model execution or performance measurements",
+    "node": "macmini-gq7vhw",
+    "hardware": "Apple M6, 24 GB",
+    "max_usd_per_job": 0,
+    "max_profile_duration_s": 1800,
+    "max_build_or_measure_duration_s": 7200,
+    "retries": 0,
+    "phases": ["profile-qualified-C", "freeze-candidate-and-inputs", "build-and-correctness", "five-block-screen", "thirty-new-block-qualification", "independent-audit-and-shared-MLflow-readback"],
+    "advancement": "Profile and correctness evidence must be verified before screening. Freeze source, Highway pin, input identities, compiler, flags, and executable hashes before timing. Screen must pass every numerical gate before qualification. No new PR or performance claim before all gates and readbacks pass."
+  },
+  "arms": {
+    "B": {
+      "name": "Frozen llama reference",
+      "source": "3947de0cbc73fe5cbcaae548b297f03a401532d7",
+      "worker_sha256": "95ef73e7f71ed1f34adc5af2195b116462a149d4c73635a4d96528bbbdb3fec2",
+      "role": "Immutable external performance floor; never normalized or replaced"
+    },
+    "C": {
+      "name": "Current qualified Skippy upstream sampler",
+      "source": "a9b37b71bb9ebcff51e321e7fcedba323f7d9458",
+      "worker_sha256": "d93d1643c2675f4f33e8bd8d720c639075448225fa5f6468e7f79c72033e12f1",
+      "role": "Primary optimization baseline; freshly remeasured, no historical timing reuse"
+    },
+    "D": {"name": "Skippy upstream sampler with Highway top-k", "source": "Must be frozen before build admission", "role": "Candidate, including conversion, dispatch, allocation, and fallback costs"},
+    "R": {"name": "Candidate build with Highway path disabled", "role": "Diagnostic build/dependency control only; no normalization, reference promotion, or parity gate"}
+  },
+  "model": {
+    "repository": "unsloth/Qwen3.5-9B-GGUF",
+    "revision": "3885219b6810b007914f3a7950a8d1b469d598a5",
+    "file": "Qwen3.5-9B-Q4_K_M.gguf",
+    "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+    "vocabulary_tokens": 248320,
+    "context_tokens": 4096,
+    "kv_keys": "f16",
+    "kv_values": "f16",
+    "threads": 8,
+    "concurrency": 1
+  },
+  "controls": {
+    "seed": 73,
+    "correctness_seeds": [1, 42, 73, 1234],
+    "temperature": 0.8,
+    "top_k": 40,
+    "top_p": 0.95,
+    "min_p": 0.05,
+    "sampler_order": ["top_k", "top_p", "min_p", "temperature", "distribution"],
+    "speculation": "Disabled for timings; controlled MTP recovery remains mandatory correctness coverage",
+    "cache": "Prefix/disk replay disabled as in the qualified predecessor",
+    "profiling": "Instruments only in dedicated diagnostic jobs; exported sampled stacks and disassembly, no raw trace or environment upload; no profiled timing used for qualification",
+    "warmup": "Three complete warmup blocks inside each fresh arm process; one model resident at a time; loading and warmup outside measured intervals",
+    "orders": ["BCRD", "CDBR", "DRCB", "RBDC"],
+    "order_selection": "Cycle the fixed four-order schedule by global block index; retain its incomplete final cycle",
+    "instrumentation": "Identical native monotonic timing boundaries; native sampler perf counters disabled in all arms; caller assertions outside token timing"
+  },
+  "workloads": {
+    "primary": ["lazy-before-tool-trigger", "large-HTML-write-argument", "Unicode-and-partial-UTF8", "restricted-values-and-rejection-fallback", "closing-delimiters-and-EOS"],
+    "input_manifest_sha256": "a38e818a82528f625abb6b54d4fc19f38cdc86ad5b7db2baf2502f7c29c9eeff",
+    "scopes": ["fixed-input native sampler", "teacher-forced native decode"],
+    "supplemental": "Separately report unconstrained versions of the same five captured cases for current-source C, D and R using a matched new harness. Freeze metadata and hashes before timing. These do not replace B, enter the primary aggregate, or rescue a failed grammar gate.",
+    "selection": "All primary cases, fixed order and captured logits retained; no outcome-based case selection",
+    "overlap": "Screen and qualification share the synthetic cases. Qualification has fresh timing blocks, not independent dataset samples."
+  },
+  "correctness": {
+    "existing": "All 17 native tests, 32 controlled recovery cases, and 20 seeded comparisons from the qualified source; new candidate must freshly pass affected native and ABI correctness",
+    "top_k_differential": "Compare full selected token records and ordering against existing selection: sizes 0,1,3,4,7,8,15,16,31,32,39,40,41,127,128,129,1024,248320; k<=0,1,2,4,40,128,129,n,n+1; increasing/decreasing/random/equal/boundary ties, positive/negative zero, infinities and NaNs. Unsupported numeric cases must preserve the original path. Invalid-input refusal must match existing behavior.",
+    "rng": "No RNG substitution or extra sampler RNG draws. Seeded token sequences and accepted/clone/reset/recovery state must match C. Highway internal pivot RNG must not alias or alter model sampler RNG.",
+    "fallback": "Preserve original input until optimized eligibility and tie checks succeed; fallback costs count in timing. No tie-breaking policy change or approximate numeric result.",
+    "abi": "No public C ABI change; actual production sampler entrypoint, no copied selection emulation in benchmark"
+  },
+  "statistics": {
+    "screen_blocks": 5,
+    "qualification_blocks": 30,
+    "unit": "Fresh independent four-worker block; each arm has its own process lifetime and prescribed warmup",
+    "fixed_input_repetitions_per_cell": 4,
+    "decode_repetitions_per_cell": 1,
+    "aggregation": "Case-balanced geometric mean paired ratios, per-case and aggregate results retained",
+    "confidence": "One-sided 95% paired block-bootstrap bounds; 10000 resamples, seed 7301",
+    "qualification_partition": "Three predetermined ten-block jobs, global blocks 0-9,10-19,20-29, audited together. No per-chunk stopping or selection.",
+    "missing_or_invalid": "Missing cells, wrong hashes, changed sources, correctness failure, thermal throttling or another observed concurrent JY job invalidate the job. Retain evidence; no sample deletion or automatic retries. Audit OS exclusivity only to the extent observed.",
+    "secondary": ["sampler p50/p95 microseconds", "native decode tokens/second", "peak RSS MiB", "allocation counts in separate diagnostic runs", "fallback rate", "conversion and dispatch attribution outside qualification instrumentation"]
+  },
+  "gates": {
+    "correctness": "Every required test and seeded comparison passes before performance admission",
+    "improvement": "Aggregate sampler D/C upper one-sided 95% bound <=0.95",
+    "sampler_no_regression": "Every primary case and aggregate D/C and D/B sampler upper one-sided 95% bound <=1.01",
+    "decode_no_regression": "Every primary case and aggregate D/C and D/B decode-throughput lower one-sided 95% bound >=0.99",
+    "diagnostic": "R never substitutes for C or B; no R-based normalization or additional parity requirement",
+    "recording": "JY receipts/source/model/input/binary/placement audits plus shared MLflow parameter/metric/artifact readback; readable flat B/C/D/R comparison views verified in UI"
+  },
+  "decision_map": {
+    "profile": "If top-k is absent or negligible, retain the profile and report the attribution; do not claim a top-k opportunity from the older profile alone. A changed hypothesis requires a new frozen revision before measurement.",
+    "correctness_failure": "Repair only the candidate; freeze new source and repeat affected correctness before screening. Never relax seeded-decision or tie handling requirements.",
+    "screen_failure": "Stop this candidate's qualification. Preserve failure. A root-directed new candidate requires a new revision and fresh screen; no repeated timing until favorable.",
+    "qualification_failure": "No performance PR or claim; retain all blocks and report failing cases/bounds. No comparator change or normalization."
+  },
+  "limits": ["Only M6 Qwen3.5-9B is authorized for this campaign; Spark/x86 require separate hardware qualification", "No edits to the predecessor PR's measured implementation or results", "No deployment, application restart, KV policy change, new agents, Slack messages, or unrelated plugin-failure investigation"]
+}

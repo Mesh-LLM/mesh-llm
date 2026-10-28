@@ -150,6 +150,11 @@ grammar-sampling-shared-build:
     cmake -S .deps/llama.cpp -B .deps/grammar-shared -G Ninja -DBUILD_SHARED_LIBS=ON -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_STAGE_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF -DGGML_METAL=OFF -DGGML_ACCELERATE=ON
     cmake --build .deps/grammar-shared --parallel 8 --target llama
 
+# Profile the immutable qualified sampler without qualifying profiler timings.
+[unix]
+sampler-simd-profile qualified_workspace model_file artifacts:
+    bash skippy/evals/simd-top-k/profile.sh "{{ qualified_workspace }}" "{{ model_file }}" "{{ artifacts }}"
+
 # Build only the diagnostic controller; its worker binaries remain frozen.
 [unix]
 grammar-process-control-build vendor:
