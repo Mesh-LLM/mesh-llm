@@ -48,7 +48,10 @@ int main(int argc, char ** argv) {
         const std::set<std::string> expected_cases{
             "lazy-before-tool-trigger", "large-HTML-write-argument", "Unicode-and-partial-UTF8",
             "restricted-values-and-rejection-fallback", "closing-delimiters-and-EOS"};
-        std::set<std::tuple<std::string, std::string, int, std::string>> warmups;
+        std::set<std::tuple<std::string, std::string, int, std::string, int>> warmups;
+        std::map<std::pair<int, std::string>, int> worker_processes;
+        std::map<int, std::pair<int, std::string>> process_owners;
+        const std::array<std::string, 6> orders{"ABC", "BCA", "CAB", "CBA", "ACB", "BAC"};
         std::string line;
         size_t warmup_rows = 0;
         while (std::getline(input, line)) {
@@ -56,6 +59,16 @@ int main(int argc, char ** argv) {
             const auto arm = row.at("arm").get<std::string>();
             check(arm == "A" || arm == "B" || arm == "C", "unknown arm");
             const int block = row.at("block");
+            check(row.at("protocol_revision").get<int>() == 8, "wrong process protocol");
+            check(block >= 0 && block < blocks, "invalid block identity");
+            check(row.at("arm_order").get<std::string>() == orders[block % orders.size()], "wrong arm order");
+            const int pid = row.at("worker_pid");
+            check(pid > 0, "invalid worker PID");
+            const auto owner = std::make_pair(block, arm);
+            const auto [owned, inserted] = worker_processes.emplace(owner, pid);
+            check(inserted || owned->second == pid, "worker changed inside arm/block");
+            const auto [process, fresh] = process_owners.emplace(pid, owner);
+            check(fresh || process->second == owner, "worker shared across arms or blocks");
             const auto name = row.at("case").get<std::string>();
             const auto scope = row.at("scope").get<std::string>();
             check(expected_cases.count(name), "unknown case identity");
@@ -63,17 +76,19 @@ int main(int argc, char ** argv) {
             check(row.at("repetitions").get<int>() == (scope == "fixed-input-native-sampler" ? 4 : 1), "wrong repetitions");
             check(row.at("thermal_before").get<int>() <= 1 && row.at("thermal_after").get<int>() <= 1, "thermal pressure");
             if (row.at("warmup").get<bool>()) {
-                check(block >= -3 && block < 0, "invalid warmup identity");
-                check(warmups.emplace(name, scope, block, arm).second, "duplicate warmup");
+                const int iteration = row.at("worker_iteration");
+                check(iteration >= -3 && iteration < 0, "invalid warmup identity");
+                check(warmups.emplace(name, scope, block, arm, iteration).second, "duplicate warmup");
                 ++warmup_rows;
                 continue;
             }
-            check(block >= 0 && block < blocks, "invalid block identity");
+            check(row.at("worker_iteration").get<int>() == 0, "invalid measured iteration");
             cases.insert(name);
             auto & arms = cells[{name, scope, block}];
             check(arms.emplace(arm, row).second, "duplicate arm/case/block");
         }
-        check(cases.size() == 5 && warmup_rows == 3 * 5 * 3 * 2, "missing cases or warmups");
+        check(cases.size() == 5 && warmup_rows == static_cast<size_t>(blocks * 3 * 5 * 3 * 2), "missing cases or warmups");
+        check(worker_processes.size() == static_cast<size_t>(blocks * 3), "missing fresh workers");
         check(cells.size() == static_cast<size_t>(5 * 2 * blocks), "missing case/scope/block");
         std::map<std::pair<std::string, std::string>, std::vector<double>> cb;
         std::map<std::pair<std::string, std::string>, std::vector<double>> ca;

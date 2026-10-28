@@ -1,4 +1,4 @@
-From 0c00238fea1bbd7f27fb14f9e98c5d9f5f45d6f3 Mon Sep 17 00:00:00 2001
+From c963a4765b14713b800cc4ef89a29b2a0531d12c Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -17,8 +17,8 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/profile_residency.cpp        |  258 +++
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
- src/skippy/tests/runtime_events.cpp           |  624 +++++++
- src/skippy/tests/sampling_history.cpp         |  400 ++++
+ src/skippy/tests/runtime_events.cpp           |  629 +++++++
+ src/skippy/tests/sampling_history.cpp         |  457 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9778 insertions(+), 32 deletions(-)
+ 34 files changed, 9840 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5138,16 +5138,17 @@ index 000000000..31734bf56
 +}
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
 new file mode 100644
-index 000000000..8c9e3288b
+index 000000000..b75c3b75d
 --- /dev/null
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -0,0 +1,624 @@
+@@ -0,0 +1,629 @@
 +#include "skippy.h"
 +
 +#include "../events_internal.h"
 +#include "../runtime_support.h"
 +#include "../runtime_types.h"
 +#include "../workloads_internal.h"
++#include "../../../common/sampling.h"
 +
 +#include <atomic>
 +#include <cstdio>
@@ -5517,6 +5518,9 @@ index 000000000..8c9e3288b
 +            session, &sampling, "{\"grammar\":\"\"}", 0, &error) == SKIPPY_STATUS_OK);
 +    CHECK(session->sampling_backend_enabled);
 +    llama_sampler * sampling_chain = session->sampling_chain;
++    common_sampler * owned_sampler = session->sampler;
++    CHECK(owned_sampler != nullptr);
++    CHECK(common_sampler_get(owned_sampler) == sampling_chain);
 +    CHECK(session->sampling_rebuild_count == 2);
 +    llama_token predicted = -1;
 +    CHECK(skippy_decode_step_sampled(
@@ -5529,6 +5533,7 @@ index 000000000..8c9e3288b
 +    CHECK(session->sampling_backend_enabled);
 +    CHECK(session->sampling_chain == sampling_chain);
 +    CHECK(session->sampling_reuse_hit_count == 1);
++    CHECK(session->sampler == owned_sampler);
 +    CHECK(session->n_past == 0);
 +    CHECK(skippy_prefill_chunk(
 +            session, prompt, 2, nullptr, 0, nullptr, 0,
@@ -5768,19 +5773,22 @@ index 000000000..8c9e3288b
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..abd61f505
+index 000000000..a46698fdf
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,457 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
++#include "../runtime_support.h"
 +#include "llama-model.h"
++#include "../../../common/sampling.h"
 +
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cmath>
 +#include <cstring>
 +#include <vector>
++#include <limits>
 +
 +#define CHECK(condition) do { if (!(condition)) { \
 +    std::fprintf(stderr, "CHECK failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
@@ -5826,7 +5834,7 @@ index 000000000..abd61f505
 +    const auto status = skippy_session_configure_chat_sampling(
 +            session, &sampling, metadata, prompt_count, &error);
 +    ok(status, error);
-+    CHECK(session->grammar_sampler != nullptr);
++    CHECK(session->sampler != nullptr && session->sampling_has_grammar);
 +}
 +
 +llama_token decode(skippy_session * session, const skippy_sampling_config & sampling, llama_token token) {
@@ -6132,6 +6140,59 @@ index 000000000..abd61f505
 +    CHECK(max_delta == 0.0f);
 +}
 +
++void adapter_contracts(skippy_model * model) {
++    auto * session = create(model);
++    prefill(session, {1, 2});
++    auto config = sampling_config();
++    config.temperature = 0.8f;
++    config.sampler_count = 1;
++    config.samplers[0] = UINT32_MAX;
++    skippy_error * error = nullptr;
++    auto status = skippy_session_configure_chat_sampling(session, &config, "{}", 2, &error);
++    CHECK(status == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    error = nullptr;
++    config.sampler_count = 0;
++    status = skippy_session_configure_chat_sampling(session, &config,
++            "{\"grammar_triggers\":[{\"type\":99}]}", 2, &error);
++    CHECK(status == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    error = nullptr;
++    config.reasoning_budget_tokens = 0;
++    status = skippy_session_configure_chat_sampling(session, &config,
++            "{\"supports_thinking\":true}", 2, &error);
++    CHECK(status == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    error = nullptr;
++
++    config = sampling_config();
++    config.ignore_eos = 1;
++    config.logit_bias_count = 3;
++    const auto * vocab = llama_model_get_vocab(model->model);
++    const auto eos = llama_vocab_eos(vocab);
++    config.logit_bias[1] = {eos, std::numeric_limits<float>::infinity()};
++    config.logit_bias[2] = config.logit_bias[1];
++    status = skippy_session_configure_chat_sampling(session, &config, "{}", 2, &error);
++    ok(status, error);
++    llama_token token = LLAMA_TOKEN_NULL;
++    error = nullptr;
++    status = skippy_session_sample_current(session, &config, &token, &error);
++    ok(status, error);
++    CHECK(token == 42 && !llama_vocab_is_eog(vocab, token));
++
++    const auto * original = common_sampler_get_candidates(session->sampler, false);
++    const auto selected = original->selected;
++    const auto size = original->size;
++    auto * clone = common_sampler_clone(session->sampler);
++    const auto * copied = common_sampler_get_candidates(clone, false);
++    CHECK(copied->size == size && copied->selected == selected);
++    CHECK(copied->data != original->data);
++    skippy_clear_chat_sampling(session);
++    CHECK(copied->data[selected].id == token);
++    common_sampler_free(clone);
++    release(session);
++}
++
 +} // namespace
 +
 +int main(int argc, char ** argv) {
@@ -6165,6 +6226,7 @@ index 000000000..abd61f505
 +        }
 +        if (grammar) {
 +            generated_prefix_restore(model);
++            adapter_contracts(model);
 +        }
 +    }
 +    error = nullptr;
@@ -10379,5 +10441,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

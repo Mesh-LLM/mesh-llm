@@ -1,17 +1,30 @@
-From 42afe01b0e9f6871f272e11b96845cfe544b47b0 Mon Sep 17 00:00:00 2001
+From 831a4a9a0446d2b123c6d3d36ae53cc9c53795b5 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
 
 ---
+ common/common.cpp                       |  109 ---
+ common/common.h                         |   20 +-
+ common/json.cpp                         |   12 +-
+ common/json.h                           |   16 +-
+ common/log-terminal.cpp                 |   52 +
+ common/log.h                            |   43 +-
+ common/regex-escape.cpp                 |    8 +
+ common/sampling-config.cpp              |  169 ++++
+ common/sampling-report.cpp              |   51 +
+ common/sampling-timing.cpp              |   10 +
+ common/sampling.cpp                     |  254 +----
+ common/sampling.h                       |   50 +-
+ common/tokenization.cpp                 |   58 ++
  src/skippy/abi.cpp                      |   59 ++
  src/skippy/activation.cpp               | 1014 +++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
  src/skippy/activation_layout.cpp        |  156 +++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
- src/skippy/chat_sampling.cpp            |  137 +++
- src/skippy/chat_sampling.h              |    6 +
+ src/skippy/chat_sampling.cpp            |   64 ++
+ src/skippy/chat_sampling.h              |    7 +
  src/skippy/devices.cpp                  |  106 ++
  src/skippy/environment.h                |   48 +
  src/skippy/errors.h                     |   66 ++
@@ -39,12 +52,13 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/package_tensor_binding.cpp   |  120 +++
  src/skippy/package_tensor_binding.h     |   27 +
  src/skippy/rerank_template.h            |   36 +
- src/skippy/runtime_support.h            |   50 +
- src/skippy/runtime_types.h              |  179 ++++
- src/skippy/sampling.cpp                 | 1031 ++++++++++++++++++++
- src/skippy/sampling_internal.h          |   70 ++
+ src/skippy/runtime_support.h            |   47 +
+ src/skippy/runtime_types.h              |  182 ++++
+ src/skippy/sampling.cpp                 |  589 +++++++++++
+ src/skippy/sampling_config.cpp          |  178 ++++
+ src/skippy/sampling_internal.h          |   67 ++
  src/skippy/sampling_vocab.cpp           |   74 ++
- src/skippy/session.cpp                  |  539 ++++++++++
+ src/skippy/session.cpp                  |  519 ++++++++++
  src/skippy/speculative_decoding.cpp     |  568 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_execution_contract.cpp |   72 ++
@@ -60,10 +74,16 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/state_memory.cpp             |  116 +++
  src/skippy/state_memory.h               |   16 +
  src/skippy/tokenization.cpp             |  179 ++++
- src/skippy/verification.cpp             |  270 +++++
+ src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  372 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 59 files changed, 16126 insertions(+)
+ 73 files changed, 16210 insertions(+), 395 deletions(-)
+ create mode 100644 common/log-terminal.cpp
+ create mode 100644 common/regex-escape.cpp
+ create mode 100644 common/sampling-config.cpp
+ create mode 100644 common/sampling-report.cpp
+ create mode 100644 common/sampling-timing.cpp
+ create mode 100644 common/tokenization.cpp
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
@@ -102,6 +122,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  create mode 100644 src/skippy/runtime_support.h
  create mode 100644 src/skippy/runtime_types.h
  create mode 100644 src/skippy/sampling.cpp
+ create mode 100644 src/skippy/sampling_config.cpp
  create mode 100644 src/skippy/sampling_internal.h
  create mode 100644 src/skippy/sampling_vocab.cpp
  create mode 100644 src/skippy/session.cpp
@@ -124,6 +145,1284 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  create mode 100644 src/skippy/workloads.cpp
  create mode 100644 src/skippy/workloads_internal.h
 
+diff --git a/common/common.cpp b/common/common.cpp
+index c5db22832..7b6f6102d 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -66,14 +66,6 @@
+ #pragma warning(disable: 4244 4267) // possible loss of data
+ #endif
+ 
+-common_time_meas::common_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
+-
+-common_time_meas::~common_time_meas() {
+-    if (t_start_us >= 0) {
+-        t_acc += ggml_time_us() - t_start_us;
+-    }
+-}
+-
+ //
+ // CPU utils
+ //
+@@ -524,11 +516,6 @@ void string_replace_all(std::string & s, const std::string & search, const std::
+     s = std::move(builder);
+ }
+ 
+-std::string regex_escape(const std::string & s) {
+-    static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
+-    return std::regex_replace(s, special_chars, "\\$&");
+-}
+-
+ std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
+     std::ostringstream result;
+     for (size_t i = 0; i < values.size(); ++i) {
+@@ -1038,48 +1025,6 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
+ // TTY utils
+ //
+ 
+-bool common_is_tty(FILE * file) {
+-#if defined(_WIN32)
+-    return _isatty(_fileno(file));
+-#else
+-    return isatty(fileno(file));
+-#endif
+-}
+-
+-bool tty_can_use_colors() {
+-    // Check NO_COLOR environment variable (https://no-color.org/)
+-    if (const char * no_color = std::getenv("NO_COLOR")) {
+-        if (no_color[0] != '\0') {
+-            return false;
+-        }
+-    }
+-
+-    // Check TERM environment variable
+-    if (const char * term = std::getenv("TERM")) {
+-        if (std::strcmp(term, "dumb") == 0) {
+-            return false;
+-        }
+-    }
+-
+-    // Check if stdout and stderr are connected to a terminal
+-    // We check both because log messages can go to either
+-    return common_is_tty(stdout) || common_is_tty(stderr);
+-}
+-
+-bool tty_enable_ansi() {
+-#if defined(_WIN32)
+-    // a Windows console renders ANSI sequences only in virtual terminal mode, pipes and files take them as is
+-    for (DWORD id : { STD_OUTPUT_HANDLE, STD_ERROR_HANDLE }) {
+-        HANDLE h    = GetStdHandle(id);
+-        DWORD  mode = 0;
+-        if (GetConsoleMode(h, &mode) && !SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+-            return false;
+-        }
+-    }
+-#endif
+-    return true;
+-}
+-
+ //
+ // Model utils
+ //
+@@ -1824,60 +1769,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
+ // Vocab utils
+ //
+ 
+-std::vector<llama_token> common_tokenize(
+-  const struct llama_context * ctx,
+-           const std::string & text,
+-                        bool   add_special,
+-                        bool   parse_special) {
+-    const llama_model * model = llama_get_model(ctx);
+-    const llama_vocab * vocab = llama_model_get_vocab(model);
+-    return common_tokenize(vocab, text, add_special, parse_special);
+-}
+-
+-std::vector<llama_token> common_tokenize(
+-    const struct llama_vocab * vocab,
+-           const std::string & text,
+-                        bool   add_special,
+-                        bool   parse_special) {
+-    // upper limit for the number of tokens
+-    int n_tokens = text.length() + 2 * add_special;
+-    std::vector<llama_token> result(n_tokens);
+-    n_tokens = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+-    if (n_tokens == std::numeric_limits<int32_t>::min()) {
+-        throw std::runtime_error("Tokenization failed: input text too large, tokenization result exceeds int32_t limit");
+-    }
+-    if (n_tokens < 0) {
+-        result.resize(-n_tokens);
+-        int check = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+-        GGML_ASSERT(check == -n_tokens);
+-    } else {
+-        result.resize(n_tokens);
+-    }
+-    return result;
+-}
+-
+-std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
+-    const llama_model * model = llama_get_model(ctx);
+-    const llama_vocab * vocab = llama_model_get_vocab(model);
+-    return common_token_to_piece(vocab, token, special);
+-}
+-
+-std::string common_token_to_piece(const struct llama_vocab * vocab, llama_token token, bool special) {
+-    std::string piece;
+-    piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
+-    const int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+-    if (n_chars < 0) {
+-        piece.resize(-n_chars);
+-        int check = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+-        GGML_ASSERT(check == -n_chars);
+-    }
+-    else {
+-        piece.resize(n_chars);
+-    }
+-
+-    return piece;
+-}
+-
+ std::string common_detokenize(const struct llama_context * ctx, const std::vector<llama_token> & tokens, bool special) {
+     const llama_model * model = llama_get_model(ctx);
+     const llama_vocab * vocab = llama_model_get_vocab(model);
+diff --git a/common/common.h b/common/common.h
+index 2cd6e2ec9..54a928f04 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -41,7 +41,7 @@
+ #define die(msg)          do { fputs("error: " msg "\n", stderr);                exit(1); } while (0)
+ #define die_fmt(fmt, ...) do { fprintf(stderr, "error: " fmt "\n", __VA_ARGS__); exit(1); } while (0)
+ 
+-struct common_time_meas {
++struct LLAMA_API common_time_meas {
+     common_time_meas(int64_t & t_acc, bool disable = false);
+     ~common_time_meas();
+ 
+@@ -299,7 +299,7 @@ struct common_params_sampling {
+     bool backend_sampling = false;
+ 
+     // print the parameters into a string
+-    std::string print() const;
++    LLAMA_API std::string print() const;
+ };
+ 
+ struct common_params_model {
+@@ -809,7 +809,7 @@ std::string string_repeat(const std::string & str, size_t n);
+ 
+ void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
+ 
+-std::string regex_escape(const std::string & s);
++LLAMA_API std::string regex_escape(const std::string & s);
+ 
+ template<class T>
+ static std::vector<T> string_split(const std::string & str, char delim) {
+@@ -944,11 +944,11 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
+ //
+ 
+ // Auto-detect if colors can be enabled based on terminal and environment
+-bool tty_can_use_colors();
+-bool tty_enable_ansi(); // false when stdout or stderr is a console that cannot render ANSI sequences
++LLAMA_API bool tty_can_use_colors();
++LLAMA_API bool tty_enable_ansi(); // false when stdout or stderr is a console that cannot render ANSI sequences
+ 
+ // Check if the given file is attached to a terminal
+-bool common_is_tty(FILE * file);
++LLAMA_API bool common_is_tty(FILE * file);
+ 
+ //
+ // Model utils
+@@ -1156,13 +1156,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
+ 
+ // tokenizes a string into a vector of tokens
+ // should work similar to Python's `tokenizer.encode`
+-std::vector<llama_token> common_tokenize(
++LLAMA_API std::vector<llama_token> common_tokenize(
+   const struct llama_context * ctx,
+            const std::string & text,
+                         bool   add_special,
+                         bool   parse_special = false);
+ 
+-std::vector<llama_token> common_tokenize(
++LLAMA_API std::vector<llama_token> common_tokenize(
+     const struct llama_vocab * vocab,
+            const std::string & text,
+                         bool   add_special,
+@@ -1170,12 +1170,12 @@ std::vector<llama_token> common_tokenize(
+ 
+ // tokenizes a token into a piece, optionally renders special/control tokens
+ // should work similar to Python's `tokenizer.id_to_piece`
+-std::string common_token_to_piece(
++LLAMA_API std::string common_token_to_piece(
+         const struct llama_context * ctx,
+                        llama_token   token,
+                        bool          special = true);
+ 
+-std::string common_token_to_piece(
++LLAMA_API std::string common_token_to_piece(
+           const struct llama_vocab * vocab,
+                        llama_token   token,
+                        bool          special = true);
+diff --git a/common/json.cpp b/common/json.cpp
+index 37713cef2..694d85bad 100644
+--- a/common/json.cpp
++++ b/common/json.cpp
+@@ -92,7 +92,7 @@ static std::shared_ptr<common_json> set_json(const std::set<T> & vals) {
+ }
+ 
+ // a set value is usable only for the types below
+-#define COMMON_JSON_SET(...) template <> common_json_value::common_json_value(const std::set<__VA_ARGS__> & vals) : type(VAL_JSON), val_json(set_json(vals)) {}
++#define COMMON_JSON_SET(...) template <> LLAMA_API common_json_value::common_json_value(const std::set<__VA_ARGS__> & vals) : type(VAL_JSON), val_json(set_json(vals)) {}
+ 
+ COMMON_JSON_SET(int)
+ COMMON_JSON_SET(std::string)
+@@ -111,7 +111,7 @@ static std::shared_ptr<common_json> map_json(const T & vals) {
+ }
+ 
+ // a map value is usable only for the types below
+-#define COMMON_JSON_MAP(...) template <> common_json_value::common_json_value(const std::map<std::string, __VA_ARGS__> & vals) : type(VAL_JSON), val_json(map_json(vals)) {}
++#define COMMON_JSON_MAP(...) template <> LLAMA_API common_json_value::common_json_value(const std::map<std::string, __VA_ARGS__> & vals) : type(VAL_JSON), val_json(map_json(vals)) {}
+ 
+ COMMON_JSON_MAP(bool)
+ COMMON_JSON_MAP(std::string)
+@@ -119,7 +119,7 @@ COMMON_JSON_MAP(std::string)
+ #undef COMMON_JSON_MAP
+ 
+ // an unordered map value is usable only for the types below
+-#define COMMON_JSON_UMAP(...) template <> common_json_value::common_json_value(const std::unordered_map<std::string, __VA_ARGS__> & vals) : type(VAL_JSON), val_json(map_json(vals)) {}
++#define COMMON_JSON_UMAP(...) template <> LLAMA_API common_json_value::common_json_value(const std::unordered_map<std::string, __VA_ARGS__> & vals) : type(VAL_JSON), val_json(map_json(vals)) {}
+ 
+ COMMON_JSON_UMAP(size_t)
+ 
+@@ -138,7 +138,7 @@ static std::shared_ptr<common_json> vec_json(const std::vector<T> & vals) {
+ 
+ // a vector value is usable only for the types below
+ // note: std::vector<bool> is not here, its proxy reference does not convert
+-#define COMMON_JSON_VEC(...) template <> common_json_value::common_json_value(const std::vector<__VA_ARGS__> & vals) : type(VAL_JSON), val_json(vec_json(vals)) {}
++#define COMMON_JSON_VEC(...) template <> LLAMA_API common_json_value::common_json_value(const std::vector<__VA_ARGS__> & vals) : type(VAL_JSON), val_json(vec_json(vals)) {}
+ 
+ COMMON_JSON_VEC(int)
+ COMMON_JSON_VEC(unsigned char)
+@@ -396,13 +396,13 @@ common_json::items_view common_json::items() const {
+ }
+ 
+ // the backing library cannot build a common_json, so this one is just a copy
+-template <> common_json common_json::get<common_json>() const {
++template <> LLAMA_API common_json common_json::get<common_json>() const {
+     return *this;
+ }
+ 
+ // get<T>() is usable only for the types below
+ 
+-#define COMMON_JSON_GET(...) template <> __VA_ARGS__ common_json::get<__VA_ARGS__>() const { return guard([&] { return as_json(this).get<__VA_ARGS__>(); }); }
++#define COMMON_JSON_GET(...) template <> LLAMA_API __VA_ARGS__ common_json::get<__VA_ARGS__>() const { return guard([&] { return as_json(this).get<__VA_ARGS__>(); }); }
+ 
+ COMMON_JSON_GET(bool)
+ COMMON_JSON_GET(int)
+diff --git a/common/json.h b/common/json.h
+index 95b6d6f21..da3b599dc 100644
+--- a/common/json.h
++++ b/common/json.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include "llama.h"
++
+ #include <cstddef>
+ #include <cstdint>
+ #include <initializer_list>
+@@ -28,18 +30,18 @@
+ //
+ // in doubt, search the code base for an existing usage example; do not add anything to this header unless absolutely necessary
+ 
+-class common_json;
++class LLAMA_API common_json;
+ 
+ // common_json_value holds a list of these, and each of them holds a value, so one must come first
+ struct common_json_item;
+ 
+-struct common_json_error : std::runtime_error {
++struct LLAMA_API common_json_error : std::runtime_error {
+     using std::runtime_error::runtime_error;
+ };
+ 
+ // one value, tagged so that this header stays free of the backing library
+ // note: a value that holds a tree is single use, the second use gives null
+-struct common_json_value {
++struct LLAMA_API common_json_value {
+     enum value_type {
+         VAL_NULL,
+         VAL_BOOL,
+@@ -98,7 +100,7 @@ struct common_json_value {
+     common_json_value(T val) : type(VAL_DOUBLE), val_double((double) val) {}
+ };
+ 
+-struct common_json_item {
++struct LLAMA_API common_json_item {
+     std::string       key;
+     common_json_value val;
+ 
+@@ -135,7 +137,7 @@ struct common_json_is_value<std::map<std::string, V, C, A>> : std::true_type {};
+ template <typename V, typename H, typename E, typename A>
+ struct common_json_is_value<std::unordered_map<std::string, V, H, E, A>> : std::true_type {};
+ 
+-class common_json {
++class LLAMA_API common_json {
+   public:
+     common_json();
+     common_json(const common_json & other);
+@@ -266,7 +268,7 @@ class common_json {
+ 
+     // walks an array by index, or an object in insertion order
+     // a plain value gives itself once, same as the backing library
+-    class iterator {
++    class LLAMA_API iterator {
+       public:
+         using iterator_category = std::forward_iterator_tag;
+         using value_type        = common_json;
+@@ -310,7 +312,7 @@ class common_json {
+ 
+         items_view(common_json * node, size_t n) : node(node), n(n) {}
+ 
+-        class iterator {
++        class LLAMA_API iterator {
+           public:
+             iterator(common_json * node, size_t idx) : node(node), idx(idx) {}
+ 
+diff --git a/common/log-terminal.cpp b/common/log-terminal.cpp
+new file mode 100644
+index 000000000..a486de11c
+--- /dev/null
++++ b/common/log-terminal.cpp
+@@ -0,0 +1,52 @@
++#include "common.h"
++#include <cstdlib>
++#include <cstring>
++#if defined(_WIN32)
++#include <io.h>
++#include <windows.h>
++#else
++#include <unistd.h>
++#endif
++
++bool common_is_tty(FILE * file) {
++#if defined(_WIN32)
++    return _isatty(_fileno(file));
++#else
++    return isatty(fileno(file));
++#endif
++}
++
++bool tty_can_use_colors() {
++    // Check NO_COLOR environment variable (https://no-color.org/)
++    if (const char * no_color = std::getenv("NO_COLOR")) {
++        if (no_color[0] != '\0') {
++            return false;
++        }
++    }
++
++    // Check TERM environment variable
++    if (const char * term = std::getenv("TERM")) {
++        if (std::strcmp(term, "dumb") == 0) {
++            return false;
++        }
++    }
++
++    // Check if stdout and stderr are connected to a terminal
++    // We check both because log messages can go to either
++    return common_is_tty(stdout) || common_is_tty(stderr);
++}
++
++bool tty_enable_ansi() {
++#if defined(_WIN32)
++    // a Windows console renders ANSI sequences only in virtual terminal mode, pipes and files take them as is
++    for (DWORD id : { STD_OUTPUT_HANDLE, STD_ERROR_HANDLE }) {
++        HANDLE h    = GetStdHandle(id);
++        DWORD  mode = 0;
++        if (GetConsoleMode(h, &mode) && !SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
++            return false;
++        }
++    }
++#endif
++    return true;
++}
++
+diff --git a/common/log.h b/common/log.h
+index 93ea58e76..6bc5c5914 100644
+--- a/common/log.h
++++ b/common/log.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include "llama.h"
+ #include "ggml.h" // for ggml_log_level
+ 
+ #define LOG_CLR_TO_EOL  "\033[K\r"
+@@ -39,34 +40,34 @@ enum log_colors {
+ 
+ // needed by the LOG_TMPL macro to avoid computing log arguments if the verbosity lower
+ // set via common_log_set_verbosity()
+-int  common_log_get_verbosity_thold(void);
++LLAMA_API int  common_log_get_verbosity_thold(void);
+ 
+-void common_log_set_verbosity_thold(int verbosity); // not thread-safe
++LLAMA_API void common_log_set_verbosity_thold(int verbosity); // not thread-safe
+ 
+-bool common_log_get_jsonl(void);
++LLAMA_API bool common_log_get_jsonl(void);
+ 
+-void common_log_set_jsonl(bool jsonl); // not thread-safe
++LLAMA_API void common_log_set_jsonl(bool jsonl); // not thread-safe
+ 
+-int common_log_get_verbosity(enum ggml_log_level level);
++LLAMA_API int common_log_get_verbosity(enum ggml_log_level level);
+ 
+-void common_log_default_callback(enum ggml_log_level level, const char * text, void * user_data);
++LLAMA_API void common_log_default_callback(enum ggml_log_level level, const char * text, void * user_data);
+ 
+ // the common_log uses an internal worker thread to print/write log messages
+ // when the worker thread is paused, incoming log messages are discarded
+ struct common_log;
+ 
+-struct common_log * common_log_init();
++LLAMA_API struct common_log * common_log_init();
+ 
+ // Singleton, intentionally leaked to avoid Windows teardown hangs.
+ // Call common_log_flush() before exit if you want to ensure all logs are flushed.
+-struct common_log * common_log_main();
++LLAMA_API struct common_log * common_log_main();
+ 
+-void                common_log_pause (struct common_log * log); // pause  the worker thread, not thread-safe
+-void                common_log_resume(struct common_log * log); // resume the worker thread, not thread-safe
+-void                common_log_free  (struct common_log * log);
++LLAMA_API void                common_log_pause (struct common_log * log); // pause  the worker thread, not thread-safe
++LLAMA_API void                common_log_resume(struct common_log * log); // resume the worker thread, not thread-safe
++LLAMA_API void                common_log_free  (struct common_log * log);
+ 
+ LOG_ATTRIBUTE_FORMAT(3, 4)
+-void common_log_add(struct common_log * log, enum ggml_log_level level, const char * fmt, ...);
++LLAMA_API void common_log_add(struct common_log * log, enum ggml_log_level level, const char * fmt, ...);
+ 
+ // defaults: file = NULL, colors = false, prefix = false, timestamps = false
+ //
+@@ -91,13 +92,13 @@ void common_log_add(struct common_log * log, enum ggml_log_level level, const ch
+ // O - output  (stdout, V = LOG_DEFAULT_OUTPUT)
+ //
+ 
+-void common_log_set_file      (struct common_log * log, const char * file); // not thread-safe
+-void common_log_set_stdo      (struct common_log * log, bool enabled);      // whether to output to stdout/stderr
+-void common_log_set_colors    (struct common_log * log, log_colors colors); // not thread-safe
+-bool common_log_get_colors    (struct common_log * log);                    // whether colors are enabled
+-void common_log_set_prefix    (struct common_log * log, bool prefix);       // whether to output prefix to each log
+-void common_log_set_timestamps(struct common_log * log, bool timestamps);   // whether to output timestamps in the prefix
+-void common_log_flush         (struct common_log * log);                    // flush all pending log messages
++LLAMA_API void common_log_set_file      (struct common_log * log, const char * file); // not thread-safe
++LLAMA_API void common_log_set_stdo      (struct common_log * log, bool enabled);      // whether to output to stdout/stderr
++LLAMA_API void common_log_set_colors    (struct common_log * log, log_colors colors); // not thread-safe
++LLAMA_API bool common_log_get_colors    (struct common_log * log);                    // whether colors are enabled
++LLAMA_API void common_log_set_prefix    (struct common_log * log, bool prefix);       // whether to output prefix to each log
++LLAMA_API void common_log_set_timestamps(struct common_log * log, bool timestamps);   // whether to output timestamps in the prefix
++LLAMA_API void common_log_flush         (struct common_log * log);                    // flush all pending log messages
+ 
+ // helper macros for logging
+ // use these to avoid computing log arguments if the verbosity of the log is higher than the threshold
+@@ -133,11 +134,11 @@ void common_log_flush         (struct common_log * log);                    // f
+ #define LOG_ERRV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_ERROR, verbosity, __VA_ARGS__)
+ #define LOG_CNTV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_CONT,  verbosity, __VA_ARGS__)
+ 
+-class common_json; // defined in common/json.h
++class LLAMA_API common_json; // defined in common/json.h
+ 
+ // helper allows different types of json output
+ // no-op if --log-jsonl is not set
+-void common_log_add_json(struct common_log * log, const char * type, const common_json & data);
++LLAMA_API void common_log_add_json(struct common_log * log, const char * type, const common_json & data);
+ 
+ // will only print if --log-jsonl is set
+ #define LOG_JSON(type, data) \
+diff --git a/common/regex-escape.cpp b/common/regex-escape.cpp
+new file mode 100644
+index 000000000..12c3888f6
+--- /dev/null
++++ b/common/regex-escape.cpp
+@@ -0,0 +1,8 @@
++#include "common.h"
++#include <regex>
++
++std::string regex_escape(const std::string & s) {
++    static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
++    return std::regex_replace(s, special_chars, "\\$&");
++}
++
+diff --git a/common/sampling-config.cpp b/common/sampling-config.cpp
+new file mode 100644
+index 000000000..bf3c4c8e6
+--- /dev/null
++++ b/common/sampling-config.cpp
+@@ -0,0 +1,169 @@
++#include "sampling.h"
++#include "log.h"
++#include <algorithm>
++#include <cctype>
++#include <unordered_map>
++
++char common_sampler_type_to_chr(enum common_sampler_type cnstr) {
++    switch (cnstr) {
++        case COMMON_SAMPLER_TYPE_DRY:         return 'd';
++        case COMMON_SAMPLER_TYPE_TOP_K:       return 'k';
++        case COMMON_SAMPLER_TYPE_TYPICAL_P:   return 'y';
++        case COMMON_SAMPLER_TYPE_TOP_P:       return 'p';
++        case COMMON_SAMPLER_TYPE_TOP_N_SIGMA: return 's';
++        case COMMON_SAMPLER_TYPE_MIN_P:       return 'm';
++        case COMMON_SAMPLER_TYPE_TEMPERATURE: return 't';
++        case COMMON_SAMPLER_TYPE_XTC:         return 'x';
++        case COMMON_SAMPLER_TYPE_INFILL:      return 'i';
++        case COMMON_SAMPLER_TYPE_PENALTIES:   return 'e';
++        case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return 'a';
++        default : return '?';
++    }
++}
++
++std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
++    switch (cnstr) {
++        case COMMON_SAMPLER_TYPE_DRY:         return "dry";
++        case COMMON_SAMPLER_TYPE_TOP_K:       return "top_k";
++        case COMMON_SAMPLER_TYPE_TYPICAL_P:   return "typ_p";
++        case COMMON_SAMPLER_TYPE_TOP_P:       return "top_p";
++        case COMMON_SAMPLER_TYPE_TOP_N_SIGMA: return "top_n_sigma";
++        case COMMON_SAMPLER_TYPE_MIN_P:       return "min_p";
++        case COMMON_SAMPLER_TYPE_TEMPERATURE: return "temperature";
++        case COMMON_SAMPLER_TYPE_XTC:         return "xtc";
++        case COMMON_SAMPLER_TYPE_INFILL:      return "infill";
++        case COMMON_SAMPLER_TYPE_PENALTIES:   return "penalties";
++        case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return "adaptive_p";
++        default : return "";
++    }
++}
++
++std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names) {
++    // sampler names can be written multiple ways; generate aliases from canonical names
++    static const auto sampler_name_map = []{
++        // canonical sampler name mapping
++        std::unordered_map<std::string, common_sampler_type> canonical_name_map {
++            { "dry",         COMMON_SAMPLER_TYPE_DRY         },
++            { "top_k",       COMMON_SAMPLER_TYPE_TOP_K       },
++            { "top_p",       COMMON_SAMPLER_TYPE_TOP_P       },
++            { "top_n_sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
++            { "typ_p",       COMMON_SAMPLER_TYPE_TYPICAL_P   },
++            { "min_p",       COMMON_SAMPLER_TYPE_MIN_P       },
++            { "temperature", COMMON_SAMPLER_TYPE_TEMPERATURE },
++            { "xtc",         COMMON_SAMPLER_TYPE_XTC         },
++            { "infill",      COMMON_SAMPLER_TYPE_INFILL      },
++            { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES   },
++            { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  }
++        };
++        std::unordered_map<std::string, common_sampler_type> alias_name_map;
++        for (const auto & entry : canonical_name_map) {
++            const std::string & canonical = entry.first;
++            if (canonical.find('_') == std::string::npos) {
++                continue;
++            }
++            // kebab-case: "top-k", "min-p", etc.
++            {
++                std::string kebab_case = canonical;
++                std::replace(kebab_case.begin(), kebab_case.end(), '_', '-');
++                alias_name_map.insert({kebab_case, entry.second});
++            }
++            // no dash: "topk", "minp", etc.
++            {
++                std::string no_dash = canonical;
++                no_dash.erase(std::remove(no_dash.begin(), no_dash.end(), '_'), no_dash.end());
++                alias_name_map.insert({no_dash, entry.second});
++            }
++        }
++        // misc. aliases
++        alias_name_map.insert({"nucleus", COMMON_SAMPLER_TYPE_TOP_P});
++        alias_name_map.insert({"temp",    COMMON_SAMPLER_TYPE_TEMPERATURE});
++        alias_name_map.insert({"typ",     COMMON_SAMPLER_TYPE_TYPICAL_P});
++        // include aliases + canonical names in the complete mapping
++        alias_name_map.merge(canonical_name_map);
++        return alias_name_map;
++    }();
++
++    std::vector<common_sampler_type> samplers;
++    samplers.reserve(names.size());
++
++    for (const auto & name : names) {
++        std::string name_lower = name;
++        std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
++        auto sampler = sampler_name_map.find(name_lower);
++        if (sampler != sampler_name_map.end()) {
++            samplers.push_back(sampler->second);
++            continue;
++        }
++        LOG_WRN("%s: unable to match sampler by name '%s'\n", __func__, name_lower.c_str());
++    }
++
++    return samplers;
++}
++
++std::vector<common_sampler_type> common_sampler_types_from_chars(const std::string & chars) {
++    std::unordered_map<char, common_sampler_type> sampler_name_map = {
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_DRY),         COMMON_SAMPLER_TYPE_DRY },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_K),       COMMON_SAMPLER_TYPE_TOP_K },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TYPICAL_P),   COMMON_SAMPLER_TYPE_TYPICAL_P },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_P),       COMMON_SAMPLER_TYPE_TOP_P },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_N_SIGMA), COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_MIN_P),       COMMON_SAMPLER_TYPE_MIN_P },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TEMPERATURE), COMMON_SAMPLER_TYPE_TEMPERATURE },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_XTC),         COMMON_SAMPLER_TYPE_XTC },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_INFILL),      COMMON_SAMPLER_TYPE_INFILL },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_PENALTIES),   COMMON_SAMPLER_TYPE_PENALTIES },
++        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_ADAPTIVE_P),  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
++    };
++
++    std::vector<common_sampler_type> samplers;
++    samplers.reserve(chars.size());
++
++    for (const auto & c : chars) {
++        const auto sampler = sampler_name_map.find(c);
++        if (sampler != sampler_name_map.end()) {
++            samplers.push_back(sampler->second);
++        } else {
++            LOG_WRN("%s: unable to match sampler by char '%c'\n", __func__, c);
++        }
++    }
++
++    return samplers;
++}
++
++void common_sampling_add_preserved_tokens(common_params_sampling & sampling, const llama_vocab * vocab, const std::vector<std::string> & tokens) {
++    GGML_ASSERT(vocab != nullptr);
++    for (const auto & t : tokens) {
++        auto ids = common_tokenize(vocab, t, false, true);
++        if (ids.size() == 1) {
++            sampling.preserved_tokens.insert(ids[0]);
++        }
++    }
++}
++
++void common_sampling_add_grammar_triggers(common_params_sampling & sampling, const llama_vocab * vocab, std::vector<common_grammar_trigger> triggers) {
++    GGML_ASSERT(vocab != nullptr);
++    for (auto & trigger : triggers) {
++        if (trigger.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
++            const auto & word = trigger.value;
++            auto ids = common_tokenize(vocab, word, false, true);
++            if (ids.size() == 1) {
++                auto token = ids[0];
++                if (std::find(sampling.preserved_tokens.begin(), sampling.preserved_tokens.end(), (llama_token) token) == sampling.preserved_tokens.end()) {
++                    throw std::runtime_error("Grammar trigger word should be marked as preserved token: " + word);
++                }
++                common_grammar_trigger token_trigger;
++                token_trigger.type  = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
++                token_trigger.value = word;
++                token_trigger.token = token;
++                sampling.grammar_triggers.push_back(std::move(token_trigger));
++            } else {
++                sampling.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
++            }
++        } else {
++            sampling.grammar_triggers.push_back(std::move(trigger));
++        }
++    }
++    if (sampling.grammar_lazy && sampling.grammar_triggers.empty()) {
++        throw std::runtime_error("Error: no triggers set for lazy grammar!");
++    }
++}
+diff --git a/common/sampling-report.cpp b/common/sampling-report.cpp
+new file mode 100644
+index 000000000..d40a39f71
+--- /dev/null
++++ b/common/sampling-report.cpp
+@@ -0,0 +1,51 @@
++#include "sampling.h"
++#include "fit.h"
++#include "log.h"
++#include <cstring>
++
++void common_perf_print(const struct llama_context * ctx, const struct common_sampler * gsmpl) {
++    // TODO: measure grammar performance
++
++    const double t_sampling_ms = 1e-3 * common_sampler_elapsed_us(gsmpl);
++
++    llama_perf_sampler_data data_smpl;
++    llama_perf_context_data data_ctx;
++
++    memset(&data_smpl, 0, sizeof(data_smpl));
++    memset(&data_ctx,  0, sizeof(data_ctx));
++
++    if (gsmpl) {
++        auto & data = data_smpl;
++
++        data = llama_perf_sampler(common_sampler_get(gsmpl));
++
++        // note: the sampling time includes the samplers time + extra time spent in common/sampling
++        LOG_INF("%s:    sampling time = %10.2f ms\n", __func__, t_sampling_ms);
++        LOG_INF("%s:    samplers time = %10.2f ms / %5d tokens\n", __func__, data.t_sample_ms, data.n_sample);
++    }
++
++    if (ctx) {
++        auto & data = data_ctx;
++
++        data = llama_perf_context(ctx);
++
++        const double t_end_ms = 1e-3 * ggml_time_us();
++
++        const double t_total_ms = t_end_ms - data.t_start_ms;
++        const double t_unacc_ms = t_total_ms - (t_sampling_ms + data.t_p_eval_ms + data.t_eval_ms);
++        const double t_unacc_pc = 100.0 * t_unacc_ms /  t_total_ms;
++
++        LOG_INF("%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
++        LOG_INF("%s: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
++                __func__, data.t_p_eval_ms, data.n_p_eval, data.t_p_eval_ms / data.n_p_eval, 1e3 / data.t_p_eval_ms * data.n_p_eval);
++        LOG_INF("%s:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
++                __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
++        LOG_INF("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
++        LOG_INF("%s: unaccounted time = %10.2f ms / %5.1f %%      (total - sampling - prompt eval - eval) / (total)\n", __func__, t_unacc_ms, t_unacc_pc);
++        LOG_INF("%s:    graphs reused = %10d\n", __func__, data.n_reused);
++        LOG_INF("%s:   graph reallocs = %10d    / %5d        (same size) / (changed size)\n", __func__, data.n_reallocs_same, data.n_reallocs_diff);
++
++        common_memory_breakdown_print(ctx);
++    }
++}
++
+diff --git a/common/sampling-timing.cpp b/common/sampling-timing.cpp
+new file mode 100644
+index 000000000..3936d82f6
+--- /dev/null
++++ b/common/sampling-timing.cpp
+@@ -0,0 +1,10 @@
++#include "common.h"
++
++common_time_meas::common_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
++
++common_time_meas::~common_time_meas() {
++    if (t_start_us >= 0) {
++        t_acc += ggml_time_us() - t_start_us;
++    }
++}
++
+diff --git a/common/sampling.cpp b/common/sampling.cpp
+index 564fa9c4d..72375bd35 100644
+--- a/common/sampling.cpp
++++ b/common/sampling.cpp
+@@ -1,7 +1,6 @@
+ #include "sampling.h"
+ 
+ #include "common.h"
+-#include "fit.h"
+ #include "log.h"
+ #include "reasoning-budget.h"
+ 
+@@ -13,6 +12,7 @@
+ #include <cmath>
+ #include <cstring>
+ #include <random>
++#include <memory>
+ #include <unordered_map>
+ #include <vector>
+ 
+@@ -213,6 +213,8 @@ struct common_sampler * common_sampler_init(
+ 
+     std::vector<llama_sampler *> samplers;
+ 
++    try {
++
+     const std::string & grammar_str = common_grammar_value(params.grammar);
+     if (grammar_str.compare(0, 11, "%llguidance") == 0) {
+ #ifdef LLAMA_USE_LLGUIDANCE
+@@ -286,7 +288,8 @@ struct common_sampler * common_sampler_init(
+         auto tokens = common_tokenize(vocab, params.generation_prompt, false, true);
+         for (size_t i = 0; i < tokens.size(); i++) {
+             std::string piece = common_token_to_piece(vocab, tokens[i], true);
+-            if (i == 0 && std::isspace(piece[0]) && !std::isspace(params.generation_prompt[0])) {
++            if (i == 0 && !piece.empty() && std::isspace(static_cast<unsigned char>(piece[0])) &&
++                    !std::isspace(static_cast<unsigned char>(params.generation_prompt[0]))) {
+                 // Some tokenizers will add a space before the first special token, need to exclude
+                 continue;
+             }
+@@ -406,17 +409,18 @@ struct common_sampler * common_sampler_init(
+             samplers.push_back(greedy ? llama_sampler_init_greedy() : llama_sampler_init_dist(params.seed));
+         }
+     } else if (params.mirostat == 1) {
+-        samplers.push_back(llama_sampler_init_temp(params.temp));
++        samplers.push_back(llama_sampler_init_temp_ext(params.temp, params.dynatemp_range, params.dynatemp_exponent));
+         samplers.push_back(llama_sampler_init_mirostat(llama_vocab_n_tokens(vocab), params.seed, params.mirostat_tau, params.mirostat_eta, 100));
+     } else if (params.mirostat == 2) {
+-        samplers.push_back(llama_sampler_init_temp(params.temp));
++        samplers.push_back(llama_sampler_init_temp_ext(params.temp, params.dynatemp_range, params.dynatemp_exponent));
+         samplers.push_back(llama_sampler_init_mirostat_v2(params.seed, params.mirostat_tau, params.mirostat_eta));
+     } else {
+         GGML_ASSERT(false && "unknown mirostat version");
+     }
+ 
+-    for (auto * smpl : samplers) {
++    for (auto *& smpl : samplers) {
+         llama_sampler_chain_add(chain, smpl);
++        smpl = nullptr;
+     }
+ 
+     if (grmr && params.backend_sampling) {
+@@ -444,6 +448,13 @@ struct common_sampler * common_sampler_init(
+     };
+ 
+     return result;
++    } catch (...) {
++        for (auto * smpl : samplers) { llama_sampler_free(smpl); }
++        llama_sampler_free(grmr);
++        llama_sampler_free(rbudget);
++        llama_sampler_free(chain);
++        throw;
++    }
+ }
+ 
+ void common_sampler_free(struct common_sampler * gsmpl) {
+@@ -516,16 +527,24 @@ void common_sampler_reset(struct common_sampler * gsmpl) {
+ }
+ 
+ struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
+-    return new common_sampler {
++    std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)> grmr(llama_sampler_clone(gsmpl->grmr), llama_sampler_free);
++    std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)> rbudget(llama_sampler_clone(gsmpl->rbudget), llama_sampler_free);
++    std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)> chain(llama_sampler_clone(gsmpl->chain), llama_sampler_free);
++    auto * result = new common_sampler {
+         /* .params  = */ gsmpl->params,
+-        /* .grmr    = */ llama_sampler_clone(gsmpl->grmr),
+-        /* .rbudget = */ llama_sampler_clone(gsmpl->rbudget),
+-        /* .chain   = */ llama_sampler_clone(gsmpl->chain),
++        /* .grmr    = */ grmr.get(),
++        /* .rbudget = */ rbudget.get(),
++        /* .chain   = */ chain.get(),
+         /* .prev    = */ gsmpl->prev,
+         /* .cur     = */ gsmpl->cur,
+         /* .cur_p   = */ gsmpl->cur_p,
+         /* .rng     = */ gsmpl->rng,
+     };
++    result->cur_p.data = gsmpl->cur_p.data ? result->cur.data() : nullptr;
++    grmr.release();
++    rbudget.release();
++    chain.release();
++    return result;
+ }
+ 
+ void common_sampler_copy(const common_sampler * src, common_sampler * dst) {
+@@ -549,50 +568,8 @@ void common_sampler_copy(const common_sampler * src, common_sampler * dst) {
+     dst->t_total_us = src->t_total_us;
+ }
+ 
+-void common_perf_print(const struct llama_context * ctx, const struct common_sampler * gsmpl) {
+-    // TODO: measure grammar performance
+-
+-    const double t_sampling_ms = gsmpl ? 1e-3*gsmpl->t_total_us : 0;
+-
+-    llama_perf_sampler_data data_smpl;
+-    llama_perf_context_data data_ctx;
+-
+-    memset(&data_smpl, 0, sizeof(data_smpl));
+-    memset(&data_ctx,  0, sizeof(data_ctx));
+-
+-    if (gsmpl) {
+-        auto & data = data_smpl;
+-
+-        data = llama_perf_sampler(gsmpl->chain);
+-
+-        // note: the sampling time includes the samplers time + extra time spent in common/sampling
+-        LOG_INF("%s:    sampling time = %10.2f ms\n", __func__, t_sampling_ms);
+-        LOG_INF("%s:    samplers time = %10.2f ms / %5d tokens\n", __func__, data.t_sample_ms, data.n_sample);
+-    }
+-
+-    if (ctx) {
+-        auto & data = data_ctx;
+-
+-        data = llama_perf_context(ctx);
+-
+-        const double t_end_ms = 1e-3 * ggml_time_us();
+-
+-        const double t_total_ms = t_end_ms - data.t_start_ms;
+-        const double t_unacc_ms = t_total_ms - (t_sampling_ms + data.t_p_eval_ms + data.t_eval_ms);
+-        const double t_unacc_pc = 100.0 * t_unacc_ms /  t_total_ms;
+-
+-        LOG_INF("%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
+-        LOG_INF("%s: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
+-                __func__, data.t_p_eval_ms, data.n_p_eval, data.t_p_eval_ms / data.n_p_eval, 1e3 / data.t_p_eval_ms * data.n_p_eval);
+-        LOG_INF("%s:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
+-                __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
+-        LOG_INF("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
+-        LOG_INF("%s: unaccounted time = %10.2f ms / %5.1f %%      (total - sampling - prompt eval - eval) / (total)\n", __func__, t_unacc_ms, t_unacc_pc);
+-        LOG_INF("%s:    graphs reused = %10d\n", __func__, data.n_reused);
+-        LOG_INF("%s:   graph reallocs = %10d    / %5d        (same size) / (changed size)\n", __func__, data.n_reallocs_same, data.n_reallocs_diff);
+-
+-        common_memory_breakdown_print(ctx);
+-    }
++int64_t common_sampler_elapsed_us(const struct common_sampler * gsmpl) {
++    return gsmpl ? gsmpl->t_total_us : 0;
+ }
+ 
+ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
+@@ -649,6 +626,9 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
+ 
+     llama_sampler_apply(chain, &cur_p);
+ 
++    if (cur_p.selected < 0 || static_cast<size_t>(cur_p.selected) >= cur_p.size) {
++        return LLAMA_TOKEN_NULL;
++    }
+     id = cur_p.data[cur_p.selected].id;
+ 
+     if (grammar_first || !grammar_should_apply(gsmpl)) {
+@@ -680,7 +660,9 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
+ 
+     llama_sampler_apply(chain, &cur_p);
+ 
+-    GGML_ASSERT(cur_p.selected != -1 && "no selected token during sampling - check your sampling configuration");
++    if (cur_p.selected < 0 || static_cast<size_t>(cur_p.selected) >= cur_p.size) {
++        return LLAMA_TOKEN_NULL;
++    }
+ 
+     id = cur_p.data[cur_p.selected].id;
+ 
+@@ -925,167 +907,3 @@ std::string common_sampler_prev_str(common_sampler * gsmpl, llama_context * ctx_
+ 
+     return result;
+ }
+-
+-char common_sampler_type_to_chr(enum common_sampler_type cnstr) {
+-    switch (cnstr) {
+-        case COMMON_SAMPLER_TYPE_DRY:         return 'd';
+-        case COMMON_SAMPLER_TYPE_TOP_K:       return 'k';
+-        case COMMON_SAMPLER_TYPE_TYPICAL_P:   return 'y';
+-        case COMMON_SAMPLER_TYPE_TOP_P:       return 'p';
+-        case COMMON_SAMPLER_TYPE_TOP_N_SIGMA: return 's';
+-        case COMMON_SAMPLER_TYPE_MIN_P:       return 'm';
+-        case COMMON_SAMPLER_TYPE_TEMPERATURE: return 't';
+-        case COMMON_SAMPLER_TYPE_XTC:         return 'x';
+-        case COMMON_SAMPLER_TYPE_INFILL:      return 'i';
+-        case COMMON_SAMPLER_TYPE_PENALTIES:   return 'e';
+-        case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return 'a';
+-        default : return '?';
+-    }
+-}
+-
+-std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
+-    switch (cnstr) {
+-        case COMMON_SAMPLER_TYPE_DRY:         return "dry";
+-        case COMMON_SAMPLER_TYPE_TOP_K:       return "top_k";
+-        case COMMON_SAMPLER_TYPE_TYPICAL_P:   return "typ_p";
+-        case COMMON_SAMPLER_TYPE_TOP_P:       return "top_p";
+-        case COMMON_SAMPLER_TYPE_TOP_N_SIGMA: return "top_n_sigma";
+-        case COMMON_SAMPLER_TYPE_MIN_P:       return "min_p";
+-        case COMMON_SAMPLER_TYPE_TEMPERATURE: return "temperature";
+-        case COMMON_SAMPLER_TYPE_XTC:         return "xtc";
+-        case COMMON_SAMPLER_TYPE_INFILL:      return "infill";
+-        case COMMON_SAMPLER_TYPE_PENALTIES:   return "penalties";
+-        case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return "adaptive_p";
+-        default : return "";
+-    }
+-}
+-
+-std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names) {
+-    // sampler names can be written multiple ways; generate aliases from canonical names
+-    static const auto sampler_name_map = []{
+-        // canonical sampler name mapping
+-        std::unordered_map<std::string, common_sampler_type> canonical_name_map {
+-            { "dry",         COMMON_SAMPLER_TYPE_DRY         },
+-            { "top_k",       COMMON_SAMPLER_TYPE_TOP_K       },
+-            { "top_p",       COMMON_SAMPLER_TYPE_TOP_P       },
+-            { "top_n_sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
+-            { "typ_p",       COMMON_SAMPLER_TYPE_TYPICAL_P   },
+-            { "min_p",       COMMON_SAMPLER_TYPE_MIN_P       },
+-            { "temperature", COMMON_SAMPLER_TYPE_TEMPERATURE },
+-            { "xtc",         COMMON_SAMPLER_TYPE_XTC         },
+-            { "infill",      COMMON_SAMPLER_TYPE_INFILL      },
+-            { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES   },
+-            { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  }
+-        };
+-        std::unordered_map<std::string, common_sampler_type> alias_name_map;
+-        for (const auto & entry : canonical_name_map) {
+-            const std::string & canonical = entry.first;
+-            if (canonical.find('_') == std::string::npos) {
+-                continue;
+-            }
+-            // kebab-case: "top-k", "min-p", etc.
+-            {
+-                std::string kebab_case = canonical;
+-                std::replace(kebab_case.begin(), kebab_case.end(), '_', '-');
+-                alias_name_map.insert({kebab_case, entry.second});
+-            }
+-            // no dash: "topk", "minp", etc.
+-            {
+-                std::string no_dash = canonical;
+-                no_dash.erase(std::remove(no_dash.begin(), no_dash.end(), '_'), no_dash.end());
+-                alias_name_map.insert({no_dash, entry.second});
+-            }
+-        }
+-        // misc. aliases
+-        alias_name_map.insert({"nucleus", COMMON_SAMPLER_TYPE_TOP_P});
+-        alias_name_map.insert({"temp",    COMMON_SAMPLER_TYPE_TEMPERATURE});
+-        alias_name_map.insert({"typ",     COMMON_SAMPLER_TYPE_TYPICAL_P});
+-        // include aliases + canonical names in the complete mapping
+-        alias_name_map.merge(canonical_name_map);
+-        return alias_name_map;
+-    }();
+-
+-    std::vector<common_sampler_type> samplers;
+-    samplers.reserve(names.size());
+-
+-    for (const auto & name : names) {
+-        std::string name_lower = name;
+-        std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+-        auto sampler = sampler_name_map.find(name_lower);
+-        if (sampler != sampler_name_map.end()) {
+-            samplers.push_back(sampler->second);
+-            continue;
+-        }
+-        LOG_WRN("%s: unable to match sampler by name '%s'\n", __func__, name_lower.c_str());
+-    }
+-
+-    return samplers;
+-}
+-
+-std::vector<common_sampler_type> common_sampler_types_from_chars(const std::string & chars) {
+-    std::unordered_map<char, common_sampler_type> sampler_name_map = {
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_DRY),         COMMON_SAMPLER_TYPE_DRY },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_K),       COMMON_SAMPLER_TYPE_TOP_K },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TYPICAL_P),   COMMON_SAMPLER_TYPE_TYPICAL_P },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_P),       COMMON_SAMPLER_TYPE_TOP_P },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_N_SIGMA), COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_MIN_P),       COMMON_SAMPLER_TYPE_MIN_P },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TEMPERATURE), COMMON_SAMPLER_TYPE_TEMPERATURE },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_XTC),         COMMON_SAMPLER_TYPE_XTC },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_INFILL),      COMMON_SAMPLER_TYPE_INFILL },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_PENALTIES),   COMMON_SAMPLER_TYPE_PENALTIES },
+-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_ADAPTIVE_P),  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
+-    };
+-
+-    std::vector<common_sampler_type> samplers;
+-    samplers.reserve(chars.size());
+-
+-    for (const auto & c : chars) {
+-        const auto sampler = sampler_name_map.find(c);
+-        if (sampler != sampler_name_map.end()) {
+-            samplers.push_back(sampler->second);
+-        } else {
+-            LOG_WRN("%s: unable to match sampler by char '%c'\n", __func__, c);
+-        }
+-    }
+-
+-    return samplers;
+-}
+-
+-void common_sampling_add_preserved_tokens(common_params_sampling & sampling, const llama_vocab * vocab, const std::vector<std::string> & tokens) {
+-    GGML_ASSERT(vocab != nullptr);
+-    for (const auto & t : tokens) {
+-        auto ids = common_tokenize(vocab, t, false, true);
+-        if (ids.size() == 1) {
+-            sampling.preserved_tokens.insert(ids[0]);
+-        }
+-    }
+-}
+-
+-void common_sampling_add_grammar_triggers(common_params_sampling & sampling, const llama_vocab * vocab, std::vector<common_grammar_trigger> triggers) {
+-    GGML_ASSERT(vocab != nullptr);
+-    for (auto & trigger : triggers) {
+-        if (trigger.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
+-            const auto & word = trigger.value;
+-            auto ids = common_tokenize(vocab, word, false, true);
+-            if (ids.size() == 1) {
+-                auto token = ids[0];
+-                if (std::find(sampling.preserved_tokens.begin(), sampling.preserved_tokens.end(), (llama_token) token) == sampling.preserved_tokens.end()) {
+-                    throw std::runtime_error("Grammar trigger word should be marked as preserved token: " + word);
+-                }
+-                common_grammar_trigger token_trigger;
+-                token_trigger.type  = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
+-                token_trigger.value = word;
+-                token_trigger.token = token;
+-                sampling.grammar_triggers.push_back(std::move(token_trigger));
+-            } else {
+-                sampling.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
+-            }
+-        } else {
+-            sampling.grammar_triggers.push_back(std::move(trigger));
+-        }
+-    }
+-    if (sampling.grammar_lazy && sampling.grammar_triggers.empty()) {
+-        throw std::runtime_error("Error: no triggers set for lazy grammar!");
+-    }
+-}
+diff --git a/common/sampling.h b/common/sampling.h
+index f19bd27c4..97b4c278a 100644
+--- a/common/sampling.h
++++ b/common/sampling.h
+@@ -37,23 +37,25 @@ struct common_sampler;
+ // llama_sampler API overloads
+ 
+ // note: can mutate params in some cases
+-struct common_sampler * common_sampler_init(
++LLAMA_API struct common_sampler * common_sampler_init(
+         const struct llama_model * model,
+         struct common_params_sampling & params);
+ 
+-void common_sampler_free(struct common_sampler * gsmpl);
++LLAMA_API void common_sampler_free(struct common_sampler * gsmpl);
+ 
+ // if is_generated is true, the token is accepted by the sampling chain, the reasoning budget sampler, and the grammar sampler
+-void                    common_sampler_accept(struct common_sampler * gsmpl, llama_token token, bool is_generated);
+-void                    common_sampler_reset (struct common_sampler * gsmpl);
+-struct common_sampler * common_sampler_clone (struct common_sampler * gsmpl);
+-void                    common_sampler_copy  (const struct common_sampler * src, struct common_sampler * dst);
++LLAMA_API void                    common_sampler_accept(struct common_sampler * gsmpl, llama_token token, bool is_generated);
++LLAMA_API void                    common_sampler_reset (struct common_sampler * gsmpl);
++LLAMA_API struct common_sampler * common_sampler_clone (struct common_sampler * gsmpl);
++LLAMA_API void                    common_sampler_copy  (const struct common_sampler * src, struct common_sampler * dst);
+ 
+ // arguments can be nullptr to skip printing
+ void common_perf_print(const struct llama_context * ctx, const struct common_sampler * gsmpl);
+ 
++LLAMA_API int64_t common_sampler_elapsed_us(const struct common_sampler * gsmpl);
++
+ // get the underlying llama_sampler_chain
+-struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
++LLAMA_API struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
+ 
+ // extended sampling implementation:
+ //
+@@ -65,7 +67,7 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
+ // if grammar_first is true, the grammar is applied before the samplers (slower)
+ // useful in cases where all the resulting candidates (not just the sampled one) must fit the grammar
+ //
+-llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first = false);
++LLAMA_API llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first = false);
+ 
+ // generalized version of common_sampler_sample
+ //
+@@ -83,48 +85,48 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
+ //
+ // returns at least 1 token, up to idxs.size()
+ //
+-std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first = false);
++LLAMA_API std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first = false);
+ 
+ // as above, but verifies by rejection sampling; draft_q holds the draft's candidates per token
+-std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first = false);
++LLAMA_API std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first = false);
+ 
+ // assume idxs == [ 0, 1, 2, ..., draft.size() ]
+-std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const llama_tokens & draft, bool grammar_first = false);
++LLAMA_API std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const llama_tokens & draft, bool grammar_first = false);
+ 
+-uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl);
++LLAMA_API uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl);
+ 
+ // force the reasoning budget sampler (if any) to begin forcing its end sequence now.
+-bool common_sampler_reasoning_budget_force(struct common_sampler * gsmpl);
++LLAMA_API bool common_sampler_reasoning_budget_force(struct common_sampler * gsmpl);
+ 
+ // helpers
+ 
+ // access the internal list of current candidate tokens
+ // if do_sort == true, the candidates are guaranteed to be sorted afterwards (in descending order of probability)
+ // the .sorted flag of the result indicates whether the returned candidates are sorted
+-llama_token_data_array * common_sampler_get_candidates(struct common_sampler * gsmpl, bool do_sort);
++LLAMA_API llama_token_data_array * common_sampler_get_candidates(struct common_sampler * gsmpl, bool do_sort);
+ 
+ // get the last accepted token
+-llama_token common_sampler_last(const struct common_sampler * gsmpl);
++LLAMA_API llama_token common_sampler_last(const struct common_sampler * gsmpl);
+ 
+ // print the sampler chain into a string
+-std::string common_sampler_print(const struct common_sampler * gsmpl);
++LLAMA_API std::string common_sampler_print(const struct common_sampler * gsmpl);
+ 
+ // get a string representation of the last accepted tokens
+-std::string common_sampler_prev_str(common_sampler * gsmpl, llama_context * ctx, int n);
++LLAMA_API std::string common_sampler_prev_str(common_sampler * gsmpl, llama_context * ctx, int n);
+ 
+-char        common_sampler_type_to_chr(enum common_sampler_type cnstr);
+-std::string common_sampler_type_to_str(enum common_sampler_type cnstr);
++LLAMA_API char        common_sampler_type_to_chr(enum common_sampler_type cnstr);
++LLAMA_API std::string common_sampler_type_to_str(enum common_sampler_type cnstr);
+ 
+-std::vector<enum common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names);
+-std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std::string & chars);
++LLAMA_API std::vector<enum common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names);
++LLAMA_API std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std::string & chars);
+ 
+ // add the strings that are a single token in the vocab to the preserved tokens
+-void common_sampling_add_preserved_tokens(common_params_sampling & sampling, const llama_vocab * vocab, const std::vector<std::string> & tokens);
++LLAMA_API void common_sampling_add_preserved_tokens(common_params_sampling & sampling, const llama_vocab * vocab, const std::vector<std::string> & tokens);
+ 
+ // add grammar triggers, a trigger word that is a single token becomes a token trigger and must be a preserved token
+-void common_sampling_add_grammar_triggers(common_params_sampling & sampling, const llama_vocab * vocab, std::vector<common_grammar_trigger> triggers);
++LLAMA_API void common_sampling_add_grammar_triggers(common_params_sampling & sampling, const llama_vocab * vocab, std::vector<common_grammar_trigger> triggers);
+ 
+-llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab,
++LLAMA_API llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab,
+                 const char * grammar_kind, const char * grammar_data);
+ 
+ struct common_sampler_deleter {
+diff --git a/common/tokenization.cpp b/common/tokenization.cpp
+new file mode 100644
+index 000000000..7f5064cb5
+--- /dev/null
++++ b/common/tokenization.cpp
+@@ -0,0 +1,58 @@
++#include "common.h"
++#include <limits>
++#include <stdexcept>
++
++std::vector<llama_token> common_tokenize(
++  const struct llama_context * ctx,
++           const std::string & text,
++                        bool   add_special,
++                        bool   parse_special) {
++    const llama_model * model = llama_get_model(ctx);
++    const llama_vocab * vocab = llama_model_get_vocab(model);
++    return common_tokenize(vocab, text, add_special, parse_special);
++}
++
++std::vector<llama_token> common_tokenize(
++    const struct llama_vocab * vocab,
++           const std::string & text,
++                        bool   add_special,
++                        bool   parse_special) {
++    // upper limit for the number of tokens
++    int n_tokens = text.length() + 2 * add_special;
++    std::vector<llama_token> result(n_tokens);
++    n_tokens = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
++    if (n_tokens == std::numeric_limits<int32_t>::min()) {
++        throw std::runtime_error("Tokenization failed: input text too large, tokenization result exceeds int32_t limit");
++    }
++    if (n_tokens < 0) {
++        result.resize(-n_tokens);
++        int check = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
++        GGML_ASSERT(check == -n_tokens);
++    } else {
++        result.resize(n_tokens);
++    }
++    return result;
++}
++
++std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
++    const llama_model * model = llama_get_model(ctx);
++    const llama_vocab * vocab = llama_model_get_vocab(model);
++    return common_token_to_piece(vocab, token, special);
++}
++
++std::string common_token_to_piece(const struct llama_vocab * vocab, llama_token token, bool special) {
++    std::string piece;
++    piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
++    const int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
++    if (n_chars < 0) {
++        piece.resize(-n_chars);
++        int check = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
++        GGML_ASSERT(check == -n_chars);
++    }
++    else {
++        piece.resize(n_chars);
++    }
++
++    return piece;
++}
++
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
 new file mode 100644
 index 000000000..ceed6e5d3
@@ -1585,158 +2884,86 @@ index 000000000..7c9aae114
 +        std::string & error);
 diff --git a/src/skippy/chat_sampling.cpp b/src/skippy/chat_sampling.cpp
 new file mode 100644
-index 000000000..88ebd7e05
+index 000000000..459934fc7
 --- /dev/null
 +++ b/src/skippy/chat_sampling.cpp
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,64 @@
 +#include "skippy/chat_sampling.h"
 +#include "skippy/runtime_types.h"
 +#include "skippy/runtime_support.h"
 +#include "skippy/sampling_internal.h"
-+#include "../../common/reasoning-budget.h"
++#include "skippy/errors.h"
++#include "../../common/sampling.h"
 +
 +#include <cmath>
-+#include <exception>
-+#include <vector>
++#include <stdexcept>
 +
-+static llama_token_data_array skippy_chat_candidates_from_logits(
-+        std::vector<llama_token_data> & candidates,
-+        const float * logits,
-+        int32_t n_vocab) {
-+    candidates.resize(static_cast<size_t>(n_vocab));
-+    for (llama_token token = 0; token < n_vocab; ++token) {
-+        candidates[token] = { token, logits[token], 0.0f };
-+    }
-+    return {candidates.data(), candidates.size(), -1, false};
-+}
-+
-+static bool skippy_chat_grammar_should_apply(const skippy_session * session) {
-+    if (session == nullptr || session->grammar_sampler == nullptr) {
++bool skippy_retire_backend_sampling(skippy_session * session, skippy_error ** out_error) {
++    if (!session->sampling_backend_enabled) { return true; }
++    try {
++        // Cloning preserves accepted history and RNG state, but gives the chain
++        // fresh CPU nodes instead of the detached chain's offload-only nodes.
++        auto * replacement = common_sampler_clone(session->sampler);
++        llama_set_sampler(session->ctx, session->seq_id, nullptr);
++        common_sampler_free(session->sampler);
++        session->sampler = replacement;
++        session->sampling_chain = common_sampler_get(replacement);
++        session->sampling_backend_enabled = false;
++        session->sampling_backend_retired = true;
++        return true;
++    } catch (...) {
++        session->reset_required = true;
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to retire backend sampler");
 +        return false;
 +    }
-+    if (!session->grammar_lazy || session->reasoning_budget_sampler == nullptr) {
-+        return true;
-+    }
-+    const auto state = common_reasoning_budget_get_state(session->reasoning_budget_sampler);
-+    return state == REASONING_BUDGET_IDLE || state == REASONING_BUDGET_DONE;
 +}
 +
-+static void skippy_sync_chat_sampling_history(skippy_session * session) {
-+    if (session == nullptr || session->sampling_chain == nullptr) {
-+        return;
-+    }
++void skippy_chat_accept_history(skippy_session * session) {
 +    while (session->sampling_accepted_token_count < session->token_history.size()) {
-+        const size_t index = session->sampling_accepted_token_count;
-+        const llama_token token = session->token_history[index];
-+        llama_sampler_accept(session->sampling_chain, token);
-+        const bool generated = index >= session->grammar_generated_start;
-+        const bool accept_grammar = generated && skippy_chat_grammar_should_apply(session);
-+        if (session->reasoning_budget_sampler != nullptr && generated) {
-+            llama_sampler_accept(session->reasoning_budget_sampler, token);
-+            if (!accept_grammar && session->grammar_sampler != nullptr &&
-+                    common_reasoning_budget_get_state(session->reasoning_budget_sampler) == REASONING_BUDGET_DONE) {
-+                const std::vector<llama_token> * end_match =
-+                        common_reasoning_budget_get_end_match(session->reasoning_budget_sampler);
-+                if (end_match != nullptr) {
-+                    for (const llama_token end_token : *end_match) {
-+                        llama_sampler_accept(session->grammar_sampler, end_token);
-+                    }
-+                }
-+            }
-+        }
-+        if (accept_grammar) {
-+            try {
-+                llama_sampler_accept(session->grammar_sampler, token);
-+            } catch (const std::exception & e) {
-+                skippy_disable_chat_grammar_after_exception(session, "accept", e.what());
-+            } catch (...) {
-+                skippy_disable_chat_grammar_after_exception(session, "accept", nullptr);
-+            }
-+        }
-+        session->sampling_accepted_token_count++;
++        const auto index = session->sampling_accepted_token_count;
++        common_sampler_accept(session->sampler, session->token_history[index],
++                index >= session->grammar_generated_start);
++        ++session->sampling_accepted_token_count;
 +    }
 +}
 +
 +llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_index) {
-+    skippy_sync_chat_sampling_history(session);
++    skippy_chat_accept_history(session);
 +    if (session->sampling_backend_enabled) {
-+        const llama_token sampled = llama_get_sampled_token_ith(session->ctx, logits_index);
-+        skippy_mark_context_synchronized(session->stage_model);
-+        if (sampled != LLAMA_TOKEN_NULL) {
-+            llama_sampler_accept(session->sampling_chain, sampled);
-+            return sampled;
++        const auto token = llama_get_sampled_token_ith(session->ctx, logits_index);
++        if (token != LLAMA_TOKEN_NULL) {
++            skippy_mark_context_synchronized(session->stage_model);
++            return token;
 +        }
-+        return skippy_greedy_sample_ith(session, logits_index);
++        // The chain may have been attached after this row was decoded.
++        if (!skippy_retire_backend_sampling(session, nullptr)) { return LLAMA_TOKEN_NULL; }
 +    }
-+    llama_synchronize(session->ctx);
++    if (llama_get_sampled_probs_ith(session->ctx, logits_index) == nullptr &&
++            llama_get_sampled_logits_ith(session->ctx, logits_index) == nullptr &&
++            llama_get_logits_ith(session->ctx, logits_index) == nullptr) {
++        return LLAMA_TOKEN_NULL;
++    }
++    const auto token = common_sampler_sample(session->sampler, session->ctx, logits_index);
 +    skippy_mark_context_synchronized(session->stage_model);
-+
-+    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-+    const float * logits = llama_get_logits_ith(session->ctx, logits_index);
-+    if (logits == nullptr) {
-+        return skippy_greedy_sample_ith(session, logits_index);
++    const auto * candidates = common_sampler_get_candidates(session->sampler, false);
++    if (candidates->selected < 0 || static_cast<size_t>(candidates->selected) >= candidates->size) {
++        return LLAMA_TOKEN_NULL;
 +    }
-+
-+    auto apply_grammar = [&](llama_token_data_array & values) {
-+        try {
-+            llama_sampler_apply(session->grammar_sampler, &values);
-+        } catch (const std::exception & e) {
-+            skippy_disable_chat_grammar_after_exception(session, "apply", e.what());
-+        } catch (...) {
-+            skippy_disable_chat_grammar_after_exception(session, "apply", nullptr);
-+        }
-+    };
-+    auto cur = skippy_chat_candidates_from_logits(session->sampling_candidates, logits, n_vocab);
-+    if (session->reasoning_budget_sampler != nullptr) {
-+        llama_sampler_apply(session->reasoning_budget_sampler, &cur);
-+    }
-+    llama_sampler_apply(session->sampling_chain, &cur);
-+    if (cur.selected < 0 || static_cast<size_t>(cur.selected) >= cur.size) {
-+        return skippy_greedy_sample_ith(session, logits_index);
-+    }
-+    const auto proposed = cur.data[cur.selected].id;
-+    if (!skippy_chat_grammar_should_apply(session)) {
-+        return proposed;
-+    }
-+
-+    // Match common_sampler_sample: avoid decoding every vocabulary piece when
-+    // the proposed token already satisfies the grammar. apply never accepts it;
-+    // history advances only after the caller commits a generated token.
-+    llama_token_data proposal{proposed, 1.0f, 0.0f};
-+    llama_token_data_array single{&proposal, 1, -1, false};
-+    apply_grammar(single);
-+    if (proposal.logit != -INFINITY) {
-+        return proposed;
-+    }
-+
-+    // Sampling mutates both the candidate set and RNG. Reload the original
-+    // logits and repeat the budget/grammar/chain order used by upstream fallback.
-+    cur = skippy_chat_candidates_from_logits(session->sampling_candidates, logits, n_vocab);
-+    if (session->reasoning_budget_sampler != nullptr) {
-+        llama_sampler_apply(session->reasoning_budget_sampler, &cur);
-+    }
-+    if (skippy_chat_grammar_should_apply(session)) {
-+        apply_grammar(cur);
-+    }
-+    llama_sampler_apply(session->sampling_chain, &cur);
-+    if (cur.selected < 0 || static_cast<size_t>(cur.selected) >= cur.size) {
-+        return skippy_greedy_sample_ith(session, logits_index);
-+    }
-+    return cur.data[cur.selected].id;
++    const auto logit = candidates->data[candidates->selected].logit;
++    return logit == -INFINITY || std::isnan(logit) ? LLAMA_TOKEN_NULL : token;
 +}
-+
 diff --git a/src/skippy/chat_sampling.h b/src/skippy/chat_sampling.h
 new file mode 100644
-index 000000000..5d51ad76f
+index 000000000..1c01b2bd0
 --- /dev/null
 +++ b/src/skippy/chat_sampling.h
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,7 @@
 +#pragma once
 +
 +#include "llama.h"
 +
 +struct skippy_session;
++void skippy_chat_accept_history(skippy_session * session);
 +llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_index);
 diff --git a/src/skippy/devices.cpp b/src/skippy/devices.cpp
 new file mode 100644
@@ -9149,10 +10376,10 @@ index 000000000..f0c3b2ea7
 +}
 diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
 new file mode 100644
-index 000000000..55499ea20
+index 000000000..d7e991307
 --- /dev/null
 +++ b/src/skippy/runtime_support.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,47 @@
 +#pragma once
 +
 +#include "skippy/common.h"
@@ -9178,10 +10405,7 @@ index 000000000..55499ea20
 +    return !skippy_runtime_has_stage_plan(config) || config->activation_export_identity_count == 0;
 +}
 +
-+void skippy_disable_chat_grammar_after_exception(
-+        skippy_session * session,
-+        const char * operation,
-+        const char * message);
++
 +
 +enum skippy_status skippy_require_usable_session(
 +        const skippy_session * session,
@@ -9205,10 +10429,10 @@ index 000000000..55499ea20
 +        skippy_error ** out_error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 new file mode 100644
-index 000000000..5a02c35c5
+index 000000000..296fad7f9
 --- /dev/null
 +++ b/src/skippy/runtime_types.h
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,182 @@
 +#pragma once
 +
 +#include "skippy.h"
@@ -9338,6 +10562,8 @@ index 000000000..5a02c35c5
 +    std::vector<uint8_t> input_payload;
 +};
 +
++struct common_sampler;
++
 +struct skippy_session {
 +    skippy_model * stage_model = nullptr;
 +    llama_context * ctx = nullptr;
@@ -9354,10 +10580,11 @@ index 000000000..5a02c35c5
 +    std::vector<llama_seq_id> prefill_seq_ids;
 +    std::vector<llama_seq_id *> prefill_seq_id_ptrs;
 +    std::vector<int8_t> prefill_logits;
-+    std::vector<llama_token_data> sampling_candidates;
++    common_sampler * sampler = nullptr;
++    // Borrowed from sampler for backend attachment; common_sampler owns it.
 +    llama_sampler * sampling_chain = nullptr;
-+    llama_sampler * grammar_sampler = nullptr;
-+    llama_sampler * reasoning_budget_sampler = nullptr;
++    bool sampling_has_grammar = false;
++    bool sampling_has_reasoning_budget = false;
 +    bool grammar_lazy = false;
 +    bool sampling_backend_enabled = false;
 +    // A sampler chain may be backend-initialized at most once
@@ -9390,17 +10617,17 @@ index 000000000..5a02c35c5
 +};
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 new file mode 100644
-index 000000000..7126c40e5
+index 000000000..07708e65e
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,1031 @@
+@@ -0,0 +1,589 @@
 +#include "skippy/sampling.h"
 +#include "skippy/chat_sampling.h"
 +#include "skippy/errors.h"
 +#include "skippy/execution_internal.h"
 +#include "skippy/runtime_support.h"
 +#include "skippy/runtime_types.h"
-+#include "../../common/reasoning-budget.h"
++#include "../../common/sampling.h"
 +#include "skippy/sampling_internal.h"
 +#include "skippy/speculative_internal.h"
 +
@@ -9531,14 +10758,8 @@ index 000000000..7126c40e5
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +
-+    if (session->sampling_backend_enabled) {
-+        // Verification requests logits for every row and then consumes them on
-+        // the CPU. An attached backend sampler permits only one output row per
-+        // sequence, so retire its one-shot backend initialization before
-+        // building the verification batch.
-+        llama_set_sampler(session->ctx, session->seq_id, nullptr);
-+        session->sampling_backend_enabled = false;
-+        session->sampling_backend_retired = true;
++    if (!skippy_retire_backend_sampling(session, out_error)) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +
 +    const int32_t n_tokens = static_cast<int32_t>(token_count);
@@ -9618,10 +10839,6 @@ index 000000000..7126c40e5
 +
 +llama_token skippy_greedy_sample_ith(skippy_session * session, int32_t index) {
 +    return skippy_greedy_sample_context(session->stage_model->model, session->ctx, index);
-+}
-+
-+static llama_token skippy_greedy_sample(skippy_session * session) {
-+    return skippy_greedy_sample_ith(session, -1);
 +}
 +
 +static bool skippy_compute_token_signal_context(
@@ -9720,12 +10937,11 @@ index 000000000..7126c40e5
 +    if (session->ctx != nullptr) {
 +        llama_set_sampler(session->ctx, session->seq_id, nullptr);
 +    }
-+    llama_sampler_free(session->sampling_chain);
-+    llama_sampler_free(session->grammar_sampler);
-+    llama_sampler_free(session->reasoning_budget_sampler);
++    common_sampler_free(session->sampler);
++    session->sampler = nullptr;
 +    session->sampling_chain = nullptr;
-+    session->grammar_sampler = nullptr;
-+    session->reasoning_budget_sampler = nullptr;
++    session->sampling_has_grammar = false;
++    session->sampling_has_reasoning_budget = false;
 +    session->grammar_lazy = false;
 +    session->sampling_backend_enabled = false;
 +    session->sampling_backend_retired = false;
@@ -9736,32 +10952,6 @@ index 000000000..7126c40e5
 +    session->sampling_accepted_token_count = 0;
 +}
 +
-+static std::string skippy_regex_escape(const std::string & value) {
-+    static const std::regex special_chars(R"([-[\]{}()*+?.,\^$|#\s])");
-+    return std::regex_replace(value, special_chars, R"(\$&)");
-+}
-+
-+static std::vector<llama_token> skippy_tokenize_text(
-+        const llama_vocab * vocab,
-+        const std::string & text,
-+        bool add_special,
-+        bool parse_special) {
-+    if (vocab == nullptr || text.empty()) {
-+        return {};
-+    }
-+    const int32_t count = -llama_tokenize(vocab, text.c_str(), static_cast<int32_t>(text.size()), nullptr, 0, add_special, parse_special);
-+    if (count <= 0) {
-+        return {};
-+    }
-+    std::vector<llama_token> tokens(static_cast<size_t>(count));
-+    const int32_t written = llama_tokenize(vocab, text.c_str(), static_cast<int32_t>(text.size()), tokens.data(), count, add_special, parse_special);
-+    if (written < 0) {
-+        return {};
-+    }
-+    tokens.resize(static_cast<size_t>(written));
-+    return tokens;
-+}
-+
 +static bool skippy_sampling_enabled(const skippy_sampling_config * sampling) {
 +    if (sampling == nullptr || sampling->version == 0 ||
 +            (sampling->flags & SKIPPY_SAMPLING_FLAG_ENABLED) == 0) {
@@ -9770,7 +10960,7 @@ index 000000000..7126c40e5
 +    return true;
 +}
 +
-+static bool skippy_sampling_is_greedy_equivalent(const skippy_sampling_config * sampling) {
++bool skippy_sampling_is_greedy_equivalent(const skippy_sampling_config * sampling) {
 +    if (!skippy_sampling_enabled(sampling)) {
 +        return true;
 +    }
@@ -9898,14 +11088,14 @@ index 000000000..7126c40e5
 +        uint64_t prompt_token_count) {
 +    if (session == nullptr || metadata_json == nullptr ||
 +            std::strcmp(metadata_json, "{\"grammar\":\"\"}") != 0 ||
-+            session->sampling_chain == nullptr || session->grammar_sampler != nullptr ||
-+            session->reasoning_budget_sampler != nullptr ||
++            session->sampling_chain == nullptr || session->sampling_has_grammar ||
++            session->sampling_has_reasoning_budget ||
 +            !session->sampling_config_valid || session->sampling_config.logit_bias_count != 0 ||
 +            (sampling != nullptr && sampling->logit_bias_count != 0) ||
 +            !skippy_sampling_chain_is_reusable_for(session, sampling)) {
 +        return false;
 +    }
-+    llama_sampler_reset(session->sampling_chain);
++    common_sampler_reset(session->sampler);
 +    skippy_store_sampling_config(session, sampling);
 +    session->chat_sampling_metadata = metadata_json;
 +    session->grammar_generated_start = prompt_token_count;
@@ -9918,13 +11108,13 @@ index 000000000..7126c40e5
 +
 +bool skippy_reset_reusable_sampling(skippy_session * session) {
 +    if (session == nullptr || session->sampling_chain == nullptr ||
-+            session->grammar_sampler != nullptr || !session->sampling_config_valid ||
-+            session->reasoning_budget_sampler != nullptr ||
++            session->sampling_has_grammar || !session->sampling_config_valid ||
++            session->sampling_has_reasoning_budget ||
 +            session->sampling_backend_retired ||
 +            session->sampling_config.logit_bias_count != 0) {
 +        return false;
 +    }
-+    llama_sampler_reset(session->sampling_chain);
++    common_sampler_reset(session->sampler);
 +    session->chat_sampling_metadata.clear();
 +    session->grammar_generated_start = 0;
 +    session->sampling_accepted_token_count = 0;
@@ -9934,238 +11124,10 @@ index 000000000..7126c40e5
 +    return true;
 +}
 +
-+static std::vector<llama_logit_bias> skippy_sampling_logit_biases(
-+        skippy_session * session,
-+        const skippy_sampling_config * sampling) {
-+    std::vector<llama_logit_bias> biases;
-+    if (sampling != nullptr) {
-+        const uint32_t count = std::min<uint32_t>(sampling->logit_bias_count, SKIPPY_MAX_LOGIT_BIAS);
-+        biases.assign(sampling->logit_bias, sampling->logit_bias + count);
-+    }
-+    const bool ignore_eos = sampling != nullptr &&
-+            (sampling->ignore_eos != 0 ||
-+                    (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0);
-+    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+    if (ignore_eos) {
-+        const int32_t token_count = llama_vocab_n_tokens(vocab);
-+        for (llama_token token = 0; token < token_count; ++token) {
-+            if (!llama_vocab_is_eog(vocab, token)) {
-+                continue;
-+            }
-+            const auto found = std::find_if(biases.begin(), biases.end(), [token](const llama_logit_bias & bias) {
-+                return bias.token == token;
-+            });
-+            if (found == biases.end()) {
-+                biases.push_back({token, -INFINITY});
-+            } else {
-+                found->bias = -INFINITY;
-+            }
-+        }
-+    }
-+    int32_t suppress_token_count = 0;
-+    const llama_token * suppress_tokens = llama_vocab_get_suppress_tokens(vocab, &suppress_token_count);
-+    return skippy_add_vocab_suppress_token_biases(
-+            std::move(biases), suppress_tokens, suppress_token_count);
-+}
-+
-+static std::vector<std::string> skippy_dry_sequence_breaker_storage(
-+        const skippy_sampling_config * sampling) {
-+    const uint32_t count = std::min<uint32_t>(
-+            sampling->dry_sequence_breaker_count,
-+            SKIPPY_MAX_DRY_SEQUENCE_BREAKERS);
-+    std::vector<std::string> storage;
-+    storage.reserve(count);
-+    for (uint32_t i = 0; i < count; ++i) {
-+        const char * begin = sampling->dry_sequence_breakers[i];
-+        const char * end = std::find(
-+                begin,
-+                begin + SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES,
-+                '\0');
-+        storage.emplace_back(begin, end);
-+    }
-+    return storage;
-+}
-+
-+static void skippy_add_configured_sampler(
-+        llama_sampler * chain,
-+        skippy_session * session,
-+        const skippy_sampling_config * sampling,
-+        float repeat_penalty,
-+        uint32_t sampler_type,
-+        uint32_t seed) {
-+    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-+    switch (sampler_type) {
-+        case SKIPPY_SAMPLER_PENALTIES:
-+        {
-+            const int32_t penalty_last_n = sampling->penalty_last_n == 0
-+                    ? -1
-+                    : sampling->penalty_last_n;
-+            llama_sampler_chain_add(chain, llama_sampler_init_penalties(
-+                    n_vocab,
-+                    penalty_last_n,
-+                    repeat_penalty,
-+                    sampling->frequency_penalty,
-+                    sampling->presence_penalty));
-+            break;
-+        }
-+        case SKIPPY_SAMPLER_DRY:
-+        {
-+            std::vector<std::string> breaker_storage =
-+                    skippy_dry_sequence_breaker_storage(sampling);
-+            std::vector<const char *> breakers;
-+            breakers.reserve(breaker_storage.size());
-+            for (const std::string & breaker : breaker_storage) {
-+                breakers.push_back(breaker.c_str());
-+            }
-+            llama_sampler_chain_add(chain, llama_sampler_init_dry(
-+                    vocab,
-+                    sampling->dry_multiplier,
-+                    sampling->dry_base,
-+                    sampling->dry_allowed_length,
-+                    sampling->dry_penalty_last_n,
-+                    breakers.data(),
-+                    breakers.size()));
-+            break;
-+        }
-+        case SKIPPY_SAMPLER_TOP_N_SIGMA:
-+            llama_sampler_chain_add(chain, llama_sampler_init_top_n_sigma(sampling->top_nsigma));
-+            break;
-+        case SKIPPY_SAMPLER_TOP_K:
-+            llama_sampler_chain_add(chain, llama_sampler_init_top_k(sampling->top_k));
-+            break;
-+        case SKIPPY_SAMPLER_TYPICAL_P:
-+            llama_sampler_chain_add(chain, llama_sampler_init_typical(sampling->typical_p, 0));
-+            break;
-+        case SKIPPY_SAMPLER_TOP_P:
-+            llama_sampler_chain_add(chain, llama_sampler_init_top_p(sampling->top_p, 0));
-+            break;
-+        case SKIPPY_SAMPLER_MIN_P:
-+            llama_sampler_chain_add(chain, llama_sampler_init_min_p(sampling->min_p, 0));
-+            break;
-+        case SKIPPY_SAMPLER_XTC:
-+            llama_sampler_chain_add(chain, llama_sampler_init_xtc(
-+                    sampling->xtc_probability,
-+                    sampling->xtc_threshold,
-+                    0,
-+                    seed));
-+            break;
-+        case SKIPPY_SAMPLER_TEMPERATURE:
-+            llama_sampler_chain_add(chain, llama_sampler_init_temp_ext(
-+                    sampling->temperature,
-+                    sampling->dynatemp_range,
-+                    sampling->dynatemp_exponent));
-+            break;
-+        default:
-+            break;
-+    }
-+}
-+
-+llama_sampler * skippy_build_sampling_chain(
-+        skippy_session * session,
-+        const skippy_sampling_config * sampling) {
-+    llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
-+    llama_sampler * sampler = llama_sampler_chain_init(chain_params);
-+    if (sampler == nullptr) {
-+        return nullptr;
-+    }
-+
-+    const std::vector<llama_logit_bias> logit_biases =
-+            skippy_sampling_logit_biases(session, sampling);
-+    if (!logit_biases.empty()) {
-+        const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+        llama_sampler_chain_add(
-+                sampler,
-+                llama_sampler_init_logit_bias(
-+                        llama_vocab_n_tokens(vocab),
-+                        static_cast<int32_t>(logit_biases.size()),
-+                        logit_biases.data()));
-+    }
-+    if (skippy_sampling_is_greedy_equivalent(sampling)) {
-+        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
-+        ++session->sampling_rebuild_count;
-+        skippy_log_sampling_cache_metrics(session, "rebuild");
-+        return sampler;
-+    }
-+    const uint32_t seed = sampling->seed == 0 ? LLAMA_DEFAULT_SEED : sampling->seed;
-+    const float repeat_penalty = sampling->repeat_penalty == 0.0f
-+            ? 1.0f
-+            : sampling->repeat_penalty;
-+    static const uint32_t default_samplers[] = {
-+        SKIPPY_SAMPLER_PENALTIES,
-+        SKIPPY_SAMPLER_DRY,
-+        SKIPPY_SAMPLER_TOP_N_SIGMA,
-+        SKIPPY_SAMPLER_TOP_K,
-+        SKIPPY_SAMPLER_TYPICAL_P,
-+        SKIPPY_SAMPLER_TOP_P,
-+        SKIPPY_SAMPLER_MIN_P,
-+        SKIPPY_SAMPLER_XTC,
-+        SKIPPY_SAMPLER_TEMPERATURE,
-+    };
-+    const uint32_t configured_count =
-+            std::min<uint32_t>(sampling->sampler_count, SKIPPY_MAX_SAMPLERS);
-+    if (sampling->mirostat_mode == 1 || sampling->mirostat_mode == 2) {
-+        skippy_add_configured_sampler(
-+                sampler,
-+                session,
-+                sampling,
-+                repeat_penalty,
-+                SKIPPY_SAMPLER_TEMPERATURE,
-+                seed);
-+    } else if (configured_count == 0) {
-+        for (const uint32_t sampler_type : default_samplers) {
-+            if (sampler_type == SKIPPY_SAMPLER_TYPICAL_P &&
-+                    !(sampling->typical_p > 0.0f && sampling->typical_p < 1.0f)) {
-+                continue;
-+            }
-+            if (sampler_type == SKIPPY_SAMPLER_TOP_P &&
-+                    !(sampling->top_p > 0.0f && sampling->top_p < 1.0f)) {
-+                continue;
-+            }
-+            skippy_add_configured_sampler(
-+                    sampler,
-+                    session,
-+                    sampling,
-+                    repeat_penalty,
-+                    sampler_type,
-+                    seed);
-+        }
-+    } else {
-+        for (uint32_t i = 0; i < configured_count; ++i) {
-+            skippy_add_configured_sampler(
-+                    sampler,
-+                    session,
-+                    sampling,
-+                    repeat_penalty,
-+                    sampling->samplers[i],
-+                    seed);
-+        }
-+    }
-+    if (sampling->mirostat_mode == 1) {
-+        const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+        llama_sampler_chain_add(sampler, llama_sampler_init_mirostat(
-+                llama_vocab_n_tokens(vocab),
-+                seed,
-+                sampling->mirostat_entropy,
-+                sampling->mirostat_learning_rate,
-+                100));
-+    } else if (sampling->mirostat_mode == 2) {
-+        llama_sampler_chain_add(sampler, llama_sampler_init_mirostat_v2(
-+                seed,
-+                sampling->mirostat_entropy,
-+                sampling->mirostat_learning_rate));
-+    } else {
-+        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
-+    }
-+    ++session->sampling_rebuild_count;
-+    skippy_log_sampling_cache_metrics(session, "rebuild");
-+    return sampler;
-+}
-+
 +static bool skippy_ensure_plain_sampling_chain(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling) {
-+    if (session == nullptr || !skippy_sampling_enabled(sampling)) {
++    if (session == nullptr) {
 +        return false;
 +    }
 +
@@ -10177,7 +11139,7 @@ index 000000000..7126c40e5
 +    }
 +
 +    skippy_clear_chat_sampling(session);
-+    session->sampling_chain = skippy_build_sampling_chain(session, sampling);
++    skippy_initialize_chat_sampler(session, sampling, json::object(), nullptr);
 +    if (session->sampling_chain == nullptr) {
 +        return false;
 +    }
@@ -10205,219 +11167,42 @@ index 000000000..7126c40e5
 +            // row. Backend sampling accepts at most one row per sequence.
 +            !session->ctx->get_cparams().embeddings &&
 +            session->sampling_chain != nullptr &&
-+            session->grammar_sampler == nullptr &&
-+            session->reasoning_budget_sampler == nullptr &&
++            !session->sampling_has_grammar &&
++            !session->sampling_has_reasoning_budget &&
 +            skippy_sampling_is_greedy_equivalent(sampling)) {
 +        session->sampling_backend_enabled =
 +                llama_set_sampler(session->ctx, session->seq_id, session->sampling_chain);
 +    }
 +}
 +
-+bool skippy_init_chat_grammar_sampler(
-+        skippy_session * session,
-+        const json & metadata,
-+        struct skippy_error ** out_error) {
-+    const std::string grammar = metadata.value("grammar", std::string());
-+    if (grammar.empty()) {
-+        return true;
-+    }
-+
-+    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+    const bool grammar_lazy = metadata.value("grammar_lazy", false);
-+    session->grammar_lazy = grammar_lazy;
-+    std::vector<std::string> trigger_patterns_storage;
-+    std::vector<const char *> trigger_patterns;
-+    std::vector<llama_token> trigger_tokens;
-+    if (const auto triggers = metadata.find("grammar_triggers"); triggers != metadata.end() && triggers->is_array()) {
-+        for (const auto & trigger : *triggers) {
-+            const int type = trigger.value("type", -1);
-+            switch (type) {
-+                case 0:
-+                    if (trigger.contains("token")) {
-+                        trigger_tokens.push_back(static_cast<llama_token>(trigger.value("token", 0)));
-+                    }
-+                    break;
-+                case 1:
-+                    trigger_patterns_storage.push_back(skippy_regex_escape(trigger.value("value", std::string())));
-+                    break;
-+                case 2:
-+                    trigger_patterns_storage.push_back(trigger.value("value", std::string()));
-+                    break;
-+                case 3:
-+                {
-+                    std::string pattern = trigger.value("value", std::string());
-+                    if (pattern.empty()) {
-+                        pattern = "^$";
-+                    } else {
-+                        if (pattern.front() != '^') {
-+                            pattern.insert(pattern.begin(), '^');
-+                        }
-+                        if (pattern.back() != '$') {
-+                            pattern.push_back('$');
-+                        }
-+                    }
-+                    trigger_patterns_storage.push_back(std::move(pattern));
-+                    break;
-+                }
-+                default:
-+                    break;
-+            }
-+        }
-+    }
-+    trigger_patterns.reserve(trigger_patterns_storage.size());
-+    for (const auto & pattern : trigger_patterns_storage) {
-+        trigger_patterns.push_back(pattern.c_str());
-+    }
-+
-+    session->grammar_sampler = grammar_lazy ?
-+            llama_sampler_init_grammar_lazy_patterns(
-+                    vocab,
-+                    grammar.c_str(),
-+                    "root",
-+                    trigger_patterns.data(),
-+                    trigger_patterns.size(),
-+                    trigger_tokens.data(),
-+                    trigger_tokens.size()) :
-+            llama_sampler_init_grammar(vocab, grammar.c_str(), "root");
-+    if (session->grammar_sampler == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to initialize chat grammar sampler");
-+        return false;
-+    }
-+
-+    if (!grammar_lazy) {
-+        const std::string generation_prompt = metadata.value("generation_prompt", std::string());
-+        try {
-+            for (const llama_token token : skippy_tokenize_text(vocab, generation_prompt, false, true)) {
-+                llama_sampler_accept(session->grammar_sampler, token);
-+            }
-+        } catch (const std::exception & e) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, e.what());
-+            return false;
-+        } catch (...) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to prefill chat grammar sampler");
-+            return false;
-+        }
-+    }
-+    return true;
-+}
-+
-+bool skippy_init_chat_reasoning_budget_sampler(
-+        skippy_session * session,
-+        const skippy_sampling_config * sampling,
-+        const json & metadata,
-+        struct skippy_error ** out_error) {
-+    if (session == nullptr || sampling == nullptr) {
-+        return true;
-+    }
-+    const bool finite_budget = sampling->reasoning_budget_tokens >= 0;
-+    const bool supports_thinking = metadata.value("supports_thinking", false);
-+    const std::string start_tag = metadata.value("thinking_start_tag", std::string());
-+    const auto end_tags_json = metadata.find("thinking_end_tags");
-+    if (start_tag.empty() || end_tags_json == metadata.end() || !end_tags_json->is_array()) {
-+        if (finite_budget && supports_thinking) {
-+            skippy_set_error(
-+                    out_error,
-+                    SKIPPY_STATUS_INVALID_ARGUMENT,
-+                    "finite reasoning budget requires thinking start and end tags");
-+            return false;
-+        }
-+        return true;
-+    }
-+    const bool needs_sampler = finite_budget || session->grammar_lazy;
-+    if (!needs_sampler) {
-+        return true;
-+    }
-+    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+    const std::vector<llama_token> start_tokens = skippy_tokenize_text(vocab, start_tag, false, true);
-+    std::vector<std::vector<llama_token>> end_tokens;
-+    for (const auto & value : *end_tags_json) {
-+        if (!value.is_string()) {
-+            continue;
-+        }
-+        std::vector<llama_token> tokens = skippy_tokenize_text(vocab, value.get<std::string>(), false, true);
-+        if (!tokens.empty()) {
-+            end_tokens.push_back(std::move(tokens));
-+        }
-+    }
-+    if (start_tokens.empty() || end_tokens.empty()) {
-+        if (finite_budget && supports_thinking) {
-+            skippy_set_error(
-+                    out_error,
-+                    SKIPPY_STATUS_INVALID_ARGUMENT,
-+                    "finite reasoning budget requires non-empty tokenized thinking tags");
-+            return false;
-+        }
-+        return true;
-+    }
-+    const int32_t budget = sampling->reasoning_budget_tokens < 0
-+            ? std::numeric_limits<int32_t>::max()
-+            : sampling->reasoning_budget_tokens;
-+    session->reasoning_budget_sampler = common_reasoning_budget_init(
-+            vocab, {start_tokens}, end_tokens, end_tokens.front(), budget);
-+    if (session->reasoning_budget_sampler == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to initialize reasoning budget sampler");
-+        return false;
-+    }
-+    const std::string generation_prompt = metadata.value("generation_prompt", std::string());
-+    for (const llama_token token : skippy_tokenize_text(vocab, generation_prompt, false, true)) {
-+        llama_sampler_accept(session->reasoning_budget_sampler, token);
-+    }
-+    return true;
-+}
-+
 +llama_token skippy_sample_token_ith(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling,
 +        int32_t logits_index) {
-+    if (session == nullptr || session->ctx == nullptr ||
++    if (session == nullptr || session->reset_required || session->ctx == nullptr ||
 +            session->stage_model == nullptr || session->stage_model->model == nullptr) {
-+        return 0;
++        return LLAMA_TOKEN_NULL;
 +    }
-+    if (skippy_mtp_greedy_sampling_fastpath_enabled() &&
-+            !session->sampling_backend_enabled &&
-+            session->grammar_sampler == nullptr &&
-+            session->reasoning_budget_sampler == nullptr &&
-+            skippy_sampling_is_greedy_equivalent(sampling)) {
-+        if (session->sampling_chain != nullptr) {
-+            skippy_clear_chat_sampling(session);
-+        }
-+        const bool ignore_eog =
-+                sampling != nullptr &&
-+                (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0;
-+        return skippy_greedy_sample_context_with_eog_policy(
-+                session->stage_model->model,
-+                session->ctx,
-+                logits_index,
-+                ignore_eog);
-+    }
-+    if (session->sampling_chain != nullptr) {
-+        if (!session->chat_sampling_metadata.empty() ||
-+                (skippy_sampling_enabled(sampling) &&
-+                 session->sampling_config_valid &&
-+                 skippy_sampling_configs_equal(session->sampling_config, *sampling))) {
++    try {
++        if (session->sampler != nullptr &&
++                (!session->chat_sampling_metadata.empty() ||
++                 (skippy_sampling_enabled(sampling) && session->sampling_config_valid &&
++                  skippy_sampling_configs_equal(session->sampling_config, *sampling)))) {
 +            return skippy_chat_sample_token(session, logits_index);
 +        }
-+        skippy_clear_chat_sampling(session);
++        if (skippy_ensure_plain_sampling_chain(session, sampling)) {
++            return skippy_chat_sample_token(session, logits_index);
++        }
++    } catch (const std::exception & error) {
++        session->reset_required = true;
++        LLAMA_LOG_ERROR("%s: sampling failed: %s\n", __func__, error.what());
++    } catch (...) {
++        session->reset_required = true;
++        LLAMA_LOG_ERROR("%s: sampling failed\n", __func__);
 +    }
-+    if (!skippy_sampling_enabled(sampling)) {
-+        return skippy_greedy_sample_ith(session, logits_index);
-+    }
-+    if (skippy_ensure_plain_sampling_chain(session, sampling)) {
-+        return skippy_chat_sample_token(session, logits_index);
-+    }
-+    llama_synchronize(session->ctx);
-+
-+    llama_sampler * sampler = skippy_build_sampling_chain(session, sampling);
-+    if (sampler == nullptr) {
-+        return skippy_greedy_sample_ith(session, logits_index);
-+    }
-+
-+    for (const llama_token token : session->token_history) {
-+        llama_sampler_accept(sampler, token);
-+    }
-+    llama_token token = llama_sampler_sample(sampler, session->ctx, logits_index);
-+    llama_sampler_free(sampler);
-+    return token;
++    // Native callers translate the exhausted/error sentinel into skippy_status;
++    // neither exceptions nor an unconstrained fallback cross the C boundary.
++    return LLAMA_TOKEN_NULL;
 +}
 +
 +llama_token skippy_sample_token(
@@ -10425,12 +11210,196 @@ index 000000000..7126c40e5
 +        const skippy_sampling_config * sampling) {
 +    return skippy_sample_token_ith(session, sampling, -1);
 +}
+diff --git a/src/skippy/sampling_config.cpp b/src/skippy/sampling_config.cpp
+new file mode 100644
+index 000000000..b96b65745
+--- /dev/null
++++ b/src/skippy/sampling_config.cpp
+@@ -0,0 +1,178 @@
++#include "skippy/sampling_internal.h"
++#include "skippy/runtime_types.h"
++#include "../../common/common.h"
++#include "../../common/sampling.h"
++#include "../vendor/nlohmann/json.hpp"
++
++#include <algorithm>
++#include <cstring>
++#include <limits>
++#include <stdexcept>
++
++using json = nlohmann::ordered_json;
++
++static common_sampler_type sampler_type(uint32_t type) {
++    switch (type) {
++        case SKIPPY_SAMPLER_PENALTIES: return COMMON_SAMPLER_TYPE_PENALTIES;
++        case SKIPPY_SAMPLER_DRY: return COMMON_SAMPLER_TYPE_DRY;
++        case SKIPPY_SAMPLER_TOP_N_SIGMA: return COMMON_SAMPLER_TYPE_TOP_N_SIGMA;
++        case SKIPPY_SAMPLER_TOP_K: return COMMON_SAMPLER_TYPE_TOP_K;
++        case SKIPPY_SAMPLER_TYPICAL_P: return COMMON_SAMPLER_TYPE_TYPICAL_P;
++        case SKIPPY_SAMPLER_TOP_P: return COMMON_SAMPLER_TYPE_TOP_P;
++        case SKIPPY_SAMPLER_MIN_P: return COMMON_SAMPLER_TYPE_MIN_P;
++        case SKIPPY_SAMPLER_XTC: return COMMON_SAMPLER_TYPE_XTC;
++        case SKIPPY_SAMPLER_TEMPERATURE: return COMMON_SAMPLER_TYPE_TEMPERATURE;
++        default: throw std::invalid_argument("unknown Skippy sampler type");
++    }
++}
++
++static common_params_sampling sampling_params(const skippy_sampling_config * config, bool chat) {
++    common_params_sampling params;
++    params.no_perf = true;
++    params.min_keep = 0;
++    if (config != nullptr && (chat || (config->version != 0 && (config->flags & SKIPPY_SAMPLING_FLAG_ENABLED)))) {
++        params.reasoning_budget_tokens = config->reasoning_budget_tokens;
++        params.ignore_eos = config->ignore_eos != 0 || (config->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS);
++        params.logit_bias.assign(config->logit_bias,
++                config->logit_bias + std::min<uint32_t>(config->logit_bias_count, SKIPPY_MAX_LOGIT_BIAS));
++    }
++    if (config == nullptr || config->version == 0 || !(config->flags & SKIPPY_SAMPLING_FLAG_ENABLED)) {
++        params.samplers = {COMMON_SAMPLER_TYPE_TEMPERATURE};
++        params.temp = 0.0f;
++        return params;
++    }
++    if (skippy_sampling_is_greedy_equivalent(config)) {
++        params.samplers = {COMMON_SAMPLER_TYPE_TEMPERATURE};
++        params.temp = 0.0f;
++        return params;
++    }
++    params.seed = config->seed == 0 ? LLAMA_DEFAULT_SEED : config->seed;
++    params.top_k = config->top_k;
++    params.top_p = config->top_p;
++    params.min_p = config->min_p;
++    params.typ_p = config->typical_p;
++    params.top_n_sigma = config->top_nsigma;
++    params.temp = config->temperature;
++    params.dynatemp_range = config->dynatemp_range;
++    params.dynatemp_exponent = config->dynatemp_exponent;
++    params.penalty_last_n = config->penalty_last_n == 0 ? -1 : config->penalty_last_n;
++    params.penalty_repeat = config->repeat_penalty == 0.0f ? 1.0f : config->repeat_penalty;
++    params.penalty_freq = config->frequency_penalty;
++    params.penalty_present = config->presence_penalty;
++    params.dry_multiplier = config->dry_multiplier;
++    params.dry_base = config->dry_base;
++    params.dry_allowed_length = config->dry_allowed_length;
++    params.dry_penalty_last_n = config->dry_penalty_last_n;
++    params.xtc_probability = config->xtc_probability;
++    params.xtc_threshold = config->xtc_threshold;
++    params.mirostat = config->mirostat_mode;
++    params.mirostat_tau = config->mirostat_entropy;
++    params.mirostat_eta = config->mirostat_learning_rate;
++    params.reasoning_budget_tokens = config->reasoning_budget_tokens;
++    if (params.mirostat < 0 || params.mirostat > 2) {
++        throw std::invalid_argument("unknown Skippy mirostat mode");
++    }
++    params.logit_bias.assign(config->logit_bias,
++            config->logit_bias + std::min<uint32_t>(config->logit_bias_count, SKIPPY_MAX_LOGIT_BIAS));
++    params.ignore_eos = config->ignore_eos != 0 || (config->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS);
++    params.dry_sequence_breakers.clear();
++    for (uint32_t i = 0; i < std::min<uint32_t>(config->dry_sequence_breaker_count, SKIPPY_MAX_DRY_SEQUENCE_BREAKERS); ++i) {
++        const auto * begin = config->dry_sequence_breakers[i];
++        params.dry_sequence_breakers.emplace_back(begin,
++                std::find(begin, begin + SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES, '\0'));
++    }
++    params.samplers.clear();
++    if (config->sampler_count != 0) {
++        for (uint32_t i = 0; i < std::min<uint32_t>(config->sampler_count, SKIPPY_MAX_SAMPLERS); ++i) {
++            params.samplers.push_back(sampler_type(config->samplers[i]));
++        }
++    } else {
++        for (auto type : {COMMON_SAMPLER_TYPE_PENALTIES, COMMON_SAMPLER_TYPE_DRY,
++                COMMON_SAMPLER_TYPE_TOP_N_SIGMA, COMMON_SAMPLER_TYPE_TOP_K,
++                COMMON_SAMPLER_TYPE_TYPICAL_P, COMMON_SAMPLER_TYPE_TOP_P,
++                COMMON_SAMPLER_TYPE_MIN_P, COMMON_SAMPLER_TYPE_XTC, COMMON_SAMPLER_TYPE_TEMPERATURE}) {
++            if (type == COMMON_SAMPLER_TYPE_TYPICAL_P && !(params.typ_p > 0 && params.typ_p < 1)) { continue; }
++            if (type == COMMON_SAMPLER_TYPE_TOP_P && !(params.top_p > 0 && params.top_p < 1)) { continue; }
++            params.samplers.push_back(type);
++        }
++    }
++    return params;
++}
++
++static void chat_params(common_params_sampling & params, const llama_vocab * vocab, const json & metadata,
++        bool configure_reasoning) {
++    const auto grammar = metadata.value("grammar", std::string());
++    if (!grammar.empty()) {
++        params.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, grammar};
++    }
++    params.grammar_lazy = metadata.value("grammar_lazy", false);
++    params.generation_prompt = metadata.value("generation_prompt", std::string());
++    if (const auto triggers = metadata.find("grammar_triggers"); triggers != metadata.end() && triggers->is_array()) {
++        for (const auto & trigger : *triggers) {
++            const auto type = trigger.value("type", -1);
++            if (type < COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN || type > COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL) {
++                throw std::invalid_argument("unknown chat grammar trigger type");
++            }
++            // Preserve WORD text matching across token pieces. Normalizing it
++            // to one token ID would narrow the existing metadata contract.
++            params.grammar_triggers.push_back({static_cast<common_grammar_trigger_type>(type),
++                    trigger.value("value", std::string()), trigger.value("token", LLAMA_TOKEN_NULL)});
++        }
++    }
++    const auto start = metadata.value("thinking_start_tag", std::string());
++    const auto ends = metadata.find("thinking_end_tags");
++    if (configure_reasoning && !start.empty() && ends != metadata.end() && ends->is_array()) {
++        params.reasoning_budget_start = common_tokenize(vocab, start, false, true);
++        for (const auto & end : *ends) {
++            if (!end.is_string()) { continue; }
++            auto tokens = common_tokenize(vocab, end.get<std::string>(), false, true);
++            if (!tokens.empty()) { params.reasoning_budget_end.push_back(std::move(tokens)); }
++        }
++    }
++    if (params.reasoning_budget_start.empty() || params.reasoning_budget_end.empty()) {
++        if (configure_reasoning && params.reasoning_budget_tokens >= 0 && metadata.value("supports_thinking", false)) {
++            throw std::invalid_argument("finite reasoning budget requires non-empty thinking tags");
++        }
++        params.reasoning_budget_start.clear();
++        params.reasoning_budget_end.clear();
++    } else {
++        params.reasoning_budget_forced = params.reasoning_budget_end.front();
++    }
++    // common_sampler_init merges model suppression itself, but its callers
++    // supply EOG suppression for ignore_eos explicitly.
++    if (params.ignore_eos) {
++        for (llama_token token = 0; token < llama_vocab_n_tokens(vocab); ++token) {
++            if (llama_vocab_is_eog(vocab, token)) {
++                params.logit_bias.erase(std::remove_if(params.logit_bias.begin(), params.logit_bias.end(),
++                        [token](const llama_logit_bias & bias) { return bias.token == token; }), params.logit_bias.end());
++                params.logit_bias.push_back({token, -std::numeric_limits<float>::infinity()});
++            }
++        }
++    }
++}
++
++bool skippy_initialize_chat_sampler(skippy_session * session,
++        const skippy_sampling_config * config, const json & metadata, skippy_error **) {
++    auto params = sampling_params(config, !metadata.empty());
++    const auto * model = session->stage_model->model;
++    const auto * vocab = llama_model_get_vocab(model);
++    chat_params(params, vocab, metadata, config != nullptr);
++    // Upstream appends model suppression once; discard conflicting user
++    // entries first so a positive infinity cannot cancel negative infinity.
++    int32_t count = 0;
++    const auto * suppressed = llama_vocab_get_suppress_tokens(vocab, &count);
++    params.logit_bias.erase(std::remove_if(params.logit_bias.begin(), params.logit_bias.end(),
++            [suppressed, count](const llama_logit_bias & bias) {
++                return suppressed != nullptr && count > 0 &&
++                        std::find(suppressed, suppressed + count, bias.token) != suppressed + count;
++            }), params.logit_bias.end());
++    session->sampler = common_sampler_init(model, params);
++    if (session->sampler == nullptr) { return false; }
++    session->sampling_chain = common_sampler_get(session->sampler);
++    session->sampling_has_grammar = !params.grammar.empty();
++    session->sampling_has_reasoning_budget = !params.reasoning_budget_start.empty() &&
++            !params.reasoning_budget_end.empty() && (params.grammar_lazy || params.reasoning_budget_tokens >= 0);
++    session->grammar_lazy = params.grammar_lazy;
++    ++session->sampling_rebuild_count;
++    return true;
++}
 diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
 new file mode 100644
-index 000000000..e48653520
+index 000000000..7bbf16016
 --- /dev/null
 +++ b/src/skippy/sampling_internal.h
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,67 @@
 +#pragma once
 +
 +#include "skippy/common.h"
@@ -10475,23 +11444,20 @@ index 000000000..e48653520
 +// Keep exhausted sampling out of public outputs and subsequent decode inputs.
 +enum skippy_status skippy_store_sampled_token(
 +        llama_token token, llama_token * output, skippy_error ** out_error);
-+llama_sampler * skippy_build_sampling_chain(skippy_session * session, const skippy_sampling_config * sampling);
 +std::vector<llama_logit_bias> skippy_add_vocab_suppress_token_biases(
 +        std::vector<llama_logit_bias> biases,
 +        const llama_token * suppress_tokens,
 +        int32_t suppress_token_count);
 +void skippy_refresh_backend_sampling(skippy_session * session, const skippy_sampling_config * sampling);
++bool skippy_retire_backend_sampling(skippy_session * session, skippy_error ** out_error);
++bool skippy_sampling_is_greedy_equivalent(const skippy_sampling_config * sampling);
 +bool skippy_reuse_plain_chat_sampling(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling,
 +        const char * metadata_json,
 +        uint64_t prompt_token_count);
 +bool skippy_reset_reusable_sampling(skippy_session * session);
-+bool skippy_init_chat_grammar_sampler(
-+        skippy_session * session,
-+        const nlohmann::ordered_json & metadata,
-+        skippy_error ** out_error);
-+bool skippy_init_chat_reasoning_budget_sampler(
++bool skippy_initialize_chat_sampler(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling,
 +        const nlohmann::ordered_json & metadata,
@@ -10583,10 +11549,10 @@ index 000000000..baf83db44
 +}
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..a089530b0
+index 000000000..79bf1c8ae
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,539 @@
+@@ -0,0 +1,519 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -10643,20 +11609,6 @@ index 000000000..a089530b0
 +#include "skippy/speculative_internal.h"
 +#include "skippy/runtime_support.h"
 +#include "skippy/runtime_types.h"
-+
-+void skippy_disable_chat_grammar_after_exception(
-+        skippy_session * session,
-+        const char * operation,
-+        const char * message) {
-+    if (session == nullptr || session->grammar_sampler == nullptr) {
-+        return;
-+    }
-+    fprintf(stderr, "skippy: disabling chat grammar after %s failed: %s\n",
-+            operation != nullptr ? operation : "grammar operation",
-+            message != nullptr ? message : "unknown native exception");
-+    llama_sampler_free(session->grammar_sampler);
-+    session->grammar_sampler = nullptr;
-+}
 +
 +enum skippy_status skippy_require_usable_session(
 +        const skippy_session * session,
@@ -10916,34 +11868,28 @@ index 000000000..a089530b0
 +        skippy_clear_chat_sampling(session);
 +        return skippy_success(out_error);
 +    }
-+    if (skippy_reuse_plain_chat_sampling(
-+            session, sampling, metadata_json, prompt_token_count)) {
-+        return skippy_success(out_error);
-+    }
-+
 +    try {
++        if (skippy_reuse_plain_chat_sampling(session, sampling, metadata_json, prompt_token_count)) {
++            return skippy_success(out_error);
++        }
 +        json metadata = json::parse(metadata_json);
 +        skippy_clear_chat_sampling(session);
-+        session->sampling_chain = skippy_build_sampling_chain(session, sampling);
-+        if (session->sampling_chain == nullptr) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to initialize chat sampling chain");
-+            return SKIPPY_STATUS_RUNTIME_ERROR;
-+        }
 +        session->chat_sampling_metadata = metadata_json;
 +        session->sampling_config = sampling != nullptr ?
 +                *sampling : skippy_sampling_config{};
 +        session->sampling_config_valid = true;
 +        session->grammar_generated_start = prompt_token_count;
 +        session->sampling_accepted_token_count = 0;
-+        if (!skippy_init_chat_grammar_sampler(session, metadata, out_error)) {
++        if (!skippy_initialize_chat_sampler(session, sampling, metadata, out_error)) {
 +            skippy_clear_chat_sampling(session);
-+            return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
-+        }
-+        if (!skippy_init_chat_reasoning_budget_sampler(session, sampling, metadata, out_error)) {
-+            skippy_clear_chat_sampling(session);
-+            return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to initialize chat sampler");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
 +        }
 +        skippy_refresh_backend_sampling(session, sampling);
++    } catch (const std::invalid_argument & e) {
++        skippy_clear_chat_sampling(session);
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, e.what());
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    } catch (const std::exception & e) {
 +        skippy_clear_chat_sampling(session);
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, e.what());
@@ -15938,10 +16884,10 @@ index 000000000..54753a161
 +} // extern "C"
 diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
 new file mode 100644
-index 000000000..e078d867c
+index 000000000..0812485d7
 --- /dev/null
 +++ b/src/skippy/verification.cpp
-@@ -0,0 +1,270 @@
+@@ -0,0 +1,256 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -16079,21 +17025,8 @@ index 000000000..e078d867c
 +        }
 +    }
 +
-+    if (skippy_runtime_is_terminal_stage(&session->stage_model->config) && session->sampling_backend_enabled) {
-+        // Backend (in-graph) sampling permits at most one output row per
-+        // sequence per decode, but sampled verification must output every row
-+        // of the window, so llama_decode would reject the batch outright.
-+        // Detach the backend sampler and fall back to CPU-chain sampling for
-+        // this session: the chain itself is untouched and the row sampling
-+        // below consumes it through skippy_sample_token_ith. This chain stays
-+        // retired; only building a fresh chain permits backend offload again.
-+        llama_set_sampler(session->ctx, session->seq_id, nullptr);
-+        session->sampling_backend_enabled = false;
-+        // The detached chain has already been backend-initialized and
-+        // llama_sampler_chain_backend_init asserts on reuse, so retire it
-+        // from offload for the rest of its lifetime; a rebuilt chain may
-+        // offload again.
-+        session->sampling_backend_retired = true;
++    if (!skippy_retire_backend_sampling(session, out_error)) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
 +
 +    const bool activation_input = skippy_is_filtered(session) && session->stage_model->config.layer_start > 0;
@@ -16167,8 +17100,7 @@ index 000000000..e078d867c
 +        session->token_history.resize(history_size_before_verification);
 +        // Any stateful sampler (grammar, penalties, or RNG) must not absorb
 +        // tokens from a rejected suffix.
-+        const bool stop_after_first_mismatch =
-+                session->grammar_sampler != nullptr || session->sampling_chain != nullptr;
++        const bool stop_after_first_mismatch = true;
 +        bool proposal_mismatched = false;
 +        for (size_t i = 0; i < token_count; ++i) {
 +            skippy_record_tokens(session, &token_ids[i], 1);

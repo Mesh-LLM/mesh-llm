@@ -17,19 +17,21 @@ using json = nlohmann::ordered_json;
 
 int main(int argc, char ** argv) {
     try {
-        if (argc != 7) { throw std::runtime_error("usage: controller BASELINE CANDIDATE MODEL INPUT_DIR OUTPUT_DIR prerequisite|diagnostic|development|qualification"); }
+        if (argc != 7) { throw std::runtime_error("usage: controller BASELINE CANDIDATE MODEL INPUT_DIR OUTPUT_DIR prerequisite|correctness|diagnostic|development|qualification"); }
         const std::string phase = argv[6];
         const bool diagnostic = phase == "diagnostic";
-        if (phase != "prerequisite" && !diagnostic && phase != "development" && phase != "qualification") { throw std::runtime_error("unknown phase"); }
+        if (phase != "prerequisite" && phase != "correctness" && !diagnostic && phase != "development" && phase != "qualification") { throw std::runtime_error("unknown phase"); }
         const std::filesystem::path out = argv[5];
         std::filesystem::create_directories(out);
         worker baseline(argv[1], argv[3], argv[4]);
         worker candidate(argv[2], argv[3], argv[4]);
         if (baseline.ready.at("fixtures") != candidate.ready.at("fixtures")) { throw std::runtime_error("A/B/C fixture identity mismatch"); }
         std::ofstream(out / "admitted-fixtures.json") << baseline.ready.at("fixtures").dump(2) << '\n';
-        if (phase == "prerequisite") {
-            baseline.call({{"action", "capture"}});
+        if (phase == "prerequisite" || phase == "correctness") {
+            if (phase == "prerequisite") { baseline.call({{"action", "capture"}}); }
             std::ofstream(out / "correctness.json") << candidate.call({{"action", "correctness"}}).dump(2) << '\n';
+            candidate.finish();
+            baseline.finish();
             return 0;
         }
         const int blocks = diagnostic ? 6 : (phase == "development" ? 5 : 30);

@@ -51,7 +51,7 @@ static void verify_case(skippy_model * model, bool lazy, bool reject, bool stoch
     ok(status, error);
     require(session->verify_checkpoints.empty(), "verify checkpoint leak");
     require(session->token_history == expected_history, "trim changed the accepted prefix");
-    if (session->grammar_sampler == nullptr) {
+    if (session->sampler == nullptr) {
         // A recurrent checkpoint restore can invalidate the cached sampler.
         // Reconfigure as the serving host does, then replay committed history.
         error = nullptr;
@@ -63,7 +63,7 @@ static void verify_case(skippy_model * model, bool lazy, bool reject, bool stoch
     status = skippy_decode_step_sampled(session, reject ? 43 : 44, &sampling,
         nullptr, 0, nullptr, 0, &bytes, &next, &error);
     ok(status, error);
-    require(session->grammar_sampler != nullptr, "grammar disabled after recovery");
+    require(session->sampler != nullptr && session->sampling_has_grammar, "grammar disabled after recovery");
     require(reject ? next == 44 : llama_vocab_is_eog(llama_model_get_vocab(model->model), next), "incorrect continuation after verification");
     error = nullptr;
     status = skippy_session_free(session, &error);

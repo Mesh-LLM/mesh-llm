@@ -1,9 +1,17 @@
 # Grammar sampler A/B/C experiment
 
 This experiment compares the existing Skippy sampler (A), the real llama.cpp
-`common_sampler_sample` entrypoint (B), and Skippy with sampling-first grammar
-validation (C). The owning native patch remains `0002`; its logprobs-dependent
-patch is refreshed for the extracted `chat_sampling` module.
+`common_sampler_sample` entrypoint (B), and Skippy's public
+`skippy_session_sample_current` ABI backed by the same upstream sampler (C).
+The candidate retains the conservative literal-trigger matcher and WORD trigger
+semantics. The owning native patch remains `0002`; build, tests, backend-retirement
+and logprobs owners are refreshed in place.
+
+The upstream-backed candidate is a new configuration requiring fresh correctness
+and performance qualification. Historical sampling-first and process-control
+results do not qualify it. `correctness` controller mode reuses the admitted
+captured inputs without recapturing them. Build only the new candidate with
+`just grammar-sampling-candidate-build` when reusing the frozen reference worker.
 
 The user selected **JY-only measurements on Apple M6**, using Qwen3.5-9B Q4_K_M
 because the available M6 nodes have 24 GB memory. The exact model, controls and
@@ -13,8 +21,9 @@ decode speed or Max agent latency.
 `runner.cpp` calls the production entrypoints without reproducing their algorithms.
 Both arms use identically configured native llama contexts. Five synthetic cases
 cover the actual model-generated lazy tool grammar, an HTML file argument,
-Unicode, forced proposal rejection, closing delimiters and EOS. One baseline
-process serves A/B; a second process serves C. Only one computes at a time.
+Unicode, forced proposal rejection, closing delimiters and EOS. A and B use the frozen
+reference binary in separate fresh lifetimes. C uses its own fresh process. Only
+one model is resident at a time; loading and fixed warmup are outside timing.
 
 The prerequisite phase captures teacher-forced model logits once. The restricted
 grammar case deliberately makes an invalid proposal most likely; other cases
@@ -24,7 +33,11 @@ isolates sampler cost from different model outputs. Matched decode uses the same
 teacher-forced sequence and includes native decoding and sampling; a separate
 free-running check requires seeded B/C token decisions to match.
 
-`controller.cpp` preserves raw per-token timings in balanced A/B/C block order.
+`fresh_controller.cpp` runs independent arm lifetimes in balanced A/B/C order.
+Each fresh process completes three full warmup blocks before its measured block.
+The triplet is the independent statistical unit. Qualification retains three
+fixed ten-block chunks and audits all 30 together; chunk outcomes never select
+which samples enter the analysis.
 `audit.cpp` checks completeness, decisions and thermal observations, and computes
 paired confidence bounds. Speed qualification is separate from external identity,
 MTP correctness, co-tenancy and MLflow readback gates. No PR is authorized until

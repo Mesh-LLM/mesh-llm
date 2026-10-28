@@ -189,7 +189,11 @@ void configure_session(skippy_session & session, const fixture & input, uint32_t
     const std::string message = error ? error->message : "sampling configuration failed";
     skippy_error_free(error);
     require(status == SKIPPY_STATUS_OK, message);
+#ifdef SKIPPY_EVAL_COMMON_SAMPLER
+    require(session.sampler != nullptr && session.sampling_has_grammar && !session.sampling_backend_enabled, "grammar/backend configuration mismatch");
+#else
     require(session.grammar_sampler != nullptr && !session.sampling_backend_enabled, "grammar/backend configuration mismatch");
+#endif
 }
 
 json fixture_manifest(const std::vector<fixture> & inputs) {

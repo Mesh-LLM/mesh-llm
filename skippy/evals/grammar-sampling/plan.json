@@ -1,8 +1,8 @@
 {
   "campaign": "max-grammar-sampling-abc-20261028",
-  "protocol_revision": 6,
-  "question": "Can Skippy avoid full-vocabulary grammar filtering on valid proposals while matching llama.cpp performance and tool-call correctness?",
-  "proposal": "Use upstream's sampling-first, single-token grammar validation and grammar-first fallback in Skippy's native chat sampler. Preserve lazy triggers, reasoning-budget handling, accepted-token history and MTP rejection recovery. Initialize the reused candidate array in a helper with by-value loop inputs, avoiding the reference-capturing lambda that prevented M6 vectorization. Do not disable grammar or change Max tool policy. Move evaluator grammar-validity assertions outside the timed interval. Before another production change, compare the unchanged revision-4 native sampler with llama.cpp in both baseline and candidate binaries using a diagnostic-only balanced control. Add conservative literal substring matching in llama_grammar_trigger_pattern::find for nonempty printable ASCII patterns without regex metacharacters/backslashes and with default ECMAScript flags. Retain regex construction and all regex fallback behavior. Preserve WORD-trigger activation across multiple token pieces; do not convert WORD triggers to TOKEN triggers.",
+  "protocol_revision": 8,
+  "question": "Can the public Skippy sampling ABI delegate to actual upstream common_sampler, improve on existing Skippy, and remain within 1% of frozen llama B?",
+  "proposal": "Replace Skippy sampler orchestration and candidate-buffer ownership with actual common_sampler_init/accept/sample/reset/free. Keep a thin Skippy ABI adapter for configuration, committed history, CPU/backend transitions and raw logprobs. Compile the upstream implementation once in llama, retain performance reporting in llama-common, and preserve split-piece WORD triggers with the carried literal matcher. No public ABI signature changes.",
   "execution": {
     "measurement_location": "JY only",
     "local_measurements_permitted": false,
@@ -33,7 +33,7 @@
       "policy": "Real common_sampler_sample with its default grammar_first=false"
     },
     "C": {
-      "name": "Skippy sampling-first candidate",
+      "name": "Public Skippy ABI backed by upstream common_sampler",
       "product_base": "3947de0cbc73fe5cbcaae548b297f03a401532d7",
       "policy": "Proposed fix; executed commit and binary hashes must be frozen before dispatch"
     }
@@ -76,7 +76,7 @@
       "distribution"
     ],
     "adapter": "Both native arms use the same llama_context configuration and directly exercise the production sampler entrypoints. Prompt history is settled before timing; generated history is settled inside the next timed sample. Matched decode is teacher-forced to remove output-length and logit-input confounds. This is not a Max end-to-end benchmark. Evaluator grammar-validity checks run after elapsed-time capture; failed checks still invalidate the job.",
-    "resident_processes": "One baseline process serves A/B and one candidate process serves C. Both remain resident; only one computes at a time. This avoids model loading between paired blocks.",
+    "resident_processes": "One fresh worker per arm per independent triplet block. A and B use the same frozen binary in separate lifetimes. C uses its frozen candidate binary. Arms execute sequentially, with at most one model resident; each gets three complete warmup blocks before its measured block. Fixed ABC,BCA,CAB,CBA,ACB,BAC order cycles by global block index.",
     "native_sampler_perf_counters": "Disabled in all arms. Skippy uses llama_sampler_chain_default_params.no_perf=true; the reference explicitly sets common_params_sampling.no_perf=true. Only the evaluator monotonic timers measure sampling."
   },
   "workloads": {
@@ -113,14 +113,15 @@
     "exclusions": "No outcome-based sample removal. Wrong inputs, identity mismatch, failed correctness, missing arm/block, concurrent JY job on the chosen node or observed thermal throttling invalidates the affected qualification job; retain it and run a new complete job. Missing required observations fail closed.",
     "fixed_input_repetitions_per_cell": 4,
     "decode_repetitions_per_cell": 1,
-    "warmup_definition": "Three discarded complete blocks before each measurement phase, with the same per-cell repetition counts.",
+    "warmup_definition": "Three discarded complete warmup blocks inside every fresh arm lifetime, using four fixed-input repetitions and one decode repetition per case; fresh arm process per triplet block.",
     "development_overlap": "All five synthetic cases are shared between screening and qualification. The 30 qualification timing blocks are fresh; do not describe repeats as independent dataset samples.",
     "development_reference": "Revision 2's planned five-block screen was stopped incomplete before outcome inspection. Revision 3 completed 30 fresh blocks and failed the sampler gate despite improving existing Skippy. Revision 4 requires its own verified build/correctness and five-block screen before 30 new qualification blocks. No earlier timing is reused. Revision 4 passed correctness but failed its five-block screen: aggregate sampler C/B 1.008926, upper 1.011759; lazy case 1.018528, upper 1.023724. Revision 5 first diagnoses unchanged native revision-4 code under the corrected timing boundary; no historical timing can qualify it.",
     "screen_advancement": "The five-block audit must pass within_one_percent and improves_existing. qualified_speed remains false until a separate 30-block qualification passes. Every original correctness, source, hardware, confidence and 1% gate remains mandatory.",
-    "screen_prerequisite": "First verify the revision-5 diagnostic and apply diagnostic-decisions.json. If an independent-process follow-up is triggered, do not advance this candidate screen until that control is verified and any resulting process policy is frozen in a new protocol. Frozen baseline B remains primary; no normalization or comparator substitution."
+    "screen_prerequisite": "R7 verified the persistent B/R offset and read-only source investigation identified binary-plus-mixed-workload confounding without establishing a layout defect. This revision removes A/B and B/C shared worker history. R stays diagnostic only; no tight R/B parity requirement, normalization or comparator promotion. Fresh public-ABI correctness must pass before the five-block screen.",
+    "qualification_partition": "After a passing five-block screen, retain three predetermined qualification jobs with disjoint global blocks 0-9,10-19,20-29. All 30 triplets form one qualification audit. Every chunk must pass identity, correctness, thermal and co-tenancy checks; no optional stopping or per-chunk sample removal. A failed job invalidates this qualification attempt."
   },
   "qualification": {
-    "correctness": "All grammar/lazy-trigger/Unicode/fallback/EOS tests and MTP acceptance, rejection and checkpoint cleanup must pass. B/C seeded decision/state comparisons must pass under the admitted matching sampler configuration; any intentional semantic difference requires a new protocol revision before measurement. The candidate also runs 16 focused native tests: the previous 13 plus grammar parser, grammar integration and a differential literal-trigger test covering partial spellings, UTF-8 input pieces, embedded NUL input, regex escapes, captures, anchors and nondefault flags.",
+    "correctness": "All grammar/lazy-trigger/Unicode/fallback/EOS tests and MTP acceptance, rejection and checkpoint cleanup must pass. B/C seeded decision/state comparisons must pass under the admitted matching sampler configuration; any intentional semantic difference requires a new protocol revision before measurement. The candidate also runs 16 focused native tests: the previous 13 plus grammar parser, grammar integration and a differential literal-trigger test covering partial spellings, UTF-8 input pieces, embedded NUL input, regex escapes, captures, anchors and nondefault flags. Revision 8 additionally covers malformed configuration without process abort, finite-budget tag validation, duplicate positive-infinity EOG bias override, cloned candidate-buffer independence, backend-to-CPU verification retirement and late backend attachment through the public ABI.",
     "sampler_against_llama": "Upper one-sided 95% confidence bound of C/B sampler latency ratio <= 1.01, including per-case results",
     "decode_against_llama": "Lower one-sided 95% confidence bound of C/B decode-throughput ratio >= 0.99",
     "win_against_existing": "C must improve on A with a paired confidence bound demonstrating the direction of the improvement; report native sampling and decode separately",
@@ -169,6 +170,6 @@
     "source_commit": "983f2aad129270dea4d172bff9441d2195a86d9a",
     "decision_map": "diagnostic-decisions.json",
     "job_id": "job_fxd7jt5v9ek6m1v",
-    "status": "Pending verified execution; no performance evidence reused."
+    "status": "Finished and verified; R5 and R7 are diagnostic only and do not qualify the upstream-backed candidate."
   }
 }

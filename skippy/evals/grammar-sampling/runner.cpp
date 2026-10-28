@@ -1,4 +1,5 @@
 #include "fixtures.h"
+#include "skippy/chat_sampling.h"
 
 #include <algorithm>
 #include <chrono>
@@ -32,10 +33,12 @@ struct samplers {
             session.ctx = runtime.ctx;
             configure_session(session, input, seed);
             // Both host adapters settle prompt history before measuring decode.
-            for (auto token : input.prompt) {
-                llama_sampler_accept(session.sampling_chain, token);
-            }
+#ifdef SKIPPY_EVAL_COMMON_SAMPLER
+            skippy_chat_accept_history(&session);
+#else
+            for (auto token : input.prompt) { llama_sampler_accept(session.sampling_chain, token); }
             session.sampling_accepted_token_count = input.prompt.size();
+#endif
         }
     }
 
@@ -54,7 +57,9 @@ struct samplers {
         if (have_pending) {
             session.token_history.push_back(pending);
         }
-        auto token = skippy_sample_token_ith(&session, &config, -1);
+        llama_token token = LLAMA_TOKEN_NULL;
+        const auto status = skippy_session_sample_current(&session, &config, &token, nullptr);
+        if (status != SKIPPY_STATUS_OK) { return LLAMA_TOKEN_NULL; }
         return token;
     }
 };
@@ -155,7 +160,11 @@ static json measure(native_runtime & rt, const fixture & input, const std::files
             }
             const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now() - start).count();
             if (!sample.upstream) {
+#ifdef SKIPPY_EVAL_COMMON_SAMPLER
+                require(sample.session.sampler != nullptr && sample.session.sampling_has_grammar, "grammar unexpectedly disabled");
+#else
                 require(sample.session.grammar_sampler != nullptr, "grammar unexpectedly disabled");
+#endif
             }
             require(selected >= 0 && selected < llama_vocab_n_tokens(rt.vocab), "invalid sampled token");
             times.push_back(ns);

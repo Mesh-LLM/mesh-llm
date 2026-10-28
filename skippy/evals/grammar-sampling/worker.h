@@ -3,6 +3,7 @@
 #include "json.hpp"
 
 #include <cstdio>
+#include <cerrno>
 #include <cstdlib>
 #include <fcntl.h>
 #include <stdexcept>
@@ -60,13 +61,22 @@ struct worker {
         return read();
     }
 
-    ~worker() {
-        if (input) { fclose(input); }
-        if (output) { fclose(output); }
+    void finish() {
+        if (input) { fclose(input); input = nullptr; }
+        if (output) { fclose(output); output = nullptr; }
         if (pid > 0) {
             int status = 0;
-            waitpid(pid, &status, 0);
+            pid_t exited;
+            do { exited = waitpid(pid, &status, 0); } while (exited < 0 && errno == EINTR);
+            pid = -1;
+            if (exited < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+                throw std::runtime_error("worker failed during shutdown");
+            }
         }
+    }
+
+    ~worker() {
+        try { finish(); } catch (...) { }
     }
 };
 

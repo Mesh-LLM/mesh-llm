@@ -1,4 +1,4 @@
-From 229c259e6d7bfbbe4fcfbf5a52b5766a15c496ac Mon Sep 17 00:00:00 2001
+From 772898c95835cb981bcb293039c92055149ff347 Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
 Subject: [PATCH] skippy: record per-token logprobs while sampling
@@ -20,12 +20,12 @@ as unreadable instead of being read from a stale row. ABI 0.1.72 -> 0.1.73.
  src/CMakeLists.txt             |  1 +
  src/skippy/logprobs.cpp        | 94 ++++++++++++++++++++++++++++++++++
  src/skippy/runtime_types.h     |  2 +
- src/skippy/sampling.cpp        | 25 +++++++++
+ src/skippy/sampling.cpp        | 21 +++++++-
  src/skippy/sampling_internal.h |  7 +++
  src/skippy/session.cpp         |  1 +
  src/skippy/state.cpp           |  1 +
  src/skippy/workloads.cpp       |  1 +
- 12 files changed, 198 insertions(+), 1 deletion(-)
+ 12 files changed, 193 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/logprobs.h
  create mode 100644 src/skippy/logprobs.cpp
 
@@ -42,7 +42,7 @@ index 4e33847d9..9497734b7 100644
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 53326a4e7..f233bb47f 100644
+index 53326a4e7..4214d0b89 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -143,11 +143,11 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 925bee6a9..de2d696c3 100644
+index db4a3d8a4..97aafb91e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -71,6 +71,7 @@ add_library(llama
-             skippy/sampling.cpp
+@@ -82,6 +82,7 @@ add_library(llama
+             skippy/sampling_config.cpp
              skippy/chat_sampling.cpp
              skippy/sampling_vocab.cpp
 +            skippy/logprobs.cpp
@@ -255,10 +255,10 @@ index 000000000..43260dfc2
 +    return skippy_success(out_error);
 +}
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index c8e372a2d..7089b198b 100644
+index 0003f3162..b87d09214 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -138,6 +138,8 @@ struct skippy_session {
+@@ -140,6 +140,8 @@ struct skippy_session {
      int32_t preserve_prefix_tokens = 0;
      std::vector<llama_token> token_history;
      std::vector<skippy_token_signal> signal_history;
@@ -268,61 +268,59 @@ index c8e372a2d..7089b198b 100644
      std::vector<int32_t> prefill_n_seq_ids;
      std::vector<llama_seq_id> prefill_seq_ids;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 04d6eaa5f..afc93f704 100644
+index 035aa0747..5ae58b53c 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -460,6 +460,10 @@ static bool skippy_sampling_chain_is_reusable_for(
+@@ -423,6 +423,9 @@ static bool skippy_sampling_chain_is_reusable_for(
              session->sampling_backend_retired) {
          return false;
      }
-+    // A chain attached to the backend hides the raw logits a logprobs request reads.
 +    if (session->sampling_backend_enabled && skippy_sampling_wants_logprobs(sampling)) {
 +        return false;
 +    }
      if (sampling != nullptr &&
              skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
          return true;
-@@ -813,6 +817,8 @@ void skippy_refresh_backend_sampling(
+@@ -548,13 +551,14 @@ void skippy_refresh_backend_sampling(
              session->sampling_chain != nullptr &&
-             session->grammar_sampler == nullptr &&
-             session->reasoning_budget_sampler == nullptr &&
-+            // In-graph sampling skips copying the raw logits that logprobs read.
+             !session->sampling_has_grammar &&
+             !session->sampling_has_reasoning_budget &&
 +            !skippy_sampling_wants_logprobs(sampling) &&
              skippy_sampling_is_greedy_equivalent(sampling)) {
          session->sampling_backend_enabled =
                  llama_set_sampler(session->ctx, session->seq_id, session->sampling_chain);
-@@ -971,10 +977,29 @@ bool skippy_init_chat_reasoning_budget_sampler(
-     return true;
+     }
  }
  
+-llama_token skippy_sample_token_ith(
 +static llama_token skippy_sample_token_ith_impl(
-+        skippy_session * session,
-+        const skippy_sampling_config * sampling,
-+        int32_t logits_index);
-+
- llama_token skippy_sample_token_ith(
          skippy_session * session,
          const skippy_sampling_config * sampling,
          int32_t logits_index) {
-+    // A logprobs request does not attach backend (in-graph) sampling, but a lane
-+    // may still carry a sampler a previous request attached, until this call
-+    // detaches it. Such a decode skipped copying the raw logits row, so that
-+    // token's entry is recorded as unreadable rather than read from a stale row.
-+    const bool raw_logits_valid = session == nullptr || !session->sampling_backend_enabled;
-+    const llama_token token = skippy_sample_token_ith_impl(session, sampling, logits_index);
-+    skippy_record_token_logprobs(session, sampling, logits_index, token, raw_logits_valid);
-+    return token;
-+}
-+
-+static llama_token skippy_sample_token_ith_impl(
+@@ -584,6 +588,21 @@ llama_token skippy_sample_token_ith(
+     return LLAMA_TOKEN_NULL;
+ }
+ 
++llama_token skippy_sample_token_ith(
 +        skippy_session * session,
 +        const skippy_sampling_config * sampling,
 +        int32_t logits_index) {
-     if (session == nullptr || session->ctx == nullptr ||
-             session->stage_model == nullptr || session->stage_model->model == nullptr) {
-         return 0;
++    try {
++        const bool raw_logits_valid = session == nullptr || !session->sampling_backend_enabled;
++        const llama_token token = skippy_sample_token_ith_impl(session, sampling, logits_index);
++        skippy_record_token_logprobs(session, sampling, logits_index, token, raw_logits_valid);
++        return token;
++    } catch (...) {
++        if (session != nullptr) { session->reset_required = true; }
++        return LLAMA_TOKEN_NULL;
++    }
++}
++
+ llama_token skippy_sample_token(
+         skippy_session * session,
+         const skippy_sampling_config * sampling) {
 diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
-index e48653520..287cd99af 100644
+index 7bbf16016..81bc26ff5 100644
 --- a/src/skippy/sampling_internal.h
 +++ b/src/skippy/sampling_internal.h
 @@ -18,6 +18,13 @@ struct skippy_session;
@@ -340,10 +338,10 @@ index e48653520..287cd99af 100644
          skippy_session * session,
          const llama_token * token_ids,
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 1136d8fe5..9f9887091 100644
+index e718b3e28..17cd13db1 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -398,6 +398,7 @@ enum skippy_status skippy_session_reset(
+@@ -378,6 +378,7 @@ enum skippy_status skippy_session_reset(
          session->token_history.clear();
      }
      session->signal_history.clear();

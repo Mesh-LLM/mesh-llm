@@ -1,41 +1,41 @@
-From 63ba0c77a543bafaf4ce2c4aa9de524538c77425 Mon Sep 17 00:00:00 2001
+From bc711264ee6c876c9a73ab7ebe02e8732eb76285 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] build(skippy): wire native runtime and backend support
 
 ---
  CMakeLists.txt                             |  17 +
- common/CMakeLists.txt                      |   3 +-
+ common/CMakeLists.txt                      |  40 +-
  common/chat-auto-parser-generator.cpp      |  51 +-
  common/chat-diff-analyzer.cpp              |  10 +-
  common/chat-peg-parser.cpp                 |  15 +-
  common/chat-peg-parser.h                   |   2 +-
- common/chat.cpp                            | 126 ++++-
+ common/chat.cpp                            | 126 +++-
  common/chat.h                              |   5 +-
- common/ngram-cache.cpp                     | 158 +++++-
- common/peg-parser.cpp                      | 337 +++++++++++
+ common/ngram-cache.cpp                     | 158 ++++-
+ common/peg-parser.cpp                      | 337 ++++++++++
  common/peg-parser.h                        |   8 +
  common/reasoning-budget.cpp                | 119 ++--
  common/reasoning-budget.h                  |  16 +-
- common/stage-chat.cpp                      | 363 ++++++++++++
+ common/stage-chat.cpp                      | 363 +++++++++++
  ggml/cmake/common.cmake                    |   9 +-
  ggml/include/ggml-backend.h                |  27 +
  ggml/src/ggml-backend.cpp                  |  25 +-
- ggml/src/ggml-cuda/cachegen.cu             | 223 ++++++++
+ ggml/src/ggml-cuda/cachegen.cu             | 223 +++++++
  ggml/src/ggml-cuda/cachegen.cuh            |  27 +
  ggml/src/ggml-cuda/ggml-cuda.cu            | 344 ++++++++++-
  ggml/src/ggml-cuda/vendors/hip.h           |   1 +
  ggml/src/ggml-metal/CMakeLists.txt         |   1 +
  ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
- ggml/src/ggml-metal/ggml-metal-device.m    | 452 ++++++++++++++-
+ ggml/src/ggml-metal/ggml-metal-device.m    | 452 +++++++++++++-
  ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
- ggml/src/ggml-metal/kernels/cachegen.metal | 195 +++++++
- src/CMakeLists.txt                         | 630 ++++++++++++++++++++-
+ ggml/src/ggml-metal/kernels/cachegen.metal | 195 ++++++
+ src/CMakeLists.txt                         | 680 ++++++++++++++++++++-
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3134 insertions(+), 127 deletions(-)
+ 31 files changed, 3184 insertions(+), 164 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -84,22 +84,34 @@ index 12f45558f..3edaa3e74 100644
  if (LLAMA_BUILD_COMMON)
      install(TARGETS llama-common LIBRARY)
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 2b307c59d..650e14517 100644
+index 2b307c59d..7e6b889ee 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
-@@ -101,10 +101,10 @@ add_library(${TARGET}
+@@ -86,10 +86,7 @@ add_library(${TARGET}
+     json-schema-to-grammar.cpp
+     json-schema.cpp
+     json-schema.h
+-    json.cpp
+     json.h
+-    llguidance.cpp
+-    log.cpp
+     log.h
+     ngram-cache.cpp
+     ngram-cache.h
+@@ -101,10 +98,10 @@ add_library(${TARGET}
      peg-parser.h
      preset.cpp
      preset.h
 -    reasoning-budget.cpp
      reasoning-budget.h
-     sampling.cpp
+-    sampling.cpp
      sampling.h
++    sampling-report.cpp
 +    stage-chat.cpp
      speculative.cpp
      speculative.h
      subproc.cpp
-@@ -143,6 +143,7 @@ endif()
+@@ -143,6 +140,7 @@ endif()
  
  if (BUILD_SHARED_LIBS)
      set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -107,6 +119,43 @@ index 2b307c59d..650e14517 100644
  
      # TODO: make fine-grained exports in the future
      set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+@@ -151,36 +149,4 @@ endif()
+ target_link_libraries(${TARGET} PUBLIC  llama-common-base)
+ target_link_libraries(${TARGET} PRIVATE cpp-httplib)
+ 
+-if (LLAMA_LLGUIDANCE)
+-    include(ExternalProject)
+-    set(LLGUIDANCE_SRC ${CMAKE_BINARY_DIR}/llguidance/source)
+-    set(LLGUIDANCE_PATH ${LLGUIDANCE_SRC}/target/release)
+-    set(LLGUIDANCE_LIB_NAME "${CMAKE_STATIC_LIBRARY_PREFIX}llguidance${CMAKE_STATIC_LIBRARY_SUFFIX}")
+-
+-    ExternalProject_Add(llguidance_ext
+-        GIT_REPOSITORY https://github.com/guidance-ai/llguidance
+-        # v1.0.1:
+-        GIT_TAG d795912fedc7d393de740177ea9ea761e7905774
+-        PREFIX ${CMAKE_BINARY_DIR}/llguidance
+-        SOURCE_DIR ${LLGUIDANCE_SRC}
+-        BUILD_IN_SOURCE TRUE
+-        CONFIGURE_COMMAND ""
+-        BUILD_COMMAND cargo build --release --package llguidance
+-        INSTALL_COMMAND ""
+-        BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_PATH}/llguidance.h
+-        UPDATE_COMMAND ""
+-    )
+-    target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_LLGUIDANCE)
+-
+-    add_library(llguidance STATIC IMPORTED)
+-    set_target_properties(llguidance PROPERTIES IMPORTED_LOCATION ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME})
+-    add_dependencies(llguidance llguidance_ext)
+-
+-    target_include_directories(${TARGET} PRIVATE ${LLGUIDANCE_PATH})
+-    target_link_libraries(${TARGET} PRIVATE llguidance)
+-    if (WIN32)
+-        target_link_libraries(${TARGET} PRIVATE ws2_32 userenv ntdll bcrypt)
+-    endif()
+-endif()
+-
+ target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
 index 9b918b366..fbb39cb3a 100644
 --- a/common/chat-auto-parser-generator.cpp
@@ -3395,10 +3444,16 @@ index 000000000..728899e4b
 +    }
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2e8..e38fd87b4 100644
+index 97250c2e8..5e02baa49 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -47,6 +47,40 @@ set(LLAMA_CORE_SOURCES
+@@ -1,4 +1,5 @@
+ llama_add_compile_flags()
++find_package(Threads REQUIRED)
+ 
+ #
+ # libraries
+@@ -47,6 +48,50 @@ set(LLAMA_CORE_SOURCES
  add_library(llama
              ../include/llama.h
              ${LLAMA_CORE_SOURCES}
@@ -3423,7 +3478,17 @@ index 97250c2e8..e38fd87b4 100644
 +            skippy/model_package.cpp
 +            skippy/package_tensor_binding.cpp
 +            ../common/reasoning-budget.cpp
++            ../common/sampling.cpp
++            ../common/sampling-config.cpp
++            ../common/sampling-timing.cpp
++            ../common/tokenization.cpp
++            ../common/regex-escape.cpp
++            ../common/log-terminal.cpp
++            ../common/log.cpp
++            ../common/json.cpp
++            ../common/llguidance.cpp
 +            skippy/sampling.cpp
++            skippy/sampling_config.cpp
 +            skippy/chat_sampling.cpp
 +            skippy/sampling_vocab.cpp
 +            skippy/stage_slice_plan.cpp
@@ -3439,12 +3504,16 @@ index 97250c2e8..e38fd87b4 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -60,19 +94,611 @@ set_target_properties(llama PROPERTIES
+@@ -60,19 +105,648 @@ set_target_properties(llama PROPERTIES
  )
  
  # exclude non-model sources from unity build
 -set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h
 +set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h ../common/reasoning-budget.cpp
++    ../common/sampling.cpp ../common/sampling-config.cpp ../common/sampling-timing.cpp
++    ../common/tokenization.cpp ../common/regex-escape.cpp ../common/log-terminal.cpp
++    ../common/log.cpp ../common/json.cpp
++    ../common/llguidance.cpp
 +    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 +
 +# Keep model sources out of the unity build as well. The Skippy stage
@@ -3464,9 +3533,42 @@ index 97250c2e8..e38fd87b4 100644
 +# entries with its own clang, which cannot read a PCH produced by the
 +# configured compiler, so the llama target must stay PCH-free.
 +# target_precompile_headers (llama PRIVATE models/models.h)
- 
- target_link_libraries(llama PUBLIC ggml)
- 
++
++target_link_libraries(llama PUBLIC ggml PRIVATE Threads::Threads vendor::nlohmann)
++
++if (LLAMA_LLGUIDANCE)
++    include(ExternalProject)
++    set(LLGUIDANCE_SRC ${CMAKE_BINARY_DIR}/llguidance/source)
++    set(LLGUIDANCE_PATH ${LLGUIDANCE_SRC}/target/release)
++    set(LLGUIDANCE_LIB_NAME "${CMAKE_STATIC_LIBRARY_PREFIX}llguidance${CMAKE_STATIC_LIBRARY_SUFFIX}")
++
++    ExternalProject_Add(llguidance_ext
++        GIT_REPOSITORY https://github.com/guidance-ai/llguidance
++        # v1.0.1:
++        GIT_TAG d795912fedc7d393de740177ea9ea761e7905774
++        PREFIX ${CMAKE_BINARY_DIR}/llguidance
++        SOURCE_DIR ${LLGUIDANCE_SRC}
++        BUILD_IN_SOURCE TRUE
++        CONFIGURE_COMMAND ""
++        BUILD_COMMAND cargo build --release --package llguidance
++        INSTALL_COMMAND ""
++        BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_PATH}/llguidance.h
++        UPDATE_COMMAND ""
++    )
++    target_compile_definitions(llama PUBLIC LLAMA_USE_LLGUIDANCE)
++
++    add_library(llguidance STATIC IMPORTED)
++    set_target_properties(llguidance PROPERTIES IMPORTED_LOCATION ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME})
++    add_dependencies(llguidance llguidance_ext)
++
++    target_include_directories(llama PRIVATE ${LLGUIDANCE_PATH})
++    target_link_libraries(llama PRIVATE llguidance)
++    if (WIN32)
++        target_link_libraries(llama PRIVATE ws2_32 userenv ntdll bcrypt)
++    endif()
++endif()
++
++
 +if (LLAMA_STAGE_BUILD_TESTS)
 +    target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
 +
@@ -3735,7 +3837,8 @@ index 97250c2e8..e38fd87b4 100644
 +            FIXTURES_REQUIRED ${fixture})
 +    endfunction()
 +    add_skippy_sampling_history_state_tests(granitehybrid skippy-noalloc-granite-hybrid-fixture recurrent)
-+
+ 
+-target_link_libraries(llama PUBLIC ggml)
 +    add_test(
 +        NAME skippy_generate_qwen3_fixture
 +        COMMAND skippy-model-fixture-generator
@@ -4043,7 +4146,7 @@ index 97250c2e8..e38fd87b4 100644
 +        FIXTURES_REQUIRED skippy-noalloc-mamba-fixture)
 +
 +endif()
-+
+ 
  if (BUILD_SHARED_LIBS)
      set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
      target_compile_definitions(llama PRIVATE LLAMA_BUILD)
