@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 74;
+pub const ABI_VERSION_PATCH: u32 = 75;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -18,6 +18,7 @@ mod activation;
 mod dynamic;
 mod model;
 mod multimodal;
+mod receipts;
 mod runtime;
 mod sampling;
 mod stage_plan;
@@ -67,6 +68,7 @@ pub use multimodal::{
     MtmdHelperGenAudioOutputType, MtmdHelperInitOpt, MtmdHelperVideo, MtmdHelperVideoInitParams,
     MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
 };
+pub use receipts::*;
 pub use runtime::{
     NativeRuntimeLoadError, abi_features, llama_model_is_diffusion, llama_model_is_hybrid,
     llama_model_is_recurrent, llama_model_meta_val_str, try_abi_features,
@@ -139,7 +141,8 @@ pub use dynamic::{
     skippy_model_llama_model, skippy_model_memory_cache_capabilities, skippy_model_open,
     skippy_model_open_from_parts, skippy_model_open_from_parts_with_events_fn,
     skippy_model_open_from_source, skippy_model_open_with_events_fn,
-    skippy_model_output_activation_boundary, skippy_model_supports_causal_readout,
+    skippy_model_output_activation_boundary, skippy_model_replay_receipt,
+    skippy_model_set_receipt_recorder, skippy_model_supports_causal_readout,
     skippy_model_workload_info_v1, skippy_ngram_cache_append, skippy_ngram_cache_create,
     skippy_ngram_cache_draft, skippy_ngram_cache_free, skippy_ngram_cache_reset,
     skippy_parse_chat_response_json, skippy_prefill_chunk, skippy_prefill_chunk_frame,
@@ -203,7 +206,8 @@ pub use static_bindings::{
     skippy_model_info_tensor_count, skippy_model_input_activation_boundary,
     skippy_model_llama_model, skippy_model_memory_cache_capabilities, skippy_model_open,
     skippy_model_open_from_parts, skippy_model_open_from_source,
-    skippy_model_output_activation_boundary, skippy_model_supports_causal_readout,
+    skippy_model_output_activation_boundary, skippy_model_replay_receipt,
+    skippy_model_set_receipt_recorder, skippy_model_supports_causal_readout,
     skippy_model_workload_info_v1, skippy_ngram_cache_append, skippy_ngram_cache_create,
     skippy_ngram_cache_draft, skippy_ngram_cache_free, skippy_ngram_cache_reset,
     skippy_parse_chat_response_json, skippy_prefill_chunk, skippy_prefill_chunk_frame,

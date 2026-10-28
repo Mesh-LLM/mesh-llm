@@ -1,0 +1,1274 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 28 Oct 2026 02:04:42 -0500
+Subject: [PATCH] skippy: add receipt recorder and replay
+
+skippy_model_set_receipt_recorder reports, after each computed ubatch,
+the residual stream entering every stage layer, the stage output, and
+each layer's attn_q, attn_k and attn_v outputs and attention output,
+with the ubatch geometry replay needs: tokens, sequences, positions,
+output rows, KV cells, n_kv and the stage input rows. It also reports
+KV-cache changes, so the caller can refuse sequences a replay cannot
+reproduce. The receipt tensors are flagged as graph outputs in the
+build and reserve graphs, so the planned allocation keeps them, and
+are copied into one of two pinned host blocks, used in turn, so a
+caller can hash a ubatch while the next one computes.
+
+skippy_model_replay_receipt replays recorded steps in a scratch
+context created with the stage context's parameters, forcing the
+recorded KV cells and n_kv, and also reports the matmul inputs and
+outputs of one challenged layer. Verifiable inference receipts commit
+to the residual stream and open a challenged layer by replay instead
+of storing every matmul column. Replaces skippy_model_set_receipt_tap
+and the eval-callback hooks it needed. ABI 0.1.74 -> 0.1.75.
+---
+ include/skippy.h               |   1 +
+ include/skippy/common.h        |   2 +-
+ include/skippy/receipts.h      | 194 +++++++++++
+ src/CMakeLists.txt             |   1 +
+ src/llama-context.cpp          |  21 ++
+ src/llama-context.h            |   6 +
+ src/llama-kv-cache.cpp         |  45 +++
+ src/llama-kv-cache.h           |  20 ++
+ src/skippy/model_lifecycle.cpp |   2 +
+ src/skippy/model_loading.cpp   |   2 +
+ src/skippy/receipts.cpp        | 607 +++++++++++++++++++++++++++++++++
+ src/skippy/receipts_internal.h |  71 ++++
+ src/skippy/runtime_types.h     |   5 +
+ 13 files changed, 976 insertions(+), 1 deletion(-)
+ create mode 100644 include/skippy/receipts.h
+ create mode 100644 src/skippy/receipts.cpp
+ create mode 100644 src/skippy/receipts_internal.h
+
+diff --git a/include/skippy.h b/include/skippy.h
+index 9497734b7..a59a1a8d3 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -25,6 +25,7 @@
+ #include "skippy/model_package.h"
+ #include "skippy/signals.h"
+ #include "skippy/logprobs.h"
++#include "skippy/receipts.h"
+ #include "skippy/workloads.h"
+ #include "skippy/system_one.h"
+ #include "skippy/laya.h"
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 4214d0b89..80710eb3b 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 74
++#define SKIPPY_ABI_VERSION_PATCH 75
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/receipts.h b/include/skippy/receipts.h
+new file mode 100644
+index 000000000..3da3a9ac4
+--- /dev/null
++++ b/include/skippy/receipts.h
+@@ -0,0 +1,194 @@
++#ifndef SKIPPY_RECEIPTS_H
++#define SKIPPY_RECEIPTS_H
++
++/**
++ * @file skippy/receipts.h
++ * @brief Recording and replay for verifiable inference receipts.
++ *
++ * A receipt commits to the residual stream and the attention projections of
++ * every layer a stage runs. While serving, the recorder reports each ubatch:
++ * its geometry (tokens, sequences, positions, output rows, KV cells, n_kv),
++ * the stage input rows, and the committed tensors of every layer. It also
++ * reports every KV-cache operation that changes which cells a sequence holds.
++ *
++ * To open a challenge, the caller replays the recorded ubatches of one
++ * sequence in a scratch context of the same model. Other sequences' columns
++ * are replaced by dummy columns at the recorded cells, and the recorded cells
++ * and n_kv are forced, so the challenged sequence computes bit for bit what it
++ * computed while serving. The replay also reports the inputs and outputs of
++ * every weight matmul of the challenged layer.
++ */
++
++#include "runtime.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/** @brief A per-layer tensor reported by the recorder or a replay. */
++enum skippy_receipt_tensor_kind {
++    /** Residual stream entering the layer; layer == layer_end is the stage output. */
++    SKIPPY_RECEIPT_TENSOR_RESIDUAL    = 0,
++    /** Output of the attn_q, attn_k and attn_v matmuls. */
++    SKIPPY_RECEIPT_TENSOR_ATTN_Q      = 1,
++    SKIPPY_RECEIPT_TENSOR_ATTN_K      = 2,
++    SKIPPY_RECEIPT_TENSOR_ATTN_V      = 3,
++    /** Attention output: the input of the attn_output matmul. */
++    SKIPPY_RECEIPT_TENSOR_ATTN_OUT    = 4,
++    /** Replay only: the normed input of the attn_q, attn_k and attn_v matmuls. */
++    SKIPPY_RECEIPT_TENSOR_ATTN_IN     = 5,
++    /** Replay only: the output of the attn_output matmul. */
++    SKIPPY_RECEIPT_TENSOR_ATTN_PROJ   = 6,
++    /** Replay only: the normed input of the ffn_gate and ffn_up matmuls. */
++    SKIPPY_RECEIPT_TENSOR_FFN_IN      = 7,
++    SKIPPY_RECEIPT_TENSOR_FFN_GATE    = 8,
++    SKIPPY_RECEIPT_TENSOR_FFN_UP      = 9,
++    /** Replay only: the input of the ffn_down matmul. */
++    SKIPPY_RECEIPT_TENSOR_FFN_DOWN_IN = 10,
++    SKIPPY_RECEIPT_TENSOR_FFN_DOWN    = 11,
++};
++
++/** @brief One reported tensor, column per token, in f32. */
++struct skippy_receipt_tensor {
++    int32_t layer;
++    /** A skippy_receipt_tensor_kind. */
++    int32_t kind;
++    /** Values per column. */
++    int64_t len;
++    /**
++     * Number of columns: the ubatch's token count, or its output-row count when
++     * the layer keeps only output rows (the last layer of a final stage).
++     */
++    int64_t n_cols;
++    /** Column j at `values + j * len`. */
++    const float * values;
++};
++
++/**
++ * @brief One computed ubatch.
++ *
++ * The tensor values and stage input rows of a ubatch reported by the
++ * recorder stay valid until the callback for the next ubatch returns, or the
++ * recorder is removed or replaced, so a caller can hash them while the next
++ * ubatch computes. Every other pointer is valid only during the callback.
++ */
++struct skippy_receipt_ubatch {
++    /** Replay step index, or -1 while serving. */
++    int64_t step;
++    int32_t n_tokens;
++    /** Per column: token id, sequence, position, output flag, and KV cell. */
++    const int32_t * token;
++    const int32_t * seq;
++    const int32_t * pos;
++    const int8_t * output;
++    const uint32_t * cell;
++    /** KV cells the attention graph covered. */
++    uint32_t n_kv;
++    /** Stage input rows (a stage after the first), or NULL. Row j at `input + j * input_row_bytes`. */
++    const void * input;
++    int64_t input_row_bytes;
++    /** ggml type of the input rows. */
++    int32_t input_type;
++    size_t n_tensors;
++    const struct skippy_receipt_tensor * tensors;
++    /** Non-NULL when the ubatch cannot be receipted: the reason. Nothing else is set. */
++    const char * error;
++};
++
++/** @brief KV-cache operations that the recorder reports. */
++enum skippy_receipt_memory_op {
++    /** Every sequence lost all its cells. */
++    SKIPPY_RECEIPT_MEMORY_CLEAR      = 0,
++    /** Cells of `seq` (every sequence if -1) in positions [p0, p1) were removed; p1 < 0 means no end. */
++    SKIPPY_RECEIPT_MEMORY_SEQ_RM     = 1,
++    /** Cells of `seq` in [p0, p1) were shared with `seq_dst`. */
++    SKIPPY_RECEIPT_MEMORY_SEQ_CP     = 2,
++    /** Every sequence except `seq` lost its cells. */
++    SKIPPY_RECEIPT_MEMORY_SEQ_KEEP   = 3,
++    /** Positions of `seq` in [p0, p1) were shifted or divided. */
++    SKIPPY_RECEIPT_MEMORY_SEQ_SHIFT  = 4,
++    /** Cells of `seq` (every sequence if -1) were loaded from saved state. */
++    SKIPPY_RECEIPT_MEMORY_STATE_READ = 5,
++    /** Cells moved to close gaps. */
++    SKIPPY_RECEIPT_MEMORY_COMPACT    = 6,
++};
++
++struct skippy_receipt_memory_event {
++    /** A skippy_receipt_memory_op. */
++    int32_t op;
++    int32_t seq;
++    int32_t seq_dst;
++    int32_t p0;
++    int32_t p1;
++};
++
++typedef void (*skippy_receipt_ubatch_fn)(void * user_data, const struct skippy_receipt_ubatch * ubatch);
++typedef void (*skippy_receipt_memory_fn)(void * user_data, const struct skippy_receipt_memory_event * event);
++
++/**
++ * @brief Installs or, with both callbacks NULL, removes the receipt recorder.
++ *
++ * The callbacks run on the thread that decodes or changes the KV cache. The
++ * recorder marks the committed tensors as graph outputs, which keeps them
++ * alive and may disable some kernel fusions; replay marks the same tensors.
++ * The stage needs a plain unified KV cache with one stream.
++ */
++LLAMA_API enum skippy_status skippy_model_set_receipt_recorder(
++        struct skippy_model * model,
++        skippy_receipt_ubatch_fn on_ubatch,
++        skippy_receipt_memory_fn on_memory,
++        void * user_data,
++        struct skippy_error ** out_error);
++
++enum skippy_receipt_replay_kind {
++    /** Decode one recorded ubatch. */
++    SKIPPY_RECEIPT_REPLAY_DECODE = 0,
++    /** Remove positions [p0, p1) of the replayed sequence (p1 < 0: no end). */
++    SKIPPY_RECEIPT_REPLAY_SEQ_RM = 1,
++};
++
++/** @brief One replay step. A decode step has the fields of a recorded ubatch. */
++struct skippy_receipt_replay_step {
++    /** A skippy_receipt_replay_kind. */
++    int32_t kind;
++    int32_t n_tokens;
++    const int32_t * token;
++    const int32_t * seq;
++    const int32_t * pos;
++    const int8_t * output;
++    const uint32_t * cell;
++    uint32_t n_kv;
++    const void * input;
++    int64_t input_row_bytes;
++    int32_t input_type;
++    /** SEQ_RM range. */
++    int32_t p0;
++    int32_t p1;
++    /** Nonzero to report this step's tensors through the capture callback. */
++    int32_t capture;
++};
++
++/**
++ * @brief Replays one sequence in the model's scratch context.
++ *
++ * The scratch context is created on first use with the stage context's
++ * parameters and kept. Each replay starts from an empty cache. After every
++ * decode step, the columns of sequences other than `seq` are removed. A
++ * captured step reports the committed tensors of every layer plus the matmul
++ * inputs and outputs of `layer`.
++ */
++LLAMA_API enum skippy_status skippy_model_replay_receipt(
++        struct skippy_model * model,
++        int32_t seq,
++        int32_t layer,
++        const struct skippy_receipt_replay_step * steps,
++        size_t n_steps,
++        skippy_receipt_ubatch_fn on_capture,
++        void * user_data,
++        struct skippy_error ** out_error);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // SKIPPY_RECEIPTS_H
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 417be82de..f5f20d470 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -71,6 +71,7 @@ add_library(llama
+             skippy/sampling.cpp
+             skippy/sampling_vocab.cpp
+             skippy/logprobs.cpp
++            skippy/receipts.cpp
+             skippy/stage_slice_plan.cpp
+             skippy/stage_plan.cpp
+             skippy/stage_realization.cpp
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 2c6149d30..2b3d85d84 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -17,6 +17,7 @@
+ #include "skippy/activation.h"
+ #include "skippy/environment.h"
+ #include "skippy/state_memory.h"
++#include "skippy/receipts_internal.h"
+ 
+ #include <atomic>
+ #include <cinttypes>
+@@ -1397,6 +1398,14 @@ void llama_context::set_n_threads(int32_t n_threads, int32_t n_threads_batch) {
+     cparams.n_threads_batch = n_threads_batch;
+ }
+ 
++void llama_context::set_receipt_capture(std::shared_ptr<skippy_receipt_capture> capture) {
++    receipt_capture = std::move(capture);
++    // the next ubatch rebuilds its graph, so the receipt tensors get marked, and
++    // the scheduler re-plans its allocation with them kept alive
++    gf_res_prev_active = nullptr;
++    sched_need_reserve = true;
++}
++
+ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data) {
+     LLAMA_LOG_DEBUG("%s: call\n", __func__);
+ 
+@@ -1675,6 +1684,10 @@ llm_graph_result * llama_context::process_ubatch(
+             return nullptr;
+         }
+ 
++        if (receipt_capture) {
++            skippy_receipt_mark_graph(*receipt_capture, *res);
++        }
++
+         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
+             ret = GGML_STATUS_ALLOC_FAILED;
+@@ -1701,6 +1714,10 @@ llm_graph_result * llama_context::process_ubatch(
+         return nullptr;
+     }
+ 
++    if (receipt_capture) {
++        skippy_receipt_report_ubatch(*receipt_capture, sched.get(), ubatch, mctx, *res);
++    }
++
+     ret = GGML_STATUS_SUCCESS;
+ 
+     return res;
+@@ -2892,6 +2909,10 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+     res->reset();
+ 
+     auto * gf = model.build_graph(gparams);
++    if (gf && receipt_capture) {
++        // the allocation planned here is reused by later graphs of the same shape
++        skippy_receipt_mark_reserve_graph(*receipt_capture, *res);
++    }
+     const uint32_t cache_capabilities = skippy_graph_cache_capabilities(*gf_res_reserve);
+     if ((cache_capabilities & skippy_cache_admitted_capabilities) != skippy_cache_admitted_capabilities) {
+         LLAMA_LOG_ERROR("%s: reserved graph state exceeds loaded cache admission\n", __func__);
+diff --git a/src/llama-context.h b/src/llama-context.h
+index a9b05f5dd..1237e4286 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -49,6 +49,7 @@ llama_context * llama_init_from_model_with_graph_inputs(
+ // "memory" as in abstract memory for the context
+ struct llama_memory_i;
+ struct llama_memory_context_i;
++struct skippy_receipt_capture;
+ 
+ // stores copy of the memory in device buffer. used for fast state save/load
+ struct llama_memory_buffer {
+@@ -149,6 +150,9 @@ struct llama_context {
+ 
+     void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
+ 
++    // receipts: marks the receipt tensors of every new graph and reports each computed ubatch
++    void set_receipt_capture(std::shared_ptr<skippy_receipt_capture> capture);
++
+     void set_embeddings (bool value);
+     void set_embeddings_nextn(bool value, bool masked);
+     void set_embeddings_layer_inp(uint32_t lid, bool enable);
+@@ -471,6 +475,8 @@ private:
+     ggml_abort_callback abort_callback      = nullptr;
+     void *              abort_callback_data = nullptr;
+ 
++    std::shared_ptr<skippy_receipt_capture> receipt_capture;
++
+     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
+ 
+     // pointers and buffer types used for the compute buffer of each backend
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index b7f87404c..6d4f103cd 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -416,6 +416,8 @@ llama_kv_cache::llama_kv_cache(
+ }
+ 
+ void llama_kv_cache::clear(bool data) {
++    receipt_notify(SKIPPY_RECEIPT_MEMORY_CLEAR, -1, -1, -1, -1);
++
+     for (uint32_t s = 0; s < n_stream; ++s) {
+         v_cells[s].reset();
+         v_heads[s] = 0;
+@@ -434,6 +436,8 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+         return true;
+     }
+ 
++    receipt_notify(SKIPPY_RECEIPT_MEMORY_SEQ_RM, seq_id, -1, p0, p1);
++
+     // TODO: fix incosistent handling of `seq_id < 0` and `seq_id == -1` in the codebase [TAG_LLAMA_SEQ_ID_NEG]
+     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
+ 
+@@ -536,6 +540,8 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
+         return;
+     }
+ 
++    receipt_notify(SKIPPY_RECEIPT_MEMORY_SEQ_CP, seq_id_src, seq_id_dst, p0, p1);
++
+     GGML_ASSERT(seq_id_src >= 0 && (size_t) seq_id_src < seq_to_stream.size());
+     GGML_ASSERT(seq_id_dst >= 0 && (size_t) seq_id_dst < seq_to_stream.size());
+ 
+@@ -628,6 +634,8 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
+         return;
+     }
+ 
++    receipt_notify(SKIPPY_RECEIPT_MEMORY_SEQ_KEEP, seq_id, -1, -1, -1);
++
+     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+ 
+     auto & cells = v_cells[seq_to_stream[seq_id]];
+@@ -655,6 +663,8 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
+         return;
+     }
+ 
++    receipt_notify(SKIPPY_RECEIPT_MEMORY_SEQ_SHIFT, seq_id, -1, p0, p1);
++
+     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+     GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_add() is only supported for n_pos_per_embd() == 1");
+ 
+@@ -705,6 +715,8 @@ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, in
+         return;
+     }
+ 
++    receipt_notify(SKIPPY_RECEIPT_MEMORY_SEQ_SHIFT, seq_id, -1, p0, p1);
++
+     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+     GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_div() is only supported for n_pos_per_embd() == 1");
+ 
+@@ -841,6 +853,7 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool
+             const auto moves = compact_cells();
+             did_compact = !moves.empty();
+             if (did_compact) {
++                receipt_notify(SKIPPY_RECEIPT_MEMORY_COMPACT, -1, -1, -1, -1);
+                 copy_compacted_cells(moves);
+                 LLAMA_LOG_DEBUG("%s: compacted %zu KV cells\n", __func__, moves.size());
+             }
+@@ -1093,6 +1106,26 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
+ 
+     res.resize(n_seqs);
+ 
++    // receipt replay: place the ubatch exactly where the serving context placed it
++    if (!receipt_forced_cells.empty()) {
++        const uint32_t strm = seq_to_stream[ubatch.seq_id_unq[0]];
++        if (n_stream != 1 || receipt_forced_cells.size() != n_tokens) {
++            LLAMA_LOG_ERROR("%s: forced receipt cells need one stream and one cell per token\n", __func__);
++            return { };
++        }
++        for (const uint32_t idx : receipt_forced_cells) {
++            if (idx >= v_cells[strm].size()) {
++                LLAMA_LOG_ERROR("%s: forced receipt cell %u is outside the cache\n", __func__, idx);
++                return { };
++            }
++        }
++        res.s0 = strm;
++        res.s1 = strm;
++        res.strm[0] = strm;
++        res.idxs[0] = receipt_forced_cells;
++        return res;
++    }
++
+     for (uint32_t s = 0; s < n_seqs; ++s) {
+         const auto seq_id = ubatch.seq_id_unq[s];
+ 
+@@ -2486,6 +2519,10 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
+     // note: this also helps some backends with performance (f.ex https://github.com/ggml-org/llama.cpp/pull/16812#issuecomment-3455112220)
+     const uint32_t n_pad_cur = std::max(n_pad, 256u);
+ 
++    if (receipt_forced_n_kv != 0) {
++        return receipt_forced_n_kv;
++    }
++
+     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+         const auto & cells = v_cells[sinfo.strm[s]];
+ 
+@@ -3463,6 +3500,7 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
+ }
+ 
+ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
++    receipt_notify(SKIPPY_RECEIPT_MEMORY_STATE_READ, seq_id, -1, -1, -1);
+     state_read_sinfo(io, seq_id, flags, nullptr, nullptr);
+ }
+ 
+@@ -4302,6 +4340,13 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
+     return n_kv;
+ }
+ 
++const std::vector<uint32_t> * llama_kv_cache_context::get_receipt_cells() const {
++    if (ubatches.empty() || i_cur >= sinfos.size() || sinfos[i_cur].n_stream() != 1) {
++        return nullptr;
++    }
++    return &sinfos[i_cur].idxs[0];
++}
++
+ uint32_t llama_kv_cache_context::get_n_kv_pos_contiguous() const {
+     // Full-cache and update contexts do not carry a concrete ubatch/slot pair.
+     if (ubatches.empty() || sinfos.empty() || i_cur >= ubatches.size() || i_cur >= sinfos.size()) {
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 021fdfe2e..8980db90e 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -305,7 +305,23 @@ public:
+     // note: used by n-gram input embeddings
+     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
+ 
++    // skippy receipts: reports every operation that changes which cells a sequence
++    // holds (op is a skippy_receipt_memory_op), so a recorder can replay the sequence
++    std::function<void(int32_t op, llama_seq_id seq, llama_seq_id seq_dst, llama_pos p0, llama_pos p1)>
++        receipt_memory_observer;
++
++    // skippy receipts replay: the cells and n_kv of the next ubatch, as recorded while
++    // serving, so a scratch context reproduces the serving graph bit for bit
++    std::vector<uint32_t> receipt_forced_cells;
++    uint32_t receipt_forced_n_kv = 0;
++
+ private:
++    void receipt_notify(int32_t op, llama_seq_id seq, llama_seq_id seq_dst, llama_pos p0, llama_pos p1) const {
++        if (receipt_memory_observer) {
++            receipt_memory_observer(op, seq, seq_dst, p0, p1);
++        }
++    }
++
+     const llama_model & model;
+     const llama_hparams & hparams;
+ 
+@@ -469,6 +485,10 @@ public:
+     //
+ 
+     uint32_t get_n_kv() const;
++
++    // receipts: the cells of the current ubatch, or nullptr with more than one stream
++    const std::vector<uint32_t> * get_receipt_cells() const;
++
+     uint32_t get_n_kv_pos_contiguous() const;
+ 
+     ggml_type type_k() const;
+diff --git a/src/skippy/model_lifecycle.cpp b/src/skippy/model_lifecycle.cpp
+index caa9fcd6d..1029871f6 100644
+--- a/src/skippy/model_lifecycle.cpp
++++ b/src/skippy/model_lifecycle.cpp
+@@ -110,6 +110,8 @@ enum skippy_status skippy_model_free(
+         if (model->mtp_model != nullptr) {
+             llama_model_free(model->mtp_model);
+         }
++        // the receipt replay context shares the model's weights
++        model->receipt_scratch.reset();
+         if (model->ctx != nullptr) {
+             llama_free(model->ctx);
+         }
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 60a27669f..bbaefed74 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -750,6 +750,8 @@ enum skippy_status skippy_finish_model_open(
+ 
+     const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(config);
+     stage_model->ctx = llama_init_from_model_with_graph_inputs(model, params, graph_build_inputs);
++    stage_model->receipt_ctx_params = params;
++    stage_model->has_receipt_ctx_params = true;
+     if (stage_model->ctx == nullptr) {
+         const char * message = "failed to create llama context";
+         if (event_scope != nullptr) {
+diff --git a/src/skippy/receipts.cpp b/src/skippy/receipts.cpp
+new file mode 100644
+index 000000000..8e0a3a0d4
+--- /dev/null
++++ b/src/skippy/receipts.cpp
+@@ -0,0 +1,607 @@
++#include "skippy/receipts.h"
++
++#include "errors.h"
++#include "graph_build_inputs.h"
++#include "receipts_internal.h"
++#include "runtime_types.h"
++
++#include "ggml-backend.h"
++#include "llama-batch.h"
++#include "llama-context.h"
++#include "llama-graph.h"
++#include "llama-kv-cache.h"
++
++#include <cstdlib>
++#include <cstring>
++#include <map>
++#include <memory>
++#include <mutex>
++#include <set>
++#include <string>
++#include <vector>
++
++// The scratch context a model replays receipts in, created on first use.
++struct skippy_receipt_scratch {
++    std::mutex mutex;
++    llama_context * ctx = nullptr;
++    std::shared_ptr<skippy_receipt_capture> capture;
++
++    ~skippy_receipt_scratch() {
++        llama_free(ctx);
++    }
++};
++
++namespace {
++
++enum class matmul_role { attn_q, attn_k, attn_v, attn_output, ffn_gate, ffn_up, ffn_down };
++
++// Matches a weight by its GGUF name "blk.<layer>.<role>.weight".
++bool weight_role(const ggml_tensor * weight, int32_t & layer, matmul_role & role) {
++    if (weight == nullptr) {
++        return false;
++    }
++    const std::string name = weight->name;
++    static const std::string prefix = "blk.";
++    static const std::string suffix = ".weight";
++    if (name.size() <= prefix.size() + suffix.size() || name.compare(0, prefix.size(), prefix) != 0 ||
++            name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
++        return false;
++    }
++    char * end = nullptr;
++    const long value = std::strtol(name.c_str() + prefix.size(), &end, 10);
++    if (end == name.c_str() + prefix.size() || *end != '.' || value < 0) {
++        return false;
++    }
++    static const std::map<std::string, matmul_role> roles = {
++        {"attn_q", matmul_role::attn_q},       {"attn_k", matmul_role::attn_k},
++        {"attn_v", matmul_role::attn_v},       {"attn_output", matmul_role::attn_output},
++        {"ffn_gate", matmul_role::ffn_gate},   {"ffn_up", matmul_role::ffn_up},
++        {"ffn_down", matmul_role::ffn_down},
++    };
++    const char * middle_start = end + 1;
++    const std::string middle(middle_start, name.c_str() + name.size() - suffix.size());
++    const auto found = roles.find(middle);
++    if (found == roles.end()) {
++        return false;
++    }
++    layer = static_cast<int32_t>(value);
++    role = found->second;
++    return true;
++}
++
++// The residual stream entering a layer: attn_q's input is rms_norm(x) * w.
++ggml_tensor * residual_of_attention_input(ggml_tensor * attn_in) {
++    if (attn_in == nullptr || attn_in->op != GGML_OP_MUL || attn_in->src[0] == nullptr ||
++            attn_in->src[0]->op != GGML_OP_RMS_NORM) {
++        return nullptr;
++    }
++    return attn_in->src[0]->src[0];
++}
++
++ggml_tensor * find_named(ggml_cgraph * gf, const std::string & name) {
++    for (int i = ggml_graph_n_nodes(gf) - 1; i >= 0; --i) {
++        ggml_tensor * node = ggml_graph_node(gf, i);
++        if (name == node->name) {
++            return node;
++        }
++    }
++    return nullptr;
++}
++
++bool readable(const ggml_tensor * t) {
++    return (t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_F16) && ggml_is_contiguous(t) &&
++           t->ne[2] == 1 && t->ne[3] == 1;
++}
++
++void keep_alive(ggml_tensor * t) {
++    ggml_set_output(t);
++    for (ggml_tensor * root = t->view_src; root != nullptr; root = root->view_src) {
++        ggml_set_output(root);
++    }
++}
++
++std::string find_targets(skippy_receipt_capture & capture, llm_graph_result & res) {
++    ggml_cgraph * gf = res.get_gf();
++    const bool extra = capture.extra_layer >= 0;
++    std::set<int32_t> layers;
++    std::map<int32_t, int> attention;  // q, k, v, attn_output seen per layer
++    auto add = [&](ggml_tensor * t, int32_t layer, int32_t kind) {
++        capture.targets.push_back({t, layer, kind});
++    };
++    for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
++        ggml_tensor * node = ggml_graph_node(gf, i);
++        int32_t layer = 0;
++        matmul_role role;
++        if (node->op != GGML_OP_MUL_MAT || !weight_role(node->src[0], layer, role)) {
++            continue;
++        }
++        layers.insert(layer);
++        const bool open = extra && layer == capture.extra_layer;
++        switch (role) {
++            case matmul_role::attn_q: {
++                ggml_tensor * x = residual_of_attention_input(node->src[1]);
++                if (x == nullptr) {
++                    return "layer " + std::to_string(layer) + " has no rms_norm attention input";
++                }
++                add(x, layer, SKIPPY_RECEIPT_TENSOR_RESIDUAL);
++                add(node, layer, SKIPPY_RECEIPT_TENSOR_ATTN_Q);
++                if (open) add(node->src[1], layer, SKIPPY_RECEIPT_TENSOR_ATTN_IN);
++                attention[layer] |= 1;
++                break;
++            }
++            case matmul_role::attn_k:
++                add(node, layer, SKIPPY_RECEIPT_TENSOR_ATTN_K);
++                attention[layer] |= 2;
++                break;
++            case matmul_role::attn_v:
++                add(node, layer, SKIPPY_RECEIPT_TENSOR_ATTN_V);
++                attention[layer] |= 4;
++                break;
++            case matmul_role::attn_output:
++                add(node->src[1], layer, SKIPPY_RECEIPT_TENSOR_ATTN_OUT);
++                if (open) add(node, layer, SKIPPY_RECEIPT_TENSOR_ATTN_PROJ);
++                attention[layer] |= 8;
++                break;
++            case matmul_role::ffn_gate:
++                if (open) {
++                    add(node->src[1], layer, SKIPPY_RECEIPT_TENSOR_FFN_IN);
++                    add(node, layer, SKIPPY_RECEIPT_TENSOR_FFN_GATE);
++                }
++                break;
++            case matmul_role::ffn_up:
++                if (open) add(node, layer, SKIPPY_RECEIPT_TENSOR_FFN_UP);
++                break;
++            case matmul_role::ffn_down:
++                if (open) {
++                    add(node->src[1], layer, SKIPPY_RECEIPT_TENSOR_FFN_DOWN_IN);
++                    add(node, layer, SKIPPY_RECEIPT_TENSOR_FFN_DOWN);
++                }
++                break;
++        }
++    }
++    if (layers.empty()) {
++        return "the graph has no blk.<layer> weight matmuls";
++    }
++    for (const int32_t layer : layers) {
++        if (attention[layer] != 15) {
++            return "layer " + std::to_string(layer) + " lacks separate attn_q, attn_k, attn_v and attn_output matmuls";
++        }
++    }
++    if (*layers.rbegin() - *layers.begin() + 1 != static_cast<int32_t>(layers.size())) {
++        return "the graph's layers are not contiguous";
++    }
++    const int32_t last = *layers.rbegin();
++    ggml_tensor * out = find_named(gf, "l_out-" + std::to_string(last));
++    if (out == nullptr) {
++        return "the graph has no l_out-" + std::to_string(last) + " stage output";
++    }
++    add(out, last + 1, SKIPPY_RECEIPT_TENSOR_RESIDUAL);
++
++    const auto & imports = res.get_skippy_activation_imports();
++    if (imports.size() > 1) {
++        return "a stage with more than one activation import";
++    }
++    if (imports.size() == 1) {
++        capture.input = imports.front().tensor;
++        if (capture.input == nullptr || !ggml_is_contiguous(capture.input) || capture.input->ne[2] != 1 ||
++                capture.input->ne[3] != 1) {
++            return "the activation import is not a contiguous row per token";
++        }
++    }
++    for (const auto & target : capture.targets) {
++        if (!readable(target.tensor)) {
++            return std::string("receipt tensor ") + target.tensor->name + " is not a contiguous f32 or f16 matrix";
++        }
++    }
++    return {};
++}
++
++}  // namespace
++
++void skippy_receipt_mark_graph(skippy_receipt_capture & capture, llm_graph_result & res) {
++    capture.targets.clear();
++    capture.input = nullptr;
++    capture.graph_error = find_targets(capture, res);
++    if (!capture.graph_error.empty()) {
++        capture.targets.clear();
++        capture.input = nullptr;
++        return;
++    }
++    for (const auto & target : capture.targets) {
++        keep_alive(target.tensor);
++    }
++    if (capture.input != nullptr) {
++        keep_alive(capture.input);
++    }
++}
++
++void skippy_receipt_mark_reserve_graph(const skippy_receipt_capture & capture, llm_graph_result & res) {
++    skippy_receipt_capture reserve;
++    reserve.extra_layer = capture.extra_layer;
++    skippy_receipt_mark_graph(reserve, res);
++}
++
++namespace {
++
++void report_error(skippy_receipt_capture & capture, const std::string & message) {
++    skippy_receipt_ubatch report = {};
++    report.step = capture.step;
++    report.error = message.c_str();
++    capture.on_ubatch(capture.user_data, &report);
++}
++
++ggml_backend_t tensor_backend(ggml_backend_sched_t sched, ggml_tensor * t) {
++    ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, t);
++    if (backend == nullptr && t->view_src != nullptr) {
++        backend = ggml_backend_sched_get_tensor_backend(sched, t->view_src);
++    }
++    return backend;
++}
++
++// Host memory of at least `size` bytes for one ubatch's copies. Pinned memory
++// lets the device copies run asynchronously; it is kept and grown as needed.
++uint8_t * host_block(skippy_receipt_capture::host_copy & copy, ggml_backend_sched_t sched,
++        const std::vector<ggml_tensor *> & tensors, size_t size) {
++    if (copy.pinned && ggml_backend_buffer_get_size(copy.pinned.get()) >= size) {
++        return static_cast<uint8_t *>(ggml_backend_buffer_get_base(copy.pinned.get()));
++    }
++    copy.pinned.reset();
++    for (ggml_tensor * t : tensors) {
++        ggml_backend_t backend = tensor_backend(sched, t);
++        ggml_backend_dev_t dev = backend != nullptr ? ggml_backend_get_device(backend) : nullptr;
++        ggml_backend_buffer_type_t buft = dev != nullptr ? ggml_backend_dev_host_buffer_type(dev) : nullptr;
++        if (buft == nullptr) {
++            continue;
++        }
++        copy.pinned.reset(ggml_backend_buft_alloc_buffer(buft, size + size / 4));
++        if (copy.pinned) {
++            copy.pageable = {};
++            return static_cast<uint8_t *>(ggml_backend_buffer_get_base(copy.pinned.get()));
++        }
++        break;
++    }
++    copy.pageable.resize(size);
++    return copy.pageable.data();
++}
++
++// Starts an asynchronous copy of a tensor to host memory.
++void fetch(ggml_backend_sched_t sched, ggml_tensor * t, uint8_t * dst) {
++    ggml_backend_t backend = tensor_backend(sched, t);
++    if (backend != nullptr) {
++        ggml_backend_tensor_get_async(backend, t, dst, 0, ggml_nbytes(t));
++    } else {
++        ggml_backend_tensor_get(t, dst, 0, ggml_nbytes(t));
++    }
++}
++
++size_t aligned(size_t n) {
++    return (n + 63) & ~static_cast<size_t>(63);
++}
++
++}  // namespace
++
++void skippy_receipt_report_ubatch(
++        skippy_receipt_capture & capture,
++        ggml_backend_sched_t sched,
++        const llama_ubatch & ubatch,
++        llama_memory_context_i * mctx,
++        const llm_graph_result & res) {
++    GGML_UNUSED(res);
++    if (capture.on_ubatch == nullptr || !capture.report) {
++        return;
++    }
++    if (!capture.graph_error.empty()) {
++        report_error(capture, capture.graph_error);
++        return;
++    }
++    const auto * kv = dynamic_cast<const llama_kv_cache_context *>(mctx);
++    const std::vector<uint32_t> * cells = kv != nullptr ? kv->get_receipt_cells() : nullptr;
++    const uint32_t n = ubatch.n_tokens;
++    if (cells == nullptr || cells->size() != n) {
++        report_error(capture, "receipts need a plain KV cache with one stream");
++        return;
++    }
++    if (ubatch.pos == nullptr || ubatch.seq_id == nullptr || ubatch.output == nullptr) {
++        report_error(capture, "the ubatch has no positions, sequences or output flags");
++        return;
++    }
++    capture.token.resize(n);
++    capture.seq.resize(n);
++    capture.pos.resize(n);
++    capture.output.resize(n);
++    capture.cell.assign(cells->begin(), cells->end());
++    int64_t n_outputs = 0;
++    for (uint32_t i = 0; i < n; ++i) {
++        if (ubatch.n_seq_id[i] != 1) {
++            report_error(capture, "a token shared by several sequences cannot be receipted");
++            return;
++        }
++        capture.token[i] = ubatch.token != nullptr ? ubatch.token[i] : -1;
++        capture.seq[i] = ubatch.seq_id[i][0];
++        capture.pos[i] = ubatch.pos[i];
++        capture.output[i] = ubatch.output[i];
++        n_outputs += ubatch.output[i] != 0;
++    }
++    if (ubatch.token == nullptr && capture.input == nullptr) {
++        report_error(capture, "a ubatch of embeddings cannot be receipted");
++        return;
++    }
++
++    // Unique tensors: the first stage layer's residual can be the import itself.
++    std::vector<ggml_tensor *> unique;
++    std::vector<size_t> slot(capture.targets.size());
++    for (size_t i = 0; i < capture.targets.size(); ++i) {
++        ggml_tensor * t = capture.targets[i].tensor;
++        size_t j = 0;
++        while (j < unique.size() && unique[j] != t) ++j;
++        if (j == unique.size()) unique.push_back(t);
++        slot[i] = j;
++    }
++    std::vector<size_t> offset(unique.size());
++    size_t size = 0;
++    for (size_t j = 0; j < unique.size(); ++j) {
++        offset[j] = size;
++        size += aligned(ggml_nbytes(unique[j]));
++    }
++    const size_t input_offset = size;
++    if (capture.input != nullptr) {
++        size += ggml_nbytes(capture.input);
++    }
++    auto & copy = capture.copies[capture.next_copy];
++    capture.next_copy ^= 1;
++    uint8_t * block = host_block(copy, sched, unique, size);
++    for (size_t j = 0; j < unique.size(); ++j) {
++        fetch(sched, unique[j], block + offset[j]);
++    }
++    if (capture.input != nullptr) {
++        fetch(sched, capture.input, block + input_offset);
++    }
++    ggml_backend_sched_synchronize(sched);
++
++    std::vector<const float *> values(unique.size());
++    copy.converted.resize(unique.size());
++    for (size_t j = 0; j < unique.size(); ++j) {
++        const ggml_tensor * t = unique[j];
++        if (t->type == GGML_TYPE_F32) {
++            values[j] = reinterpret_cast<const float *>(block + offset[j]);
++            continue;
++        }
++        auto & dst = copy.converted[j];
++        dst.resize(static_cast<size_t>(ggml_nelements(t)));
++        ggml_fp16_to_fp32_row(reinterpret_cast<const ggml_fp16_t *>(block + offset[j]), dst.data(),
++                ggml_nelements(t));
++        values[j] = dst.data();
++    }
++    std::vector<skippy_receipt_tensor> tensors;
++    tensors.reserve(capture.targets.size());
++    for (size_t i = 0; i < capture.targets.size(); ++i) {
++        const ggml_tensor * t = capture.targets[i].tensor;
++        const int64_t n_cols = t->ne[1];
++        if (n_cols != static_cast<int64_t>(n) && n_cols != n_outputs) {
++            report_error(capture, std::string("receipt tensor ") + t->name + " has neither a column per token nor per output");
++            return;
++        }
++        tensors.push_back({capture.targets[i].layer, capture.targets[i].kind, t->ne[0], n_cols,
++                values[slot[i]]});
++    }
++
++    skippy_receipt_ubatch report = {};
++    report.step = capture.step;
++    report.n_tokens = static_cast<int32_t>(n);
++    report.token = capture.token.data();
++    report.seq = capture.seq.data();
++    report.pos = capture.pos.data();
++    report.output = capture.output.data();
++    report.cell = capture.cell.data();
++    report.n_kv = kv->get_n_kv();
++    if (capture.input != nullptr) {
++        report.input = block + input_offset;
++        report.input_row_bytes = static_cast<int64_t>(capture.input->nb[1]);
++        report.input_type = capture.input->type;
++    }
++    report.n_tensors = tensors.size();
++    report.tensors = tensors.data();
++    capture.on_ubatch(capture.user_data, &report);
++}
++
++namespace {
++
++llama_kv_cache * plain_kv_cache(llama_context * ctx) {
++    return dynamic_cast<llama_kv_cache *>(ctx->get_memory());
++}
++
++}  // namespace
++
++enum skippy_status skippy_model_set_receipt_recorder(
++        struct skippy_model * model,
++        skippy_receipt_ubatch_fn on_ubatch,
++        skippy_receipt_memory_fn on_memory,
++        void * user_data,
++        struct skippy_error ** out_error) {
++    if (model == nullptr || model->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model with a context is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    llama_kv_cache * kv = plain_kv_cache(model->ctx);
++    if (on_ubatch == nullptr && on_memory == nullptr) {
++        model->ctx->set_receipt_capture(nullptr);
++        if (kv != nullptr) {
++            kv->receipt_memory_observer = nullptr;
++        }
++        return skippy_success(out_error);
++    }
++    if (on_ubatch == nullptr || on_memory == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "both receipt callbacks are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (kv == nullptr || kv->get_n_stream() != 1) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
++                "receipts need a plain KV cache with one stream");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    if (model->mtp_ctx != nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "receipts do not support MTP stages yet");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    auto capture = std::make_shared<skippy_receipt_capture>();
++    capture->on_ubatch = on_ubatch;
++    capture->user_data = user_data;
++    kv->receipt_memory_observer = [on_memory, user_data](
++            int32_t op, llama_seq_id seq, llama_seq_id seq_dst, llama_pos p0, llama_pos p1) {
++        const skippy_receipt_memory_event event = {op, seq, seq_dst, p0, p1};
++        on_memory(user_data, &event);
++    };
++    model->ctx->set_receipt_capture(std::move(capture));
++    return skippy_success(out_error);
++}
++
++namespace {
++
++enum skippy_status ensure_scratch(skippy_model * model, skippy_receipt_scratch & scratch, skippy_error ** out_error) {
++    if (scratch.ctx != nullptr) {
++        return SKIPPY_STATUS_OK;
++    }
++    if (!model->has_receipt_ctx_params) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "the stage context parameters were not kept");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    llama_context_params params = model->receipt_ctx_params;
++    params.cb_eval = nullptr;
++    params.cb_eval_user_data = nullptr;
++    params.samplers = nullptr;
++    params.n_samplers = 0;
++    scratch.ctx = llama_init_from_model_with_graph_inputs(
++            model->model, params, skippy_graph_build_inputs_from_config(&model->config));
++    if (scratch.ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to create the receipt replay context");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    if (plain_kv_cache(scratch.ctx) == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "the replay context has no plain KV cache");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    scratch.capture = std::make_shared<skippy_receipt_capture>();
++    scratch.ctx->set_receipt_capture(scratch.capture);
++    return SKIPPY_STATUS_OK;
++}
++
++enum skippy_status replay_decode(
++        skippy_model * model,
++        llama_context * ctx,
++        llama_kv_cache * kv,
++        const skippy_receipt_replay_step & step,
++        skippy_error ** out_error) {
++    const auto n = static_cast<size_t>(step.n_tokens);
++    std::vector<llama_token> tokens(step.token, step.token + n);
++    std::vector<llama_pos> positions(step.pos, step.pos + n);
++    std::vector<int32_t> n_seq_id(n, 1);
++    std::vector<llama_seq_id> seq_values(step.seq, step.seq + n);
++    std::vector<llama_seq_id *> seq_ids(n);
++    std::vector<int8_t> logits(step.output, step.output + n);
++    for (size_t i = 0; i < n; ++i) {
++        seq_ids[i] = &seq_values[i];
++    }
++    skippy_graph_build_inputs inputs = skippy_graph_build_inputs_from_config(&model->config);
++    skippy_graph_build_inputs_set_activation_tokens(inputs, tokens.data(), n);
++    if (step.input != nullptr) {
++        const size_t element = ggml_type_size(static_cast<ggml_type>(step.input_type));
++        skippy_activation_frontier_part_input part;
++        part.values = step.input;
++        part.payload_bytes = static_cast<uint64_t>(step.input_row_bytes) * n;
++        part.ggml_type = static_cast<uint32_t>(step.input_type);
++        part.rank = 2;
++        part.token_axis = 1;
++        part.dimensions[0] = step.input_row_bytes / static_cast<int64_t>(element);
++        part.dimensions[1] = static_cast<int64_t>(n);
++        part.byte_strides[0] = element;
++        part.byte_strides[1] = static_cast<uint64_t>(step.input_row_bytes);
++        part.pos_start = n > 0 ? step.pos[0] : 0;
++        inputs.activation_frontier.push_back(part);
++    }
++    llama_batch batch = {
++        step.n_tokens, tokens.data(), nullptr, positions.data(), n_seq_id.data(), seq_ids.data(), logits.data(),
++    };
++    kv->receipt_forced_cells.assign(step.cell, step.cell + n);
++    kv->receipt_forced_n_kv = step.n_kv;
++    int32_t rc = 0;
++    const bool contained = skippy_contain_native_failure(out_error, [&] { rc = ctx->decode(batch, inputs); });
++    kv->receipt_forced_cells.clear();
++    kv->receipt_forced_n_kv = 0;
++    if (!contained) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    if (rc != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "a receipt replay step failed to decode");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    return SKIPPY_STATUS_OK;
++}
++
++}  // namespace
++
++enum skippy_status skippy_model_replay_receipt(
++        struct skippy_model * model,
++        int32_t seq,
++        int32_t layer,
++        const struct skippy_receipt_replay_step * steps,
++        size_t n_steps,
++        skippy_receipt_ubatch_fn on_capture,
++        void * user_data,
++        struct skippy_error ** out_error) {
++    if (model == nullptr || model->model == nullptr || (steps == nullptr && n_steps > 0) || on_capture == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model, steps and a capture callback are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (!model->receipt_scratch) {
++        model->receipt_scratch = std::make_shared<skippy_receipt_scratch>();
++    }
++    auto scratch = model->receipt_scratch;
++    std::lock_guard<std::mutex> lock(scratch->mutex);
++    enum skippy_status status = ensure_scratch(model, *scratch, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    llama_context * ctx = scratch->ctx;
++    llama_kv_cache * kv = plain_kv_cache(ctx);
++    llama_memory_t memory = ctx->get_memory();
++    llama_memory_clear(memory, false);
++
++    auto & capture = *scratch->capture;
++    capture.on_ubatch = on_capture;
++    capture.user_data = user_data;
++    if (capture.extra_layer != layer) {
++        capture.extra_layer = layer;
++        // the next ubatch rebuilds its graph with this layer's matmuls marked
++        ctx->set_receipt_capture(scratch->capture);
++    }
++    for (size_t index = 0; index < n_steps && status == SKIPPY_STATUS_OK; ++index) {
++        const auto & step = steps[index];
++        if (step.kind == SKIPPY_RECEIPT_REPLAY_SEQ_RM) {
++            llama_memory_seq_rm(memory, seq, step.p0, step.p1);
++            continue;
++        }
++        if (step.kind != SKIPPY_RECEIPT_REPLAY_DECODE || step.n_tokens <= 0 || step.token == nullptr ||
++                step.seq == nullptr || step.pos == nullptr || step.output == nullptr || step.cell == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "malformed receipt replay step");
++            status = SKIPPY_STATUS_INVALID_ARGUMENT;
++            break;
++        }
++        capture.step = static_cast<int64_t>(index);
++        capture.report = step.capture != 0;
++        status = replay_decode(model, ctx, kv, step, out_error);
++        std::set<llama_seq_id> foreign;
++        for (int32_t i = 0; i < step.n_tokens; ++i) {
++            if (step.seq[i] != seq) foreign.insert(step.seq[i]);
++        }
++        for (const llama_seq_id other : foreign) {
++            llama_memory_seq_rm(memory, other, -1, -1);
++        }
++    }
++    capture.on_ubatch = nullptr;
++    capture.user_data = nullptr;
++    llama_memory_clear(memory, false);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    return skippy_success(out_error);
++}
+diff --git a/src/skippy/receipts_internal.h b/src/skippy/receipts_internal.h
+new file mode 100644
+index 000000000..7d75f6051
+--- /dev/null
++++ b/src/skippy/receipts_internal.h
+@@ -0,0 +1,71 @@
++#pragma once
++
++#include "skippy/receipts.h"
++
++#include "ggml-backend.h"
++
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <vector>
++
++struct ggml_tensor;
++struct llama_ubatch;
++struct llama_memory_context_i;
++class llm_graph_result;
++
++struct skippy_receipt_target {
++    ggml_tensor * tensor = nullptr;
++    int32_t layer = 0;
++    int32_t kind = 0;
++};
++
++// Receipt state of one llama_context: the serving recorder, or a replay.
++struct skippy_receipt_capture {
++    skippy_receipt_ubatch_fn on_ubatch = nullptr;
++    void * user_data = nullptr;
++    // replay: also report the matmul inputs and outputs of this layer
++    int32_t extra_layer = -1;
++    // replay: the current step, and whether to report it
++    int64_t step = -1;
++    bool report = true;
++
++    // targets of the current graph; graph_error is set when it has none
++    std::vector<skippy_receipt_target> targets;
++    ggml_tensor * input = nullptr;
++    std::string graph_error;
++
++    // per-ubatch host copies: one block for every tensor and the stage input,
++    // pinned when the backend has pinned host memory. Ubatches alternate
++    // between two, so a ubatch's values outlive the next ubatch's callback.
++    struct buffer_deleter {
++        void operator()(ggml_backend_buffer_t buffer) const { ggml_backend_buffer_free(buffer); }
++    };
++    struct host_copy {
++        std::unique_ptr<ggml_backend_buffer, buffer_deleter> pinned;
++        std::vector<uint8_t> pageable;
++        std::vector<std::vector<float>> converted;
++    };
++    host_copy copies[2];
++    int next_copy = 0;
++    std::vector<int32_t> token;
++    std::vector<int32_t> seq;
++    std::vector<int32_t> pos;
++    std::vector<int8_t> output;
++    std::vector<uint32_t> cell;
++};
++
++// Finds the receipt tensors of a freshly built graph and marks them as outputs.
++void skippy_receipt_mark_graph(skippy_receipt_capture & capture, llm_graph_result & res);
++
++// Marks the receipt tensors of a reserve graph as outputs, so the scheduler's
++// planned allocation keeps them alive. The capture's current targets are kept.
++void skippy_receipt_mark_reserve_graph(const skippy_receipt_capture & capture, llm_graph_result & res);
++
++// Reads the receipt tensors of a computed ubatch and reports them.
++void skippy_receipt_report_ubatch(
++        skippy_receipt_capture & capture,
++        ggml_backend_sched_t sched,
++        const llama_ubatch & ubatch,
++        llama_memory_context_i * mctx,
++        const llm_graph_result & res);
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index edc423266..78c8da0da 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -8,6 +8,7 @@
+ #include <atomic>
+ #include <cstddef>
+ #include <cstdint>
++#include <memory>
+ #include <mutex>
+ #include <string>
+ #include <vector>
+@@ -102,6 +103,10 @@ struct skippy_model {
+     std::string execution_contract;
+     std::vector<const char *> resident_tensor_name_ptrs;
+     skippy_glm_dsa_op_timing glm_dsa_timing = {};
++    // receipts: the stage context's parameters, and the context replays run in
++    llama_context_params receipt_ctx_params = {};
++    bool has_receipt_ctx_params = false;
++    std::shared_ptr<struct skippy_receipt_scratch> receipt_scratch;
+     bool executable = true;
+     bool has_input_activation_boundary = false;
+     skippy_activation_boundary_desc input_activation_boundary = {};

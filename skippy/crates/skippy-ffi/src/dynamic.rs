@@ -13,12 +13,12 @@ use crate::{
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
     MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
     MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig,
-    Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
-    SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
-    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
-    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenLogprobs,
-    TokenSignal, WorkloadInfoV1, runtime_abi_supported,
+    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, ReceiptMemoryFn, ReceiptReplayStep,
+    ReceiptUbatchFn, RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
+    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1,
+    StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1,
+    StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo,
+    TokenLogprobs, TokenSignal, WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -245,6 +245,8 @@ dynamic_symbols! {
     skippy_session_copy_output_activation_frame(session: *mut Session, token_count: usize, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_session_last_token_signal(session: *mut Session, out_signal: *mut TokenSignal, out_error: *mut *mut Error) -> Status;
     skippy_session_take_token_logprobs(session: *mut Session, out_entries: *mut TokenLogprobs, capacity: usize, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_model_set_receipt_recorder(model: *mut Model, on_ubatch: ReceiptUbatchFn, on_memory: ReceiptMemoryFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_model_replay_receipt(model: *mut Model, seq: i32, layer: i32, steps: *const ReceiptReplayStep, n_steps: usize, on_capture: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
     skippy_session_signal_window(session: *mut Session, window_tokens: u32, out_window: *mut GenerationSignalWindow, out_error: *mut *mut Error) -> Status;
     skippy_trim_session(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_retire_verify_checkpoint(session: *mut Session, token_start: u64, token_count: u64, out_error: *mut *mut Error) -> Status;

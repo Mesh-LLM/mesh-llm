@@ -62,7 +62,9 @@ pub use logging::{
 };
 pub use media::{MediaRejected, SpeechAudio, SpeechOutputFormat, SpeechSynthesisConfig};
 pub use native::{
-    ModelWorkload, PoolingType, StageModel, StageModelReader, SystemOneReadSlot, WorkloadInfo,
+    ModelWorkload, PoolingType, ReceiptMemoryEvent, ReceiptRecorderSink, ReceiptReplayStepRef,
+    ReceiptReplayer, ReceiptTensorView, ReceiptUbatchView, RecordedUbatch, StageModel,
+    StageModelReader, SystemOneReadSlot, WorkloadInfo,
 };
 pub use native_mtp::NativeMtpDraft;
 pub use native_test_evidence::write_evidence_marker;
