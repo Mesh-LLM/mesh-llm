@@ -1,7 +1,7 @@
 {
   "spec": {
     "name": "Grammar sampler \u2014 M6 residual B/R/C control",
-    "description": "Diagnostic only: unchanged revision-4 native patches with evaluator validity checks outside timing. Compare real llama.cpp in baseline and candidate binaries plus Skippy in the candidate process; six balanced blocks, three warmups, twenty repetitions, all five fixed-input cases. No decode or qualification claim.",
+    "description": "Diagnostic only: compare real llama.cpp in baseline and candidate binaries plus the current Skippy candidate in its process. Six balanced blocks, three warmups, twenty repetitions, all five fixed-input cases. Preserve the executed source and patch identity; no decode or qualification claim.",
     "target": {
       "executor": "lab",
       "nodes": [
@@ -36,7 +36,7 @@
     },
     "harness": {
       "name": "custom",
-      "version": "grammar-sampling-r5-diagnostic",
+      "version": "grammar-sampling-r6-diagnostic",
       "trace": {
         "kind": "file",
         "ref": "synthetic-tool-grammar-fixed-logits",
@@ -63,7 +63,7 @@
     "labels": {
       "campaign": "max-grammar-sampling-abc-20261028",
       "phase": "diagnostic",
-      "protocol": "5"
+      "protocol": "6"
     }
   }
 }

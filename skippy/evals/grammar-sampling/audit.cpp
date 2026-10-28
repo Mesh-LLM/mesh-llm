@@ -130,9 +130,11 @@ int main(int argc, char ** argv) {
             const auto b = confidence(values);
             const auto a = confidence(overall_ca.at(scope));
             const bool decode = scope == "teacher-forced-native-decode";
+            const bool within = decode ? b.at("lower_95").get<double>() >= 0.99 : b.at("upper_95").get<double>() <= 1.01;
+            llama_gate = llama_gate && within;
             const bool improves = decode ? a.at("lower_95").get<double>() > 1.0 : a.at("upper_95").get<double>() < 1.0;
             existing_win = existing_win && improves;
-            aggregate.push_back({{"scope", scope}, {"C_vs_B", b}, {"C_vs_A", a}, {"improves_existing", improves}});
+            aggregate.push_back({{"scope", scope}, {"C_vs_B", b}, {"C_vs_A", a}, {"within_one_percent", within}, {"improves_existing", improves}});
         }
         json arms = json::array();
         for (auto & [key, times] : token_times) {

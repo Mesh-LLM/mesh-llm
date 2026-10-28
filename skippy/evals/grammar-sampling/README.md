@@ -72,3 +72,16 @@ Select `diagnostic` as the controller phase after the normal build/correctness
 prerequisites. Preserve the raw observations and independently audit C/B, R/B,
 and C/R comparisons. A later production change still requires its own fresh
 correctness, passing development screen, and 30-block qualification.
+
+Revision 6 adds a literal-search path for nonempty printable ASCII trigger
+patterns with no regex syntax and default ECMAScript flags. Regex creation and
+all other matching stay unchanged, including escaped and non-ASCII patterns.
+This preserves trigger words assembled across token pieces. New core patch
+`0012` owns this upstream grammar capability, which no earlier patch modifies;
+it is independent of Skippy's sampling dispatch in `0002`. No ABI changes.
+
+Before screening, the revision-5 control must be independently verified and the
+[preregistered decision map](diagnostic-decisions.json) followed. The frozen
+baseline remains primary. A same-binary control cannot replace a failed baseline
+comparison. Native audit now enforces the aggregate gate explicitly as well as
+the per-case gates; the external verifier already required both.

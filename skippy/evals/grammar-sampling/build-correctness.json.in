@@ -43,10 +43,10 @@
     },
     "harness": {
       "name": "custom",
-      "version": "adhoc",
+      "version": "grammar-sampling-r6",
       "trace": {
         "kind": "synthetic",
-        "ref": "grammar-sampling-correctness-r5"
+        "ref": "grammar-sampling-correctness-r6"
       },
       "seed": 73,
       "warmup_requests": 0,
@@ -64,7 +64,7 @@
     "labels": {
       "campaign": "max-grammar-sampling-abc-20261028",
       "phase": "build-correctness",
-      "protocol": "5"
+      "protocol": "6"
     }
   }
 }

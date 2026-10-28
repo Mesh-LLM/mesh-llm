@@ -36,7 +36,7 @@
     },
     "harness": {
       "name": "custom",
-      "version": "grammar-sampling-r5",
+      "version": "grammar-sampling-r6",
       "trace": {
         "kind": "file",
         "ref": "synthetic-tool-grammar-fixed-logits",
@@ -62,7 +62,7 @@
     "labels": {
       "campaign": "max-grammar-sampling-abc-20261028",
       "phase": "${phase}",
-      "protocol": "5"
+      "protocol": "6"
     }
   }
 }
