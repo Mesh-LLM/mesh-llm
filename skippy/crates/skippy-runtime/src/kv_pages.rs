@@ -140,7 +140,80 @@ fn cachegen_records(validated: &ValidatedArchive<'_>) -> Result<Vec<CacheGenReco
 }
 use crate::{RuntimeKvPage, RuntimeKvPageDesc, Status};
 
+/// A size query passes no output buffer, so the native call reports the
+/// required byte count with either `Ok` or `BufferTooSmall`.
+fn size_query_result(status: Status, error: *mut skippy_ffi::Error, bytes: usize) -> Result<u64> {
+    if status != Status::BufferTooSmall && status != Status::Ok {
+        ensure_ok(status, error)?;
+    } else {
+        free_error(error);
+    }
+    Ok(bytes as u64)
+}
+
 impl StageSession {
+    /// Bytes [`Self::export_full_state`] would allocate, without copying state.
+    pub fn full_state_size(&mut self, layer_start: i32, layer_end: i32) -> Result<u64> {
+        let mut bytes = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_export_full_state(
+                self.raw,
+                layer_start,
+                layer_end,
+                ptr::null_mut(),
+                0,
+                &mut bytes,
+                &mut error,
+            )
+        };
+        size_query_result(status, error, bytes)
+    }
+
+    /// Bytes [`Self::export_recurrent_state`] would allocate, without copying state.
+    pub fn recurrent_state_size(&mut self) -> Result<u64> {
+        let mut bytes = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_export_recurrent_state(
+                self.raw,
+                ptr::null_mut(),
+                0,
+                &mut bytes,
+                &mut error,
+            )
+        };
+        size_query_result(status, error, bytes)
+    }
+
+    /// Bytes [`Self::export_kv_page`] would allocate, without copying state.
+    pub fn kv_page_size(
+        &mut self,
+        layer_start: i32,
+        layer_end: i32,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<u64> {
+        let mut desc = RawKvPageDesc::default();
+        let mut bytes = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_export_kv_page(
+                self.raw,
+                layer_start,
+                layer_end,
+                token_start,
+                token_count,
+                &mut desc,
+                ptr::null_mut(),
+                0,
+                &mut bytes,
+                &mut error,
+            )
+        };
+        size_query_result(status, error, bytes)
+    }
+
     pub fn export_state(&mut self, layer_start: i32, layer_end: i32) -> Result<Vec<u8>> {
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();

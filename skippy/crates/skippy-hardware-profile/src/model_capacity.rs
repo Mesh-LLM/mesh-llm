@@ -21,6 +21,15 @@ pub fn local_model_fit_budget_bytes() -> u64 {
     }
 }
 
+/// Host RAM `(total, available)` in bytes as the OS reports it right now
+/// (`MemTotal` and `MemAvailable` on Linux). `None` when the OS reports none.
+pub fn host_memory_bytes() -> Option<(u64, u64)> {
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+    let total = system.total_memory();
+    (total > 0).then(|| (total, system.available_memory()))
+}
+
 #[cfg(not(target_os = "macos"))]
 fn nvidia_capacity() -> Option<u64> {
     use crate::platform::command_output;

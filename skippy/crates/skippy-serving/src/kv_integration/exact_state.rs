@@ -15,7 +15,6 @@ use super::{
 const MAX_PREFIX_PROBES: usize = 64;
 
 mod restore;
-#[cfg(test)]
 mod snapshot_headroom;
 
 fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Location) -> String {
@@ -607,6 +606,10 @@ impl KvStageIntegration {
             #[cfg(test)]
             crate::frontend::capture_trace::POST_DECODE_NONE_ALREADY_RECORDED
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.finish_record(&identity.page_id);
+            return Ok(None);
+        }
+        if !self.snapshot_fits_host_memory(runtime, session_id, exact_state_payload, token_count) {
             self.finish_record(&identity.page_id);
             return Ok(None);
         }
