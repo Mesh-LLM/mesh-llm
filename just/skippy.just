@@ -317,3 +317,8 @@ skippy-layer-package-fetch *ARGS:
 [positional-arguments]
 decisions-smoke *ARGS:
     @just automation-run automation decisions-smoke "$@"
+
+# Verify the restricted heap candidate's actual vector target in the frozen worker.
+[unix]
+sampler-simd-metal-heap-isa retained qualified model artifacts binary_sha256:
+    bash skippy/evals/simd-top-k/profile-metal-heap.sh "{{ retained }}" "{{ qualified }}" "{{ model }}" "{{ artifacts }}" "{{ binary_sha256 }}"
