@@ -43,6 +43,7 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
 /// A settings-only `[[plugin]] name = "capsules"` entry: no command, no url.
 fn capsules_entry(command: Option<&str>) -> PluginConfigEntry {
     PluginConfigEntry {
+        operation_bindings: Vec::new(),
         name: "capsules".into(),
         enabled: None,
         web_ui_enabled: None,
@@ -59,6 +60,7 @@ fn capsules_entry(command: Option<&str>) -> PluginConfigEntry {
 
 fn builtin_off(name: &str) -> PluginConfigEntry {
     PluginConfigEntry {
+        operation_bindings: Vec::new(),
         name: name.into(),
         enabled: Some(false),
         ..capsules_entry(None)

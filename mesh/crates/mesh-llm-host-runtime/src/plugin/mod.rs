@@ -17,6 +17,7 @@ mod in_process;
 mod installed;
 pub(crate) mod mcp;
 pub mod openai_exchange;
+mod operation_bindings;
 pub(crate) mod operations;
 mod runtime;
 mod schema_validation;
@@ -129,6 +130,7 @@ pub struct PluginManager {
 }
 
 pub(in crate::plugin) struct PluginManagerInner {
+    operation_bindings: operation_bindings::BindingRegistry,
     capability_registration: capability_registration::CapabilityRegistration,
     pub(in crate::plugin) identity_registry: Arc<Mutex<identity_registry::PluginIdentityRegistry>>,
     pub(in crate::plugin) exchange_grants: exchange_grants::ExchangeGrantRegistry,
@@ -213,6 +215,7 @@ impl PluginManager {
         let rpc_bridge = Arc::new(Mutex::new(None));
         let runtime_data = RuntimeDataCollector::new();
         let instance_id = make_instance_id();
+        let operation_bindings = operation_bindings::BindingRegistry::from_specs(&specs.externals)?;
         let exchange_grants = exchange_grants::ExchangeGrantRegistry::from_specs(&specs.externals);
         let (plugins, failed_plugins) = Self::load_external_plugins(
             specs,
@@ -226,6 +229,7 @@ impl PluginManager {
         .await?;
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
+                operation_bindings,
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants,
@@ -453,6 +457,7 @@ impl PluginManager {
     pub fn for_test_bridge(plugin_names: &[&str], bridge: Arc<dyn PluginRpcBridge>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                operation_bindings: Default::default(),
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants: Default::default(),
@@ -480,6 +485,7 @@ impl PluginManager {
     pub(crate) fn for_test_summaries(summaries: Vec<PluginSummary>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                operation_bindings: Default::default(),
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants: Default::default(),

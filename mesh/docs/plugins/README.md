@@ -1448,3 +1448,35 @@ The following are intentionally left open for implementation design:
 - MCP and HTTP are first-class host projections
 - product APIs depend on capabilities, not plugin IDs
 - large data flows use negotiated side streams, not the control socket
+
+## Operator-bound local operations (draft)
+
+Hosts advertising `operation_bindings.v1` accept RPC method
+`plugin/bound_operation`. The authenticated connection supplies caller identity;
+RPC input cannot name another caller or choose an arbitrary provider. Install
+and manifest inspection grant no authority. An explicit
+`[[plugin.operation_bindings]]` under the caller selects `name`, `provider`,
+`profile`, `setup_operation`, `setup_input_json`, and `operations`.
+
+A request contains `binding`, optional `handle`, `operation`, and `input_json`.
+Without a handle, operation and input must be empty: only the operator-fixed
+setup call executes. Successful setup returns an opaque handle tied to both
+runtime generations. Ordinary calls must use that handle and an allowlisted
+operation; setup is excluded from the allowlist. Provider unavailability never
+selects another process or starts/retries a provider. One configured binding
+exclusively owns a provider process/profile. The consumer interprets the opaque
+setup response and validates its domain identity before using the handle.
+
+Responses distinguish `not_dispatched`, `responded` (including provider errors),
+and `uncertain`. Once queued, missing replies are uncertain and calls are never
+replayed. Queue and response share a 30-second deadline; timeout does not restart
+the provider. Capacity is bounded to eight calls per connection and binding;
+setup acquires exclusive capacity. Setup must be idempotent for the fixed payload
+and may be re-issued after a failed or uncertain attempt. Dispatching setup
+invalidates the previous handle; every successful setup mints a fresh handle.
+An absent provider does not prevent startup. Explicit provider disable revokes
+the binding; removing a provider entry takes effect on restart. Revocation and
+enqueue are synchronized: revocation before enqueue is `not_dispatched`;
+revocation after enqueue may be `uncertain`. Changed owner grants revoke old handles;
+new grants require a process restart. This draft is not yet the installed
+Lightning composition or a production-readiness claim.

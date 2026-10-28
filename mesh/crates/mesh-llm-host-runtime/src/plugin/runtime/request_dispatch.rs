@@ -4,9 +4,9 @@ use anyhow::{Context, Result, bail};
 use std::sync::atomic::Ordering;
 use tokio::sync::{mpsc, oneshot};
 
-struct PendingRequest {
-    pending: PendingResponses,
-    request_id: u64,
+pub(super) struct PendingRequest {
+    pub(super) pending: PendingResponses,
+    pub(super) request_id: u64,
 }
 
 impl Drop for PendingRequest {

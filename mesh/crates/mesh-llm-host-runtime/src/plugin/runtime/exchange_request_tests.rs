@@ -6,6 +6,7 @@ use tokio::time::{Duration, Instant};
 
 async fn running_observer() -> (Arc<ExternalPlugin>, mpsc::Receiver<super::proto::Envelope>) {
     let plugin = Arc::new(plugin_for_spec(super::ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         name: "observer".into(),
         command: "unused".into(),
         args: Vec::new(),

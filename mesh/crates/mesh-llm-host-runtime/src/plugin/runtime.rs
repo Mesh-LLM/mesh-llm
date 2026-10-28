@@ -1,3 +1,4 @@
+mod bound_operation;
 mod default_plugin_policy;
 mod request;
 mod request_dispatch;
@@ -345,6 +346,7 @@ impl ExternalPlugin {
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                     host_capabilities: vec![
+                        mesh_llm_plugin::operation_binding::CAPABILITY.to_string(),
                         mesh_llm_plugin::host_capabilities::MODEL_REQUIREMENTS.to_string(),
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
@@ -1065,6 +1067,7 @@ pub(crate) mod tests {
         asset_root: Option<&str>,
     ) -> ExternalPluginSpec {
         ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             openai_exchange_grant: None,
             name: "demo".into(),
             command: "mesh-llm-plugin-demo".into(),
@@ -1127,6 +1130,7 @@ pub(crate) mod tests {
         runner: crate::plugin::InProcessPluginRunner,
     ) -> ExternalPlugin {
         let mut plugin = plugin_for_spec(ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             openai_exchange_grant: None,
             name: name.into(),
             command: String::new(),
@@ -1438,6 +1442,7 @@ pub(crate) mod tests {
     fn configured_plugin_url_is_normalized_before_child_env_export() {
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
+                operation_bindings: Vec::new(),
                 name: "demo".into(),
                 enabled: Some(true),
                 web_ui_enabled: None,

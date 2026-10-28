@@ -40,6 +40,7 @@ fn config_sync_full_config_roundtrip() {
             ..Default::default()
         }],
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "demo".to_string(),
             enabled: Some(true),
             web_ui_enabled: Some(false),

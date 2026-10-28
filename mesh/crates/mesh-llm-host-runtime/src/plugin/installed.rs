@@ -117,6 +117,7 @@ pub(crate) fn configured_external_plugin_spec(
     };
 
     Ok(ConfiguredExternalPlugin::Active(ExternalPluginSpec {
+        operation_bindings: entry.operation_bindings.clone(),
         openai_exchange_grant: entry.openai_exchange_grant.clone().map(Box::new),
         name: entry.name.clone(),
         command,
@@ -202,6 +203,7 @@ fn installed_plugin_metadata_for_name(name: &str) -> Result<Option<InstalledPlug
 
 fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSpec {
     ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: metadata.name.clone(),
         command: installed_plugin_command(metadata).display().to_string(),

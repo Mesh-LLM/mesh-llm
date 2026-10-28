@@ -1,4 +1,5 @@
 mod model_requirements;
+mod operation_binding;
 use super::runtime::PluginRuntime;
 use super::{PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary, proto};
 use anyhow::{Context, Result, anyhow, bail};
@@ -89,6 +90,7 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
      generation,
      peer_state| {
         let authenticated_peer = peer_state.load(Ordering::Acquire);
+        let binding_capacity = Arc::new(tokio::sync::Semaphore::new(8));
         Box::pin(async move {
             let result: Result<()> = async {
                 loop {
@@ -174,6 +176,14 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                     );
                                 }
                                 Some(super::proto::envelope::Payload::RpcRequest(request)) => {
+                                    if request.method == mesh_llm_plugin::operation_binding::METHOD {
+                                        operation_binding::forward(
+                                            plugin_name.clone(), request_id, request,
+                                            PluginRequestPeer { authenticated: authenticated_peer, runtime: runtime.clone(), generation },
+                                            mesh_tx.clone(), outbound_tx.clone(), binding_capacity.clone(),
+                                        );
+                                        continue;
+                                    }
                                     forward_plugin_request(
                                         plugin_name.clone(),
                                         request_id,

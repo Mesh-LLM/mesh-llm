@@ -11,6 +11,7 @@ mod internal_rpc;
 mod io;
 mod manifest;
 pub mod openai_exchange;
+pub mod operation_binding;
 mod runtime;
 mod simple_plugin;
 mod virtual_model;

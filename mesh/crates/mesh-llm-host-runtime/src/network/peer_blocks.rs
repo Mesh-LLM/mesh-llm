@@ -941,6 +941,7 @@ mod tests {
     ) -> crate::plugin::MeshConfig {
         let mut config = crate::plugin::MeshConfig::default();
         config.plugins.push(crate::plugin::PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: name.into(),
             enabled: None,
             web_ui_enabled: None,

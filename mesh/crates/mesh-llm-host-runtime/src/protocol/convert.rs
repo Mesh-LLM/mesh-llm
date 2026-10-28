@@ -1377,6 +1377,7 @@ fn legacy_proto_config_to_mesh(
         .plugins
         .iter()
         .map(|p| PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: p.name.clone(),
             enabled: p.enabled,
             web_ui_enabled: None,

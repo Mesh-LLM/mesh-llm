@@ -98,6 +98,7 @@ mod tests {
     #[cfg(unix)]
     fn process_spec() -> super::super::ExternalPluginSpec {
         super::super::ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             name: "peer-auth-observer".into(),
             command: std::env::current_exe().unwrap().to_str().unwrap().into(),
             args: vec![

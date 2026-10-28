@@ -491,6 +491,7 @@ impl ConfigEditor {
             Some(index) => index,
             None => {
                 self.config.plugins.push(PluginConfigEntry {
+                    operation_bindings: Vec::new(),
                     name,
                     enabled: None,
                     web_ui_enabled: None,
@@ -711,6 +712,14 @@ impl PluginConfigEditor<'_> {
         grant: Option<crate::OpenAiExchangeGrant>,
     ) -> &mut Self {
         self.plugin.openai_exchange_grant = grant;
+        self
+    }
+
+    pub fn operation_bindings(
+        &mut self,
+        bindings: Vec<crate::PluginOperationBinding>,
+    ) -> &mut Self {
+        self.plugin.operation_bindings = bindings;
         self
     }
 

@@ -6,6 +6,8 @@ mod local_model_path;
 mod model;
 mod model_validation;
 mod openai_exchange;
+mod operation_binding;
+pub use operation_binding::PluginOperationBinding;
 mod plugin_validation;
 mod private_file;
 mod size;
@@ -981,6 +983,10 @@ gpu_id = "pci:0000:65:00.0"
             (
                 "PluginConfigEditor::web_ui_primary_tab",
                 vec!["plugin.<plugin-name>.web_ui_primary_tab"],
+            ),
+            (
+                "PluginConfigEditor::operation_bindings",
+                vec!["plugin.<plugin-name>.operation_bindings"],
             ),
             (
                 "PluginConfigEditor::allow_peer_blocks",

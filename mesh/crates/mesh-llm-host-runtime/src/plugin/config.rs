@@ -274,6 +274,7 @@ pub struct ResolvedPlugins {
 
 #[derive(Clone, Debug)]
 pub struct ExternalPluginSpec {
+    pub operation_bindings: Vec<mesh_llm_config::PluginOperationBinding>,
     pub openai_exchange_grant: Option<Box<mesh_llm_config::OpenAiExchangeGrant>>,
     pub name: String,
     pub command: String,
@@ -369,6 +370,7 @@ fn ensure_builtin_entry_only_toggles_enabled(entry: &PluginConfigEntry) -> Resul
 /// plugin manager starts it from the runner supplied for its name.
 pub fn in_process_builtin_spec(name: &str) -> ExternalPluginSpec {
     ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: name.to_string(),
         command: String::new(),
@@ -403,6 +405,7 @@ pub fn builtin_plugin_spec(name: &str, plugin_args: &[String]) -> Result<Externa
     // `=` keeps an argument that starts with `-` bound to its flag.
     args.extend(plugin_args.iter().map(|arg| format!("--plugin-arg={arg}")));
     Ok(ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: name.to_string(),
         command,

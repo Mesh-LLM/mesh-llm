@@ -98,6 +98,7 @@ impl super::PluginManager {
     /// Persisted owner config takes effect for security grants immediately,
     /// even when unrelated settings require a runtime restart.
     pub(crate) async fn apply_exchange_grants(&self, config: &MeshConfig) {
+        self.revoke_changed_operation_bindings(config);
         let revoked = {
             let mut states = self.inner.exchange_grants.0.lock().unwrap();
             let mut changed = Vec::new();
@@ -174,6 +175,7 @@ mod tests {
             config::{ExternalPluginSpec, PluginHostMode, ResolvedPlugins},
         };
         let spec = ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             name: "unavailable-observer".into(),
             command: "/definitely-nonexistent-mesh-llm-plugin-1331".into(),
             args: Vec::new(),
@@ -315,6 +317,7 @@ mod tests {
             ..Default::default()
         };
         let spec = ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             name: "observer".into(),
             command: "deferred-fixture".into(),
             args: Vec::new(),

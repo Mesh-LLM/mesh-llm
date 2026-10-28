@@ -1764,6 +1764,9 @@ impl Default for LoggingConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PluginConfigEntry {
+    /// Explicit local-service permissions. Installing a plugin grants nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operation_bindings: Vec<crate::PluginOperationBinding>,
     pub name: String,
     #[serde(default)]
     pub enabled: Option<bool>,

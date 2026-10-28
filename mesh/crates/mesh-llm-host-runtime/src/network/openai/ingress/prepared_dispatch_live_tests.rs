@@ -15,6 +15,7 @@ async fn select_policy(host: &mut LiveHost, deny_model: &str, virtual_echo: bool
         args.push("--virtual-echo".into());
     }
     let spec = ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         name: "openai-exchange-observer".into(),
         command: host
             .installed_metadata

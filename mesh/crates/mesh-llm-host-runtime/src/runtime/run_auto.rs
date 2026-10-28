@@ -2092,6 +2092,7 @@ mod tests {
         clear_runtime_event_engine();
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
+                operation_bindings: Vec::new(),
                 name: BLOBSTORE_PLUGIN_ID.to_owned(),
                 enabled: Some(true),
                 web_ui_enabled: None,

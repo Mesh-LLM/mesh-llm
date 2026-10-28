@@ -159,6 +159,22 @@ impl Node {
         event: crate::plugin::PluginMeshEvent,
     ) -> Result<()> {
         match event {
+            crate::plugin::PluginMeshEvent::BoundOperation {
+                plugin_id,
+                generation,
+                request,
+                response_tx,
+            } => {
+                if let Some(manager) = self.plugin_manager().await {
+                    tokio::spawn(async move {
+                        let result = manager
+                            .bound_operation(&plugin_id, generation, request)
+                            .await;
+                        let _ = response_tx.send(result);
+                    });
+                }
+                Ok(())
+            }
             crate::plugin::PluginMeshEvent::IdentityService {
                 plugin_id,
                 request,

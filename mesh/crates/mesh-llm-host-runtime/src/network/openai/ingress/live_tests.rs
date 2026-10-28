@@ -714,6 +714,7 @@ fn fixture_spec(
         args.push("--delegate".into());
     }
     ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         name: NAME.into(),
         command: installed.executable_path().display().to_string(),
         args,

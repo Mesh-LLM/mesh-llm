@@ -115,6 +115,7 @@ fn resolves_default_builtin_plugins() {
 /// A stanza for the removed built-in Lexe wallet.
 fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
     PluginConfigEntry {
+        operation_bindings: Vec::new(),
         name: RETIRED_WALLET_LEXE_PLUGIN_ID.into(),
         enabled,
         web_ui_enabled: None,
@@ -187,6 +188,7 @@ fn retired_builtin_wallet_stanza_is_ignored() {
 fn external_wallet_plugin_is_an_ordinary_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "lexe-wallet".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -212,6 +214,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
 fn external_plugin_can_be_configured() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "demo".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -239,6 +242,7 @@ fn external_plugin_can_be_configured() {
 #[test]
 fn failed_plugin_summary_redacts_urls_before_serialization() {
     let spec = ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: "remote".into(),
         command: "mesh-llm-plugin-remote".into(),
@@ -269,6 +273,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
 fn blobstore_can_be_disabled() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: BLOBSTORE_PLUGIN_ID.into(),
             enabled: Some(false),
             web_ui_enabled: None,
@@ -293,6 +298,7 @@ fn blobstore_can_be_disabled() {
 fn external_plugin_can_be_enabled_with_url() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "endpoint-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -322,6 +328,7 @@ fn external_plugin_can_be_enabled_with_url() {
 fn external_plugin_rejects_url_that_is_empty_after_normalization() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "endpoint-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -347,6 +354,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
     let raw_url = "\u{2003}tcp://user:secret@127.0.0.1:19091/control?token=private\u{2003}";
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "remote-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -377,6 +385,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
 fn external_plugin_can_be_enabled_with_command_args() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "endpoint-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -405,6 +414,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
 fn external_plugin_ignores_disabled_entry_without_install() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "endpoint-plugin".into(),
             enabled: Some(false),
             web_ui_enabled: None,
@@ -443,6 +453,7 @@ fn default_builtins_are_resolved_on_public_meshes() {
 fn resolves_external_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "demo".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -469,6 +480,7 @@ fn resolves_external_plugin() {
 async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             openai_exchange_grant: None,
             name: "demo".into(),
             command: "mesh-llm-definitely-missing-plugin-binary".into(),
