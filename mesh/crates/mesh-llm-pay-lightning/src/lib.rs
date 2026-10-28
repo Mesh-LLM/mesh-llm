@@ -5,9 +5,11 @@ mod receipt_schedule;
 mod runtime;
 mod tickets;
 pub mod wallet_binding;
-#[cfg(unix)]
+/// Subprocess `wallet.v1` adapter kept for the offline two-wallet fixture only;
+/// the installed utility reaches wallets through the host binding.
+#[cfg(all(unix, feature = "offline-mock"))]
 pub mod wallet_child;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "offline-mock"))]
 mod wallet_transport;
 /// Side-effect-free permission declaration for packaging.
 pub fn manifest_json(name: &str) -> anyhow::Result<String> {

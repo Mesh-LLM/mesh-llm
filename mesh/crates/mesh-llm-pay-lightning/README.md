@@ -101,7 +101,8 @@ the macOS file limit with `ulimit -n 8192` before the full suite. The opt-in
 `offline-mock` binary uses signed synthetic invoices and an explicit shared file
 network. It never contacts wallet services or moves funds. Its
 `MESH_LLM_OFFLINE_WALLET_CHILD` mode serves only `wallet.v1` for legacy subprocess
-adapter tests; the installed utility does not use that child adapter.
+adapter tests; the installed utility does not use that child adapter, and the
+`wallet_child` module is compiled only with that feature.
 
 Tests cover synthetic payment settlement/recovery and legacy child ownership,
 plus the installed utility's host RPC setup, startup delay, SIGKILL and identity
