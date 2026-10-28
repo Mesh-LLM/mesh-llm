@@ -314,7 +314,7 @@ class LlamaUpstreamPinGuardTests(unittest.TestCase):
     def test_workflow_runs_guard_from_protected_checkout(self) -> None:
         workflow = QUALITY_LANE.read_text(encoding="utf-8")
         summary = workflow.split("  summary:\n", 1)[1]
-        self.assertIn("ref: ${{ github.event.repository.default_branch }}", summary)
+        self.assertIn("ref: 70238ad1048498b24c524453800599b591131d35", summary)
         self.assertIn("fetch-depth: 0", summary)
         self.assertIn("persist-credentials: false", summary)
         self.assertIn("if: ${{ github.event_name == 'pull_request' }}", summary)

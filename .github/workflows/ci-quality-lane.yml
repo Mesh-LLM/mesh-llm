@@ -68,7 +68,7 @@ jobs:
       website_docs_changed: ${{ fromJson(inputs.lane_plan_json).signals.website_docs_changed }}
       clippy_max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.linux_max_parallel }}
       original_event_name: ${{ inputs.original_event_name }}
-      force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      force_hosted: true
       use_depot: ${{ inputs.use_depot }}
 
   runner_contract:
@@ -92,7 +92,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: 70238ad1048498b24c524453800599b591131d35
           fetch-depth: 0
           persist-credentials: false
       - name: Guard PR llama.cpp upstream pin monotonicity

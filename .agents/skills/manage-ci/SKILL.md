@@ -615,3 +615,18 @@ Also run what applies:
 Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
+
+## Maintainer-approved 0.78.1 release exception
+
+Mic approved PR #2632 on 2026-10-28. On this release line only, the five
+PR entrypoints use same-commit release lanes, not main's incompatible product
+automation. Planner and reporting scripts use published 0.78.1 commit
+`70238ad1048498b24c524453800599b591131d35`. Runner policy remains on protected main; all
+release lane calls force hosted placement. Hardware smoke is main-push-only,
+not authorized by this exception. No runner-group or repository setting changes.
+Native checks, plan catalog equality, and product tests remain enforced.
+This exception does not apply to main or authorize a release/merge.
+
+The Linux hosted projection excludes only `core-cuda` and records its own
+digest separately from canonical-plan provenance. GPU diagnostics, including
+manual dispatch, are unavailable on this release exception; main push only.

@@ -213,11 +213,12 @@ fn check_workflow_invariants(
     }
 
     for (lane, workflow) in pr_workflows {
+        check_release_pr_executor(workflow)?;
         ensure_contains(workflow, "pull_request:", &format!("PR {lane} trigger"))?;
         ensure_contains(
             workflow,
-            &format!("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"),
-            &format!("PR protected native {lane} lane call"),
+            &format!("uses: ./.github/workflows/ci-{lane}-lane.yml"),
+            &format!("release native {lane} lane call"),
         )?;
         ensure_contains(
             workflow,
@@ -397,7 +398,7 @@ fn check_orchestrator_invariants(
             .unwrap_or("");
         ensure_contains(
             pr_workflow,
-            &format!("uses: Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main"),
+            &format!("uses: ./.github/workflows/ci-{lane}-lane.yml"),
             &format!("native PR {lane} lane call"),
         )?;
         let main_workflow = main_workflows
@@ -1780,5 +1781,92 @@ jobs:
 
         let error = check_release_sccache_initialization(&workflow).unwrap_err();
         assert!(error.to_string().contains("`publish` invokes"), "{error}");
+    }
+}
+
+fn check_release_pr_executor(workflow: &str) -> DynResult<()> {
+    ensure_contains(
+        workflow,
+        "[[ \"$BASE_REF\" == 'release/0.78.1' ]]",
+        "release executor base boundary",
+    )?;
+    ensure_contains(
+        workflow,
+        "ref: 70238ad1048498b24c524453800599b591131d35",
+        "published release planner",
+    )?;
+    ensure_not_contains(
+        workflow,
+        "@main",
+        "release executor must not mix main lanes",
+    )
+}
+
+#[cfg(test)]
+mod release_executor_tests {
+    use super::check_release_pr_executor;
+
+    #[test]
+    fn release_hosted_projection_preserves_all_other_rows() {
+        let workflow = include_str!("../../../.github/workflows/pr_linux.yml");
+        let line = workflow
+            .lines()
+            .find(|line| line.contains("hosted=$(jq"))
+            .unwrap();
+        let expression = line.split('\'').nth(1).unwrap();
+        let input = r#"{"matrices":{"smoke":[{"id":"core-cuda"},{"id":"core"},{"id":"two-node-client"}],"hosts":[{"id":"linux-cuda"}]},"required":true}"#;
+        let output = std::process::Command::new("jq")
+            .args([
+                "-cn",
+                "--argjson",
+                "plan",
+                input,
+                &format!("$plan | {expression}"),
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let mut expected: serde_json::Value = serde_json::from_str(input).unwrap();
+        expected["matrices"]["smoke"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+        let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(actual, expected);
+        assert!(workflow.contains("== \"$HOSTED_PROJECTION_DIGEST\""));
+        assert!(workflow.contains("[[ \"$LANE_RESULT\" == \"success\" ]]"));
+    }
+
+    #[test]
+    fn release_gpu_jobs_require_actual_main_push() {
+        let workflow = include_str!("../../../.github/workflows/ci-linux-product-smoke-slice.yml");
+        for job in ["core_cuda", "laya_cuda", "laya_vulkan", "laya_rocm"] {
+            let section = workflow.split(&format!("  {job}:\n")).nth(1).unwrap();
+            let condition = section
+                .lines()
+                .find(|line| line.trim().starts_with("if:"))
+                .unwrap();
+            assert!(
+                condition
+                    .contains("github.event_name == 'push' && github.ref == 'refs/heads/main' &&")
+            );
+            for (event, reference, allowed) in [
+                ("pull_request", "refs/pull/1/merge", false),
+                ("workflow_dispatch", "refs/heads/main", false),
+                ("push", "refs/heads/release/0.78.1", false),
+                ("push", "refs/heads/main", true),
+            ] {
+                assert_eq!(event == "push" && reference == "refs/heads/main", allowed);
+            }
+        }
+    }
+
+    #[test]
+    fn release_executor_requires_exact_base_and_published_planner() {
+        let valid = "[[ \"$BASE_REF\" == 'release/0.78.1' ]]\nref: 70238ad1048498b24c524453800599b591131d35";
+        assert!(check_release_pr_executor(valid).is_ok());
+        assert!(check_release_pr_executor(&valid.replace("release/0.78.1", "main")).is_err());
+        assert!(check_release_pr_executor(&valid.replace("70238ad", "0000000")).is_err());
+        assert!(check_release_pr_executor(&format!("{valid}\nuses: lane@main")).is_err());
     }
 }

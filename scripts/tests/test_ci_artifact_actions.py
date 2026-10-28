@@ -43,7 +43,7 @@ class CiArtifactActionTests(unittest.TestCase):
             r"^[^@\s]+@[0-9a-f]{40}\s+#\s+\S",
         )
         protected_pr_lanes = {
-            f"Mesh-LLM/mesh-llm/.github/workflows/ci-{lane}-lane.yml@main": f"pr_{lane}.yml"
+            f"./.github/workflows/ci-{lane}-lane.yml": f"pr_{lane}.yml"
             for lane in ("quality", "website", "linux", "macos", "windows")
         }
         protected_pr_lanes[
