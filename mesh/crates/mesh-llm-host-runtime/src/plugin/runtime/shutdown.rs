@@ -51,6 +51,16 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     #[tokio::test]
+    async fn disconnected_status_is_not_terminal_shutdown() {
+        let runner: crate::plugin::InProcessPluginRunner = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let plugin = crate::plugin::runtime::tests::in_process_plugin("crash-fixture", runner);
+        plugin.summary.lock().await.status = "stopped".into();
+        assert!(!plugin.is_stopping().await);
+        plugin.shutdown().await;
+        assert!(plugin.is_stopping().await);
+    }
+
+    #[tokio::test]
     async fn shutdown_rejects_startup_already_waiting_for_the_restart_lock() {
         let starts = Arc::new(AtomicUsize::new(0));
         let runner_starts = starts.clone();

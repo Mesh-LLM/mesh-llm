@@ -895,8 +895,9 @@ impl ExternalPlugin {
     }
 
     async fn is_stopping(&self) -> bool {
-        let summary = self.summary.lock().await;
-        matches!(summary.status.as_str(), "shutting down" | "stopped")
+        // A disconnected transport also publishes "stopped". Only explicit
+        // terminal intent may prevent supervision from recovering a crash.
+        self.stopping.load(Ordering::Acquire)
     }
 
     /// Tell the node this plugin stopped for good, so it withdraws the key it
