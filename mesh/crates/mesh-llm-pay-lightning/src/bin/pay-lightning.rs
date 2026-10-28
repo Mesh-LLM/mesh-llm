@@ -1,17 +1,12 @@
-//! Separate utility entrypoint. Binding is explicit until installer support lands.
-use anyhow::Result;
-#[cfg(unix)]
-use anyhow::{Context, ensure};
-use std::io::Write;
+//! Separate utility entrypoint using an operator-selected host binding.
+use anyhow::{Context, Result, ensure};
+use std::{io::Write, path::PathBuf};
 
-#[cfg(unix)]
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Launch {
-    payment: mesh_llm_pay_lightning::Config,
-    wallet_plugin: String,
-    wallet_executable: std::path::PathBuf,
-    wallet_directory: std::path::PathBuf,
+    config_path: PathBuf,
+    wallet_binding: String,
     #[serde(default)]
     allow_wallet_provisioning: bool,
 }
@@ -26,38 +21,21 @@ async fn main() -> Result<()> {
         )?;
         return Ok(());
     }
-    launch().await
-}
-
-#[cfg(unix)]
-async fn launch() -> Result<()> {
-    let path = std::env::var_os("MESH_LLM_PLUGIN_CONFIG")
-        .context("explicit utility binding config required")?;
-    let config: Launch = serde_json::from_slice(&std::fs::read(path)?)?;
-    config.payment.validate()?;
+    let settings = std::env::var("MESH_LLM_PLUGIN_SETTINGS_JSON")
+        .context("explicit utility settings required")?;
+    let launch: Launch = serde_json::from_str(&settings)?;
     ensure!(
-        config.wallet_executable.is_absolute() && config.wallet_directory.is_absolute(),
-        "wallet executable and state paths must be absolute"
+        launch.config_path.is_absolute(),
+        "config path must be absolute"
     );
-    let pin = mesh_llm_wallet::provisioning::WalletPin::load(&config.wallet_directory)?;
-    ensure!(
-        pin.is_some() || config.allow_wallet_provisioning,
-        "wallet not provisioned; explicit provisioning approval required"
-    );
-    mesh_llm_pay_lightning::run(
+    ensure!(!launch.wallet_binding.is_empty(), "wallet binding required");
+    let config = mesh_llm_pay_lightning::Config::load(&launch.config_path)?;
+    mesh_llm_pay_lightning::run_bound(
         "pay-lightning".into(),
         env!("CARGO_PKG_VERSION"),
-        mesh_llm_pay_lightning::wallet_child::ChildWalletFactory {
-            executable: config.wallet_executable,
-            plugin: config.wallet_plugin,
-            directory: config.wallet_directory,
-        },
-        config.payment,
+        launch.wallet_binding,
+        launch.allow_wallet_provisioning,
+        config,
     )
     .await
-}
-
-#[cfg(not(unix))]
-async fn launch() -> Result<()> {
-    anyhow::bail!("wallet child transport is not yet supported on this platform")
 }

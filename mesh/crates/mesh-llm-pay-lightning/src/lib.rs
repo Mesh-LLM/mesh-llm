@@ -4,6 +4,7 @@ pub mod diagnostics;
 mod receipt_schedule;
 mod runtime;
 mod tickets;
+pub mod wallet_binding;
 #[cfg(unix)]
 pub mod wallet_child;
 #[cfg(unix)]
@@ -26,7 +27,7 @@ use mesh_llm_plugin::openai_exchange::{
     OpenAiAdmissionDecision as Decision, OpenAiExchangeDecision,
 };
 use mesh_llm_wallet::invoice::Invoice;
-pub use runtime::run;
+pub use runtime::{run, run_bound};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

@@ -20,7 +20,19 @@ pub(crate) fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
     hook.admission = true;
     hook.headers = vec![header.into()];
     hook.deadline_ms = 30_000;
+    use mesh_llm_plugin::{
+        config_boolean, config_path, config_schema, config_setting, config_string,
+    };
     plugin_manifest()
+        .item(
+            config_schema("pay-lightning")
+                .setting(config_setting("config_path", config_path()).required(true))
+                .setting(config_setting("wallet_binding", config_string()).required(true))
+                .setting(
+                    config_setting("allow_wallet_provisioning", config_boolean())
+                        .default_value(&false),
+                ),
+        )
         .item(hook)
         .item(mesh_channel(CHANNEL))
         .item(mesh_event_peer_up())
@@ -36,13 +48,39 @@ pub async fn run(
     factory: impl mesh_llm_wallet::provisioning::WalletFactory + 'static,
     config: Config,
 ) -> Result<()> {
+    run_with_context(name, version, Arc::new(factory), config, None).await
+}
+
+pub async fn run_bound(
+    name: String,
+    version: &str,
+    binding: String,
+    allow_provisioning: bool,
+    config: Config,
+) -> Result<()> {
+    let context = Arc::new(std::sync::OnceLock::new());
+    let factory = crate::wallet_binding::InitializedWalletFactory {
+        context: context.clone(),
+        binding,
+        allow_provisioning,
+    };
+    run_with_context(name, version, Arc::new(factory), config, Some(context)).await
+}
+
+async fn run_with_context(
+    name: String,
+    version: &str,
+    factory: Arc<dyn mesh_llm_wallet::provisioning::WalletFactory>,
+    config: Config,
+    wallet_context: Option<Arc<std::sync::OnceLock<PluginContext<'static>>>>,
+) -> Result<()> {
     config.validate()?;
     crate::diagnostics::configure(config.timing_log.clone(), config.error_log.clone())?;
     let namespace: String = name.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
     let header = format!("x-plugin-{namespace}-pay-terms");
     let manifest = manifest(&header);
     let directory = &config.data_dir;
-    let service = Arc::new(PaymentService::with_factory(directory, Arc::new(factory))?);
+    let service = Arc::new(PaymentService::with_factory(directory, factory)?);
     service.ledger.set_policy(&config.policy)?;
     for (model, price) in &config.prices {
         service.ledger.set_pricing(model, Some(price))?;
@@ -52,18 +90,7 @@ pub async fn run(
     engine.buy_peers = config.buy_peers;
     let engine = Arc::new(engine);
 
-    let metadata = PluginMetadata::new(
-        &name,
-        version,
-        plugin_server_info(
-            &name,
-            version,
-            "Lightning payments",
-            "Plugin-owned credit, ledger and settlement",
-            None::<String>,
-        ),
-    )
-    .with_manifest(manifest);
+    let metadata = payment_metadata(&name, version, manifest);
     let messages = engine.clone();
     let events = engine.clone();
     let startup = engine.clone();
@@ -73,11 +100,19 @@ pub async fn run(
         .on_initialized(move |context| {
             let engine = startup.clone();
             let mut context = context.owned();
+            let wallet_context = wallet_context.clone();
             Box::pin(async move {
                 for model in engine.service.ledger.pricing()?.keys() {
                     context
                         .require_channels_for_model(model, &[(CHANNEL, &[])])
                         .await?;
+                }
+                if let Some(wallet_context) = wallet_context {
+                    ensure!(
+                        context.host_supports(mesh_llm_plugin::operation_binding::CAPABILITY),
+                        "host does not support operation bindings"
+                    );
+                    let _ = wallet_context.set(context.owned());
                 }
                 engine.start().await?;
                 observe_receipts(Arc::downgrade(&engine));
@@ -301,6 +336,25 @@ async fn send(context: &mut PluginContext<'_>, peer: &str, message: &Message) ->
 }
 fn record_error(error: &anyhow::Error) {
     crate::diagnostics::record_error(error);
+}
+
+fn payment_metadata(
+    name: &str,
+    version: &str,
+    manifest: mesh_llm_plugin::proto::PluginManifest,
+) -> PluginMetadata {
+    PluginMetadata::new(
+        name,
+        version,
+        plugin_server_info(
+            name,
+            version,
+            "Lightning payments",
+            "Plugin-owned credit, ledger and settlement",
+            None::<String>,
+        ),
+    )
+    .with_manifest(manifest)
 }
 
 #[cfg(test)]

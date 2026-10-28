@@ -3,43 +3,63 @@
 Standalone Lightning payments utility and its admission/settlement engine. Mesh
 owns generic authenticated transport, admission hooks and authoritative terminal
 usage; this utility owns pricing, policy, durable ledger, tickets, invoices and
-reconciliation. A selected `wallet.v1` child owns provider-specific wallet access.
-No payment operations are exposed as MCP tools. The host does not link this
-crate, the ledger, payment types or wallet abstraction.
+reconciliation. A separately installed `wallet.v1` plugin owns provider-specific
+wallet access. The host does not link this crate, the ledger, payment types or
+wallet abstraction. Payment operations are not MCP tools.
 
-The common installed utility identity is `pay-lightning` on both peers and its
-peer channel is `pay.ln.v1`. Wallet identities are local only: a `wallet-alpha`
-child and a `wallet-beta` child can use the same payment protocol. Compatible
-wallet binaries need not be rebuilt for payment engine or protocol fixes.
-The library `run(name, version, factory, config)` remains for comparison/fixtures;
-it is not necessary for independent wallet adapters to link the payment engine.
+Both peers install `pay-lightning`, communicating on `pay.ln.v1`. Their wallet
+plugins may have different names; existing compatible wallet binaries need not
+be rebuilt. `run(name, version, factory, config)` remains for in-process fixtures;
+the installed executable uses `run_bound` and the host-owned wallet connection.
 
-## Explicit spike binding (not finished installation UX)
+## Explicit operator binding
 
-On Unix, `pay-lightning` reads `MESH_LLM_PLUGIN_CONFIG`. The current binding is
-explicit operator configuration, **not dependency installation or store resolution**:
+Install and enable the wallet and utility separately. The host passes the three
+declared utility settings in `MESH_LLM_PLUGIN_SETTINGS_JSON`. Example host config:
+
+```toml
+[[plugin]]
+name = "pay-lightning"
+settings = { config_path = "/absolute/payment/config.json", wallet_binding = "wallet", allow_wallet_provisioning = false }
+allow_peer_blocks = true
+
+[[plugin.operation_bindings]]
+name = "wallet"
+provider = "lexe-wallet"
+profile = "default"
+setup_operation = "wallet_open"
+setup_input_json = '{"directory":"/absolute/existing/wallet-state"}'
+operations = ["wallet_balance", "wallet_transactions", "wallet_create_invoice", "wallet_pay", "wallet_lookup", "wallet_wait_for_payment", "wallet_wait_for_arrival"]
+```
+
+The host also needs the explicit required exchange grant described below. The
+binding exclusively selects one provider and fixes the open payload. The utility
+cannot choose a wallet executable or supply an open directory. The host alone
+launches and supervises the wallet; killing the utility does not kill that wallet.
+
+`config_path` points to a separate payment JSON file:
 
 ```json
 {
-  "payment": {
-    "data_dir": "/absolute/isolated/payment-state",
-    "prices": {}, "buy_prices": {}, "buy_peers": [], "cap_msat": 0,
-    "policy": {"mode": "free_only"}
-  },
-  "wallet_plugin": "lexe-wallet",
-  "wallet_executable": "/absolute/approved/wallet-executable",
-  "wallet_directory": "/absolute/isolated/wallet-state",
-  "allow_wallet_provisioning": false
+  "data_dir": "/absolute/payment/ledger",
+  "prices": {}, "buy_prices": {}, "buy_peers": [], "cap_msat": 0,
+  "policy": {"mode": "free_only"}
 }
 ```
 
-First open requires explicit `allow_wallet_provisioning: true` if there is no
-wallet pin. Installing a package or inspecting `--manifest` never opens a wallet.
-Do not enable this against an existing funded host profile; no migration or state
-adoption is implemented. A pin is persisted in both ledger and wallet state, so
-changing provider, wallet identity or wallet directory cannot silently orphan
-payment obligations. A profile lock rejects concurrent child owners using this
-utility; this is not a lock honored by unrelated wallet launchers.
+The utility pins `wallet_id`, `provider` and `network` in the ledger directory
+before starting its engine. A changed identity or non-mainnet wallet is refused.
+The pin's historical `plugin` field records the **provider binding name**. First
+adoption without a ledger pin requires `allow_wallet_provisioning = true`, before
+any setup is attempted; this also applies when adopting an already provisioned
+wallet into a fresh ledger. Installing a package or inspecting `--manifest`
+never opens a wallet. Do not copy or replace funded wallet state to change a pin.
+
+Setup tolerates provider-startup ordering by retrying only requests that the host
+reports were not dispatched, for a bounded 90-second window. A provider error or
+uncertain setup fails closed. Repeated successful setup must be idempotent. A
+provider restart invalidates the utility's handle: currently restart the utility
+to reopen and revalidate the wallet identity; transparent reconnect is not claimed.
 
 `prices` maps model IDs to `input_msat_per_million`, `output_msat_per_million` and
 `cache_discount_percent`. `buy_prices` uses the same shape for authorized ceilings;
@@ -63,34 +83,29 @@ Background receipt observation reserves at most eight invoices per sweep, with
 one-second lookup timeouts and per-invoice exponential backoff from 250 ms to
 60 seconds. Attempts are reserved before I/O so cancellation cannot hot-loop the
 same first invoice. Expired unpaid invoices remain debts and continue low-rate
-observation; expiry is never treated as payment or forgiveness. This bounds each
-sweep's wallet I/O, not the ledger scan or total scheduler memory.
-Uncertain submissions are observed by hash, never blindly retried. One outstanding
+observation; expiry is never payment or forgiveness. This bounds each sweep's
+wallet I/O, not the ledger scan or total scheduler memory.
+
+Uncertain payments are reconciled by hash, never blindly replayed by the adapter.
+A request known not to have been dispatched is classified as not submitted;
+transport ambiguity remains uncertain. Long-poll observations can be reissued
+after the host's binding deadline; that does not retry a payment. One outstanding
 ticket per buyer/model is supported; restart abandons interrupted work and drops
 unconsumed tickets rather than replaying inference.
-
-The utility owns the wallet child and multiplexes wallet operations over one IPC
-connection. Normal drop kills the child; an abrupt utility exit closes IPC and a
-wallet using `PluginRuntime` exits on connection loss. Tests exercise SIGKILL and
-restart with a synthetic wallet. Arbitrary third-party executables that ignore
-IPC closure are not proven orphan-safe; installed ownership/supervision and
-Windows transport remain open work. Child failure is fail-closed, not transparent
-reconnect/replay. No existing wallet is auto-launched as a second owner.
 
 ## Offline development and evidence boundaries
 
 Run `just check`, `just test`, `just build`, `just package` here. `package` stages
-the separate utility; `package-mock` separately stages the combined offline
-fixture. The opt-in `offline-mock` binary uses signed synthetic invoices and a
-shared file network selected explicitly by `MESH_LLM_OFFLINE_NETWORK_DIR`. It never
-contacts wallet services or moves funds. Its `MESH_LLM_OFFLINE_WALLET_CHILD` mode
-serves only `wallet.v1`, for subprocess integration tests.
+the separate utility; `package-mock` stages the combined offline fixture. Raise
+the macOS file limit with `ulimit -n 8192` before the full suite. The opt-in
+`offline-mock` binary uses signed synthetic invoices and an explicit shared file
+network. It never contacts wallet services or moves funds. Its
+`MESH_LLM_OFFLINE_WALLET_CHILD` mode serves only `wallet.v1` for legacy subprocess
+adapter tests; the installed utility does not use that child adapter.
 
-Tests cover two distinctly named wallet children through real IPC, cold deposit
-and final settlement; delayed-Paid admission recovery; receipt recovery after
-restart; identity pins; ownership exclusion; uncertain-send disconnect; and
-utility SIGKILL/child exit/restart. The two wallet children are the **same synthetic
-backend under different names**, not two independently implemented real wallet
-providers. These tests do not establish QUIC/live inference performance parity,
-released-main paid compatibility, automatic install/binding, Windows support,
-wallet setup/controls, migration or removal UX. Run `just clean` after verification.
+Tests cover synthetic payment settlement/recovery and legacy child ownership,
+plus the installed utility's host RPC setup, startup delay, SIGKILL and identity
+pin reuse. Synthetic children are one backend under different names, not two
+independently implemented real providers. These tests do not establish live
+QUIC/inference performance, automatic install/binding, wallet setup UX, migration,
+removal UX or cross-platform installed behavior. Run `just clean` after validation.
