@@ -1,5 +1,5 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Native grammar sampler A/B/C speed audit",
   "type": "object",
   "required": ["schema", "blocks", "complete", "B_C_decisions_match", "within_one_percent", "improves_existing", "qualified_speed", "per_case", "aggregate", "arms", "remaining_gates"],
