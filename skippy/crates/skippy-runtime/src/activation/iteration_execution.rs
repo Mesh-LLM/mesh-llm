@@ -217,6 +217,14 @@ impl StageSession {
             &predicted_tokens,
         )?;
         advance_iteration_counts(requests)?;
+        // Native batches concatenate each request's rows in request order.
+        let mut first_row = 0usize;
+        for request in requests.iter_mut() {
+            let count = request.token_ids.len();
+            let rows = DecodedRows::for_prefill(count, request.positions).offset(first_row);
+            request.session.dflash_after_decode(rows);
+            first_row += count;
+        }
         validate_score_outputs(requests, &mut score_outputs)?;
         let request_outputs = iteration_frames(output_payloads, output_descs, output_bytes)?;
         Ok((
