@@ -1,0 +1,13 @@
+[package]
+name = "skippy"
+description = "Embedding, rerank and encoder workloads over llama.cpp, via skippy_api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skippy-sys = { path = "../skippy-sys" }
+thiserror = "2"
+
+[dev-dependencies]

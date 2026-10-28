@@ -1,0 +1,18 @@
+[package]
+name = "skippy-sys"
+description = "Raw cxx bindings to skippy_api's llama.cpp backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+# The links key publishes cargo:root from build.rs as DEP_SKIPPY_API_ROOT,
+# so dependents can add the shared-library rpath themselves.
+links = "skippy_api"
+build = "build.rs"
+
+[dependencies]
+cxx = "1.0.205"
+
+[build-dependencies]
+cxx-build = "1.0.205"
+cmake = "0.1"
