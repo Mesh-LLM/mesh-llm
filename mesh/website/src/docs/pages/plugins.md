@@ -10,7 +10,7 @@ Use this page to install a plugin. If you are writing one, start with [Developin
 
 ## Official plugins
 
-The Mesh-LLM organization publishes {{ plugins.count }} first-party plugins with released archives. They live in separate repositories from `mesh-llm`; check each repository for supported platforms and setup.
+The Mesh-LLM organization publishes {{ plugins.count }} first-party plugins. They live in separate repositories from `mesh-llm`; check each repository for supported platforms and setup.
 {% for group in plugins.groups %}
 ### {{ group.title }}
 
