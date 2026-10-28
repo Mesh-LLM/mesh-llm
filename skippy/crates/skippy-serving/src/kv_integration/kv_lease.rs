@@ -1,0 +1,143 @@
+//! In-place KV page records: the lane's own cells are the payload.
+//!
+//! On a host-visible backend a parked lane's attention KV need not be copied
+//! out to be recorded. The lane hands the recorder spans into its cells plus
+//! a [`LanePin`]; the recorder worker copies the spans into its own buffer
+//! once, off the runtime lock, and drops the pin. Until every pin on a lane
+//! is dropped, the lane's cells are read-shared: nothing may reset, trim
+//! below the leased page, import state into, or free that lane. The
+//! [`LeaseLedger`] is how the lane side enforces that window.
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+use skippy_runtime::KvPageSpans;
+
+/// Per-lane count of in-flight in-place records, plus the highest token
+/// position any of them covers. Cloned into every [`LanePin`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LeaseLedger {
+    inner: Arc<LeaseLedgerInner>,
+}
+
+#[derive(Debug, Default)]
+struct LeaseLedgerInner {
+    outstanding: AtomicUsize,
+    /// Highest `token_count` among in-flight leases. Only meaningful while
+    /// `outstanding > 0`; a trim below it would invalidate a reader.
+    frontier: AtomicU64,
+}
+
+impl LeaseLedger {
+    /// Register a reader of this lane's cells up to `token_count`.
+    pub(crate) fn pin(&self, token_count: u64) -> LanePin {
+        self.inner.outstanding.fetch_add(1, Ordering::AcqRel);
+        self.inner.frontier.fetch_max(token_count, Ordering::AcqRel);
+        LanePin {
+            ledger: self.clone(),
+        }
+    }
+
+    pub(crate) fn in_flight(&self) -> bool {
+        self.inner.outstanding.load(Ordering::Acquire) > 0
+    }
+
+    /// Whether a trim of the lane to `token_count` tokens would cut into a
+    /// page a reader is still copying.
+    pub(crate) fn blocks_trim_to(&self, token_count: u64) -> bool {
+        self.in_flight() && self.inner.frontier.load(Ordering::Acquire) > token_count
+    }
+
+    /// Block until every reader has dropped its pin. Readers only memcpy, so
+    /// this is bounded by one page copy per outstanding pin; a longer wait
+    /// is a stuck recorder worker and is logged rather than hidden.
+    pub(crate) fn wait_idle(&self) {
+        let started = Instant::now();
+        let mut warned = Duration::from_secs(5);
+        while self.in_flight() {
+            std::thread::sleep(Duration::from_millis(1));
+            if started.elapsed() >= warned {
+                tracing::warn!(
+                    outstanding = self.inner.outstanding.load(Ordering::Acquire),
+                    waited_ms = started.elapsed().as_millis() as u64,
+                    "lane cells still leased to the exact-state recorder"
+                );
+                warned *= 2;
+            }
+        }
+    }
+}
+
+/// One reader's hold on a lane's cells. Dropping it is the release.
+#[derive(Debug)]
+pub(crate) struct LanePin {
+    ledger: LeaseLedger,
+}
+
+impl Drop for LanePin {
+    fn drop(&mut self) {
+        self.ledger.inner.outstanding.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A KV page the recorder will read straight out of a lane's cells.
+#[derive(Debug)]
+pub(crate) struct LeasedKvPage {
+    pub(crate) spans: KvPageSpans,
+    /// Held until the worker has copied the spans out. Never read; the Drop
+    /// impl is the release.
+    #[allow(dead_code)]
+    pub(crate) pin: LanePin,
+}
+
+impl LeasedKvPage {
+    pub(crate) fn byte_len(&self) -> u64 {
+        self.spans.byte_len() as u64
+    }
+
+    /// Copy the page out of the cells. The returned bytes are owned; the
+    /// lease, and with it the lane's pin, ends when `self` is dropped.
+    pub(crate) fn materialise(&self) -> Result<Vec<u8>, skippy_runtime::KvPageSpanError> {
+        let mut kv = vec![0_u8; self.spans.byte_len()];
+        // SAFETY: the pin keeps the lane from resetting, trimming below the
+        // page, importing state, or freeing its cells while we hold it; see
+        // `LeaseLedger`. The spans were produced by the native walk for a
+        // page that is still resident under that guarantee.
+        unsafe { self.spans.read(&mut kv) }?;
+        Ok(kv)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pins_count_and_release_exactly_once() {
+        let ledger = LeaseLedger::default();
+        assert!(!ledger.in_flight());
+        let first = ledger.pin(100);
+        let second = ledger.pin(40);
+        assert!(ledger.in_flight());
+        assert!(ledger.blocks_trim_to(99));
+        assert!(!ledger.blocks_trim_to(100));
+        drop(second);
+        assert!(ledger.in_flight());
+        drop(first);
+        assert!(!ledger.in_flight());
+        assert!(!ledger.blocks_trim_to(0));
+    }
+
+    #[test]
+    fn wait_idle_returns_once_the_reader_releases() {
+        let ledger = LeaseLedger::default();
+        let pin = ledger.pin(8);
+        let reader = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            drop(pin);
+        });
+        ledger.wait_idle();
+        assert!(!ledger.in_flight());
+        reader.join().unwrap();
+    }
+}

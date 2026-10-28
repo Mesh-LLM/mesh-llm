@@ -39,19 +39,44 @@ pub enum ModelStateKind {
     Diffusion,
 }
 
+/// Where the loaded memory keeps attention cells, as reported by the buffers
+/// themselves. This is placement, not a backend name: a unified-memory
+/// backend is host visible today, and a discrete backend becomes host
+/// visible the day it allocates the cache in mapped or managed memory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum KvCellAccess {
+    /// Cells can only be read through a backend copy (`export_kv_page`).
+    #[default]
+    DeviceOnly,
+    /// Every cell tensor is host addressable; `kv_page_spans` can describe a
+    /// page in place and the recorder can read the cells directly.
+    HostVisible,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MemoryCacheCapabilities {
     pub resident: bool,
     pub kv_recurrent: bool,
     pub full_state: bool,
+    /// A hybrid whose attention cells can be lent to a cache sequence by
+    /// tagging. A resident prefix is then those cells plus a recurrent
+    /// snapshot taken at the same boundary; neither half is complete alone.
+    pub resident_kv_recurrent: bool,
+    pub kv_cell_access: KvCellAccess,
 }
 
 impl MemoryCacheCapabilities {
     pub(crate) fn from_native_bits(bits: u32) -> Self {
         Self {
-            resident: bits & 1 != 0,
-            kv_recurrent: bits & 2 != 0,
-            full_state: bits & 4 != 0,
+            resident: bits & skippy_ffi::MEMORY_CACHE_RESIDENT != 0,
+            kv_recurrent: bits & skippy_ffi::MEMORY_CACHE_KV_RECURRENT != 0,
+            full_state: bits & skippy_ffi::MEMORY_CACHE_FULL_STATE != 0,
+            resident_kv_recurrent: bits & skippy_ffi::MEMORY_CACHE_RESIDENT_KV_RECURRENT != 0,
+            kv_cell_access: if bits & skippy_ffi::MEMORY_CACHE_HOST_VISIBLE_KV != 0 {
+                KvCellAccess::HostVisible
+            } else {
+                KvCellAccess::DeviceOnly
+            },
         }
     }
 }
@@ -536,6 +561,83 @@ pub struct RuntimeKvPage {
     pub desc: RuntimeKvPageDesc,
     pub payload: Vec<u8>,
 }
+
+/// One slice of a KV page described in place: `bytes` bytes starting at
+/// `data`, which aliases live native cells. Concatenating a page's spans in
+/// order yields exactly the bytes `export_kv_page` would copy out.
+#[derive(Debug, Clone, Copy)]
+pub struct KvPageSpan {
+    pub data: *const u8,
+    pub bytes: usize,
+}
+
+/// A KV page described as spans into the session's own cells.
+///
+/// Validity is the caller's contract, not the type's: the spans alias cells
+/// that stay put until the session decodes, trims below the page, resets,
+/// imports state, or is dropped. The session owner must hold that window for
+/// as long as the spans are read. Read through [`KvPageSpans::read`], which
+/// states that contract once.
+#[derive(Debug, Clone)]
+pub struct KvPageSpans {
+    pub desc: RuntimeKvPageDesc,
+    pub spans: Vec<KvPageSpan>,
+}
+
+// Spans are plain addresses into backend memory the owning lane keeps alive;
+// reading them from another thread is what in-place recording is for. The
+// safety contract lives on `read`.
+unsafe impl Send for KvPageSpans {}
+unsafe impl Sync for KvPageSpans {}
+
+impl KvPageSpans {
+    pub fn byte_len(&self) -> usize {
+        self.spans.iter().map(|span| span.bytes).sum()
+    }
+
+    /// Copy the page into `output`, which must be exactly `byte_len()` long.
+    ///
+    /// # Safety
+    ///
+    /// The session the spans were taken from must not have decoded, trimmed
+    /// below the page, reset, imported state, or been dropped since
+    /// `kv_page_spans` returned them, and must not do so until this returns.
+    pub unsafe fn read(&self, output: &mut [u8]) -> Result<(), KvPageSpanError> {
+        if output.len() != self.byte_len() {
+            return Err(KvPageSpanError::Length {
+                expected: self.byte_len(),
+                actual: output.len(),
+            });
+        }
+        let mut written = 0;
+        for span in &self.spans {
+            // SAFETY: the caller upholds the validity window; each span was
+            // produced by the native walk as `bytes` readable bytes at `data`.
+            let source = unsafe { std::slice::from_raw_parts(span.data, span.bytes) };
+            output[written..written + span.bytes].copy_from_slice(source);
+            written += span.bytes;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KvPageSpanError {
+    Length { expected: usize, actual: usize },
+}
+
+impl std::fmt::Display for KvPageSpanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Length { expected, actual } => write!(
+                f,
+                "KV page spans cover {expected} bytes but the output holds {actual}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for KvPageSpanError {}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TokenSignal {

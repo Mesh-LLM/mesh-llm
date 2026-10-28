@@ -76,7 +76,7 @@ fn record(
         write_through_l3: true,
         l2_promotion_digest: None,
         l3_cost: None,
-        admission_credit,
+        admission: crate::kv_integration::RecordAdmission::Credit(admission_credit),
     }
 }
 

@@ -51,7 +51,7 @@ fn preflight_l3_kv_location(
 }
 
 mod admission;
-pub use admission::{CaptureAdmission, ExactStateAdmissionCredit};
+pub use admission::{CaptureAdmission, EXACT_STATE_ADMISSION_TOTAL, ExactStateAdmissionCredit};
 
 impl KvStageIntegration {
     fn available_exact_prefix_tokens(
@@ -340,7 +340,7 @@ impl KvStageIntegration {
                         write_through_l3: true,
                         l2_promotion_digest: None,
                         l3_cost: None,
-                        admission_credit,
+                        admission: super::RecordAdmission::Credit(admission_credit),
                     }),
                     ExactStateRecordAdmission::Queued
                 )
@@ -594,7 +594,7 @@ impl KvStageIntegration {
             write_through_l3,
             l2_promotion_digest: None,
             l3_cost,
-            admission_credit,
+            admission: super::RecordAdmission::Credit(admission_credit),
         }) {
             ExactStateRecordAdmission::Queued => {
                 // Recording owns the radix/blob locks while it hashes a potentially
@@ -907,7 +907,7 @@ impl KvStageIntegration {
                     write_through_l3: false,
                     l2_promotion_digest,
                     l3_cost: None,
-                    admission_credit,
+                    admission: super::RecordAdmission::Credit(admission_credit),
                 }),
                 ExactStateRecordAdmission::Queued
             )

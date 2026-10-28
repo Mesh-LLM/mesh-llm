@@ -19,7 +19,9 @@ use super::{
     output_tokens::OutputTokenCache,
 };
 
-use super::cache_payload::{durable_cache_payload, effective_cache_payload};
+use super::cache_payload::{
+    durable_cache_payload, effective_cache_payload, resident_entries_carry_recurrent,
+};
 
 mod durable_spill;
 mod exact_state_limits;
@@ -136,6 +138,7 @@ impl KvStageIntegration {
         };
         let payload_selection_reason = "loaded_graph_and_memory";
         let dense_without_recurrent = admitted.resident;
+        let resident_recurrent_snapshots = resident_entries_carry_recurrent(admitted);
         let l3_manager = manager()?;
         if cache_config.l2_max_bytes > 0 && l3_manager.is_none() {
             let _ = skippy_events::diagnostics::emit(
@@ -385,6 +388,7 @@ impl KvStageIntegration {
             cachegen_serving_enabled: worker_cachegen,
             inflight_fills,
             dense_without_recurrent,
+            resident_recurrent_snapshots,
         }))
     }
 
@@ -400,6 +404,8 @@ impl KvStageIntegration {
                 resident: model_state_kind == ModelStateKind::Dense,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             None,
         )
@@ -702,8 +708,14 @@ fn store_exact_radix_record_with_codec(
         write_through_l3,
         l2_promotion_digest,
         l3_cost,
-        admission_credit: _admission_credit,
+        admission,
     } = pending;
+    // The worker materialises leases before storing; a lease here is a
+    // caller that skipped `materialise_leased_kv`.
+    anyhow::ensure!(
+        !matches!(admission, super::RecordAdmission::Leased(_)),
+        "exact-state record reached storage with its KV page still leased"
+    );
     let logical_bytes = payload.byte_len();
     let (payload, _) = payload.dedupe_into(
         &mut blobs
@@ -1012,7 +1024,7 @@ mod tests {
             write_through_l3: true,
             l2_promotion_digest: None,
             l3_cost: None,
-            admission_credit: budget.credit(),
+            admission: super::super::RecordAdmission::Credit(budget.credit()),
         }
     }
 
@@ -1064,7 +1076,7 @@ mod tests {
             write_through_l3: true,
             l2_promotion_digest: None,
             l3_cost: None,
-            admission_credit: budget.credit(),
+            admission: super::super::RecordAdmission::Credit(budget.credit()),
         }
     }
 
@@ -1608,6 +1620,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             Some(manager.clone()),
             None,
@@ -1621,6 +1635,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             Some(manager),
             None,
@@ -1664,6 +1680,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             Some(manager),
             None,
@@ -1706,6 +1724,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             Some(manager),
             None,
@@ -1739,6 +1759,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             None,
             None,

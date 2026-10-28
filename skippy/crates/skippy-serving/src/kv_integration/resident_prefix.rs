@@ -345,7 +345,9 @@ impl KvStageIntegration {
             .radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(radix_hit) = radix.peek_resident(&identity.namespace, &identity.token_ids) else {
+        let Some(radix_hit) =
+            self.peek_resident_for_stage(&radix, &identity.namespace, &identity.token_ids)
+        else {
             self.notify_kv_lifecycle(KvLifecycleEvent::CacheLookupMiss);
             return None;
         };
@@ -394,11 +396,15 @@ impl KvStageIntegration {
                     .radix
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let eligible = radix
-                    .peek_resident(&identity.namespace, &identity.token_ids)
+                let eligible = self
+                    .peek_resident_for_stage(&radix, &identity.namespace, &identity.token_ids)
                     .is_some_and(|hit| self.meets_shared_prefix_min_tokens(hit.matched_tokens));
                 if eligible {
-                    radix.acquire_resident(&identity.namespace, &identity.token_ids)
+                    self.acquire_resident_for_stage(
+                        &mut radix,
+                        &identity.namespace,
+                        &identity.token_ids,
+                    )
                 } else {
                     None
                 }
@@ -422,6 +428,20 @@ impl KvStageIntegration {
                 &token_ids[..token_count],
             );
             restore?;
+            // The attention cells arrived by tagging; the recurrent half is
+            // the snapshot taken at this exact boundary. A contained match
+            // guarantees `token_count` is that boundary.
+            if let Some(recurrent) = radix_hit.value.recurrent.as_deref() {
+                anyhow::ensure!(
+                    token_count as u64 == radix_hit.value.token_count,
+                    "hybrid resident restore must land on the entry's own boundary"
+                );
+                runtime.import_recurrent_cache_state_for_token_count(
+                    session_id,
+                    recurrent,
+                    token_count as u64,
+                )?;
+            }
             let resident_entries = self
                 .radix
                 .lock()
@@ -550,10 +570,18 @@ impl KvStageIntegration {
         if token_count == 0 || (token_count as u64) < self.checkpoint_policy.min_tokens {
             return Ok(None);
         }
-        let estimated_bytes = resident_estimated_bytes(token_count as u64, layer_count);
+        // The recurrent half is only valid at the session's current position,
+        // so a hybrid resident entry is recorded there or not at all; the
+        // attention half could be sliced, the pair cannot.
+        if self.resident_recurrent_snapshots
+            && runtime.session_token_count(session_id) != Some(token_count as u64)
+        {
+            return Ok(None);
+        }
+        let attention_bytes = resident_estimated_bytes(token_count as u64, layer_count);
         let mut evicted_entries = 0usize;
         let mut evicted_tokens = 0u64;
-        let seq_id = {
+        let (seq_id, recurrent, estimated_bytes) = {
             let mut radix = self
                 .radix
                 .lock()
@@ -576,6 +604,12 @@ impl KvStageIntegration {
                 }));
             }
 
+            // Snapshot only once the entry is known to be new: the export
+            // copies the recurrent state, and a duplicate record needs none.
+            let recurrent =
+                self.resident_recurrent_snapshot(runtime, session_id, token_count as u64)?;
+            let estimated_bytes = attention_bytes
+                .saturating_add(recurrent.as_ref().map_or(0, |bytes| bytes.len() as u64));
             loop {
                 let stats = radix.stats();
                 // `resident_tokens` is a logical sum of every radix checkpoint
@@ -597,7 +631,7 @@ impl KvStageIntegration {
                 evicted_tokens = evicted_tokens.saturating_add(removed.value.token_count);
             }
 
-            sequences.allocate()?
+            (sequences.allocate()?, recurrent, estimated_bytes)
         };
         if let Err(error) = runtime.save_resident_prefix(session_id, seq_id, token_count as u64) {
             let mut sequences = lock_resident_sequences(&self.resident_sequences);
@@ -627,6 +661,7 @@ impl KvStageIntegration {
                 seq_id,
                 token_count: token_count as u64,
                 recompute_cost: (token_count as u64).saturating_mul(u64::from(layer_count)),
+                recurrent,
             },
             |seq_id| runtime.drop_resident_prefix_sequence(session_id, seq_id),
         )?;
@@ -659,6 +694,59 @@ impl KvStageIntegration {
             entries: stats.resident_entries,
             resident_tokens: stats.resident_tokens,
         }))
+    }
+}
+
+impl KvStageIntegration {
+    /// The recurrent state to pair with a resident entry at `token_count`,
+    /// or `None` when this stage does not pair one or the session is not at
+    /// that position.
+    fn resident_recurrent_snapshot(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        token_count: u64,
+    ) -> Result<Option<Arc<[u8]>>> {
+        if !self.resident_recurrent_snapshots {
+            return Ok(None);
+        }
+        if runtime.session_token_count(session_id) != Some(token_count) {
+            return Ok(None);
+        }
+        let recurrent = runtime.export_recurrent_cache_state(session_id)?;
+        anyhow::ensure!(
+            !recurrent.is_empty(),
+            "hybrid resident entry has no recurrent state to pair with its cells"
+        );
+        Ok(Some(Arc::from(recurrent)))
+    }
+
+    /// Resident lookup for this stage. Entries that carry a recurrent
+    /// snapshot are never sliced; everything else may be.
+    fn peek_resident_for_stage(
+        &self,
+        radix: &skippy_cache::UnifiedRadixCache<RadixResidentEntry, super::RadixExactEntry>,
+        namespace: &str,
+        tokens: &[i32],
+    ) -> Option<skippy_cache::RadixMatch<RadixResidentEntry>> {
+        if self.resident_recurrent_snapshots {
+            radix.peek_resident_contained(namespace, tokens)
+        } else {
+            radix.peek_resident(namespace, tokens)
+        }
+    }
+
+    fn acquire_resident_for_stage(
+        &self,
+        radix: &mut skippy_cache::UnifiedRadixCache<RadixResidentEntry, super::RadixExactEntry>,
+        namespace: &str,
+        tokens: &[i32],
+    ) -> Option<skippy_cache::RadixMatch<RadixResidentEntry>> {
+        if self.resident_recurrent_snapshots {
+            radix.acquire_resident_contained(namespace, tokens)
+        } else {
+            radix.acquire_resident(namespace, tokens)
+        }
     }
 }
 
@@ -808,6 +896,136 @@ fn resident_index_over_capacity(
 }
 
 #[cfg(test)]
+mod hybrid_resident_tests {
+    use super::*;
+    use crate::kv_proto::PageIdentity;
+    use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode};
+    use skippy_runtime::ModelStateKind;
+
+    fn hybrid_integration() -> KvStageIntegration {
+        let config = StageConfig {
+            ctx_size: 64,
+            lane_count: 1,
+            kv_cache: Some(StageKvCacheConfig {
+                exact_max_bytes: None,
+                mode: StageKvCacheMode::LookupRecord,
+                max_entries: 4,
+                max_bytes: 0,
+                l2_max_bytes: 0,
+                codec: skippy_protocol::StageKvCacheCodec::Native,
+                min_tokens: 1,
+                shared_prefix_stride_tokens: 1,
+                shared_prefix_record_limit: 1,
+            }),
+            ..StageConfig::default()
+        };
+        KvStageIntegration::from_loaded_model(
+            &config,
+            Some(ModelStateKind::Hybrid),
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: false,
+                kv_recurrent: true,
+                full_state: true,
+                resident_kv_recurrent: true,
+                kv_cell_access: Default::default(),
+            }),
+            None,
+        )
+        .unwrap()
+        .expect("a lending hybrid serves resident prefixes")
+    }
+
+    fn identity(tokens: &[i32]) -> PrefillKvIdentity {
+        PrefillKvIdentity {
+            identity: PageIdentity {
+                token_count: tokens.len() as u64,
+                layer_start: 0,
+                layer_end: 1,
+                ..Default::default()
+            },
+            page_id: format!("page-{}", tokens.len()),
+            namespace: "stage".to_string(),
+            token_ids: tokens.to_vec(),
+        }
+    }
+
+    fn insert(kv: &KvStageIntegration, tokens: &[i32], recurrent: Option<&[u8]>) {
+        let mut radix = kv.radix.lock().unwrap();
+        let seq_id = lock_resident_sequences(&kv.resident_sequences)
+            .allocate()
+            .unwrap();
+        radix
+            .insert_resident(
+                "stage",
+                tokens,
+                tokens.len() as u64,
+                RadixResidentEntry {
+                    page_id: format!("page-{}", tokens.len()),
+                    seq_id,
+                    token_count: tokens.len() as u64,
+                    recompute_cost: tokens.len() as u64,
+                    recurrent: recurrent.map(Arc::from),
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_lending_hybrid_serves_resident_prefixes_and_pairs_a_snapshot() {
+        let kv = hybrid_integration();
+        assert_eq!(kv.payload, StagePrefixCachePayload::ResidentKv);
+        assert!(kv.resident_recurrent_snapshots);
+        assert!(!kv.dense_without_recurrent);
+        assert!(
+            kv.captures_boundaries_during_prefill(),
+            "a shared boundary must be snapshotted while prefilling"
+        );
+        assert!(
+            !kv.payload_is_exact_state(),
+            "no durable tier, so no page export anywhere"
+        );
+    }
+
+    #[test]
+    fn snapshot_entries_are_never_sliced_on_lookup() {
+        let kv = hybrid_integration();
+        insert(&kv, &[1, 2], Some(&[7; 4]));
+        insert(&kv, &[1, 2, 3, 4], Some(&[9; 4]));
+
+        // Diverging inside the long entry: a dense stage would slice it, a
+        // snapshot stage can only use the boundary it contains.
+        let hit = kv
+            .probe_resident_prefix(&identity(&[1, 2, 3, 8]))
+            .expect("the two-token boundary is contained");
+        assert_eq!(hit.token_count, 2);
+        assert_eq!(hit.page_id, "page-2");
+
+        // Shorter than every boundary: a miss, not a slice.
+        assert!(kv.probe_resident_prefix(&identity(&[1])).is_none());
+
+        // Covering an entry exactly matches it whole.
+        let exact = kv
+            .probe_resident_prefix(&identity(&[1, 2, 3, 4, 5]))
+            .expect("the long entry is contained");
+        assert_eq!(exact.token_count, 4);
+    }
+
+    #[test]
+    fn a_record_away_from_the_sessions_position_is_declined_not_sliced() {
+        let kv = hybrid_integration();
+        let mut runtime = crate::runtime_state::RuntimeState::new_modelless_for_test(1);
+        // No session, so no position to snapshot at: the dense path would
+        // still save a sliced attention prefix here; the snapshot path must
+        // record nothing rather than an entry with no recurrent half.
+        let record = kv
+            .record_resident_prefix(&mut runtime, "request", &identity(&[1, 2, 3]), &[1, 2, 3])
+            .unwrap();
+        assert!(record.is_none());
+        assert_eq!(kv.radix.lock().unwrap().stats().resident_entries, 0);
+    }
+}
+
+#[cfg(test)]
 mod proactive_eviction_tests {
     use super::*;
     use crate::kv_integration::KvLifecycleObserver;
@@ -868,6 +1086,8 @@ mod proactive_eviction_tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             None,
         )
@@ -890,6 +1110,7 @@ mod proactive_eviction_tests {
                     seq_id,
                     token_count: 8,
                     recompute_cost: 8,
+                    recurrent: None,
                 },
             )
             .unwrap();
@@ -927,6 +1148,7 @@ mod proactive_eviction_tests {
                     seq_id,
                     token_count: 3,
                     recompute_cost: 3,
+                    recurrent: None,
                 },
             )
             .unwrap();
@@ -956,6 +1178,7 @@ mod proactive_eviction_tests {
                     seq_id,
                     token_count: 3,
                     recompute_cost: 3,
+                    recurrent: None,
                 },
             )
             .unwrap();
@@ -988,6 +1211,7 @@ mod proactive_eviction_tests {
                     seq_id,
                     token_count: 0,
                     recompute_cost: 0,
+                    recurrent: None,
                 },
             )
             .unwrap();
@@ -1021,6 +1245,7 @@ mod proactive_eviction_tests {
                     seq_id: 1,
                     token_count: 3,
                     recompute_cost: 3,
+                    recurrent: None,
                 },
             )
             .unwrap();
@@ -1061,6 +1286,7 @@ mod proactive_eviction_tests {
                     seq_id: expensive_seq_id,
                     token_count: 3,
                     recompute_cost: 300,
+                    recurrent: None,
                 },
             )
             .unwrap();
@@ -1075,6 +1301,7 @@ mod proactive_eviction_tests {
                     seq_id: cheap_seq_id,
                     token_count: 3,
                     recompute_cost: 3,
+                    recurrent: None,
                 },
             )
             .unwrap();
@@ -1110,6 +1337,7 @@ mod proactive_eviction_tests {
                 seq_id,
                 token_count: 0,
                 recompute_cost: 0,
+                recurrent: None,
             },
             |seq_id| {
                 dropped = Some(seq_id);
@@ -1144,6 +1372,7 @@ mod proactive_eviction_tests {
                 seq_id,
                 token_count: 0,
                 recompute_cost: 0,
+                recurrent: None,
             },
             |_| anyhow::bail!("native drop failed"),
         )
@@ -1186,6 +1415,7 @@ mod proactive_eviction_tests {
                     seq_id: existing_seq_id,
                     token_count: 3,
                     recompute_cost: 3,
+                    recurrent: None,
                 },
             )
             .unwrap();
@@ -1203,6 +1433,7 @@ mod proactive_eviction_tests {
                 seq_id: duplicate_seq_id,
                 token_count: 3,
                 recompute_cost: 3,
+                recurrent: None,
             },
             |seq_id| {
                 dropped = Some(seq_id);
@@ -1289,6 +1520,7 @@ mod resident_record_cap_tests {
                     seq_id,
                     token_count: 100,
                     recompute_cost: 100,
+                    recurrent: None,
                 },
             )
             .unwrap();

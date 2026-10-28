@@ -532,19 +532,16 @@ impl RuntimeState {
     pub(super) fn session(&mut self, session_id: &str) -> Result<&mut StageSession> {
         if !self.sessions.contains_key(session_id) {
             self.ensure_not_reset_by_panic(session_id)?;
-            let mut lane_session = self.take_idle_session().map(Ok).unwrap_or_else(|| {
-                if self.sessions.len() >= self.lane_count as usize {
-                    bail!("all execution lanes are busy");
+            // An idle lane the recorder refuses to drain stays parked; the
+            // request then needs a fresh lane or waits (lanes-busy is a 429
+            // with retry-after). Losing a parked checkpoint is never an option.
+            let lane_session = match self.recycle_idle_session()? {
+                Some(lane_session) => lane_session,
+                None if self.sessions.len() >= self.lane_count as usize => {
+                    bail!("all execution lanes are busy")
                 }
-                self.create_lane_session()
-            })?;
-            if !lane_session.recurrent_prefixes.is_empty() {
-                Self::demote_recurrent_lane(&mut lane_session, self.layer_start, self.layer_end);
-                if let Err(error) = lane_session.session.reset() {
-                    self.free_lane_indices.push(lane_session.index);
-                    return Err(error);
-                }
-            }
+                None => self.create_lane_session()?,
+            };
             self.sessions.insert(session_id.to_string(), lane_session);
             // Every active session must have a tracked position from the
             // moment it activates (both a fresh and a reused idle lane start

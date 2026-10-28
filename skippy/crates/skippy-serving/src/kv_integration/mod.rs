@@ -33,13 +33,17 @@ pub(crate) mod exact_state_diagnostics;
 mod snapshot_validation;
 pub(crate) use exact_state::CaptureAdmission;
 mod identity;
+mod kv_lease;
 mod l2_serving;
 pub mod lifecycle;
 mod output_tokens;
 mod records;
 mod resident_prefix;
+pub(crate) use kv_lease::{LeaseLedger, LeasedKvPage};
 mod resident_recurrent;
-pub(crate) use resident_recurrent::ResidentRecurrentPolicy;
+pub(crate) use resident_recurrent::{
+    DemotionRefusal, InPlaceRecord, RecorderReceipt, ResidentDemotion, ResidentRecurrentPolicy,
+};
 
 pub use lifecycle::{KvLifecycleEvent, KvLifecycleObserver};
 pub use records::{
@@ -244,6 +248,10 @@ pub struct KvStageIntegration {
     /// the position directly instead of importing one. Never true for a
     /// recurrent family, where an empty snapshot is corruption.
     pub(crate) dense_without_recurrent: bool,
+    /// Resident entries pair lent attention cells with a recurrent snapshot
+    /// taken at the same boundary. Records only happen at a session's
+    /// current position and restores never slice.
+    pub(crate) resident_recurrent_snapshots: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,8 +263,21 @@ pub enum StagePrefixCachePayload {
 }
 
 /// Entry backstop on the record queue. Byte admission is stage-specific;
-/// this only caps bookkeeping.
-pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 8;
+/// this only caps bookkeeping. Credits take at most
+/// `EXACT_STATE_ADMISSION_TOTAL` of these slots; the rest admit leased
+/// records, which hold no host memory while they wait.
+pub(crate) const EXACT_STATE_RECORD_CAPACITY: usize = 16;
+
+/// Channel slots a leased record may occupy. Carved out above the credit
+/// total so a credit-holding record always finds a slot: credits never
+/// exceed `EXACT_STATE_ADMISSION_TOTAL`, leased records never exceed this,
+/// and the two sum to the capacity.
+pub(crate) const LEASED_RECORD_SLOTS: usize =
+    EXACT_STATE_RECORD_CAPACITY - exact_state::EXACT_STATE_ADMISSION_TOTAL;
+const _: () = assert!(
+    LEASED_RECORD_SLOTS > 0,
+    "the recorder channel must leave room for leased records beyond the credit total"
+);
 
 /// Minimum payload bytes the record queue may hold. A record that does not fit is
 /// dropped, never delayed: recording is optional and inference is not. One
@@ -285,11 +306,62 @@ pub(crate) struct PendingExactStateRecord {
     /// Measured cold-versus-restore cost for L3 benefit admission. Missing
     /// telemetry preserves the established LRU write-through behavior.
     pub(crate) l3_cost: Option<skippy_cache::policy::CostSample>,
-    /// Owns the admission slot for this payload; released when the record is
-    /// dropped after the worker stores (or fails) it. Never read directly:
-    /// the Drop impl of the credit performs the release.
-    #[allow(dead_code)]
-    pub(crate) admission_credit: crate::kv_integration::exact_state::ExactStateAdmissionCredit,
+    /// What bounds this record while it is in flight.
+    pub(crate) admission: RecordAdmission,
+}
+
+/// How a record earned its place in the recorder.
+#[derive(Debug)]
+pub(crate) enum RecordAdmission {
+    /// Owned payload: one of the stage's credits and its byte reservation.
+    /// Released when the record is dropped after the worker stores (or
+    /// fails) it; the credit's Drop impl performs the release.
+    Credit(crate::kv_integration::exact_state::ExactStateAdmissionCredit),
+    /// The lane's cells are the payload: `payload` carries only the
+    /// recurrent half. No credit and no byte reservation, because nothing is
+    /// copied until the worker takes it and the pin is what keeps the cells.
+    /// Bounded by the channel slots credits can never need
+    /// ([`LEASED_RECORD_SLOTS`]), so a full channel means "stay parked".
+    Leased(LeasedKvPage),
+    /// A leased page the worker has already copied out. Only the worker's
+    /// own sequential execution bounds it now.
+    Released,
+}
+
+impl PendingExactStateRecord {
+    /// Bytes the record will occupy once stored, lease included.
+    pub(crate) fn byte_len(&self) -> u64 {
+        let leased = match &self.admission {
+            RecordAdmission::Leased(lease) => lease.byte_len(),
+            RecordAdmission::Credit(_) | RecordAdmission::Released => 0,
+        };
+        self.payload.byte_len().saturating_add(leased)
+    }
+
+    /// Bytes charged to the stage's record byte budget: a credit's whole
+    /// payload, nothing for a lease. Fixed for the record's lifetime, so
+    /// enqueue and finish agree.
+    pub(crate) fn budgeted_bytes(&self) -> u64 {
+        match self.admission {
+            RecordAdmission::Credit(_) => self.byte_len(),
+            RecordAdmission::Leased(_) | RecordAdmission::Released => 0,
+        }
+    }
+
+    /// Copy a leased page out of the lane's cells into an owned payload and
+    /// release the lane. A record without a lease is returned untouched.
+    pub(crate) fn materialise_leased_kv(mut self) -> Result<Self> {
+        let RecordAdmission::Leased(lease) =
+            std::mem::replace(&mut self.admission, RecordAdmission::Released)
+        else {
+            return Ok(self);
+        };
+        let kv = lease.materialise()?;
+        drop(lease);
+        let recurrent = self.payload.recurrent_state_bytes()?.into_owned();
+        self.payload = ExactStatePayload::kv_recurrent(kv, recurrent);
+        Ok(self)
+    }
 }
 
 #[derive(Debug)]
@@ -349,6 +421,11 @@ pub(crate) struct RadixResidentEntry {
     /// Deterministic first-order estimate of work needed to recreate this
     /// entry: cached tokens multiplied by stage-local layer count.
     pub(crate) recompute_cost: u64,
+    /// The recurrent state at exactly `token_count`, for a hybrid stage. The
+    /// attention cells are the cache sequence's; this half cannot be shared
+    /// by tagging and is only valid at its own boundary, so such an entry is
+    /// never sliced on restore.
+    pub(crate) recurrent: Option<Arc<[u8]>>,
 }
 
 #[derive(Debug, Clone)]
@@ -517,7 +594,27 @@ fn run_exact_state_record_job(
         }
     };
     let page_id = pending.page_id.clone();
-    let bytes = pending.payload.byte_len();
+    let bytes = pending.budgeted_bytes();
+    // Leave the lane as early as possible: the copy is the only thing that
+    // needs the cells, and it needs neither the runtime lock nor any tier.
+    let pending = match pending.materialise_leased_kv() {
+        Ok(pending) => pending,
+        Err(error) => {
+            tracing::debug!(error = %error, "leased KV page could not be read");
+            handles
+                .dropped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            notify(KvLifecycleEvent::ExactStateRecordFailed);
+            finish_exact_state_record(
+                handles.inflight_records,
+                handles.pending_count,
+                handles.queue_bytes,
+                &page_id,
+                bytes,
+            );
+            return;
+        }
+    };
     if !handles
         .worker_healthy
         .load(std::sync::atomic::Ordering::Acquire)
@@ -586,22 +683,39 @@ fn enqueue_exact_state_record(
         dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ExactStateRecordAdmission::WorkerStopped;
     }
-    let bytes = pending.payload.byte_len();
-    // Claim the bytes before the send so two producers cannot both see room.
-    // Released on every non-queued path below, and by the worker on finish.
-    let reserved = pending
-        .admission_credit
-        .transfer_reserved_bytes(queue_bytes, bytes);
-    let held = if reserved {
-        queue_bytes
-            .load(std::sync::atomic::Ordering::Acquire)
-            .saturating_sub(bytes)
-    } else {
-        queue_bytes.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel)
+    let bytes = pending.budgeted_bytes();
+    let admitted = match &mut pending.admission {
+        RecordAdmission::Credit(credit) => {
+            // Claim the bytes before the send so two producers cannot both
+            // see room. Released on every non-queued path below, and by the
+            // worker on finish.
+            let reserved = credit.transfer_reserved_bytes(queue_bytes, bytes);
+            let held = if reserved {
+                queue_bytes
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .saturating_sub(bytes)
+            } else {
+                queue_bytes.fetch_add(bytes, std::sync::atomic::Ordering::AcqRel)
+            };
+            let fits = reserved || record_fits_queue(held, bytes, queue_bytes_cap);
+            if fits {
+                pending_count.fetch_add(1, std::sync::atomic::Ordering::Release);
+            } else {
+                queue_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Release);
+            }
+            fits
+        }
+        // A lease costs no host memory while it waits, so its only bound is
+        // the slot carve-out; "no slot" leaves the lane parked, losing nothing.
+        RecordAdmission::Leased(_) | RecordAdmission::Released => pending_count
+            .fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |pending| (pending < LEASED_RECORD_SLOTS).then_some(pending + 1),
+            )
+            .is_ok(),
     };
-
-    if !reserved && !record_fits_queue(held, bytes, queue_bytes_cap) {
-        queue_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Release);
+    if !admitted {
         inflight_records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -609,7 +723,6 @@ fn enqueue_exact_state_record(
         dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ExactStateRecordAdmission::DroppedFull;
     }
-    pending_count.fetch_add(1, std::sync::atomic::Ordering::Release);
     match sender.try_send(pending) {
         Ok(()) => {
             queued.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -687,6 +800,13 @@ impl KvStageIntegration {
 
     pub(crate) fn payload_is_exact_state(&self) -> bool {
         self.exact_state_payload().is_some()
+    }
+
+    /// Whether a shared boundary must be captured while prefilling, because
+    /// the state at the end of the request cannot stand in for it: exact
+    /// state payloads, and resident entries that carry a recurrent snapshot.
+    pub(crate) fn captures_boundaries_during_prefill(&self) -> bool {
+        self.payload_is_exact_state() || self.resident_recurrent_snapshots
     }
 
     /// Whether the serving tier retains native resident prefixes independently
@@ -1395,6 +1515,7 @@ fn local_trust_checksum(page_id: &str, byte_size: u64) -> Checksum {
 
 #[cfg(test)]
 mod exact_state_record_queue_tests {
+    use super::{LEASED_RECORD_SLOTS, LeaseLedger, LeasedKvPage, RecordAdmission};
     use skippy_cache::ExactStatePayload;
     use std::sync::{
         Arc, Mutex,
@@ -1447,7 +1568,7 @@ mod exact_state_record_queue_tests {
             write_through_l3: true,
             l2_promotion_digest: None,
             l3_cost: None,
-            admission_credit,
+            admission: RecordAdmission::Credit(admission_credit),
         }
     }
 
@@ -1540,6 +1661,156 @@ mod exact_state_record_queue_tests {
         assert!(!inflight.lock().unwrap().contains("b"));
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
         assert_eq!(pending_count.load(Ordering::Relaxed), 1);
+    }
+
+    /// A leased page over `bytes` of test-owned memory. The `Vec` stands in
+    /// for the lane's cells; the ledger plays the lane.
+    fn leased(page_id: &str, cells: &[u8], ledger: &LeaseLedger) -> PendingExactStateRecord {
+        let spans = skippy_runtime::KvPageSpans {
+            desc: skippy_runtime::RuntimeKvPageDesc {
+                version: 1,
+                layer_start: 0,
+                layer_end: 1,
+                token_start: 0,
+                token_count: 1,
+                layer_count: 1,
+                k_type: 0,
+                v_type: 0,
+                k_row_bytes: 0,
+                v_row_bytes: 0,
+                v_element_bytes: 0,
+                k_idx_row_bytes: 0,
+                payload_bytes: cells.len() as u64,
+                flags: 0,
+                codec: 0,
+                component_count: 0,
+                components: Box::default(),
+            },
+            spans: vec![skippy_runtime::KvPageSpan {
+                data: cells.as_ptr(),
+                bytes: cells.len(),
+            }],
+        };
+        PendingExactStateRecord {
+            page_id: page_id.to_string(),
+            payload: ExactStatePayload::kv_recurrent(Vec::new(), vec![7; 4]),
+            extra: ExactStateExtra::default(),
+            namespace: "test".to_string(),
+            token_ids: vec![1],
+            l3_fill_claim: None,
+            write_through_l3: true,
+            l2_promotion_digest: None,
+            l3_cost: None,
+            admission: RecordAdmission::Leased(LeasedKvPage {
+                spans,
+                pin: ledger.pin(1),
+            }),
+        }
+    }
+
+    #[test]
+    fn leased_records_need_no_credit_and_no_bytes_and_stop_at_their_slots() {
+        let (sender, _receiver) = sync_channel(EXACT_STATE_RECORD_CAPACITY);
+        let inflight = Mutex::new(BTreeSet::new());
+        let queued = AtomicU64::new(0);
+        let dropped = AtomicU64::new(0);
+        let pending_count = AtomicUsize::new(0);
+        // Byte budget already exhausted by a credit holder.
+        let queue_bytes = AtomicU64::new(CAP);
+        let worker_healthy = AtomicBool::new(true);
+        let ledger = LeaseLedger::default();
+        let cells = vec![9_u8; 64];
+
+        for index in 0..LEASED_RECORD_SLOTS {
+            let page_id = format!("lease-{index}");
+            inflight.lock().unwrap().insert(page_id.clone());
+            assert_eq!(
+                enqueue_exact_state_record(
+                    &sender,
+                    &inflight,
+                    &queued,
+                    &dropped,
+                    &pending_count,
+                    &queue_bytes,
+                    CAP,
+                    &worker_healthy,
+                    leased(&page_id, &cells, &ledger),
+                ),
+                ExactStateRecordAdmission::Queued,
+                "lease {index} is admitted with the byte budget full"
+            );
+        }
+        assert_eq!(
+            queue_bytes.load(Ordering::Relaxed),
+            CAP,
+            "leases charge nothing to the byte budget"
+        );
+        assert_eq!(pending_count.load(Ordering::Relaxed), LEASED_RECORD_SLOTS);
+
+        // The slot after the carve-out is refused, and the lane's pin is
+        // released with the refused record.
+        inflight.lock().unwrap().insert("one-too-many".to_string());
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                &queue_bytes,
+                CAP,
+                &worker_healthy,
+                leased("one-too-many", &cells, &ledger),
+            ),
+            ExactStateRecordAdmission::DroppedFull
+        );
+        assert!(!inflight.lock().unwrap().contains("one-too-many"));
+        assert_eq!(pending_count.load(Ordering::Relaxed), LEASED_RECORD_SLOTS);
+
+        // Every admitted lease still pins the lane; a credit record still
+        // fits in the slots the carve-out leaves it.
+        assert!(ledger.in_flight());
+        let (total, best_effort) = budget();
+        inflight.lock().unwrap().insert("credit".to_string());
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                &AtomicU64::new(0),
+                CAP,
+                &worker_healthy,
+                pending(
+                    "credit",
+                    credit(&total, &best_effort, CaptureAdmission::Continuation)
+                ),
+            ),
+            ExactStateRecordAdmission::Queued,
+            "a credit never competes with leases for a slot"
+        );
+    }
+
+    #[test]
+    fn materialising_a_lease_copies_the_cells_once_and_releases_the_lane() {
+        let ledger = LeaseLedger::default();
+        let cells = (0..=255_u8).collect::<Vec<_>>();
+        let pending = leased("page", &cells, &ledger);
+        assert!(ledger.in_flight());
+        assert_eq!(pending.byte_len(), 256 + 4);
+        assert_eq!(pending.budgeted_bytes(), 0, "leases are not budgeted");
+
+        let pending = pending.materialise_leased_kv().expect("readable cells");
+        assert!(!ledger.in_flight(), "the pin goes with the lease");
+        assert!(matches!(pending.admission, RecordAdmission::Released));
+        assert_eq!(pending.byte_len(), 256 + 4);
+        assert_eq!(pending.budgeted_bytes(), 0);
+        let ExactStatePayload::KvRecurrent { kv, recurrent } = &pending.payload else {
+            panic!("materialised payload keeps its kind");
+        };
+        assert_eq!(kv.as_cow().unwrap().as_ref(), cells.as_slice());
+        assert_eq!(recurrent.as_cow().unwrap().as_ref(), &[7; 4]);
     }
 
     #[test]

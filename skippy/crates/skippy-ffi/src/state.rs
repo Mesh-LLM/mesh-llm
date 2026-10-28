@@ -25,6 +25,37 @@ pub const KV_PAGE_CODEC_ISWA_COMPOSITE_V1: u32 = 2;
 pub const KV_PAGE_FLAG_V_TRANSPOSED: u64 = 1 << 0;
 pub const KV_PAGE_FLAG_HAS_K_IDX: u64 = 1 << 1;
 
+/// `skippy_memory_cache_capability` bits.
+pub const MEMORY_CACHE_RESIDENT: u32 = 1 << 0;
+pub const MEMORY_CACHE_KV_RECURRENT: u32 = 1 << 1;
+pub const MEMORY_CACHE_FULL_STATE: u32 = 1 << 2;
+/// Every attention cell lives in a host-addressable backend buffer, so a KV
+/// page can be described in place with `skippy_export_kv_page_spans`.
+pub const MEMORY_CACHE_HOST_VISIBLE_KV: u32 = 1 << 3;
+/// Hybrid memory whose attention cells can be tagged into a cache sequence
+/// (one unified stream); the recurrent state travels as a snapshot.
+pub const MEMORY_CACHE_RESIDENT_KV_RECURRENT: u32 = 1 << 4;
+
+/// One host-addressable slice of a KV page, in payload order. Mirrors
+/// `struct skippy_kv_page_span`. The pointer aliases live native cells and is
+/// only meaningful under the validity window `skippy_export_kv_page_spans`
+/// documents.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct KvPageSpan {
+    pub data: *const c_void,
+    pub bytes: usize,
+}
+
+impl Default for KvPageSpan {
+    fn default() -> Self {
+        Self {
+            data: std::ptr::null(),
+            bytes: 0,
+        }
+    }
+}
+
 pub const CACHEGEN_RECORD_V1_ABI_VERSION: u32 = 1;
 pub const CACHEGEN_RECORD_F16: u32 = 0;
 pub const CACHEGEN_RECORD_EXACT: u32 = 1;

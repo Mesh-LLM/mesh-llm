@@ -160,13 +160,19 @@ impl StageOpenAiBackend {
                     cache_prefill_chunk_tokens,
                     cache_operation,
                 )?;
-            } else if let Some(kv) = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state()) {
+            } else if let Some(kv) = self
+                .kv
+                .as_ref()
+                .filter(|kv| kv.captures_boundaries_during_prefill())
+            {
                 // Recurrent and full-state payloads cannot reconstruct a shorter
-                // shared prefix from the state at the end of the request. Stop
-                // at the near-tail grid boundary while prefilling and snapshot
-                // native state there; the final exact state is recorded by
-                // `record_and_evict_kv` below. One checkpoint bounds both the
-                // extra prefill split and the very large recurrent-state export.
+                // shared prefix from the state at the end of the request, and
+                // neither can a resident entry that pairs a recurrent snapshot.
+                // Stop at the near-tail grid boundary while prefilling and
+                // record it in each configured tier; the final state is
+                // recorded by `record_and_evict_kv` below. One checkpoint
+                // bounds both the extra prefill split and the very large
+                // recurrent-state export.
                 let base = self.local_kv_message_base(session_id, ids);
                 let checkpoint =
                     kv.exact_shared_checkpoint_identity(&self.config, &base, 0, prefill_tokens);
@@ -182,18 +188,24 @@ impl StageOpenAiBackend {
                         cache_operation,
                     )?;
                     ensure_cache_operation_active(runtime, session_id, cache_operation)?;
-                    let cold_prefill_cost = self
-                        .generation_service_estimator
-                        .estimated_prefill_ms(boundary);
-                    let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
-                    kv.record_exact_state_with_cost(
-                        runtime,
-                        session_id,
-                        &identity,
-                        crate::kv_integration::CaptureAdmission::BestEffort,
-                        l3_cost,
-                    )
-                    .map_err(openai_backend_error)?;
+                    if kv.resident_recurrent_snapshots {
+                        kv.record_resident_prefix(runtime, session_id, &identity, prefill_tokens)
+                            .map_err(openai_backend_error)?;
+                    }
+                    if kv.payload_is_exact_state() {
+                        let cold_prefill_cost = self
+                            .generation_service_estimator
+                            .estimated_prefill_ms(boundary);
+                        let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
+                        kv.record_exact_state_with_cost(
+                            runtime,
+                            session_id,
+                            &identity,
+                            crate::kv_integration::CaptureAdmission::BestEffort,
+                            l3_cost,
+                        )
+                        .map_err(openai_backend_error)?;
+                    }
                     prefill_cache_chunks(
                         runtime,
                         session_id,
