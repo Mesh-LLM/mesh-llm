@@ -13,6 +13,87 @@ use std::time::{Duration, Instant};
 
 use skippy_runtime::KvPageSpans;
 
+use super::{LEASED_RECORD_SLOTS, record_fits_queue};
+
+/// Why a leased record could not reserve its owned recurrent bytes and slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeasedRecordRefusal {
+    QueueFull,
+    ByteFull,
+}
+
+/// Admission is claimed before cloning a resident recurrent snapshot. Until
+/// enqueue transfers it to the worker, dropping the reservation releases both
+/// counters, including on a disconnected recorder or a failed enqueue.
+#[derive(Debug)]
+pub(crate) struct LeasedRecordReservation {
+    pending: Arc<AtomicUsize>,
+    queue_bytes: Arc<AtomicU64>,
+    recurrent_bytes: u64,
+    transferred: bool,
+}
+
+impl LeasedRecordReservation {
+    pub(crate) fn acquire(
+        pending: &Arc<AtomicUsize>,
+        queue_bytes: &Arc<AtomicU64>,
+        recurrent_bytes: u64,
+        byte_limit: u64,
+    ) -> Result<Self, LeasedRecordRefusal> {
+        pending
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < LEASED_RECORD_SLOTS).then_some(count + 1)
+            })
+            .map_err(|_| LeasedRecordRefusal::QueueFull)?;
+        let mut held = queue_bytes.load(Ordering::Acquire);
+        loop {
+            if !record_fits_queue(held, recurrent_bytes, byte_limit) {
+                pending.fetch_sub(1, Ordering::AcqRel);
+                return Err(LeasedRecordRefusal::ByteFull);
+            }
+            let Some(next) = held.checked_add(recurrent_bytes) else {
+                pending.fetch_sub(1, Ordering::AcqRel);
+                return Err(LeasedRecordRefusal::ByteFull);
+            };
+            match queue_bytes.compare_exchange_weak(held, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break,
+                Err(actual) => held = actual,
+            }
+        }
+        Ok(Self {
+            pending: Arc::clone(pending),
+            queue_bytes: Arc::clone(queue_bytes),
+            recurrent_bytes,
+            transferred: false,
+        })
+    }
+
+    /// The enqueue/worker completion path now owns the counters. Matching
+    /// handles and size are an internal invariant, not a fresh admission.
+    pub(crate) fn transfer(
+        &mut self,
+        pending: &AtomicUsize,
+        queue_bytes: &AtomicU64,
+        recurrent_bytes: u64,
+    ) {
+        assert!(std::ptr::eq(self.pending.as_ref(), pending));
+        assert!(std::ptr::eq(self.queue_bytes.as_ref(), queue_bytes));
+        assert_eq!(self.recurrent_bytes, recurrent_bytes);
+        self.transferred = true;
+    }
+}
+
+impl Drop for LeasedRecordReservation {
+    fn drop(&mut self) {
+        if !self.transferred {
+            self.pending.fetch_sub(1, Ordering::AcqRel);
+            self.queue_bytes
+                .fetch_sub(self.recurrent_bytes, Ordering::AcqRel);
+        }
+    }
+}
+
 /// Per-lane count of in-flight in-place records, plus the highest token
 /// position any of them covers. Cloned into every [`LanePin`].
 #[derive(Debug, Clone, Default)]
@@ -111,6 +192,25 @@ impl LeasedKvPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recurrent_bytes_refuse_before_a_clone_and_release_the_slot() {
+        let pending = Arc::new(AtomicUsize::new(0));
+        let bytes = Arc::new(AtomicU64::new(8));
+        assert_eq!(
+            LeasedRecordReservation::acquire(&pending, &bytes, 4, 10).unwrap_err(),
+            LeasedRecordRefusal::ByteFull
+        );
+        assert_eq!(pending.load(Ordering::Acquire), 0);
+        assert_eq!(bytes.load(Ordering::Acquire), 8);
+
+        let reservation = LeasedRecordReservation::acquire(&pending, &bytes, 2, 10).unwrap();
+        assert_eq!(pending.load(Ordering::Acquire), 1);
+        assert_eq!(bytes.load(Ordering::Acquire), 10);
+        drop(reservation);
+        assert_eq!(pending.load(Ordering::Acquire), 0);
+        assert_eq!(bytes.load(Ordering::Acquire), 8);
+    }
 
     #[test]
     fn pins_count_and_release_exactly_once() {

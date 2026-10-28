@@ -66,7 +66,7 @@ impl ResidentRecurrentCheckpoint {
             session,
             start..end,
             &self.identity,
-            self.recurrent.clone(),
+            &self.recurrent,
             self.policy,
             ledger,
         ) {

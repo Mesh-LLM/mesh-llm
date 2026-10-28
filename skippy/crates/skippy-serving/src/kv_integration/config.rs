@@ -713,7 +713,7 @@ fn store_exact_radix_record_with_codec(
     // The worker materialises leases before storing; a lease here is a
     // caller that skipped `materialise_leased_kv`.
     anyhow::ensure!(
-        !matches!(admission, super::RecordAdmission::Leased(_)),
+        !matches!(admission, super::RecordAdmission::Leased(..)),
         "exact-state record reached storage with its KV page still leased"
     );
     let logical_bytes = payload.byte_len();

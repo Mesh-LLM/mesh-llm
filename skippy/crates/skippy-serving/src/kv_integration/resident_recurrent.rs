@@ -30,7 +30,8 @@ impl RecorderReceipt {
 pub(crate) enum DemotionRefusal {
     /// Copying path: every credit is held.
     CreditFull,
-    /// Copying path: the byte budget cannot take the export.
+    /// The byte budget cannot take the copying export or a leased record's
+    /// owned recurrent snapshot.
     ByteFull,
     /// In-place path: every leased channel slot is taken.
     QueueFull,
@@ -209,16 +210,15 @@ impl KvStageIntegration {
         demotion
     }
 
-    /// Record a resident checkpoint from the lane's own cells. No credit and
-    /// no byte reservation: nothing is copied here, and the pin is what keeps
-    /// the cells until the worker has taken its copy. The recurrent half
-    /// travels in the payload; the lane keeps the checkpoint either way.
+    /// Record a resident checkpoint from the lane's own cells. The attention
+    /// KV has no copy or credit; the recurrent snapshot reserves its owned
+    /// bytes and a queue slot before cloning. The lane keeps its copy.
     pub(crate) fn record_resident_recurrent_in_place(
         &self,
         session: &mut skippy_runtime::StageSession,
         layers: std::ops::Range<u32>,
         identity: &PrefillKvIdentity,
-        recurrent: Vec<u8>,
+        recurrent: &[u8],
         policy: ResidentRecurrentPolicy,
         ledger: &LeaseLedger,
     ) -> InPlaceRecord {
@@ -260,8 +260,29 @@ impl KvStageIntegration {
                 InPlaceRecord::Refused(DemotionRefusal::WorkerStopped)
             };
         }
-        let kv_bytes = spans.byte_len() as u64;
         let recurrent_bytes = recurrent.len() as u64;
+        let reservation = match LeasedRecordReservation::acquire(
+            &self.exact_state_records_pending,
+            &self.exact_state_record_queue_bytes,
+            recurrent_bytes,
+            self.exact_state_record_queue_limit,
+        ) {
+            Ok(reservation) => reservation,
+            Err(refusal) => {
+                self.finish_record(&identity.page_id);
+                let (event, reason) = match refusal {
+                    LeasedRecordRefusal::QueueFull => {
+                        ("demotion_queue_full_in_place", DemotionRefusal::QueueFull)
+                    }
+                    LeasedRecordRefusal::ByteFull => {
+                        ("demotion_byte_full_in_place", DemotionRefusal::ByteFull)
+                    }
+                };
+                emit_exact_state_diagnostic(event, &[("position", token_count)]);
+                return InPlaceRecord::Refused(reason);
+            }
+        };
+        let kv_bytes = spans.byte_len() as u64;
         let extra = ExactStateExtra {
             kv_desc: Some(spans.desc.clone()),
         };
@@ -271,7 +292,7 @@ impl KvStageIntegration {
         };
         let outcome = self.enqueue_exact_state_record(PendingExactStateRecord {
             page_id: identity.page_id.clone(),
-            payload: ExactStatePayload::kv_recurrent(Vec::new(), recurrent),
+            payload: ExactStatePayload::kv_recurrent(Vec::new(), recurrent.to_vec()),
             extra,
             namespace: identity.namespace.clone(),
             token_ids: identity.token_ids.clone(),
@@ -279,7 +300,7 @@ impl KvStageIntegration {
             write_through_l3: policy.write_through_l3,
             l2_promotion_digest: None,
             l3_cost: policy.l3_cost,
-            admission: RecordAdmission::Leased(lease),
+            admission: RecordAdmission::Leased(lease, reservation),
         });
         let (event, record) = match outcome {
             ExactStateRecordAdmission::Queued => {
