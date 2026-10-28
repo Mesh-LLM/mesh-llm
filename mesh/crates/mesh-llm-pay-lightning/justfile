@@ -1,0 +1,17 @@
+root := "../../.."
+
+build:
+    cd {{root}} && just with-lld cargo build --locked -p mesh-llm-pay-lightning --features offline-mock
+check:
+    cd {{root}} && cargo check --locked -p mesh-llm-pay-lightning --all-targets --features offline-mock
+    cd {{root}} && cargo clippy --locked -p mesh-llm-pay-lightning --all-targets --features offline-mock -- -D warnings
+test:
+    cd {{root}} && cargo test --locked -p mesh-llm-pay-lightning --features offline-mock -p mesh-llm-payments -p mesh-llm-payments-types -p mesh-llm-wallet
+package: build
+    mkdir -p dist
+    cp plugin.toml README.md dist/
+    cp {{root}}/target/debug/pay-lightning-mock dist/pay-lightning
+    {{root}}/target/debug/pay-lightning-mock --manifest > dist/plugin-manifest.json
+clean:
+    cd {{root}} && cargo clean -p mesh-llm-pay-lightning
+    rm -rf dist

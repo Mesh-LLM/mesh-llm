@@ -1,9 +1,18 @@
 //! Credit-first plugin protocol. A prepared admission is single-use and owner-bound.
+mod connections;
 pub mod diagnostics;
+mod runtime;
 mod tickets;
-pub mod wallet_child;
-mod wallet_transport;
+/// Side-effect-free permission declaration for packaging.
+pub fn manifest_json(name: &str) -> anyhow::Result<String> {
+    let namespace: String = name.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    mesh_llm_plugin::package_manifest_json(&runtime::manifest(&format!(
+        "x-plugin-{namespace}-pay-terms"
+    )))
+}
+mod config;
 use anyhow::{Context, Result, ensure};
+pub use config::Config;
 use mesh_llm_payments::service::PaymentService;
 use mesh_llm_payments_types::{
     contract::*, metered_wire::AdmissionTerms, pricing::Pricing, terms::RequestTerms,
@@ -12,6 +21,7 @@ use mesh_llm_plugin::openai_exchange::{
     OpenAiAdmissionDecision as Decision, OpenAiExchangeDecision,
 };
 use mesh_llm_wallet::invoice::Invoice;
+pub use runtime::run;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -67,6 +77,8 @@ impl Message {
 
 pub struct Engine {
     known: std::sync::Mutex<BTreeSet<String>>,
+    quotes: tokio::sync::Mutex<()>,
+    connected: connections::Connections,
     vouched: std::sync::Mutex<BTreeSet<String>>,
     ready_seen: std::sync::Mutex<BTreeSet<String>>,
     buyer_ready: std::sync::Mutex<BTreeSet<(String, String)>>,
@@ -87,6 +99,8 @@ impl Engine {
     ) -> Result<Self> {
         Ok(Self {
             known: Default::default(),
+            quotes: Default::default(),
+            connected: Default::default(),
             vouched: Default::default(),
             ready_seen: Default::default(),
             buyer_ready: Default::default(),
@@ -260,6 +274,13 @@ impl Engine {
         if !self.buy_peers.contains(peer) || self.cap_msat == 0 {
             return Ok(vec![]);
         }
+        // Only discovery/reconnect reconciles uncertain submissions. Holding this
+        // async lock makes a concurrent first request wait for startup recovery,
+        // not start a duplicate payment or send another hello/recover sequence.
+        let _handshake = self.connected.handshake.lock().await;
+        let Some(epoch) = self.connected.begin(peer) else {
+            return Ok(vec![]);
+        };
         let mut messages = Vec::new();
         // Observe uncertain payments before asking the authenticated seller for stored outcomes.
         for terms in self.service.reconcile().await?.approved {
@@ -275,7 +296,14 @@ impl Engine {
             },
         );
         messages.push(Message::Quote);
+        ensure!(
+            self.connected.complete(peer, epoch),
+            "peer disconnected during recovery"
+        );
         Ok(messages)
+    }
+    pub fn peer_down(&self, peer: &str) {
+        self.connected.disconnect(peer);
     }
     fn owner(&self, peer: &str, id: &str) -> Result<()> {
         ensure!(
@@ -285,6 +313,7 @@ impl Engine {
         Ok(())
     }
     async fn quote(&self, peer: &str) -> Result<Vec<Message>> {
+        let _quote = self.quotes.lock().await;
         let mut replies = vec![];
         for (model, pricing) in self.service.ledger.pricing()? {
             if self.tickets.outstanding(peer, &model)? {

@@ -5,6 +5,7 @@ pub mod catalog;
 pub mod defaults;
 pub mod github;
 pub mod install;
+mod package_identity;
 pub mod skills;
 pub mod source_ref;
 pub mod store;

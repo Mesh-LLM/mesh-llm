@@ -8,6 +8,26 @@ use std::{
 
 // One plugin process owns its log path. Serialize appenders even if write_all
 // needs multiple OS writes; separate processes must use separate paths.
+static LOG_PATHS: std::sync::OnceLock<(Option<PathBuf>, Option<PathBuf>)> =
+    std::sync::OnceLock::new();
+pub fn configure(timing: Option<PathBuf>, error: Option<PathBuf>) -> anyhow::Result<()> {
+    LOG_PATHS
+        .set((timing, error))
+        .map_err(|_| anyhow::anyhow!("payment runtime already configured"))
+}
+pub fn record_error(error: &anyhow::Error) {
+    let Ok(_guard) = RECORD_WRITE.lock() else {
+        return;
+    };
+    if let Some(path) = LOG_PATHS.get().and_then(|paths| paths.1.as_ref())
+        && let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+    {
+        let _ = writeln!(file, "{}", serde_json::json!({"error":error.to_string()}));
+    }
+}
 static RECORD_WRITE: Mutex<()> = Mutex::new(());
 
 pub struct Timing {
@@ -20,7 +40,7 @@ pub struct Timing {
 impl Timing {
     pub fn start(phase: &'static str, operation: impl Into<String>) -> Self {
         Self::with_path(
-            std::env::var_os("PAY_LIGHTNING_TIMING_LOG").map(PathBuf::from),
+            LOG_PATHS.get().and_then(|paths| paths.0.clone()),
             phase,
             operation.into(),
         )

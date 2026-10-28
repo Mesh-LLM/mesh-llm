@@ -418,6 +418,11 @@ fn validate_plugin_root(
     }
     let executable = plugin_dir.join(format!("{plugin_name}{executable_suffix}"));
     if !executable.exists() {
+        if let Some(hint) =
+            crate::package_identity::mismatch_hint(plugin_dir, plugin_name, executable_suffix)
+        {
+            bail!("{hint}");
+        }
         bail!(
             "installed plugin is missing executable {}",
             executable.display()

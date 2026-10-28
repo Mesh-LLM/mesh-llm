@@ -576,3 +576,26 @@ async fn startup_propagates_wallet_failure() {
     assert!(format!("{error:#}").contains("offline startup failure"));
     assert_eq!(factory.opens.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn concurrent_quotes_share_one_unconsumed_admission() {
+    let f = Fixture::new();
+    let (first, second) = tokio::join!(
+        f.seller.channel("buyer", Message::Quote),
+        f.seller.channel("buyer", Message::Quote)
+    );
+    assert_eq!(
+        serde_json::to_value(first.unwrap()).unwrap(),
+        serde_json::to_value(second.unwrap()).unwrap()
+    );
+    assert_eq!(f.network.next.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn warm_requests_skip_reconciliation_until_disconnect() {
+    let f = Fixture::new();
+    assert!(!f.buyer.peer_up("seller").await.unwrap().is_empty());
+    assert!(f.buyer.peer_up("seller").await.unwrap().is_empty());
+    f.buyer.peer_down("seller");
+    assert!(!f.buyer.peer_up("seller").await.unwrap().is_empty());
+}

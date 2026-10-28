@@ -1,15 +1,15 @@
 //! Standalone plugin. Money-moving behavior requires explicit isolated-state config.
+use crate::{CHANNEL, Config, Engine, Message};
 use anyhow::{Context, Result, ensure};
-use mesh_llm_payments::{ledger::Policy, service::PaymentService};
+use mesh_llm_payments::service::PaymentService;
 use mesh_llm_plugin::{
     PluginContext, PluginMetadata, PluginRuntime, SimplePlugin, mesh_channel, mesh_event_peer_down,
     mesh_event_peer_up, plugin_manifest, plugin_server_info,
 };
-use mesh_pay_lightning::{CHANNEL, Engine, Message, parse_prices};
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
+pub(crate) fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
     let mut hook = mesh_llm_plugin::openai_exchange::openai_exchange_hook("payment_gate");
     hook.phases = vec![
         "request_received".into(),
@@ -28,69 +28,36 @@ fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
         .build()
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let name = std::env::var("MESH_LLM_PLUGIN_NAME").unwrap_or_else(|_| "pay-lightning".into());
+/// Run the payment protocol with an in-process wallet adapter. Manifest inspection
+/// is handled before reading configuration or opening any state.
+pub async fn run(
+    name: String,
+    version: &str,
+    factory: impl mesh_llm_wallet::provisioning::WalletFactory + 'static,
+    config: Config,
+) -> Result<()> {
+    config.validate()?;
+    crate::diagnostics::configure(config.timing_log.clone(), config.error_log.clone())?;
     let namespace: String = name.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
     let header = format!("x-plugin-{namespace}-pay-terms");
     let manifest = manifest(&header);
-    if std::env::args().any(|arg| arg == "--manifest") {
-        println!("{}", mesh_llm_plugin::package_manifest_json(&manifest)?);
-        return Ok(());
+    let directory = &config.data_dir;
+    let service = Arc::new(PaymentService::with_factory(directory, Arc::new(factory))?);
+    service.ledger.set_policy(&config.policy)?;
+    for (model, price) in &config.prices {
+        service.ledger.set_pricing(model, Some(price))?;
     }
-    let directory = PathBuf::from(
-        std::env::var_os("PAY_LIGHTNING_DATA")
-            .context("PAY_LIGHTNING_DATA must name isolated plugin state")?,
-    );
-    ensure!(
-        directory.is_absolute(),
-        "PAY_LIGHTNING_DATA must be absolute"
-    );
-    // State is plugin-owned. No implicit adoption of ~/.mesh-llm/payments.
-    std::fs::create_dir_all(&directory)?;
-    let wallet_executable = PathBuf::from(
-        std::env::var_os("PAY_LIGHTNING_WALLET")
-            .context("PAY_LIGHTNING_WALLET must name lexe-wallet executable")?,
-    );
-    let service = Arc::new(PaymentService::with_factory(
-        &directory,
-        Arc::new(mesh_pay_lightning::wallet_child::ChildWalletFactory {
-            executable: wallet_executable,
-            directory: directory.join("wallet"),
-        }),
-    )?);
-    let policy: Policy = serde_json::from_str(
-        &std::env::var("PAY_LIGHTNING_POLICY")
-            .unwrap_or_else(|_| "{\"mode\":\"free_only\",\"daily_budget_msat\":null}".into()),
-    )?;
-    service.ledger.set_policy(&policy)?;
-    let prices =
-        parse_prices(&std::env::var("PAY_LIGHTNING_PRICES").unwrap_or_else(|_| "{}".into()))?;
-    for (model, price) in prices {
-        service.ledger.set_pricing(&model, Some(&price))?;
-    }
-    let cap = std::env::var("PAY_LIGHTNING_CAP_MSAT")
-        .ok()
-        .map(|s| s.parse())
-        .transpose()?
-        .unwrap_or(0);
-    let mut engine = Engine::new(service, &namespace, cap, &directory)?;
-    engine.buying =
-        parse_prices(&std::env::var("PAY_LIGHTNING_BUY_PRICES").unwrap_or_else(|_| "{}".into()))?;
-    engine.buy_peers = std::env::var("PAY_LIGHTNING_BUY_PEERS")
-        .unwrap_or_default()
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
+    let mut engine = Engine::new(service, &namespace, config.cap_msat, directory)?;
+    engine.buying = config.buy_prices;
+    engine.buy_peers = config.buy_peers;
     let engine = Arc::new(engine);
 
     let metadata = PluginMetadata::new(
         &name,
-        env!("CARGO_PKG_VERSION"),
+        version,
         plugin_server_info(
             &name,
-            env!("CARGO_PKG_VERSION"),
+            version,
             "Lightning payments",
             "Plugin-owned credit, ledger and settlement",
             None::<String>,
@@ -119,13 +86,21 @@ async fn main() -> Result<()> {
             let engine = messages.clone();
             let mut context = context.owned();
             Box::pin(async move {
-                let detached = serde_json::from_slice::<Message>(&message.body)
-                    .is_ok_and(|body| matches!(body, Message::Settlement { .. }));
+                let detached = serde_json::from_slice::<Message>(&message.body).is_ok_and(|body| {
+                    matches!(
+                        body,
+                        Message::Settlement { .. }
+                            | Message::Recover { .. }
+                            | Message::Paid { .. }
+                            | Message::Admission { .. }
+                            | Message::Quote
+                    )
+                });
                 let work = async move {
                     let result: Result<()> = async {
                         ensure!(message.channel == CHANNEL, "unexpected channel");
                         let message_body: Message = serde_json::from_slice(&message.body)?;
-                        let _timing = mesh_pay_lightning::diagnostics::Timing::start(
+                        let _timing = crate::diagnostics::Timing::start(
                             "channel_receive_handler",
                             message_body.kind(),
                         );
@@ -167,14 +142,33 @@ async fn main() -> Result<()> {
             let engine = events.clone();
             let mut context = context.owned();
             Box::pin(async move {
+                if event.kind == mesh_llm_plugin::proto::mesh_event::Kind::PeerDown as i32
+                    && let Some(peer) = &event.peer
+                {
+                    engine.peer_down(&peer.peer_id);
+                }
                 if event.kind == mesh_llm_plugin::proto::mesh_event::Kind::PeerUp as i32
                     && engine.cap_msat > 0
                     && let Some(peer) = event.peer
                     && engine.buy_peers.contains(&peer.peer_id)
                 {
-                    for message in engine.peer_up(&peer.peer_id).await? {
-                        send(&mut context, &peer.peer_id, &message).await?;
-                    }
+                    tokio::spawn(async move {
+                        let result: Result<()> = async {
+                            for message in engine.peer_up(&peer.peer_id).await? {
+                                if let Err(error) =
+                                    send(&mut context, &peer.peer_id, &message).await
+                                {
+                                    engine.peer_down(&peer.peer_id);
+                                    return Err(error);
+                                }
+                            }
+                            Ok(())
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            record_error(&error);
+                        }
+                    });
                 }
 
                 Ok(())
@@ -209,7 +203,10 @@ async fn main() -> Result<()> {
                         let model = event["model"].as_str().context("selected model missing")?;
                         tokio::time::timeout(std::time::Duration::from_secs(28), async {
                             for message in engine.peer_up(peer).await? {
-                                send(&mut context, peer, &message).await?;
+                                if let Err(error) = send(&mut context, peer, &message).await {
+                                    engine.peer_down(peer);
+                                    return Err(error);
+                                }
                             }
                             engine
                                 .buyer_wait(peer, model, std::time::Duration::from_secs(28))
@@ -246,23 +243,13 @@ async fn dispatch_channel_work(
 }
 
 async fn send(context: &mut PluginContext<'_>, peer: &str, message: &Message) -> Result<()> {
-    let _timing = mesh_pay_lightning::diagnostics::Timing::start("channel_send", message.kind());
+    let _timing = crate::diagnostics::Timing::start("channel_send", message.kind());
     context
         .send_json_channel(CHANNEL, peer, "payment", message)
         .await
 }
 fn record_error(error: &anyhow::Error) {
-    // Operational errors stay in the plugin's isolated directory, not the host ledger.
-    if let Some(path) = std::env::var_os("PAY_LIGHTNING_ERROR_LOG") {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(file, "{}", serde_json::json!({"error": error.to_string()}));
-        }
-    }
+    crate::diagnostics::record_error(error);
 }
 
 #[cfg(test)]
