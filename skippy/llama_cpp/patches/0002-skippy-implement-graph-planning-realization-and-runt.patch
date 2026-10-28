@@ -1,7 +1,7 @@
-From ecb5bedcd83493493b94889d7652aabce960c778 Mon Sep 17 00:00:00 2001
+From 173f92dccc746ca283ae969f5f53aaaf4aed9834 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
 
 ---
  src/skippy/abi.cpp                      |   59 ++
@@ -10,6 +10,8 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
  src/skippy/activation_layout.cpp        |  156 +++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
+ src/skippy/chat_sampling.cpp            |  134 +++
+ src/skippy/chat_sampling.h              |    6 +
  src/skippy/devices.cpp                  |  106 ++
  src/skippy/environment.h                |   48 +
  src/skippy/errors.h                     |   66 ++
@@ -38,8 +40,8 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
  src/skippy/package_tensor_binding.h     |   27 +
  src/skippy/rerank_template.h            |   36 +
  src/skippy/runtime_support.h            |   50 +
- src/skippy/runtime_types.h              |  178 ++++
- src/skippy/sampling.cpp                 | 1128 +++++++++++++++++++++
+ src/skippy/runtime_types.h              |  179 ++++
+ src/skippy/sampling.cpp                 | 1031 ++++++++++++++++++++
  src/skippy/sampling_internal.h          |   70 ++
  src/skippy/sampling_vocab.cpp           |   74 ++
  src/skippy/session.cpp                  |  539 ++++++++++
@@ -61,13 +63,15 @@ Subject: [PATCH 2/6] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  270 +++++
  src/skippy/workloads.cpp                |  372 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 57 files changed, 16079 insertions(+)
+ 59 files changed, 16123 insertions(+)
  create mode 100644 src/skippy/abi.cpp
  create mode 100644 src/skippy/activation.cpp
  create mode 100644 src/skippy/activation_internal.h
  create mode 100644 src/skippy/activation_layout.cpp
  create mode 100644 src/skippy/block_boundaries.cpp
  create mode 100644 src/skippy/block_boundaries.h
+ create mode 100644 src/skippy/chat_sampling.cpp
+ create mode 100644 src/skippy/chat_sampling.h
  create mode 100644 src/skippy/devices.cpp
  create mode 100644 src/skippy/environment.h
  create mode 100644 src/skippy/errors.h
@@ -1579,6 +1583,158 @@ index 000000000..7c9aae114
 +        int32_t layer_start,
 +        int32_t layer_end,
 +        std::string & error);
+diff --git a/src/skippy/chat_sampling.cpp b/src/skippy/chat_sampling.cpp
+new file mode 100644
+index 000000000..58094f98d
+--- /dev/null
++++ b/src/skippy/chat_sampling.cpp
+@@ -0,0 +1,134 @@
++#include "skippy/chat_sampling.h"
++#include "skippy/runtime_types.h"
++#include "skippy/runtime_support.h"
++#include "skippy/sampling_internal.h"
++#include "../../common/reasoning-budget.h"
++
++#include <cmath>
++#include <exception>
++#include <vector>
++
++static bool skippy_chat_grammar_should_apply(const skippy_session * session) {
++    if (session == nullptr || session->grammar_sampler == nullptr) {
++        return false;
++    }
++    if (!session->grammar_lazy || session->reasoning_budget_sampler == nullptr) {
++        return true;
++    }
++    const auto state = common_reasoning_budget_get_state(session->reasoning_budget_sampler);
++    return state == REASONING_BUDGET_IDLE || state == REASONING_BUDGET_DONE;
++}
++
++static void skippy_sync_chat_sampling_history(skippy_session * session) {
++    if (session == nullptr || session->sampling_chain == nullptr) {
++        return;
++    }
++    while (session->sampling_accepted_token_count < session->token_history.size()) {
++        const size_t index = session->sampling_accepted_token_count;
++        const llama_token token = session->token_history[index];
++        llama_sampler_accept(session->sampling_chain, token);
++        const bool generated = index >= session->grammar_generated_start;
++        const bool accept_grammar = generated && skippy_chat_grammar_should_apply(session);
++        if (session->reasoning_budget_sampler != nullptr && generated) {
++            llama_sampler_accept(session->reasoning_budget_sampler, token);
++            if (!accept_grammar && session->grammar_sampler != nullptr &&
++                    common_reasoning_budget_get_state(session->reasoning_budget_sampler) == REASONING_BUDGET_DONE) {
++                const std::vector<llama_token> * end_match =
++                        common_reasoning_budget_get_end_match(session->reasoning_budget_sampler);
++                if (end_match != nullptr) {
++                    for (const llama_token end_token : *end_match) {
++                        llama_sampler_accept(session->grammar_sampler, end_token);
++                    }
++                }
++            }
++        }
++        if (accept_grammar) {
++            try {
++                llama_sampler_accept(session->grammar_sampler, token);
++            } catch (const std::exception & e) {
++                skippy_disable_chat_grammar_after_exception(session, "accept", e.what());
++            } catch (...) {
++                skippy_disable_chat_grammar_after_exception(session, "accept", nullptr);
++            }
++        }
++        session->sampling_accepted_token_count++;
++    }
++}
++
++llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_index) {
++    skippy_sync_chat_sampling_history(session);
++    if (session->sampling_backend_enabled) {
++        const llama_token sampled = llama_get_sampled_token_ith(session->ctx, logits_index);
++        skippy_mark_context_synchronized(session->stage_model);
++        if (sampled != LLAMA_TOKEN_NULL) {
++            llama_sampler_accept(session->sampling_chain, sampled);
++            return sampled;
++        }
++        return skippy_greedy_sample_ith(session, logits_index);
++    }
++    llama_synchronize(session->ctx);
++    skippy_mark_context_synchronized(session->stage_model);
++
++    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
++    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
++    const float * logits = llama_get_logits_ith(session->ctx, logits_index);
++    if (logits == nullptr) {
++        return skippy_greedy_sample_ith(session, logits_index);
++    }
++
++    auto & candidates = session->sampling_candidates;
++    candidates.resize(static_cast<size_t>(n_vocab));
++    auto reset_logits = [&]() {
++        for (llama_token token = 0; token < n_vocab; ++token) {
++            candidates[token] = { token, logits[token], 0.0f };
++        }
++        return llama_token_data_array{candidates.data(), candidates.size(), -1, false};
++    };
++    auto apply_grammar = [&](llama_token_data_array & values) {
++        try {
++            llama_sampler_apply(session->grammar_sampler, &values);
++        } catch (const std::exception & e) {
++            skippy_disable_chat_grammar_after_exception(session, "apply", e.what());
++        } catch (...) {
++            skippy_disable_chat_grammar_after_exception(session, "apply", nullptr);
++        }
++    };
++    auto cur = reset_logits();
++    if (session->reasoning_budget_sampler != nullptr) {
++        llama_sampler_apply(session->reasoning_budget_sampler, &cur);
++    }
++    llama_sampler_apply(session->sampling_chain, &cur);
++    if (cur.selected < 0 || static_cast<size_t>(cur.selected) >= cur.size) {
++        return skippy_greedy_sample_ith(session, logits_index);
++    }
++    const auto proposed = cur.data[cur.selected].id;
++    if (!skippy_chat_grammar_should_apply(session)) {
++        return proposed;
++    }
++
++    // Match common_sampler_sample: avoid decoding every vocabulary piece when
++    // the proposed token already satisfies the grammar. apply never accepts it;
++    // history advances only after the caller commits a generated token.
++    llama_token_data proposal{proposed, 1.0f, 0.0f};
++    llama_token_data_array single{&proposal, 1, -1, false};
++    apply_grammar(single);
++    if (proposal.logit != -INFINITY) {
++        return proposed;
++    }
++
++    // Sampling mutates both the candidate set and RNG. Reload the original
++    // logits and repeat the budget/grammar/chain order used by upstream fallback.
++    cur = reset_logits();
++    if (session->reasoning_budget_sampler != nullptr) {
++        llama_sampler_apply(session->reasoning_budget_sampler, &cur);
++    }
++    if (skippy_chat_grammar_should_apply(session)) {
++        apply_grammar(cur);
++    }
++    llama_sampler_apply(session->sampling_chain, &cur);
++    if (cur.selected < 0 || static_cast<size_t>(cur.selected) >= cur.size) {
++        return skippy_greedy_sample_ith(session, logits_index);
++    }
++    return cur.data[cur.selected].id;
++}
++
+diff --git a/src/skippy/chat_sampling.h b/src/skippy/chat_sampling.h
+new file mode 100644
+index 000000000..5d51ad76f
+--- /dev/null
++++ b/src/skippy/chat_sampling.h
+@@ -0,0 +1,6 @@
++#pragma once
++
++#include "llama.h"
++
++struct skippy_session;
++llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_index);
 diff --git a/src/skippy/devices.cpp b/src/skippy/devices.cpp
 new file mode 100644
 index 000000000..2068a9b1c
@@ -9046,10 +9202,10 @@ index 000000000..55499ea20
 +        skippy_error ** out_error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 new file mode 100644
-index 000000000..fa97e12a5
+index 000000000..5a02c35c5
 --- /dev/null
 +++ b/src/skippy/runtime_types.h
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,179 @@
 +#pragma once
 +
 +#include "skippy.h"
@@ -9195,6 +9351,7 @@ index 000000000..fa97e12a5
 +    std::vector<llama_seq_id> prefill_seq_ids;
 +    std::vector<llama_seq_id *> prefill_seq_id_ptrs;
 +    std::vector<int8_t> prefill_logits;
++    std::vector<llama_token_data> sampling_candidates;
 +    llama_sampler * sampling_chain = nullptr;
 +    llama_sampler * grammar_sampler = nullptr;
 +    llama_sampler * reasoning_budget_sampler = nullptr;
@@ -9230,11 +9387,12 @@ index 000000000..fa97e12a5
 +};
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 new file mode 100644
-index 000000000..691dc6dd6
+index 000000000..7126c40e5
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,1128 @@
+@@ -0,0 +1,1031 @@
 +#include "skippy/sampling.h"
++#include "skippy/chat_sampling.h"
 +#include "skippy/errors.h"
 +#include "skippy/execution_internal.h"
 +#include "skippy/runtime_support.h"
@@ -10202,104 +10360,6 @@ index 000000000..691dc6dd6
 +        llama_sampler_accept(session->reasoning_budget_sampler, token);
 +    }
 +    return true;
-+}
-+
-+static bool skippy_chat_grammar_should_apply(const skippy_session * session) {
-+    if (session == nullptr || session->grammar_sampler == nullptr) {
-+        return false;
-+    }
-+    if (!session->grammar_lazy || session->reasoning_budget_sampler == nullptr) {
-+        return true;
-+    }
-+    const auto state = common_reasoning_budget_get_state(session->reasoning_budget_sampler);
-+    return state == REASONING_BUDGET_IDLE || state == REASONING_BUDGET_DONE;
-+}
-+
-+static void skippy_sync_chat_sampling_history(skippy_session * session) {
-+    if (session == nullptr || session->sampling_chain == nullptr) {
-+        return;
-+    }
-+    while (session->sampling_accepted_token_count < session->token_history.size()) {
-+        const size_t index = session->sampling_accepted_token_count;
-+        const llama_token token = session->token_history[index];
-+        llama_sampler_accept(session->sampling_chain, token);
-+        const bool generated = index >= session->grammar_generated_start;
-+        const bool accept_grammar = generated && skippy_chat_grammar_should_apply(session);
-+        if (session->reasoning_budget_sampler != nullptr && generated) {
-+            llama_sampler_accept(session->reasoning_budget_sampler, token);
-+            if (!accept_grammar && session->grammar_sampler != nullptr &&
-+                    common_reasoning_budget_get_state(session->reasoning_budget_sampler) == REASONING_BUDGET_DONE) {
-+                const std::vector<llama_token> * end_match =
-+                        common_reasoning_budget_get_end_match(session->reasoning_budget_sampler);
-+                if (end_match != nullptr) {
-+                    for (const llama_token end_token : *end_match) {
-+                        llama_sampler_accept(session->grammar_sampler, end_token);
-+                    }
-+                }
-+            }
-+        }
-+        if (accept_grammar) {
-+            try {
-+                llama_sampler_accept(session->grammar_sampler, token);
-+            } catch (const std::exception & e) {
-+                skippy_disable_chat_grammar_after_exception(session, "accept", e.what());
-+            } catch (...) {
-+                skippy_disable_chat_grammar_after_exception(session, "accept", nullptr);
-+            }
-+        }
-+        session->sampling_accepted_token_count++;
-+    }
-+}
-+
-+static llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_index) {
-+    skippy_sync_chat_sampling_history(session);
-+    if (session->sampling_backend_enabled) {
-+        const llama_token sampled = llama_get_sampled_token_ith(session->ctx, logits_index);
-+        skippy_mark_context_synchronized(session->stage_model);
-+        if (sampled != LLAMA_TOKEN_NULL) {
-+            llama_sampler_accept(session->sampling_chain, sampled);
-+            return sampled;
-+        }
-+        return skippy_greedy_sample_ith(session, logits_index);
-+    }
-+    llama_synchronize(session->ctx);
-+    skippy_mark_context_synchronized(session->stage_model);
-+
-+    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
-+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-+    const float * logits = llama_get_logits_ith(session->ctx, logits_index);
-+    if (logits == nullptr) {
-+        return skippy_greedy_sample_ith(session, logits_index);
-+    }
-+
-+    std::vector<llama_token_data> candidates;
-+    candidates.reserve(static_cast<size_t>(n_vocab));
-+    for (llama_token token = 0; token < n_vocab; ++token) {
-+        candidates.push_back({ token, logits[token], 0.0f });
-+    }
-+    llama_token_data_array cur = {
-+        candidates.data(),
-+        candidates.size(),
-+        -1,
-+        false,
-+    };
-+    if (session->reasoning_budget_sampler != nullptr) {
-+        llama_sampler_apply(session->reasoning_budget_sampler, &cur);
-+    }
-+    if (skippy_chat_grammar_should_apply(session)) {
-+        try {
-+            llama_sampler_apply(session->grammar_sampler, &cur);
-+        } catch (const std::exception & e) {
-+            skippy_disable_chat_grammar_after_exception(session, "apply", e.what());
-+        } catch (...) {
-+            skippy_disable_chat_grammar_after_exception(session, "apply", nullptr);
-+        }
-+    }
-+    llama_sampler_apply(session->sampling_chain, &cur);
-+    if (cur.selected < 0 || static_cast<size_t>(cur.selected) >= cur.size) {
-+        return skippy_greedy_sample_ith(session, logits_index);
-+    }
-+    return cur.data[cur.selected].id;
 +}
 +
 +llama_token skippy_sample_token_ith(
@@ -16542,5 +16602,5 @@ index 000000000..cc9279e7e
 +// attached from an earlier chat request.
 +void skippy_prepare_non_chat_workload(skippy_session * session);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

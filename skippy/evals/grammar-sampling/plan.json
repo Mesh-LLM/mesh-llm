@@ -1,0 +1,136 @@
+{
+  "campaign": "max-grammar-sampling-abc-20261028",
+  "protocol_revision": 3,
+  "question": "Can Skippy avoid full-vocabulary grammar filtering on valid proposals while matching llama.cpp performance and tool-call correctness?",
+  "proposal": "Use upstream's sampling-first, single-token grammar validation and grammar-first fallback in Skippy's native chat sampler. Preserve lazy triggers, reasoning-budget handling, accepted-token history and MTP rejection recovery. Reuse candidate storage where compatible; do not disable grammar or change Max tool policy.",
+  "execution": {
+    "measurement_location": "JY only",
+    "local_measurements_permitted": false,
+    "executor": "lab",
+    "preferred_node": "macmini-gq7vhw",
+    "reason_for_pinning": "All arms and paired blocks must use the same available Apple Silicon host; do not interrupt other campaigns.",
+    "max_duration_s_per_job": 7200,
+    "max_usd": 0,
+    "phases": [
+      "verified-M6-probe-reuse",
+      "build-and-correctness",
+      "qualification",
+      "independent-audit-and-MLflow-readback"
+    ],
+    "pr_gate": "No PR before audited JY qualification passes. Private experiment branch commits/pushes are permitted to deliver immutable source to JY.",
+    "hardware": "Apple M6 / 24 GB unified memory"
+  },
+  "arms": {
+    "A": {
+      "name": "Existing Skippy",
+      "product_base": "3947de0cbc73fe5cbcaae548b297f03a401532d7",
+      "policy": "Production Skippy full-vocabulary grammar-first chat sampling"
+    },
+    "B": {
+      "name": "llama.cpp reference",
+      "upstream_base": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+      "policy": "Real common_sampler_sample with its default grammar_first=false"
+    },
+    "C": {
+      "name": "Skippy sampling-first candidate",
+      "product_base": "3947de0cbc73fe5cbcaae548b297f03a401532d7",
+      "policy": "Proposed fix; executed commit and binary hashes must be frozen before dispatch"
+    }
+  },
+  "model": {
+    "repository": "unsloth/Qwen3.5-9B-GGUF",
+    "revision": "3885219b6810b007914f3a7950a8d1b469d598a5",
+    "file": "Qwen3.5-9B-Q4_K_M.gguf",
+    "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+    "vocabulary_tokens": 248320,
+    "weight_precision": "Q4_K_M",
+    "context_tokens": 4096,
+    "concurrency": 1,
+    "kv_keys": "f16",
+    "kv_values": "f16",
+    "cpu_threads": 8
+  },
+  "controls": {
+    "primary_speculation": "disabled in all arms to isolate the sampler; MTP correctness is a separate mandatory gate",
+    "prefix_and_disk_cache": "disabled for primary matched decode comparisons in every arm; do not alter the installed Max cache",
+    "temperature": 0.8,
+    "top_k": 40,
+    "top_p": 0.95,
+    "min_p": 0.05,
+    "seed": 73,
+    "additional_correctness_seeds": [
+      1,
+      42,
+      1234
+    ],
+    "max_output_tokens": 512,
+    "eos_policy": "Honor EOS and identical stop rules in every arm",
+    "instrumentation": "Native monotonic timers; no Instruments during qualification",
+    "source_control": "Same compiler, optimization flags and patched llama baseline. Benchmark the real A/B/C entrypoints; no copied or simulated reference sampler. Record unavoidable adapter differences.",
+    "sampler_chain": [
+      "top_k",
+      "top_p",
+      "min_p",
+      "temperature",
+      "distribution"
+    ],
+    "adapter": "Both native arms use the same llama_context configuration and directly exercise the production sampler entrypoints. Prompt history is settled before timing; generated history is settled inside the next timed sample. Matched decode is teacher-forced to remove output-length and logit-input confounds. This is not a Max end-to-end benchmark.",
+    "resident_processes": "One baseline process serves A/B and one candidate process serves C. Both remain resident; only one computes at a time. This avoids model loading between paired blocks.",
+    "native_sampler_perf_counters": "Disabled in all arms. Skippy uses llama_sampler_chain_default_params.no_perf=true; the reference explicitly sets common_params_sampling.no_perf=true. Only the evaluator monotonic timers measure sampling."
+  },
+  "workloads": {
+    "origin": "Synthetic tool-calling fixtures, including the todo-app HTML pattern from the diagnostic run; no private user documents or credentials",
+    "cases": [
+      "lazy-before-tool-trigger",
+      "large-HTML-write-argument",
+      "Unicode-and-partial-UTF8",
+      "restricted-values-and-rejection-fallback",
+      "closing-delimiters-and-EOS"
+    ],
+    "identity_gate": "Freeze fixture bytes, generated grammar, tokenizer identity, ordered token sequences/logit inputs and SHA-256 receipts before qualification. Record model-generated source traces separately from fixed replay inputs.",
+    "scopes": [
+      "fixed-input native sampler replay",
+      "matched native decode workload",
+      "separate free-running tool-call correctness and MTP recovery"
+    ],
+    "Unicode_boundary": "The Unicode case includes a rare valid private-use code point. Admission verifies that at least one token piece begins with a UTF-8 continuation byte; a case name alone is not evidence of a split code point."
+  },
+  "statistics": {
+    "development_paired_blocks": 0,
+    "qualification_paired_blocks": 30,
+    "warmup_replays_per_arm_case": 3,
+    "order": "Balanced Latin-square A/B/C order, fixed before execution; all three arms sequentially in each block",
+    "confidence": "One-sided 95% paired block-bootstrap confidence bounds, 10000 resamples, fixed bootstrap seed 7301",
+    "primary_aggregation": "Paired geometric-mean ratios; retain per-case results and all block observations",
+    "reported_secondary_metrics": [
+      "p50 sampler ns/token",
+      "p95 sampler ns/token",
+      "teacher-forced native tokens/s",
+      "prefill latency",
+      "per-process peak RSS"
+    ],
+    "exclusions": "No outcome-based sample removal. Wrong inputs, identity mismatch, failed correctness, missing arm/block, concurrent JY job on the chosen node or observed thermal throttling invalidates the affected qualification job; retain it and run a new complete job. Missing required observations fail closed.",
+    "fixed_input_repetitions_per_cell": 4,
+    "decode_repetitions_per_cell": 1,
+    "warmup_definition": "Three discarded complete blocks before each measurement phase, with the same per-cell repetition counts.",
+    "development_overlap": "All five synthetic cases are shared between screening and qualification. The 30 qualification timing blocks are fresh; do not describe repeats as independent dataset samples.",
+    "development_reference": "Revision 2 provides a five-block diagnostic screen. Revision 3 goes directly from its fresh verified build/correctness to 30 new qualification blocks; no revision-2 speed is reused and no speed gate is relaxed."
+  },
+  "qualification": {
+    "correctness": "All grammar/lazy-trigger/Unicode/fallback/EOS tests and MTP acceptance, rejection and checkpoint cleanup must pass. B/C seeded decision/state comparisons must pass under the admitted matching sampler configuration; any intentional semantic difference requires a new protocol revision before measurement.",
+    "sampler_against_llama": "Upper one-sided 95% confidence bound of C/B sampler latency ratio <= 1.01, including per-case results",
+    "decode_against_llama": "Lower one-sided 95% confidence bound of C/B decode-throughput ratio >= 0.99",
+    "win_against_existing": "C must improve on A with a paired confidence bound demonstrating the direction of the improvement; report native sampling and decode separately",
+    "recording": "JY identity, artifacts and raw observations independently audited, accepted results uploaded to shared MLflow, and metrics/configuration/decisive artifacts read back before a PR may be opened"
+  },
+  "limitations": [
+    "The prior local Instruments run is diagnostic only and cannot satisfy any qualification gate",
+    "A and B differ in grammar sampling order; arbitrary seeded A/C sequences need not match, but grammar validity and target semantics must be explicit",
+    "A result within 1% on a single uncontrolled timing is insufficient",
+    "Latest upstream beyond the frozen baseline is outside the initial comparison",
+    "The user selected Qwen3.5-9B Q4 for the 24 GB JY M6. This does not qualify 35B decode throughput.",
+    "The original M1 Ultra job was only a completed model/toolchain probe; it contributes no performance evidence.",
+    "Revision 2 is diagnostic screening against the installed 2c82637 source. Final revision 3 qualifies current main 3947de0 plus the candidate, with fresh builds, correctness, screening and timing; do not mix the revisions.",
+    "Revision 2 used the reference sampler default perf counters. Revision 3 disables counters in all arms before qualification; no revision-2 performance is qualification evidence."
+  ]
+}

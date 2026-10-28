@@ -1,0 +1,17 @@
+{
+  "spec": {
+    "name": "Grammar sampler A/B/C — M6 ${phase}",
+    "description": "Paired native sampling and teacher-forced decode on Qwen3.5-9B Q4_K_M, f16 KV, 4096 context, one active request. Reuse and verify the immutable JY-built binaries and captured inputs from the admitted build attempt. Performance qualification is separate from identity, correctness, co-tenancy and MLflow audits.",
+    "target": {"executor": "lab", "nodes": ["macmini-gq7vhw"], "os": "macos"},
+    "runtime": {
+      "model_package": {"ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5", "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", "egress": "lab_only"},
+      "models": [{"ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5", "env": "MODEL_DIR", "delivery": "cache", "pin": true}],
+      "flags": {"phase": "${phase}", "product_commit": "${product_sha}", "baseline_commit": "3947de0cbc73fe5cbcaae548b297f03a401532d7", "build_job_id": "${build_job_id}", "build_run_id": "${build_run_id}", "input_manifest_sha256": "${input_manifest_sha256}", "binary_manifest_sha256": "${binary_manifest_sha256}"},
+      "command": "set -eu\ncd \"${retained_workspace}\"\ntest \"$(git rev-parse HEAD)\" = '${product_sha}'\ntest -z \"$(git status --porcelain --untracked-files=no)\"\ncommand -v jq\nprintf '%s  %s\\n' '${binary_manifest_sha256}' .deps/grammar-receipts/binary-hashes.txt | shasum -a 256 -c -\nprintf '%s  %s\\n' '${input_manifest_sha256}' .deps/grammar-receipts/input-hashes.txt | shasum -a 256 -c -\nshasum -a 256 -c .deps/grammar-receipts/binary-hashes.txt\nshasum -a 256 -c .deps/grammar-receipts/input-hashes.txt\nprintf '%s  %s\\n' 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8 \"$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf\" | shasum -a 256 -c -\nmkdir -p \"$JIANYANG_ARTIFACT_DIR\"\nOUTPUT=$(mktemp -d \"$PWD/.deps/grammar-${phase}.XXXXXX\")\n.deps/grammar-C/grammar-controller .deps/grammar-A/grammar-sampling .deps/grammar-C/grammar-sampling \"$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf\" \"$PWD/.deps/grammar-inputs\" \"$OUTPUT\" '${phase}' > \"$JIANYANG_ARTIFACT_DIR/measurement.log\" 2>&1\ncp \"$OUTPUT/\"*.json* \"$JIANYANG_ARTIFACT_DIR/\"\n.deps/grammar-C/grammar-audit \"$OUTPUT/observations.jsonl\" '${blocks}' \"$JIANYANG_ARTIFACT_DIR/audit.json\" > \"$JIANYANG_ARTIFACT_DIR/audit.log\"\ncp .deps/grammar-receipts/*.txt \"$JIANYANG_ARTIFACT_DIR/\"\njq --arg commit '${product_sha}' '{points:[], custom:{schema:\"grammar-sampling-abc\",version:\"1\",data:.},provenance:{stack_commit:$commit},notes:[\"Native fixed-input sampler and teacher-forced decode; not Max end-to-end latency. External source, MTP, co-tenancy and MLflow audits remain required.\"]}' \"$JIANYANG_ARTIFACT_DIR/audit.json\" > \"$JIANYANG_RESULT_PATH\"\nshasum -a 256 \"$JIANYANG_ARTIFACT_DIR/\"* > \"$OUTPUT/artifact-hashes.txt\"\ncp \"$OUTPUT/artifact-hashes.txt\" \"$JIANYANG_ARTIFACT_DIR/\"\ncat \"$JIANYANG_ARTIFACT_DIR/audit.json\""
+    },
+    "harness": {"name": "custom", "version": "grammar-sampling-r3", "trace": {"kind": "file", "ref": "synthetic-tool-grammar-fixed-logits", "sha256": "${input_manifest_sha256}"}, "seed": 73, "warmup_requests": 3, "concurrency": [1], "request_count": 1, "args": {"phase": "${phase}", "sampler_repetitions_per_cell": 4}},
+    "budget": {"max_usd": 0, "max_duration_s": 7200, "grace_s": 120},
+    "retries": 0,
+    "labels": {"campaign": "max-grammar-sampling-abc-20261028", "phase": "${phase}", "protocol": "3"}
+  }
+}
