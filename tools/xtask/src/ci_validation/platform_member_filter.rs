@@ -61,8 +61,33 @@ fn check_source(source: &str) -> DynResult<()> {
         .into());
     }
 
+    windows_filters_run_under_bash(steps)?;
     consume_filtered(steps, MACOS_TEST_STEP, &MACOS_TEST_ENVS, &filtered_ids)?;
     consume_filtered(steps, WINDOWS_TEST_STEP, &WINDOWS_TEST_ENVS, &filtered_ids)?;
+    Ok(())
+}
+
+/// The filter scripts are Bash. The job sets no `defaults.run.shell`, so a
+/// filter step on a Windows row without `shell: bash` runs under pwsh and
+/// fails to parse before it filters anything.
+fn windows_filters_run_under_bash(steps: &[Node]) -> DynResult<()> {
+    for step in steps {
+        let name = step.get("name").and_then(Node::text).unwrap_or_default();
+        let windows_row = step
+            .get("if")
+            .and_then(Node::text)
+            .is_some_and(|condition| condition.contains("'windows'"));
+        if name.contains(FILTER_NAME_MARKER)
+            && windows_row
+            && step.get("shell").and_then(Node::text) != Some("bash")
+        {
+            return Err(format!(
+                "{PLATFORM_SLICE}: step '{name}' runs a Bash filter on a Windows row and \
+                 must declare shell: bash; the Windows default shell is pwsh"
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -145,6 +170,20 @@ mod tests {
         check_source(&source).expect(
             "the platform slice must filter planned unit-test owners against the checked-out \
              workspace before the test loops consume them",
+        );
+    }
+
+    #[test]
+    fn windows_filter_step_without_bash_shell_is_rejected() {
+        let root = repo_root().expect("resolve the repository root");
+        let source =
+            fs::read_to_string(root.join(PLATFORM_SLICE)).expect("read the platform slice");
+        let marker = "        id: windows_test_packages\n        shell: bash\n";
+        assert!(source.contains(marker), "fixture marker must exist");
+        let without_shell = source.replace(marker, "        id: windows_test_packages\n");
+        assert!(
+            check_source(&without_shell).is_err(),
+            "a Windows filter step left on the pwsh default must fail the contract"
         );
     }
 }

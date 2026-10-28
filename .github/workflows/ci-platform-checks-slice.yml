@@ -365,6 +365,7 @@ jobs:
       - name: Resolve Windows unit-test owners against the checked-out workspace
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         id: windows_test_packages
+        shell: bash
         env:
           SHARED_CRATES: ${{ steps.packages.outputs.crates }}
           WINDOWS_CRATES: ${{ steps.windows_packages.outputs.crates }}
