@@ -897,6 +897,14 @@ fail-open policy.
 
 ## Artifact and cache owners
 
+After successful runtime package verification, Windows release CPU/GPU jobs
+publish and verify an exact-key ABI cache miss under the current ref. These
+two jobs grant only `actions: read` for the publication probe; cache writes use
+the scoped runtime cache token. Failed/cancelled packaging never saves a
+partial ABI build. Hosted placement, architecture matrices, compiler-cache
+setup and PR cache policy are unchanged. Windows CUDA 13 cold-build completion
+and measured cross-run hit rates still require hosted evidence.
+
 Release/package L5 adapters use xtask native selection/import/closure checks,
 product composition and release manifests, artifact extraction/checksums,
 typed attestation verdict projection, and the exact RC `rc-ok` predicate.
