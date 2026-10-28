@@ -202,6 +202,9 @@ impl Engine {
                     self.service.serve_deposit_confirmed(&id).await?;
                 }
                 let settlement = self.service.serve_recover(&id).await?;
+                // A paid final may clear the strike limit while a prepared
+                // ticket is waiting at ingress, not only when a ticket readies.
+                self.changed.notify_waiters();
                 if matches!(settlement, ServeRecoverResponse::Pending)
                     && !self.tickets.consumed(&id, peer)?
                 {
@@ -366,6 +369,27 @@ impl Engine {
         }
         Ok(replies)
     }
+    /// Replenish a consumed ticket without waiting for its final payment. Cold
+    /// peers still establish standing through settlement before receiving credit.
+    pub async fn replenish(&self, event: &Value) -> Result<Option<(String, Vec<Message>)>> {
+        if event["observation_point"] != "serving_host_ingress"
+            || event["phase"] != "request_received"
+        {
+            return Ok(None);
+        }
+        let exchange = event["exchange_id"]
+            .as_str()
+            .context("exchange id missing")?;
+        let Some((peer, _)) = self.tickets.exchange(exchange)? else {
+            return Ok(None);
+        };
+        if !self.service.metered_trusted(&peer).await? {
+            return Ok(None);
+        }
+        let replies = self.quote(&peer).await?;
+        Ok(Some((peer, replies)))
+    }
+
     pub fn vouch_once(&self, peer: &str, id: &str) -> Result<bool> {
         let terms = self
             .service

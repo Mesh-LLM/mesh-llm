@@ -220,13 +220,37 @@ pub async fn run(
                         mesh_llm_plugin::PluginError::internal(error.to_string())
                     });
                 }
-                engine
+                let decision = engine
                     .gate_wait(&event, std::time::Duration::from_secs(28))
                     .await
-                    .map_err(|error| mesh_llm_plugin::PluginError::internal(error.to_string()))
+                    .map_err(|error| mesh_llm_plugin::PluginError::internal(error.to_string()))?;
+                if decision.decision
+                    == mesh_llm_plugin::openai_exchange::OpenAiAdmissionDecision::Allow
+                {
+                    // Refill in parallel with inference, never on its hook deadline.
+                    tokio::spawn(async move {
+                        if let Err(error) = replenish(&engine, &event, &mut context).await {
+                            record_error(&error);
+                        }
+                    });
+                }
+                Ok(decision)
             })
         });
     PluginRuntime::run(plugin).await
+}
+
+async fn replenish(
+    engine: &Engine,
+    event: &serde_json::Value,
+    context: &mut PluginContext<'_>,
+) -> Result<()> {
+    if let Some((peer, replies)) = engine.replenish(event).await? {
+        for reply in replies {
+            send(context, &peer, &reply).await?;
+        }
+    }
+    Ok(())
 }
 
 async fn dispatch_channel_work(

@@ -599,3 +599,115 @@ async fn warm_requests_skip_reconciliation_until_disconnect() {
     f.buyer.peer_down("seller");
     assert!(!f.buyer.peer_up("seller").await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn warm_refill_precedes_final_settlement_and_still_obeys_strikes() {
+    let f = Fixture::new();
+    f.prepare().await;
+    let cold = gate("seed", "buyer");
+    assert_eq!(f.seller.gate(&cold).unwrap().decision, Decision::Allow);
+    assert!(f.seller.replenish(&cold).await.unwrap().is_none());
+    let (_, bill) = f
+        .seller
+        .terminal(&terminal(
+            "seed",
+            json!({"prompt_tokens":2000,"completion_tokens":1000}),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let paid = f.buyer.channel("seller", bill).await.unwrap().remove(0);
+    let warm = f
+        .seller
+        .channel("buyer", paid)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|m| matches!(m, Message::Admission { .. }))
+        .unwrap();
+    let paid = f.buyer.channel("seller", warm).await.unwrap().remove(0);
+    let ready = f.seller.channel("buyer", paid).await.unwrap().remove(0);
+    f.buyer.channel("seller", ready).await.unwrap();
+
+    // Withhold every final payment: each next admission must arrive before any
+    // settlement completes, but the existing three-unpaid-final bound still wins.
+    let mut withheld = Vec::new();
+    for index in 0..mesh_llm_payments::ledger::metered::STRIKE_LIMIT {
+        let event = gate(&format!("warm-{index}"), "buyer");
+        assert_eq!(
+            f.buyer
+                .buyer_wait("seller", "model", std::time::Duration::from_secs(1))
+                .await
+                .unwrap()
+                .decision,
+            Decision::Abstain
+        );
+        assert_eq!(f.seller.gate(&event).unwrap().decision, Decision::Allow);
+        let (_, mut replies) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            f.seller.replenish(&event),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        let paid = f
+            .buyer
+            .channel("seller", replies.remove(0))
+            .await
+            .unwrap()
+            .remove(0);
+        let ready = f.seller.channel("buyer", paid).await.unwrap().remove(0);
+        f.buyer.channel("seller", ready).await.unwrap();
+        // Repeated refills reuse the outstanding ticket, not another admission.
+        let before = f
+            .seller
+            .service
+            .ledger
+            .unpaid_metered_invoices()
+            .unwrap()
+            .len();
+        f.seller.replenish(&event).await.unwrap();
+        assert_eq!(
+            f.seller
+                .service
+                .ledger
+                .unpaid_metered_invoices()
+                .unwrap()
+                .len(),
+            before
+        );
+        let (_, bill) = f
+            .seller
+            .terminal(&terminal(
+                &format!("warm-{index}"),
+                json!({"prompt_tokens":2000,"completion_tokens":1000}),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        withheld.push(bill);
+    }
+    assert_eq!(
+        f.seller.gate(&gate("over-limit", "buyer")).unwrap().status,
+        Some(402)
+    );
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 2);
+    // Settlement clears the bound and wakes ingress holding a prepared ticket.
+    let event = gate("resumed", "buyer");
+    let resume = f
+        .seller
+        .gate_wait(&event, std::time::Duration::from_secs(1));
+    let settle = async {
+        tokio::task::yield_now().await;
+        let paid = f
+            .buyer
+            .channel("seller", withheld.remove(0))
+            .await
+            .unwrap()
+            .remove(0);
+        f.seller.channel("buyer", paid).await.unwrap();
+    };
+    let (decision, _) = tokio::join!(resume, settle);
+    assert_eq!(decision.unwrap().decision, Decision::Allow);
+}
