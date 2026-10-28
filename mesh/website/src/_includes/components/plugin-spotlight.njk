@@ -1,16 +1,25 @@
-{#- Selectable, auto-advancing plugin spotlight. Data: src/_data/plugins.js.
-    Without JS every panel is shown as a stacked list; plugin-spotlight.js turns
-    it into tabs, auto-advances (unless reduced motion) and stops once the user picks one. -#}
+{#- Plugin carousel: a rail of selectable cards above a detail panel. Data: src/_data/plugins.js.
+    Without JS every panel is shown as a stacked list; plugin-spotlight.js turns the
+    rail on, auto-advances (unless reduced motion) and stops once the user picks a card. -#}
 <div class="plugin-spot" data-plugin-spotlight>
-  <div class="plugin-spot-tabs" role="tablist" aria-label="Mesh plugins" data-plugin-spot-tabs hidden>
-    {% for group in plugins.groups %}
-    <span class="plugin-spot-tab-heading" role="presentation">{{ group.title }}</span>
-    {% for p in group.plugins %}
-    <button class="plugin-spot-tab" type="button" role="tab" id="plugin-tab-{{ p.name }}" aria-controls="plugin-panel-{{ p.name }}" aria-selected="{{ 'true' if p.name == plugins.all[0].name else 'false' }}" tabindex="{{ '0' if p.name == plugins.all[0].name else '-1' }}" data-plugin-spot-tab>
+  <div class="plugin-spot-bar" data-plugin-spot-bar hidden>
+    <span class="plugin-spot-count mono" aria-live="polite"><span data-plugin-spot-index>1</span> / {{ plugins.count }}</span>
+    <div class="plugin-spot-nav">
+      <button class="plugin-spot-arrow" type="button" data-plugin-spot-prev aria-label="Previous plugin"><i data-lucide="chevron-left" aria-hidden="true"></i></button>
+      <button class="plugin-spot-arrow" type="button" data-plugin-spot-next aria-label="Next plugin"><i data-lucide="chevron-right" aria-hidden="true"></i></button>
+    </div>
+  </div>
+  <div class="plugin-spot-rail" role="tablist" aria-label="Mesh plugins" data-plugin-spot-tabs hidden>
+    {% for p in plugins.all %}
+    <button class="plugin-spot-tab" type="button" role="tab" id="plugin-tab-{{ p.name }}" aria-controls="plugin-panel-{{ p.name }}" aria-selected="{{ 'true' if loop.first else 'false' }}" tabindex="{{ '0' if loop.first else '-1' }}" data-plugin-spot-tab>
+      <span class="plugin-spot-tab-top">
+        <span class="plugin-icon" aria-hidden="true"><i data-lucide="{{ p.icon }}"></i></span>
+        <span class="plugin-spot-tab-group">{{ p.groupTitle }}</span>
+      </span>
       <span class="plugin-spot-tab-name mono">{{ p.name }}</span>
+      <span class="plugin-spot-tab-tagline">{{ p.tagline }}</span>
       <span class="plugin-spot-progress" aria-hidden="true"><span data-plugin-spot-progress></span></span>
     </button>
-    {% endfor %}
     {% endfor %}
   </div>
   <div class="plugin-spot-panels">
@@ -20,8 +29,13 @@
         <span class="plugin-spot-group">{{ p.groupTitle }}</span>
         <span class="plugin-spot-platforms">{{ p.platforms }}</span>
       </div>
-      <h3 class="plugin-spot-name mono">{{ p.name }}</h3>
-      <p class="plugin-spot-tagline">{{ p.tagline }}</p>
+      <div class="plugin-spot-title">
+        <span class="plugin-icon plugin-icon--lg" aria-hidden="true"><i data-lucide="{{ p.icon }}"></i></span>
+        <div>
+          <h3 class="plugin-spot-name mono">{{ p.name }}</h3>
+          <p class="plugin-spot-tagline">{{ p.tagline }}</p>
+        </div>
+      </div>
       <p class="plugin-spot-summary">{{ p.summaryHtml | safe }}</p>
       {% if p.install %}
       <div class="plugin-spot-install">

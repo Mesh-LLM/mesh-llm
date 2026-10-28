@@ -22,7 +22,7 @@ bodyClass: plugins-index
       {% for p in group.plugins %}
       <li class="plugins-card">
         <div class="plugin-spot-meta"><span class="plugin-spot-platforms">{{ p.platforms }}</span></div>
-        <h3 class="mono"><a href="{{ p.url }}">{{ p.name }}</a></h3>
+        <h3 class="mono"><span class="plugin-icon" aria-hidden="true"><i data-lucide="{{ p.icon }}"></i></span><a href="{{ p.url }}">{{ p.name }}</a></h3>
         <p class="plugins-card-tagline">{{ p.tagline }}</p>
         <p class="plugins-card-summary">{{ p.summaryHtml | safe }}</p>
         {% if p.install %}
