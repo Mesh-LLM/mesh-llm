@@ -1,0 +1,21 @@
+{#- Rotating strip of released first-party plugins. Data: src/_data/plugins.js.
+    Without JS or with reduced motion it is a plain horizontally scrollable row. -#}
+<div class="plugin-strip" data-plugin-strip>
+  <div class="plugin-strip-head">
+    <span class="plugin-strip-label mono">{{ plugins.count }} released plugins</span>
+    <a class="plugin-strip-link" href="/docs/pages/plugins/">Browse plugins &rarr;</a>
+  </div>
+  <div class="plugin-strip-viewport" tabindex="0" aria-label="Released Mesh plugins">
+    <ul class="plugin-strip-track" data-plugin-strip-track>
+      {% for p in plugins.all %}
+      <li class="plugin-strip-item">
+        <a class="plugin-card" href="{{ p.url }}" rel="noopener">
+          <span class="plugin-card-group">{% for g in plugins.groups %}{% if g.id == p.group %}{{ g.title }}{% endif %}{% endfor %}</span>
+          <span class="plugin-card-name mono">{{ p.name }}</span>
+          <span class="plugin-card-tagline">{{ p.tagline }}</span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>

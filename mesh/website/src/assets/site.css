@@ -8666,3 +8666,20 @@ body.is-stage2-debug-scrubber-visible .stage2-scroll.is-stage2-scrubbable .stage
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Homepage plugin strip (src/_includes/components/plugin-strip.njk) */
+.plugin-strip { margin-top: 32px; }
+.plugin-strip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.plugin-strip-label { color: var(--subtle); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+.plugin-strip-link { color: var(--muted); font-size: 14px; text-decoration: none; }
+.plugin-strip-link:hover, .plugin-strip-link:focus-visible { color: var(--blue); }
+.plugin-strip-viewport { overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent); mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent); }
+.plugin-strip-viewport::-webkit-scrollbar { display: none; }
+.plugin-strip.is-rotating .plugin-strip-viewport { overflow-x: hidden; }
+.plugin-strip-track { display: flex; gap: 12px; width: max-content; margin: 0; padding: 2px 0; list-style: none; }
+.plugin-strip-item { flex: none; }
+.plugin-card { display: flex; flex-direction: column; gap: 6px; width: 220px; min-height: 100%; box-sizing: border-box; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); text-decoration: none; transition: border-color 160ms ease; }
+.plugin-card:hover, .plugin-card:focus-visible { border-color: var(--blue); outline: none; }
+.plugin-card-group { color: var(--subtle); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+.plugin-card-name { font-size: 15px; font-weight: 600; }
+.plugin-card-tagline { color: var(--muted); font-size: 13px; line-height: 1.4; }
