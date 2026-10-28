@@ -130,6 +130,27 @@ async fn non_wallet_provider_uses_fixed_setup_allowlist_generation_and_revocatio
             .await,
         Response::NotDispatched { .. }
     ));
+    // A valid handle is worthless to any other plugin, including the provider
+    // itself: the binding is keyed by the caller the operator named.
+    let provider_generation = manager
+        .inner
+        .plugins
+        .get("state-store")
+        .unwrap()
+        .bound_generation()
+        .await
+        .unwrap();
+    assert!(matches!(
+        manager
+            .bound_operation(
+                "state-store",
+                provider_generation,
+                request(Some(handle.clone()), "write", "{}")
+            )
+            .await,
+        Response::NotDispatched { reason } if reason == "binding is not authorized"
+    ));
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
     let Response::Responded { handle: fresh, .. } = manager
         .bound_operation("client", generation, request(None, "", ""))
         .await
