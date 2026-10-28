@@ -27,6 +27,27 @@ impl WalletFactory for Offline {
     }
 }
 #[async_trait]
+impl mesh_llm_wallet::backend::WalletBackend for Offline {
+    fn provider_name(&self) -> &'static str {
+        "offline"
+    }
+    async fn open(&self, directory: &Path) -> Result<mesh_llm_wallet::backend::OpenedWallet> {
+        let created = !directory.join("offline-invoices").exists();
+        let provider = WalletFactory::open(self, directory).await?;
+        Ok(mesh_llm_wallet::backend::OpenedWallet {
+            identity: mesh_llm_wallet::contract::WalletIdentity {
+                wallet_id: format!("offline:{}", directory.display()),
+                provider: "offline".into(),
+                network: "mainnet".into(),
+            },
+            provider,
+            created,
+            features: Default::default(),
+        })
+    }
+}
+
+#[async_trait]
 impl WalletProvider for Offline {
     async fn balance(&self) -> Result<Balance> {
         Ok(Balance {
@@ -122,7 +143,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let name = std::env::var("MESH_LLM_PLUGIN_NAME").context("launch via plugin host")?;
-    let config = mesh_llm_pay_lightning::Config::from_launch_env()?;
     let network = PathBuf::from(
         std::env::var_os("MESH_LLM_OFFLINE_NETWORK_DIR")
             .context("explicit offline network directory required")?,
@@ -131,6 +151,15 @@ async fn main() -> Result<()> {
         network.is_absolute(),
         "offline network directory must be absolute"
     );
+    if std::env::var_os("MESH_LLM_OFFLINE_WALLET_CHILD").is_some() {
+        return mesh_llm_plugin::PluginRuntime::run(mesh_llm_wallet::plugin_server::wallet_plugin(
+            name,
+            env!("CARGO_PKG_VERSION"),
+            Offline(network, PathBuf::new()),
+        ))
+        .await;
+    }
+    let config = mesh_llm_pay_lightning::Config::from_launch_env()?;
     mesh_llm_pay_lightning::run(
         name,
         env!("CARGO_PKG_VERSION"),

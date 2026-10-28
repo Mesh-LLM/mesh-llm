@@ -26,7 +26,7 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 
 [features]
-offline-mock = ["dep:bitcoin", "dep:lightning-invoice"]
+offline-mock = ["dep:bitcoin", "dep:lightning-invoice", "mesh-llm-wallet/plugin-server"]
 
 [[bin]]
 name = "pay-lightning-mock"

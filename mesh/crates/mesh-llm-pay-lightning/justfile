@@ -10,8 +10,13 @@ test:
 package: build
     mkdir -p dist
     cp plugin.toml README.md dist/
-    cp {{root}}/target/debug/pay-lightning-mock dist/pay-lightning
-    {{root}}/target/debug/pay-lightning-mock --manifest > dist/plugin-manifest.json
+    cp {{root}}/target/debug/pay-lightning dist/pay-lightning
+    {{root}}/target/debug/pay-lightning --manifest > dist/plugin-manifest.json
+package-mock: build
+    mkdir -p dist-mock
+    cp plugin.toml README.md dist-mock/
+    cp {{root}}/target/debug/pay-lightning-mock dist-mock/pay-lightning
+    {{root}}/target/debug/pay-lightning-mock --manifest > dist-mock/plugin-manifest.json
 clean:
     cd {{root}} && cargo clean -p mesh-llm-pay-lightning
-    rm -rf dist
+    rm -rf dist dist-mock

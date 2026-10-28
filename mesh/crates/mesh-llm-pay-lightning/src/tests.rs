@@ -97,7 +97,7 @@ impl WalletProvider for Wallet {
     }
 }
 struct Fixture {
-    seller: Engine,
+    seller: Arc<Engine>,
     buyer: Engine,
     network: Arc<Network>,
     _seller_dir: tempfile::TempDir,
@@ -140,7 +140,7 @@ impl Fixture {
                 daily_budget_msat: Some(100_000),
             })
             .unwrap();
-        let seller = Engine::new(seller_service, "706179", 0, seller_dir.path()).unwrap();
+        let seller = Arc::new(Engine::new(seller_service, "706179", 0, seller_dir.path()).unwrap());
         let mut buyer = Engine::new(buyer_service, "706179", 100_000, buyer_dir.path()).unwrap();
         buyer.buying.insert("model".into(), price());
         buyer.buy_peers.insert("seller".into());
@@ -602,7 +602,44 @@ async fn warm_requests_skip_reconciliation_until_disconnect() {
 
 #[tokio::test]
 async fn warm_refill_precedes_final_settlement_and_still_obeys_strikes() {
+    warm_strike_recovery(false).await;
+}
+
+#[tokio::test]
+async fn seller_receipt_resumes_ingress_without_buyer_paid_notification() {
+    warm_strike_recovery(true).await;
+}
+
+async fn warm_strike_recovery(withhold_paid: bool) {
     let f = Fixture::new();
+    seed_warm_standing(&f).await;
+    let mut withheld = issue_unpaid_finals(&f).await;
+    assert_eq!(
+        f.seller.gate(&gate("over-limit", "buyer")).unwrap().status,
+        Some(402)
+    );
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 2);
+    let event = gate("resumed", "buyer");
+    let resume = f
+        .seller
+        .gate_wait(&event, std::time::Duration::from_secs(1));
+    let settle = settle_while_withholding_notification(&f, withheld.remove(0), withhold_paid);
+    let (decision, delayed) = tokio::join!(resume, settle);
+    assert_eq!(decision.unwrap().decision, Decision::Allow);
+    if let Some(paid) = delayed {
+        f.seller.channel("buyer", paid).await.unwrap();
+        assert_eq!(
+            f.seller
+                .service
+                .ledger
+                .metered_unpaid_finals("buyer")
+                .unwrap(),
+            mesh_llm_payments::ledger::metered::STRIKE_LIMIT - 1
+        );
+    }
+}
+
+async fn seed_warm_standing(f: &Fixture) {
     f.prepare().await;
     let cold = gate("seed", "buyer");
     assert_eq!(f.seller.gate(&cold).unwrap().decision, Decision::Allow);
@@ -628,7 +665,9 @@ async fn warm_refill_precedes_final_settlement_and_still_obeys_strikes() {
     let paid = f.buyer.channel("seller", warm).await.unwrap().remove(0);
     let ready = f.seller.channel("buyer", paid).await.unwrap().remove(0);
     f.buyer.channel("seller", ready).await.unwrap();
+}
 
+async fn issue_unpaid_finals(f: &Fixture) -> Vec<Message> {
     // Withhold every final payment: each next admission must arrive before any
     // settlement completes, but the existing three-unpaid-final bound still wins.
     let mut withheld = Vec::new();
@@ -688,26 +727,68 @@ async fn warm_refill_precedes_final_settlement_and_still_obeys_strikes() {
             .unwrap();
         withheld.push(bill);
     }
-    assert_eq!(
-        f.seller.gate(&gate("over-limit", "buyer")).unwrap().status,
-        Some(402)
-    );
-    assert_eq!(f.network.sends.load(Ordering::SeqCst), 2);
-    // Settlement clears the bound and wakes ingress holding a prepared ticket.
-    let event = gate("resumed", "buyer");
-    let resume = f
-        .seller
-        .gate_wait(&event, std::time::Duration::from_secs(1));
-    let settle = async {
-        tokio::task::yield_now().await;
-        let paid = f
-            .buyer
-            .channel("seller", withheld.remove(0))
-            .await
-            .unwrap()
-            .remove(0);
+    withheld
+}
+
+async fn settle_while_withholding_notification(
+    f: &Fixture,
+    bill: Message,
+    withhold_paid: bool,
+) -> Option<Message> {
+    tokio::task::yield_now().await;
+    let paid = f.buyer.channel("seller", bill).await.unwrap().remove(0);
+    if !withhold_paid {
         f.seller.channel("buyer", paid).await.unwrap();
-    };
-    let (decision, _) = tokio::join!(resume, settle);
-    assert_eq!(decision.unwrap().decision, Decision::Allow);
+        return None;
+    }
+    // Run the actual background observer; no explicit refresh or Paid wakes ingress.
+    crate::runtime::observe_receipts(Arc::downgrade(&f.seller));
+    Some(paid)
+}
+
+#[tokio::test]
+async fn seller_restart_observes_receipts_without_a_peer_message() {
+    let f = Fixture::new();
+    seed_warm_standing(&f).await;
+    let mut bills = issue_unpaid_finals(&f).await;
+    let paid = f
+        .buyer
+        .channel("seller", bills.remove(0))
+        .await
+        .unwrap()
+        .remove(0);
+    let directory = f._seller_dir.path().to_path_buf();
+    let network = f.network.clone();
+    drop(f.seller);
+    let service = Arc::new(
+        PaymentService::with_provider(&directory, Arc::new(Wallet(network, true))).unwrap(),
+    );
+    let seller = Engine::new(service, "706179", 0, &directory).unwrap();
+    assert_eq!(
+        seller
+            .service
+            .ledger
+            .metered_unpaid_finals("buyer")
+            .unwrap(),
+        mesh_llm_payments::ledger::metered::STRIKE_LIMIT
+    );
+    seller.refresh_receipts().await.unwrap();
+    assert_eq!(
+        seller
+            .service
+            .ledger
+            .metered_unpaid_finals("buyer")
+            .unwrap(),
+        mesh_llm_payments::ledger::metered::STRIKE_LIMIT - 1
+    );
+    seller.channel("buyer", paid).await.unwrap();
+    seller.refresh_receipts().await.unwrap();
+    assert_eq!(
+        seller
+            .service
+            .ledger
+            .metered_unpaid_finals("buyer")
+            .unwrap(),
+        mesh_llm_payments::ledger::metered::STRIKE_LIMIT - 1
+    );
 }

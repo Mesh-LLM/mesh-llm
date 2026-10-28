@@ -3,6 +3,10 @@ mod connections;
 pub mod diagnostics;
 mod runtime;
 mod tickets;
+#[cfg(unix)]
+pub mod wallet_child;
+#[cfg(unix)]
+mod wallet_transport;
 /// Side-effect-free permission declaration for packaging.
 pub fn manifest_json(name: &str) -> anyhow::Result<String> {
     let namespace: String = name.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
@@ -125,6 +129,15 @@ impl Engine {
             .context("warming payment wallet at startup")?;
         Ok(())
     }
+    /// Observe seller wallet receipts independently of buyer notifications.
+    /// A partial sweep can record receipts before another lookup fails, so wake
+    /// admission even on error. Durable invoice facts make repeated sweeps safe.
+    pub(crate) async fn refresh_receipts(&self) -> Result<()> {
+        let result = self.service.metered_refresh_all().await;
+        self.changed.notify_waiters();
+        result
+    }
+
     pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
         self.known.lock().unwrap().insert(peer.into());
         match message {

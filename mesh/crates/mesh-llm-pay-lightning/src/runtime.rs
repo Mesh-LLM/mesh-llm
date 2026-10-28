@@ -79,7 +79,9 @@ pub async fn run(
                         .require_channels_for_model(model, &[(CHANNEL, &[])])
                         .await?;
                 }
-                engine.start().await
+                engine.start().await?;
+                observe_receipts(Arc::downgrade(&engine));
+                Ok(())
             })
         })
         .on_channel_message(move |message, context| {
@@ -238,6 +240,31 @@ pub async fn run(
             })
         });
     PluginRuntime::run(plugin).await
+}
+
+pub(crate) fn observe_receipts(engine: std::sync::Weak<Engine>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let Some(engine) = engine.upgrade() else {
+                break;
+            };
+            // One sweep at a time, outside admission and buyer payment locks.
+            // A wedged wallet lookup must not retain the engine indefinitely.
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                engine.refresh_receipts(),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => record_error(&error),
+                Err(error) => record_error(&anyhow::Error::new(error)),
+            }
+        }
+    });
 }
 
 async fn replenish(

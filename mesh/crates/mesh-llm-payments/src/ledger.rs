@@ -334,9 +334,11 @@ impl Ledger {
             policy.validate()?;
             // No reservation: approval only needs recorded budget left today.
             // Already-approved work settles even if concurrent work overshoots.
+            let budget_msat = policy.daily_budget_msat.unwrap_or(0);
+            let settled_today_msat = settled_today(&transaction, now_ms)?;
             ensure!(
-                policy.daily_budget_msat.unwrap_or(0) > settled_today(&transaction, now_ms)?,
-                "daily payment budget exhausted"
+                budget_msat > settled_today_msat,
+                "daily payment budget exhausted: budget_msat={budget_msat}, settled_today_msat={settled_today_msat}"
             );
         }
         transaction.execute("UPDATE requests SET state='approved' WHERE id=?", [id])?;
