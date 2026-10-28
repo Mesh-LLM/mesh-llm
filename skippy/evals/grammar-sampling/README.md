@@ -100,9 +100,23 @@ comparison. Native audit now enforces the aggregate gate explicitly as well as
 the per-case gates; the external verifier already required both.
 
 The verified revision-5 diagnostic requested the independent-process branch of
-`diagnostic-decisions.json`. `process-control.json` freezes the24-pair startup and
+`diagnostic-decisions.json`. `process-control.json` freezes the 24-pair startup and
 A-history design. Build its controller with `just grammar-process-control-build
 <recorded-llama-vendor-directory>`; it executes the unchanged revision-5 worker
 binaries and input corpus. This control neither qualifies the literal candidate
 nor substitutes its same-binary reference for frozen baseline B. All observations,
 including preconditioning and discarded warmups, remain in the raw evidence.
+
+The revision-8 `measure.json.in` template uses `grammar-fresh-controller`.
+Select `development` (or `development-screen`) with `blocks=5`, or
+`qualification` with `blocks=30`. The qualification command retains fixed chunks
+0–9, 10–19 and 20–29, concatenates every observation, and runs one 30-block
+audit. This single-spec reproduction executes the chunks sequentially;
+`plan.json` specifies three separate jobs for campaign execution.
+The fresh-controller binary is included in the build phase's hash receipts.
+
+`build-correctness.json.in` deliberately retains `grammar-controller prerequisite`:
+that mode captures logits and checks correctness without collecting timing rows.
+`diagnostic.json.in` retains the historical revision-6 B/R/C shared-process
+experiment with twenty repetitions and no decode. It does not feed the
+revision-8 A/B/C audit and must not be used for screening or qualification.

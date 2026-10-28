@@ -5489,7 +5489,7 @@ index 000000000..cb420a561
 +            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
 +    CHECK(session->sampling_backend_enabled);
 +    CHECK(skippy_session_configure_chat_sampling(session, &config,
-+            R"({"grammar":"root ::= \"2a\""})", 1, &error) == SKIPPY_STATUS_OK);
++            "{\"grammar\":\"root ::= \\\"2a\\\"\"}", 1, &error) == SKIPPY_STATUS_OK);
 +    predicted = LLAMA_TOKEN_NULL;
 +    CHECK(skippy_session_sample_current(session, &config, &predicted, &error) == SKIPPY_STATUS_RUNTIME_ERROR);
 +    CHECK(predicted == LLAMA_TOKEN_NULL && session->sampling_accepted_token_count == 0);

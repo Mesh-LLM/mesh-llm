@@ -19,10 +19,10 @@ Bumps the Skippy ABI to 0.1.72.
  include/skippy.h        |   1 +
  include/skippy/asr.h    | 172 +++++++++++++++
  include/skippy/common.h |   4 +-
- src/CMakeLists.txt      |  35 +++
+ src/CMakeLists.txt      |  37 +++
  src/skippy/abi.cpp      |   6 +-
  src/skippy/asr.cpp      | 465 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 681 insertions(+), 2 deletions(-)
+ 6 files changed, 683 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/asr.h
  create mode 100644 src/skippy/asr.cpp
 
@@ -260,7 +260,7 @@ index 93803e031..78e2c01f3 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -167,6 +172,36 @@ if (LLAMA_LLGUIDANCE)
+@@ -167,6 +172,38 @@ if (LLAMA_LLGUIDANCE)
  endif()
  
  
@@ -275,7 +275,9 @@ index 93803e031..78e2c01f3 100644
 +    # without defining anything, which relies on whisper.cpp linking the bare
 +    # `ggml` target (as its CMakeLists does) rather than ggml::ggml or
 +    # variables a real ggml-config.cmake would set.
-+    file(WRITE ${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/ggml-config.cmake "")
++    set(ggml_DIR "${CMAKE_CURRENT_BINARY_DIR}/skippy-ggml-package")
++    file(MAKE_DIRECTORY "${ggml_DIR}")
++    file(WRITE "${ggml_DIR}/ggml-config.cmake" "")
 +    set(WHISPER_USE_SYSTEM_GGML ON  CACHE BOOL "" FORCE)
 +    set(WHISPER_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
 +    set(WHISPER_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
