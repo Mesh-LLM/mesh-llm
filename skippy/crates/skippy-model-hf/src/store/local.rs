@@ -51,6 +51,18 @@ pub fn remember_model_ref_path(model_ref: &str, path: &Path) {
     }
 }
 
+/// Record that `model_ref` resolves to `path`, replacing any earlier mapping.
+///
+/// Unlike [`remember_model_ref_path`], which keeps the preferred of several
+/// scanned candidates for one ref, this is for refs whose file is dictated by
+/// whoever serves them: a served alias must always describe the file currently
+/// loaded under it, even when an earlier registration pointed elsewhere.
+pub fn replace_model_ref_path(model_ref: &str, path: &Path) {
+    if let Ok(mut paths) = model_ref_paths().lock() {
+        paths.insert(model_ref.to_string(), path.to_path_buf());
+    }
+}
+
 fn remembered_model_ref_path(model_ref: &str) -> Option<PathBuf> {
     model_ref_paths()
         .lock()

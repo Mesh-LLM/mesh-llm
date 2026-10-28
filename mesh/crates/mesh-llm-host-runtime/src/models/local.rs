@@ -7,7 +7,7 @@ pub use skippy_model_hf::store::local::{
     HuggingFaceModelIdentity, direct_hf_cache_root_gguf_paths, find_model_path,
     huggingface_hub_cache, huggingface_hub_cache_dir, huggingface_identity_for_path,
     huggingface_repo_folder_name, layered_package_layer_count_for_path,
-    layered_package_total_bytes_for_path, model_ref_for_path, remember_model_ref_path,
+    layered_package_total_bytes_for_path, model_ref_for_path, replace_model_ref_path,
     scan_hf_cache_fast, scan_hf_cache_info, scan_installed_models, scan_installed_models_in,
     scan_local_models,
 };
@@ -46,7 +46,9 @@ fn served_model_refs() -> &'static Mutex<HashSet<String>> {
 /// particular) reach the file; registering the ref lets the public-id
 /// derivation know it must not rename the model from that path.
 pub fn remember_served_model_ref(model_ref: &str, path: &Path) {
-    remember_model_ref_path(model_ref, path);
+    // Replace, never prefer: the served alias must describe the file that is
+    // loaded under it now, even if an earlier registration used another path.
+    replace_model_ref_path(model_ref, path);
     if let Ok(mut refs) = served_model_refs().lock() {
         refs.insert(model_ref.to_string());
     }

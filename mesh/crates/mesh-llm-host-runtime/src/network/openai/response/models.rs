@@ -502,6 +502,39 @@ mod tests {
         }
     }
 
+    /// A configured alias can be re-registered against a different GGUF (model
+    /// swap under the same name, or a later startup registration picking the
+    /// file actually loaded). The alias must then describe the file served
+    /// now, not keep whichever path sorted first (CodeRabbit, PR #2651).
+    #[test]
+    fn re_registering_a_served_alias_replaces_its_file() {
+        let temp = tempfile::tempdir().unwrap();
+        // Alphabetically the first path wins the scanner's preference key, so
+        // "keep the preferred" semantics would pin the alias to the stale file.
+        let first = temp.path().join("a-first.gguf");
+        let second = temp.path().join("b-second.gguf");
+        std::fs::write(&first, b"GGUF").unwrap();
+        std::fs::write(&second, b"GGUF").unwrap();
+        let alias = "swapped/alias:Q4_K_M";
+
+        crate::models::remember_served_model_ref(alias, &first);
+        assert_eq!(crate::models::find_model_path(alias), first);
+
+        crate::models::remember_served_model_ref(alias, &second);
+        assert_eq!(crate::models::find_model_path(alias), second);
+
+        let descriptor = mesh::ServedModelDescriptor {
+            identity: mesh::ServedModelIdentity {
+                model_name: alias.into(),
+                source_kind: mesh::ModelSourceKind::LocalGguf,
+                local_file_name: Some("b-second.gguf".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(public_model_id(alias, Some(&descriptor), ""), alias);
+    }
+
     fn assert_listing_round_trip(descriptor: mesh::ServedModelDescriptor, public: &str) {
         use crate::network::openai::request_normalize::ResponseAdapter;
         use crate::network::openai::request_parse::{
