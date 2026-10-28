@@ -112,7 +112,7 @@ const plugins = [
     icon: 'wallet',
     repo: 'lexe-wallet-plugin',
     group: 'payments',
-    tagline: 'Lightning wallet (preview)',
+    tagline: 'Earn for serving models, and pay for models with micropayments',
     summary:
       'Preview. A `wallet.v1` plugin backed by Lexe for experimental paid inference. It can provision a mainnet wallet; use small amounts.',
     install: 'mesh-llm plugins install Mesh-LLM/lexe-wallet',
