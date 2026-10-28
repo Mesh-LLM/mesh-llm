@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Native grammar sampler A/B/C speed audit",
+  "type": "object",
+  "required": ["schema", "blocks", "complete", "B_C_decisions_match", "within_one_percent", "improves_existing", "qualified_speed", "per_case", "aggregate", "arms", "remaining_gates"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": 1},
+    "blocks": {"enum": [5, 30]},
+    "complete": {"const": true},
+    "B_C_decisions_match": {"const": true},
+    "within_one_percent": {"type": "boolean"},
+    "improves_existing": {"type": "boolean"},
+    "qualified_speed": {"type": "boolean"},
+    "per_case": {"type": "array", "minItems": 10, "maxItems": 10, "items": {"type": "object", "required": ["case", "scope", "C_vs_B", "C_vs_A", "within_one_percent"]}},
+    "aggregate": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "object", "required": ["scope", "C_vs_B", "C_vs_A", "improves_existing"]}},
+    "arms": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"type": "object", "required": ["arm", "scope", "p50_ns", "p95_ns", "geomean_tokens_s", "peak_rss_bytes"]}},
+    "remaining_gates": {"type": "array", "items": {"type": "string"}}
+  }
+}

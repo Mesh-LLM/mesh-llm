@@ -1,4 +1,4 @@
-From 109631bdce64aa306a025c0d7536b0c4be0c4aa1 Mon Sep 17 00:00:00 2001
+From 229c259e6d7bfbbe4fcfbf5a52b5766a15c496ac Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
 Subject: [PATCH] skippy: record per-token logprobs while sampling
@@ -143,12 +143,12 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 9fddadd3f..fe75f538d 100644
+index 925bee6a9..de2d696c3 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -70,6 +70,7 @@ add_library(llama
-             ../common/reasoning-budget.cpp
+@@ -71,6 +71,7 @@ add_library(llama
              skippy/sampling.cpp
+             skippy/chat_sampling.cpp
              skippy/sampling_vocab.cpp
 +            skippy/logprobs.cpp
              skippy/stage_slice_plan.cpp
