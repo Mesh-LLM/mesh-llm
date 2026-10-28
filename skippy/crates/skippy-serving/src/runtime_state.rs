@@ -71,6 +71,11 @@ pub struct RuntimeState {
     /// Sessions discarded by panic recovery whose requests have not cleaned
     /// up yet; see `panic_recovery`.
     sessions_reset_by_panic: BTreeSet<String>,
+    /// Native sequence last bound to each session id, kept after the lane is
+    /// released so a receipt can still commit the session's turn.
+    receipt_sequences: BTreeMap<String, i32>,
+    /// Verifiable inference receipts, when the operator turned them on.
+    receipts: Option<Arc<crate::receipts::StageReceipts>>,
     #[cfg(test)]
     modelless_for_test: bool,
 }
@@ -232,6 +237,8 @@ impl RuntimeState {
             max_idle_sessions: None,
             session_token_counts: BTreeMap::new(),
             sessions_reset_by_panic: BTreeSet::new(),
+            receipt_sequences: BTreeMap::new(),
+            receipts: None,
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
@@ -386,6 +393,8 @@ fn runtime_from_loaded_model(
         max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
         sessions_reset_by_panic: BTreeSet::new(),
+        receipt_sequences: BTreeMap::new(),
+        receipts: None,
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),

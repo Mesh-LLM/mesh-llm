@@ -64,6 +64,8 @@ pub enum Command {
     },
     /// Plan and admit a direct GGUF split for explicit worker endpoints.
     PlanSplit(PlanSplitArgs),
+    /// Send a chat request to a node serving with receipts, then audit the receipt.
+    AuditReceipt(AuditReceiptArgs),
     /// List, install, remove, or prune verified native runtime bundles.
     Runtime {
         #[command(subcommand)]
@@ -124,6 +126,21 @@ pub struct ServeBinaryArgs {
     pub worker_only: bool,
     #[arg(skip)]
     pub api_bind_addr: Option<SocketAddr>,
+    /// Serve verifiable inference receipts on this address. Opt-in: every
+    /// weight matmul is recorded, which slows decoding.
+    #[arg(long)]
+    pub receipts_listen: Option<SocketAddr>,
+    /// Allow a non-loopback --receipts-listen address. Openings carry
+    /// activations derived from prompts, so only expose them to auditors you
+    /// trust.
+    #[arg(long, requires = "receipts_listen")]
+    pub receipts_allow_remote: bool,
+    /// Receipts address of the next stage, for example http://127.0.0.1:9502.
+    #[arg(long, requires = "receipts_listen")]
+    pub receipts_downstream: Option<String>,
+    /// Model named in receipts. Defaults to the stage model id.
+    #[arg(long, requires = "receipts_listen")]
+    pub receipts_claimed_model: Option<String>,
     #[arg(long, default_value_t = 4)]
     pub max_inflight: usize,
     #[arg(long)]
@@ -416,6 +433,39 @@ pub enum RuntimeCommand {
         #[arg(long)]
         release: Option<String>,
     },
+}
+
+#[derive(Parser)]
+pub struct AuditReceiptArgs {
+    /// OpenAI base URL of stage 0.
+    #[arg(long, default_value = "http://127.0.0.1:9337")]
+    pub api: String,
+    /// Receipts API of stage 0.
+    #[arg(long, default_value = "http://127.0.0.1:9501")]
+    pub receipts: String,
+    /// The GGUF the node claims to serve, on this machine.
+    #[arg(long)]
+    pub claimed_model: PathBuf,
+    #[arg(long, default_value = "Explain in two sentences why the sky is blue.")]
+    pub prompt: String,
+    #[arg(long, default_value_t = 32)]
+    pub max_tokens: u32,
+    /// Challenge this layer instead of a random one.
+    #[arg(long)]
+    pub layer: Option<u32>,
+}
+
+impl From<AuditReceiptArgs> for skippy_commands::receipts::AuditReceiptCommand {
+    fn from(args: AuditReceiptArgs) -> Self {
+        Self {
+            api: args.api,
+            receipts: args.receipts,
+            claimed_model: args.claimed_model,
+            prompt: args.prompt,
+            max_tokens: args.max_tokens,
+            layer: args.layer,
+        }
+    }
 }
 
 #[derive(Parser)]

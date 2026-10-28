@@ -2177,6 +2177,14 @@ impl StageOpenAiBackend {
         })();
 
         finish_generation_lifecycle(lifecycle, lifecycle_cancelled, result.is_ok());
+        if result.is_ok() {
+            crate::receipts::finish_stage_zero_turn(
+                &self.runtime,
+                request.ids.frontend_request_id,
+                request_id,
+                &session_key,
+            );
+        }
         self.finish_embedded_generation_session(&request, lane_pool, lane, &result, &session_key)?;
         result?;
         Ok(cache_stats)

@@ -124,6 +124,17 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         native_mtp_min_tokens: openai_speculative.native_mtp.min_draft_tokens,
         speculative: openai_speculative,
     });
+    let receipts = args
+        .receipts_listen
+        .map(|listen| skippy_serving::receipts::ReceiptsOptions {
+            listen,
+            allow_remote: args.receipts_allow_remote,
+            downstream: args.receipts_downstream.clone(),
+            claimed_model: args
+                .receipts_claimed_model
+                .clone()
+                .unwrap_or_else(|| config.model_id.clone()),
+        });
     let native_mtp_enabled = config.native_mtp_enabled;
     Ok(BinaryStageOptions {
         tuning: tuning.clone(),
@@ -149,6 +160,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         compute_meter: None,
         openai,
         l3_manager: None,
+        receipts,
     })
 }
 

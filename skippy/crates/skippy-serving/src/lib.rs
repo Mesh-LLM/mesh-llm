@@ -12,6 +12,7 @@ pub mod kv_integration;
 pub mod kv_proto;
 mod listener;
 pub mod readiness;
+pub mod receipts;
 pub mod runtime_state;
 
 #[cfg(test)]

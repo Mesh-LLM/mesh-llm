@@ -124,6 +124,10 @@ async fn run_main(
         Command::Serve(args) => serve::run(*args).await,
         Command::Models { command } => skippy_commands::models::run_standalone(&command).await,
         Command::PlanSplit(args) => skippy_commands::split::run(args.into()),
+        Command::AuditReceipt(args) => {
+            let command = args.into();
+            tokio::task::spawn_blocking(move || skippy_commands::receipts::run(command)).await?
+        }
         Command::Runtime { command } => {
             skippy_commands::runtime::run(
                 command.into(),
