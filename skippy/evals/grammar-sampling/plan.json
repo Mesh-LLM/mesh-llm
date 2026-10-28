@@ -12,9 +12,8 @@
     "max_duration_s_per_job": 7200,
     "max_usd": 0,
     "phases": [
-      "cache-and-toolchain-probe",
+      "verified-M6-probe-reuse",
       "build-and-correctness",
-      "development-screen",
       "qualification",
       "independent-audit-and-MLflow-readback"
     ],
@@ -97,7 +96,7 @@
     "Unicode_boundary": "The Unicode case includes a rare valid private-use code point. Admission verifies that at least one token piece begins with a UTF-8 continuation byte; a case name alone is not evidence of a split code point."
   },
   "statistics": {
-    "development_paired_blocks": 5,
+    "development_paired_blocks": 0,
     "qualification_paired_blocks": 30,
     "warmup_replays_per_arm_case": 3,
     "order": "Balanced Latin-square A/B/C order, fixed before execution; all three arms sequentially in each block",
@@ -114,7 +113,8 @@
     "fixed_input_repetitions_per_cell": 4,
     "decode_repetitions_per_cell": 1,
     "warmup_definition": "Three discarded complete blocks before each measurement phase, with the same per-cell repetition counts.",
-    "development_overlap": "All five synthetic cases are shared between screening and qualification. The 30 qualification timing blocks are fresh; do not describe repeats as independent dataset samples."
+    "development_overlap": "All five synthetic cases are shared between screening and qualification. The 30 qualification timing blocks are fresh; do not describe repeats as independent dataset samples.",
+    "development_reference": "Revision 2 provides a five-block diagnostic screen. Revision 3 goes directly from its fresh verified build/correctness to 30 new qualification blocks; no revision-2 speed is reused and no speed gate is relaxed."
   },
   "qualification": {
     "correctness": "All grammar/lazy-trigger/Unicode/fallback/EOS tests and MTP acceptance, rejection and checkpoint cleanup must pass. B/C seeded decision/state comparisons must pass under the admitted matching sampler configuration; any intentional semantic difference requires a new protocol revision before measurement.",
