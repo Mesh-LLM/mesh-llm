@@ -9,6 +9,7 @@ fi
 qualified_workspace=$1
 model_file=$2
 artifact_directory=$3
+profile_directory=$(cd "$(dirname "$0")" && pwd -P)
 mkdir -p "$artifact_directory"
 artifact_directory=$(cd "$artifact_directory" && pwd -P)
 cd "$qualified_workspace"
@@ -17,7 +18,7 @@ test -z "$(git status --porcelain --untracked-files=no)"
 test "$(sysctl -n machdep.cpu.brand_string)" = 'Apple M6'
 test "$(sysctl -n hw.memsize)" = 25769803776
 shasum -a 256 -c .deps/grammar-receipts/binary-hashes.txt
-shasum -a 256 -c .deps/grammar-receipts/input-hashes.txt
+shasum -a 256 -c "$profile_directory/qualified-input-hashes.txt"
 printf '%s  %s\n' 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8 "$model_file" | shasum -a 256 -c -
 candidate_binary="$PWD/.deps/grammar-C/grammar-sampling"
 candidate_hash=$(shasum -a 256 "$candidate_binary" | cut -d ' ' -f 1)
@@ -57,6 +58,6 @@ symbols=$(awk '$3 ~ /^_Z21common_sampler_sampleP/ || $3 ~ /^_Z24skippy_chat_samp
 test -n "$symbols"
 xcrun llvm-objdump --disassemble-symbols="$symbols" --demangle --symbolize-operands "$candidate_binary" > "$artifact_directory/current-C-disassembly.txt"
 cp .deps/grammar-receipts/binary-hashes.txt "$artifact_directory/binary-hashes.txt"
-cp .deps/grammar-receipts/input-hashes.txt "$artifact_directory/input-hashes.txt"
+cp "$profile_directory/qualified-input-hashes.txt" "$artifact_directory/input-hashes.txt"
 shasum -a 256 "$artifact_directory/"* > "$private_directory/artifact-hashes.txt"
 cp "$private_directory/artifact-hashes.txt" "$artifact_directory/artifact-hashes.txt"

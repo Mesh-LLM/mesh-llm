@@ -1,0 +1,6 @@
+35b477aba0cc6cfa7a05ab1acdb7cd6bc2d8d4a1b9d0c4ebe2444a3a3ae6d6e3  .deps/grammar-inputs/closing-delimiters-and-EOS.logits
+a38e818a82528f625abb6b54d4fc19f38cdc86ad5b7db2baf2502f7c29c9eeff  .deps/grammar-inputs/fixtures.json
+44c709d3cfa46469d959e51a5b2d3e33482d209efc8644a1c3df54423afb4be5  .deps/grammar-inputs/large-HTML-write-argument.logits
+e54c38032be91e85c89d2ffbe07d6d676c36d3f7df883dcd6d8241875e85a5df  .deps/grammar-inputs/lazy-before-tool-trigger.logits
+9aba1aa800074cd0acbf419f64d86835f4472f795283eb2c1fd8a07eb8ddeae3  .deps/grammar-inputs/restricted-values-and-rejection-fallback.logits
+046bb0e13276f34879dd1e0ff17aef98c6d78c2f5cd4199e30692be409eaf591  .deps/grammar-inputs/Unicode-and-partial-UTF8.logits
