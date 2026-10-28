@@ -57,3 +57,9 @@ from the frozen references. The controller-only build also compiles `simd-audit`
 which checks every arm, case, scope, warmup and process identity before evaluating
 the frozen paired bootstrap gates. Its statistical result still requires the
 separate source, correctness, placement and MLflow audits.
+
+The controller-only build runs model-free synthetic contracts. They exercise the
+whole five-block controller, exact paired constant-ratio confidence bounds,
+failure gates, and rejection of missing/duplicate cells, unknown thermal state,
+changed ranges/orders, malformed timings and divergent token decisions. Their
+synthetic times are test data and never enter MLflow performance metrics.

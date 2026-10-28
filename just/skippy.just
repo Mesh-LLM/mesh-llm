@@ -174,7 +174,8 @@ sampler-simd-candidate-build backend:
 [unix]
 sampler-simd-controller native:
     cmake -S skippy/evals/simd-top-k -B .deps/simd-controller -G Ninja -DSIMD_CONTROLLER_ONLY=ON -DLLAMA_ROOT="{{ native }}"
-    cmake --build .deps/simd-controller --parallel 4 --target simd-controller simd-audit
+    cmake --build .deps/simd-controller --parallel 4 --target simd-controller simd-audit simd-contracts
+    ctest --test-dir .deps/simd-controller --output-on-failure -R '^simd-orchestration-contracts$'
 
 # Build only the diagnostic controller; its worker binaries remain frozen.
 [unix]
