@@ -62,6 +62,23 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
         },
         metal_only: false,
     },
+    // Qwen3.6-27B; the draft reads target layers 2..=62 at width 5120.
+    DFlashPairing {
+        target: DFlashTarget {
+            architecture: "qwen35",
+            layer_count: 64,
+            embedding_length: 5120,
+            expert_count: 0,
+        },
+        draft: DFlashDraftSource {
+            repo: "AtomicChat/Qwen3.6-27B-DFlash-GGUF",
+            revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458",
+            file: "Qwen3.6-27B-DFlash.Q8_0.gguf",
+            sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1",
+            bytes: 1_849_481_472,
+        },
+        metal_only: false,
+    },
     // Qwen3.6-35B-A3B; the draft reads target layers 2..=38 at width 2048.
     DFlashPairing {
         target: DFlashTarget {
@@ -209,6 +226,10 @@ mod tests {
             Some("AtomicChat/Qwen3.5-9B-DFlash-GGUF")
         );
         assert_eq!(
+            repos(&target_meta("qwen35", 64, 5120, 0)),
+            Some("AtomicChat/Qwen3.6-27B-DFlash-GGUF")
+        );
+        assert_eq!(
             repos(&target_meta("qwen35moe", 40, 2048, 256)),
             Some("Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp")
         );
@@ -227,7 +248,10 @@ mod tests {
         let coder = pairing_for_target(&target_meta("qwen3next", 48, 2048, 512)).unwrap();
         assert!(coder.default_on(true));
         assert!(!coder.default_on(false));
-        for pairing in &DFLASH_PAIRINGS[..2] {
+        for pairing in DFLASH_PAIRINGS
+            .iter()
+            .filter(|p| p.target.architecture != "qwen3next")
+        {
             assert!(pairing.default_on(true) && pairing.default_on(false));
         }
     }
@@ -235,7 +259,7 @@ mod tests {
     #[test]
     fn other_shapes_of_the_same_family_do_not_match() {
         for meta in [
-            target_meta("qwen35", 64, 5120, 0),
+            target_meta("qwen35", 48, 5120, 0),
             target_meta("qwen35", 32, 2048, 0),
             target_meta("qwen35moe", 40, 2048, 128),
             target_meta("qwen3", 32, 4096, 0),
