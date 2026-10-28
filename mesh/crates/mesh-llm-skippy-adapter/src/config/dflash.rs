@@ -83,7 +83,8 @@ pub(super) fn choose_dflash_draft(
         None => scan_gguf_compact_meta(default.model_path)
             .as_ref()
             .and_then(pairing_for_target),
-    };
+    }
+    .filter(|pairing| pairing.default_on(cfg!(target_os = "macos")));
     Ok(pairing.map(|pairing| (pairing.draft.cache_path(), Some(pairing))))
 }
 
