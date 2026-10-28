@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Wed, 28 Oct 2026 14:17:38 +1100
+Subject: [PATCH] skippy: experimental verify-overhead knobs from #2318
+ (measurement only)
+
+SKIPPY_RS_SEQ sizes recurrent rollback snapshots for in-place verify;
+SKIPPY_VERIFY_KEEP_BACKEND_SAMPLER keeps the backend sampler attached across
+sampled verify; restores upstream's per-sequence backend-sampling output limit.
+---
+ src/llama-context.cpp        | 7 ++++---
+ src/skippy/model_loading.cpp | 3 ++-
+ src/skippy/sampling.cpp      | 7 +++++--
+ src/skippy/session.cpp       | 1 +
+ src/skippy/verification.cpp  | 3 ++-
+ 5 files changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 2c6149d30..4665d7791 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2041,9 +2041,10 @@ int llama_context::decode(
+                 // are limited to one output row; a sampler on some other
+                 // sequence of this context must not reject a multi-output
+                 // batch (e.g. speculative verification) for this one.
+-                if (seq_output_count[seq_id] > 1 && sampling.samplers.count(seq_id) > 0) {
+-                    LLAMA_LOG_ERROR("%s: backend sampling requires at most one output token per sequence (seq_id %d had %d)\n",
+-                            __func__, seq_id, seq_output_count[seq_id]);
++                if (sampling.samplers.count(seq_id) > 0 &&
++                        seq_output_count[seq_id] > (int32_t) cparams.n_outputs_max_per_seq) {
++                    LLAMA_LOG_ERROR("%s: backend sampling supports at most %u outputs per sequence (seq_id %d had %d)\n",
++                            __func__, cparams.n_outputs_max_per_seq, seq_id, seq_output_count[seq_id]);
+                     return -1;
+                 }
+             }
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 60a27669f..32bc991d5 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -733,7 +733,8 @@ enum skippy_status skippy_finish_model_open(
+     }
+     if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
+         params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
+-        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
++        // Experiment: snapshot depth for in-place speculative rollback.
++        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, skippy_env_u32("SKIPPY_RS_SEQ", 2, 2, 64));
+         params.kv_unified = true;
+     }
+     // Multi-lane activation exports rely on the shared KV pool's batch order.
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index cff146149..a971fa342 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -1,3 +1,4 @@
++#include "skippy/environment.h"
+ #include "skippy/sampling.h"
+ #include "skippy/errors.h"
+ #include "skippy/execution_internal.h"
+@@ -134,7 +135,7 @@ enum skippy_status skippy_verify_token_batch(
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+ 
+-    if (session->sampling_backend_enabled) {
++    if (session->sampling_backend_enabled && !skippy_env_enabled("SKIPPY_VERIFY_KEEP_BACKEND_SAMPLER")) {
+         // Verification requests logits for every row and then consumes them on
+         // the CPU. An attached backend sampler permits only one output row per
+         // sequence, so retire its one-shot backend initialization before
+@@ -332,7 +333,9 @@ void skippy_clear_chat_sampling(skippy_session * session) {
+     session->reasoning_budget_sampler = nullptr;
+     session->grammar_lazy = false;
+     session->sampling_backend_enabled = false;
+-    session->sampling_backend_retired = false;
++    // Experiment: a chain retired by sampled verification stays retired until
++    // the session is reset, so speculative repair does not re-attach a backend
++    // sampler that the next verify window must detach (two reserves per window).
+     session->sampling_config = {};
+     session->sampling_config_valid = false;
+     session->chat_sampling_metadata.clear();
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 9f9887091..d4bc35de6 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -410,6 +410,7 @@ enum skippy_status skippy_session_reset(
+             skippy_env_enabled("SKIPPY_DETACH_SAMPLER_ON_RESET");
+     if (detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)) {
+         skippy_clear_chat_sampling(session);
++        session->sampling_backend_retired = false;
+     }
+     skippy_mtp_clear_session_state(session);
+     session->sampling_backend_verifying = false;
+diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
+index 576171e79..c4f8d4dcf 100644
+--- a/src/skippy/verification.cpp
++++ b/src/skippy/verification.cpp
+@@ -135,7 +135,8 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+         }
+     }
+ 
+-    if (skippy_runtime_is_terminal_stage(&session->stage_model->config) && session->sampling_backend_enabled) {
++    if (skippy_runtime_is_terminal_stage(&session->stage_model->config) && session->sampling_backend_enabled &&
++            !skippy_env_enabled("SKIPPY_VERIFY_KEEP_BACKEND_SAMPLER")) {
+         // Backend (in-graph) sampling permits at most one output row per
+         // sequence per decode, but sampled verification must output every row
+         // of the window, so llama_decode would reject the batch outright.
