@@ -124,3 +124,10 @@ impl BoundDispatched {
         }
     }
 }
+
+#[cfg(test)]
+impl ExternalPlugin {
+    pub(in crate::plugin) async fn bound_test_pending(&self) -> super::PendingResponses {
+        self.runtime.lock().await.as_ref().unwrap().pending.clone()
+    }
+}

@@ -147,6 +147,51 @@ async fn non_wallet_provider_uses_fixed_setup_allowlist_generation_and_revocatio
             .await,
         Response::NotDispatched { .. }
     ));
+    // Hold the final admission lock: the call has passed initial authorization
+    // and reserved queue capacity, but cannot yet reach the enqueue boundary.
+    let pending = manager.inner.plugins["state-store"]
+        .bound_test_pending()
+        .await;
+    let blocked = pending.lock().await;
+    let gate = manager
+        .inner
+        .operation_bindings
+        .0
+        .lock()
+        .unwrap()
+        .get(&("client".into(), "state".into()))
+        .unwrap()
+        .capacity
+        .clone();
+    let queued_manager = manager.clone();
+    let queued = tokio::spawn(async move {
+        queued_manager
+            .bound_operation(
+                "client",
+                generation,
+                BoundOperationRequest {
+                    binding: "state".into(),
+                    handle: Some(fresh),
+                    operation: "write".into(),
+                    input_json: "{}".into(),
+                },
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while gate.available_permits() == 8 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    manager.revoke_changed_operation_bindings(&MeshConfig::default());
+    drop(blocked);
+    assert!(
+        matches!(tokio::time::timeout(std::time::Duration::from_secs(2), queued)
+        .await.unwrap().unwrap(), Response::NotDispatched { reason } if reason == "binding revoked")
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
     manager.revoke_changed_operation_bindings(&MeshConfig::default());
 
     assert!(matches!(
