@@ -88,8 +88,9 @@ impl DFlashBackoff {
 }
 
 impl DFlashDecodeState {
-    /// DFlash commits by token equality, which is only a valid acceptance
-    /// test under greedy sampling. `speculation_admitted` also excludes
+    /// DFlash commits by token equality against rows the native verifier
+    /// samples in causal order, stopping at the first mismatch, which keeps
+    /// greedy and stochastic sampling exact. `speculation_admitted` excludes
     /// logprobs requests, whose rows past a rejection would not line up, and
     /// generation hooks need serial steps.
     fn for_request(

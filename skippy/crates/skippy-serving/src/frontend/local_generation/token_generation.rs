@@ -17,7 +17,9 @@ use crate::frontend::iteration_scheduler::CacheRuntimeContext;
 use crate::frontend::iteration_scheduler::DirectIterationChannel;
 use crate::frontend::iteration_scheduler::ScheduledGenerationRequest;
 use crate::frontend::iteration_scheduler::ScheduledResumeRequest;
-use crate::frontend::linear_proposal::greedy_linear_proposal_admitted;
+use crate::frontend::linear_proposal::{
+    greedy_linear_proposal_admitted, sampled_linear_proposal_admitted,
+};
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
 use crate::kv_integration::proactive_eviction_attrs;
@@ -1467,8 +1469,14 @@ impl StageOpenAiBackend {
             self.generation_hooks_active(&hook_request, hook_runtime.as_ref());
         // Verified proposal rows past a rejected token are sampled too, so their
         // recorded logprobs would not line up with the emitted tokens.
-        let speculation_admitted = request.sampling.top_logprobs.is_none()
+        let logprobs_free = request.sampling.top_logprobs.is_none();
+        let speculation_admitted = logprobs_free
             && greedy_linear_proposal_admitted(request.sampling, request.chat_sampling_metadata);
+        // DFlash blocks verify through the native sampled verifier, which keeps
+        // stochastic sampling exact; native MTP spans sample past a rejection
+        // and stay greedy-only.
+        let dflash_admitted =
+            logprobs_free && sampled_linear_proposal_admitted(request.chat_sampling_metadata);
         let linear_proposal_enabled = self.linear_proposal_ingress.is_some()
             && !request.native_mtp_enabled
             && request.speculative.dflash.is_none()
@@ -1529,7 +1537,7 @@ impl StageOpenAiBackend {
             dflash: self.admit_dflash(
                 request,
                 session_id,
-                speculation_admitted,
+                dflash_admitted,
                 generation_hooks_active,
             )?,
         })
