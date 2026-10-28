@@ -139,6 +139,11 @@ fn windows_runtime_producer_cannot_drop_its_callers_cache_policy() {
             "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
             "          allow_native_github_cache: \"true\"\n      - name: Save exact PR-scoped Windows ABI build",
         ),
+        (
+            "ci-windows-runtime-slice.yml",
+            "          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}\n          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
+            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
+        ),
     ] {
         assert!(
             cache_evidence::check(&changed(name, old, new)).is_err(),
