@@ -72,7 +72,7 @@ const plugins = [
     tagline: 'Huge MoE models streamed from your SSD',
     summary:
       'Preview. Serve a [Slotstream](https://github.com/carloslfu/slotstream) server on the mesh. Slotstream streams mixture-of-experts weights from SSD, so a roughly 105 GB Qwen3.8-Flash-Next fits on a Mac without holding it all in memory. Install Slotstream and its model separately; see the [README](https://github.com/Mesh-LLM/slotstream-plugin#readme).',
-    install: null,
+    install: 'mesh-llm plugins install Mesh-LLM/slotstream-plugin',
     platforms: 'macOS arm64 (14+)',
   },
   {
