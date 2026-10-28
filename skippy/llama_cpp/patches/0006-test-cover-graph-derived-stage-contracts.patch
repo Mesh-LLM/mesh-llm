@@ -1,4 +1,4 @@
-From c963a4765b14713b800cc4ef89a29b2a0531d12c Mon Sep 17 00:00:00 2001
+From 92779ec91d460a402c10a3c57a8129a386a97b0c Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -18,7 +18,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  629 +++++++
- src/skippy/tests/sampling_history.cpp         |  457 +++++
+ src/skippy/tests/sampling_history.cpp         |  459 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9840 insertions(+), 32 deletions(-)
+ 34 files changed, 9842 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5773,10 +5773,10 @@ index 000000000..b75c3b75d
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..a46698fdf
+index 000000000..932b031a9
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,457 @@
+@@ -0,0 +1,459 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "../runtime_support.h"
@@ -6176,7 +6176,9 @@ index 000000000..a46698fdf
 +    ok(status, error);
 +    llama_token token = LLAMA_TOKEN_NULL;
 +    error = nullptr;
-+    status = skippy_session_sample_current(session, &config, &token, &error);
++    size_t output_bytes = 0;
++    status = skippy_decode_step_sampled(session, 3, &config,
++            nullptr, 0, nullptr, 0, &output_bytes, &token, &error);
 +    ok(status, error);
 +    CHECK(token == 42 && !llama_vocab_is_eog(vocab, token));
 +
