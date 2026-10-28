@@ -1,7 +1,7 @@
-/* The CLI and embeddable SDK share the hero's first-screen entry point. */
+/* The CLI, embeddable SDK and plugins share the hero's first-screen entry point. */
 .hero-entry-points {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 24px;
   flex: 1;
   min-width: 0;
@@ -62,6 +62,14 @@
 .hero-sdk a:focus-visible {
   outline: 2px solid var(--blue-3);
   outline-offset: 3px;
+}
+@media (max-width: 1100px) {
+  .hero-entry-points {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  }
+  .hero-plugins {
+    grid-column: 1 / -1;
+  }
 }
 @media (max-width: 1000px) {
   .hero-entry-points + .hero-sponsor {
