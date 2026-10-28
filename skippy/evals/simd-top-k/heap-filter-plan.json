@@ -1,0 +1,49 @@
+{
+  "revision": "heap-filter-v2",
+  "status": "Unqualified replacement for the failed partition candidate; new builds and all remote gates pending",
+  "hypothesis": "Keep the small top-40 heap and use Highway ordered comparisons to skip groups of logits below its nondecreasing cutoff, avoiding vocabulary-sized packing and partitioning.",
+  "lineage": {
+    "frozen_m6_plan_sha256": "fc9b42c3d5bd83c9e6543fbc7c6b8396a78089be20ed446701bf754704ac308a",
+    "frozen_spark_plan_sha256": "49a733991cfb50cd7172143a171fed29f025bdbdb327e39ca01e48ad59a2dcba",
+    "failed_partition_native_tree": "c81b95e77324501872f9aac8acc2488d9365df63",
+    "local_diagnostic_mlflow_run": "f39f964f6c03477ebcefc3d56973afb8",
+    "independent_review": "GPT-6 Astra; read-only source, raw-data and assembly review"
+  },
+  "eligibility": {
+    "top_k": 40,
+    "candidate_count_min": 248320,
+    "candidate_count_max": 2147483647,
+    "numeric": "IEEE binary32 and ordered comparisons; refuse builds defining __FAST_MATH__",
+    "bypass": "Disabled control, sorted input, unsupported size/k/representation, nonfinite initial top-40 heap. Refusal must preserve the full array and descriptor.",
+    "late_fallback": "Restore the original first 40 records on ties within the selected prefix or at its boundary. The tail is never mutated. A raised cutoff retires lower boundary ties.",
+    "success": "Exact native selected prefix and descriptor size=40, sorted=true, selected unchanged. Full-buffer permutation is not promised; repopulate records before enlarging descriptor, including grammar retries.",
+    "scope": "Restriction follows observed small-N regressions and k=40-only timing evidence. It is frozen before new remote measurements; the crossover is unknown. It is not an evaluation-case exclusion."
+  },
+  "changed_variable": "Top-k implementation and its declared eligibility only. Same sampler order, model RNG, grammar, model/KV/context/backend/workload, frozen primary B and current C, measurements and numerical gates.",
+  "local_evidence_limits": "M5 synthetic model-free development only. Paired within-revision evidence supports advancing a candidate; noisy marginal medians are not a remote qualification or a cross-revision effect estimate. Retain all failures and masked/small-N regressions. No further unrestricted local timing sweep.",
+  "correctness": [
+    "Retain original native suite, 32 recovery cases per affected arm, and all 20 external seeded comparisons against qualified C; test new production-linked wrapper and sampler, not standalone partial_sort alone.",
+    "Preserve all original top-k edge sizes/k guards; add eligibility threshold neighbors, vector-width/remainder neighbors, explicit initial-heap/vector-lane/scalar-tail NaNs and infinities, signed-zero boundary ties, ties surviving/retiring as cutoff rises, finite-prefix masked tail, delayed fallback full-buffer restoration.",
+    "Repeat sampler reuse with all logits refilled before each expansion; verify clone/reset/accept and exact downstream temperature/top-p/distribution records and seeded choices. Fresh full-model correctness must include grammar rejection/resampling and recovery.",
+    "On both pinned toolchains retain actual partial_sort/heap implementation headers and complete compilation commands. Tail-NaN equivalence is implementation-specific; audit ordered comparisons, actual headers and targeted empirical tests. A toolchain mismatch or correctness failure blocks timing.",
+    "Prove actual execution in the admitted D binary of the Highway vector HeapFilter target plus ordered vector compare, using Instruments on M6 and owned-child GDB/disassembly on Spark. Compiled symbols alone are insufficient. R remains diagnostic only."
+  ],
+  "execution": {
+    "location": "All model execution and qualification performance through JY. User-authorized local exceptions cover only isolated model-free kernel diagnosis and correctness.",
+    "m6": "Same admitted Apple M6/Metal node, frozen B/C binaries and original input hashes reused; D/R rebuilt at new immutable source.",
+    "spark": "Any eligible enrolled ARM64 GB10 Spark may build. Freeze actual node, native compiler, binaries and captured input bytes before timing; matched same-node B/C/D/R within this separate stratum. Preserve previous failed screen/monitoring gap and completed old-candidate diagnostic build.",
+    "phases": [
+      "immutable source and configuration/readback",
+      "fresh build and toolchain audit",
+      "fresh full correctness and actual ISA audit/readback",
+      "one five-block screen per hardware stratum",
+      "only after passing screen, 30 fresh qualification blocks per stratum",
+      "independent audit and shared MLflow readback"
+    ],
+    "max_usd_per_job": 0,
+    "max_duration_s": 7200,
+    "retries": 0
+  },
+  "gates": "Every numerical, per-case, confidence, completeness, freshness and decode gate in the unchanged parent plans applies. No omissions, normalization, comparator substitution or gate relaxation. No performance PR before all required qualification and readback gates pass. Supplemental unconstrained coverage remains a separate prerequisite before any broader claim.",
+  "decision": "A correctness failure needs a source-identified repair and immutable new revision. A failed five-block screen stops qualification for this candidate; preserve all observations. Do not repeat unchanged timing until favorable. Do not combine replace-root/custom sift-down or other algorithms with this revision."
+}

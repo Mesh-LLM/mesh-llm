@@ -1,0 +1,41 @@
+{
+  "revision": "heap-filter-v2",
+  "status": "Unqualified: native local model-free integration passed; fresh remote correctness, actual dispatch and all performance gates pending",
+  "native_source_tree": "e4cc2b65b42834fe2ab257a2517afd969ba7f9c5",
+  "native_owner_commit": "1719ec8a71b5ee27ba63dcbb49dc203249f1785f",
+  "queue_owner": "0013-sampling-add-portable-Highway-top-k.patch",
+  "owner_patch_sha256": "80ca8f88716eb99f68af5214fabe21934ae2e49ad280f145ebcd358a9a8f1fa4",
+  "plan_file": "heap-filter-plan.json",
+  "plan_sha256": "337779f28efe49524743e7af9b8072903f2985cb9d030b165996d545aa9fe0b7",
+  "highway": {
+    "release": "1.4.0",
+    "commit": "2607d3b5b0113992fe84d3848859eae13b3b52c1",
+    "archive_sha256": "741d705781e0b3e406beda8f1f994fbae01321237ce8023a1ad90fbaf7940c25",
+    "dependency": "hwy core only; no contrib partitioner",
+    "operation": "HeapFilter: capped ordered float SIMD comparison with typed logit field reads, skip losing groups, standard heap replacement for possible winners",
+    "model_rng": "No random-number access or draws"
+  },
+  "eligibility": {
+    "top_k": 40,
+    "candidate_count_min": 248320,
+    "candidate_count_max": 2147483647,
+    "fallback": "See heap-filter-plan.json; any refusal restores every input record and preserves descriptor",
+    "representation": "IEEE binary32; __FAST_MATH__ builds bypass the candidate"
+  },
+  "configurations": {
+    "D": {
+      "LLAMA_SAMPLER_HIGHWAY": "ON",
+      "LLAMA_SAMPLER_HIGHWAY_DISABLED": "OFF"
+    },
+    "R": {
+      "LLAMA_SAMPLER_HIGHWAY": "ON",
+      "LLAMA_SAMPLER_HIGHWAY_DISABLED": "ON"
+    },
+    "B_C": {
+      "LLAMA_SAMPLER_HIGHWAY": "OFF"
+    },
+    "default_product_build": "OFF; this is an experiment until qualified"
+  },
+  "baseline_integrity": "Frozen B and qualified C unchanged. R diagnostic only, never used to normalize D/B. The failed partition candidate and all diagnostic/screen evidence remain retained separately.",
+  "qualification": "All unchanged parent-plan correctness, per-case/aggregate within1%, 5% aggregate improvement, decode, freshness, placement and shared-recording gates apply. No remote speed measured for this revision."
+}

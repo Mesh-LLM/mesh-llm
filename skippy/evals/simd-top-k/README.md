@@ -84,3 +84,19 @@ The job must retain this file alongside observations even on failure. External
 JY placement checks apply only to snapshots inside the execution window; a
 post-run snapshot never establishes conditions during measurement. This is a
 new orchestration revision requiring fresh controller admission and measurements.
+
+The partition-based candidate failed both initial screens. Its configuration and
+results remain unchanged in the campaign record. The replacement
+[heap-filter plan](heap-filter-plan.json) and
+[frozen candidate](heap-filter-candidate.json) keep a top-40 heap and use Highway
+ordered comparisons to skip groups below the cutoff, without packing or sorting
+a vocabulary-sized scratch array. Eligibility is restricted to k=40 and at least
+248,320 candidates because local small-array diagnostics regressed. Every frozen
+production case remains in the evaluation, including masked fallback cases.
+
+Success preserves the selected prefix; it does not preserve native partial_sort's
+tail permutation. Native callers refill logits before expanding candidate arrays.
+The new contracts cover refill, clone/reset/accept, exceptional positions, late
+fallback restoration, and downstream sampling. Fresh correctness under both pinned
+toolchains and actual vector HeapFilter execution must be verified before timing.
+The original five-block screen and fresh 30-block qualification gates still apply.

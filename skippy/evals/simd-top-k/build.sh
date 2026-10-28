@@ -14,7 +14,7 @@ if [[ $# == 3 ]]; then
     arms=(B C D R)
 fi
 scripts/prepare-llama.sh pinned
-test "$(git -C .deps/llama.cpp rev-parse 'HEAD^{tree}')" = c81b95e77324501872f9aac8acc2488d9365df63
+test "$(git -C .deps/llama.cpp rev-parse 'HEAD^{tree}')" = e4cc2b65b42834fe2ab257a2517afd969ba7f9c5
 if [[ $# == 3 ]]; then
     LLAMA_WORKDIR="$PWD/.deps/simd-B-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "$baseline/scripts/prepare-llama.sh" pinned
     LLAMA_WORKDIR="$PWD/.deps/simd-C-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "$current/scripts/prepare-llama.sh" pinned
