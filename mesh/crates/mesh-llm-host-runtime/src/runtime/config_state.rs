@@ -190,7 +190,7 @@ fn read_revision(sidecar: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-fn atomic_write(target: &Path, contents: &[u8]) -> std::io::Result<()> {
+pub(super) fn atomic_write(target: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
