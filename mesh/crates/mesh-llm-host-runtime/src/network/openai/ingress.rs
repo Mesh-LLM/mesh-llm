@@ -905,14 +905,16 @@ async fn route_missing_local_model(
     // clients can retry; return 404 only when the model truly doesn't exist anywhere.
     // A first load has no target yet, only its serving assignment. A client
     // that excluded this node gets the exclusion 409 below instead: retrying
-    // here would never help it.
+    // here would never help it. A plugin serving the same name keeps the
+    // plugin route it had before.
     let loading_locally = !excluded.contains(&ctx.node.id())
         && ctx
             .node
             .serving_models()
             .await
             .iter()
-            .any(|served| served == model_name);
+            .any(|served| served == model_name)
+        && !plugin_serves_model(ctx, model_name).await;
     if loading_locally || has_local_unavailable_candidates(ctx.targets, model_name) {
         record_pre_routing_rejection(ctx, Some(model_name), 503).await;
         return response_outcome(
@@ -1057,6 +1059,18 @@ async fn route_self_targeted_model(
         )
         .await,
     )
+}
+
+/// Whether a plugin inference endpoint claims `model_name`; a lookup error
+/// counts as claimed, as in `local_model_unavailable`.
+async fn plugin_serves_model(ctx: &IngressRouteContext<'_>, model_name: &str) -> bool {
+    match ctx.plugin_manager {
+        Some(manager) => !matches!(
+            manager.inference_endpoint_for_model(model_name).await,
+            Ok(None)
+        ),
+        None => false,
+    }
 }
 
 /// Check whether the model is known locally but currently unavailable — all local candidates are None.

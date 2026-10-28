@@ -517,6 +517,71 @@ async fn route_missing_local_model_answers_503_while_the_first_load_runs() {
     node.endpoint.close().await;
 }
 
+/// A plugin endpoint serving the same name keeps the plugin route it had
+/// before the first-load 503 existed.
+#[tokio::test]
+async fn route_missing_local_model_prefers_a_plugin_serving_a_loading_name() {
+    use tokio::io::AsyncReadExt;
+
+    let model = "acme/plugin-model:Q4_K_M";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    node.set_serving_models(vec![model.into()]).await;
+    let targets = election::ModelTargets::default();
+    let affinity = affinity::AffinityRouter::new();
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "acme".to_string(),
+            endpoint_id: "ep1".to_string(),
+            // Unreachable: only which branch answers matters here.
+            address: "http://127.0.0.1:1".to_string(),
+            models: vec![model.to_string()],
+        }])
+        .await;
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        exchange_channel: None,
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let (client_side, server_side) = tokio::join!(tokio::net::TcpStream::connect(addr), async {
+        listener.accept().await.map(|(stream, _)| stream)
+    });
+    let mut client_side = client_side.expect("connect");
+    let mut request = plugin_only_request(model);
+    route_missing_local_model(
+        server_side.expect("accept").into(),
+        &mut request,
+        &ctx,
+        model,
+        None,
+        &[],
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+
+    let mut response = Vec::new();
+    client_side
+        .read_to_end(&mut response)
+        .await
+        .expect("read response");
+    let response_text = String::from_utf8_lossy(&response);
+    assert!(
+        !response_text.contains("loading or draining"),
+        "a plugin-served name must take the plugin route, got: {response_text}"
+    );
+    node.endpoint.close().await;
+}
+
 /// A client that excluded this node can't be served by its local load, so it
 /// keeps the exclusion 409 rather than a 503 it would retry forever.
 #[tokio::test]
