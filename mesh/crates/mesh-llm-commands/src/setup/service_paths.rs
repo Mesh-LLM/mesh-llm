@@ -1,5 +1,5 @@
 use super::SetupPlatform;
-use super::service_binary::service_binary_path;
+use super::service_binary::{service_binary_path, working_directory};
 use super::service_templates::{SERVICE_LABEL, SERVICE_NAME};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -31,7 +31,11 @@ impl ServiceInstallContext {
         let binary_path = service_binary_path(
             std::env::args_os().next().as_deref(),
             std::env::var_os("PATH").as_deref(),
-            std::env::current_dir().ok().as_deref(),
+            working_directory(
+                std::env::var_os("PWD").as_deref(),
+                std::env::current_dir().ok(),
+            )
+            .as_deref(),
             current_exe,
         );
         let user_id = match platform {

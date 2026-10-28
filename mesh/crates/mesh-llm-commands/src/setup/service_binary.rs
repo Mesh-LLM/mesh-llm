@@ -17,6 +17,33 @@ pub(crate) fn service_binary_path(
     invoked_binary_path(invoked, path_var, cwd).unwrap_or(current_exe)
 }
 
+/// The working directory as the shell names it: `$PWD` when it is absolute
+/// and the same directory as `current_dir`, which resolves links.
+pub(crate) fn working_directory(
+    pwd: Option<&OsStr>,
+    current_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let current_dir = current_dir?;
+    let logical = pwd
+        .map(PathBuf::from)
+        .filter(|pwd| pwd.is_absolute() && same_directory(pwd, &current_dir));
+    Some(logical.unwrap_or(current_dir))
+}
+
+#[cfg(unix)]
+fn same_directory(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_directory(_a: &Path, _b: &Path) -> bool {
+    false
+}
+
 #[cfg(unix)]
 fn invoked_binary_path(
     invoked: Option<&OsStr>,

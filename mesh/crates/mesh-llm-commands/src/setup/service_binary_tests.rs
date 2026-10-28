@@ -1,4 +1,4 @@
-use super::service_binary::service_binary_path;
+use super::service_binary::{service_binary_path, working_directory};
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -105,4 +105,42 @@ fn falls_back_to_current_exe_without_an_invoked_name() {
     let chosen = service_binary_path(None, None, None, current_exe.clone());
 
     assert_eq!(chosen, current_exe);
+}
+
+#[test]
+fn the_working_directory_keeps_a_linked_pwd() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("cellar/mesh-llm-0.79.0/bin");
+    fs::create_dir_all(&real).unwrap();
+    let link = root.path().join("bin");
+    symlink(&real, &link).unwrap();
+
+    let chosen = working_directory(Some(link.as_os_str()), Some(real.clone()));
+
+    assert_eq!(chosen, Some(link));
+}
+
+#[test]
+fn the_working_directory_ignores_a_pwd_naming_another_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    let other = root.path().join("other");
+    fs::create_dir_all(&real).unwrap();
+    fs::create_dir_all(&other).unwrap();
+
+    let chosen = working_directory(Some(other.as_os_str()), Some(real.clone()));
+
+    assert_eq!(chosen, Some(real));
+}
+
+#[test]
+fn the_working_directory_ignores_a_relative_pwd() {
+    let root = tempfile::tempdir().unwrap();
+
+    let chosen = working_directory(
+        Some(OsString::from("bin").as_os_str()),
+        Some(root.path().to_path_buf()),
+    );
+
+    assert_eq!(chosen, Some(root.path().to_path_buf()));
 }
