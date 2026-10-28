@@ -1735,6 +1735,7 @@ jobs:
           backend: cpu
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
       - name: Save and verify Windows release ABI cache
         if: steps.llama_cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/save-and-verify-actions-cache
@@ -1893,6 +1894,7 @@ jobs:
           backend: ${{ matrix.backend }}
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
       - name: Save and verify Windows release ABI cache
         if: steps.llama_cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/save-and-verify-actions-cache
