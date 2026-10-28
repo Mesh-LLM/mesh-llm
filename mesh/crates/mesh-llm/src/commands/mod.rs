@@ -20,7 +20,7 @@ use self::doctor::dispatch_doctor_command;
 use self::download::dispatch_download_command;
 use self::models::dispatch_models_command;
 use self::plugin_cli::run_external_plugin_command;
-use self::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
+use self::runtime::{LoadSizing, dispatch_runtime_command, run_drop, run_load, run_status};
 use self::setup::dispatch_setup_command;
 
 pub async fn dispatch(cli: &Cli) -> Result<bool> {
@@ -147,7 +147,12 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             )
             .await
         }
-        Command::Load { name, port } => run_load(name, *port).await,
+        Command::Load {
+            name,
+            port,
+            ctx_size,
+            parallel,
+        } => run_load(name, *port, LoadSizing::from_flags(*ctx_size, *parallel)).await,
         Command::Unload { name, port } => run_drop(name, *port).await,
         Command::Status { port } => run_status(*port).await,
         Command::Stop => run_stop(),

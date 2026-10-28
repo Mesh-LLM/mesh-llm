@@ -440,6 +440,7 @@ pub(super) async fn run_auto_handle_control_request(
             spec,
             config_model_id,
             profile,
+            sizing,
             resp,
         } => {
             let intent = ModelIntent::Load {
@@ -447,6 +448,7 @@ pub(super) async fn run_auto_handle_control_request(
                 spec,
                 config_model_id,
                 profile,
+                sizing,
                 source: IntentSource::ApiLoad,
                 completion: Some(resp),
             };
@@ -521,6 +523,7 @@ pub(super) async fn run_auto_handle_model_intent(
             spec,
             config_model_id,
             profile,
+            sizing,
             source,
             completion,
         } => {
@@ -584,6 +587,7 @@ pub(super) async fn run_auto_handle_model_intent(
                 config_model_id,
                 profile.clone(),
                 source == IntentSource::NativeLifecycle,
+                sizing,
             )
             .await;
             match &result {
