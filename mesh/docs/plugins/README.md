@@ -73,6 +73,7 @@ details through environment variables:
 | `MESH_LLM_PLUGIN_TRANSPORT` | Transport kind, such as `unix` or `pipe`    |
 | `MESH_LLM_PLUGIN_NAME`      | Configured plugin name                      |
 | `MESH_LLM_PLUGIN_URL`       | Optional `[[plugin]].url` value from config |
+| `MESH_LLM_PLUGIN_SETTINGS_JSON` | JSON object from this plugin's `[[plugin]].settings`; `{}` when empty |
 
 An HTTP or HTTPS URL configures a locally launched adapter plugin and is
 provided through `MESH_LLM_PLUGIN_URL`. `plugin.url` does not support `tcp://`

@@ -122,7 +122,11 @@ pub(crate) fn configured_external_plugin_spec(
         command,
         args: entry.args.clone(),
         url: url.map(str::to_owned),
-        env: BTreeMap::new(),
+        env: BTreeMap::from([(
+            "MESH_LLM_PLUGIN_SETTINGS_JSON".into(),
+            serde_json::to_string(&entry.settings)
+                .context("Failed to serialize plugin settings for launch")?,
+        )]),
         startup,
         web_ui_enabled: entry.web_ui_enabled,
         web_ui_primary_tab: entry.web_ui_primary_tab,

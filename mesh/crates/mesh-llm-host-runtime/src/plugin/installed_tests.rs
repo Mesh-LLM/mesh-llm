@@ -254,3 +254,36 @@ fn explicit_installed_command_still_runs_when_the_store_copy_is_disabled() {
     assert!(!spec.startup.optional, "explicit commands remain required");
     assert_eq!(spec.installed_metadata, Some(metadata));
 }
+
+#[test]
+#[serial_test::serial]
+fn configured_settings_are_delivered_only_to_their_plugin_launch() {
+    let store = tempfile::tempdir().unwrap();
+    with_plugin_dir(store.path(), || {
+        let mut entry = capsules_entry(Some("unused-fixture"));
+        entry
+            .settings
+            .insert("profile".into(), toml::Value::String("fixture".into()));
+        entry
+            .settings
+            .insert("enabled".into(), toml::Value::Boolean(false));
+        let ConfiguredExternalPlugin::Active(spec) =
+            configured_external_plugin_spec(&entry).unwrap()
+        else {
+            panic!("explicit command must resolve");
+        };
+        let settings: serde_json::Value =
+            serde_json::from_str(&spec.env["MESH_LLM_PLUGIN_SETTINGS_JSON"]).unwrap();
+        assert_eq!(
+            settings,
+            serde_json::json!({"profile": "fixture", "enabled": false})
+        );
+        entry.settings.clear();
+        let ConfiguredExternalPlugin::Active(empty) =
+            configured_external_plugin_spec(&entry).unwrap()
+        else {
+            panic!("explicit command must resolve");
+        };
+        assert_eq!(empty.env["MESH_LLM_PLUGIN_SETTINGS_JSON"], "{}");
+    });
+}
