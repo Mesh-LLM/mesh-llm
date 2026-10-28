@@ -172,6 +172,10 @@ pub struct GenerationCompletion {
     pub generated_token_count: usize,
     pub termination: GenerationTermination,
     pub request_to_first_token_us: Option<u64>,
+    /// Backend request-start to the last generated token's availability.
+    /// With `request_to_first_token_us` and `generated_token_count` this
+    /// bounds the native decode span without carrying per-token stamps.
+    pub request_to_last_token_us: Option<u64>,
 }
 
 impl GenerationCompletion {
@@ -191,7 +195,15 @@ impl GenerationCompletion {
             generated_token_count,
             termination,
             request_to_first_token_us,
+            request_to_last_token_us: None,
         }
+    }
+
+    /// Records when the last generated token became available.
+    #[must_use]
+    pub fn with_request_to_last_token_us(mut self, request_to_last_token_us: Option<u64>) -> Self {
+        self.request_to_last_token_us = request_to_last_token_us;
+        self
     }
 }
 
