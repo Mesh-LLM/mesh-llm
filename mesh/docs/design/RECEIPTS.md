@@ -683,7 +683,7 @@ parameters already fit a phone:
 
 ## Open Items
 
-Not yet measured or built:
+Not yet measured or built (see [RECEIPTS_PLAN.md](RECEIPTS_PLAN.md) for the build plan):
 
 - ROCm is deferred: no rounding profile or replay test yet, so ROCm nodes
   advertise no receipts until one is measured.
