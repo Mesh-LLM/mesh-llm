@@ -30,3 +30,12 @@ blocks; R never replaces either primary comparator or normalizes their results.
 The predecessor's source, captured inputs and historical results stay immutable.
 Its [qualified figures](../grammar-sampling/figures/README.md) describe the earlier
 comparison, not evidence that this proposed SIMD change is faster.
+
+The separately authorized [Spark plan](spark-plan.json) replicates B/C/D/R on one
+Linux/CUDA DGX Spark. It has its own built reference binaries and captured logits,
+frozen before timing. The same semantic cases and numerical gates apply. Spark
+and M6 results are never pooled; each stratum must qualify independently.
+
+```sh
+just sampler-simd-spark-probe /absolute/model.gguf /absolute/artifacts
+```

@@ -155,6 +155,11 @@ grammar-sampling-shared-build:
 sampler-simd-profile qualified_workspace model_file artifacts:
     bash skippy/evals/simd-top-k/profile.sh "{{ qualified_workspace }}" "{{ model_file }}" "{{ artifacts }}"
 
+# Inspect the admitted Spark toolchain/model/telemetry without inference.
+[unix]
+sampler-simd-spark-probe model_file artifacts:
+    bash skippy/evals/simd-top-k/probe-spark.sh "{{ model_file }}" "{{ artifacts }}"
+
 # Build only the diagnostic controller; its worker binaries remain frozen.
 [unix]
 grammar-process-control-build vendor:

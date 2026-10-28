@@ -1,0 +1,70 @@
+{
+  "campaign": "skippy-highway-top-k-spark-v1",
+  "purpose": "Replicate the B/C/D/R Highway top-k experiment as a separate Spark hardware stratum, explicitly authorized after the M6 plan was frozen.",
+  "parent_plan": "plan.json",
+  "parent_plan_sha256": "fc9b42c3d5bd83c9e6543fbc7c6b8396a78089be20ed446701bf754704ac308a",
+  "hardware": {
+    "node": "spark-000468",
+    "reason": "Idle, not draining, observed without throttling, exact model already cached, model storage mounted. Never interrupt another job.",
+    "cpu": "Arm Cortex-X925/Cortex-A725, 20 cores, ARM64/NEON",
+    "gpu": "NVIDIA GB10",
+    "os": "Linux/CUDA",
+    "memory": "Record actual physical/unified memory in the probe; do not substitute marketing capacity for observed bytes"
+  },
+  "arms": {
+    "B": {"source": "3947de0cbc73fe5cbcaae548b297f03a401532d7", "name": "Frozen llama reference, Linux/CUDA build"},
+    "C": {"source": "a9b37b71bb9ebcff51e321e7fcedba323f7d9458", "name": "Current qualified upstream-backed sampler, Linux/CUDA build"},
+    "D": {"name": "Same-source Highway top-k candidate, Linux/CUDA build", "source": "Freeze after profile prerequisite and implementation, before build admission"},
+    "R": {"name": "Candidate with optimized top-k disabled, Linux/CUDA build", "role": "Diagnostic only; never a replacement comparator or normalization factor"}
+  },
+  "build": {
+    "policy": "Compile all Spark arms with the same admitted Linux compiler, optimization and CUDA architecture flags. No cross-OS binary reuse. Record compiler/tool versions and source/native-object/executable hashes. Preserve B's native source; platform harness adapters are separately identified and identical across Spark arms.",
+    "selection": "The experiment changes CPU top-k only; CUDA decoding/backend sampling behavior is unchanged. Record actual selected Highway target; source support alone does not prove NEON executed.",
+    "probe": "Check cache/hash readability, compiler/CMake/Ninja/CUDA tools, profiler permissions, CPU features, GPU compute capability, thermal/throttling telemetry and model-free process state before build. No model generation in the probe.",
+    "backend": "GGML_CUDA=ON, GGML_METAL=OFF, GGML_ACCELERATE=OFF; architecture/toolchain flags frozen from observed probe evidence before candidate build. Native sampler perf counters disabled in all arms."
+  },
+  "model": {
+    "ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5#*Q4_K_M*",
+    "file": "Qwen3.5-9B-Q4_K_M.gguf",
+    "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+    "size_bytes": 5680522464,
+    "context_tokens": 4096,
+    "kv_keys": "f16",
+    "kv_values": "f16",
+    "cpu_threads": 8,
+    "concurrency": 1,
+    "speculation": "disabled for timing"
+  },
+  "inputs": {
+    "semantic_corpus": "The same five frozen synthetic grammar cases, prompt/template/tokenizer/continuation controls, sampler settings and seeds as plan.json.",
+    "logits": "Capture once using frozen B on CUDA, freeze ordered fixture/logit hashes before correctness and timing, and replay exactly those bytes in every Spark arm. Hardware-native capture is separate from M6 input identities; no cross-hardware pooling or absolute-speed attribution.",
+    "matched_decode": "Teacher-forced native CUDA decode using identical sequences per arm. Correctness checks precede timing. Supplemental unconstrained cases remain separate from the five-case grammar aggregate."
+  },
+  "statistics": {
+    "screen_blocks": 5,
+    "qualification_blocks": 30,
+    "warmup_blocks_per_fresh_worker": 3,
+    "orders": ["BCRD", "CDBR", "DRCB", "RBDC"],
+    "unit": "Fresh independent four-worker Spark block; only one model resident at a time. Loading and prescribed warmup excluded from timing.",
+    "confidence": "Same one-sided 95% paired block-bootstrap, 10000 resamples, seed 7301, case-balanced geometric mean ratios as plan.json",
+    "qualification_partition": "Three predetermined ten-block jobs, all 30 audited together; no optional stopping or block/case removal."
+  },
+  "gates": {
+    "correctness": "Same native, public-ABI, seeded, MTP-recovery and new differential top-k tests as plan.json; freshly pass on Spark before timing",
+    "sampler_improvement": "Aggregate D/C upper one-sided 95% bound <=0.95",
+    "sampler_no_regression": "Every primary case and aggregate D/C and D/B upper one-sided 95% bound <=1.01",
+    "decode_no_regression": "Every primary case and aggregate D/C and D/B decode-throughput lower one-sided 95% bound >=0.99",
+    "telemetry": "Record available Linux CPU and NVIDIA thermal/throttle observations. Unknown telemetry is explicitly unknown, never mapped to healthy; resolve required thermal/co-tenancy instrumentation before admitting timing. Retain observed invalid jobs; no exclusions or normalization.",
+    "portability_claim": "Report each hardware stratum independently. A claim that the optimization benefits both requires every applicable gate to pass in both strata. A Spark pass cannot rescue an M6 failure, or vice versa."
+  },
+  "execution": {
+    "location": "JY only",
+    "max_probe_duration_s": 900,
+    "max_build_or_measure_duration_s": 7200,
+    "max_usd_per_job": 0,
+    "retries": 0,
+    "dependencies": "Probe audit and shared MLflow readback -> frozen build configuration -> build and correctness -> five-block screen -> thirty-block qualification -> independent audit/readback.",
+    "recording": "Dedicated Spark parent and flat B/C/D/R rows carrying hardware/backend/source/precision fields. Empty metrics stay blank. Filter Spark and M6 dashboards separately; never combine results.",
+    "unchanged": "M6 admitted jobs, original sampler PR/results and every existing gate remain unchanged. No application deployment/restart, KV changes, new agents, Slack, or unrelated plugin investigation."
+  }
+}
