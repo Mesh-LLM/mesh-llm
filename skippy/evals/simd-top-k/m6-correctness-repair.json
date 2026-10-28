@@ -13,7 +13,13 @@
     "Capture exact D production replay with Instruments, time limit 180 seconds, and export actual Highway frames",
     "Recheck binary/input identities and independently audit all evidence"
   ],
-  "isa_gate": "Require a sampled executed hwy::N_*::PartialSortKV64Desc frame in the Time Profiler export. Source support or a chosen-target name alone is insufficient. Failure or no frame blocks timing admission.",
+  "isa_gate": "Require an actual sampled NEON/NEON_BF16 frame in the exact descending K32V32 partial-sort path, in the same backtrace as llama_sampler_top_k_highway and belonging to the admitted D executable. Source support or a chosen-target name alone is insufficient. Missing executing-frame evidence blocks timing.",
   "observability": "Emit each stage to JY log, retain individual logs and partial artifacts on failure, record this attempt separately from the failed LLDB attempt",
-  "performance": "No profiled latency qualifies speed. Frozen numerical gates, five-block screen and thirty fresh qualification blocks remain unchanged."
+  "performance": "No profiled latency qualifies speed. Frozen numerical gates, five-block screen and thirty fresh qualification blocks remain unchanged.",
+  "recognizer_repair": {
+    "issue": "The initial recognizer required PartialSortKV64Desc itself. Each NEON wrapper is a four-byte tail branch, so Time Profiler exposed its implementation instead.",
+    "source_proof": "Pinned Highway hwy/contrib/sort/vqsort_kv64d.cc unconditionally forwards the same keys, num and k to VQPartialSortStatic<K32V32,SortDescending>.",
+    "accepted_evidence": "Exact implementation template and target namespace, same production-wrapper backtrace, matching binary path and pre/post hashes. Unrelated Highway helpers are insufficient.",
+    "history": "Preserve the failed recognizer and its hash. Record/read back the corrected auditor and source proof before re-auditing existing raw evidence. No model rerun, comparator change, normalization or numerical gate change."
+  }
 }

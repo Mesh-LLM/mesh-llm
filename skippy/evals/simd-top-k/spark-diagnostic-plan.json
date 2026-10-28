@@ -26,6 +26,10 @@
     "inconclusive": "Retain evidence and report the unresolved mechanism; no favorable-repeat screen"
   },
   "recording_repair": "Future timing jobs must carry durable in-run placement/process and thermal evidence. A post-run snapshot cannot stand in for missing observations. Archive every failed attempt and keep all existing numeric gates.",
-  "budget": {"max_duration_s": 1800, "max_usd": 0, "retries": 0},
-  "unchanged": "Frozen B primary, R diagnostic, M6 and Spark separate; no Max, KV, deployment, agents or performance PR"
+  "budget": {
+    "max_duration_s": 1800,
+    "max_usd": 0,
+    "retries": 0
+  },
+  "unchanged": "Frozen B primary, R diagnostic, M6 and Spark separate; no application changes, KV changes, deployment, agents or performance PR"
 }
