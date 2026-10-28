@@ -58,7 +58,7 @@ fn select_deferred_checkpoint_boundary(
     chat.filter(valid).or_else(|| shared.filter(valid))
 }
 
-fn checkpoint_boundaries(
+pub(super) fn checkpoint_boundaries(
     selected: Option<usize>,
     chat: Option<usize>,
     restored: usize,

@@ -130,14 +130,41 @@ impl StageOpenAiBackend {
                         && restored_prefill_tokens < checkpoint_tokens.len()
                 })
             {
-                prefill_cache_chunks(
-                    runtime,
-                    session_id,
-                    &checkpoint_tokens[restored_prefill_tokens..],
-                    cache_prefill_chunk_tokens,
-                    cache_operation,
-                )?;
-                ensure_cache_operation_active(runtime, session_id, cache_operation)?;
+                let kv = self.kv.as_ref();
+                let boundaries = if kv.is_some_and(|kv| kv.resident_recurrent_snapshots) {
+                    prefill_checkpoints::checkpoint_boundaries(
+                        Some(checkpoint_tokens.len()),
+                        Some(checkpoint_tokens.len()),
+                        restored_prefill_tokens,
+                        cache_prefill_chunk_tokens,
+                        true,
+                    )
+                } else {
+                    vec![checkpoint_tokens.len()]
+                };
+                let mut cursor = restored_prefill_tokens;
+                for boundary in boundaries {
+                    prefill_cache_chunks(
+                        runtime,
+                        session_id,
+                        &prefill_tokens[cursor..boundary],
+                        cache_prefill_chunk_tokens,
+                        cache_operation,
+                    )?;
+                    ensure_cache_operation_active(runtime, session_id, cache_operation)?;
+                    if let Some(kv) = kv.filter(|kv| kv.resident_recurrent_snapshots) {
+                        let base = self.local_kv_message_base(session_id, ids);
+                        let identity = kv.prefill_identity(
+                            &self.config,
+                            &base,
+                            0,
+                            &prefill_tokens[..boundary],
+                        );
+                        kv.record_resident_prefix(runtime, session_id, &identity, prefill_tokens)
+                            .map_err(openai_backend_error)?;
+                    }
+                    cursor = boundary;
+                }
                 // This branch is the max_tokens=0 prefill-only fallback. The
                 // chat-prefix state must be exported before this same runtime
                 // operation advances through the remaining suffix. A detached
@@ -156,7 +183,7 @@ impl StageOpenAiBackend {
                 prefill_cache_chunks(
                     runtime,
                     session_id,
-                    &prefill_tokens[checkpoint_tokens.len()..],
+                    &prefill_tokens[cursor..],
                     cache_prefill_chunk_tokens,
                     cache_operation,
                 )?;
