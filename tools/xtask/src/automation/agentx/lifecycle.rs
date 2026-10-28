@@ -304,6 +304,12 @@ fn server(
         if std::env::var("AGENTX_SKIPPY_KV_SPAN_DEBUG").as_deref() == Ok("1") {
             enable_native_kv_span_debug(&mut spec);
         }
+        if std::env::var("AGENTX_SKIPPY_KV_EXTENT_PROFILE").as_deref() == Ok("1") {
+            spec.environment.insert(
+                "LLAMA_KV_EXTENT_PROFILE".into(),
+                process::Value::Public("1".into()),
+            );
+        }
     }
     spec.environment.insert(
         "MESH_AGENT_SESSION_HEADER".into(),
@@ -504,6 +510,7 @@ fn launch_identity(
             else if requested_generation_concurrency.is_some() { "explicit_override" }
             else { "automatic" },
         "native_kv_span_debug":engine == "skippy" && std::env::var("AGENTX_SKIPPY_KV_SPAN_DEBUG").as_deref() == Ok("1"),
+        "native_kv_extent_profile":engine == "skippy" && std::env::var("AGENTX_SKIPPY_KV_EXTENT_PROFILE").as_deref() == Ok("1"),
         "batch_tokens":BATCH_TOKENS,"microbatch_tokens":microbatch_tokens,
         "speculation":false,"dataset_sha256":inputs::DATA_SHA,
         "llama_upstream":std::fs::read_to_string(input.root.join("skippy/llama_cpp/upstream.txt"))?.trim()
