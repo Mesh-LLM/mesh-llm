@@ -1,0 +1,33 @@
+---
+layout: base.njk
+title: Showcase
+description: Apps built on Mesh LLM.
+permalink: /showcase/index.html
+bodyClass: showcase-index
+---
+<header class="shell page-hero">
+  <h1>Showcase</h1>
+  <p class="lead">Apps built on mesh-llm. Built something? <a href="{{ site.githubUrl }}/issues/new?title=Showcase:%20">Tell us about it</a>.</p>
+</header>
+
+<main class="shell showcase-page">
+  <ul class="showcase-grid">
+    {% for app in showcase.apps %}
+    <li class="showcase-card">
+      <a class="showcase-shot showcase-shot--{{ app.imageFit }}" href="{{ app.url }}" tabindex="-1" aria-hidden="true">
+        <img src="{{ app.image }}" alt="{{ app.imageAlt }}" loading="lazy">
+      </a>
+      <div class="showcase-body">
+        <div class="plugin-spot-meta"><span class="plugin-spot-platforms">{{ app.platforms }}</span></div>
+        <h2><a href="{{ app.url }}">{{ app.name }}</a></h2>
+        <p class="showcase-tagline">{{ app.tagline }}</p>
+        <p class="showcase-summary">{{ app.summary }}</p>
+        <ul class="showcase-uses" aria-label="Uses">
+          {% for u in app.uses %}<li>{{ u }}</li>{% endfor %}
+        </ul>
+        <a class="btn ghost btn-sm showcase-cta" href="{{ app.linkUrl }}">{{ app.linkLabel }}</a>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</main>
