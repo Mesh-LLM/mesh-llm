@@ -14,7 +14,7 @@ const toHtml = (markdown) =>
     .replace(/`([^`]+)`/g, '<code>$1</code>');
 
 const groups = [
-  { id: 'inference', title: 'Inference runtimes' },
+  { id: 'inference', title: 'Inference' },
   { id: 'payments', title: 'Payments' },
   { id: 'tools', title: 'Tools and integrations' },
 ];
@@ -69,7 +69,7 @@ const plugins = [
     icon: 'plug',
     repo: 'openai-endpoint-plugin',
     group: 'inference',
-    tagline: 'Ollama, vLLM, LM Studio',
+    tagline: 'Share any inference engine you have on the mesh',
     summary:
       'Add an already-running OpenAI-compatible server such as Ollama, vLLM, LM Studio, TGI, or Lemonade Server.',
     install: 'mesh-llm plugins install openai-endpoint',
@@ -116,7 +116,7 @@ const plugins = [
     summary:
       'Preview. A `wallet.v1` plugin backed by Lexe for experimental paid inference. It can provision a mainnet wallet; use small amounts.',
     install: 'mesh-llm plugins install Mesh-LLM/lexe-wallet',
-    platforms: 'macOS arm64, Windows arm64',
+    platforms: 'macOS, Linux, Windows',
   },
   {
     name: 'model-prices',
@@ -127,7 +127,7 @@ const plugins = [
     summary:
       'Preview. Read-only console page showing model prices on a mesh. No wallet needed. Install from the release archive; see the [README](https://github.com/Mesh-LLM/model-price-plugin#readme).',
     install: null,
-    platforms: 'macOS arm64, Windows arm64',
+    platforms: 'macOS, Linux, Windows',
   },
   {
     name: 'metrics',
