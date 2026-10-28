@@ -177,6 +177,12 @@ sampler-simd-controller native:
     cmake --build .deps/simd-controller --parallel 4 --target simd-controller simd-audit simd-contracts
     ctest --test-dir .deps/simd-controller --output-on-failure -R '^simd-orchestration-contracts$'
 
+# Reuse the predecessor's affected native suite against an admitted arm build.
+[unix]
+sampler-simd-native-tests build:
+    cmake --build "{{ build }}" --parallel 4 --target skippy-sampling-history skippy-runtime-events-test skippy-model-fixture-generator test-skippy-verify-checkpoint-retirement test-skippy-sampling-suppress test-grammar-trigger-patterns test-grammar-parser test-grammar-integration test-sampler-highway
+    ctest --test-dir "{{ build }}/native" --output-on-failure --timeout 900 -R '^(skippy_sampling_history_|skippy_runtime_event_native_model_load_production|test-skippy-verify-checkpoint-retirement|test-skippy-sampling-suppress|test-grammar-trigger-patterns|test-grammar-parser|test-grammar-integration|test-sampler-highway)'
+
 # Build only the diagnostic controller; its worker binaries remain frozen.
 [unix]
 grammar-process-control-build vendor:
