@@ -50,3 +50,10 @@ changes cannot silently rebuild admitted worker binaries.
 The B build uses the original native sampler interface. ABI recovery verification
 is built for C, D and R, which expose the newer public implementation being tested.
 This harness selection does not alter the frozen B native source.
+
+M6 reuses its admitted B/C binaries and input hashes. Build only the new D/R
+workers with `just sampler-simd-candidate-build metal`; their paths are separate
+from the frozen references. The controller-only build also compiles `simd-audit`,
+which checks every arm, case, scope, warmup and process identity before evaluating
+the frozen paired bootstrap gates. Its statistical result still requires the
+separate source, correctness, placement and MLflow audits.

@@ -1,22 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ $# != 3 || ( $1 != metal && $1 != cuda ) ]]; then
-    echo 'usage: build.sh metal|cuda BASELINE_WORKSPACE CURRENT_WORKSPACE' >&2
+if [[ ( $# != 1 && $# != 3 ) || ( $1 != metal && $1 != cuda ) ]]; then
+    echo 'usage: build.sh metal|cuda [BASELINE_WORKSPACE CURRENT_WORKSPACE]' >&2
     exit 2
 fi
 backend=$1
-baseline=$2
-current=$3
-test "$(git -C "$baseline" rev-parse HEAD)" = 3947de0cbc73fe5cbcaae548b297f03a401532d7
-test "$(git -C "$current" rev-parse HEAD)" = a9b37b71bb9ebcff51e321e7fcedba323f7d9458
+arms=(D R)
+if [[ $# == 3 ]]; then
+    baseline=$2
+    current=$3
+    test "$(git -C "$baseline" rev-parse HEAD)" = 3947de0cbc73fe5cbcaae548b297f03a401532d7
+    test "$(git -C "$current" rev-parse HEAD)" = a9b37b71bb9ebcff51e321e7fcedba323f7d9458
+    arms=(B C D R)
+fi
 scripts/prepare-llama.sh pinned
 test "$(git -C .deps/llama.cpp rev-parse 'HEAD^{tree}')" = c81b95e77324501872f9aac8acc2488d9365df63
-LLAMA_WORKDIR="$PWD/.deps/simd-B-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "$baseline/scripts/prepare-llama.sh" pinned
-LLAMA_WORKDIR="$PWD/.deps/simd-C-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "$current/scripts/prepare-llama.sh" pinned
+if [[ $# == 3 ]]; then
+    LLAMA_WORKDIR="$PWD/.deps/simd-B-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "$baseline/scripts/prepare-llama.sh" pinned
+    LLAMA_WORKDIR="$PWD/.deps/simd-C-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "$current/scripts/prepare-llama.sh" pinned
+fi
 just sampler-simd-controller "$PWD/.deps/llama.cpp"
 architecture=()
 if [[ $backend == cuda ]]; then architecture=(-DCMAKE_CUDA_ARCHITECTURES=121); fi
-for arm in B C D R; do
+for arm in "${arms[@]}"; do
     native="$PWD/.deps/llama.cpp"
     upstream=ON
     highway=OFF

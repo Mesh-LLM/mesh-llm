@@ -165,11 +165,16 @@ sampler-simd-spark-probe model_file artifacts:
 sampler-simd-build backend baseline current:
     bash skippy/evals/simd-top-k/build.sh "{{ backend }}" "{{ baseline }}" "{{ current }}"
 
+# M6 keeps its immutable reference workers and builds only the new candidate/control.
+[unix]
+sampler-simd-candidate-build backend:
+    bash skippy/evals/simd-top-k/build.sh "{{ backend }}"
+
 # Compile orchestration independently of admitted worker executables.
 [unix]
 sampler-simd-controller native:
     cmake -S skippy/evals/simd-top-k -B .deps/simd-controller -G Ninja -DSIMD_CONTROLLER_ONLY=ON -DLLAMA_ROOT="{{ native }}"
-    cmake --build .deps/simd-controller --parallel 4 --target simd-controller
+    cmake --build .deps/simd-controller --parallel 4 --target simd-controller simd-audit
 
 # Build only the diagnostic controller; its worker binaries remain frozen.
 [unix]
