@@ -796,6 +796,7 @@ impl StageOpenAiBackend {
                 sideband_capacity: skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES,
                 native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
             })?;
+            decode_message.set_split_dflash(request.split_dflash());
             let mut native_mtp = NativeMtpVerifier::default();
             let effective_speculative =
                 speculation_after_prefix_restore(request.speculative, prefill_chain_cache_restored);
@@ -1327,7 +1328,7 @@ impl StageOpenAiBackend {
                                 layout.input_tokens.len(),
                             )?;
                             let input_tokens = layout.input_tokens;
-                            let message =
+                            let mut message =
                                 embedded_verify_window_message(VerifyWindowMessageArgs {
                                     window_id: window.id,
                                     request_id,
@@ -1339,6 +1340,7 @@ impl StageOpenAiBackend {
                                     sampling: wire_sampling.clone(),
                                     native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
                                 })?;
+                            message.state.set_split_dflash(request.split_dflash());
                             let dispatched = self.dispatch_embedded_stage_message(
                                 &request,
                                 downstream,
@@ -1724,18 +1726,21 @@ impl StageOpenAiBackend {
                         );
                         draft_tokens.truncate(split_len);
                         let verify_inputs = verify_inputs_for_proposals(current, &draft_tokens);
-                        let message = embedded_verify_window_message(VerifyWindowMessageArgs {
-                            window_id: i32::try_from(decoded_tokens)
-                                .map_err(|_| InferenceError::backend("decode step exceeds i32"))?,
-                            request_id,
-                            session_id,
-                            prompt_token_count: request.prompt_token_ids.len(),
-                            pos_start: prefill_token_count + decoded_tokens,
-                            decode_step: decoded_tokens,
-                            tokens: &verify_inputs,
-                            sampling: wire_sampling.clone(),
-                            native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
-                        })?;
+                        let mut message =
+                            embedded_verify_window_message(VerifyWindowMessageArgs {
+                                window_id: i32::try_from(decoded_tokens).map_err(|_| {
+                                    InferenceError::backend("decode step exceeds i32")
+                                })?,
+                                request_id,
+                                session_id,
+                                prompt_token_count: request.prompt_token_ids.len(),
+                                pos_start: prefill_token_count + decoded_tokens,
+                                decode_step: decoded_tokens,
+                                tokens: &verify_inputs,
+                                sampling: wire_sampling.clone(),
+                                native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
+                            })?;
+                        message.state.set_split_dflash(request.split_dflash());
                         let verify = self.execute_embedded_stage_message(
                             &request,
                             downstream,
@@ -2037,6 +2042,7 @@ impl StageOpenAiBackend {
                     request.prediction_return.as_ref(),
                     WireReplyKind::PredictedToken,
                 )?;
+                request.observe_reply_stats(&reply.stats);
                 let downstream_wait_ms = wait_timer.elapsed_ms();
                 decode_downstream_wait_ms += downstream_wait_ms;
                 if records_replay_checkpoint
@@ -2260,7 +2266,13 @@ impl StageOpenAiBackend {
                     output_activation_bytes: decode_output_activation_bytes,
                     forward_activation_bytes: decode_forward_activation_bytes,
                     downstream_wait_ms: decode_downstream_wait_ms,
-                    speculative_stats: &speculative_stats,
+                    speculative_stats: &{
+                        let mut stats = speculative_stats.clone();
+                        stats.split_dflash_health = request
+                            .split_dflash()
+                            .then(|| request.split_dflash_health.counts());
+                        stats
+                    },
                     native_mtp_stats,
                     native_mtp_counters,
                     native_mtp_options,
