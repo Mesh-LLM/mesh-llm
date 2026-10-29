@@ -18,12 +18,20 @@ fn generate_chat_tail_session(
         None,
     );
     let mut output = Vec::new();
+    let sampling = SamplingConfig {
+        // Log-probability collection keeps greedy sampling on the CPU path.
+        // This isolates the native in-graph sampler from recurrent state.
+        top_logprobs: (std::env::var("SKIPPY_RECURRENT_CACHE_TEST_CPU_SAMPLING").as_deref()
+            == Ok("1"))
+        .then_some(0),
+        ..SamplingConfig::default()
+    };
     let stats = backend.generate_local_tokens(
         LocalGeneration {
             prompt_token_ids: prompt,
             recurrent_cache_prefix_token_ids: Some(&prompt[..prompt.len() - 4]),
             max_tokens: 8,
-            sampling: &SamplingConfig::default(),
+            sampling: &sampling,
             chat_sampling_metadata: None,
             speculative: &SpeculativeDecodeConfig::default(),
             native_mtp_enabled: false,
