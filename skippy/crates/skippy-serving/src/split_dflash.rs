@@ -31,10 +31,24 @@ const MAX_WIRE_DRAFT_TOKENS: usize = 15;
 pub struct SplitDFlashStage {
     /// Every target layer the draft reads, across all stages.
     pub target_layers: Vec<u32>,
-    /// The draft, on the final stage only.
+    /// The draft, on the final stage only. A path on the planning node; a
+    /// stage on another node only finds it there if `draft_source` is unset.
     pub draft_model_path: Option<PathBuf>,
     pub max_draft_tokens: Option<usize>,
     pub draft_n_gpu_layers: Option<i32>,
+    /// Where a catalog default draft comes from, on the final stage only, so
+    /// that stage fetches and verifies its own copy. `None` for a configured
+    /// draft, which the operator places, and from older planners.
+    pub draft_source: Option<SplitDFlashDraftSource>,
+}
+
+/// A default DFlash draft pinned on Hugging Face.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SplitDFlashDraftSource {
+    pub repo: String,
+    pub revision: String,
+    pub file: String,
+    pub sha256: String,
 }
 
 impl SplitDFlashStage {
@@ -51,6 +65,7 @@ impl SplitDFlashStage {
             draft_model_path: final_stage.then(|| dflash.draft_model_path.clone()),
             max_draft_tokens: dflash.max_draft_tokens,
             draft_n_gpu_layers,
+            draft_source: None,
         })
     }
 
