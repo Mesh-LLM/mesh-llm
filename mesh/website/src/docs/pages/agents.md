@@ -6,13 +6,11 @@ title: Coding agents
 
 Use the console first. Once chat works at `http://localhost:3131`, connect an agent to the same local Mesh API.
 
-## Console model and payment choices
+## Console model choice
 
-The chat console remembers your selected model and Free/Paid preference in this browser. **Mesh — automatic** lets Mesh choose; selecting a specific model keeps that choice instead of silently switching back to automatic. If it becomes unavailable, it stays selected and new sends/retries wait until it returns or you choose another model. Queued prompts wait for the current model to be eligible under their captured payment restriction.
+The chat console remembers your selected model in this browser. **Mesh — automatic** lets Mesh choose; selecting a specific model keeps that choice instead of silently switching back to automatic. If it becomes unavailable, it stays selected and new sends/retries wait until it returns or you choose another model. Queued prompts wait for the current model to be eligible. Changing the next request's model does not prevent stopping an active response with **Stop** or **Escape**.
 
-**Free** restricts requests to free providers, including your own locally hosted models even when you charge remote buyers. Paid-only models are hidden. **Paid** permits paid providers; it does not require a charge when a free provider is available. Prices are advertised estimates, not binding quotes; “from” is the lowest advertised output rate. The switch appears only when the node reports automatic wallet policy. Otherwise requests stay free-only.
-
-Model prices and wallet policy refresh periodically while chat is open. Changing the next request's model/payment choice does not prevent stopping an active response with **Stop** or **Escape**.
+The console lists the models this node can route to. Models that require a capability this node does not have (for example paid inference, provided by a separately installed plugin) are not listed; a plugin may add its own console pages for what it provides.
 
 ## Base URL
 

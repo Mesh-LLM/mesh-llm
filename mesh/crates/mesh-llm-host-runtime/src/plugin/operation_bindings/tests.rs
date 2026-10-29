@@ -291,7 +291,7 @@ fn installed_package_grant_survives_config_apply_until_replaced() {
     fn manager_with(installed_grant: bool) -> PluginManager {
         let manager = PluginManager::for_test_summaries(Vec::new());
         manager.inner.operation_bindings.0.lock().unwrap().insert(
-            ("pay".into(), "vault".into()),
+            ("consumer".into(), "vault".into()),
             Binding {
                 grant: grant("vault"),
                 handle: None,
@@ -306,7 +306,7 @@ fn installed_package_grant_survives_config_apply_until_replaced() {
         let mut config = MeshConfig::default();
         config.plugins.push(crate::plugin::PluginConfigEntry {
             operation_bindings: bindings,
-            name: "pay".into(),
+            name: "consumer".into(),
             enabled,
             web_ui_enabled: None,
             web_ui_primary_tab: None,
@@ -328,7 +328,7 @@ fn installed_package_grant_survives_config_apply_until_replaced() {
             .0
             .lock()
             .unwrap()
-            .contains_key(&("pay".to_owned(), "vault".to_owned()))
+            .contains_key(&("consumer".to_owned(), "vault".to_owned()))
     };
 
     let manager = manager_with(true);
@@ -384,22 +384,22 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
             resolved: None,
         }
     }
-    let pay = ("pay".to_owned(), "vault".to_owned());
+    let consumer = ("consumer".to_owned(), "vault".to_owned());
     let other = ("other".to_owned(), "vault".to_owned());
     let named = ("named".to_owned(), "vault".to_owned());
     let mut registry = BTreeMap::new();
-    registry.insert(pay.clone(), binding(capability_grant("vault")));
+    registry.insert(consumer.clone(), binding(capability_grant("vault")));
     registry.insert(other.clone(), binding(capability_grant("vault")));
     let mut fixed = capability_grant("vault");
     fixed.capability = None;
     fixed.provider = "vault-b".into();
     registry.insert(named.clone(), binding(fixed));
 
-    let capacity = registry[&pay].capacity.clone();
-    reserve_resolved_provider(&mut registry, &pay, &capacity, "vault-a").unwrap();
-    assert_eq!(registry[&pay].provider(), Some("vault-a"));
+    let capacity = registry[&consumer].capacity.clone();
+    reserve_resolved_provider(&mut registry, &consumer, &capacity, "vault-a").unwrap();
+    assert_eq!(registry[&consumer].provider(), Some("vault-a"));
     assert!(
-        registry[&pay].grant.provider.is_empty(),
+        registry[&consumer].grant.provider.is_empty(),
         "resolution must not rewrite the grant"
     );
 
@@ -416,10 +416,10 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
 
     // Re-resolving the owner to the same provider is idempotent; a stale
     // registration (different capacity) is refused.
-    let capacity = registry[&pay].capacity.clone();
-    reserve_resolved_provider(&mut registry, &pay, &capacity, "vault-a").unwrap();
+    let capacity = registry[&consumer].capacity.clone();
+    reserve_resolved_provider(&mut registry, &consumer, &capacity, "vault-a").unwrap();
     assert!(
-        reserve_resolved_provider(&mut registry, &pay, &Arc::new(Semaphore::new(8)), "vault-a")
+        reserve_resolved_provider(&mut registry, &consumer, &Arc::new(Semaphore::new(8)), "vault-a")
             .is_err()
     );
 
@@ -430,7 +430,7 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
     let mut config = MeshConfig::default();
     config.plugins.push(crate::plugin::PluginConfigEntry {
         operation_bindings: vec![capability_grant("vault")],
-        name: "pay".into(),
+        name: "consumer".into(),
         enabled: None,
         web_ui_enabled: None,
         web_ui_primary_tab: None,
@@ -445,7 +445,7 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
     });
     manager.revoke_changed_operation_bindings(&config);
     let registry = manager.inner.operation_bindings.0.lock().unwrap();
-    assert_eq!(registry[&pay].provider(), Some("vault-a"));
+    assert_eq!(registry[&consumer].provider(), Some("vault-a"));
     // Disabling the resolved provider's plugin revokes the binding bound to it.
     drop(registry);
     config.plugins.push(crate::plugin::PluginConfigEntry {
@@ -471,6 +471,6 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
             .0
             .lock()
             .unwrap()
-            .contains_key(&pay)
+            .contains_key(&consumer)
     );
 }

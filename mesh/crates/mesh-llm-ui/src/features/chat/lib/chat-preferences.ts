@@ -5,11 +5,9 @@ const STORAGE_KEY = 'mesh-llm.chat.routing-preferences'
 export type ChatRoutingPreferences = {
   /** '' means "Mesh — automatic". */
   model: string
-  /** Send `mesh_payment: { mode: 'free_only' }`: the node may only narrow, never widen, spending. */
-  freeOnly: boolean
 }
 
-const DEFAULTS: ChatRoutingPreferences = { model: '', freeOnly: false }
+const DEFAULTS: ChatRoutingPreferences = { model: '' }
 
 export function loadChatRoutingPreferences(): ChatRoutingPreferences {
   try {
@@ -17,11 +15,8 @@ export function loadChatRoutingPreferences(): ChatRoutingPreferences {
     if (!raw) return DEFAULTS
     const parsed: unknown = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object') return DEFAULTS
-    const { model, freeOnly } = parsed as Record<string, unknown>
-    return {
-      model: typeof model === 'string' ? model : '',
-      freeOnly: freeOnly === true
-    }
+    const { model } = parsed as Record<string, unknown>
+    return { model: typeof model === 'string' ? model : '' }
   } catch {
     return DEFAULTS
   }
