@@ -266,6 +266,23 @@ impl StageSession {
         ensure_ok(status, error)
     }
 
+    /// How this session's verify windows were held for rollback since it was
+    /// created or last reset.
+    pub fn verify_rollback_counts(&self) -> Result<VerifyRollbackCounts> {
+        let mut counts = VerifyRollbackCounts::default();
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_verify_rollback_counts(
+                self.raw,
+                &mut counts.in_place,
+                &mut counts.checkpointed,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        Ok(counts)
+    }
+
     pub fn trim_session(&mut self, token_count: u64) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe { skippy_ffi::skippy_trim_session(self.raw, token_count, &mut error) };
@@ -660,6 +677,16 @@ mod tests {
         let grammar = r#"{"grammar":"root ::= \"ok\""}"#;
         assert_eq!(chat_sampling_metadata_for_native(grammar), grammar);
     }
+}
+
+/// Verify windows a session held for rollback, by how they were held.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VerifyRollbackCounts {
+    /// Rolled back in place through the recurrent rollback snapshots.
+    pub in_place: u64,
+    /// Held in a host checkpoint, including windows first held in place that
+    /// another decode then landed on.
+    pub checkpointed: u64,
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **20 headers** and **124 exported functions**.
+Current generated surface: **20 headers** and **125 exported functions**.
 
 ## Quick navigation
 
@@ -188,7 +188,7 @@ Current generated surface: **20 headers** and **124 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>16 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>17 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-model-memory-cache-capabilities"><code>skippy_model_memory_cache_capabilities</code></a>
         <a href="#skippy-fn-skippy-export-state"><code>skippy_export_state</code></a>
@@ -199,6 +199,7 @@ Current generated surface: **20 headers** and **124 exported functions**.
         <a href="#skippy-fn-skippy-import-recurrent-state"><code>skippy_import_recurrent_state</code></a>
         <a href="#skippy-fn-skippy-trim-session"><code>skippy_trim_session</code></a>
         <a href="#skippy-fn-skippy-retire-verify-checkpoint"><code>skippy_retire_verify_checkpoint</code></a>
+        <a href="#skippy-fn-skippy-session-verify-rollback-counts"><code>skippy_session_verify_rollback_counts</code></a>
         <a href="#skippy-fn-skippy-export-kv-page"><code>skippy_export_kv_page</code></a>
         <a href="#skippy-fn-skippy-import-kv-page"><code>skippy_import_kv_page</code></a>
         <a href="#skippy-fn-skippy-import-cachegen-kv-page-v1"><code>skippy_import_cachegen_kv_page_v1</code></a>
@@ -1762,6 +1763,19 @@ LLAMA_API enum skippy_status skippy_retire_verify_checkpoint(
          struct skippy_session * session,
         uint64_t token_start,
         uint64_t token_count,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-verify-rollback-counts"></a>
+#### `skippy_session_verify_rollback_counts`
+
+Reports how this session's verify windows were held for rollback since it was created or last reset: in place through the recurrent rollback snapshots, or in a host checkpoint. A window first held in place and later checkpointed because another decode landed on it counts as checkpointed.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_verify_rollback_counts(
+         const struct skippy_session * session,
+        uint64_t * out_in_place,
+        uint64_t * out_checkpointed,
         struct skippy_error ** out_error);
 ```
 

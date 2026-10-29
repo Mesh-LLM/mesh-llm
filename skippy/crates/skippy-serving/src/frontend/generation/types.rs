@@ -204,6 +204,21 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
 pub(in crate::frontend) struct SplitDFlashHealth {
     feature_rows_missing: std::sync::atomic::AtomicI64,
     draft_context_resets: std::sync::atomic::AtomicI64,
+    verify_rollbacks_in_place: std::sync::atomic::AtomicI64,
+    verify_rollbacks_checkpointed: std::sync::atomic::AtomicI64,
+}
+
+/// Split DFlash counters for a generation's response timings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::frontend) struct SplitDFlashCounts {
+    pub(in crate::frontend) feature_rows_missing: i64,
+    pub(in crate::frontend) draft_context_resets: i64,
+    /// Largest per-stage count of verify windows a downstream stage rolled
+    /// back in place, and held in a host checkpoint.
+    pub(in crate::frontend) downstream_rollbacks_in_place: i64,
+    pub(in crate::frontend) downstream_rollbacks_checkpointed: i64,
+    /// The same on stage 0, when it could be read.
+    pub(in crate::frontend) stage0_rollbacks: Option<skippy_runtime::VerifyRollbackCounts>,
 }
 
 impl SplitDFlashHealth {
@@ -213,15 +228,26 @@ impl SplitDFlashHealth {
             .fetch_max(stats.dflash_feature_rows_missing, Ordering::Relaxed);
         self.draft_context_resets
             .fetch_max(stats.dflash_draft_context_resets, Ordering::Relaxed);
+        self.verify_rollbacks_in_place
+            .fetch_max(stats.verify_rollbacks_in_place, Ordering::Relaxed);
+        self.verify_rollbacks_checkpointed
+            .fetch_max(stats.verify_rollbacks_checkpointed, Ordering::Relaxed);
     }
 
-    /// `(feature rows missing, draft context resets)`.
-    pub(in crate::frontend) fn counts(&self) -> (i64, i64) {
+    pub(in crate::frontend) fn counts(
+        &self,
+        stage0_rollbacks: Option<skippy_runtime::VerifyRollbackCounts>,
+    ) -> SplitDFlashCounts {
         use std::sync::atomic::Ordering;
-        (
-            self.feature_rows_missing.load(Ordering::Relaxed),
-            self.draft_context_resets.load(Ordering::Relaxed),
-        )
+        SplitDFlashCounts {
+            feature_rows_missing: self.feature_rows_missing.load(Ordering::Relaxed),
+            draft_context_resets: self.draft_context_resets.load(Ordering::Relaxed),
+            downstream_rollbacks_in_place: self.verify_rollbacks_in_place.load(Ordering::Relaxed),
+            downstream_rollbacks_checkpointed: self
+                .verify_rollbacks_checkpointed
+                .load(Ordering::Relaxed),
+            stage0_rollbacks,
+        }
     }
 }
 

@@ -961,6 +961,8 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; STAGE_REPLY_STATS_FIELD_C
         stats.prefill_compute_observation_count,
         stats.dflash_feature_rows_missing,
         stats.dflash_draft_context_resets,
+        stats.verify_rollbacks_in_place,
+        stats.verify_rollbacks_checkpointed,
     ]
 }
 
@@ -995,6 +997,8 @@ fn reply_stats_from_fields(fields: [i64; STAGE_REPLY_STATS_FIELD_COUNT]) -> Stag
         prefill_compute_observation_count: fields[26],
         dflash_feature_rows_missing: fields[27],
         dflash_draft_context_resets: fields[28],
+        verify_rollbacks_in_place: fields[29],
+        verify_rollbacks_checkpointed: fields[30],
     }
 }
 
