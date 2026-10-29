@@ -15,29 +15,35 @@ use skippy_runtime::KvPageSpans;
 
 use super::{LEASED_RECORD_SLOTS, record_fits_queue};
 
-/// Why a leased record could not reserve its owned recurrent bytes and slot.
+/// Why a leased record could not reserve its slot and bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LeasedRecordRefusal {
     QueueFull,
     ByteFull,
 }
 
-/// Admission is claimed before cloning a resident recurrent snapshot. Until
-/// enqueue transfers it to the worker, dropping the reservation releases both
-/// counters, including on a disconnected recorder or a failed enqueue.
+/// Admission is claimed before cloning a resident recurrent snapshot: a
+/// leased slot, and every byte the record will occupy once the worker has
+/// copied the page out of the lane (attention KV plus the snapshot). The copy
+/// happens inside this reservation, never on top of a full queue; a page the
+/// budget cannot hold stays on the lane. Until enqueue transfers it to the
+/// worker, dropping the reservation releases both counters, including on a
+/// disconnected recorder or a failed enqueue.
 #[derive(Debug)]
 pub(crate) struct LeasedRecordReservation {
     pending: Arc<AtomicUsize>,
     queue_bytes: Arc<AtomicU64>,
-    recurrent_bytes: u64,
+    bytes: u64,
     transferred: bool,
 }
 
 impl LeasedRecordReservation {
+    /// `bytes` is the stored size of the record: the leased page plus the
+    /// recurrent snapshot that will be cloned once this succeeds.
     pub(crate) fn acquire(
         pending: &Arc<AtomicUsize>,
         queue_bytes: &Arc<AtomicU64>,
-        recurrent_bytes: u64,
+        bytes: u64,
         byte_limit: u64,
     ) -> Result<Self, LeasedRecordRefusal> {
         pending
@@ -47,11 +53,11 @@ impl LeasedRecordReservation {
             .map_err(|_| LeasedRecordRefusal::QueueFull)?;
         let mut held = queue_bytes.load(Ordering::Acquire);
         loop {
-            if !record_fits_queue(held, recurrent_bytes, byte_limit) {
+            if !record_fits_queue(held, bytes, byte_limit) {
                 pending.fetch_sub(1, Ordering::AcqRel);
                 return Err(LeasedRecordRefusal::ByteFull);
             }
-            let Some(next) = held.checked_add(recurrent_bytes) else {
+            let Some(next) = held.checked_add(bytes) else {
                 pending.fetch_sub(1, Ordering::AcqRel);
                 return Err(LeasedRecordRefusal::ByteFull);
             };
@@ -64,22 +70,17 @@ impl LeasedRecordReservation {
         Ok(Self {
             pending: Arc::clone(pending),
             queue_bytes: Arc::clone(queue_bytes),
-            recurrent_bytes,
+            bytes,
             transferred: false,
         })
     }
 
     /// The enqueue/worker completion path now owns the counters. Matching
     /// handles and size are an internal invariant, not a fresh admission.
-    pub(crate) fn transfer(
-        &mut self,
-        pending: &AtomicUsize,
-        queue_bytes: &AtomicU64,
-        recurrent_bytes: u64,
-    ) {
+    pub(crate) fn transfer(&mut self, pending: &AtomicUsize, queue_bytes: &AtomicU64, bytes: u64) {
         assert!(std::ptr::eq(self.pending.as_ref(), pending));
         assert!(std::ptr::eq(self.queue_bytes.as_ref(), queue_bytes));
-        assert_eq!(self.recurrent_bytes, recurrent_bytes);
+        assert_eq!(self.bytes, bytes);
         self.transferred = true;
     }
 }
@@ -88,8 +89,7 @@ impl Drop for LeasedRecordReservation {
     fn drop(&mut self) {
         if !self.transferred {
             self.pending.fetch_sub(1, Ordering::AcqRel);
-            self.queue_bytes
-                .fetch_sub(self.recurrent_bytes, Ordering::AcqRel);
+            self.queue_bytes.fetch_sub(self.bytes, Ordering::AcqRel);
         }
     }
 }
@@ -194,11 +194,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recurrent_bytes_refuse_before_a_clone_and_release_the_slot() {
+    fn stored_bytes_refuse_before_a_clone_and_release_the_slot() {
         let pending = Arc::new(AtomicUsize::new(0));
         let bytes = Arc::new(AtomicU64::new(8));
+        // A two-byte snapshot would fit; the page it rides with does not.
         assert_eq!(
-            LeasedRecordReservation::acquire(&pending, &bytes, 4, 10).unwrap_err(),
+            LeasedRecordReservation::acquire(&pending, &bytes, 2 + 4, 10).unwrap_err(),
             LeasedRecordRefusal::ByteFull
         );
         assert_eq!(pending.load(Ordering::Acquire), 0);

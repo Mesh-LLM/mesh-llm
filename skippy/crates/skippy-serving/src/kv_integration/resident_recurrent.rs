@@ -261,10 +261,15 @@ impl KvStageIntegration {
             };
         }
         let recurrent_bytes = recurrent.len() as u64;
+        let kv_bytes = spans.byte_len() as u64;
+        // Reserve what the worker will allocate when it copies the page out,
+        // not just the snapshot cloned here: a page the budget cannot hold
+        // stays on the lane and is offered again, instead of the worker
+        // materialising it on top of a full queue.
         let reservation = match LeasedRecordReservation::acquire(
             &self.exact_state_records_pending,
             &self.exact_state_record_queue_bytes,
-            recurrent_bytes,
+            kv_bytes.saturating_add(recurrent_bytes),
             self.exact_state_record_queue_limit,
         ) {
             Ok(reservation) => reservation,
@@ -282,7 +287,6 @@ impl KvStageIntegration {
                 return InPlaceRecord::Refused(reason);
             }
         };
-        let kv_bytes = spans.byte_len() as u64;
         let extra = ExactStateExtra {
             kv_desc: Some(spans.desc.clone()),
         };

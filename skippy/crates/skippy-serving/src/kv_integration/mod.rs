@@ -319,13 +319,33 @@ pub(crate) enum RecordAdmission {
     /// Released when the record is dropped after the worker stores (or
     /// fails) it; the credit's Drop impl performs the release.
     Credit(crate::kv_integration::exact_state::ExactStateAdmissionCredit),
-    /// The lane's cells are the attention payload; the owned recurrent half
-    /// has already reserved queue bytes and a leased slot before being cloned.
-    /// The worker releases both reservations on completion.
+    /// The lane's cells are the attention payload. A leased slot and the
+    /// record's whole stored size (page plus recurrent snapshot) were
+    /// reserved before the snapshot was cloned, so the worker's copy lands
+    /// inside the budget. The worker releases both on completion.
     Leased(LeasedKvPage, LeasedRecordReservation),
     /// A leased page the worker has already copied out. Only the worker's
     /// own sequential execution bounds it now.
     Released,
+}
+
+impl RecordAdmission {
+    /// Take the lease out of a leased admission, leaving `Released` behind.
+    /// Any other admission is handed back exactly as it was: a credit stays
+    /// held by the record until the record itself is dropped.
+    fn take_lease(&mut self) -> Option<LeasedKvPage> {
+        match std::mem::replace(self, RecordAdmission::Released) {
+            RecordAdmission::Leased(lease, reservation) => {
+                // Transferred at enqueue; the worker releases the counters.
+                drop(reservation);
+                Some(lease)
+            }
+            retained => {
+                *self = retained;
+                None
+            }
+        }
+    }
 }
 
 impl PendingExactStateRecord {
@@ -338,23 +358,22 @@ impl PendingExactStateRecord {
         self.payload.byte_len().saturating_add(leased)
     }
 
-    /// Bytes charged to the stage's record byte budget: a credit's whole
-    /// payload or a lease's owned recurrent snapshot. The worker captures
-    /// this before materialising the leased attention KV.
+    /// Bytes charged to the stage's record byte budget: the record's whole
+    /// stored size, for a credit and a lease alike. The worker captures this
+    /// before materialising, after which the lease is gone and the same
+    /// bytes live in the payload.
     pub(crate) fn budgeted_bytes(&self) -> u64 {
         match self.admission {
-            RecordAdmission::Credit(_) => self.byte_len(),
-            RecordAdmission::Leased(_, _) => self.payload.byte_len(),
+            RecordAdmission::Credit(_) | RecordAdmission::Leased(_, _) => self.byte_len(),
             RecordAdmission::Released => 0,
         }
     }
 
     /// Copy a leased page out of the lane's cells into an owned payload and
-    /// release the lane. A record without a lease is returned untouched.
+    /// release the lane. A record without a lease is returned untouched,
+    /// admission included.
     pub(crate) fn materialise_leased_kv(mut self) -> Result<Self> {
-        let RecordAdmission::Leased(lease, _reservation) =
-            std::mem::replace(&mut self.admission, RecordAdmission::Released)
-        else {
+        let Some(lease) = self.admission.take_lease() else {
             return Ok(self);
         };
         let kv = lease.materialise()?;
@@ -706,7 +725,7 @@ fn enqueue_exact_state_record(
             }
             fits
         }
-        // A lease claimed its slot and recurrent-byte budget before cloning.
+        // A lease claimed its slot and its stored bytes before cloning.
         RecordAdmission::Leased(_, reservation) => {
             reservation.transfer(pending_count, queue_bytes, bytes);
             true
@@ -1727,7 +1746,7 @@ mod exact_state_record_queue_tests {
     }
 
     #[test]
-    fn leased_records_charge_recurrent_bytes_and_stop_at_their_slots() {
+    fn leased_records_charge_their_stored_bytes_and_stop_at_their_slots() {
         let (sender, _receiver) = sync_channel(EXACT_STATE_RECORD_CAPACITY);
         let inflight = Mutex::new(BTreeSet::new());
         let queued = AtomicU64::new(0);
@@ -1741,8 +1760,8 @@ mod exact_state_record_queue_tests {
         for index in 0..LEASED_RECORD_SLOTS {
             let page_id = format!("lease-{index}");
             let reservation =
-                LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 4, CAP)
-                    .expect("a leased slot and recurrent bytes fit");
+                LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 64 + 4, CAP)
+                    .expect("a leased slot and the stored bytes fit");
             inflight.lock().unwrap().insert(page_id.clone());
             assert_eq!(
                 enqueue_exact_state_record(
@@ -1762,15 +1781,16 @@ mod exact_state_record_queue_tests {
         }
         assert_eq!(
             queue_bytes.load(Ordering::Relaxed),
-            (LEASED_RECORD_SLOTS * 4) as u64,
-            "queued recurrent snapshots count against the byte budget"
+            (LEASED_RECORD_SLOTS * (64 + 4)) as u64,
+            "queued leases count page and snapshot against the byte budget"
         );
         assert_eq!(pending_count.load(Ordering::Relaxed), LEASED_RECORD_SLOTS);
 
         // The slot after the carve-out is refused before a recurrent clone
         // or a lane pin is constructed.
         assert_eq!(
-            LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 4, CAP).unwrap_err(),
+            LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 64 + 4, CAP)
+                .unwrap_err(),
             LeasedRecordRefusal::QueueFull
         );
         assert_eq!(pending_count.load(Ordering::Relaxed), LEASED_RECORD_SLOTS);
@@ -1806,12 +1826,17 @@ mod exact_state_record_queue_tests {
         let cells = (0..=255_u8).collect::<Vec<_>>();
         let pending_count = Arc::new(AtomicUsize::new(0));
         let queue_bytes = Arc::new(AtomicU64::new(0));
-        let reservation = LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 4, CAP)
-            .expect("test snapshot fits");
+        let reservation =
+            LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 256 + 4, CAP)
+                .expect("test page and snapshot fit");
         let pending = leased("page", &cells, &ledger, reservation);
         assert!(ledger.in_flight());
         assert_eq!(pending.byte_len(), 256 + 4);
-        assert_eq!(pending.budgeted_bytes(), 4, "recurrent bytes are budgeted");
+        assert_eq!(
+            pending.budgeted_bytes(),
+            256 + 4,
+            "the page the worker will copy is budgeted with the snapshot"
+        );
 
         let pending = pending.materialise_leased_kv().expect("readable cells");
         assert!(!ledger.in_flight(), "the pin goes with the lease");
@@ -1886,19 +1911,72 @@ mod exact_state_record_queue_tests {
     }
 
     #[test]
-    fn leased_worker_completion_releases_recurrent_bytes_and_lane_pin() {
+    fn materialising_leaves_a_credit_record_and_its_credit_untouched() {
+        let (total, best_effort) = budget();
+        let pending = pending(
+            "credit",
+            credit(&total, &best_effort, CaptureAdmission::BestEffort),
+        );
+        assert_eq!(total.load(Ordering::Acquire), 1);
+
+        let pending = pending
+            .materialise_leased_kv()
+            .expect("nothing to materialise");
+        assert!(
+            matches!(pending.admission, RecordAdmission::Credit(_)),
+            "a credit record passes through unchanged"
+        );
+        assert_eq!(
+            total.load(Ordering::Acquire),
+            1,
+            "the credit is held for as long as the record is"
+        );
+        assert_eq!(pending.budgeted_bytes(), pending.byte_len());
+
+        drop(pending);
+        assert_eq!(total.load(Ordering::Acquire), 0);
+        assert_eq!(best_effort.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_full_queue_refuses_the_lease_before_the_page_is_pinned() {
+        let pending_count = Arc::new(AtomicUsize::new(0));
+        // Room for the snapshot alone, not for the page the worker would
+        // have to copy out behind it.
+        let queue_bytes = Arc::new(AtomicU64::new(CAP - 8));
+        let ledger = LeaseLedger::default();
+        let cells = vec![9_u8; 64];
+        assert_eq!(
+            LeasedRecordReservation::acquire(
+                &pending_count,
+                &queue_bytes,
+                cells.len() as u64 + 4,
+                CAP
+            )
+            .unwrap_err(),
+            LeasedRecordRefusal::ByteFull
+        );
+        assert!(!ledger.in_flight(), "no pin is taken for a refused lease");
+        assert_eq!(pending_count.load(Ordering::Acquire), 0);
+        assert_eq!(queue_bytes.load(Ordering::Acquire), CAP - 8);
+
+        // Once the queue drains, the same page is admitted, and the worker's
+        // copy fits inside what was reserved: the budget never exceeds the
+        // cap at any point between enqueue and completion.
+        queue_bytes.store(0, Ordering::Release);
         let (sender, receiver) = sync_channel(EXACT_STATE_RECORD_CAPACITY);
         let inflight = Mutex::new(BTreeSet::from(["lease".to_string()]));
         let queued = AtomicU64::new(0);
         let dropped = AtomicU64::new(0);
-        let pending_count = Arc::new(AtomicUsize::new(0));
-        let queue_bytes = Arc::new(AtomicU64::new(0));
         let worker_healthy = AtomicBool::new(true);
         let worker_panics = AtomicU64::new(0);
-        let ledger = LeaseLedger::default();
-        let cells = vec![9_u8; 64];
-        let reservation = LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 4, CAP)
-            .expect("test snapshot fits");
+        let reservation = LeasedRecordReservation::acquire(
+            &pending_count,
+            &queue_bytes,
+            cells.len() as u64 + 4,
+            CAP,
+        )
+        .expect("an empty queue admits the page");
         assert_eq!(
             enqueue_exact_state_record(
                 &sender,
@@ -1913,7 +1991,62 @@ mod exact_state_record_queue_tests {
             ),
             ExactStateRecordAdmission::Queued
         );
-        assert_eq!(queue_bytes.load(Ordering::Acquire), 4);
+        let reserved = queue_bytes.load(Ordering::Acquire);
+        run_exact_state_record_job(
+            ExactStateWorkerHandles {
+                inflight_records: &inflight,
+                dropped: &dropped,
+                pending_count: &pending_count,
+                queue_bytes: &queue_bytes,
+                worker_healthy: &worker_healthy,
+                worker_panics: &worker_panics,
+            },
+            None,
+            receiver.recv().unwrap(),
+            |record| {
+                assert_eq!(
+                    record.payload.byte_len(),
+                    reserved,
+                    "the materialised record is exactly what was reserved"
+                );
+                assert_eq!(queue_bytes.load(Ordering::Acquire), reserved);
+                Ok(())
+            },
+        );
+        assert_eq!(queue_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(dropped.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn leased_worker_completion_releases_stored_bytes_and_lane_pin() {
+        let (sender, receiver) = sync_channel(EXACT_STATE_RECORD_CAPACITY);
+        let inflight = Mutex::new(BTreeSet::from(["lease".to_string()]));
+        let queued = AtomicU64::new(0);
+        let dropped = AtomicU64::new(0);
+        let pending_count = Arc::new(AtomicUsize::new(0));
+        let queue_bytes = Arc::new(AtomicU64::new(0));
+        let worker_healthy = AtomicBool::new(true);
+        let worker_panics = AtomicU64::new(0);
+        let ledger = LeaseLedger::default();
+        let cells = vec![9_u8; 64];
+        let reservation =
+            LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 64 + 4, CAP)
+                .expect("test page and snapshot fit");
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                &queue_bytes,
+                CAP,
+                &worker_healthy,
+                leased("lease", &cells, &ledger, reservation),
+            ),
+            ExactStateRecordAdmission::Queued
+        );
+        assert_eq!(queue_bytes.load(Ordering::Acquire), 64 + 4);
         assert!(ledger.in_flight());
 
         run_exact_state_record_job(
@@ -1950,8 +2083,9 @@ mod exact_state_record_queue_tests {
         let worker_healthy = AtomicBool::new(false);
         let ledger = LeaseLedger::default();
         let cells = vec![9_u8; 64];
-        let reservation = LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 4, CAP)
-            .expect("test snapshot fits");
+        let reservation =
+            LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 64 + 4, CAP)
+                .expect("test snapshot fits");
         assert_eq!(
             enqueue_exact_state_record(
                 &sender,
@@ -1984,8 +2118,9 @@ mod exact_state_record_queue_tests {
         let worker_healthy = AtomicBool::new(true);
         let ledger = LeaseLedger::default();
         let cells = vec![9_u8; 64];
-        let reservation = LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 4, CAP)
-            .expect("test snapshot fits");
+        let reservation =
+            LeasedRecordReservation::acquire(&pending_count, &queue_bytes, 64 + 4, CAP)
+                .expect("test snapshot fits");
         assert_eq!(
             enqueue_exact_state_record(
                 &sender,
