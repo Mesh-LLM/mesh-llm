@@ -22,13 +22,27 @@ export default {
       summary:
         'A collaboration app where people and AI agents work together in channels. Buzz agents can run on models served by mesh-llm.',
       image: '/assets/showcase/buzz.png',
-      imageAlt: 'Buzz logo',
+      imageAlt: 'Buzz channel where people and agents plan and ship a change together',
       imageFit: 'cover',
       url: 'https://buzz.xyz',
       linkLabel: 'Visit buzz.xyz',
       linkUrl: 'https://buzz.xyz',
       uses: ['Agents on mesh models', 'OpenAI-compatible API'],
       platforms: 'macOS · iOS',
+    },
+    {
+      name: 'Earn and burn',
+      tagline: 'Earn sats serving models, spend them on models you use',
+      summary:
+        'Install a wallet plugin and your node gets paid in Lightning micropayments when it serves inference, then pays other nodes for the models it calls. Lexe can create a wallet for you; NWC connects one you already have. Preview: use small amounts.',
+      image: '/assets/showcase/earn-burn.svg',
+      imageAlt: 'Sats flowing in from serving inference and out to pay for models',
+      imageFit: 'contain',
+      url: '/plugins/',
+      linkLabel: 'See wallet plugins',
+      linkUrl: '/plugins/',
+      uses: ['lexe-wallet', 'nwc-wallet', 'Lightning micropayments'],
+      platforms: 'macOS, Linux, Windows',
     },
   ],
 };

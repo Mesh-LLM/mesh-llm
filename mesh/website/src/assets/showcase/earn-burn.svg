@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#f7931a"/></marker>
+  </defs>
+  <rect width="640" height="400" fill="#0b0b0c"/>
+  <g fill="none" stroke="#f7931a" stroke-width="3" marker-end="url(#a)">
+    <path d="M200 150 C 260 90, 380 90, 440 150"/>
+    <path d="M440 250 C 380 310, 260 310, 200 250"/>
+  </g>
+  <text x="320" y="82" fill="#f7931a" font-size="18" font-weight="600" text-anchor="middle">earn: serve inference</text>
+  <text x="320" y="334" fill="#f7931a" font-size="18" font-weight="600" text-anchor="middle">burn: pay for models</text>
+  <g>
+    <rect x="70" y="140" width="140" height="120" rx="16" fill="#18181b" stroke="#3f3f46"/>
+    <text x="140" y="190" fill="#fafafa" font-size="20" font-weight="700" text-anchor="middle">your node</text>
+    <text x="140" y="218" fill="#a1a1aa" font-size="14" text-anchor="middle">wallet plugin</text>
+  </g>
+  <g>
+    <rect x="430" y="140" width="140" height="120" rx="16" fill="#18181b" stroke="#3f3f46"/>
+    <text x="500" y="190" fill="#fafafa" font-size="20" font-weight="700" text-anchor="middle">the mesh</text>
+    <text x="500" y="218" fill="#a1a1aa" font-size="14" text-anchor="middle">other nodes</text>
+  </g>
+  <text x="320" y="208" fill="#fafafa" font-size="44" text-anchor="middle">⚡</text>
+  <text x="320" y="372" fill="#71717a" font-size="13" text-anchor="middle">Lightning micropayments · lexe-wallet · nwc-wallet</text>
+</svg>
