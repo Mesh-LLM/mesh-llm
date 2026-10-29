@@ -321,6 +321,7 @@ fn parse_failure_family(
                 Some(CliCommandFamily::Runtime)
             }
             "config" => Some(CliCommandFamily::Configuration),
+            "wallet" => Some(CliCommandFamily::Wallet),
             "doctor" => Some(CliCommandFamily::Diagnostics),
             "discover" => Some(CliCommandFamily::Discovery),
             "rotate-key" | "auth" => Some(CliCommandFamily::Identity),

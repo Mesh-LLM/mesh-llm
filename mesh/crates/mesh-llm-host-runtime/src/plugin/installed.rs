@@ -6,6 +6,8 @@ use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_stor
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+// The active spec carries every grant; the inactive summary is a few strings.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ConfiguredExternalPlugin {
     Active(ExternalPluginSpec),
     Inactive(PluginSummary),
@@ -235,6 +237,11 @@ pub(crate) fn installed_exchange_grant(
         read_identity_bundle: hook.read_identity_bundle,
         delegate_signing_key: hook.delegate_signing_key,
         signing_scopes: hook.signing_scopes.clone(),
+        deadline_ms: hook.deadline_ms,
+        max_body_bytes: hook.max_body_bytes,
+        max_queue_bytes: hook.max_queue_bytes,
+        max_in_flight: hook.max_in_flight,
+        max_delegation_ttl_secs: hook.max_delegation_ttl_secs,
         ..mesh_llm_config::OpenAiExchangeGrant::default()
     })
 }

@@ -7,6 +7,7 @@ use super::{
 
 pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) {
     match command {
+        Command::Wallet { .. } => assembly.command.push_str(" wallet"),
         Command::Hermes(args) | Command::Openclaw(args) => {
             assembly
                 .command

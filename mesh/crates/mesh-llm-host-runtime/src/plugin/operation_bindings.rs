@@ -115,14 +115,16 @@ impl PluginManager {
         };
         let setup = request.handle.is_none();
         let (operation, input) = if setup {
-            if !request.operation.is_empty() || !request.input_json.is_empty() {
-                return denied("setup accepts no caller payload");
+            if !request.operation.is_empty() {
+                return denied("setup accepts no caller operation");
             }
             let input = if binding.grant.setup_directory {
-                match setup_directory_payload(caller, &request.binding, &provider_name) {
+                match setup_directory_payload(&request.input_json, &provider_name) {
                     Ok(payload) => payload,
                     Err(error) => return denied(&format!("setup directory unavailable: {error}")),
                 }
+            } else if !request.input_json.is_empty() {
+                return denied("setup accepts no caller payload");
             } else {
                 binding.grant.setup_input_json.clone()
             };
@@ -243,27 +245,34 @@ impl PluginManager {
     }
 }
 
-/// Host-owned state directory for one caller/binding/provider, created
-/// owner-only: `~/.mesh-llm/plugin-state/<caller>/<binding>/<provider>`.
-fn setup_directory_payload(caller: &str, binding: &str, provider: &str) -> anyhow::Result<String> {
-    for segment in [caller, binding, provider] {
-        anyhow::ensure!(
-            !segment.is_empty()
-                && segment
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-                && segment != "."
-                && segment != "..",
-            "'{segment}' cannot be used as a directory name"
-        );
+/// Setup payload for a `setup_directory` binding. The caller names a base
+/// directory it owns (`{"directory": <absolute base>}`); the host scopes it to
+/// the resolved provider (`<base>/<provider>`) and creates it owner-only, so
+/// the caller never learns or chooses which provider it was bound to, and each
+/// provider keeps its own state (e.g. `payments/wallets/lexe-wallet`).
+fn setup_directory_payload(caller_payload: &str, provider: &str) -> anyhow::Result<String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Payload {
+        directory: std::path::PathBuf,
     }
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
-    let directory = home
-        .join(".mesh-llm")
-        .join("plugin-state")
-        .join(caller)
-        .join(binding)
-        .join(provider);
+    let payload: Payload = serde_json::from_str(caller_payload).map_err(|error| {
+        anyhow::anyhow!("setup payload must be {{\"directory\": <base>}}: {error}")
+    })?;
+    anyhow::ensure!(
+        payload.directory.is_absolute(),
+        "setup directory base must be an absolute path"
+    );
+    anyhow::ensure!(
+        !provider.is_empty()
+            && provider
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            && provider != "."
+            && provider != "..",
+        "'{provider}' cannot be used as a directory name"
+    );
+    let directory = payload.directory.join(provider);
     std::fs::create_dir_all(&directory)?;
     mesh_llm_config::restrict_private_directory(&directory)?;
     Ok(serde_json::json!({ "directory": directory.display().to_string() }).to_string())

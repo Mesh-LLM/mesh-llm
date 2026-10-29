@@ -13,8 +13,9 @@ pub struct PluginOperationBinding {
     /// when `provider` is empty. Comes from an installed package's manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability: Option<String>,
-    /// The host supplies `{"directory": <host-owned per caller/binding/provider>}`
-    /// as the setup payload instead of `setup_input_json`.
+    /// Setup takes `{"directory": <absolute base>}` from the caller and the
+    /// host dispatches `<base>/<provider>` (owner-only) instead of
+    /// `setup_input_json`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub setup_directory: bool,
     /// Opaque profile identifier. One provider process owns one profile.

@@ -19,10 +19,17 @@ pub struct InstalledOpenAiExchangeAccess {
     pub read_identity_bundle: bool,
     pub delegate_signing_key: bool,
     pub signing_scopes: Vec<String>,
+    /// Limits the package asks for; the grant made at install uses them.
+    pub deadline_ms: u64,
+    pub max_body_bytes: u64,
+    pub max_queue_bytes: u64,
+    pub max_in_flight: u32,
+    pub max_delegation_ttl_secs: u64,
 }
 
 impl InstalledOpenAiExchangeAccess {
-    /// Explicit installation warning; requests confer no permissions.
+    /// Installation notice: installing the package grants exactly these
+    /// requests (a `[[plugin]]` entry can narrow or replace them).
     pub fn access_summary(&self) -> String {
         let mut permissions = Vec::new();
         for (enabled, label) in [
@@ -42,7 +49,7 @@ impl InstalledOpenAiExchangeAccess {
             permissions.push("allowlisted headers");
         }
         format!(
-            "OpenAI lifecycle v{} requests: {}. Explicit operator grants are required; installation grants no access. Prompt/content grants disclose that data to this plugin process.",
+            "OpenAI lifecycle v{} access: {}. Installing grants these requests; a [[plugin]] entry in config.toml can narrow or replace them. Prompt/content access discloses that data to this plugin process.",
             self.contract_version,
             if permissions.is_empty() {
                 "lifecycle metadata".into()
@@ -67,7 +74,7 @@ mod tests {
             "original prompts",
             "generated content",
             "signing delegation",
-            "installation grants no access",
+            "Installing grants these requests",
         ] {
             assert!(summary.contains(text));
         }

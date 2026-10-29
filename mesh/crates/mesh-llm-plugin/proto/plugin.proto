@@ -847,8 +847,10 @@ message OperationBindingManifest {
   string capability = 2;
   string setup_operation = 3;
   repeated string operations = 4;
-  // The host supplies `{"directory": <host-owned, per caller/binding/provider>}`
-  // as the setup payload, so the caller never names a filesystem location.
+  // Setup takes `{"directory": <absolute base the caller owns>}` from the
+  // caller; the host dispatches `{"directory": "<base>/<provider plugin name>"}`
+  // (created owner-only), so each provider keeps separate state and the
+  // caller never learns which provider it was bound to.
   bool setup_directory = 5;
 }
 

@@ -225,3 +225,48 @@ async fn non_wallet_provider_uses_fixed_setup_allowlist_generation_and_revocatio
     ));
     manager.shutdown().await;
 }
+
+#[test]
+fn setup_directory_payload_scopes_the_caller_base_to_the_provider() {
+    let base = tempfile::tempdir().unwrap();
+    let wallets = base.path().join("wallets");
+    let payload = super::setup_directory_payload(
+        &serde_json::json!({ "directory": wallets }).to_string(),
+        "lexe-wallet",
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(
+        value["directory"].as_str().unwrap(),
+        wallets.join("lexe-wallet").display().to_string(),
+        "main's layout: <payments>/wallets/<wallet plugin>"
+    );
+    assert!(wallets.join("lexe-wallet").is_dir());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(wallets.join("lexe-wallet"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+    // The caller cannot pick the provider segment or leave the base: a relative
+    // base, an empty payload and a provider that is not a plain name are refused.
+    assert!(
+        super::setup_directory_payload(r#"{"directory":"relative/wallets"}"#, "lexe-wallet")
+            .is_err()
+    );
+    assert!(super::setup_directory_payload("", "lexe-wallet").is_err());
+    assert!(
+        super::setup_directory_payload(r#"{"directory":"/tmp","extra":1}"#, "lexe-wallet").is_err()
+    );
+    assert!(
+        super::setup_directory_payload(
+            &serde_json::json!({ "directory": wallets }).to_string(),
+            "../x"
+        )
+        .is_err()
+    );
+}

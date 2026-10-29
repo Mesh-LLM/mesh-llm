@@ -77,6 +77,9 @@ fn apply_config_host_ram_offload(config_path: Option<&std::path::Path>) -> Resul
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Serve | Command::Client => Ok(()),
+        Command::Wallet { port, command } => {
+            mesh_llm_commands::wallet::run(command, *port, cli.config.as_deref()).await
+        }
         Command::Models { command } => {
             apply_config_host_ram_offload(cli.config.as_deref())?;
             dispatch_models_command(command).await?;
