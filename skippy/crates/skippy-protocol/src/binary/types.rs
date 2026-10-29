@@ -200,6 +200,10 @@ pub mod state_flags {
     /// continues after the first rejected row's correction token (reply
     /// marker 2). Without it a final stage drops drafts from rejected windows.
     pub const NATIVE_MTP_DRAFT_AFTER_CORRECTION: i32 = 1 << 13;
+    /// The sender reads a final stage's DFlash draft-context counters, which
+    /// follow the reply stats (reply marker bit `REPLY_DFLASH_HEALTH`). Without
+    /// it a final stage never sends them.
+    pub const SPLIT_DFLASH: i32 = 1 << 14;
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -415,6 +419,18 @@ impl StageStateHeader {
             self.flags |= state_flags::NATIVE_MTP_DRAFT_AFTER_CORRECTION;
         } else {
             self.flags &= !state_flags::NATIVE_MTP_DRAFT_AFTER_CORRECTION;
+        }
+    }
+
+    pub fn split_dflash(self) -> bool {
+        self.flags & state_flags::SPLIT_DFLASH != 0
+    }
+
+    pub fn set_split_dflash(&mut self, reads: bool) {
+        if reads {
+            self.flags |= state_flags::SPLIT_DFLASH;
+        } else {
+            self.flags &= !state_flags::SPLIT_DFLASH;
         }
     }
 
@@ -720,9 +736,21 @@ pub struct StageReplyStats {
     pub prefill_compute_stage_index: i64,
     pub prefill_compute_token_count_at_slowest_rate: i64,
     pub prefill_compute_observation_count: i64,
+    /// Target rows whose DFlash features never reached the final stage's
+    /// draft for this session. Cumulative per session, so merging keeps the
+    /// larger value. Only on the wire to senders that set
+    /// `state_flags::SPLIT_DFLASH`.
+    pub dflash_feature_rows_missing: i64,
+    /// Times that draft's context was cleared or left with a gap.
+    pub dflash_draft_context_resets: i64,
 }
 
 impl StageReplyStats {
+    /// Whether the DFlash draft-context counters need to go on the wire.
+    pub fn has_dflash_health(self) -> bool {
+        self.dflash_feature_rows_missing != 0 || self.dflash_draft_context_resets != 0
+    }
+
     pub fn merge(&mut self, other: Self) {
         self.kv_lookup_hits += other.kv_lookup_hits;
         self.kv_lookup_misses += other.kv_lookup_misses;
@@ -767,6 +795,12 @@ impl StageReplyStats {
                 other.prefill_compute_token_count_at_slowest_rate;
         }
         self.prefill_compute_observation_count += other.prefill_compute_observation_count;
+        self.dflash_feature_rows_missing = self
+            .dflash_feature_rows_missing
+            .max(other.dflash_feature_rows_missing);
+        self.dflash_draft_context_resets = self
+            .dflash_draft_context_resets
+            .max(other.dflash_draft_context_resets);
     }
 
     pub fn observe_prefill_edge_transport(
@@ -832,6 +866,7 @@ impl StageReplyStats {
             && self.verify_window_max_tokens == 0
             && self.prefill_edge_observation_count == 0
             && self.prefill_compute_observation_count == 0
+            && !self.has_dflash_health()
     }
 }
 

@@ -59,6 +59,28 @@ fn forward_dflash_features(
     }
 }
 
+/// Hands a split final stage's draft the DFlash feature rows each request's
+/// input frame carries, as a stage message would. A frame without them leaves
+/// the draft nothing to ingest, which it counts as missing rows.
+fn receive_dflash_features(requests: &mut [IterationBatchRequest<'_>]) {
+    for request in requests.iter_mut() {
+        if !request.session.dflash_attached() {
+            continue;
+        }
+        let rows = match request.input.map(crate::DFlashFeatureRows::from_frame) {
+            Some(Ok(rows)) => rows,
+            Some(Err(error)) => {
+                crate::write_native_log_note(format!(
+                    "dflash feature parts are malformed, dropped: {error:#}"
+                ));
+                None
+            }
+            None => None,
+        };
+        request.session.dflash_set_remote_features(rows);
+    }
+}
+
 impl StageSession {
     /// Execute one scheduler iteration for every request as a single native
     /// batch. Frames that carry optional parts, and exporting stages whose
@@ -68,6 +90,7 @@ impl StageSession {
     pub fn iteration_batch_sampled(
         requests: &mut [IterationBatchRequest<'_>],
     ) -> Result<IterationBatchOutput> {
+        receive_dflash_features(requests);
         let mut outputs = if requests
             .iter()
             .any(iteration_request_requires_one_at_a_time)
@@ -106,6 +129,7 @@ impl StageSession {
                 "causal readouts require a text-only activation frontier"
             );
         }
+        receive_dflash_features(requests);
         if requests
             .iter()
             .any(iteration_request_requires_one_at_a_time)
