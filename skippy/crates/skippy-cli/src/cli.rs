@@ -453,6 +453,9 @@ pub struct AuditReceiptArgs {
     /// Challenge this layer instead of a random one.
     #[arg(long)]
     pub layer: Option<u32>,
+    /// Times to compute the challenged layer for the client cost report.
+    #[arg(long, default_value_t = 1)]
+    pub timing_runs: u32,
 }
 
 impl From<AuditReceiptArgs> for skippy_commands::receipts::AuditReceiptCommand {
@@ -464,6 +467,7 @@ impl From<AuditReceiptArgs> for skippy_commands::receipts::AuditReceiptCommand {
             prompt: args.prompt,
             max_tokens: args.max_tokens,
             layer: args.layer,
+            timing_runs: args.timing_runs.max(1),
         }
     }
 }

@@ -37,7 +37,7 @@ use skippy_receipts::wire::{Challenge, Opening, RECEIPT_VERSION, Receipt, StageC
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::panic_recovery::lock_runtime;
 
-/// Receipts issued by stage 0 that stay retrievable.
+/// Receipts issued (or refused) by stage 0 that stay retrievable.
 const ISSUED_RECEIPTS: usize = 256;
 /// Bound on a downstream commit or open, which may replay a whole turn.
 const DOWNSTREAM_TIMEOUT: Duration = Duration::from_secs(120);
@@ -70,7 +70,8 @@ pub struct StageReceipts {
     replayer: OnceLock<Box<dyn Replayer + Send + Sync>>,
     downstream: Option<String>,
     claimed_model: String,
-    issued: Mutex<VecDeque<Receipt>>,
+    /// By receipt id: the receipt, or why the turn got none.
+    issued: Mutex<VecDeque<(String, Result<Receipt, String>)>>,
     client: reqwest::blocking::Client,
 }
 
@@ -248,11 +249,14 @@ async fn receipt_handler(
 ) -> Result<Json<Receipt>, ApiError> {
     // stage 0 commits a turn after its response is sent, so a client may
     // ask before the receipt exists
-    state
-        .receipts
-        .receipt(&id)
-        .map(Json)
-        .map_err(|error| ApiError(StatusCode::NOT_FOUND, error))
+    match state.receipts.receipt(&id) {
+        Some(Ok(receipt)) => Ok(Json(receipt)),
+        Some(Err(reason)) => Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            anyhow!("turn {id} got no receipt: {reason}"),
+        )),
+        None => Err(ApiError(StatusCode::NOT_FOUND, anyhow!("no receipt {id}"))),
+    }
 }
 
 impl StageReceipts {
@@ -303,14 +307,41 @@ impl StageReceipts {
         Ok(stages)
     }
 
-    /// Stage 0, after a turn: commits the whole chain and keeps the receipt.
+    /// Stage 0, after a turn: commits the whole chain and keeps the
+    /// receipt, or why there is none.
     fn finish_turn(&self, receipt_id: &str, session: &str, seq: i32) -> Result<Receipt> {
+        let result = self.commit_turn(receipt_id, session, seq);
+        self.keep(
+            receipt_id,
+            result
+                .as_ref()
+                .map(Receipt::clone)
+                .map_err(|e| format!("{e:#}")),
+        );
+        result
+    }
+
+    fn keep(&self, receipt_id: &str, result: Result<Receipt, String>) {
+        let mut issued = self
+            .issued
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        issued.push_back((receipt_id.to_owned(), result));
+        while issued.len() > ISSUED_RECEIPTS {
+            issued.pop_front();
+        }
+    }
+
+    fn commit_turn(&self, receipt_id: &str, session: &str, seq: i32) -> Result<Receipt> {
         self.reports.wait_applied();
-        let positions = self
-            .reports
-            .recorder()
-            .recorded_range(seq)
-            .context("the turn recorded no matmuls")?;
+        let recorder = self.reports.recorder();
+        let positions =
+            recorder
+                .recorded_range(seq)
+                .with_context(|| match recorder.last_error() {
+                    Some(reason) => format!("the turn recorded nothing: {reason}"),
+                    None => "the turn recorded nothing".to_owned(),
+                })?;
         let request = CommitRequest {
             receipt_id: receipt_id.to_string(),
             session: session.to_string(),
@@ -318,34 +349,25 @@ impl StageReceipts {
             position_end: positions.end,
         };
         let stages = self.commit_chain(&request, seq)?;
-        let receipt = Receipt {
+        Ok(Receipt {
             version: RECEIPT_VERSION,
             receipt_id: receipt_id.to_string(),
             model: self.claimed_model.clone(),
             position_start: positions.start,
             position_end: positions.end,
             stages,
-        };
-        let mut issued = self
-            .issued
-            .lock()
-            .map_err(|_| anyhow!("receipts lock poisoned"))?;
-        issued.push_back(receipt.clone());
-        while issued.len() > ISSUED_RECEIPTS {
-            issued.pop_front();
-        }
-        Ok(receipt)
+        })
     }
 
-    fn receipt(&self, id: &str) -> Result<Receipt> {
+    /// The receipt of a turn, or why it got none; `None` for an unknown id.
+    fn receipt(&self, id: &str) -> Option<Result<Receipt, String>> {
         self.issued
             .lock()
-            .map_err(|_| anyhow!("receipts lock poisoned"))?
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .rev()
-            .find(|receipt| receipt.receipt_id == id)
-            .cloned()
-            .with_context(|| format!("no receipt {id}"))
+            .find(|(receipt_id, _)| receipt_id == id)
+            .map(|(_, result)| result.clone())
     }
 
     fn open(&self, challenge: &Challenge) -> Result<Opening> {

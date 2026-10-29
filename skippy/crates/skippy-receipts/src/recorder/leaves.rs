@@ -2,7 +2,7 @@
 //!
 //! One BLAKE3 call runs on one core, and a ubatch holds two leaves per layer
 //! for every column, so the work is split across cores. A unit is one layer
-//! of one column (its residual and attention leaves), or the stage output
+//! of one column (its residual and mixing leaves), or the stage output
 //! residual of one column.
 
 use std::num::NonZero;
@@ -10,8 +10,8 @@ use std::ops::Range;
 
 use anyhow::{Context, Result};
 
-use super::{TensorKind, UbatchColumns};
-use crate::commitment::{Hash, attention_leaf, residual_leaf};
+use crate::commitment::{Hash, MixingValue, mixing_leaf, residual_leaf};
+use crate::layer_tensors::{GGML_F32, MIXING_KINDS, TensorKind, UbatchColumns};
 
 /// Hashing threads per ubatch, at most.
 const MAX_THREADS: usize = 8;
@@ -37,24 +37,24 @@ impl Ubatch<'_> {
         let layer = self.layers.start + u32::try_from(unit % per_column)?;
         let position = u32::try_from(self.pos[col]).context("negative position")?;
         if layer == self.layers.end {
-            let output = self.columns.column(layer, TensorKind::Residual, col);
+            let output = self.residual(layer, col)?;
             return Ok((residual_leaf(position, layer, output), None));
         }
-        let column = |kind: TensorKind| {
-            self.columns
-                .column(layer, kind, col)
-                .with_context(|| format!("layer {layer} reported no {kind:?} column"))
-        };
-        let residual = residual_leaf(position, layer, Some(column(TensorKind::Residual)?));
-        let attention = attention_leaf(
-            position,
-            layer,
-            column(TensorKind::AttnQ)?,
-            column(TensorKind::AttnK)?,
-            column(TensorKind::AttnV)?,
-            column(TensorKind::AttnOut)?,
-        );
-        Ok((residual, Some(attention)))
+        let residual = self
+            .residual(layer, col)?
+            .with_context(|| format!("layer {layer} reported no residual column"))?;
+        let residual = residual_leaf(position, layer, Some(residual));
+        let mixing = mixing_values(self.columns, layer, col);
+        Ok((residual, Some(mixing_leaf(position, layer, &mixing))))
+    }
+
+    fn residual(&self, layer: u32, col: usize) -> Result<Option<&[u8]>> {
+        match self.columns.column(layer, TensorKind::Residual, 0, col) {
+            Some(column) if column.ggml_type != GGML_F32 => {
+                anyhow::bail!("layer {layer} reported a residual that is not f32")
+            }
+            column => Ok(column.map(|c| c.bytes)),
+        }
     }
 
     fn units(&self, range: Range<usize>) -> Vec<Result<UnitLeaves>> {
@@ -117,6 +117,26 @@ pub(super) fn ubatch_leaves(
                 Some(e) => Err(e),
                 None => Ok((u32::try_from(pos).context("negative position")?, leaves)),
             }
+        })
+        .collect()
+}
+
+/// The committed mixing values of a layer at one column, in leaf order.
+pub(crate) fn mixing_values(
+    columns: &dyn UbatchColumns,
+    layer: u32,
+    col: usize,
+) -> Vec<MixingValue<'_>> {
+    MIXING_KINDS
+        .iter()
+        .flat_map(|&kind| {
+            (0..columns.count(layer, kind)).map(move |index| MixingValue {
+                kind,
+                index,
+                value: columns
+                    .column(layer, kind, index, col)
+                    .map(|c| (c.ggml_type, c.bytes)),
+            })
         })
         .collect()
 }

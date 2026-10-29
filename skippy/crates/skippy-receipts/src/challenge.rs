@@ -71,6 +71,7 @@ mod tests {
                 root: String::new(),
                 leaf_count: 0,
                 backend: String::new(),
+                cache_types: Vec::new(),
             }],
         }
     }

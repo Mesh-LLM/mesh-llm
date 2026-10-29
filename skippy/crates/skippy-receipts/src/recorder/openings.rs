@@ -102,12 +102,27 @@ fn opening_bytes(opening: &Opening) -> usize {
             leaf.residual_in.len()
                 + leaf.residual_out.as_ref().map_or(0, String::len)
                 + paths(&leaf.residual_in_path)
-                + paths(&leaf.attention_path)
+                + paths(&leaf.mixing_path)
                 + paths(&leaf.residual_out_path)
+                + leaf
+                    .mixing
+                    .iter()
+                    .map(|t| t.values.as_ref().map_or(0, String::len))
+                    .sum::<usize>()
                 + leaf
                     .matrices
                     .iter()
-                    .map(|m| m.weight.len() + m.input.len() + m.output.len())
+                    .map(|m| {
+                        m.weight.len()
+                            + m.input.len()
+                            + m.output.len()
+                            + m.experts.as_ref().map_or(0, |e| e.len() * 4)
+                    })
+                    .sum::<usize>()
+                + leaf
+                    .selections
+                    .iter()
+                    .map(|s| s.ids.len() * 4)
                     .sum::<usize>()
         })
         .sum()
@@ -136,9 +151,11 @@ mod tests {
                 residual_in: "0".repeat(bytes),
                 residual_out: None,
                 residual_in_path: Vec::new(),
-                attention_path: Vec::new(),
+                mixing_path: Vec::new(),
                 residual_out_path: Vec::new(),
+                mixing: Vec::new(),
                 matrices: Vec::new(),
+                selections: Vec::new(),
             }],
         })
     }

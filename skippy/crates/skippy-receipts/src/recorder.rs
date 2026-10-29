@@ -21,10 +21,14 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result, bail};
 
 use crate::commitment::{
-    Hash, MerkleTree, attention_leaf, attention_slot, encode_path, leaf_index, residual_leaf,
+    Hash, MerkleTree, encode_path, leaf_index, mixing_leaf, mixing_slot, residual_leaf,
     residual_slot, slots_per_position,
 };
-use crate::wire::{Challenge, LeafOpening, MatrixOpening, Opening, StageCommitment, encode_f32};
+use crate::layer_tensors::{FLAG_ROUTER, GGML_F32, MIXING_KINDS, TensorKind, UbatchColumns};
+use crate::wire::{
+    Challenge, LeafOpening, MatrixOpening, MixingKind, Opening, SelectionOpening, StageCommitment,
+    TensorOpening, encode_bytes, mixing_bytes, mixing_values,
+};
 
 /// Committed turns are dropped, oldest first, past this many bytes.
 pub const DEFAULT_WINDOW_BYTES: usize = 1 << 30;
@@ -39,50 +43,6 @@ mod leaves;
 mod openings;
 
 use openings::OpeningCache;
-
-/// A per-layer tensor the native recorder reports (`skippy_receipt_tensor_kind`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TensorKind {
-    Residual,
-    AttnQ,
-    AttnK,
-    AttnV,
-    AttnOut,
-    AttnIn,
-    AttnProj,
-    FfnIn,
-    FfnGate,
-    FfnUp,
-    FfnDownIn,
-    FfnDown,
-}
-
-impl TensorKind {
-    pub fn from_code(code: i32) -> Option<Self> {
-        Some(match code {
-            0 => Self::Residual,
-            1 => Self::AttnQ,
-            2 => Self::AttnK,
-            3 => Self::AttnV,
-            4 => Self::AttnOut,
-            5 => Self::AttnIn,
-            6 => Self::AttnProj,
-            7 => Self::FfnIn,
-            8 => Self::FfnGate,
-            9 => Self::FfnUp,
-            10 => Self::FfnDownIn,
-            11 => Self::FfnDown,
-            _ => return None,
-        })
-    }
-}
-
-/// The committed tensors of a ubatch, by column.
-pub trait UbatchColumns: Sync {
-    /// Column `col` of tensor `kind` at `layer`; `None` when the layer kept
-    /// no row for that column or the tensor was not reported.
-    fn column(&self, layer: u32, kind: TensorKind, col: usize) -> Option<&[f32]>;
-}
 
 /// Stage input rows of a ubatch, for a stage after the first.
 #[derive(Clone, Debug, PartialEq)]
@@ -127,74 +87,136 @@ pub enum ReplayStep {
 /// One position of the challenged layer, as the replay recomputed it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReplayedLayer {
-    pub residual_in: Vec<f32>,
-    pub residual_out: Option<Vec<f32>>,
-    pub attn_in: Vec<f32>,
-    pub q: Vec<f32>,
-    pub k: Vec<f32>,
-    pub v: Vec<f32>,
-    pub attn_out: Vec<f32>,
-    pub attn_proj: Vec<f32>,
-    pub ffn: Option<ReplayedFfn>,
+    /// Little-endian f32 bytes.
+    pub residual_in: Vec<u8>,
+    pub residual_out: Option<Vec<u8>>,
+    /// The mixing leaf's values, in leaf order.
+    pub mixing: Vec<ReplayedMixing>,
+    pub matmuls: Vec<ReplayedMatmul>,
+    pub selections: Vec<SelectionOpening>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ReplayedFfn {
-    pub ffn_in: Vec<f32>,
-    pub gate: Vec<f32>,
-    pub up: Vec<f32>,
-    pub down_in: Vec<f32>,
-    pub down: Vec<f32>,
+pub struct ReplayedMixing {
+    pub kind: MixingKind,
+    pub index: u32,
+    /// ggml type and bytes; `None` where the layer kept no row.
+    pub value: Option<(i32, Vec<u8>)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReplayedMatmul {
+    pub index: u32,
+    pub weight: String,
+    pub router: bool,
+    pub experts: Option<Vec<i32>>,
+    /// Little-endian f32 bytes.
+    pub input: Vec<u8>,
+    pub output: Vec<u8>,
 }
 
 impl ReplayedLayer {
     /// Collects column `col` of a captured replay ubatch for `layer`.
     pub fn from_columns(layer: u32, columns: &dyn UbatchColumns, col: usize) -> Result<Self> {
-        let get = |l: u32, kind: TensorKind| columns.column(l, kind, col).map(<[f32]>::to_vec);
-        let need = |kind: TensorKind| {
-            get(layer, kind)
-                .with_context(|| format!("replay did not capture {kind:?} of layer {layer}"))
+        let f32_column = |l: u32, kind: TensorKind, index: u32| -> Result<Option<Vec<u8>>> {
+            match columns.column(l, kind, index, col) {
+                Some(c) if c.ggml_type != GGML_F32 => {
+                    bail!(
+                        "replay reported {} {index} of layer {l} as type {}",
+                        kind.name(),
+                        c.ggml_type
+                    )
+                }
+                c => Ok(c.map(|c| c.bytes.to_vec())),
+            }
         };
-        let residual_out = get(layer + 1, TensorKind::Residual);
-        let ffn = match residual_out {
-            Some(_) => Some(ReplayedFfn {
-                ffn_in: need(TensorKind::FfnIn)?,
-                gate: need(TensorKind::FfnGate)?,
-                up: need(TensorKind::FfnUp)?,
-                down_in: need(TensorKind::FfnDownIn)?,
-                down: need(TensorKind::FfnDown)?,
-            }),
-            None => None,
-        };
+        let residual_in = f32_column(layer, TensorKind::Residual, 0)?
+            .with_context(|| format!("replay did not capture the residual of layer {layer}"))?;
+        let residual_out = f32_column(layer + 1, TensorKind::Residual, 0)?;
+        let mixing = MIXING_KINDS
+            .iter()
+            .flat_map(|&kind| (0..columns.count(layer, kind)).map(move |index| (kind, index)))
+            .map(|(kind, index)| ReplayedMixing {
+                kind: MixingKind::from_tensor_kind(kind).expect("a mixing kind"),
+                index,
+                value: columns
+                    .column(layer, kind, index, col)
+                    .map(|c| (c.ggml_type, c.bytes.to_vec())),
+            })
+            .collect();
+        let mut matmuls = Vec::new();
+        for index in 0..columns.count(layer, TensorKind::MatmulInput) {
+            let (Some(input), Some(output)) = (
+                columns.column(layer, TensorKind::MatmulInput, index, col),
+                f32_column(layer, TensorKind::MatmulOutput, index)?,
+            ) else {
+                // the layer dropped this position's row before the matmul
+                continue;
+            };
+            if input.ggml_type != GGML_F32 {
+                bail!(
+                    "replay reported matmul input {index} of layer {layer} as type {}",
+                    input.ggml_type
+                );
+            }
+            let experts = columns
+                .column(layer, TensorKind::ExpertIds, index, col)
+                .map(|c| c.i32_values().context("expert ids are not i32"))
+                .transpose()?;
+            matmuls.push(ReplayedMatmul {
+                index,
+                weight: input.name.to_owned(),
+                router: input.flags & FLAG_ROUTER != 0,
+                experts,
+                input: input.bytes.to_vec(),
+                output,
+            });
+        }
+        let selections = (0..columns.count(layer, TensorKind::Selection))
+            .filter_map(|index| {
+                let column = columns.column(layer, TensorKind::Selection, index, col)?;
+                Some(
+                    column
+                        .i32_values()
+                        .context("a selection is not i32")
+                        .map(|ids| SelectionOpening { index, ids }),
+                )
+            })
+            .collect::<Result<_>>()?;
         Ok(Self {
-            residual_in: need(TensorKind::Residual)?,
+            residual_in,
             residual_out,
-            attn_in: need(TensorKind::AttnIn)?,
-            q: need(TensorKind::AttnQ)?,
-            k: need(TensorKind::AttnK)?,
-            v: need(TensorKind::AttnV)?,
-            attn_out: need(TensorKind::AttnOut)?,
-            attn_proj: need(TensorKind::AttnProj)?,
-            ffn,
+            mixing,
+            matmuls,
+            selections,
         })
     }
 
-    fn matrices(&self, layer: u32) -> Vec<MatrixOpening> {
-        let name = |role: &str| format!("blk.{layer}.{role}.weight");
-        let mut matrices = vec![
-            MatrixOpening::new(&name("attn_q"), &self.attn_in, &self.q),
-            MatrixOpening::new(&name("attn_k"), &self.attn_in, &self.k),
-            MatrixOpening::new(&name("attn_v"), &self.attn_in, &self.v),
-            MatrixOpening::new(&name("attn_output"), &self.attn_out, &self.attn_proj),
-        ];
-        if let Some(ffn) = &self.ffn {
-            matrices.extend([
-                MatrixOpening::new(&name("ffn_gate"), &ffn.ffn_in, &ffn.gate),
-                MatrixOpening::new(&name("ffn_up"), &ffn.ffn_in, &ffn.up),
-                MatrixOpening::new(&name("ffn_down"), &ffn.down_in, &ffn.down),
-            ]);
-        }
-        matrices
+    fn mixing_openings(&self) -> Vec<TensorOpening> {
+        self.mixing
+            .iter()
+            .map(|m| {
+                TensorOpening::new(
+                    m.kind,
+                    m.index,
+                    m.value.as_ref().map(|(t, bytes)| (*t, bytes.as_slice())),
+                )
+            })
+            .collect()
+    }
+
+    fn matrices(&self) -> Vec<MatrixOpening> {
+        self.matmuls
+            .iter()
+            .map(|m| MatrixOpening {
+                index: m.index,
+                weight: m.weight.clone(),
+                router: m.router,
+                experts: m.experts.clone(),
+                input: encode_bytes(&m.input),
+                output: encode_bytes(&m.output),
+            })
+            .collect()
     }
 }
 
@@ -224,6 +246,8 @@ struct SeqLog {
     pending_start: Option<u32>,
     /// Why the sequence cannot be replayed, until it is cleared.
     tainted: Option<String>,
+    /// ggml types of the cache rows the stage stored.
+    cache_types: BTreeSet<i32>,
 }
 
 impl SeqLog {
@@ -319,12 +343,14 @@ impl Recorder {
     /// ubatch in the replay log of every sequence it touched.
     pub fn record_ubatch(&self, record: UbatchRecord, columns: &dyn UbatchColumns) {
         let leaves = leaves::ubatch_leaves(self.layers.clone(), &record.pos, columns);
+        let cache_types = self.cache_types(columns);
         let record = Arc::new(record);
         let mut state = self.lock();
         let touched: BTreeSet<i32> = record.seq.iter().copied().collect();
         for seq in &touched {
             let log = &mut state.seqs.entry(*seq).or_default().live;
             log.events.push(Event::Ubatch(record.clone()));
+            log.cache_types.extend(&cache_types);
         }
         for (col, leaf) in leaves.into_iter().enumerate() {
             let seq = state.seqs.entry(record.seq[col]).or_default();
@@ -338,6 +364,19 @@ impl Recorder {
                 Err(error) => seq.taint(&format!("{error:#}")),
             }
         }
+    }
+
+    fn cache_types(&self, columns: &dyn UbatchColumns) -> BTreeSet<i32> {
+        self.layers
+            .clone()
+            .flat_map(|layer| {
+                (0..columns.count(layer, TensorKind::MixingStored)).filter_map(move |index| {
+                    columns
+                        .column(layer, TensorKind::MixingStored, index, 0)
+                        .map(|c| c.ggml_type)
+                })
+            })
+            .collect()
     }
 
     /// A ubatch could not be receipted; every live sequence is tainted.
@@ -416,6 +455,11 @@ impl Recorder {
         }
     }
 
+    /// Why the last unreceiptable ubatch could not be receipted.
+    pub fn last_error(&self) -> Option<String> {
+        self.lock().last_error.clone()
+    }
+
     /// Positions recorded for a sequence since its last commit.
     pub fn recorded_range(&self, seq: i32) -> Option<Range<u32>> {
         let state = self.lock();
@@ -438,12 +482,15 @@ impl Recorder {
         }
         let slots = self.slots();
         let mut state = self.lock();
-        let last_error = state.last_error.clone();
+        let last_error = state
+            .last_error
+            .as_ref()
+            .map(|e| format!(" ({e})"))
+            .unwrap_or_default();
         let entry = state.seqs.get_mut(&seq).with_context(|| {
             format!(
-                "receipt {receipt_id}: stage {} recorded nothing for sequence {seq}{}",
+                "receipt {receipt_id}: stage {} recorded nothing for sequence {seq}{last_error}",
                 self.stage_index,
-                last_error.map(|e| format!(" ({e})")).unwrap_or_default()
             )
         })?;
         let covers = |log: &SeqLog| {
@@ -455,7 +502,9 @@ impl Recorder {
             &mut entry.live
         } else {
             let index = entry.retired.iter().rposition(covers).with_context(|| {
-                format!("receipt {receipt_id}: no recorded turn covers positions {positions:?}")
+                format!(
+                    "receipt {receipt_id}: no recorded turn covers positions {positions:?}{last_error}"
+                )
             })?;
             &mut entry.retired[index]
         };
@@ -474,6 +523,11 @@ impl Recorder {
         }
         log.pending_start = None;
         let events = log.events.clone();
+        let cache_types = log
+            .cache_types
+            .iter()
+            .map(|&t| crate::weights::type_name(t as u32))
+            .collect();
         let tree = MerkleTree::new(leaves)?;
         let commitment = StageCommitment {
             stage_index: self.stage_index,
@@ -482,6 +536,7 @@ impl Recorder {
             root: hex::encode(tree.root()),
             leaf_count: tree.leaf_count(),
             backend: self.backend.clone(),
+            cache_types,
         };
         let bytes = tree.bytes()
             + events
@@ -552,19 +607,14 @@ impl Recorder {
             let values = replayed
                 .get(&position)
                 .with_context(|| format!("replay did not reach position {position}"))?;
+            let mixing = values.mixing_openings();
+            let decoded = mixing_bytes(&mixing)?;
             let recomputed = [
                 residual_leaf(position, layer, Some(&values.residual_in)),
-                attention_leaf(
-                    position,
-                    layer,
-                    &values.q,
-                    &values.k,
-                    &values.v,
-                    &values.attn_out,
-                ),
+                mixing_leaf(position, layer, &mixing_values(&decoded)),
                 residual_leaf(position, layer + 1, values.residual_out.as_deref()),
             ];
-            for ((name, leaf), committed) in ["residual-in", "attention", "residual-out"]
+            for ((name, leaf), committed) in ["residual-in", "mixing", "residual-out"]
                 .iter()
                 .zip(recomputed)
                 .zip(expected.hashes)
@@ -576,15 +626,17 @@ impl Recorder {
                     );
                 }
             }
-            let [residual_in_path, attention_path, residual_out_path] = expected.paths;
+            let [residual_in_path, mixing_path, residual_out_path] = expected.paths;
             leaves.push(LeafOpening {
                 position,
-                residual_in: encode_f32(&values.residual_in),
-                residual_out: values.residual_out.as_deref().map(encode_f32),
+                residual_in: encode_bytes(&values.residual_in),
+                residual_out: values.residual_out.as_deref().map(encode_bytes),
                 residual_in_path,
-                attention_path,
+                mixing_path,
                 residual_out_path,
-                matrices: values.matrices(layer),
+                mixing,
+                matrices: values.matrices(),
+                selections: values.selections.clone(),
             });
         }
         Ok(Opening {
@@ -640,7 +692,7 @@ impl Recorder {
             capture.entry(step).or_default().push(position);
             let slot_indices = [
                 residual_slot(layer, self.layers.start),
-                attention_slot(layer, self.layers.start),
+                mixing_slot(layer, self.layers.start),
                 residual_slot(layer + 1, self.layers.start),
             ];
             let mut hashes = [[0u8; 32]; 3];
@@ -686,7 +738,7 @@ struct ReplayPlan {
     expected: Vec<ExpectedLeaves>,
 }
 
-/// The committed residual-in, attention and residual-out leaves of one
+/// The committed residual-in, mixing and residual-out leaves of one
 /// position, with their Merkle paths.
 struct ExpectedLeaves {
     hashes: [Hash; 3],

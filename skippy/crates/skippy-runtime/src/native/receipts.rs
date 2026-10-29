@@ -19,14 +19,25 @@ pub struct ReceiptTensorView<'a> {
     pub layer: u32,
     /// A `skippy_ffi::RECEIPT_TENSOR_*` kind.
     pub kind: i32,
+    /// Ordinal among the layer's tensors of this kind.
+    pub index: u32,
+    /// ggml type of the values: F32, I32, or a stored row's cache type.
+    pub ggml_type: i32,
+    /// `skippy_ffi::RECEIPT_TENSOR_ROUTER` and other flags.
+    pub flags: i32,
+    /// Elements per column.
     pub len: usize,
+    pub row_bytes: usize,
     pub n_cols: usize,
-    pub values: &'a [f32],
+    pub values: &'a [u8],
+    /// The weight's name for a matmul, else the graph node's name.
+    pub name: &'a str,
 }
 
 impl<'a> ReceiptTensorView<'a> {
-    pub fn column(&self, j: usize) -> &'a [f32] {
-        &self.values[j * self.len..(j + 1) * self.len]
+    /// Column `j` as raw bytes.
+    pub fn column(&self, j: usize) -> &'a [u8] {
+        &self.values[j * self.row_bytes..(j + 1) * self.row_bytes]
     }
 }
 
@@ -96,9 +107,15 @@ pub(super) struct InstalledRecorder(Mutex<Option<Box<RecorderBinding>>>);
 struct RecordedTensor {
     layer: u32,
     kind: i32,
+    index: u32,
+    ggml_type: i32,
+    flags: i32,
     len: usize,
+    row_bytes: usize,
     n_cols: usize,
-    values: *const f32,
+    values: *const u8,
+    // the native name lives in the graph, which the next ubatch may rebuild
+    name: String,
 }
 
 /// One computed ubatch, owned. The native recorder keeps the tensor values
@@ -147,9 +164,14 @@ impl RecordedUbatch {
                 .map(|t| RecordedTensor {
                     layer: t.layer,
                     kind: t.kind,
+                    index: t.index,
+                    ggml_type: t.ggml_type,
+                    flags: t.flags,
                     len: t.len,
+                    row_bytes: t.row_bytes,
                     n_cols: t.n_cols,
                     values: t.values.as_ptr(),
+                    name: t.name.to_owned(),
                 })
                 .collect(),
             gate,
@@ -162,10 +184,15 @@ impl RecordedUbatch {
         self.tensors.iter().map(|t| ReceiptTensorView {
             layer: t.layer,
             kind: t.kind,
+            index: t.index,
+            ggml_type: t.ggml_type,
+            flags: t.flags,
             len: t.len,
+            row_bytes: t.row_bytes,
             n_cols: t.n_cols,
             // SAFETY: valid until self is dropped, see the type docs.
-            values: unsafe { std::slice::from_raw_parts(t.values, t.len * t.n_cols) },
+            values: unsafe { std::slice::from_raw_parts(t.values, t.row_bytes * t.n_cols) },
+            name: &t.name,
         })
     }
 }
@@ -174,6 +201,51 @@ impl Drop for RecordedUbatch {
     fn drop(&mut self) {
         self.gate.release();
     }
+}
+
+/// Safe views of the tensors of a native ubatch.
+pub(super) unsafe fn tensor_views<'a>(
+    u: &'a ReceiptUbatch,
+) -> Result<Vec<ReceiptTensorView<'a>>, String> {
+    let raw: &[ReceiptTensor] = if u.n_tensors == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(u.tensors, u.n_tensors) }
+    };
+    let mut tensors = Vec::with_capacity(raw.len());
+    for t in raw {
+        let (Ok(layer), Ok(index), Ok(len), Ok(row_bytes), Ok(n_cols)) = (
+            u32::try_from(t.layer),
+            u32::try_from(t.index),
+            usize::try_from(t.len),
+            usize::try_from(t.row_bytes),
+            usize::try_from(t.n_cols),
+        ) else {
+            return Err("malformed receipt tensor".to_string());
+        };
+        let name = if t.name.is_null() {
+            ""
+        } else {
+            unsafe { CStr::from_ptr(t.name) }.to_str().unwrap_or("")
+        };
+        tensors.push(ReceiptTensorView {
+            layer,
+            kind: t.kind,
+            index,
+            ggml_type: t.ggml_type,
+            flags: t.flags,
+            len,
+            row_bytes,
+            n_cols,
+            values: if t.values.is_null() || row_bytes * n_cols == 0 {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(t.values.cast::<u8>(), row_bytes * n_cols) }
+            },
+            name,
+        });
+    }
+    Ok(tensors)
 }
 
 /// Builds a safe view of a native ubatch; `Err` carries the native reason
@@ -196,28 +268,7 @@ unsafe fn view<'a>(u: &'a ReceiptUbatch) -> Result<ReceiptUbatchView<'a>, String
             u.input_type,
         ))
     };
-    let raw: &[ReceiptTensor] = if u.n_tensors == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(u.tensors, u.n_tensors) }
-    };
-    let mut tensors = Vec::with_capacity(raw.len());
-    for t in raw {
-        let (Ok(layer), Ok(len), Ok(n_cols)) = (
-            u32::try_from(t.layer),
-            usize::try_from(t.len),
-            usize::try_from(t.n_cols),
-        ) else {
-            return Err("malformed receipt tensor".to_string());
-        };
-        tensors.push(ReceiptTensorView {
-            layer,
-            kind: t.kind,
-            len,
-            n_cols,
-            values: unsafe { std::slice::from_raw_parts(t.values, len * n_cols) },
-        });
-    }
+    let tensors = unsafe { tensor_views(u) }?;
     Ok(ReceiptUbatchView {
         step: usize::try_from(u.step).ok(),
         token: slice(u.token),

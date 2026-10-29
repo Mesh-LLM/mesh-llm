@@ -13,12 +13,12 @@ use crate::{
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
     MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
     MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, ReceiptMemoryFn, ReceiptReplayStep,
-    ReceiptUbatchFn, RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
-    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1,
-    StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1,
-    StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo,
-    TokenLogprobs, TokenSignal, WorkloadInfoV1, runtime_abi_supported,
+    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, ReceiptGlueRequest,
+    ReceiptMemoryFn, ReceiptReplayStep, ReceiptUbatchFn, RuntimeConfig, SamplingConfig, Session,
+    SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1,
+    StagePlan, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
+    StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
+    SystemOneSlot, TensorInfo, TokenLogprobs, TokenSignal, WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -247,6 +247,8 @@ dynamic_symbols! {
     skippy_session_take_token_logprobs(session: *mut Session, out_entries: *mut TokenLogprobs, capacity: usize, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_model_set_receipt_recorder(model: *mut Model, on_ubatch: ReceiptUbatchFn, on_memory: ReceiptMemoryFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
     skippy_model_release_receipt_scratch(model: *mut Model, out_error: *mut *mut Error) -> Status;
+    skippy_model_eval_receipt_glue(model: *mut Model, request: *const ReceiptGlueRequest, on_result: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_receipt_stored_row_error(ggml_type: i32, stored: *const c_void, computed: *const f32, n: i64, stored_error: *mut f64, rounding_error: *mut f64, norm: *mut f64, out_error: *mut *mut Error) -> Status;
     skippy_model_replay_receipt(model: *mut Model, seq: i32, layer: i32, steps: *const ReceiptReplayStep, n_steps: usize, on_capture: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
     skippy_session_signal_window(session: *mut Session, window_tokens: u32, out_window: *mut GenerationSignalWindow, out_error: *mut *mut Error) -> Status;
     skippy_trim_session(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;

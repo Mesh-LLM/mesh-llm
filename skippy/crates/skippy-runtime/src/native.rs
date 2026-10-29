@@ -13,8 +13,13 @@ use crate::path_cstring::path_to_cstring;
 use crate::runtime_events;
 use crate::session::StageSession;
 use crate::vocabulary::{ensure_in_vocabulary, vocabulary_size};
+mod receipt_glue;
 mod receipts;
 
+pub use receipt_glue::{
+    ReceiptGlueInput, ReceiptGlueRequestRef, ReceiptGlueResult, ReceiptGlueTensor,
+    ReceiptGlueValues, StoredRowError, receipt_stored_row_error,
+};
 pub use receipts::{
     ReceiptMemoryEvent, ReceiptRecorderSink, ReceiptReplayStepRef, ReceiptReplayer,
     ReceiptTensorView, ReceiptUbatchView, RecordedUbatch,

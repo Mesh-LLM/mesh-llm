@@ -4,7 +4,10 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-pub const RECEIPT_VERSION: u32 = 2;
+use crate::commitment::MixingValue;
+use crate::layer_tensors::TensorKind;
+
+pub const RECEIPT_VERSION: u32 = 3;
 
 /// What the node claims it ran, attached to a response.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -32,6 +35,10 @@ pub struct StageCommitment {
     pub leaf_count: u64,
     /// Backend facts the verifier needs to pick rounding profiles.
     pub backend: String,
+    /// ggml type names of the KV cache and state rows the stage stored,
+    /// for example `f16` or `q8_0`. A client decides which it accepts.
+    #[serde(default)]
+    pub cache_types: Vec<String>,
 }
 
 impl Receipt {
@@ -65,7 +72,7 @@ pub struct Opening {
 }
 
 /// One challenged position: the layer's committed leaves with their Merkle
-/// paths, and the layer's weight matmuls recomputed by replay.
+/// paths, and the layer's weight matmuls and selections recomputed by replay.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LeafOpening {
     pub position: u32,
@@ -74,15 +81,17 @@ pub struct LeafOpening {
     /// Residual stream leaving the layer. Absent where the layer kept no row
     /// for this position (the final layer of a final stage, non-output rows).
     pub residual_out: Option<String>,
-    /// Hex sibling hashes, leaf to root, of the residual-in, attention and
+    /// Hex sibling hashes, leaf to root, of the residual-in, mixing and
     /// residual-out leaves.
     pub residual_in_path: Vec<String>,
-    pub attention_path: Vec<String>,
+    pub mixing_path: Vec<String>,
     pub residual_out_path: Vec<String>,
-    /// The layer's weight matmuls at this position. The attention leaf is
-    /// the attn_q, attn_k and attn_v outputs and the attn_output input. The
-    /// FFN matmuls are absent with `residual_out`.
+    /// The mixing leaf's values, in leaf order.
+    pub mixing: Vec<TensorOpening>,
+    /// The layer's weight matmuls at this position, by index. Matmuls after
+    /// the layer dropped this position's row are absent.
     pub matrices: Vec<MatrixOpening>,
+    pub selections: Vec<SelectionOpening>,
 }
 
 impl LeafOpening {
@@ -97,32 +106,136 @@ impl LeafOpening {
             .transpose()
     }
 
-    /// The opened matmul whose weight is `blk.<layer>.<role>.weight`.
-    pub fn matrix(&self, layer: u32, role: &str) -> Option<&MatrixOpening> {
-        let name = format!("blk.{layer}.{role}.weight");
-        self.matrices.iter().find(|m| m.weight == name)
+    pub fn matrix(&self, index: u32) -> Option<&MatrixOpening> {
+        self.matrices.iter().find(|m| m.index == index)
+    }
+
+    pub fn mixing_value(&self, kind: MixingKind, index: u32) -> Option<&TensorOpening> {
+        self.mixing
+            .iter()
+            .find(|t| t.kind == kind && t.index == index)
+    }
+
+    pub fn selection(&self, index: u32) -> Option<&SelectionOpening> {
+        self.selections.iter().find(|s| s.index == index)
     }
 }
 
-/// One weight matmul for one token: `output = weight · input`.
+/// Which part of a token-mixing op a value is.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum MixingKind {
+    Input,
+    /// A KV cache or state row as stored, in the cache's type.
+    Stored,
+    Output,
+}
+
+impl MixingKind {
+    pub fn tensor_kind(self) -> TensorKind {
+        match self {
+            Self::Input => TensorKind::MixingInput,
+            Self::Stored => TensorKind::MixingStored,
+            Self::Output => TensorKind::MixingOutput,
+        }
+    }
+
+    pub fn from_tensor_kind(kind: TensorKind) -> Option<Self> {
+        match kind {
+            TensorKind::MixingInput => Some(Self::Input),
+            TensorKind::MixingStored => Some(Self::Stored),
+            TensorKind::MixingOutput => Some(Self::Output),
+            _ => None,
+        }
+    }
+}
+
+/// One committed token-mixing value.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TensorOpening {
+    pub kind: MixingKind,
+    pub index: u32,
+    /// ggml type of the values.
+    pub ggml_type: i32,
+    /// Base64 little-endian values; absent where the layer kept no row.
+    pub values: Option<String>,
+}
+
+impl TensorOpening {
+    pub fn new(kind: MixingKind, index: u32, value: Option<(i32, &[u8])>) -> Self {
+        Self {
+            kind,
+            index,
+            ggml_type: value.map_or(crate::layer_tensors::GGML_F32, |(t, _)| t),
+            values: value.map(|(_, bytes)| encode_bytes(bytes)),
+        }
+    }
+
+    pub fn bytes(&self) -> Result<Option<Vec<u8>>> {
+        self.values
+            .as_deref()
+            .map(|text| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(text)
+                    .context("decode a mixing value")
+            })
+            .transpose()
+    }
+
+    /// The f32 values; an error for another type.
+    pub fn f32_values(&self) -> Result<Option<Vec<f32>>> {
+        if self.ggml_type != crate::layer_tensors::GGML_F32 {
+            bail!("mixing value {:?} {} is not f32", self.kind, self.index);
+        }
+        Ok(self
+            .bytes()?
+            .map(|bytes| crate::layer_tensors::decode_f32_bytes(&bytes)))
+    }
+}
+
+/// A mixing value decoded for hashing: kind, index, ggml type and bytes.
+pub type DecodedMixing = (MixingKind, u32, i32, Option<Vec<u8>>);
+
+/// Decodes the mixing values of a leaf for hashing.
+pub fn mixing_bytes(values: &[TensorOpening]) -> Result<Vec<DecodedMixing>> {
+    values
+        .iter()
+        .map(|t| Ok((t.kind, t.index, t.ggml_type, t.bytes()?)))
+        .collect()
+}
+
+/// Borrows decoded mixing values as leaf inputs.
+pub fn mixing_values(decoded: &[DecodedMixing]) -> Vec<MixingValue<'_>> {
+    decoded
+        .iter()
+        .map(|(kind, index, ggml_type, bytes)| MixingValue {
+            kind: kind.tensor_kind(),
+            index: *index,
+            value: bytes.as_deref().map(|b| (*ggml_type, b)),
+        })
+        .collect()
+}
+
+/// One weight matmul for one token: `output = weight · input`. For a
+/// `mul_mat_id`, one slice of input and output per expert used.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MatrixOpening {
+    /// Ordinal among the layer's weight matmuls.
+    pub index: u32,
     /// GGUF tensor name, e.g. `blk.12.attn_q.weight`.
     pub weight: String,
+    /// The output feeds a selection (MoE routing); every row is checked.
+    #[serde(default)]
+    pub router: bool,
+    /// The experts a `mul_mat_id` used, one per output slice.
+    #[serde(default)]
+    pub experts: Option<Vec<i32>>,
     /// Base64 little-endian f32.
     pub input: String,
     pub output: String,
 }
 
 impl MatrixOpening {
-    pub fn new(weight: &str, input: &[f32], output: &[f32]) -> Self {
-        Self {
-            weight: weight.to_owned(),
-            input: encode_f32(input),
-            output: encode_f32(output),
-        }
-    }
-
     pub fn input_values(&self) -> Result<Vec<f32>> {
         decode_f32(&self.input).with_context(|| format!("decode input of {}", self.weight))
     }
@@ -132,8 +245,18 @@ impl MatrixOpening {
     }
 }
 
+/// The ids a selection (`argsort` or top-k) picked for one token.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SelectionOpening {
+    pub index: u32,
+    pub ids: Vec<i32>,
+}
+
 pub fn encode_f32(values: &[f32]) -> String {
-    let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    encode_bytes(&crate::layer_tensors::f32_bytes(values))
+}
+
+pub fn encode_bytes(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
@@ -169,6 +292,7 @@ mod tests {
             root: String::new(),
             leaf_count: 0,
             backend: String::new(),
+            cache_types: Vec::new(),
         };
         let receipt = Receipt {
             version: RECEIPT_VERSION,

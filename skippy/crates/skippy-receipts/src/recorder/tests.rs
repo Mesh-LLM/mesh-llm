@@ -3,64 +3,146 @@ use std::collections::HashMap;
 
 use super::*;
 use crate::audit::verify_paths;
-use crate::wire::{RECEIPT_VERSION, Receipt};
+use crate::layer_tensors::{GGML_I32, TensorColumn, f32_bytes, i32_bytes};
+use crate::wire::{RECEIPT_VERSION, Receipt, encode_f32};
 
 const LAYERS: Range<u32> = 2..4;
+/// ggml type of the stored rows: f16.
+const CACHE_TYPE: i32 = 1;
 
 /// A deterministic stand-in for the values a layer computes for a token.
-fn value(layer: u32, kind: TensorKind, token: i32, position: i32) -> Vec<f32> {
-    let base =
-        layer as f32 * 100.0 + kind as u8 as f32 + token as f32 * 0.25 + position as f32 * 0.5;
+fn value(layer: u32, kind: TensorKind, index: u32, token: i32, position: i32) -> Vec<f32> {
+    let base = layer as f32 * 100.0
+        + kind.code() as f32
+        + index as f32 * 10.0
+        + token as f32 * 0.25
+        + position as f32 * 0.5;
     vec![base, base + 1.0, -base]
 }
 
-/// Columns of a ubatch computed by `value`. The final residual of the last
-/// layer exists only for output rows, as on a final stage.
-struct Columns(HashMap<(u32, TensorKind, usize), Vec<f32>>);
+type Key = (u32, TensorKind, u32, usize);
+
+/// Columns of a ubatch computed by `value`: per layer a mixing input, a
+/// stored row and a mixing output; in the opened layer also four attention
+/// matmuls, and for output rows two FFN matmuls (one with experts) and a
+/// selection. The final residual of the last layer exists only for output
+/// rows, as on a final stage.
+struct Columns(HashMap<Key, (i32, i32, String, Vec<u8>)>);
 
 impl Columns {
     fn new(record: &UbatchRecord, open_layer: Option<u32>) -> Self {
-        let mut map = HashMap::new();
+        let mut columns = Self(HashMap::new());
         for col in 0..record.token.len() {
             let (token, pos) = (record.token[col], record.pos[col]);
+            let f32_at = |layer, kind, index| f32_bytes(&value(layer, kind, index, token, pos));
             for layer in LAYERS {
                 for kind in [
                     TensorKind::Residual,
-                    TensorKind::AttnQ,
-                    TensorKind::AttnK,
-                    TensorKind::AttnV,
-                    TensorKind::AttnOut,
+                    TensorKind::MixingInput,
+                    TensorKind::MixingOutput,
                 ] {
-                    map.insert((layer, kind, col), value(layer, kind, token, pos));
+                    columns.put(
+                        (layer, kind, 0, col),
+                        GGML_F32,
+                        0,
+                        "",
+                        f32_at(layer, kind, 0),
+                    );
                 }
+                let stored = value(layer, TensorKind::MixingStored, 0, token, pos)
+                    .iter()
+                    .flat_map(|v| half::f16::from_f32(*v).to_le_bytes())
+                    .collect();
+                columns.put(
+                    (layer, TensorKind::MixingStored, 0, col),
+                    CACHE_TYPE,
+                    0,
+                    "",
+                    stored,
+                );
                 if open_layer == Some(layer) {
-                    for kind in [
-                        TensorKind::AttnIn,
-                        TensorKind::AttnProj,
-                        TensorKind::FfnIn,
-                        TensorKind::FfnGate,
-                        TensorKind::FfnUp,
-                        TensorKind::FfnDownIn,
-                        TensorKind::FfnDown,
-                    ] {
-                        map.insert((layer, kind, col), value(layer, kind, token, pos));
-                    }
+                    let matmuls = if record.output[col] != 0 { 6 } else { 4 };
+                    columns.add_matmuls(layer, col, matmuls, &f32_at);
                 }
             }
             if record.output[col] != 0 {
-                map.insert(
-                    (LAYERS.end, TensorKind::Residual, col),
-                    value(LAYERS.end, TensorKind::Residual, token, pos),
+                let key = (LAYERS.end, TensorKind::Residual, 0, col);
+                columns.put(
+                    key,
+                    GGML_F32,
+                    0,
+                    "",
+                    f32_at(LAYERS.end, TensorKind::Residual, 0),
                 );
             }
         }
-        Self(map)
+        columns
+    }
+
+    fn put(&mut self, key: Key, ggml_type: i32, flags: i32, name: &str, bytes: Vec<u8>) {
+        self.0
+            .insert(key, (ggml_type, flags, name.to_owned(), bytes));
+    }
+
+    fn add_matmuls(
+        &mut self,
+        layer: u32,
+        col: usize,
+        count: u32,
+        f32_at: &dyn Fn(u32, TensorKind, u32) -> Vec<u8>,
+    ) {
+        for index in 0..count {
+            let name = format!("blk.{layer}.w{index}.weight");
+            let flags = if index == 4 { FLAG_ROUTER } else { 0 };
+            for kind in [TensorKind::MatmulInput, TensorKind::MatmulOutput] {
+                self.put(
+                    (layer, kind, index, col),
+                    GGML_F32,
+                    flags,
+                    &name,
+                    f32_at(layer, kind, index),
+                );
+            }
+        }
+        if count > 4 {
+            let ids = i32_bytes(&[3, 1]);
+            self.put(
+                (layer, TensorKind::ExpertIds, 5, col),
+                GGML_I32,
+                0,
+                "",
+                ids.clone(),
+            );
+            self.put((layer, TensorKind::Selection, 0, col), GGML_I32, 0, "", ids);
+        }
     }
 }
 
 impl UbatchColumns for Columns {
-    fn column(&self, layer: u32, kind: TensorKind, col: usize) -> Option<&[f32]> {
-        self.0.get(&(layer, kind, col)).map(Vec::as_slice)
+    fn count(&self, layer: u32, kind: TensorKind) -> u32 {
+        self.0
+            .keys()
+            .filter(|k| k.0 == layer && k.1 == kind)
+            .map(|k| k.2 + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn column(
+        &self,
+        layer: u32,
+        kind: TensorKind,
+        index: u32,
+        col: usize,
+    ) -> Option<TensorColumn<'_>> {
+        self.0
+            .get(&(layer, kind, index, col))
+            .map(|(ggml_type, flags, name, bytes)| TensorColumn {
+                ggml_type: *ggml_type,
+                flags: *flags,
+                name,
+                bytes,
+            })
     }
 }
 
@@ -117,8 +199,10 @@ impl Replayer for FakeReplayer {
                 let position = u32::try_from(record.pos[col])?;
                 if record.seq[col] == seq && capture.contains(&position) {
                     let mut layer_values = ReplayedLayer::from_columns(layer, &columns, col)?;
-                    if self.corrupt {
-                        layer_values.q[0] += 1.0;
+                    if self.corrupt
+                        && let Some((_, bytes)) = &mut layer_values.mixing[0].value
+                    {
+                        bytes[0] ^= 1;
                     }
                     out.push((position, layer_values));
                 }
@@ -151,6 +235,23 @@ fn two_lane_turn() -> Recorder {
     recorder
 }
 
+/// Position 1 is not an output row: its final residual, FFN matmuls and
+/// selection are absent. Position 3 has them all.
+fn check_opened_layer(opening: &Opening) {
+    let (early, output) = (&opening.leaves[0], &opening.leaves[1]);
+    assert!(early.residual_out.is_none());
+    assert_eq!(early.matrices.len(), 4);
+    assert!(early.selections.is_empty());
+    assert_eq!(output.matrices.len(), 6);
+    assert_eq!(output.mixing.len(), 3);
+    assert_eq!(output.mixing[1].kind, crate::wire::MixingKind::Stored);
+    assert_eq!(output.mixing[1].ggml_type, CACHE_TYPE);
+    assert!(output.matrices[4].router);
+    assert_eq!(output.matrices[5].experts, Some(vec![3, 1]));
+    assert_eq!(output.selections[0].ids, vec![3, 1]);
+    assert_eq!(output.matrices[2].weight, "blk.3.w2.weight");
+}
+
 #[test]
 fn a_replayed_opening_verifies_against_the_root() {
     let recorder = two_lane_turn();
@@ -164,11 +265,14 @@ fn a_replayed_opening_verifies_against_the_root() {
     };
     let replayer = FakeReplayer::default();
     let opening = recorder.open(&challenge, &replayer).unwrap();
-    verify_paths(&receipt(stage, 0..4), &challenge, &opening).unwrap();
-    // Position 1 is not an output row: its final residual and FFN are absent.
-    assert!(opening.leaves[0].residual_out.is_none());
-    assert_eq!(opening.leaves[0].matrices.len(), 4);
-    assert_eq!(opening.leaves[1].matrices.len(), 7);
+    assert_eq!(stage.cache_types, vec!["f16".to_string()]);
+    verify_paths(&receipt(stage.clone(), 0..4), &challenge, &opening).unwrap();
+    check_opened_layer(&opening);
+
+    // a receipt that does not name the stored rows' type is refused
+    let mut unnamed = stage;
+    unnamed.cache_types = vec!["q8_0".into()];
+    assert!(verify_paths(&receipt(unnamed, 0..4), &challenge, &opening).is_err());
 
     let steps = replayer.steps.borrow();
     let ReplayStep::Decode { record, capture } = &steps[1] else {

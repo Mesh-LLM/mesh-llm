@@ -1,17 +1,16 @@
 use std::ffi::{c_char, c_void};
 
 pub const RECEIPT_TENSOR_RESIDUAL: i32 = 0;
-pub const RECEIPT_TENSOR_ATTN_Q: i32 = 1;
-pub const RECEIPT_TENSOR_ATTN_K: i32 = 2;
-pub const RECEIPT_TENSOR_ATTN_V: i32 = 3;
-pub const RECEIPT_TENSOR_ATTN_OUT: i32 = 4;
-pub const RECEIPT_TENSOR_ATTN_IN: i32 = 5;
-pub const RECEIPT_TENSOR_ATTN_PROJ: i32 = 6;
-pub const RECEIPT_TENSOR_FFN_IN: i32 = 7;
-pub const RECEIPT_TENSOR_FFN_GATE: i32 = 8;
-pub const RECEIPT_TENSOR_FFN_UP: i32 = 9;
-pub const RECEIPT_TENSOR_FFN_DOWN_IN: i32 = 10;
-pub const RECEIPT_TENSOR_FFN_DOWN: i32 = 11;
+pub const RECEIPT_TENSOR_MIXING_INPUT: i32 = 1;
+pub const RECEIPT_TENSOR_MIXING_STORED: i32 = 2;
+pub const RECEIPT_TENSOR_MIXING_OUTPUT: i32 = 3;
+pub const RECEIPT_TENSOR_MATMUL_INPUT: i32 = 4;
+pub const RECEIPT_TENSOR_MATMUL_OUTPUT: i32 = 5;
+pub const RECEIPT_TENSOR_EXPERT_IDS: i32 = 6;
+pub const RECEIPT_TENSOR_SELECTION: i32 = 7;
+pub const RECEIPT_TENSOR_SELECTION_SCORES: i32 = 8;
+
+pub const RECEIPT_TENSOR_ROUTER: i32 = 1;
 
 pub const RECEIPT_MEMORY_CLEAR: i32 = 0;
 pub const RECEIPT_MEMORY_SEQ_RM: i32 = 1;
@@ -30,9 +29,14 @@ pub const RECEIPT_REPLAY_SEQ_RM: i32 = 1;
 pub struct ReceiptTensor {
     pub layer: i32,
     pub kind: i32,
+    pub index: i32,
+    pub ggml_type: i32,
+    pub flags: i32,
     pub len: i64,
+    pub row_bytes: i64,
     pub n_cols: i64,
-    pub values: *const f32,
+    pub values: *const c_void,
+    pub name: *const c_char,
 }
 
 /// Mirrors `struct skippy_receipt_ubatch`.
@@ -53,6 +57,8 @@ pub struct ReceiptUbatch {
     pub n_tensors: usize,
     pub tensors: *const ReceiptTensor,
     pub error: *const c_char,
+    pub n_unchecked_weights: usize,
+    pub unchecked_weights: *const *const c_char,
 }
 
 /// Mirrors `struct skippy_receipt_memory_event`.
@@ -84,6 +90,30 @@ pub struct ReceiptReplayStep {
     pub p0: i32,
     pub p1: i32,
     pub capture: i32,
+}
+
+/// Mirrors `struct skippy_receipt_glue_value`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ReceiptGlueValue {
+    pub kind: i32,
+    pub index: i32,
+    pub ggml_type: i32,
+    pub len: i64,
+    pub values: *const c_void,
+}
+
+/// Mirrors `struct skippy_receipt_glue_request`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ReceiptGlueRequest {
+    pub layer: i32,
+    pub n_cols: i32,
+    pub pos: *const i32,
+    pub residual: *const f32,
+    pub residual_len: i64,
+    pub n_values: usize,
+    pub values: *const ReceiptGlueValue,
 }
 
 /// Mirrors `skippy_receipt_ubatch_fn`.

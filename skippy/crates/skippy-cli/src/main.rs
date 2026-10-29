@@ -4,6 +4,7 @@ mod disk_cache;
 mod local_model;
 mod local_resource_planning;
 mod native_logging;
+mod receipt_glue;
 mod runtime;
 mod serve;
 mod serve_settings;
@@ -101,7 +102,10 @@ async fn run_main(
     let native_options = runtime::resolve_options(cli.native_runtime)?;
     #[cfg(feature = "dynamic-native-runtime")]
     if matches!(&cli.command, Command::Serve(args) if !args.print_effective_config || args.public.config.is_none())
-        || matches!(&cli.command, Command::PlanSplit(_))
+        || matches!(
+            &cli.command,
+            Command::PlanSplit(_) | Command::AuditReceipt(_)
+        )
     {
         runtime::prepare_native_runtime(&native_options, automatic_runtime).await?;
     }
@@ -126,7 +130,13 @@ async fn run_main(
         Command::PlanSplit(args) => skippy_commands::split::run(args.into()),
         Command::AuditReceipt(args) => {
             let command = args.into();
-            tokio::task::spawn_blocking(move || skippy_commands::receipts::run(command)).await?
+            tokio::task::spawn_blocking(move || {
+                skippy_commands::receipts::run(command, &|path, layer| {
+                    let evaluator = receipt_glue::NativeGlueEvaluator::open(path, layer)?;
+                    Ok(Box::new(evaluator) as Box<dyn skippy_receipts::glue::GlueEvaluator>)
+                })
+            })
+            .await?
         }
         Command::Runtime { command } => {
             skippy_commands::runtime::run(

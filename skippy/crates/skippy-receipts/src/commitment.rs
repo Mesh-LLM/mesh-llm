@@ -3,17 +3,20 @@
 //! A stage holding layers `start..end` commits, for every position, to
 //! `2 · (end - start) + 1` leaves in this order:
 //!
-//! `residual(start), attention(start), residual(start + 1), ..., attention(end - 1), residual(end)`
+//! `residual(start), mixing(start), residual(start + 1), ..., mixing(end - 1), residual(end)`
 //!
 //! A residual leaf holds the residual stream entering a layer (`residual(end)`
-//! is the stage output). An attention leaf holds the outputs of the layer's
-//! attn_q, attn_k and attn_v matmuls and the attention output that feeds
-//! attn_output. Leaves are ordered by position, then by that slot order.
+//! is the stage output). A mixing leaf holds the inputs, stored KV or state
+//! rows, and outputs of the layer's token-mixing ops (see
+//! [`crate::layer_tensors`]). Leaves are ordered by position, then by that
+//! slot order.
 
 use anyhow::{Result, bail};
 
-const RESIDUAL_DOMAIN: &[u8] = b"skippy-receipt-residual-v2";
-const ATTENTION_DOMAIN: &[u8] = b"skippy-receipt-attention-v2";
+use crate::layer_tensors::TensorKind;
+
+const RESIDUAL_DOMAIN: &[u8] = b"skippy-receipt-residual-v3";
+const MIXING_DOMAIN: &[u8] = b"skippy-receipt-mixing-v3";
 const NODE_DOMAIN: &[u8] = b"skippy-receipt-node-v1";
 
 pub type Hash = [u8; 32];
@@ -28,8 +31,8 @@ pub fn residual_slot(layer: u32, layer_start: u32) -> u64 {
     2 * u64::from(layer - layer_start)
 }
 
-/// Slot of the attention leaf of `layer`.
-pub fn attention_slot(layer: u32, layer_start: u32) -> u64 {
+/// Slot of the mixing leaf of `layer`.
+pub fn mixing_slot(layer: u32, layer_start: u32) -> u64 {
     residual_slot(layer, layer_start) + 1
 }
 
@@ -38,21 +41,17 @@ pub fn leaf_index(position: u32, slot: u64, position_start: u32, slots: u64) -> 
     u64::from(position - position_start) * slots + slot
 }
 
-/// Hashes the length, then the little-endian bytes of the values. The bytes
-/// go to BLAKE3 in one call, so it can hash many chunks in parallel lanes.
-fn hash_f32(hasher: &mut blake3::Hasher, values: &[f32]) {
-    hasher.update(&(values.len() as u32).to_le_bytes());
-    #[cfg(target_endian = "little")]
-    hasher.update(bytemuck::cast_slice(values));
-    #[cfg(target_endian = "big")]
-    for v in values {
-        hasher.update(&v.to_le_bytes());
-    }
+/// Hashes the byte length, then the bytes. The bytes go to BLAKE3 in one
+/// call, so it can hash many chunks in parallel lanes.
+fn hash_bytes(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hasher.update(&(bytes.len() as u32).to_le_bytes());
+    hasher.update(bytes);
 }
 
-/// The residual leaf of `layer` at `position`. `None` marks a row the layer
-/// did not produce: the final layer of a final stage keeps only output rows.
-pub fn residual_leaf(position: u32, layer: u32, values: Option<&[f32]>) -> Hash {
+/// The residual leaf of `layer` at `position`, over little-endian f32
+/// bytes. `None` marks a row the layer did not produce: the final layer of
+/// a final stage keeps only output rows.
+pub fn residual_leaf(position: u32, layer: u32, values: Option<&[u8]>) -> Hash {
     let mut hasher = blake3::Hasher::new();
     hasher.update(RESIDUAL_DOMAIN);
     hasher.update(&position.to_le_bytes());
@@ -60,7 +59,7 @@ pub fn residual_leaf(position: u32, layer: u32, values: Option<&[f32]>) -> Hash 
     match values {
         Some(values) => {
             hasher.update(&[1]);
-            hash_f32(&mut hasher, values);
+            hash_bytes(&mut hasher, values);
         }
         None => {
             hasher.update(&[0]);
@@ -69,21 +68,36 @@ pub fn residual_leaf(position: u32, layer: u32, values: Option<&[f32]>) -> Hash 
     *hasher.finalize().as_bytes()
 }
 
-/// The attention leaf of `layer` at `position`: q, k, v and the attention output.
-pub fn attention_leaf(
-    position: u32,
-    layer: u32,
-    q: &[f32],
-    k: &[f32],
-    v: &[f32],
-    out: &[f32],
-) -> Hash {
+/// One committed token-mixing value of a layer at a position.
+#[derive(Clone, Copy, Debug)]
+pub struct MixingValue<'a> {
+    pub kind: TensorKind,
+    pub index: u32,
+    /// ggml type and little-endian bytes; `None` where the layer kept no row.
+    pub value: Option<(i32, &'a [u8])>,
+}
+
+/// The mixing leaf of `layer` at `position`, over its values in leaf order
+/// (inputs, stored rows, outputs, each by index).
+pub fn mixing_leaf(position: u32, layer: u32, values: &[MixingValue<'_>]) -> Hash {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(ATTENTION_DOMAIN);
+    hasher.update(MIXING_DOMAIN);
     hasher.update(&position.to_le_bytes());
     hasher.update(&layer.to_le_bytes());
-    for values in [q, k, v, out] {
-        hash_f32(&mut hasher, values);
+    hasher.update(&(values.len() as u32).to_le_bytes());
+    for v in values {
+        hasher.update(&v.kind.code().to_le_bytes());
+        hasher.update(&v.index.to_le_bytes());
+        match v.value {
+            Some((ggml_type, bytes)) => {
+                hasher.update(&[1]);
+                hasher.update(&ggml_type.to_le_bytes());
+                hash_bytes(&mut hasher, bytes);
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
     }
     *hasher.finalize().as_bytes()
 }
@@ -187,8 +201,10 @@ pub fn root_from_path(leaf: Hash, index: u64, path: &[String]) -> Result<Hash> {
 mod tests {
     use super::*;
 
+    use crate::layer_tensors::f32_bytes;
+
     fn leaf(i: u32) -> Hash {
-        residual_leaf(i, 0, Some(&[i as f32, 1.0]))
+        residual_leaf(i, 0, Some(&f32_bytes(&[i as f32, 1.0])))
     }
 
     #[test]
@@ -212,7 +228,7 @@ mod tests {
         let leaves: Vec<Hash> = (0..6).map(leaf).collect();
         let tree = MerkleTree::new(leaves).unwrap();
         let path = encode_path(&tree.path(2).unwrap());
-        let forged = residual_leaf(2, 0, Some(&[2.0001, 1.0]));
+        let forged = residual_leaf(2, 0, Some(&f32_bytes(&[2.0001, 1.0])));
         assert_ne!(root_from_path(forged, 2, &path).unwrap(), tree.root());
     }
 
@@ -222,23 +238,27 @@ mod tests {
     }
 
     #[test]
-    fn long_rows_hash_like_their_bytes() {
-        let values: Vec<f32> = (0..5000).map(|i| i as f32 * 0.5).collect();
-        let mut expected = blake3::Hasher::new();
-        expected.update(&5000u32.to_le_bytes());
-        for v in &values {
-            expected.update(&v.to_le_bytes());
-        }
-        let mut actual = blake3::Hasher::new();
-        hash_f32(&mut actual, &values);
-        assert_eq!(expected.finalize(), actual.finalize());
+    fn mixing_values_bind_type_and_presence() {
+        let bytes = [1u8, 2, 3, 4];
+        let value = |ggml_type, present: bool| MixingValue {
+            kind: TensorKind::MixingStored,
+            index: 0,
+            value: present.then_some((ggml_type, &bytes[..])),
+        };
+        let a = mixing_leaf(1, 2, &[value(1, true)]);
+        assert_ne!(a, mixing_leaf(1, 2, &[value(8, true)]));
+        assert_ne!(a, mixing_leaf(1, 2, &[value(1, false)]));
+        assert_ne!(a, mixing_leaf(1, 3, &[value(1, true)]));
+        let mut other = value(1, true);
+        other.kind = TensorKind::MixingOutput;
+        assert_ne!(a, mixing_leaf(1, 2, &[other]));
     }
 
     #[test]
-    fn slots_order_residuals_and_attention_by_layer() {
+    fn slots_order_residuals_and_mixing_by_layer() {
         assert_eq!(slots_per_position(18, 36), 37);
         assert_eq!(residual_slot(18, 18), 0);
-        assert_eq!(attention_slot(18, 18), 1);
+        assert_eq!(mixing_slot(18, 18), 1);
         assert_eq!(residual_slot(36, 18), 36);
         assert_eq!(leaf_index(11, 36, 10, 37), 73);
     }

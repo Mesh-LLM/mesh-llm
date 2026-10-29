@@ -62,9 +62,11 @@ pub use logging::{
 };
 pub use media::{MediaRejected, SpeechAudio, SpeechOutputFormat, SpeechSynthesisConfig};
 pub use native::{
-    ModelWorkload, PoolingType, ReceiptMemoryEvent, ReceiptRecorderSink, ReceiptReplayStepRef,
-    ReceiptReplayer, ReceiptTensorView, ReceiptUbatchView, RecordedUbatch, StageModel,
-    StageModelReader, SystemOneReadSlot, WorkloadInfo,
+    ModelWorkload, PoolingType, ReceiptGlueInput, ReceiptGlueRequestRef, ReceiptGlueResult,
+    ReceiptGlueTensor, ReceiptGlueValues, ReceiptMemoryEvent, ReceiptRecorderSink,
+    ReceiptReplayStepRef, ReceiptReplayer, ReceiptTensorView, ReceiptUbatchView, RecordedUbatch,
+    StageModel, StageModelReader, StoredRowError, SystemOneReadSlot, WorkloadInfo,
+    receipt_stored_row_error,
 };
 pub use native_mtp::NativeMtpDraft;
 pub use native_test_evidence::write_evidence_marker;

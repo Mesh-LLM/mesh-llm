@@ -1,5 +1,6 @@
 //! Client-side checks of an opening: Merkle paths against the receipt, then
-//! random weight rows against the opened matmul columns.
+//! weight rows against the opened matmul columns: random rows for most
+//! matmuls, every row for a router.
 
 use std::collections::BTreeMap;
 
@@ -7,11 +8,14 @@ use anyhow::{Context, Result, bail};
 use rand::RngExt;
 
 use crate::commitment::{
-    attention_leaf, attention_slot, leaf_index, residual_leaf, residual_slot, root_from_path,
+    leaf_index, mixing_leaf, mixing_slot, residual_leaf, residual_slot, root_from_path,
     slots_per_position,
 };
-use crate::weights::WeightFile;
-use crate::wire::{Challenge, Opening, Receipt};
+use crate::layer_tensors::f32_bytes;
+use crate::weights::{TensorInfo, WeightFile};
+use crate::wire::{
+    Challenge, MatrixOpening, MixingKind, Opening, Receipt, mixing_bytes, mixing_values,
+};
 
 /// A column check fails above this relative error (see RECEIPTS.md).
 pub const TOLERANCE: f64 = 1e-3;
@@ -92,7 +96,7 @@ fn quantize_q8_blocks(profile: Profile, x: &[f32]) -> Vec<f64> {
 
 /// Relative error of the checked rows (RECEIPTS.md, "Fail rule"):
 /// `||y[R] - y_ref[R]|| / (||y|| · sqrt(|R| / M))`.
-pub fn column_error(rows: &[(usize, Vec<f64>)], x: &[f64], y: &[f32]) -> f64 {
+pub fn column_error(rows: &[(usize, &[f64])], x: &[f64], y: &[f32]) -> f64 {
     let norm_y = y
         .iter()
         .map(|&v| f64::from(v) * f64::from(v))
@@ -116,6 +120,9 @@ pub fn column_error(rows: &[(usize, Vec<f64>)], x: &[f64], y: &[f32]) -> f64 {
 pub struct MatrixVerdict {
     pub weight: String,
     pub weight_type: String,
+    /// A router: every row was checked.
+    pub router: bool,
+    /// Columns checked: one per position, or one per expert used.
     pub tokens: usize,
     pub failing_tokens: usize,
     pub max_error: f64,
@@ -133,8 +140,8 @@ pub struct AuditReport {
 }
 
 /// Checks that every opened leaf hashes to the stage root in the receipt:
-/// the residual stream entering and leaving the layer, and the attention
-/// leaf (the attn_q, attn_k and attn_v outputs and the attn_output input).
+/// the residual stream entering and leaving the layer, and the mixing leaf.
+/// Stored rows must be in a cache type the receipt names.
 pub fn verify_paths(receipt: &Receipt, challenge: &Challenge, opening: &Opening) -> Result<()> {
     let layer = challenge.layer;
     let stage = receipt
@@ -159,17 +166,17 @@ pub fn verify_paths(receipt: &Receipt, challenge: &Challenge, opening: &Opening)
         if position < receipt.position_start || position >= receipt.position_end {
             bail!("position {position} is outside the receipt");
         }
-        let output = |role: &str| -> Result<Vec<f32>> {
-            leaf.matrix(layer, role)
-                .with_context(|| format!("position {position}: no {role} matmul opened"))?
-                .output_values()
-        };
-        let attn_out = leaf
-            .matrix(layer, "attn_output")
-            .with_context(|| format!("position {position}: no attn_output matmul opened"))?
-            .input_values()?;
-        let residual_in = leaf.residual_in_values()?;
-        let residual_out = leaf.residual_out_values()?;
+        for stored in leaf.mixing.iter().filter(|t| t.kind == MixingKind::Stored) {
+            let name = crate::weights::type_name(stored.ggml_type as u32);
+            if !stage.cache_types.contains(&name) {
+                bail!(
+                    "position {position}: a stored row is {name}, which the receipt does not name"
+                );
+            }
+        }
+        let residual_in = f32_bytes(&leaf.residual_in_values()?);
+        let residual_out = leaf.residual_out_values()?.map(|v| f32_bytes(&v));
+        let decoded = mixing_bytes(&leaf.mixing)?;
         let checks = [
             (
                 "residual-in",
@@ -178,17 +185,10 @@ pub fn verify_paths(receipt: &Receipt, challenge: &Challenge, opening: &Opening)
                 residual_leaf(position, layer, Some(&residual_in)),
             ),
             (
-                "attention",
-                attention_slot(layer, stage.layer_start),
-                &leaf.attention_path,
-                attention_leaf(
-                    position,
-                    layer,
-                    &output("attn_q")?,
-                    &output("attn_k")?,
-                    &output("attn_v")?,
-                    &attn_out,
-                ),
+                "mixing",
+                mixing_slot(layer, stage.layer_start),
+                &leaf.mixing_path,
+                mixing_leaf(position, layer, &mixing_values(&decoded)),
             ),
             (
                 "residual-out",
@@ -209,46 +209,172 @@ pub fn verify_paths(receipt: &Receipt, challenge: &Challenge, opening: &Opening)
     Ok(())
 }
 
+/// One opened matmul column split into the slices one weight row meets: a
+/// `mul_mat_id` has one per expert used, a batched matmul one per batch.
+struct MatmulSlices {
+    /// Values per weight row (K) and rows per weight matrix (M).
+    k: usize,
+    m: usize,
+    /// Per output slice: the first weight row and the input slice.
+    slices: Vec<(u64, usize)>,
+}
+
+fn matmul_slices(
+    tensor: &TensorInfo,
+    m: &MatrixOpening,
+    x: usize,
+    y: usize,
+) -> Result<MatmulSlices> {
+    let k = usize::try_from(tensor.row_len())?;
+    let rows = usize::try_from(tensor.rows())?;
+    let matrices = tensor.dims.get(2).copied().unwrap_or(1);
+    let shape = || {
+        format!(
+            "{}: opened input of {x} and output of {y} values do not fit the claimed weight {:?}",
+            m.weight, tensor.dims
+        )
+    };
+    if k == 0 || rows == 0 || !x.is_multiple_of(k) || !y.is_multiple_of(rows) {
+        bail!(shape());
+    }
+    let (groups_in, groups_out) = (x / k, y / rows);
+    let slices = match &m.experts {
+        Some(experts) => {
+            if experts.len() != groups_out || (groups_in != 1 && groups_in != groups_out) {
+                bail!(shape());
+            }
+            experts
+                .iter()
+                .enumerate()
+                .map(|(g, &e)| {
+                    let e = u64::try_from(e)
+                        .ok()
+                        .filter(|&e| e < matrices)
+                        .with_context(|| {
+                            format!("{}: expert {e} outside {matrices} experts", m.weight)
+                        })?;
+                    Ok((e * rows as u64, if groups_in == 1 { 0 } else { g }))
+                })
+                .collect::<Result<_>>()?
+        }
+        None => {
+            if groups_in != groups_out {
+                bail!(shape());
+            }
+            match matrices {
+                1 => (0..groups_out).map(|g| (0, g)).collect(),
+                n if n == groups_out as u64 => (0..groups_out)
+                    .map(|g| (g as u64 * rows as u64, g))
+                    .collect(),
+                _ => bail!(shape()),
+            }
+        }
+    };
+    Ok(MatmulSlices { k, m: rows, slices })
+}
+
+/// Weight rows already read, by tensor and row.
+#[derive(Default)]
+struct RowCache {
+    rows: BTreeMap<(String, u64), Vec<f64>>,
+    /// Row indices checked per weight; every row for a router.
+    picked: BTreeMap<String, Vec<usize>>,
+}
+
+impl RowCache {
+    fn picked(
+        &mut self,
+        weight: &str,
+        m: usize,
+        all: bool,
+        rng: &mut impl rand::Rng,
+    ) -> Vec<usize> {
+        self.picked
+            .entry(weight.to_owned())
+            .or_insert_with(|| {
+                if all || m <= ROWS_PER_MATRIX {
+                    return (0..m).collect();
+                }
+                let mut picked = std::collections::BTreeSet::new();
+                while picked.len() < ROWS_PER_MATRIX {
+                    picked.insert(rng.random_range(0..m));
+                }
+                picked.into_iter().collect()
+            })
+            .clone()
+    }
+
+    fn load(&mut self, weights: &WeightFile, weight: &str, row: u64) -> Result<()> {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            self.rows.entry((weight.to_owned(), row))
+        {
+            entry.insert(weights.row(weight, row)?);
+        }
+        Ok(())
+    }
+}
+
+/// Per checked column: its error, and the profile that gave it.
+type ColumnErrors = Vec<(f64, &'static str)>;
+
+/// Errors of every slice of one opened matmul column, with the best profile.
+fn matmul_errors(
+    weights: &WeightFile,
+    cache: &mut RowCache,
+    m: &MatrixOpening,
+    rng: &mut impl rand::Rng,
+) -> Result<ColumnErrors> {
+    let x = m.input_values()?;
+    let y = m.output_values()?;
+    let tensor = weights.tensor(&m.weight)?;
+    let shape = matmul_slices(tensor, m, x.len(), y.len())?;
+    let picked = cache.picked(&m.weight, shape.m, m.router, rng);
+    let mut errors = Vec::with_capacity(shape.slices.len());
+    for (g, &(base, input)) in shape.slices.iter().enumerate() {
+        for &r in &picked {
+            cache.load(weights, &m.weight, base + r as u64)?;
+        }
+        let rows: Vec<(usize, &[f64])> = picked
+            .iter()
+            .map(|&r| {
+                (
+                    r,
+                    cache.rows[&(m.weight.clone(), base + r as u64)].as_slice(),
+                )
+            })
+            .collect();
+        let xs = &x[input * shape.k..(input + 1) * shape.k];
+        let ys = &y[g * shape.m..(g + 1) * shape.m];
+        let best = PROFILES
+            .iter()
+            .map(|p| (column_error(&rows, &p.apply(xs), ys), p.name()))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("profiles");
+        errors.push(best);
+    }
+    Ok(errors)
+}
+
 /// Row checks of every opened matrix against the claimed weights.
 pub fn check_rows(
     weights: &WeightFile,
     opening: &Opening,
     rng: &mut impl rand::Rng,
 ) -> Result<AuditReport> {
-    // weight name -> per-token (error, profile)
-    let mut per_matrix: BTreeMap<String, Vec<(f64, &'static str)>> = BTreeMap::new();
-    let mut row_cache: BTreeMap<String, Vec<(usize, Vec<f64>)>> = BTreeMap::new();
+    // weight name -> per-column (error, profile), and whether it is a router
+    let mut per_matrix: BTreeMap<String, (bool, ColumnErrors)> = BTreeMap::new();
+    let mut cache = RowCache::default();
     for leaf in &opening.leaves {
         for m in &leaf.matrices {
-            let x = m.input_values()?;
-            let y = m.output_values()?;
-            let tensor = weights.tensor(&m.weight)?;
-            if tensor.row_len() as usize != x.len() || tensor.rows() as usize != y.len() {
-                bail!(
-                    "{}: opened shape {}x{} does not match the claimed weight {}x{}",
-                    m.weight,
-                    y.len(),
-                    x.len(),
-                    tensor.rows(),
-                    tensor.row_len()
-                );
-            }
-            if !row_cache.contains_key(&m.weight) {
-                let rows = sample_rows(weights, &m.weight, y.len(), rng)?;
-                row_cache.insert(m.weight.clone(), rows);
-            }
-            let rows = &row_cache[&m.weight];
-            let best = PROFILES
-                .iter()
-                .map(|p| (column_error(rows, &p.apply(&x), &y), p.name()))
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .expect("profiles");
-            per_matrix.entry(m.weight.clone()).or_default().push(best);
+            let errors = matmul_errors(weights, &mut cache, m, rng)?;
+            let entry = per_matrix.entry(m.weight.clone()).or_default();
+            entry.0 |= m.router;
+            entry.1.extend(errors);
         }
     }
     let matrices: Vec<MatrixVerdict> = per_matrix
         .into_iter()
-        .map(|(weight, errors)| verdict(weights, weight, &errors))
+        .map(|(weight, (router, errors))| verdict(weights, weight, router, &errors))
         .collect::<Result<_>>()?;
     if matrices.is_empty() {
         bail!("the opening has no matrices to check");
@@ -263,25 +389,10 @@ pub fn check_rows(
     })
 }
 
-fn sample_rows(
-    weights: &WeightFile,
-    name: &str,
-    m: usize,
-    rng: &mut impl rand::Rng,
-) -> Result<Vec<(usize, Vec<f64>)>> {
-    let mut picked = std::collections::BTreeSet::new();
-    while picked.len() < ROWS_PER_MATRIX.min(m) {
-        picked.insert(rng.random_range(0..m));
-    }
-    picked
-        .into_iter()
-        .map(|r| Ok((r, weights.row(name, r as u64)?)))
-        .collect()
-}
-
 fn verdict(
     weights: &WeightFile,
     weight: String,
+    router: bool,
     errors: &[(f64, &'static str)],
 ) -> Result<MatrixVerdict> {
     let failing = errors.iter().filter(|(e, _)| *e > TOLERANCE).count();
@@ -300,11 +411,17 @@ fn verdict(
         .unwrap_or("raw");
     let weight_type = crate::weights::type_name(weights.tensor(&weight)?.ggml_type);
     Ok(MatrixVerdict {
+        router,
         tokens: errors.len(),
         failing_tokens: failing,
         max_error,
         best_profile,
-        pass: failing * 2 <= errors.len(),
+        // a router steers the selection, so no column of it may fail
+        pass: if router {
+            failing == 0
+        } else {
+            failing * 2 <= errors.len()
+        },
         weight,
         weight_type,
     })
@@ -316,7 +433,8 @@ mod tests {
 
     #[test]
     fn exact_columns_have_zero_error() {
-        let rows = vec![(0, vec![1.0, 2.0]), (1, vec![-1.0, 0.5])];
+        let (a, b) = ([1.0, 2.0], [-1.0, 0.5]);
+        let rows = vec![(0, &a[..]), (1, &b[..])];
         let x = [0.5f32, 0.25];
         let y = [1.0f32, -0.375];
         assert_eq!(column_error(&rows, &Profile::Raw.apply(&x), &y), 0.0);
@@ -324,7 +442,8 @@ mod tests {
 
     #[test]
     fn a_wrong_output_shows_up() {
-        let rows = vec![(0, vec![1.0, 2.0])];
+        let a = [1.0, 2.0];
+        let rows = vec![(0, &a[..])];
         let y = [1.01f32, 5.0];
         assert!(column_error(&rows, &Profile::Raw.apply(&[0.5, 0.25]), &y) > TOLERANCE);
     }
@@ -341,5 +460,45 @@ mod tests {
                     .all(|(a, b)| (a - f64::from(*b)).abs() < 5e-3)
             );
         }
+    }
+
+    fn tensor(dims: Vec<u64>) -> TensorInfo {
+        TensorInfo {
+            name: "w".into(),
+            dims,
+            ggml_type: 0,
+            offset: 0,
+        }
+    }
+
+    fn matrix(experts: Option<Vec<i32>>) -> MatrixOpening {
+        MatrixOpening {
+            index: 0,
+            weight: "w".into(),
+            router: false,
+            experts,
+            input: String::new(),
+            output: String::new(),
+        }
+    }
+
+    #[test]
+    fn expert_slices_start_at_their_expert() {
+        let w = tensor(vec![4, 3, 8]);
+        let s = matmul_slices(&w, &matrix(Some(vec![5, 2])), 4, 6).unwrap();
+        assert_eq!(s.slices, vec![(15, 0), (6, 0)]);
+        let s = matmul_slices(&w, &matrix(Some(vec![5, 2])), 8, 6).unwrap();
+        assert_eq!(s.slices, vec![(15, 0), (6, 1)]);
+        assert!(matmul_slices(&w, &matrix(Some(vec![9, 2])), 4, 6).is_err());
+        assert!(matmul_slices(&w, &matrix(Some(vec![1])), 4, 6).is_err());
+    }
+
+    #[test]
+    fn a_shared_weight_meets_every_batch() {
+        let s = matmul_slices(&tensor(vec![4, 3]), &matrix(None), 8, 6).unwrap();
+        assert_eq!(s.slices, vec![(0, 0), (0, 1)]);
+        let s = matmul_slices(&tensor(vec![4, 3, 2]), &matrix(None), 8, 6).unwrap();
+        assert_eq!(s.slices, vec![(0, 0), (3, 1)]);
+        assert!(matmul_slices(&tensor(vec![4, 3]), &matrix(None), 5, 3).is_err());
     }
 }

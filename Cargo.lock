@@ -8776,6 +8776,7 @@ dependencies = [
  "skippy-model-hf",
  "skippy-native-runtime",
  "skippy-protocol",
+ "skippy-receipts",
  "skippy-runtime",
  "skippy-runtime-install",
  "skippy-serving",

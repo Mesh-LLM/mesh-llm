@@ -6,10 +6,9 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
+use skippy_receipts::layer_tensors::{TensorColumn, TensorKind, UbatchColumns};
 use skippy_receipts::recorder::Recorder;
-use skippy_receipts::recorder::{
-    ReplayStep, ReplayedLayer, Replayer, StageInput, TensorKind, UbatchColumns, UbatchRecord,
-};
+use skippy_receipts::recorder::{ReplayStep, ReplayedLayer, Replayer, StageInput, UbatchRecord};
 use skippy_runtime::{
     ReceiptMemoryEvent, ReceiptRecorderSink, ReceiptReplayStepRef, ReceiptReplayer,
     ReceiptTensorView, RecordedUbatch,
@@ -17,11 +16,12 @@ use skippy_runtime::{
 
 use super::report_queue::Report;
 
-/// The tensors of a native ubatch, by layer and kind. A tensor with fewer
-/// columns than tokens covers only the output rows.
+/// The tensors of a native ubatch, by layer, kind and index. A tensor with
+/// fewer columns than tokens covers only the output rows.
 struct ViewColumns<'a> {
     output_index: Vec<Option<usize>>,
-    tensors: HashMap<(u32, TensorKind), ReceiptTensorView<'a>>,
+    tensors: HashMap<(u32, TensorKind, u32), ReceiptTensorView<'a>>,
+    counts: HashMap<(u32, TensorKind), u32>,
 }
 
 impl<'a> ViewColumns<'a> {
@@ -36,25 +36,46 @@ impl<'a> ViewColumns<'a> {
                 })
             })
             .collect();
-        let tensors = tensors
-            .filter_map(|t| Some(((t.layer, TensorKind::from_code(t.kind)?), t)))
+        let tensors: HashMap<_, _> = tensors
+            .filter_map(|t| Some(((t.layer, TensorKind::from_code(t.kind)?, t.index), t)))
             .collect();
+        let mut counts: HashMap<(u32, TensorKind), u32> = HashMap::new();
+        for &(layer, kind, index) in tensors.keys() {
+            let count = counts.entry((layer, kind)).or_default();
+            *count = (*count).max(index + 1);
+        }
         Self {
             output_index,
             tensors,
+            counts,
         }
     }
 }
 
 impl UbatchColumns for ViewColumns<'_> {
-    fn column(&self, layer: u32, kind: TensorKind, col: usize) -> Option<&[f32]> {
-        let tensor = self.tensors.get(&(layer, kind))?;
+    fn count(&self, layer: u32, kind: TensorKind) -> u32 {
+        self.counts.get(&(layer, kind)).copied().unwrap_or(0)
+    }
+
+    fn column(
+        &self,
+        layer: u32,
+        kind: TensorKind,
+        index: u32,
+        col: usize,
+    ) -> Option<TensorColumn<'_>> {
+        let tensor = self.tensors.get(&(layer, kind, index))?;
         let j = if tensor.n_cols == self.output_index.len() {
             col
         } else {
             (*self.output_index.get(col)?)?
         };
-        (j < tensor.n_cols).then(|| tensor.column(j))
+        (j < tensor.n_cols).then(|| TensorColumn {
+            ggml_type: tensor.ggml_type,
+            flags: tensor.flags,
+            name: tensor.name,
+            bytes: tensor.column(j),
+        })
     }
 }
 
