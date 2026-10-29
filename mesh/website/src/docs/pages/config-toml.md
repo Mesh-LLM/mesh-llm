@@ -48,10 +48,16 @@ bind           = "[::]:7447"   # Mesh owner-control listen address
 Paid inference is not built into the node. It is provided by the `pay-lightning`
 plugin together with a separately installed `wallet.v1` plugin (for example the
 external `lexe-wallet`). The node only supplies the generic pieces: an
-operator-fixed operation binding that lets the payments plugin reach the wallet,
-and an exchange grant that lets it admit or refuse requests. Prices, spending
-policy and the ledger location live in the payments plugin's own JSON file, not
-in `config.toml`.
+operation binding that lets the payments plugin reach the wallet, and an
+exchange grant that lets it admit or refuse requests. `mesh-llm plugins install`
+grants both from the package manifest, so installing the two plugins is the
+whole setup; prices and spending policy are then set with `mesh-llm wallet
+pricing …` / `mesh-llm wallet policy …` and live in the payments plugin's own
+JSON file under `~/.mesh-llm/payments/`, not in `config.toml`.
+
+The `[[plugin]]` entry below is the optional operator override: it replaces the
+installed grants with explicit ones (a named wallet provider and open payload, a
+separate payment JSON file).
 
 ```toml
 [[plugin]]
@@ -88,11 +94,14 @@ name = "lexe-wallet"
 - `settings.allow_wallet_provisioning` — required once, to adopt a wallet into a
   fresh ledger. Afterwards the ledger pins the wallet identity, and a changed
   identity is refused.
-- `openai_exchange_grant` — must grant the phases, header and admission access
-  the plugin's manifest requires; without it the plugin cannot gate requests.
+- `openai_exchange_grant` — when present, replaces the hook grant made at
+  install; it must still grant the phases, header and admission access the
+  plugin's manifest requires, or the plugin cannot gate requests.
 
-A node without these entries serves free inference only. See the
-[plugin README](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/crates/mesh-llm-pay-lightning/README.md)
+A node without the payments plugin serves free inference only; with it
+installed and nothing configured, the defaults are non-spending (no prices,
+`free_only` policy). See the
+[plugin README](https://github.com/Mesh-LLM/ln-payments-plugin/blob/main/crates/mesh-llm-pay-lightning/README.md)
 for the payment JSON and the [exchange contract](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/plugins/openai-exchange-lifecycle.md)
 for the grant fields.
 
