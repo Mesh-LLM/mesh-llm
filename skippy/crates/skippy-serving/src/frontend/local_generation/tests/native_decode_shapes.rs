@@ -85,6 +85,64 @@ fn native_hybrid_iteration_batch_shape_parity() -> Result<()> {
 }
 
 #[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_hybrid_resident_checkpoint_shape_parity() -> Result<()> {
+    let (wide, _) =
+        recurrent_test_backend("checkpoint-wide", "checkpoint-wide", 512, (128, 32), 8, 256)?;
+    let (narrow, _) = recurrent_test_backend(
+        "checkpoint-narrow",
+        "checkpoint-narrow",
+        512,
+        (32, 32),
+        8,
+        256,
+    )?;
+    let mut wide_runtime = wide.runtime.lock().unwrap();
+    let mut narrow_runtime = narrow.runtime.lock().unwrap();
+    let session = "checkpoint-parity";
+    wide_runtime.enable_resident_recurrent_request(session);
+    narrow_runtime.enable_resident_recurrent_request(session);
+    for chunk in (1..=126).collect::<Vec<_>>().chunks(32) {
+        prefill_without_intermediate_sampling(&mut wide_runtime, session, chunk, false)?;
+        prefill_without_intermediate_sampling(&mut narrow_runtime, session, chunk, false)?;
+    }
+    let wide_recurrent = wide_runtime.export_recurrent_cache_state(session)?;
+    let narrow_recurrent = narrow_runtime.export_recurrent_cache_state(session)?;
+    assert!(!wide_recurrent.is_empty() && !narrow_recurrent.is_empty());
+    wide_runtime.save_resident_prefix(session, 2, 126)?;
+    narrow_runtime.save_resident_prefix(session, 2, 126)?;
+    let mut wide_token =
+        prefill_without_intermediate_sampling(&mut wide_runtime, session, &[127, 128], true)?
+            .context("wide checkpoint continuation produced no sample")?;
+    let mut narrow_token =
+        prefill_without_intermediate_sampling(&mut narrow_runtime, session, &[127, 128], true)?
+            .context("narrow checkpoint continuation produced no sample")?;
+    assert_eq!(
+        wide_token, narrow_token,
+        "native checkpoint continuation differs across batch sizes"
+    );
+    for index in 1..8 {
+        wide_token = iterate(
+            &mut wide_runtime,
+            &[session],
+            &[&[wide_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        narrow_token = iterate(
+            &mut narrow_runtime,
+            &[session],
+            &[&[narrow_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        assert_eq!(
+            wide_token, narrow_token,
+            "native checkpoint decode token {index} differs across batch sizes"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
 fn native_interleaved_prefills_preserve_concurrent_decode() -> Result<()> {
     let serial = interleaved_prefill_continuation(false, false, None)?;
