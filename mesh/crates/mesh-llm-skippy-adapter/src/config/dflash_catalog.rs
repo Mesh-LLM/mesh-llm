@@ -265,6 +265,23 @@ impl DFlashDraftSource {
 }
 
 impl DFlashPairing {
+    /// The catalog pairing whose draft is `file` in `repo` at `revision` with
+    /// `sha256`, so a split stage fetches only drafts this node pins too.
+    pub fn for_draft(
+        repo: &str,
+        revision: &str,
+        file: &str,
+        sha256: &str,
+    ) -> Option<&'static DFlashPairing> {
+        DFLASH_PAIRINGS.iter().find(|pairing| {
+            let draft = &pairing.draft;
+            draft.repo == repo
+                && draft.revision == revision
+                && draft.file == file
+                && draft.sha256 == sha256
+        })
+    }
+
     /// Refuses a draft that cannot read this target: it must be a DFlash GGUF
     /// as wide as the target and read only layers the target has.
     pub fn check_draft(&self, path: &Path) -> Result<()> {
@@ -444,6 +461,20 @@ mod tests {
         let mut basename_first = named(dense, "Qwen3.6-27B");
         basename_first.name = Some("Qwen3.8-27B".to_string());
         assert_eq!(repo(&basename_first, false), Some(QWEN36));
+    }
+
+    #[test]
+    fn a_pinned_draft_finds_its_pairing_and_nothing_else_does() {
+        for pairing in DFLASH_PAIRINGS {
+            let draft = &pairing.draft;
+            let found =
+                DFlashPairing::for_draft(draft.repo, draft.revision, draft.file, draft.sha256)
+                    .expect("catalog draft");
+            assert_eq!(found.draft, *draft);
+        }
+        let draft = &DFLASH_PAIRINGS[0].draft;
+        assert!(DFlashPairing::for_draft(draft.repo, "main", draft.file, draft.sha256).is_none());
+        assert!(DFlashPairing::for_draft(draft.repo, draft.revision, draft.file, "00").is_none());
     }
 
     #[test]

@@ -1462,6 +1462,14 @@ fn stage_dflash_to_proto(
             .max_draft_tokens
             .map(|tokens| u32::try_from(tokens).unwrap_or(u32::MAX)),
         draft_n_gpu_layers: plan.draft_n_gpu_layers,
+        draft_source: plan.draft_source.as_ref().map(|source| {
+            skippy_stage_proto::StageDFlashDraftSource {
+                repo: source.repo.clone(),
+                revision: source.revision.clone(),
+                file: source.file.clone(),
+                sha256: source.sha256.clone(),
+            }
+        }),
     }
 }
 
@@ -1473,6 +1481,14 @@ fn stage_dflash_from_proto(
         draft_model_path: plan.draft_model_path.map(std::path::PathBuf::from),
         max_draft_tokens: plan.max_draft_tokens.map(|tokens| tokens as usize),
         draft_n_gpu_layers: plan.draft_n_gpu_layers,
+        draft_source: plan.draft_source.map(|source| {
+            skippy_serving::split_dflash::SplitDFlashDraftSource {
+                repo: source.repo,
+                revision: source.revision,
+                file: source.file,
+                sha256: source.sha256,
+            }
+        }),
     }
 }
 

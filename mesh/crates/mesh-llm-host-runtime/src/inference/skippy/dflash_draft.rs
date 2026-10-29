@@ -89,6 +89,93 @@ fn discard_cached_draft(path: &Path) {
     }
 }
 
+/// The pinned source of a default DFlash draft, for a split plan to carry to
+/// the final stage.
+pub(crate) fn split_dflash_draft_source(
+    pairing: &DFlashPairing,
+) -> skippy_serving::split_dflash::SplitDFlashDraftSource {
+    skippy_serving::split_dflash::SplitDFlashDraftSource {
+        repo: pairing.draft.repo.to_string(),
+        revision: pairing.draft.revision.to_string(),
+        file: pairing.draft.file.to_string(),
+        sha256: pairing.draft.sha256.to_string(),
+    }
+}
+
+/// Points a split stage's catalog default draft at this node's own copy.
+///
+/// The planner's draft path is on the planner's node. A plan that names a
+/// catalog draft is resolved here against the same pinned repo, revision,
+/// file and SHA-256 the single-node default uses, in this node's Hugging Face
+/// cache. As on one node, the load never waits for the draft: a missing draft
+/// downloads in the background, this load serves without speculation, and the
+/// next load of the model picks the draft up. A draft that fails its checks
+/// also serves without speculation. A plan without a source (a configured
+/// draft, or an older planner) loads its path as sent, and so does a source
+/// this node's catalog does not pin.
+pub(crate) async fn materialize_split_dflash_draft(
+    plan: &mut skippy_serving::split_dflash::SplitDFlashStage,
+) {
+    let resolved = plan.clone();
+    let resolved = tokio::task::spawn_blocking(move || {
+        let mut plan = resolved;
+        resolve_split_dflash_draft(&mut plan, default_dflash_draft_cached, verify_dflash_draft);
+        plan
+    })
+    .await;
+    match resolved {
+        Ok(resolved) => *plan = resolved,
+        Err(error) => {
+            tracing::warn!("split DFlash draft check failed, serving without speculation: {error}");
+            plan.draft_model_path = None;
+        }
+    }
+}
+
+fn resolve_split_dflash_draft(
+    plan: &mut skippy_serving::split_dflash::SplitDFlashStage,
+    cached_or_fetch: impl FnOnce(&'static DFlashPairing) -> bool,
+    verify: impl FnOnce(&'static DFlashPairing, PathBuf) -> Result<PathBuf>,
+) {
+    let Some(pairing) = split_dflash_catalog_pairing(plan) else {
+        return;
+    };
+    if !cached_or_fetch(pairing) {
+        plan.draft_model_path = None;
+        return;
+    }
+    plan.draft_model_path = match verify(pairing, pairing.draft.cache_path()) {
+        Ok(path) => {
+            tracing::info!(draft = %path.display(), "split DFlash draft verified on this node");
+            Some(path)
+        }
+        Err(error) => {
+            tracing::warn!(
+                draft = pairing.draft.repo,
+                "split DFlash draft unavailable, serving without speculation: {error:#}"
+            );
+            None
+        }
+    };
+}
+
+/// The catalog pairing a split plan's draft source names, or `None` when the
+/// plan has no source or this node's catalog does not pin it.
+fn split_dflash_catalog_pairing(
+    plan: &skippy_serving::split_dflash::SplitDFlashStage,
+) -> Option<&'static DFlashPairing> {
+    let source = plan.draft_source.as_ref()?;
+    let pairing =
+        DFlashPairing::for_draft(&source.repo, &source.revision, &source.file, &source.sha256);
+    if pairing.is_none() {
+        tracing::warn!(
+            draft = %format!("{}/{}@{}", source.repo, source.file, source.revision),
+            "split DFlash draft is not in this node's catalog; loading the planner's path"
+        );
+    }
+    pairing
+}
+
 /// `true` when `path` exists. Otherwise starts `fetch` in the background,
 /// once per `key` at a time, and returns `false` without waiting for it.
 fn draft_cached_or_fetch(
@@ -209,6 +296,73 @@ mod tests {
         .await
         .expect("the download starts in the background");
         assert_eq!(started.load(Ordering::SeqCst), 1);
+    }
+
+    fn qwen36_27b() -> &'static DFlashPairing {
+        DFlashPairing::for_draft(
+            "AtomicChat/Qwen3.6-27B-DFlash-GGUF",
+            "a3d4fb1eff6f268cbbdf808042f6902cc17f5458",
+            "Qwen3.6-27B-DFlash.Q8_0.gguf",
+            "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1",
+        )
+        .expect("catalog pairing")
+    }
+
+    fn final_stage_plan(
+        source: Option<skippy_serving::split_dflash::SplitDFlashDraftSource>,
+    ) -> skippy_serving::split_dflash::SplitDFlashStage {
+        skippy_serving::split_dflash::SplitDFlashStage {
+            target_layers: vec![2, 62],
+            draft_model_path: Some("/home/planner/.cache/draft.gguf".into()),
+            draft_source: source,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_final_stage_loads_its_own_copy_of_a_catalog_draft() {
+        let pairing = qwen36_27b();
+        let mut plan = final_stage_plan(Some(split_dflash_draft_source(pairing)));
+        let verified = Arc::new(AtomicUsize::new(0));
+        let counter = verified.clone();
+
+        resolve_split_dflash_draft(
+            &mut plan,
+            |found| std::ptr::eq(found, pairing),
+            |found, path| {
+                assert!(std::ptr::eq(found, pairing));
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(path)
+            },
+        );
+
+        assert_eq!(verified.load(Ordering::SeqCst), 1);
+        assert_eq!(plan.draft_model_path, Some(pairing.draft.cache_path()));
+    }
+
+    #[test]
+    fn a_final_stage_without_the_catalog_draft_yet_serves_without_speculation() {
+        let mut plan = final_stage_plan(Some(split_dflash_draft_source(qwen36_27b())));
+        resolve_split_dflash_draft(&mut plan, |_| false, |_, _| unreachable!());
+        assert_eq!(plan.draft_model_path, None);
+
+        let mut plan = final_stage_plan(Some(split_dflash_draft_source(qwen36_27b())));
+        resolve_split_dflash_draft(&mut plan, |_| true, |_, _| anyhow::bail!("sha256 mismatch"));
+        assert_eq!(plan.draft_model_path, None);
+    }
+
+    #[test]
+    fn a_plan_without_a_catalog_source_loads_the_path_as_sent() {
+        let sent = final_stage_plan(None).draft_model_path;
+        let mut plan = final_stage_plan(None);
+        resolve_split_dflash_draft(&mut plan, |_| unreachable!(), |_, _| unreachable!());
+        assert_eq!(plan.draft_model_path, sent);
+
+        let mut unknown = split_dflash_draft_source(qwen36_27b());
+        unknown.revision = "main".into();
+        let mut plan = final_stage_plan(Some(unknown));
+        resolve_split_dflash_draft(&mut plan, |_| unreachable!(), |_, _| unreachable!());
+        assert_eq!(plan.draft_model_path, sent);
     }
 
     #[test]

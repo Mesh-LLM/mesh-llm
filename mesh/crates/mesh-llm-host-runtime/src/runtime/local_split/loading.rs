@@ -829,6 +829,7 @@ pub(super) fn split_runtime_stage_load_request(
             let mut plan = plan.clone();
             if downstream.is_some() {
                 plan.draft_model_path = None;
+                plan.draft_source = None;
             }
             plan
         }),
@@ -923,11 +924,19 @@ pub(super) async fn split_generation_load_settings<'a>(
         spec.config_model_id,
         spec.package.generation.as_ref(),
     );
-    let split_dflash = split_dflash_plan(
+    let mut split_dflash = split_dflash_plan(
         &mut embedded_openai,
         resolved.speculative.draft_n_gpu_layers,
         resolved.speculative.draft_max_tokens_configured,
     );
+    // A catalog default travels with its pinned source so the final stage,
+    // often another node, fetches and verifies its own copy rather than
+    // looking for this node's cache path. A configured draft stays a path.
+    if let (Some(plan), Some(pairing)) =
+        (split_dflash.as_mut(), resolved.speculative.default_dflash)
+    {
+        plan.draft_source = Some(crate::inference::skippy::split_dflash_draft_source(pairing));
+    }
     let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
     let mut runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
