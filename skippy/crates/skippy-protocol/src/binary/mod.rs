@@ -242,6 +242,9 @@ mod tests {
             dflash_draft_context_resets: 2,
             verify_rollbacks_in_place: 11,
             verify_rollbacks_checkpointed: 3,
+            dflash_draft_us: 41_000,
+            dflash_drafts: 12,
+            dflash_ingest_us: 3_500,
             ..StageReplyStats::default()
         };
         let reply = StageReply {
@@ -267,6 +270,61 @@ mod tests {
         assert_eq!(decoded, reply);
         // The counters were consumed, and nothing after them.
         assert_eq!(cursor.position() as usize, cursor.get_ref().len() - 4);
+    }
+
+    #[test]
+    fn an_early_verdict_says_its_draft_follows() {
+        let verdict = StageReply {
+            kind: WireReplyKind::PredictedTokens,
+            predicted: 5,
+            predicted_tokens: vec![5, 6],
+            native_mtp_draft: None,
+            window: StageReplyWindow {
+                window_id: 9,
+                draft_follows: true,
+            },
+            stats: StageReplyStats::default(),
+            log_probabilities: Vec::new(),
+        };
+        let draft = StageReply {
+            predicted_tokens: Vec::new(),
+            native_mtp_draft: Some(StageNativeMtpDraft {
+                token_ids: vec![7, 8, 9],
+                proposal_compute_us: 3_000,
+                follows_correction: false,
+            }),
+            window: StageReplyWindow {
+                window_id: 9,
+                draft_follows: false,
+            },
+            stats: StageReplyStats {
+                dflash_draft_us: 3_000,
+                dflash_drafts: 1,
+                ..StageReplyStats::default()
+            },
+            ..verdict.clone()
+        };
+        let mut bytes = Vec::new();
+        send_reply_message(&mut bytes, &verdict).unwrap();
+        send_reply_message(&mut bytes, &draft).unwrap();
+        let mut cursor = Cursor::new(bytes);
+
+        assert_eq!(recv_reply(&mut cursor).unwrap(), verdict);
+        assert_eq!(recv_reply(&mut cursor).unwrap(), draft);
+        assert_eq!(cursor.position() as usize, cursor.get_ref().len());
+    }
+
+    #[test]
+    fn early_verdict_flag_round_trips() {
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        assert!(!state.split_dflash_early_verdict());
+        state.set_split_dflash(true);
+        state.set_split_dflash_early_verdict(true);
+        assert!(state.split_dflash_early_verdict());
+        state.set_native_mtp_draft_tokens(4);
+        assert!(state.split_dflash() && state.split_dflash_early_verdict());
+        state.set_split_dflash_early_verdict(false);
+        assert!(!state.split_dflash_early_verdict() && state.split_dflash());
     }
 
     #[test]
@@ -328,7 +386,10 @@ mod tests {
         send_reply_predicted_tokens_with_window_and_stats(
             &mut bytes,
             &[1, 2, 3],
-            StageReplyWindow { window_id: 42 },
+            StageReplyWindow {
+                window_id: 42,
+                draft_follows: false,
+            },
             StageReplyStats::default(),
         )
         .unwrap();
