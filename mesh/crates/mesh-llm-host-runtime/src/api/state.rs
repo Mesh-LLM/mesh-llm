@@ -43,6 +43,9 @@ impl Serialize for PublicationState {
 }
 
 pub enum RuntimeControlRequest {
+    NativeNode {
+        resp: tokio::sync::oneshot::Sender<crate::mesh::Node>,
+    },
     Join {
         invite_token: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,

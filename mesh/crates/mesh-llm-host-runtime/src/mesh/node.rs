@@ -76,6 +76,7 @@ pub struct RouteEntry {
 
 #[derive(Clone)]
 pub struct Node {
+    pub(crate) native_inference: Arc<super::native_inference::NativeInferenceState>,
     pub(crate) endpoint: Endpoint,
     pub(crate) endpoint_secret_key: SecretKey,
     pub(crate) public_addr: Option<stun::PublicAddr>,
@@ -886,6 +887,7 @@ impl Node {
             tunnel_tx,
             tunnel_http_tx,
             stage_transport_tx,
+            native_inference: Default::default(),
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_control_lifecycle: Arc::new(Mutex::new(None)),
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
@@ -1076,6 +1078,7 @@ impl Node {
             tunnel_tx,
             tunnel_http_tx,
             stage_transport_tx,
+            native_inference: Default::default(),
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_control_lifecycle: Arc::new(Mutex::new(None)),
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),

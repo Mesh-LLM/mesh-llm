@@ -28,6 +28,7 @@ Each QUIC connection carries multiple logical streams, distinguished by a 1-byte
 | 0x0b | CONFIG_SUBSCRIBE | reserved | legacy mesh-plane config stream ID; do not reuse |
 | 0x0c | CONFIG_PUSH | reserved | legacy mesh-plane config stream ID; do not reuse |
 | 0x0d | SUBPROTOCOL | bidirectional | protobuf `MeshSubprotocolOpen`, then subprotocol-owned framing |
+| 0x0f | NATIVE_CHAT | bidirectional | length-prefixed protobuf `NativeChatFrame` |
 
 Streams 0x02 and 0x04 are raw TCP relay tunnels. They carry llama.cpp RPC and HTTP traffic respectively and are not subject to protobuf framing or generation validation.
 
@@ -44,6 +45,86 @@ limit are rejected before allocation on read and before a prefix or body is
 written on send.
 
 Config and inventory mutation are exclusive to `mesh-llm-control/1`. The former mesh-plane config stream IDs `0x0b` and `0x0c` remain reserved for wire compatibility bookkeeping, but `mesh-llm/1` no longer dispatches protobuf request/response handlers for them. Skippy layer-package artifact transfer is not a mesh-owned schema. Gossip advertises `skippy-stage/2` feature support through `PeerAnnouncement.subprotocols`; mesh stream `0x0d` opens the advertised subprotocol, and the request/response schema plus artifact byte framing remain owned by `skippy-protocol`.
+
+## Native chat inference (`0x0f`)
+
+Native SDK chat inference uses a mesh bidirectional stream without HTTP request
+lines, headers, SSE framing, or a loopback TCP connection. After the stream-type
+byte, every frame is a 4-byte little-endian length followed by a protobuf
+`NativeChatFrame`. Its `generation` must be `1`; `payload_json` carries typed
+inference data, and optional `error` carries a terminal provider error. The
+normal 8 MiB frame bound applies to requests, replies, and individual chunks.
+
+The caller sends one request frame and finishes its send direction. The JSON
+payload binds the exact provider and serving ID to an OpenAI-shaped chat request:
+
+```json
+{
+  "target": {
+    "provider_node_id": "<provider-endpoint-id>",
+    "serving_id": "<exact-serving-id>"
+  },
+  "request": {
+    "model": "<exact-serving-id>",
+    "messages": [{"role": "user", "content": "Explain lock ordering."}],
+    "reasoning_effort": "high",
+    "stream": false
+  }
+}
+```
+
+The provider must be the receiving node. An empty `request.model` is filled
+with the selected serving ID; a different nonempty model is rejected. Incoming
+native chat executes a locally loaded backend and never routes to another peer.
+Mesh admission, activity policy, runtime drain admission, request capacity, and
+the current instance's effort observations apply before execution. Remote native
+chat does not implement paid inference: a provider requiring payment rejects the
+request rather than bypassing payment or changing transports.
+
+Unary inference returns one response frame whose payload is the serialized chat
+completion. With `request.stream = true`, the provider returns one frame per
+serialized chat-completion chunk. Successful streaming ends with an explicit
+terminal frame with empty `payload_json` and no `error`. EOF before that terminal
+frame is a failure, so a lost connection cannot appear as successful truncated
+output. An error frame terminates either response shape. Dropping the native
+consumer stream cancels its producer and stops receiving; the provider observes
+the stopped stream and cancels backend execution.
+
+Native chat is bounded on both sides, but no bound covers a healthy
+generation's total duration:
+
+- A unary request must complete within 300 seconds of the provider accepting
+  it. It produces one response and has no progress signal of its own.
+- Opening the provider stream, including connection acquisition, QUIC stream
+  credit and the initial request write, must finish within 300 seconds.
+- A stream has no total-duration limit. Each wait for the next chunk is bounded
+  by a 300-second inactivity window that restarts with every chunk, so a
+  generation that keeps producing is never cut off and a generation that stops
+  producing fails instead of hanging. The consumer applies the window to the
+  provider it reads from; the provider applies the same window to its local
+  backend, so a client cannot extend or shorten a provider's silence.
+- A single frame write blocked by QUIC flow control, and the provider's read of
+  the request frame before it starts work, are bounded by 15 seconds. That is a
+  blocked-write deadline, not a stream lifetime: a paused reader does not by
+  itself expire it, and a reader that resumes before the write deadline keeps
+  the exchange alive.
+
+Any of these failures ends the stream with a provider error frame, or with a
+local timeout error in a consumer still waiting on a provider that has gone
+silent. Neither materializes as a successful truncated response.
+
+Model discovery uses the existing model advertisements. The optional
+`ServedModelMetadata.thinking_efforts` protobuf message wraps the ordered effort
+strings so missing metadata remains distinct from a present empty list. Its
+legacy JSON representation is an optional array. It contains no thinking-toggle
+or reasoning-parser diagnostics. These are render-probe observations of the
+selected template, not guarantees about generation. Providers remain separate
+catalog entries even when their serving IDs match.
+
+Older peers ignore the optional metadata addition. An older peer may advertise
+a model without understanding `NATIVE_CHAT`; attempting native inference then
+returns an explicit stream/support error. Native callers never fall back to HTTP
+or silently select another provider.
 
 ## Private owner-control (`mesh-llm-control/1`)
 

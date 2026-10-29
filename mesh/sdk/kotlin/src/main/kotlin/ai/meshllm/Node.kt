@@ -30,7 +30,17 @@ data class NodeStatus(
     val payloadJson: String,
 )
 
-data class Model(val id: String, val name: String, val contextLength: UInt?)
+/**
+ * @property thinkingEfforts ordered effort strings the serving provider observed
+ * in the loaded chat template. `null` means unknown (an older provider or an
+ * unprobed model); an empty list means the template exposes no effort levels.
+ */
+data class Model(
+    val id: String,
+    val name: String,
+    val contextLength: UInt?,
+    val thinkingEfforts: List<String>? = null,
+)
 
 data class OpenAIResponse(
     val statusCode: UShort,
@@ -98,7 +108,9 @@ class Node internal constructor(private val handle: MeshNodeHandleInterface) {
 
     class Inference(private val handle: MeshNodeHandleInterface) {
         suspend fun listModels(): List<Model> = withContext(Dispatchers.IO) {
-            handle.inferenceListModels().map { Model(it.id, it.name, it.contextLength) }
+            handle.inferenceListModels().map {
+                Model(it.id, it.name, it.contextLength, it.thinkingEfforts)
+            }
         }
 
         suspend fun request(path: String, body: JsonObject): OpenAIResponse =

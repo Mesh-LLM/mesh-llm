@@ -266,6 +266,10 @@ fn model_metadata_json(
 ) -> Option<serde_json::Value> {
     let mut metadata = serde_json::Map::new();
     let descriptor_metadata = descriptor.and_then(|descriptor| descriptor.metadata.as_ref());
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.thinking_efforts.as_ref())
+    {
+        metadata.insert("thinking_efforts".to_string(), serde_json::json!(value));
+    }
     if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.workload_class) {
         metadata.insert("workload_class".to_string(), serde_json::json!(value));
     }
@@ -649,6 +653,7 @@ mod tests {
         let models = vec!["Qwen3-32B-Q4_K_M".to_string()];
         let mut descriptor = local_gguf_descriptor(&models[0]);
         descriptor.metadata = Some(mesh::ServedModelMetadata {
+            thinking_efforts: Some(vec!["high".into(), "low".into()]),
             workload_class: Some(mesh::ModelWorkloadClass::CausalGeneration),
             architecture: Some("qwen3".to_string()),
             parameter_size: Some("32B".to_string()),
@@ -673,6 +678,10 @@ mod tests {
         let body = models_list_json(&models, &[descriptor], &runtimes);
         let metadata = &body["data"][0]["metadata"];
         assert_eq!(metadata["workload_class"], "causal_generation");
+        assert_eq!(
+            metadata["thinking_efforts"],
+            serde_json::json!(["high", "low"])
+        );
 
         assert_eq!(metadata["architecture"], "qwen3");
         assert_eq!(metadata["parameter_size"], "32B");

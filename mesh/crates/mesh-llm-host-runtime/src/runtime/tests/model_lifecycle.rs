@@ -377,6 +377,11 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
     let registry = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let vision_model = "Qwen3VL-2B-Instruct-Q4_K_M";
     let text_model = "Qwen3-8B-Q4_K_M";
+    let thinking = skippy_inference_api::thinking::ThinkingControls {
+        toggle: skippy_inference_api::thinking::ThinkingToggle::Observed,
+        reasoning_parser: Some(true),
+        efforts: vec!["high".into(), "low".into()],
+    };
     let vision_capabilities = models::ModelCapabilities {
         multimodal: true,
         vision: models::CapabilityLevel::Supported,
@@ -391,6 +396,9 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
             model_name: vision_model,
             instance_id: "runtime-vision",
             context_length: Some(8192),
+            thinking: Some(&thinking),
+            backend: None,
+            port: 0,
             capabilities: vision_capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
         },
@@ -404,6 +412,9 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
             model_name: text_model,
             instance_id: "runtime-text",
             context_length: Some(8192),
+            thinking: None,
+            backend: None,
+            port: 0,
             capabilities: models::ModelCapabilities::default(),
             workload_class: mesh::ModelWorkloadClass::Embedding,
         },
@@ -424,6 +435,19 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
         .expect("text descriptor should be registered");
     assert!(text.capabilities_known);
     assert_eq!(text.capabilities, models::ModelCapabilities::default());
+
+    assert_eq!(
+        vision.metadata.as_ref().unwrap().thinking_efforts,
+        Some(thinking.efforts)
+    );
+    assert_eq!(text.metadata.as_ref().unwrap().thinking_efforts, None);
+    assert!(unregister_runtime_instance(&registry, &node, vision_model, "runtime-vision").await);
+    assert!(
+        node.served_model_descriptors()
+            .await
+            .iter()
+            .all(|descriptor| descriptor.identity.model_name != vision_model)
+    );
 }
 
 #[tokio::test]

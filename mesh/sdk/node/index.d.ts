@@ -20,9 +20,23 @@ export type ModelCapabilities = {
   moe: boolean
 }
 
+export type ModelMetadata = {
+  /** Ordered thinking effort strings the serving provider observed. */
+  thinking_efforts?: string[] | null
+  context_length?: number | null
+  architecture?: string | null
+  quant?: string | null
+}
+
 export type Model = {
   id: string
   name: string
+  /**
+   * Provider-reported model metadata. `thinking_efforts` is absent when the
+   * provider is older or has not probed the model, and `[]` when the loaded
+   * template exposes no effort levels.
+   */
+  metadata?: ModelMetadata | null
 }
 
 export type ModelSummary = Model & {

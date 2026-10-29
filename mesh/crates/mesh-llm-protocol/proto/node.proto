@@ -1,6 +1,13 @@
 syntax = "proto3";
 package meshllm.node.v1;
 
+// Native chat request/response envelope; payload_json contains typed inference data, never HTTP.
+message NativeChatFrame {
+  uint32 generation = 1;
+  bytes payload_json = 2;
+  optional string error = 3;
+}
+
 // Stream 0x01 — Gossip
 message GossipFrame {
   uint32 gen = 1;
@@ -459,6 +466,12 @@ message ServedModelMetadata {
   optional uint32 expert_count = 11;
   optional uint32 active_expert_count = 12;
   optional ModelWorkloadClass workload_class = 13;
+  // Wrapper retains the distinction between an unprobed runtime and no observed levels.
+  optional ThinkingEfforts thinking_efforts = 14;
+}
+
+message ThinkingEfforts {
+  repeated string values = 1;
 }
 
 enum ModelWorkloadClass {

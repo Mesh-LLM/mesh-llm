@@ -420,6 +420,10 @@ pub(super) async fn run_auto_handle_control_request(
     use super::{IntentSource, ModelIntent};
 
     match cmd {
+        api::RuntimeControlRequest::NativeNode { resp } => {
+            let _ = resp.send(ctx.node.clone());
+            false
+        }
         api::RuntimeControlRequest::Join { invite_token, resp } => {
             let result = tokio::select! {
                 biased;

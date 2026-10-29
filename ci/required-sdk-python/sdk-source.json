@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
   "repository": "Mesh-LLM/mesh-llm-python-sdk",
-  "revision": "d2a881612186b0626a153ee237dfa3df00ab6087",
-  "manifest_sha256": "2844313b33527d1745d7208b568bdbab7984a0459172f5cfa305eacb35e2b9c7"
+  "revision": "0357f19f02cc3c2769ab46b0299af027e07049c1",
+  "manifest_sha256": "774e1fb4c94aff1d134ebdac64ffbad0cdef7288531fc9631140c00d01d74426"
 }
