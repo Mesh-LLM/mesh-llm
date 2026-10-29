@@ -2192,3 +2192,14 @@ async fn split_participants_exclude_a_blocked_peer() {
         .expect("the operator's block is reported as an exclusion reason");
     assert_eq!(exclusion.reason.as_str(), "blocked");
 }
+
+#[test]
+fn a_split_drafts_short_dflash_blocks_unless_the_cap_is_configured() {
+    // Backend and catalog defaults are longer than a split's.
+    assert_eq!(split_dflash_max_draft_tokens(Some(15), false), Some(4));
+    assert_eq!(split_dflash_max_draft_tokens(None, false), Some(4));
+    assert_eq!(split_dflash_max_draft_tokens(Some(3), false), Some(3));
+    // A configured `draft_max_tokens` wins, longer or shorter.
+    assert_eq!(split_dflash_max_draft_tokens(Some(15), true), Some(15));
+    assert_eq!(split_dflash_max_draft_tokens(Some(2), true), Some(2));
+}
