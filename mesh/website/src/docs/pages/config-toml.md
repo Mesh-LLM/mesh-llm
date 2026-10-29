@@ -173,6 +173,10 @@ files are already on local disk. Otherwise the node refuses it, and the error
 names the setting. For a layer package, the node reports nothing to a peer's
 inventory query until the package metadata is in the local cache.
 
+The node also advertises the setting in gossip. A coordinator leaves it out of
+a split, with the reason `peer_model_downloads_refused`, when the node would
+have to fetch files. Older nodes ignore the advertisement.
+
 ## Deep Dives
 
 | Page | What it covers |

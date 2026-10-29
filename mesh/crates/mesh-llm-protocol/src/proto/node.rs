@@ -136,6 +136,10 @@ pub struct NodeRecord {
     pub genesis_policy: ::core::option::Option<SignedMeshGenesisPolicy>,
     #[prost(message, optional, tag = "25")]
     pub release_attestation: ::core::option::Option<ReleaseBuildAttestation>,
+    /// Mirrors PeerAnnouncement.refuses_peer_model_downloads. Absent means the
+    /// node accepts peer model downloads.
+    #[prost(bool, optional, tag = "26")]
+    pub refuses_peer_model_downloads: ::core::option::Option<bool>,
 }
 /// Decode-only projection of the old LightningOffer wire message. Prices,
 /// invoice settings and payment protocol details are intentionally not read.
@@ -308,6 +312,12 @@ pub struct PeerAnnouncement {
     /// one per plugin.
     #[prost(message, repeated, tag = "54")]
     pub plugin_key_withdrawals: ::prost::alloc::vec::Vec<PluginKeyWithdrawal>,
+    /// Set when this node refuses split-stage requests that would make it fetch
+    /// model files it does not already have (`runtime.peer_model_downloads =
+    /// false`). Additive; older nodes ignore it. Absent means the node accepts
+    /// peer model downloads, which is the legacy behavior.
+    #[prost(bool, optional, tag = "55")]
+    pub refuses_peer_model_downloads: ::core::option::Option<bool>,
 }
 /// A public key a plugin on this node signs with, bound to this node by the
 /// node's own key, so a peer's plugin can check what that plugin signed without

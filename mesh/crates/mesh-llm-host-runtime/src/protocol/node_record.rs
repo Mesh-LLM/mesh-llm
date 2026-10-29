@@ -47,6 +47,7 @@ pub(crate) fn node_record_from_wire_ann(
         owner_attestation: ann.owner_attestation.clone(),
         genesis_policy: ann.genesis_policy.clone(),
         release_attestation: ann.release_attestation.clone(),
+        refuses_peer_model_downloads: ann.refuses_peer_model_downloads,
     }
 }
 
@@ -97,6 +98,7 @@ pub(crate) fn node_record_to_local(
         genesis_policy: record.genesis_policy.clone(),
         release_attestation: record.release_attestation.clone(),
         inference_admission_state: (record.admission_state != 0).then_some(record.admission_state),
+        refuses_peer_model_downloads: record.refuses_peer_model_downloads,
         ..Default::default()
     };
     let (_, mut local) = proto_ann_to_local(&ann)?;
