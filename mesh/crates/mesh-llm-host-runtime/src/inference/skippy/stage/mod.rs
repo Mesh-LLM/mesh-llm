@@ -393,6 +393,9 @@ impl StageControlState {
             effective_load.source_model_bytes = package.source_model_bytes;
             resolved_package = Some(package);
         }
+        if let Some(plan) = effective_load.dflash.as_mut() {
+            crate::inference::skippy::materialize_split_dflash_draft(plan).await;
+        }
         let config = stage_config(&effective_load, resolved_package.as_ref())?;
         let compute_meter = Arc::new(skippy_serving::compute_meter::StageComputeMeter::default());
         let server = skippy_serving::start_binary_stage(BinaryStageOptions {
