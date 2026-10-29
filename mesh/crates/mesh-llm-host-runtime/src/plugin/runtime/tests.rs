@@ -231,7 +231,7 @@ pub(super) fn plugin_for_spec_with_mesh_tx(
         }),
         restart_lock: Arc::new(Mutex::new(())),
         stopping: AtomicBool::new(false),
-        announce_starts: AtomicBool::new(true),
+        announce_starts: AtomicBool::new(false),
         next_request_id: AtomicU64::new(1),
         next_generation: AtomicU64::new(1),
         in_process: None,
