@@ -445,6 +445,7 @@ fn run_binary_stage(
         openai,
         l3_manager,
         compute_meter,
+        split_dflash,
     } = options;
     // With an OpenAI frontend, a stop request closes HTTP admission first.
     // Keep worker connections and prediction returns alive until Axum drains.
@@ -464,17 +465,25 @@ fn run_binary_stage(
     );
     telemetry.emit("stage.binary_server_start", lifecycle_attrs(&config));
     let warm_downstream = Arc::new(Mutex::new(None));
-    let runtime = load_runtime_with_overrides(
-        &config,
-        &RuntimeLaunchOverrides {
-            mtp_source,
-            n_threads: tuning.n_threads,
-            n_threads_batch: tuning.n_threads_batch,
-            recurrent_rollback_tokens: 0,
-        },
-        None,
-    )?
-    .context("binary stage server requires model_path")?;
+    let overrides = RuntimeLaunchOverrides {
+        mtp_source,
+        n_threads: tuning.n_threads,
+        n_threads_batch: tuning.n_threads_batch,
+        recurrent_rollback_tokens: split_dflash.as_ref().map_or(
+            0,
+            crate::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
+        ),
+    };
+    let runtime = load_runtime_with_overrides(&config, &overrides, None)?
+        .context("binary stage server requires model_path")?;
+    if let Some(plan) = split_dflash.as_ref() {
+        crate::split_dflash::attach_split_dflash(
+            &mut lock_runtime(&runtime),
+            &config,
+            &overrides,
+            plan,
+        )?;
+    }
     // In-flight admission is bounded by the lanes the runtime actually serves.
     // The native encoder-decoder clamp can hold that below `config.lane_count`
     // (#1954).

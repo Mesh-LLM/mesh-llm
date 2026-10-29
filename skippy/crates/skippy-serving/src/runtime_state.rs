@@ -509,7 +509,7 @@ fn reject_legacy_serving_package(config: &StageConfig) -> Result<()> {
     Ok(())
 }
 
-fn runtime_config_from_stage_config(
+pub(crate) fn runtime_config_from_stage_config(
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
 ) -> Result<RuntimeConfig> {
