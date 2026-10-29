@@ -1,0 +1,764 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Michael Neale <14976+michaelneale@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 17:27:44 +1100
+Subject: [PATCH] skippy: add clef joint decision reads
+
+Render the systemone template, tokenize the prompt pieces with their
+decision order, and read one score per option from the embeddings output
+in one micro-batch, as the upstream server does for clef.
+---
+ include/skippy.h        |   1 +
+ include/skippy/clef.h   | 144 ++++++++++++
+ include/skippy/common.h |   4 +-
+ src/CMakeLists.txt      |  20 ++
+ src/skippy/abi.cpp      |   1 +
+ src/skippy/clef.cpp     | 505 ++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 674 insertions(+), 1 deletion(-)
+ create mode 100644 include/skippy/clef.h
+ create mode 100644 src/skippy/clef.cpp
+
+diff --git a/include/skippy.h b/include/skippy.h
+index 9497734b7..48e0be2cf 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -28,6 +28,7 @@
+ #include "skippy/workloads.h"
+ #include "skippy/system_one.h"
+ #include "skippy/laya.h"
++#include "skippy/clef.h"
+ #include "skippy/asr.h"
+ 
+ #endif // SKIPPY_H
+diff --git a/include/skippy/clef.h b/include/skippy/clef.h
+new file mode 100644
+index 000000000..a2bb704e0
+--- /dev/null
++++ b/include/skippy/clef.h
+@@ -0,0 +1,144 @@
++#ifndef SKIPPY_CLEF_H
++#define SKIPPY_CLEF_H
++
++/**
++ * @file skippy/clef.h
++ * @brief Joint Clef decision reads (prompt rendering, decision order, one-pass scoring).
++ *
++ * Clef is a decision model whose head scores every option of every question
++ * of a request in one non-causal forward pass. It does not load through
++ * `skippy_model_open`; it owns its GGUF, tokenizer, `systemone` chat
++ * template, and an embeddings-mode execution context. The caller supplies the
++ * request as JSON in prompt order; the runtime renders the template, splits
++ * the prompt on the Clef separator, tokenizes each piece, marks the decision
++ * order of every token, decodes the whole prompt in one micro-batch, and
++ * returns one raw score per option. Temperature and softmax stay on the
++ * caller side (see `skippy_clef_model_decision_metadata`).
++ */
++
++#include "common.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define SKIPPY_CLEF_INFO_V1_ABI_VERSION 1
++
++struct skippy_clef_model;
++
++/** @brief Decision-order marks assigned to prompt tokens, as the head reads them. */
++enum skippy_clef_order {
++    SKIPPY_CLEF_ORDER_NONE            = 0,
++    SKIPPY_CLEF_ORDER_QUESTION_NOUL   = 1,
++    SKIPPY_CLEF_ORDER_QUESTION_CHOICE = 2,
++    SKIPPY_CLEF_ORDER_QUESTION_SCORE  = 3,
++    SKIPPY_CLEF_ORDER_OPTION          = 4,
++};
++
++/** @brief Sizes and budgets of an opened Clef model. */
++struct skippy_clef_info_v1 {
++    uint32_t struct_size;
++    uint32_t abi_version;
++    int32_t  n_ctx;            /**< tokens one read may span; also the micro-batch size */
++    int32_t  n_embd;
++    int32_t  n_layer;
++    int32_t  n_vocab;
++    int64_t  parameter_count;
++    uint64_t model_bytes;      /**< weight bytes as loaded */
++    /** Number of `<arch>.decision.*` metadata entries, see `skippy_clef_model_decision_metadata`. */
++    uint32_t decision_metadata_count;
++    /** `<arch>.decision.type`, NUL-terminated and truncated to the field. */
++    char     decision_type[32];
++};
++
++/**
++ * @brief Opens a Clef GGUF with an embeddings-mode context; not a `skippy_model`.
++ *
++ * `n_ctx` bounds the tokens of one request and sizes the single micro-batch
++ * that reads it. `n_gpu_layers` follows llama.cpp (negative offloads all
++ * layers). Fails with SKIPPY_STATUS_MODEL_ERROR when the GGUF is not a Clef
++ * decision model or has no `systemone` chat template.
++ */
++LLAMA_API enum skippy_status skippy_clef_model_open(
++        const char * model_path,
++        int32_t n_ctx,
++        int32_t n_threads,
++        int32_t n_gpu_layers,
++        struct skippy_clef_model ** out_model,
++        struct skippy_error ** out_error);
++
++/** @brief Releases a model returned by `skippy_clef_model_open`. */
++LLAMA_API void skippy_clef_model_free(struct skippy_clef_model * model);
++
++/**
++ * @brief Reports the model's sizes, decision type, and metadata count.
++ *
++ * `out_info` must be initialized with its `struct_size` and `abi_version`.
++ */
++LLAMA_API enum skippy_status skippy_clef_model_info_v1(
++        const struct skippy_clef_model * model,
++        struct skippy_clef_info_v1 * out_info,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Reads one `<arch>.decision.*` GGUF metadata entry by index.
++ *
++ * `out_key` receives the key suffix after `<arch>.decision.` (for example
++ * `temperature.choice.3_5` or `score_bias.5.2`) and `out_value` its string
++ * value; both are NUL-terminated and truncated to their capacities. Indices
++ * run over `decision_metadata_count` of `skippy_clef_info_v1`.
++ */
++LLAMA_API enum skippy_status skippy_clef_model_decision_metadata(
++        const struct skippy_clef_model * model,
++        uint32_t index,
++        char * out_key,
++        size_t key_capacity,
++        char * out_value,
++        size_t value_capacity,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Plans the prompt of a request: token ids with their decision order.
++ *
++ * `request_json` is `{"state": ..., "questions": [{"id", "type",
++ * "instructions", "options": [{"key", "description"}]}]}` with the questions
++ * and options in the order the caller wants the scores back. The runtime
++ * sorts object keys, escapes the Clef marker in the input, renders the
++ * `systemone` template, splits on the separator, and tokenizes each piece on
++ * its own without special tokens. Returns SKIPPY_STATUS_BUFFER_TOO_SMALL with
++ * `out_token_count` set to the required length when `capacity` is short.
++ */
++LLAMA_API enum skippy_status skippy_clef_plan(
++        const struct skippy_clef_model * model,
++        const char * request_json,
++        size_t request_len,
++        int32_t * out_tokens,
++        int32_t * out_orders,
++        size_t capacity,
++        size_t * out_token_count,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Scores every option of every question of a request in one pass.
++ *
++ * Plans the prompt like `skippy_clef_plan`, decodes it in one micro-batch,
++ * and writes one raw score per option in prompt order to `out_scores`. The
++ * head reports an unusable decision order as NaN, which fails the read with
++ * SKIPPY_STATUS_RUNTIME_ERROR. Calls are serialized per model. Returns
++ * SKIPPY_STATUS_BUFFER_TOO_SMALL with `out_score_count` set when `capacity`
++ * is short, and SKIPPY_STATUS_INVALID_ARGUMENT when the prompt exceeds `n_ctx`.
++ */
++LLAMA_API enum skippy_status skippy_clef_read(
++        struct skippy_clef_model * model,
++        const char * request_json,
++        size_t request_len,
++        float * out_scores,
++        size_t capacity,
++        size_t * out_score_count,
++        struct skippy_error ** out_error);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // SKIPPY_CLEF_H
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 4214d0b89..aae45c36e 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 74
++#define SKIPPY_ABI_VERSION_PATCH 75
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+@@ -112,6 +112,8 @@ enum skippy_feature {
+ #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
+ /** @brief Full-model speech recognition (`skippy/asr.h`). */
+ #define SKIPPY_FEATURE_SPEECH_RECOGNITION     (UINT64_C(1) << 41)
++/** @brief Joint Clef decision reads (`skippy/clef.h`). */
++#define SKIPPY_FEATURE_CLEF_DECISIONS         (UINT64_C(1) << 42)
+ 
+ enum skippy_status {
+     SKIPPY_STATUS_OK                      = 0,
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index afe1ac4ef..f072b989a 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -95,6 +95,8 @@ add_library(llama
+             skippy/events.cpp
+             skippy/system_one.cpp
+             skippy/laya.cpp
++            skippy/clef.cpp
++            $<TARGET_OBJECTS:llama-clef-template>
+             ../tools/laya/laya.cpp
+             skippy/asr.cpp
+             unicode.h
+@@ -129,6 +131,24 @@ set_source_files_properties(skippy/asr.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION
+ 
+ configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
+ 
++# The Clef decision read renders the model's `systemone` chat template with
++# the common jinja engine. Those sources include common's `unicode.h`, which
++# the llama include order would shadow with `src/unicode.h`, so they compile
++# as their own object set with common's include order and join the library.
++add_library(llama-clef-template OBJECT
++            ../common/jinja/lexer.cpp
++            ../common/jinja/parser.cpp
++            ../common/jinja/runtime.cpp
++            ../common/jinja/value.cpp
++            ../common/jinja/string.cpp
++            ../common/jinja/caps.cpp
++            ../common/unicode.cpp
++            )
++set_target_properties(llama-clef-template PROPERTIES POSITION_INDEPENDENT_CODE ON)
++target_include_directories(llama-clef-template PRIVATE ../common ../vendor ../include ../ggml/include)
++target_compile_features(llama-clef-template PRIVATE cxx_std_17)
++target_link_libraries(llama-clef-template PRIVATE vendor::nlohmann)
++
+ target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
+ target_include_directories(llama PUBLIC ../include)
+ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
+diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
+index ed9825df3..7ad903ff5 100644
+--- a/src/skippy/abi.cpp
++++ b/src/skippy/abi.cpp
+@@ -49,6 +49,7 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_SYSTEM_ONE |
+            SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
+            SKIPPY_FEATURE_LAYA_DECISIONS |
++           SKIPPY_FEATURE_CLEF_DECISIONS |
+ #if defined(SKIPPY_HAS_WHISPER)
+            SKIPPY_FEATURE_SPEECH_RECOGNITION |
+ #endif
+diff --git a/src/skippy/clef.cpp b/src/skippy/clef.cpp
+new file mode 100644
+index 000000000..6c16d9ba2
+--- /dev/null
++++ b/src/skippy/clef.cpp
+@@ -0,0 +1,505 @@
++#include "skippy/clef.h"
++
++#include "skippy/errors.h"
++
++#include "common.h"
++#include "json.h"
++#include "jinja/lexer.h"
++#include "jinja/parser.h"
++#include "jinja/runtime.h"
++#include "jinja/value.h"
++#include "llama-ext.h"
++#include "llama.h"
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <cstring>
++#include <map>
++#include <mutex>
++#include <string>
++#include <utility>
++#include <vector>
++
++// Mirrors tools/server/server-decision.cpp fill_task_joint: the prompt is
++// rendered from the systemone template, split on the separator, and every
++// piece is tokenized on its own.
++namespace {
++
++const std::string CLEF_MARKER        = "<<clef:";
++const std::string CLEF_SEP           = "<<clef:sep>>";
++const std::string CLEF_MARK_QUESTION = "<<clef:question>>";
++const std::string CLEF_MARK_OPTION   = "<<clef:option>>";
++
++struct clef_batch_guard {
++    explicit clef_batch_guard(llama_batch_ext * value) : batch(value) {}
++    ~clef_batch_guard() { llama_batch_ext_free(batch); }
++    clef_batch_guard(const clef_batch_guard &) = delete;
++    clef_batch_guard & operator=(const clef_batch_guard &) = delete;
++    llama_batch_ext * batch;
++};
++
++} // namespace
++
++struct skippy_clef_model {
++    llama_model * model = nullptr;
++    llama_context * ctx = nullptr;
++    const llama_vocab * vocab = nullptr;
++    jinja::program tmpl_prog;
++    std::string tmpl_src;
++    std::string decision_type;
++    // key suffix after "<arch>.decision." -> string value, in GGUF order
++    std::vector<std::pair<std::string, std::string>> decision_metadata;
++    int32_t n_ctx = 0;
++    // one context and one output buffer serve every read
++    std::mutex lane;
++
++    ~skippy_clef_model() {
++        if (ctx != nullptr) {
++            llama_free(ctx);
++        }
++        if (model != nullptr) {
++            llama_model_free(model);
++        }
++    }
++};
++
++namespace {
++
++enum skippy_status clef_fail(skippy_error ** out_error, enum skippy_status status, const std::string & message) {
++    skippy_set_error(out_error, status, message.c_str());
++    return status;
++}
++
++template <typename Body>
++enum skippy_status clef_entry(skippy_error ** out_error, Body && body) {
++    enum skippy_status status = SKIPPY_STATUS_RUNTIME_ERROR;
++    if (!skippy_contain_native_failure(out_error, [&] { status = body(); })) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    return status;
++}
++
++std::string meta_str(const llama_model * model, const std::string & key) {
++    char buf[256];
++    const int32_t n = llama_model_meta_val_str(model, key.c_str(), buf, sizeof(buf));
++    return n < 0 ? "" : std::string(buf);
++}
++
++void copy_c_string(char * out, size_t capacity, const std::string & value) {
++    if (out == nullptr || capacity == 0) {
++        return;
++    }
++    const size_t n = std::min(capacity - 1, value.size());
++    std::memcpy(out, value.data(), n);
++    out[n] = '\0';
++}
++
++void replace_all(std::string & str, const std::string & search, const std::string & replace) {
++    if (search.empty()) {
++        return;
++    }
++    size_t pos = 0;
++    while ((pos = str.find(search, pos)) != std::string::npos) {
++        str.replace(pos, search.size(), replace);
++        pos += replace.size();
++    }
++}
++
++std::vector<std::string> split_on(const std::string & str, const std::string & sep) {
++    std::vector<std::string> parts;
++    size_t start = 0;
++    while (true) {
++        const size_t pos = str.find(sep, start);
++        if (pos == std::string::npos) {
++            parts.push_back(str.substr(start));
++            return parts;
++        }
++        parts.push_back(str.substr(start, pos - start));
++        start = pos + sep.size();
++    }
++}
++
++bool starts_with(const std::string & str, const std::string & prefix) {
++    return str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0;
++}
++
++// replace text in all strings of a JSON value
++common_json replace_text(const common_json & val, const std::string & search, const std::string & replace) {
++    if (val.is_string()) {
++        std::string str = val.get<std::string>();
++        replace_all(str, search, replace);
++        return str;
++    }
++    if (val.is_array()) {
++        common_json out = common_json::array();
++        for (const auto & item : val) {
++            out.push_back(replace_text(item, search, replace));
++        }
++        return out;
++    }
++    if (val.is_object()) {
++        common_json out = common_json::object();
++        for (const auto & [key, item] : val.items()) {
++            out[key] = replace_text(item, search, replace);
++        }
++        return out;
++    }
++    return val;
++}
++
++// sort the keys of all objects of a JSON value
++common_json sort_keys(const common_json & val) {
++    if (val.is_array()) {
++        common_json out = common_json::array();
++        for (const auto & item : val) {
++            out.push_back(sort_keys(item));
++        }
++        return out;
++    }
++    if (val.is_object()) {
++        std::map<std::string, common_json> sorted;
++        for (const auto & [key, item] : val.items()) {
++            sorted[key] = sort_keys(item);
++        }
++        common_json out = common_json::object();
++        for (const auto & [key, item] : sorted) {
++            out[key] = item;
++        }
++        return out;
++    }
++    return val;
++}
++
++struct clef_plan {
++    std::vector<llama_token> tokens;
++    std::vector<int32_t> orders;
++    size_t n_options = 0;
++};
++
++// Builds the token plan of a request. The request carries the questions and
++// options in prompt order; the caller owns option ordering and softmax.
++clef_plan plan_request(const skippy_clef_model & model, const std::string & request) {
++    const common_json body = common_json::parse(request);
++    if (!body.is_object() || !body.contains("state") || !body.contains("questions") || !body.at("questions").is_array() ||
++            body.at("questions").empty()) {
++        throw std::invalid_argument("clef request needs \"state\" and a non-empty \"questions\" array");
++    }
++
++    std::vector<int32_t> question_orders;
++    size_t n_options = 0;
++    common_json inp_questions = common_json::array();
++    for (const auto & q : body.at("questions")) {
++        if (!q.is_object() || !q.contains("id") || !q.contains("type") || !q.contains("instructions") ||
++                !q.contains("options") || !q.at("options").is_array() || q.at("options").empty()) {
++            throw std::invalid_argument("clef question needs id, type, instructions and non-empty options");
++        }
++        const std::string type = q.at("type").get<std::string>();
++        int32_t order = SKIPPY_CLEF_ORDER_NONE;
++        if (type == "noul") {
++            order = SKIPPY_CLEF_ORDER_QUESTION_NOUL;
++        } else if (type == "choice") {
++            order = SKIPPY_CLEF_ORDER_QUESTION_CHOICE;
++        } else if (type == "score") {
++            order = SKIPPY_CLEF_ORDER_QUESTION_SCORE;
++        } else {
++            throw std::invalid_argument("clef question type must be noul, choice or score");
++        }
++        question_orders.push_back(order);
++
++        common_json options = common_json::array();
++        for (const auto & opt : q.at("options")) {
++            if (!opt.is_object() || !opt.contains("key")) {
++                throw std::invalid_argument("clef option needs a key");
++            }
++            common_json option = common_json::object();
++            option["key"]         = opt.at("key");
++            option["description"] = opt.contains("description") ? opt.at("description") : common_json();
++            options.push_back(option);
++            n_options++;
++        }
++        common_json question = common_json::object();
++        question["id"]           = q.at("id");
++        question["type"]         = type;
++        question["instructions"] = q.at("instructions");
++        question["options"]      = options;
++        inp_questions.push_back(question);
++    }
++
++    // the template is given raw JSON values with sorted keys, and no marker in the input
++    common_json inp = common_json::object();
++    inp["state"]     = body.at("state");
++    inp["questions"] = inp_questions;
++    inp = replace_text(sort_keys(inp), CLEF_MARKER, "<<clef ");
++    inp["images"]        = common_json::array();
++    inp["sep"]           = CLEF_SEP;
++    inp["mark_question"] = CLEF_MARK_QUESTION;
++    inp["mark_option"]   = CLEF_MARK_OPTION;
++
++    jinja::context ctx(model.tmpl_src);
++    jinja::global_from_json(ctx, inp, false);
++    jinja::runtime runtime(ctx);
++    const jinja::value results = runtime.execute(model.tmpl_prog);
++    const std::string prompt   = jinja::runtime::gather_string_parts(results)->as_string().str();
++
++    const auto invalid = std::runtime_error("unexpected layout of the decision prompt");
++
++    clef_plan plan;
++    size_t i_question = 0;
++    for (std::string piece : split_on(prompt, CLEF_SEP)) {
++        int32_t order = SKIPPY_CLEF_ORDER_NONE;
++        if (starts_with(piece, CLEF_MARK_QUESTION)) {
++            piece = piece.substr(CLEF_MARK_QUESTION.size());
++            if (i_question >= question_orders.size()) {
++                throw invalid;
++            }
++            order = question_orders[i_question++];
++        } else if (starts_with(piece, CLEF_MARK_OPTION)) {
++            piece = piece.substr(CLEF_MARK_OPTION.size());
++            order = SKIPPY_CLEF_ORDER_OPTION;
++            plan.n_options++;
++        }
++
++        const std::vector<llama_token> piece_tokens = common_tokenize(model.vocab, piece, false, true);
++        if (order != SKIPPY_CLEF_ORDER_NONE && piece_tokens.empty()) {
++            throw std::invalid_argument("the instructions and the options of a question must not be empty");
++        }
++        plan.tokens.insert(plan.tokens.end(), piece_tokens.begin(), piece_tokens.end());
++        plan.orders.resize(plan.tokens.size(), order);
++    }
++
++    if (i_question != question_orders.size() || plan.n_options != n_options) {
++        throw invalid;
++    }
++    return plan;
++}
++
++} // namespace
++
++extern "C" enum skippy_status skippy_clef_model_open(
++        const char * model_path,
++        int32_t n_ctx,
++        int32_t n_threads,
++        int32_t n_gpu_layers,
++        struct skippy_clef_model ** out_model,
++        struct skippy_error ** out_error) {
++    if (model_path == nullptr || out_model == nullptr || n_ctx <= 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model_path, out_model and a positive n_ctx are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *out_model = nullptr;
++    skippy_clef_model * handle = nullptr;
++    const enum skippy_status status = clef_entry(out_error, [&] {
++        handle = new skippy_clef_model();
++
++        llama_model_params mparams = llama_model_default_params();
++        mparams.n_gpu_layers = n_gpu_layers < 0 ? 999 : n_gpu_layers;
++        handle->model = llama_model_load_from_file(model_path, mparams);
++        if (handle->model == nullptr) {
++            return clef_fail(out_error, SKIPPY_STATUS_MODEL_ERROR, "failed to load clef model");
++        }
++
++        const std::string arch   = meta_str(handle->model, "general.architecture");
++        const std::string prefix = arch + ".decision.";
++        handle->decision_type = meta_str(handle->model, prefix + "type");
++        if (handle->decision_type != "clef") {
++            return clef_fail(out_error, SKIPPY_STATUS_MODEL_ERROR,
++                    "model is not a clef decision model (decision type '" + handle->decision_type + "')");
++        }
++        for (int32_t i = 0; i < llama_model_meta_count(handle->model); i++) {
++            char key[256];
++            char val[256];
++            if (llama_model_meta_key_by_index(handle->model, i, key, sizeof(key)) < 0 || !starts_with(key, prefix)) {
++                continue;
++            }
++            if (llama_model_meta_val_str_by_index(handle->model, i, val, sizeof(val)) < 0) {
++                continue;
++            }
++            handle->decision_metadata.emplace_back(key + prefix.size(), val);
++        }
++
++        const char * tmpl_src = llama_model_chat_template(handle->model, "systemone");
++        if (tmpl_src == nullptr) {
++            return clef_fail(out_error, SKIPPY_STATUS_MODEL_ERROR, "decision model has no \"systemone\" template");
++        }
++        jinja::lexer lexer;
++        auto lexer_res = lexer.tokenize(tmpl_src);
++        handle->tmpl_prog = jinja::parse_from_tokens(lexer_res);
++        handle->tmpl_src  = lexer_res.source;
++        handle->vocab     = llama_model_get_vocab(handle->model);
++
++        // the head reads the whole prompt in one micro-batch from the embeddings output
++        llama_context_params cparams = llama_context_default_params();
++        cparams.n_ctx                 = n_ctx;
++        cparams.n_batch               = n_ctx;
++        cparams.n_ubatch              = n_ctx;
++        cparams.n_seq_max             = 1;
++        cparams.n_threads             = std::max(1, n_threads);
++        cparams.n_threads_batch       = std::max(1, n_threads);
++        cparams.embeddings            = true;
++        cparams.pooling_type          = LLAMA_POOLING_TYPE_NONE;
++        cparams.n_outputs_max         = n_ctx;
++        cparams.n_outputs_max_per_seq = 1;
++        handle->ctx = llama_init_from_model(handle->model, cparams);
++        if (handle->ctx == nullptr) {
++            return clef_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to create clef context");
++        }
++        handle->n_ctx = static_cast<int32_t>(llama_n_ctx(handle->ctx));
++        return skippy_success(out_error);
++    });
++    if (status != SKIPPY_STATUS_OK) {
++        delete handle;
++        return status;
++    }
++    *out_model = handle;
++    return SKIPPY_STATUS_OK;
++}
++
++extern "C" void skippy_clef_model_free(struct skippy_clef_model * model) {
++    delete model;
++}
++
++extern "C" enum skippy_status skippy_clef_model_info_v1(
++        const struct skippy_clef_model * model,
++        struct skippy_clef_info_v1 * out_info,
++        struct skippy_error ** out_error) {
++    return clef_entry(out_error, [&] {
++        if (model == nullptr || model->model == nullptr || out_info == nullptr) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_info are required");
++        }
++        if (out_info->struct_size != sizeof(skippy_clef_info_v1) || out_info->abi_version != SKIPPY_CLEF_INFO_V1_ABI_VERSION) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "clef info descriptor uses an incompatible ABI");
++        }
++        out_info->n_ctx = model->n_ctx;
++        out_info->n_embd = llama_model_n_embd(model->model);
++        out_info->n_layer = llama_model_n_layer(model->model);
++        out_info->n_vocab = llama_vocab_n_tokens(model->vocab);
++        out_info->parameter_count = static_cast<int64_t>(llama_model_n_params(model->model));
++        out_info->model_bytes = llama_model_size(model->model);
++        out_info->decision_metadata_count = static_cast<uint32_t>(model->decision_metadata.size());
++        copy_c_string(out_info->decision_type, sizeof(out_info->decision_type), model->decision_type);
++        return skippy_success(out_error);
++    });
++}
++
++extern "C" enum skippy_status skippy_clef_model_decision_metadata(
++        const struct skippy_clef_model * model,
++        uint32_t index,
++        char * out_key,
++        size_t key_capacity,
++        char * out_value,
++        size_t value_capacity,
++        struct skippy_error ** out_error) {
++    return clef_entry(out_error, [&] {
++        if (model == nullptr || out_key == nullptr || key_capacity == 0 || out_value == nullptr || value_capacity == 0) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and output buffers are required");
++        }
++        if (index >= model->decision_metadata.size()) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "decision metadata index is out of range");
++        }
++        copy_c_string(out_key, key_capacity, model->decision_metadata[index].first);
++        copy_c_string(out_value, value_capacity, model->decision_metadata[index].second);
++        return skippy_success(out_error);
++    });
++}
++
++extern "C" enum skippy_status skippy_clef_plan(
++        const struct skippy_clef_model * model,
++        const char * request_json,
++        size_t request_len,
++        int32_t * out_tokens,
++        int32_t * out_orders,
++        size_t capacity,
++        size_t * out_token_count,
++        struct skippy_error ** out_error) {
++    return clef_entry(out_error, [&] {
++        if (model == nullptr || model->vocab == nullptr || request_json == nullptr || out_token_count == nullptr ||
++                ((out_tokens == nullptr || out_orders == nullptr) && capacity != 0)) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid clef plan arguments");
++        }
++        clef_plan plan;
++        try {
++            plan = plan_request(*model, std::string(request_json, request_len));
++        } catch (const std::invalid_argument & e) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, e.what());
++        } catch (const common_json_error & e) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, std::string("invalid clef request JSON: ") + e.what());
++        }
++        *out_token_count = plan.tokens.size();
++        if (plan.tokens.size() > capacity) {
++            return clef_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "clef plan buffers are too small");
++        }
++        if (!plan.tokens.empty()) {
++            std::memcpy(out_tokens, plan.tokens.data(), plan.tokens.size() * sizeof(int32_t));
++            std::memcpy(out_orders, plan.orders.data(), plan.orders.size() * sizeof(int32_t));
++        }
++        return skippy_success(out_error);
++    });
++}
++
++extern "C" enum skippy_status skippy_clef_read(
++        struct skippy_clef_model * model,
++        const char * request_json,
++        size_t request_len,
++        float * out_scores,
++        size_t capacity,
++        size_t * out_score_count,
++        struct skippy_error ** out_error) {
++    return clef_entry(out_error, [&] {
++        if (model == nullptr || model->ctx == nullptr || request_json == nullptr || out_score_count == nullptr ||
++                (out_scores == nullptr && capacity != 0)) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid clef read arguments");
++        }
++        clef_plan plan;
++        try {
++            plan = plan_request(*model, std::string(request_json, request_len));
++        } catch (const std::invalid_argument & e) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, e.what());
++        } catch (const common_json_error & e) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, std::string("invalid clef request JSON: ") + e.what());
++        }
++        *out_score_count = plan.n_options;
++        if (plan.n_options > capacity) {
++            return clef_fail(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "clef score buffer is too small");
++        }
++        if (plan.tokens.size() > static_cast<size_t>(model->n_ctx)) {
++            return clef_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "clef prompt of " + std::to_string(plan.tokens.size()) + " tokens exceeds the context of " +
++                    std::to_string(model->n_ctx));
++        }
++
++        std::lock_guard<std::mutex> guard(model->lane);
++        llama_memory_t mem = llama_get_memory(model->ctx);
++        if (mem != nullptr) {
++            llama_memory_clear(mem, true);
++        }
++
++        clef_batch_guard batch_guard(llama_batch_ext_init(model->ctx));
++        for (size_t i = 0; i < plan.tokens.size(); i++) {
++            const int32_t idx = llama_batch_ext_add_token(batch_guard.batch, 0, plan.tokens[i]);
++            const llama_pos pos = static_cast<llama_pos>(i);
++            if (idx < 0 || !llama_batch_ext_set_pos(batch_guard.batch, idx, &pos) ||
++                    !llama_batch_ext_set_output_embd(batch_guard.batch, idx, true) ||
++                    !llama_batch_ext_set_decision_order(batch_guard.batch, idx, static_cast<llama_decision_order>(plan.orders[i]))) {
++                return clef_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to build the clef batch");
++            }
++        }
++        if (llama_process(model->ctx, LLAMA_PROCESS_TYPE_DECODE, batch_guard.batch) != 0) {
++            return clef_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "clef decode failed");
++        }
++        llama_synchronize(model->ctx);
++
++        // the scores are the first rows of the embeddings output
++        for (size_t i = 0; i < plan.n_options; i++) {
++            const float * embd = llama_get_embeddings_ith(model->ctx, static_cast<int32_t>(i));
++            if (embd == nullptr) {
++                return clef_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "clef head returned no score for option " + std::to_string(i));
++            }
++            if (std::isnan(embd[0])) {
++                return clef_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "clef head could not use the decision order of the prompt");
++            }
++            out_scores[i] = embd[0];
++        }
++        return skippy_success(out_error);
++    });
++}
