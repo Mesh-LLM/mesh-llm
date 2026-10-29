@@ -20,14 +20,14 @@ export default {
       name: 'Buzz',
       tagline: 'Your people, your agents, your project — in one place',
       summary:
-        'A collaboration app where people and AI agents work together in channels. Buzz agents can run on models served by mesh-llm.',
+        'Buzz has “shared compute”, powered by mesh-llm: your agents can run on compute pooled by your community, for free.',
       image: '/assets/showcase/buzz.png',
       imageAlt: 'Buzz channel where people and agents plan and ship a change together',
       imageFit: 'cover',
       url: 'https://buzz.xyz',
       linkLabel: 'Visit buzz.xyz',
       linkUrl: 'https://buzz.xyz',
-      uses: ['Agents on mesh models', 'OpenAI-compatible API'],
+      uses: ['Shared compute', 'Agents on mesh models'],
       platforms: 'macOS · iOS',
     },
     {

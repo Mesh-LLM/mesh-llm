@@ -5,12 +5,7 @@
     <div class="footer-rule" aria-hidden="true"></div>
 
     <div class="footer-grid">
-      <section class="footer-sponsors" aria-labelledby="footer-sponsors-title">
-        <h2 id="footer-sponsors-title">Sponsors</h2>
-        <div class="footer-list">
-          {{ footerRow("Become a sponsor", site.githubUrl, "arrow-up-right", "sponsor-row") }}
-        </div>
-
+      <section class="footer-sponsors">
         <div class="footer-brand-block">
           <a class="brand" href="/" aria-label="Mesh LLM home">{% set showBrandVersion = true %}{% include "brand.njk" %}{% set showBrandVersion = false %}</a>
           <span>© <script>document.write(new Date().getFullYear())</script> mesh-llm</span>
