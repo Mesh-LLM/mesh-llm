@@ -360,6 +360,14 @@ fn validate_packaged_manifest(
     manifest: &InstalledPluginManifestMetadata,
     plugin_name: &str,
 ) -> Result<()> {
+    for binding in &manifest.operation_bindings {
+        validate_binding_request(binding, plugin_name).map_err(|reason| {
+            anyhow::anyhow!(
+                "plugin '{plugin_name}' manifest binding '{}': {reason}",
+                binding.name
+            )
+        })?;
+    }
     let Some(schema) = &manifest.config_schema else {
         return Ok(());
     };
@@ -1220,5 +1228,73 @@ mod tests {
             InstalledPluginWebUiValidationStatus::Invalid
         );
         assert!(web_ui.validation.reason.unwrap().contains("escapes"));
+    }
+}
+
+/// The bounds the host's binding registry enforces at node start, applied while
+/// the archive is still staged, so a package the node would refuse to boot with
+/// never lands in the store.
+fn validate_binding_request(
+    binding: &crate::store::InstalledOperationBindingRequest,
+    plugin_name: &str,
+) -> std::result::Result<(), String> {
+    let identifier_ok = |value: &str| !value.trim().is_empty() && value.len() <= 256;
+    if !identifier_ok(&binding.name)
+        || !identifier_ok(&binding.capability)
+        || !identifier_ok(&binding.setup_operation)
+    {
+        return Err("binding identifiers must contain 1–256 bytes".into());
+    }
+    if binding.capability == plugin_name {
+        return Err("self bindings are not permitted".into());
+    }
+    if binding.operations.is_empty() || binding.operations.len() > 64 {
+        return Err("bindings require 1–64 allowed operations".into());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for operation in &binding.operations {
+        if !identifier_ok(operation)
+            || operation == &binding.setup_operation
+            || !seen.insert(operation.as_str())
+        {
+            return Err("allowed operations must be unique, bounded and exclude setup".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod binding_request_bounds_tests {
+    use super::validate_binding_request;
+    use crate::store::InstalledOperationBindingRequest;
+
+    fn request(operations: Vec<String>) -> InstalledOperationBindingRequest {
+        InstalledOperationBindingRequest {
+            name: "store".into(),
+            capability: "storage.v1".into(),
+            setup_operation: "open".into(),
+            operations,
+            setup_directory: false,
+        }
+    }
+
+    #[test]
+    fn a_manifest_binding_is_refused_at_stage_when_the_registry_would_refuse_it() {
+        assert!(validate_binding_request(&request(vec!["read".into()]), "demo").is_ok());
+        let too_many = (0..65).map(|i| format!("op{i}")).collect();
+        assert_eq!(
+            validate_binding_request(&request(too_many), "demo"),
+            Err("bindings require 1–64 allowed operations".into())
+        );
+        assert!(validate_binding_request(&request(vec![]), "demo").is_err());
+        assert!(validate_binding_request(&request(vec!["open".into()]), "demo").is_err());
+        assert!(validate_binding_request(&request(vec!["a".into(), "a".into()]), "demo").is_err());
+        let mut long = request(vec!["read".into()]);
+        long.capability = "c".repeat(257);
+        assert!(validate_binding_request(&long, "demo").is_err());
+        assert_eq!(
+            validate_binding_request(&request(vec!["read".into()]), "storage.v1"),
+            Err("self bindings are not permitted".into())
+        );
     }
 }
