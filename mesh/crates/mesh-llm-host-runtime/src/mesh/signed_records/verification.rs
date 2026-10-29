@@ -1,5 +1,6 @@
 //! Bounded signature verification, independent of the membership lock.
 
+use super::verification_cache::VerificationCache;
 use super::{decode_cache_affinity, decode_node_record, log_malformed_record};
 use crate::mesh::Node;
 use crate::proto::node::{NodeRecord, SignedCacheAffinity, SignedNodeRecord};
@@ -33,6 +34,7 @@ struct Usage {
 pub(crate) struct VerificationGate {
     slots: Arc<Semaphore>,
     senders: Mutex<HashMap<EndpointId, Usage>>,
+    verified: VerificationCache,
 }
 
 impl Default for VerificationGate {
@@ -40,6 +42,7 @@ impl Default for VerificationGate {
         Self {
             slots: Arc::new(Semaphore::new(2)),
             senders: Mutex::new(HashMap::new()),
+            verified: VerificationCache::default(),
         }
     }
 }
@@ -122,11 +125,12 @@ impl Node {
         };
         let nodes = std::mem::take(&mut inbound.signed_records);
         let caches = std::mem::take(&mut inbound.signed_cache_affinity);
+        let gate = self.gossip_verification.clone();
         // The permit lives in the blocking job: cancelling the async caller
         // cannot admit replacement work while this job is still running.
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            verify_records(remote, nodes, caches)
+            verify_records(&gate.verified, remote, nodes, caches)
         })
         .await
         .map_err(|error| {
@@ -137,6 +141,7 @@ impl Node {
 }
 
 fn verify_records(
+    verified: &VerificationCache,
     remote: EndpointId,
     nodes: Vec<SignedNodeRecord>,
     caches: Vec<SignedCacheAffinity>,
@@ -145,7 +150,8 @@ fn verify_records(
     for wire in nodes {
         prepared.sender_node_record_present |= RecordHeader::parse(&NODE_RECORD, &wire.signed)
             .is_ok_and(|header| header.endpoint_id == remote);
-        let result = VerifiedRecord::verify(NODE_RECORD, &wire.signed, &wire.signature)
+        let result = verified
+            .verify(NODE_RECORD, &wire.signed, &wire.signature)
             .and_then(|record| decode_node_record(record.body()).map(|body| (record, body)));
         match result {
             Ok((record, body)) => prepared.nodes.push(PreparedNode {
@@ -160,7 +166,8 @@ fn verify_records(
         prepared.sender_cache_record_present |=
             RecordHeader::parse(&CACHE_AFFINITY_RECORD, &wire.signed)
                 .is_ok_and(|header| header.endpoint_id == remote);
-        let result = VerifiedRecord::verify(CACHE_AFFINITY_RECORD, &wire.signed, &wire.signature)
+        let result = verified
+            .verify(CACHE_AFFINITY_RECORD, &wire.signed, &wire.signature)
             .and_then(|record| decode_cache_affinity(record.body()).map(|body| (record, body)));
         match result {
             Ok(record) => prepared.caches.push(record),
@@ -176,6 +183,97 @@ mod tests {
 
     fn sender(seed: u8) -> EndpointId {
         iroh::SecretKey::from_bytes(&[seed; 32]).public()
+    }
+
+    #[test]
+    fn repeated_batches_reuse_both_signatures_but_keep_current_hop_data() {
+        use prost::Message;
+        let cache = VerificationCache::default();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[1; 32]);
+        let now = mesh_llm_membership::requirements::current_time_unix_ms();
+        let node = VerifiedRecord::sign(
+            NODE_RECORD,
+            &key,
+            1,
+            now,
+            &NodeRecord::default().encode_to_vec(),
+        );
+        let affinity = crate::proto::node::CacheAffinityAdvertisement {
+            salt: vec![3; 32],
+            epoch: 1,
+            generated_at_unix_ms: now,
+            ttl_ms: 120_000,
+            entries: Vec::new(),
+        };
+        let affinity = VerifiedRecord::sign(
+            CACHE_AFFINITY_RECORD,
+            &key,
+            1,
+            now,
+            &affinity.encode_to_vec(),
+        );
+        for latency in [10, 20] {
+            let hop = crate::proto::node::HopObservation {
+                latency_ms: Some(latency),
+                ..Default::default()
+            };
+            let prepared = verify_records(
+                &cache,
+                sender(1),
+                vec![SignedNodeRecord {
+                    signed: node.signed_bytes().to_vec(),
+                    signature: node.signature().to_vec(),
+                    hop: Some(hop.clone()),
+                }],
+                vec![SignedCacheAffinity {
+                    signed: affinity.signed_bytes().to_vec(),
+                    signature: affinity.signature().to_vec(),
+                }],
+            );
+            assert_eq!(prepared.nodes.len(), 1);
+            assert_eq!(prepared.nodes[0].record, node);
+            assert_eq!(prepared.nodes[0].hop, Some(hop));
+            assert_eq!(prepared.caches.len(), 1);
+            assert_eq!(prepared.caches[0].0, affinity);
+            assert!(prepared.sender_node_record_present && prepared.sender_cache_record_present);
+        }
+        assert_eq!(
+            cache
+                .verifications
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[test]
+    fn cached_signature_does_not_bypass_body_validation() {
+        let cache = VerificationCache::default();
+        let record = VerifiedRecord::sign(
+            NODE_RECORD,
+            &ed25519_dalek::SigningKey::from_bytes(&[1; 32]),
+            1,
+            1_000_000,
+            &[0xff],
+        );
+        for _ in 0..2 {
+            let prepared = verify_records(
+                &cache,
+                sender(1),
+                vec![SignedNodeRecord {
+                    signed: record.signed_bytes().to_vec(),
+                    signature: record.signature().to_vec(),
+                    hop: None,
+                }],
+                Vec::new(),
+            );
+            assert!(prepared.nodes.is_empty());
+        }
+        assert_eq!(
+            cache
+                .verifications
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[tokio::test(start_paused = true)]

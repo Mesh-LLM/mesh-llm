@@ -31,6 +31,7 @@ use std::collections::HashMap;
 type Announcement = (EndpointAddr, PeerAnnouncement);
 
 mod verification;
+mod verification_cache;
 pub(crate) use verification::VerificationGate;
 
 impl Node {
