@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use mesh_llm_plugin_manager::InstalledPluginMetadata;
 use mesh_llm_plugin_manager::defaults::{
     DEFAULT_PLUGINS, DefaultPluginOutcome, NO_DEFAULT_PLUGINS_ENV, default_plugin,
     default_plugins_opted_out, provision_bundled_defaults, turn_off_defaults,
@@ -24,6 +25,83 @@ use mesh_llm_tui::terminal_progress::{
 pub struct PluginListRows {
     pub externals: Vec<RuntimePluginRow>,
     pub inactive: Vec<InactivePluginRow>,
+    /// Capability providers reported by the running node
+    /// (`GET /api/plugins/providers`); `None` when no node answered, in which
+    /// case binding readiness cannot be judged and is not reported.
+    pub providers: Option<Vec<CapabilityProviderRow>>,
+}
+
+/// One row of `GET /api/plugins/providers`.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]
+pub struct CapabilityProviderRow {
+    pub capability: String,
+    pub plugin_name: String,
+    pub available: bool,
+}
+
+/// Fetch the running node's capability providers; `None` when it is not
+/// running or does not answer.
+pub async fn fetch_capability_providers(port: u16) -> Option<Vec<CapabilityProviderRow>> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/api/plugins/providers"))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json().await.ok()
+}
+
+/// Installed, enabled plugins whose manifest asks for a provider by capability
+/// but for which the running node has no provider, or more than one. Such a
+/// binding is refused on every call, so the plugin is not ready; the node says
+/// the same once at start, this is the persistent view.
+fn unresolvable_capability_grants(
+    installed: &[InstalledPluginMetadata],
+    providers: Option<&[CapabilityProviderRow]>,
+) -> Vec<String> {
+    let Some(providers) = providers else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    for plugin in installed.iter().filter(|plugin| plugin.enabled) {
+        let Some(manifest) = plugin.manifest.as_ref() else {
+            continue;
+        };
+        for binding in &manifest.operation_bindings {
+            let mut candidates: Vec<&str> = providers
+                .iter()
+                .filter(|provider| {
+                    provider.capability == binding.capability
+                        && provider.available
+                        && provider.plugin_name != plugin.name
+                })
+                .map(|provider| provider.plugin_name.as_str())
+                .collect();
+            candidates.sort_unstable();
+            candidates.dedup();
+            match candidates.as_slice() {
+                [_] => {}
+                [] => warnings.push(format!(
+                    "{} binding {} is not ready: no running plugin serves {}",
+                    plugin.name, binding.name, binding.capability
+                )),
+                several => warnings.push(format!(
+                    "{} binding {} is not ready: several plugins serve {} ({}); name one with [[plugin.operation_bindings]]",
+                    plugin.name,
+                    binding.name,
+                    binding.capability,
+                    several.join(", ")
+                )),
+            }
+        }
+    }
+    warnings
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -528,6 +606,9 @@ fn list(runtime_rows: &PluginListRows) -> Result<()> {
     let mut err = mesh_llm_events::console_err();
     for missing in missing_requirements(&installed) {
         writeln!(err, "⚠️  {}", missing.describe())?;
+    }
+    for warning in unresolvable_capability_grants(&installed, runtime_rows.providers.as_deref()) {
+        writeln!(err, "⚠️  {warning}")?;
     }
 
     for spec in &runtime_rows.externals {

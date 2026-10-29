@@ -1526,7 +1526,10 @@ impl Node {
     }
 
     pub async fn all_served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
-        let mut descriptors = self.local_descriptors_with_plugins().await;
+        // Local descriptors carry the channel requirements plugins attached,
+        // exactly as peers see them in announcements.
+        let hosted_models = self.hosted_models.lock().await.clone();
+        let mut descriptors = self.descriptors_with_requirements(&hosted_models).await;
         let peer_descriptors = {
             let state = self.state.lock().await;
             state

@@ -264,12 +264,41 @@ impl PluginManager {
                 tracing::info!(caller = %key.0, binding = %key.1, provider = %only, capability, "Capability binding resolved");
                 Ok(only.clone())
             }
-            [] => Err(denied(&format!("no running plugin serves {capability}"))),
-            several => Err(denied(&format!(
-                "several plugins serve {capability} ({}); name one with [[plugin.operation_bindings]]",
-                several.join(", ")
-            ))),
+            [] => {
+                let reason = format!("no running plugin serves {capability}");
+                warn_unresolvable_grant(key, &reason);
+                Err(denied(&reason))
+            }
+            several => {
+                let reason = format!(
+                    "several plugins serve {capability} ({}); name one with [[plugin.operation_bindings]]",
+                    several.join(", ")
+                );
+                warn_unresolvable_grant(key, &reason);
+                Err(denied(&reason))
+            }
         }
+    }
+}
+
+/// A capability grant that resolves to no provider, or to more than one, is
+/// refused on every call; the caller usually retries quietly. Say so once per
+/// binding and outcome as an output event (the default log filter drops
+/// host-runtime `tracing::warn!`), so the operator learns at node start that
+/// the plugin is not ready rather than at its first failing request.
+fn warn_unresolvable_grant(key: &(String, String), reason: &str) {
+    static WARNED: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+    let entry = format!("{}/{}: {reason}", key.0, key.1);
+    let first = WARNED
+        .lock()
+        .map(|mut warned| warned.get_or_insert_with(Default::default).insert(entry))
+        .unwrap_or(false);
+    if first {
+        let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+            message: format!("Plugin {} binding {} is not ready: {reason}", key.0, key.1),
+            context: None,
+        });
     }
 }
 

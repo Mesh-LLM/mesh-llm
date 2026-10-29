@@ -257,7 +257,9 @@ async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
 async fn run_plugin_command(command: &mesh_llm_cli::PluginCommand, cli: &Cli) -> Result<()> {
     match command {
         mesh_llm_cli::PluginCommand::List => {
-            let rows = resolved_plugin_list_rows(cli)?;
+            let mut rows = resolved_plugin_list_rows(cli)?;
+            rows.providers =
+                mesh_llm_commands::plugin::fetch_capability_providers(cli.console).await;
             mesh_llm_commands::plugin::run_plugin_command(
                 command,
                 Some(&rows),
@@ -309,6 +311,7 @@ fn resolved_plugin_list_rows(cli: &Cli) -> Result<mesh_llm_commands::plugin::Plu
                 error: summary.error,
             })
             .collect(),
+        providers: None,
     })
 }
 

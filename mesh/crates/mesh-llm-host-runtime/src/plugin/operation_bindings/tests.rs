@@ -419,8 +419,13 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
     let capacity = registry[&consumer].capacity.clone();
     reserve_resolved_provider(&mut registry, &consumer, &capacity, "vault-a").unwrap();
     assert!(
-        reserve_resolved_provider(&mut registry, &consumer, &Arc::new(Semaphore::new(8)), "vault-a")
-            .is_err()
+        reserve_resolved_provider(
+            &mut registry,
+            &consumer,
+            &Arc::new(Semaphore::new(8)),
+            "vault-a"
+        )
+        .is_err()
     );
 
     // The owner config entry still carries the grant as written (no provider);
