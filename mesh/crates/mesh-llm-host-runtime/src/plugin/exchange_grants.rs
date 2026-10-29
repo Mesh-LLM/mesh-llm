@@ -7,6 +7,10 @@ use tokio::sync::watch;
 
 struct GrantState {
     effective: Option<OpenAiExchangeGrant>,
+    /// Granted by the installed package's manifest rather than a config entry.
+    /// Stands until a config entry for the plugin names its own grant or
+    /// disables the plugin; an owner apply without a stanza does not revoke it.
+    installed: Option<OpenAiExchangeGrant>,
     revision: watch::Sender<u64>,
 }
 
@@ -14,6 +18,17 @@ impl GrantState {
     fn new(effective: Option<OpenAiExchangeGrant>) -> Self {
         Self {
             effective,
+            installed: None,
+            revision: watch::channel(0).0,
+        }
+    }
+    fn installed(
+        effective: Option<OpenAiExchangeGrant>,
+        installed: Option<OpenAiExchangeGrant>,
+    ) -> Self {
+        Self {
+            effective,
+            installed,
             revision: watch::channel(0).0,
         }
     }
@@ -36,9 +51,16 @@ impl ExchangeGrantRegistry {
             specs
                 .iter()
                 .map(|spec| {
+                    let installed = spec
+                        .installed_metadata
+                        .as_ref()
+                        .and_then(super::installed::installed_exchange_grant);
                     (
                         spec.name.clone(),
-                        GrantState::new(spec.openai_exchange_grant.as_deref().cloned()),
+                        GrantState::installed(
+                            spec.openai_exchange_grant.as_deref().cloned(),
+                            installed,
+                        ),
                     )
                 })
                 .collect(),
@@ -115,12 +137,6 @@ impl super::PluginManager {
                 )
                 .collect();
             for name in names {
-                let effective = config
-                    .plugins
-                    .iter()
-                    .find(|entry| entry.name == name)
-                    .filter(|entry| entry.enabled != Some(false))
-                    .and_then(|entry| entry.openai_exchange_grant.clone());
                 let state = states.entry(name.clone()).or_insert_with(|| {
                     GrantState::new(
                         self.inner
@@ -130,6 +146,16 @@ impl super::PluginManager {
                             .cloned(),
                     )
                 });
+                let entry = config.plugins.iter().find(|entry| entry.name == name);
+                let effective = match entry {
+                    Some(entry) if entry.enabled == Some(false) => None,
+                    Some(entry) if entry.openai_exchange_grant.is_some() => {
+                        entry.openai_exchange_grant.clone()
+                    }
+                    // No stanza, or one that does not name a grant: the
+                    // installed package's grant (if any) stands.
+                    Some(_) | None => state.installed.clone(),
+                };
                 if state.replace(effective) {
                     changed.push(name.clone());
                 }
@@ -204,6 +230,73 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    /// An installed package's hook grant is not revoked by an owner apply
+    /// whose config has no stanza for the plugin (the zero-config install),
+    /// or a stanza that names no grant. A stanza naming its own grant replaces
+    /// it; disabling the plugin revokes it.
+    #[tokio::test]
+    async fn installed_package_grant_stands_until_config_names_or_disables_it() {
+        let manager = super::super::PluginManager::for_test_summaries(Vec::new());
+        let installed = fixture_grant(true);
+        manager.inner.exchange_grants.0.lock().unwrap().insert(
+            "pay".into(),
+            GrantState::installed(Some(installed.clone()), Some(installed.clone())),
+        );
+        let entry = |grant: Option<OpenAiExchangeGrant>, enabled: Option<bool>| {
+            let mut config = MeshConfig::default();
+            config.plugins.push(crate::plugin::PluginConfigEntry {
+                operation_bindings: Vec::new(),
+                name: "pay".into(),
+                enabled,
+                web_ui_enabled: None,
+                web_ui_primary_tab: None,
+                allow_peer_blocks: None,
+                allow_inference_observation: None,
+                openai_exchange_grant: grant,
+                command: None,
+                args: Vec::new(),
+                url: None,
+                settings: BTreeMap::new(),
+                startup: crate::plugin::PluginStartupConfig::default(),
+            });
+            config
+        };
+
+        manager.apply_exchange_grants(&MeshConfig::default()).await;
+        assert_eq!(
+            manager.effective_exchange_grant("pay"),
+            Some(installed.clone())
+        );
+        assert!(manager.has_exchange_hooks().await);
+
+        manager.apply_exchange_grants(&entry(None, None)).await;
+        assert_eq!(
+            manager.effective_exchange_grant("pay"),
+            Some(installed.clone())
+        );
+
+        let named = fixture_grant(false);
+        manager
+            .apply_exchange_grants(&entry(Some(named.clone()), None))
+            .await;
+        assert_eq!(manager.effective_exchange_grant("pay"), Some(named));
+
+        manager
+            .apply_exchange_grants(&entry(None, Some(false)))
+            .await;
+        assert_eq!(manager.effective_exchange_grant("pay"), None);
+        assert!(!manager.has_exchange_hooks().await);
+
+        // A config-sourced grant (no installed package) is still removed with
+        // its stanza.
+        manager.inner.exchange_grants.0.lock().unwrap().insert(
+            "configured".into(),
+            GrantState::new(Some(fixture_grant(true))),
+        );
+        manager.apply_exchange_grants(&MeshConfig::default()).await;
+        assert_eq!(manager.effective_exchange_grant("configured"), None);
     }
 
     #[tokio::test]
