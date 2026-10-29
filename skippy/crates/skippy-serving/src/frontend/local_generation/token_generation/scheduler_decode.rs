@@ -25,6 +25,9 @@ impl StageOpenAiBackend {
             && self.draft.is_none()
             && !request.native_mtp_enabled
             && !state.generation_hooks_active;
+        #[cfg(test)]
+        let resume_scheduler_decode = resume_scheduler_decode
+            && std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_NO_HANDOFF").is_none();
         if scheduler_resume_ready(
             resume_scheduler_decode,
             !recurrent_checkpoint_required,
