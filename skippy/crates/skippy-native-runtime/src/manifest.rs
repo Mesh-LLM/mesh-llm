@@ -276,6 +276,11 @@ fn verify_file_checksums(
 struct FileStamp {
     len: u64,
     modified: SystemTime,
+    /// On Unix the inode change time, which a writer cannot set back: a
+    /// same-length rewrite whose modification time is restored still changes
+    /// it. Stable `std` exposes no equivalent on Windows.
+    #[cfg(unix)]
+    changed: (i64, i64),
 }
 
 impl FileStamp {
@@ -287,6 +292,11 @@ impl FileStamp {
         Ok(metadata.modified().ok().map(|modified| Self {
             len: metadata.len(),
             modified,
+            #[cfg(unix)]
+            changed: {
+                use std::os::unix::fs::MetadataExt;
+                (metadata.ctime(), metadata.ctime_nsec())
+            },
         }))
     }
 }
@@ -294,7 +304,7 @@ impl FileStamp {
 /// Files this process already hashed to their declared checksum. Runtime
 /// discovery, selection and loading each read the same manifests, and a CUDA
 /// runtime is about 1 GB, so a start hashed it about three times. A file
-/// whose length or modification time changed since is hashed again.
+/// whose `FileStamp` changed since is hashed again.
 fn verified_files() -> std::sync::MutexGuard<'static, HashMap<(PathBuf, String), FileStamp>> {
     static VERIFIED: OnceLock<Mutex<HashMap<(PathBuf, String), FileStamp>>> = OnceLock::new();
     VERIFIED
@@ -435,6 +445,37 @@ mod tests {
         let error = NativeRuntimeManifest::read_from_dir(temp.path()).unwrap_err();
         assert!(error.to_string().contains("checksum mismatch"));
         assert_eq!(hashed(), before + 2);
+    }
+
+    /// A same-length rewrite that puts the old modification time back still
+    /// changes the inode change time, so it is hashed again and rejected.
+    #[cfg(unix)]
+    #[test]
+    fn a_rewrite_with_its_modification_time_restored_is_hashed_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("lib/libllama.so");
+        fs::create_dir_all(library.parent().unwrap()).unwrap();
+        fs::write(&library, b"native runtime").unwrap();
+        cpu_runtime_manifest().write_to_dir(temp.path()).unwrap();
+        NativeRuntimeManifest::read_from_dir(temp.path()).unwrap();
+        let original = fs::metadata(&library).unwrap().modified().unwrap();
+        let before = HASHED.with(Cell::get);
+
+        fs::write(&library, b"NATIVE RUNTIME").unwrap();
+        File::options()
+            .write(true)
+            .open(&library)
+            .unwrap()
+            .set_modified(original)
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&library).unwrap().modified().unwrap(),
+            original
+        );
+
+        let error = NativeRuntimeManifest::read_from_dir(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("checksum mismatch"));
+        assert_eq!(HASHED.with(Cell::get), before + 1);
     }
 
     #[test]
