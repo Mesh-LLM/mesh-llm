@@ -64,6 +64,42 @@ fn resident_hybrid_native_batch_shape_parity() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_first_turn_without_exact_recorder() -> Result<()> {
+    let (mut wide, _) = recurrent_test_backend(
+        "wide-no-recorder",
+        "wide-no-recorder",
+        512,
+        (128, 32),
+        8,
+        256,
+    )?;
+    let (mut narrow, _) = recurrent_test_backend(
+        "narrow-no-recorder",
+        "narrow-no-recorder",
+        512,
+        (32, 32),
+        8,
+        256,
+    )?;
+    for backend in [&mut wide, &mut narrow] {
+        let mut kv = backend.kv.as_ref().unwrap().as_ref().clone();
+        assert!(kv.resident_recurrent_snapshots && kv.payload_is_exact_state());
+        kv.serialized_payload = None;
+        assert!(!kv.payload_is_exact_state());
+        backend.kv = Some(Arc::new(kv));
+    }
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let (expected, _) = generate(&narrow, &prompt, 8)?;
+    let (actual, _) = generate(&wide, &prompt, 8)?;
+    assert_eq!(
+        actual, expected,
+        "resident first turn differs without exact recording"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
     // The extended prompt reaches 150 tokens. Leave the 128-token decode
     // headroom requirement outside this microbatch-shape comparison.
