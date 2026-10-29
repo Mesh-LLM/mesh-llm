@@ -104,6 +104,16 @@ fn native_hybrid_iteration_batch_shape_parity() -> Result<()> {
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_hybrid_resident_checkpoint_null_sampling_parity() -> Result<()> {
+    native_hybrid_checkpoint_shape_parity(false)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_hybrid_exact_capture_shape_parity() -> Result<()> {
+    native_hybrid_checkpoint_shape_parity(true)
+}
+
+fn native_hybrid_checkpoint_shape_parity(record_exact: bool) -> Result<()> {
     let (wide, _) =
         recurrent_test_backend("checkpoint-wide", "checkpoint-wide", 512, (128, 32), 8, 256)?;
     let (narrow, _) = recurrent_test_backend(
@@ -128,6 +138,32 @@ fn native_hybrid_resident_checkpoint_null_sampling_parity() -> Result<()> {
     assert!(!wide_recurrent.is_empty() && !narrow_recurrent.is_empty());
     wide_runtime.save_resident_prefix(session, 2, 126)?;
     narrow_runtime.save_resident_prefix(session, 2, 126)?;
+    if record_exact {
+        for (backend, runtime) in [(&wide, &mut *wide_runtime), (&narrow, &mut *narrow_runtime)] {
+            let kv = backend.kv.as_ref().unwrap();
+            let ids = InferenceGenerationIds::new_with_trust(
+                InferenceCacheHints::default(),
+                Some(session),
+                true,
+                None,
+            );
+            let base = backend.local_kv_message_base(session, &ids);
+            let identity =
+                kv.prefill_identity(&backend.config, &base, 0, &(1..=126).collect::<Vec<_>>());
+            anyhow::ensure!(
+                kv.record_exact_state_with_cost_and_durability(
+                    runtime,
+                    session,
+                    &identity,
+                    crate::kv_integration::CaptureAdmission::BestEffort,
+                    None,
+                    false,
+                )?
+                .is_some(),
+                "lane-owned exact checkpoint was not captured"
+            );
+        }
+    }
     let mut wide_token = prefill_without_sampling_config(&mut wide_runtime, session, &[127, 128])?
         .context("wide checkpoint continuation produced no sample")?;
     let mut narrow_token =
