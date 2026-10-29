@@ -152,19 +152,7 @@ above the budget, and insufficient funds fail when a payment is attempted.
 With automatic policy enabled, routing prefers local inference, then eligible
 paid providers, then free providers.
 
-## 4. How payments work
-
-For a buyer that has not yet settled a request with a provider, the provider
-requires an anti-griefing deposit (₿1 by default) before starting inference.
-The deposit proves the buyer can pay and is credited toward the final bill.
-
-Once one of that buyer's requests settles, later requests to the same running
-provider normally skip the deposit. The provider streams the response,
-calculates the bill from backend-reported token usage after generation
-completes, and the client's wallet automatically pays any remaining amount
-under its saved spending policy.
-
-## 5. Limitations
+## 4. Limitations
 
 Payments in MeshLLM are still experimental, and the protocol may change rapidly.
 This early implementation has several known limitations that are being actively
