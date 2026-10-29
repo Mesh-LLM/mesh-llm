@@ -197,10 +197,37 @@ fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
     let mut extended = prompt;
     extended.extend_from_slice(&actual);
     extended.extend(129..=150);
+    let (cold_wide, _) = recurrent_test_backend(
+        "wide-growing-cold",
+        "wide-growing-cold",
+        512,
+        (128, 32),
+        8,
+        256,
+    )?;
+    let (cold_narrow, _) = recurrent_test_backend(
+        "narrow-growing-cold",
+        "narrow-growing-cold",
+        512,
+        (32, 32),
+        8,
+        256,
+    )?;
+    let wide_cold_output = generate(&cold_wide, &extended, 8)?.0;
+    let narrow_cold_output = generate(&cold_narrow, &extended, 8)?.0;
     assert_eq!(
-        generate(&wide, &extended, 8)?.0,
-        generate(&narrow, &extended, 8)?.0,
-        "growing resident turns differ across batch sizes"
+        wide_cold_output, narrow_cold_output,
+        "cold growing output differs across batch sizes"
+    );
+    let wide_warm_output = generate(&wide, &extended, 8)?.0;
+    let narrow_warm_output = generate(&narrow, &extended, 8)?.0;
+    assert_eq!(
+        wide_warm_output, wide_cold_output,
+        "wide growing resident turn differs from cold"
+    );
+    assert_eq!(
+        narrow_warm_output, narrow_cold_output,
+        "narrow growing resident turn differs from cold"
     );
     Ok(())
 }
