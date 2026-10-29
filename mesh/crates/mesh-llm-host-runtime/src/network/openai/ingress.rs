@@ -276,6 +276,55 @@ fn explicit_model_route(
     }
 }
 
+/// Build the single-model candidate pool for an automatic route, or the
+/// resolution that explains why no pool is usable.
+///
+/// Applies the ingress admission order in one place: workload-class candidates,
+/// media compatibility, payment admission, then the readiness pool.
+#[allow(clippy::too_many_arguments)]
+async fn auto_route_candidate_pool<'a>(
+    node: &mesh::Node,
+    request: &proxy::BufferedHttpRequest,
+    targets: &election::ModelTargets,
+    available_models: &'a [String],
+    descriptors: &[crate::mesh::ServedModelDescriptor],
+    media: &router::MediaRequirements,
+    required_tokens: Option<u32>,
+    affinity: &affinity::AffinityRouter,
+) -> Result<Vec<router::RoutingCandidate<'a>>, AutoRouteResolution> {
+    let available = workload_routing::routing_candidates(
+        node,
+        available_models,
+        &request.client_path,
+        descriptors,
+    );
+    if available.is_empty()
+        && let Some(workload) = required_request_workload(&request.client_path)
+    {
+        if available_models.is_empty() {
+            return Err(AutoRouteResolution::NoModelReady);
+        }
+        return Err(AutoRouteResolution::WorkloadUnsupported(workload));
+    }
+    let Some(available) = router::filter_media_compatible_candidates(&available, media) else {
+        return Err(AutoRouteResolution::MediaUnsupported);
+    };
+    let (available, ready_models) = match auto_route::payment_admission::admitted_models(
+        node,
+        Some(targets),
+        request,
+        &available,
+        required_tokens,
+        affinity,
+    )
+    .await
+    {
+        Ok(pool) => pool,
+        Err(reason) => return Err(AutoRouteResolution::PaymentRequired(reason)),
+    };
+    Ok(auto_route::pool_for_ready_models(&available, &ready_models))
+}
+
 /// Admit explicit workloads or select a compatible automatic route, preserving committee mode.
 #[allow(clippy::too_many_arguments)]
 async fn resolve_auto_routed_model(
@@ -349,37 +398,21 @@ async fn resolve_auto_routed_model(
     let media = workload_routing::request_media(&request.client_path, body_json);
     let available_models =
         collect_available_models_for_auto_route(node, targets, plugin_manager).await;
-    let available = workload_routing::routing_candidates(
+    let available = match auto_route_candidate_pool(
         node,
-        &available_models,
-        &request.client_path,
-        descriptors,
-    );
-    if available.is_empty()
-        && let Some(workload) = required_request_workload(&request.client_path)
-    {
-        if available_models.is_empty() {
-            return AutoRouteResolution::NoModelReady;
-        }
-        return AutoRouteResolution::WorkloadUnsupported(workload);
-    }
-    let Some(available) = router::filter_media_compatible_candidates(&available, &media) else {
-        return AutoRouteResolution::MediaUnsupported;
-    };
-    let (available, ready_models) = match auto_route::payment_admission::admitted_models(
-        node,
-        Some(targets),
         request,
-        &available,
+        targets,
+        &available_models,
+        descriptors,
+        &media,
         required_tokens,
         affinity,
     )
     .await
     {
         Ok(pool) => pool,
-        Err(reason) => return AutoRouteResolution::PaymentRequired(reason),
+        Err(resolution) => return resolution,
     };
-    let available = auto_route::pool_for_ready_models(&available, &ready_models);
 
     let classification = body_json.map_or_else(
         || router::Classification {
