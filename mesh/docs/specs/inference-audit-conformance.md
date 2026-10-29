@@ -115,7 +115,10 @@ The adjudicator publishes, per model:
 - Evidence: the sender keeps the exact request and response bodies behind those
   two digests, the response with its logprobs when the node served them. While
   the version is live it gives them only to the adjudicators scoring the audit,
-  over an authenticated channel, and each adjudicator checks them against the
+  over a channel encrypted to the intended adjudicator and authenticated with
+  its owner identity on the roster, so someone watching the channel cannot read
+  the prompt. The version key, which an adjudicator needs to check the keyed
+  values, travels the same way. Each adjudicator checks the bodies against the
   digests before scoring. At retirement they are published with the corpus.
 - Adjudicator side: the AAC judge record family (adjudication/v1,
   sample-manifest/v1, calibration-summary/v1), as of
