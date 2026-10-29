@@ -1,7 +1,6 @@
 //! The `mesh` provider `serve` keeps in Pi's `~/.pi/agent/models.json`.
 
 use mesh_llm_events::{OutputEvent, emit_event};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Update ~/.pi/agent/models.json to include a "mesh" provider.
@@ -66,22 +65,11 @@ fn load(path: &Path) -> Option<serde_json::Value> {
 }
 
 /// Replaces the file at `path`, or the file a symlink there points to, with
-/// `contents`: written to a temporary file next to it, with the old file's
-/// permissions, then renamed over it, which leaves the old file in place if
+/// `contents`. The new file gets the old one's permissions, or on Windows its
+/// DACL, before anything is written, and the old file stays in place if
 /// anything fails.
 fn replace(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let target = write_target(path)?;
-    let dir = target.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir)?;
-    // Created readable by the owner only.
-    let mut file = tempfile::NamedTempFile::new_in(dir)?;
-    if let Ok(metadata) = std::fs::metadata(&target) {
-        file.as_file().set_permissions(metadata.permissions())?;
-    }
-    file.write_all(contents)?;
-    file.as_file().sync_all()?;
-    file.persist(&target).map_err(|e| e.error)?;
-    Ok(())
+    mesh_llm_config::replace_file_keeping_access(&write_target(path)?, contents)
 }
 
 /// `path`, or the file it links to.
