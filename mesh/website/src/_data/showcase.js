@@ -3,17 +3,17 @@
 export default {
   apps: [
     {
-      name: 'Mesh',
-      tagline: 'mesh-llm from your menu bar',
+      name: 'Mesh App',
+      tagline: 'A desktop launcher for mesh-llm',
       summary:
-        'A desktop launcher that runs mesh-llm from the menu bar or system tray. It picks a model that fits your machine, downloads it on first use, and opens chat in one click. Join the public mesh or run a private one and invite people with a code.',
+        'Mesh App runs mesh-llm for you: on demand, at set times of day, or when the sun is shining and your power is free. It also helps you hook mesh-llm up to the agents and apps you already use.',
       image: '/assets/showcase/mesh-app.png',
       imageAlt: 'Mesh desktop app settings panel',
       imageFit: 'contain',
       url: 'https://github.com/Mesh-LLM/mesh-app',
       linkLabel: 'Download for macOS',
       linkUrl: 'https://github.com/Mesh-LLM/mesh-app/releases/download/dev-latest/Mesh-macos-arm64.dmg',
-      uses: ['Public and private meshes', 'Automatic model setup', 'OpenAI-compatible API'],
+      uses: ['Scheduled and solar-aware serving', 'Connects your agents and apps', 'Public and private meshes'],
       platforms: 'macOS arm64 · Windows, Linux preview',
     },
     {
