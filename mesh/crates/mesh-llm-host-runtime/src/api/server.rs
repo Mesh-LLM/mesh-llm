@@ -160,7 +160,11 @@ async fn bind_management_listener(
     let addr = if listen_all { "0.0.0.0" } else { "127.0.0.1" };
     match existing_listener {
         Some(listener) => Some(listener),
-        None => match TcpListener::bind(format!("{addr}:{port}")).await {
+        None => match crate::network::exclusive_listener::bind_exclusive_tcp_listener(&format!(
+            "{addr}:{port}"
+        ))
+        .await
+        {
             Ok(listener) => Some(listener),
             Err(e) => {
                 tracing::error!("Management API: failed to bind :{port}: {e}");
