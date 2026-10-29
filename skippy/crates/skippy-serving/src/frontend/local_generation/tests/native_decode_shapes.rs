@@ -24,6 +24,23 @@ pub(super) fn prefill_without_intermediate_sampling(
     Ok(output.samples.first().map(|sample| sample.predicted_token))
 }
 
+fn prefill_without_sampling_config(
+    runtime: &mut RuntimeState,
+    session: &str,
+    tokens: &[i32],
+) -> Result<Option<i32>> {
+    let output = runtime.iteration_batch_sampled(&[RuntimeIterationBatchRequest {
+        session_id: session,
+        token_ids: tokens,
+        positions: &[],
+        sampling: None,
+        input: None,
+        sample_last: true,
+        phase: IterationBatchPhase::Prefill,
+    }])?;
+    Ok(output.samples.first().map(|sample| sample.predicted_token))
+}
+
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_hybrid_iteration_batch_shape_parity() -> Result<()> {
@@ -86,7 +103,7 @@ fn native_hybrid_iteration_batch_shape_parity() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
-fn native_hybrid_resident_checkpoint_shape_parity() -> Result<()> {
+fn native_hybrid_resident_checkpoint_null_sampling_parity() -> Result<()> {
     let (wide, _) =
         recurrent_test_backend("checkpoint-wide", "checkpoint-wide", 512, (128, 32), 8, 256)?;
     let (narrow, _) = recurrent_test_backend(
@@ -111,11 +128,10 @@ fn native_hybrid_resident_checkpoint_shape_parity() -> Result<()> {
     assert!(!wide_recurrent.is_empty() && !narrow_recurrent.is_empty());
     wide_runtime.save_resident_prefix(session, 2, 126)?;
     narrow_runtime.save_resident_prefix(session, 2, 126)?;
-    let mut wide_token =
-        prefill_without_intermediate_sampling(&mut wide_runtime, session, &[127, 128], true)?
-            .context("wide checkpoint continuation produced no sample")?;
+    let mut wide_token = prefill_without_sampling_config(&mut wide_runtime, session, &[127, 128])?
+        .context("wide checkpoint continuation produced no sample")?;
     let mut narrow_token =
-        prefill_without_intermediate_sampling(&mut narrow_runtime, session, &[127, 128], true)?
+        prefill_without_sampling_config(&mut narrow_runtime, session, &[127, 128])?
             .context("narrow checkpoint continuation produced no sample")?;
     assert_eq!(
         wide_token, narrow_token,
