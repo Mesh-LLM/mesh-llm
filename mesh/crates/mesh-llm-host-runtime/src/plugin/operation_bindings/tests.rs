@@ -76,6 +76,7 @@ async fn non_wallet_provider_uses_fixed_setup_allowlist_generation_and_revocatio
             handle: None,
             capacity: Arc::new(Semaphore::new(8)),
             installed_grant: false,
+            resolved: None,
         },
     );
     let request = |handle, operation: &str, input: &str| BoundOperationRequest {
@@ -297,6 +298,7 @@ fn installed_package_grant_survives_config_apply_until_replaced() {
                 handle: None,
                 capacity: Arc::new(Semaphore::new(8)),
                 installed_grant,
+                resolved: None,
             },
         );
         manager
@@ -353,5 +355,128 @@ fn installed_package_grant_survives_config_apply_until_replaced() {
     assert!(
         !kept(&manager),
         "a config grant whose entry is gone is revoked"
+    );
+}
+
+/// A provider belongs to one binding: a second capability binding resolving to
+/// it, or a capability binding resolving to a provider another binding names,
+/// is refused; and resolving keeps the grant itself unchanged so an unchanged
+/// owner config entry does not revoke the binding afterwards.
+#[test]
+fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
+    fn capability_grant(name: &str) -> PluginOperationBinding {
+        PluginOperationBinding {
+            capability: Some("wallet.v1".into()),
+            setup_directory: true,
+            name: name.into(),
+            provider: String::new(),
+            profile: "default".into(),
+            setup_operation: "wallet_open".into(),
+            setup_input_json: "{}".into(),
+            operations: vec!["wallet_balance".into()],
+        }
+    }
+    fn binding(grant: PluginOperationBinding) -> Binding {
+        Binding {
+            grant,
+            handle: None,
+            capacity: Arc::new(Semaphore::new(8)),
+            installed_grant: false,
+            resolved: None,
+        }
+    }
+    let pay = ("pay".to_owned(), "wallet".to_owned());
+    let other = ("other".to_owned(), "wallet".to_owned());
+    let named = ("named".to_owned(), "wallet".to_owned());
+    let mut registry = BTreeMap::new();
+    registry.insert(pay.clone(), binding(capability_grant("wallet")));
+    registry.insert(other.clone(), binding(capability_grant("wallet")));
+    let mut fixed = capability_grant("wallet");
+    fixed.capability = None;
+    fixed.provider = "ledger-wallet".into();
+    registry.insert(named.clone(), binding(fixed));
+
+    let capacity = registry[&pay].capacity.clone();
+    reserve_resolved_provider(&mut registry, &pay, &capacity, "lexe-wallet").unwrap();
+    assert_eq!(registry[&pay].provider(), Some("lexe-wallet"));
+    assert!(
+        registry[&pay].grant.provider.is_empty(),
+        "resolution must not rewrite the grant"
+    );
+
+    let capacity = registry[&other].capacity.clone();
+    assert_eq!(
+        reserve_resolved_provider(&mut registry, &other, &capacity, "lexe-wallet"),
+        Err("lexe-wallet is already bound exclusively by pay/wallet".into())
+    );
+    assert_eq!(
+        reserve_resolved_provider(&mut registry, &other, &capacity, "ledger-wallet"),
+        Err("ledger-wallet is already bound exclusively by named/wallet".into())
+    );
+    assert_eq!(registry[&other].provider(), None);
+
+    // Re-resolving the owner to the same provider is idempotent; a stale
+    // registration (different capacity) is refused.
+    let capacity = registry[&pay].capacity.clone();
+    reserve_resolved_provider(&mut registry, &pay, &capacity, "lexe-wallet").unwrap();
+    assert!(
+        reserve_resolved_provider(
+            &mut registry,
+            &pay,
+            &Arc::new(Semaphore::new(8)),
+            "lexe-wallet"
+        )
+        .is_err()
+    );
+
+    // The owner config entry still carries the grant as written (no provider);
+    // reapplying it after resolution keeps the resolved binding.
+    let manager = PluginManager::for_test_summaries(Vec::new());
+    *manager.inner.operation_bindings.0.lock().unwrap() = registry;
+    let mut config = MeshConfig::default();
+    config.plugins.push(crate::plugin::PluginConfigEntry {
+        operation_bindings: vec![capability_grant("wallet")],
+        name: "pay".into(),
+        enabled: None,
+        web_ui_enabled: None,
+        web_ui_primary_tab: None,
+        allow_peer_blocks: None,
+        allow_inference_observation: None,
+        openai_exchange_grant: None,
+        command: None,
+        args: Vec::new(),
+        url: None,
+        settings: std::collections::BTreeMap::new(),
+        startup: crate::plugin::PluginStartupConfig::default(),
+    });
+    manager.revoke_changed_operation_bindings(&config);
+    let registry = manager.inner.operation_bindings.0.lock().unwrap();
+    assert_eq!(registry[&pay].provider(), Some("lexe-wallet"));
+    // Disabling the resolved provider's plugin revokes the binding bound to it.
+    drop(registry);
+    config.plugins.push(crate::plugin::PluginConfigEntry {
+        operation_bindings: Vec::new(),
+        name: "lexe-wallet".into(),
+        enabled: Some(false),
+        web_ui_enabled: None,
+        web_ui_primary_tab: None,
+        allow_peer_blocks: None,
+        allow_inference_observation: None,
+        openai_exchange_grant: None,
+        command: None,
+        args: Vec::new(),
+        url: None,
+        settings: std::collections::BTreeMap::new(),
+        startup: crate::plugin::PluginStartupConfig::default(),
+    });
+    manager.revoke_changed_operation_bindings(&config);
+    assert!(
+        !manager
+            .inner
+            .operation_bindings
+            .0
+            .lock()
+            .unwrap()
+            .contains_key(&pay)
     );
 }

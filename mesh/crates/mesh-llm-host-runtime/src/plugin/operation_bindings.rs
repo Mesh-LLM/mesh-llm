@@ -15,6 +15,21 @@ struct Binding {
     capacity: Arc<Semaphore>,
     /// Granted by the installed package's manifest rather than a config entry.
     installed_grant: bool,
+    /// The provider a capability grant resolved to. Kept apart from the
+    /// immutable grant so owner config can still be compared against it.
+    resolved: Option<String>,
+}
+
+impl Binding {
+    /// The provider this binding is pinned to, named by the operator or
+    /// resolved from its capability; `None` while still unresolved.
+    fn provider(&self) -> Option<&str> {
+        if self.grant.provider.is_empty() {
+            self.resolved.as_deref()
+        } else {
+            Some(self.grant.provider.as_str())
+        }
+    }
 }
 
 #[derive(Default)]
@@ -50,6 +65,7 @@ impl BindingRegistry {
                                 handle: None,
                                 capacity: Arc::new(Semaphore::new(8)),
                                 installed_grant: installed_grants.contains(grant),
+                                resolved: None,
                             }
                         )
                         .is_none(),
@@ -82,7 +98,8 @@ impl PluginManager {
                 };
                 granted
                     && !config.plugins.iter().any(|entry| {
-                        entry.name == binding.grant.provider && entry.enabled == Some(false)
+                        binding.provider() == Some(entry.name.as_str())
+                            && entry.enabled == Some(false)
                     })
             });
     }
@@ -222,8 +239,8 @@ impl PluginManager {
         key: &(String, String),
         binding: &Binding,
     ) -> Result<String, Response> {
-        if !binding.grant.provider.is_empty() {
-            return Ok(binding.grant.provider.clone());
+        if let Some(provider) = binding.provider() {
+            return Ok(provider.to_owned());
         }
         let Some(capability) = binding.grant.capability.as_deref() else {
             return Err(denied("binding names no provider"));
@@ -242,12 +259,8 @@ impl PluginManager {
         match candidates.as_slice() {
             [only] => {
                 let mut registry = self.inner.operation_bindings.0.lock().unwrap();
-                if let Some(current) = registry
-                    .get_mut(key)
-                    .filter(|current| Arc::ptr_eq(&current.capacity, &binding.capacity))
-                {
-                    current.grant.provider = only.clone();
-                }
+                reserve_resolved_provider(&mut registry, key, &binding.capacity, only)
+                    .map_err(|reason| denied(&reason))?;
                 tracing::info!(caller = %key.0, binding = %key.1, provider = %only, capability, "Capability binding resolved");
                 Ok(only.clone())
             }
@@ -257,6 +270,36 @@ impl PluginManager {
                 several.join(", ")
             ))),
         }
+    }
+}
+
+/// Pin a capability binding to the provider it resolved to, under the
+/// registry lock. One binding owns a provider, whether it named it or
+/// resolved to it, so two consumers never share one provider process.
+fn reserve_resolved_provider(
+    registry: &mut BTreeMap<(String, String), Binding>,
+    key: &(String, String),
+    capacity: &Arc<Semaphore>,
+    provider: &str,
+) -> Result<(), String> {
+    if let Some((owner, _)) = registry
+        .iter()
+        .find(|(other, current)| *other != key && current.provider() == Some(provider))
+    {
+        return Err(format!(
+            "{provider} is already bound exclusively by {}/{}",
+            owner.0, owner.1
+        ));
+    }
+    match registry
+        .get_mut(key)
+        .filter(|current| Arc::ptr_eq(&current.capacity, capacity))
+    {
+        Some(current) => {
+            current.resolved = Some(provider.to_owned());
+            Ok(())
+        }
+        None => Err("binding revoked during resolution".into()),
     }
 }
 
