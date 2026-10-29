@@ -64,7 +64,7 @@ fn check(document: &Node) -> Result<(), String> {
         return Err("one save and one conditional retry required".into());
     };
     let (save_index, _) = saves[0];
-    let (final_index, final_probe) = unique(steps, "name", "Verify new exact cache publication")?;
+    let (final_index, final_probe) = unique(steps, "name", "Verify exact cache publication")?;
     let (lookup_index, lookup) = unique(steps, "name", "Verify current cache version lookup")?;
     if !(snapshot_index < save_index
         && save_index < initial_index
@@ -143,7 +143,7 @@ fn run(initial: Value, final_rows: Value) -> Value {
     let scripts = json!({
         "snapshot":probe_script(&document,"id","existing"),
         "initial":probe_script(&document,"id","initial-publication"),
-        "final":probe_script(&document,"name","Verify new exact cache publication"),
+        "final":probe_script(&document,"name","Verify exact cache publication"),
     });
     let scripts_path = fixture.path().join("scripts.json");
     fs::write(&scripts_path, serde_json::to_vec(&scripts).unwrap()).unwrap();
@@ -205,9 +205,8 @@ fn cache_publication_early_exact_entry_avoids_retry_and_cooldown() {
     assert_eq!(output["requests"]["final"], 1);
 }
 #[test]
-fn cache_publication_nonmatching_or_existing_entries_do_not_count() {
+fn cache_publication_nonmatching_entries_do_not_count() {
     for invalid in [
-        entry(json!(123), "fixture-exact-key", "refs/heads/main", 17),
         entry(json!(456), "other-key", "refs/heads/main", 17),
         entry(json!(456), "fixture-exact-key", "refs/pull/7/merge", 17),
         entry(json!(456), "fixture-exact-key", "refs/heads/main", 0),
@@ -238,17 +237,32 @@ fn cache_publication_cooldown_precedes_retry_and_terminal_missing_fails() {
         assert_eq!(trace[retry - 1]["value"], "missing");
         if final_rows[0].as_array().unwrap().is_empty() {
             assert_eq!(output["failures"].as_array().unwrap().len(), 1);
-            assert!(
-                output["failures"][0]
-                    .as_str()
-                    .unwrap()
-                    .contains("No new exact")
-            );
+            assert!(output["failures"][0].as_str().unwrap().contains("No exact"));
             assert_eq!(events(&output, "lookup"), 0);
         } else {
             assert_published(&output);
         }
     }
+}
+/// Regression for release run 40804094970: the main warmer published the exact
+/// key/ref before the release job's save-time snapshot, so the immutable save
+/// was refused and no new ID could ever appear. A concurrent valid publication
+/// must verify (without a doomed retry save) and still pass the version lookup.
+#[test]
+fn cache_publication_accepts_concurrent_exact_publication() {
+    let concurrent = entry(json!(123), "fixture-exact-key", "refs/heads/main", 17);
+    let output = run(json!([[concurrent.clone()]]), json!([[concurrent]]));
+    assert_published(&output);
+    assert_eq!(output["initial"], "published");
+    assert_eq!(events(&output, "save"), 1);
+    assert_eq!(events(&output, "timer"), 0);
+    assert!(
+        output["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("concurrently published exact"))
+    );
 }
 fn mutate(node: &mut Node, key: &str, new: &str) {
     let Node::Map(entries) = node else {
@@ -287,6 +301,20 @@ fn cache_publication_required_bindings_and_lookup_refusal_cannot_drift() {
             "with",
             "fail-on-cache-miss",
             "false",
+        ),
+        // The listing API is version-agnostic; only this lookup-only restore
+        // refuses an exact key/ref entry from an incompatible cache version.
+        (
+            "Verify current cache version lookup",
+            "with",
+            "lookup-only",
+            "false",
+        ),
+        (
+            "Verify current cache version lookup",
+            "",
+            "continue-on-error",
+            "true",
         ),
         (
             "Verify current cache version lookup",
