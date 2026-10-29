@@ -293,6 +293,7 @@ mesh-llm serve --local-model-only --model "C:\path\to\model.gguf"
 
 Good to know on native Windows:
 
+- RTX 50-series and other Blackwell (SM 120) cards aren't covered by the stable release on native Windows yet: its only Windows CUDA runtime is CUDA 12, built for architectures up to SM 90, so `mesh-llm runtime install cuda` finds no compatible runtime for them. Use [WSL2](#running-under-wsl2-alternative) with the Linux CUDA 13 runtime until a Windows CUDA 13 runtime ships.
 - `--local-model-only` requires an absolute path to a local `.gguf` file; catalog and Hugging Face refs are rejected in this mode.
 - Models download to `%LOCALAPPDATA%\huggingface\hub` (the Rust `hf-hub` convention) — a separate cache from the Python tools' `~\.cache\huggingface`.
 - `mesh-llm.exe` is not code-signed yet, so SmartScreen may prompt when launching it manually.
