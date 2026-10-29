@@ -5,13 +5,13 @@ use crate::{
     AbiVersion, ActivationBoundaryDesc, ActivationPartDesc, AsrInfoV1, AsrSegmentV1,
     AsrTranscribeParamsV1, CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16,
     CACHEGEN_RECORD_F16_TRANSPOSED, CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED,
-    CACHEGEN_RECORD_Q4_0, CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
-    FEATURE_SPEECH_RECOGNITION, LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1,
-    LayaMemoryV1, LayaSequence, LlamaPerfContextData, StagePlanDescV1, StagePlanProfileDescV1,
-    StagePlanStateDescV1, StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1,
-    StagePlannerConfigV1, StagePlannerProfileV1, StagePlannerTensorV1,
-    WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
-    runtime_abi_supported,
+    CACHEGEN_RECORD_Q4_0, CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION,
+    CLEF_INFO_V1_ABI_VERSION, CacheGenRecordV1, ClefInfoV1, FEATURE_SPEECH_RECOGNITION,
+    LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1, LayaMemoryV1, LayaSequence,
+    LlamaPerfContextData, StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1,
+    StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1,
+    StagePlannerProfileV1, StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1,
+    WorkloadKind, WorkloadPooling, runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -362,6 +362,20 @@ fn asr_types_match_native_layout() {
         AsrSegmentV1::default().abi_version,
         ASR_SEGMENT_V1_ABI_VERSION
     );
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn clef_info_matches_native_layout() {
+    assert_eq!(CLEF_INFO_V1_ABI_VERSION, 1);
+    assert_eq!(size_of::<ClefInfoV1>(), 80);
+    assert_eq!(offset_of!(ClefInfoV1, parameter_count), 24);
+    assert_eq!(offset_of!(ClefInfoV1, model_bytes), 32);
+    assert_eq!(offset_of!(ClefInfoV1, decision_metadata_count), 40);
+    assert_eq!(offset_of!(ClefInfoV1, decision_type), 44);
+    let info = ClefInfoV1::default();
+    assert_eq!(info.struct_size, 80);
+    assert_eq!(info.abi_version, CLEF_INFO_V1_ABI_VERSION);
 }
 
 #[test]
