@@ -2247,6 +2247,17 @@ impl StageOpenAiBackend {
                 native_mtp_counters.observe_history_ngram_proposer(proposer.stats());
             }
             let native_mtp_stats = native_mtp.stats();
+            let stage0_rollbacks = if request.split_dflash() {
+                let key = session_key.clone();
+                self.iteration_scheduler
+                    .execute_runtime("verify-rollback-counts", move |runtime| {
+                        Ok(runtime.verify_rollback_counts(&key))
+                    })
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
             self.record_embedded_decode_summary(
                 &request,
                 &mut cache_stats,
@@ -2270,7 +2281,7 @@ impl StageOpenAiBackend {
                         let mut stats = speculative_stats.clone();
                         stats.split_dflash_health = request
                             .split_dflash()
-                            .then(|| request.split_dflash_health.counts());
+                            .then(|| request.split_dflash_health.counts(stage0_rollbacks));
                         stats
                     },
                     native_mtp_stats,

@@ -618,6 +618,13 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_session_verify_rollback_counts(
+        session: *const Session,
+        out_in_place: *mut u64,
+        out_checkpointed: *mut u64,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_export_state(
         session: *mut Session,
         layer_start: i32,

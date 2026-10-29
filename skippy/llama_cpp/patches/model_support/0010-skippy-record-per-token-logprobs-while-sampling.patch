@@ -42,15 +42,15 @@ index 4e33847d9..9497734b7 100644
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 53326a4e7..4214d0b89 100644
+index f233bb47f..5f325683c 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 72
-+#define SKIPPY_ABI_VERSION_PATCH 75
+-#define SKIPPY_ABI_VERSION_PATCH 73
++#define SKIPPY_ABI_VERSION_PATCH 76
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -143,10 +143,10 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 78e2c01f3..0d453a1e7 100644
+index e913b2bb1..7eab4b4c5 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -82,6 +82,7 @@ add_library(llama
+@@ -83,6 +83,7 @@ add_library(llama
              skippy/sampling_config.cpp
              skippy/chat_sampling.cpp
              skippy/sampling_vocab.cpp
@@ -255,10 +255,10 @@ index 000000000..43260dfc2
 +    return skippy_success(out_error);
 +}
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index f44e874d9..d5dc18f06 100644
+index 68c75fa9c..feb26df56 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -140,6 +140,8 @@ struct skippy_session {
+@@ -145,6 +145,8 @@ struct skippy_session {
      int32_t preserve_prefix_tokens = 0;
      std::vector<llama_token> token_history;
      std::vector<skippy_token_signal> signal_history;
@@ -268,10 +268,10 @@ index f44e874d9..d5dc18f06 100644
      std::vector<int32_t> prefill_n_seq_ids;
      std::vector<llama_seq_id> prefill_seq_ids;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index de5fa6ba5..22aaa6a30 100644
+index 29115b72e..71269a98a 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -426,6 +426,9 @@ static bool skippy_sampling_chain_is_reusable_for(
+@@ -428,6 +428,9 @@ static bool skippy_sampling_chain_is_reusable_for(
              session->sampling_backend_retired) {
          return false;
      }
@@ -281,7 +281,7 @@ index de5fa6ba5..22aaa6a30 100644
      if (sampling != nullptr &&
              skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
          return true;
-@@ -561,13 +564,14 @@ void skippy_refresh_backend_sampling(
+@@ -563,13 +566,14 @@ void skippy_refresh_backend_sampling(
              session->sampling_chain != nullptr &&
              !session->sampling_has_grammar &&
              !session->sampling_has_reasoning_budget &&
@@ -297,7 +297,7 @@ index de5fa6ba5..22aaa6a30 100644
          skippy_session * session,
          const skippy_sampling_config * sampling,
          int32_t logits_index) {
-@@ -597,6 +601,21 @@ llama_token skippy_sample_token_ith(
+@@ -599,6 +603,21 @@ llama_token skippy_sample_token_ith(
      return LLAMA_TOKEN_NULL;
  }
  
@@ -338,7 +338,7 @@ index 7bbf16016..81bc26ff5 100644
          skippy_session * session,
          const llama_token * token_ids,
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 36c972d92..3bd92390c 100644
+index a9251d2c9..13e318534 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
 @@ -379,6 +379,7 @@ enum skippy_status skippy_session_reset(
@@ -350,16 +350,16 @@ index 36c972d92..3bd92390c 100644
      // makes the next sampled decode reattach the chain and mark the scheduler
      // for reserve, which rebuilds compute buffers at every request boundary.
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 0f9b3a27c..2eb002bd2 100644
+index f1ae5bf2b..b7ca419cf 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -1003,6 +1003,7 @@ enum skippy_status skippy_session_restore_prefix(
+@@ -1028,6 +1028,7 @@ enum skippy_status skippy_session_restore_prefix(
          session->token_history.assign(token_ids, token_ids + token_count);
      }
      session->signal_history.clear();
 +    session->token_logprobs.clear();
      skippy_mtp_clear_session_state(session);
-     session->verify_checkpoints.clear();
+     skippy_clear_verify_windows(session);
      return skippy_success(out_error);
 diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
 index d3de66cbe..3ca967bf3 100644

@@ -83,7 +83,7 @@ pub use runtime_events::{
     OperationId, RecordRejection, RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind,
     RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit, next_operation_id,
 };
-pub use session::{DecodeBatchRequest, StageSession};
+pub use session::{DecodeBatchRequest, StageSession, VerifyRollbackCounts};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 pub use skippy_ffi::{
