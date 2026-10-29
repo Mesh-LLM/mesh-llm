@@ -677,6 +677,8 @@ struct RuntimeState<P> {
     pending_host_responses: PendingHostResponses,
     /// What the host listed in its `InitializeRequest`; empty until then.
     host_capabilities: std::sync::RwLock<Arc<[String]>>,
+    /// The current local inference observation subscription, if any.
+    inference_observation: crate::inference_observation::FeedSlot,
     /// An error from `on_initialized`, which runs on its own task: it ends the
     /// runtime, as an error from the read loop does.
     fatal_tx: mpsc::Sender<anyhow::Error>,
@@ -723,6 +725,7 @@ impl PluginRuntime {
             outbound_tx,
             pending_host_responses: Arc::new(Mutex::new(HashMap::new())),
             host_capabilities: std::sync::RwLock::new(Arc::from([])),
+            inference_observation: Default::default(),
             fatal_tx,
         });
         let mut writer = tokio::spawn(Self::write_loop(
@@ -892,6 +895,10 @@ impl PluginRuntime {
                 Self::handle_initialize(state, request_id, request).await
             }
             proto::envelope::Payload::HealthRequest(_) => Self::handle_health(state, request_id),
+            proto::envelope::Payload::InferenceObservationBatch(batch) => {
+                state.inference_observation.deliver(batch);
+                Ok(true)
+            }
             proto::envelope::Payload::ShutdownRequest(_) => {
                 Self::write_payload(
                     &state,
@@ -1017,20 +1024,15 @@ impl PluginRuntime {
             Arc::from(request.host_capabilities.clone());
         let mut plugin = state.plugin.clone().write_owned().await;
         let mut context = Self::context(&state);
-        if plugin
-            .manifest()
-            .and_then(|m| m.openai_exchange_hook)
-            .is_some_and(|h| h.required)
-            && !context.host_supports(crate::host_capabilities::OPENAI_EXCHANGE)
-        {
+        if let Some(message) = crate::host_capabilities::unsupported_requirement(
+            plugin.manifest().as_ref(),
+            |capability| context.host_supports(capability),
+        ) {
             Self::write_payload(
                 &state,
                 request_id,
                 proto::envelope::Payload::ErrorResponse(
-                    PluginError::invalid_request(
-                        "host does not support required openai_exchange.v1 contract",
-                    )
-                    .into_error_response(),
+                    PluginError::invalid_request(message).into_error_response(),
                 ),
             )
             .await?;
@@ -1255,6 +1257,7 @@ impl PluginRuntime {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
         )
+        .with_inference_observation(state.inference_observation.clone())
     }
 
     async fn write_payload<P: Plugin + Clone + Sync>(

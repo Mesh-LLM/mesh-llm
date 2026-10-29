@@ -56,6 +56,37 @@ pub struct SystemOneResponse {
     pub model: String,
     pub answers: BTreeMap<String, SystemOneAnswer>,
     pub usage: SystemOneUsage,
+    /// Causal readout evidence keyed by question. Absent for existing adapters.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub readouts: BTreeMap<String, DecisionReadout>,
+    /// Physical execution work, including shared-prefix preparation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readout_usage: Option<DecisionReadoutUsage>,
+}
+
+/// Measured input work across preparation and independent causal candidate branches.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct DecisionReadoutUsage {
+    /// Inputs evaluated by completed local steps, not multiplied by split stages.
+    pub evaluated_tokens: usize,
+    /// Input positions restored from a reusable prefix rather than evaluated again.
+    pub cached_tokens: usize,
+    /// The evaluated_tokens subset spent preparing prefixes, including failed warmups.
+    pub cache_preparation_tokens: usize,
+}
+
+/// Candidate likelihood is conditional on the supplied prompt and labels.
+/// It is not a calibrated probability that an answer is true.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DecisionReadout {
+    pub method: &'static str,
+    pub normalization: &'static str,
+    pub probability_semantics: &'static str,
+    /// Scores and token counts follow the original candidate order.
+    pub candidate_log_probabilities: Vec<f64>,
+    pub candidate_token_counts: Vec<usize>,
+    pub evaluated_tokens: usize,
+    pub cached_tokens: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -79,8 +110,14 @@ pub enum SystemOneAnswer {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub struct SystemOneUsage {
+    /// Inputs consumed across all executions, including cached prefixes.
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Cache projection for Decisions; System One exposes reuse in readout_usage.
+    /// Zero for adapters without measured cache accounting. Keep the legacy
+    /// System One usage object unchanged when serializing this internal count.
+    #[serde(skip_serializing)]
+    pub cached_tokens: u32,
 }
 
 /// A JSON value that remembers the order its object keys arrived in.

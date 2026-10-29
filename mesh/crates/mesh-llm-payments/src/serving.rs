@@ -53,8 +53,8 @@ impl PaymentService {
 
     /// Admit one request at the seller's current prices. Buyers at the strike
     /// limit are refused; buyers in good standing are admitted without a
-    /// deposit and dispatch is claimed here; everyone else is quoted a deposit
-    /// of a flat 1 sat. Replaying the same terms before
+    /// deposit and dispatch is claimed here; everyone else is quoted the
+    /// operator's flat deposit. Replaying the same terms before
     /// dispatch returns the same answer; a request already dispatched or
     /// finalized is reported as replayed: never a second dispatch.
     pub async fn serve_admit(&self, request: ServeAdmitRequest) -> Result<ServeAdmitResponse> {
@@ -85,9 +85,13 @@ impl PaymentService {
         let deposit = self.ledger.metered_admit(&MeteredRequest {
             id: &request_id,
             peer: &buyer,
+            model: &model,
             pricing: &pricing,
             require_deposit,
         })?;
+        // The minimum recorded at admission, so a replay restates the same
+        // terms the buyer saved even if the operator has changed it since.
+        let min_payment_msat = self.ledger.metered_min_payment_msat(&request_id)?;
         if deposit == 0 {
             ensure!(
                 self.ledger.metered_claim_dispatch(&request_id, &buyer)?,
@@ -95,7 +99,7 @@ impl PaymentService {
             );
             return Ok(ServeAdmitResponse::Admitted {
                 request_id,
-                min_payment_msat: self.ledger.min_payment_msat()?,
+                min_payment_msat,
             });
         }
         let invoice = self
@@ -105,7 +109,7 @@ impl PaymentService {
         Ok(ServeAdmitResponse::Deposit {
             request_id,
             invoice,
-            min_payment_msat: deposit,
+            min_payment_msat,
         })
     }
 

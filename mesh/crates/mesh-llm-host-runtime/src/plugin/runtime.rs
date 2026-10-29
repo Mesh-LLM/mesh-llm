@@ -30,10 +30,14 @@ mod exchange_request;
 mod exchange_request_tests;
 mod identity_artifact;
 mod lifecycle_readiness;
+#[cfg(test)]
+mod restart_tests;
 mod shutdown;
 mod socket_auth;
+pub(crate) mod status_publication;
 
 use self::default_plugin_policy::restrict_default_plugin;
+use self::status_publication::StatusDeclaration;
 
 /// How long a stopping plugin waits to tell the node to withdraw its key.
 const PLUGIN_STOPPED_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -65,6 +69,11 @@ pub(crate) struct PluginRuntime {
     pub(crate) generation: u64,
     pub(crate) authenticated_peer: bool,
     pub(crate) initialized_lifecycle: Option<Box<proto::OpenAiExchangeHookManifest>>,
+    /// What this generation's manifest says about `/api/status`.
+    pub(crate) status_declaration: StatusDeclaration,
+    /// Whether this generation's manifest declares `inference_observation`;
+    /// meaningful once `status_declaration` is no longer pending.
+    pub(crate) declares_inference_observation: bool,
     pub(crate) _child: Option<Child>,
     connection_task: tokio::task::JoinHandle<()>,
     pub(crate) outbound_tx: mpsc::Sender<proto::Envelope>,
@@ -318,6 +327,8 @@ impl ExternalPlugin {
             generation,
             authenticated_peer,
             initialized_lifecycle: None,
+            status_declaration: StatusDeclaration::Pending,
+            declares_inference_observation: false,
             _child: child,
             connection_task,
             outbound_tx,
@@ -347,6 +358,8 @@ impl ExternalPlugin {
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
                         mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
+                        mesh_llm_plugin::host_capabilities::PLUGIN_STATUS.to_string(),
+                        mesh_llm_plugin::host_capabilities::LOCAL_INFERENCE_OBSERVATION.to_string(),
                     ],
                 }),
                 Some(self.spec.startup.init_timeout()),
@@ -434,6 +447,7 @@ impl ExternalPlugin {
                 manifest.openai_exchange_hook.as_deref(),
                 self.spec.openai_exchange_grant.as_deref(),
             )?;
+            status_publication::validate_declaration(&self.spec.name, manifest)?;
         }
         Ok(())
     }
@@ -918,7 +932,9 @@ impl ExternalPlugin {
             failed_runtime
         };
         if let Some(runtime) = failed_runtime {
+            let generation = runtime.generation;
             stop_runtime(runtime, &reason).await;
+            status_publication::announce_disconnected(&self.mesh_tx, &self.spec.name, generation);
         }
         self.publish_summary().await;
     }
@@ -1209,7 +1225,7 @@ pub(crate) mod tests {
         plugin_for_spec_with_mesh_tx(spec, mesh_tx)
     }
 
-    fn plugin_for_spec_with_mesh_tx(
+    pub(super) fn plugin_for_spec_with_mesh_tx(
         spec: ExternalPluginSpec,
         mesh_tx: mpsc::Sender<PluginMeshEvent>,
     ) -> (ExternalPlugin, RuntimeDataCollector) {
@@ -1292,7 +1308,7 @@ pub(crate) mod tests {
         command
     }
 
-    async fn mark_plugin_running(plugin: &ExternalPlugin, generation: u64) {
+    pub(super) async fn mark_plugin_running(plugin: &ExternalPlugin, generation: u64) {
         let child = sleeping_test_command()
             .kill_on_drop(true)
             .spawn()
@@ -1303,6 +1319,8 @@ pub(crate) mod tests {
             generation,
             authenticated_peer: true,
             initialized_lifecycle: None,
+            status_declaration: StatusDeclaration::Pending,
+            declares_inference_observation: false,
             _child: Some(child),
             connection_task: tokio::spawn(std::future::pending::<()>()),
             outbound_tx,
@@ -1499,6 +1517,7 @@ pub(crate) mod tests {
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
                 allow_peer_blocks: None,
+                allow_inference_observation: None,
                 openai_exchange_grant: None,
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: Vec::new(),
@@ -1871,6 +1890,8 @@ pub(crate) mod tests {
             generation: 1,
             authenticated_peer: true,
             initialized_lifecycle: None,
+            status_declaration: StatusDeclaration::Pending,
+            declares_inference_observation: false,
             _child: Some(child),
             connection_task: tokio::spawn(std::future::pending::<()>()),
             outbound_tx: outbound_tx.clone(),

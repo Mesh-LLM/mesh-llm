@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 mod served_descriptors;
 
+/// Build the stage advertisement from this node's supported capabilities.
 fn skippy_stage_subprotocols(
     artifact_transfer_supported: bool,
     stage_protocol_generation_supported: bool,
@@ -29,7 +30,7 @@ fn skippy_stage_subprotocols(
     }
     if stage_protocol_generation_supported {
         features.push(
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11.to_string(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12.to_string(),
         );
     }
     if artifact_transfer_supported {
@@ -80,9 +81,10 @@ fn supports_decode_batch_policy(subprotocols: &[crate::proto::node::MeshSubproto
     )
 }
 
+/// Accept a stage generation only when one descriptor contains its entire bundle.
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     let required_features = [
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
@@ -1388,6 +1390,7 @@ fn legacy_proto_config_to_mesh(
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: p.command.clone(),
             args: p.args.clone(),

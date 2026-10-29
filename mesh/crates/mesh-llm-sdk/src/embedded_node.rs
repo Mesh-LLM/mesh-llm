@@ -6,7 +6,8 @@ pub use mesh_llm_embedded_runtime::{
     EmbeddedMeshAdmissionConfig, EmbeddedMeshDiscoveryMode, EmbeddedMeshHttpConfig,
     EmbeddedMeshLogFormat, EmbeddedMeshNetworkConfig, EmbeddedMeshNodeConfig, EmbeddedMeshNodeMode,
     EmbeddedMeshRequirementsConfig, EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig,
-    EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
+    EmbeddedTrustPolicy, MeshMembershipConfig, MeshMembershipStatus,
+    SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
 };
 
 pub type MeshNodeStatus = mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus;
@@ -60,6 +61,27 @@ impl MeshNode {
 
     pub async fn join_token(&self, token: impl Into<String>) -> anyhow::Result<()> {
         self.handle.join_token(token).await
+    }
+
+    /// Serves this node's models into a further mesh, with its own identity,
+    /// owner allowlist, peers and local API port, replacing a membership of
+    /// the same name. The models are not loaded again. See the crate README
+    /// for what a failed replacement leaves running.
+    pub async fn add_membership(
+        &self,
+        config: MeshMembershipConfig,
+    ) -> anyhow::Result<MeshMembershipStatus> {
+        self.handle.add_membership(config).await
+    }
+
+    /// Leaves a membership's mesh. Returns whether there was one by that name.
+    pub async fn remove_membership(&self, name: impl Into<String>) -> anyhow::Result<bool> {
+        self.handle.remove_membership(name).await
+    }
+
+    /// The running memberships, with their peers and any join failure.
+    pub async fn memberships(&self) -> anyhow::Result<Vec<MeshMembershipStatus>> {
+        self.handle.memberships().await
     }
 
     pub async fn shutdown(self) -> anyhow::Result<()> {

@@ -182,3 +182,40 @@ fn graph_windows_cuda_labels_are_validated_before_install_and_package() {
         Some("${{ matrix.cuda_architectures }}")
     );
 }
+
+#[test]
+fn graph_windows_release_abi_cache_is_saved_only_after_package_verification() {
+    let doc = document("release.yml");
+    for name in [
+        "build_native_runtime_windows_cpu",
+        "build_native_runtime_windows_gpu",
+    ] {
+        let j = job(&doc, name);
+        assert_eq!(text(j, "runs-on"), Some("windows-2022"));
+        assert_eq!(text(j.get("permissions").unwrap(), "actions"), Some("read"));
+        let restore = action(j, "./.github/actions/restore-windows-abi-cache");
+        assert_eq!(text(restore, "id"), Some("llama_cache"));
+        let package = action(j, "./.github/actions/prepare-native-runtime-input");
+        let save = action(j, "./.github/actions/save-and-verify-actions-cache");
+        assert_eq!(
+            text(save, "if"),
+            Some("steps.llama_cache.outputs.cache-hit != 'true'")
+        );
+        for (key, value) in [
+            ("path", "${{ steps.llama_cache.outputs.cache-path }}"),
+            (
+                "cache-key",
+                "${{ steps.llama_cache.outputs.cache-primary-key }}",
+            ),
+            ("cache-ref", "${{ github.ref }}"),
+        ] {
+            assert_eq!(input(save, key), Some(value));
+        }
+        let position = |n: &Node| steps(j).iter().position(|s| std::ptr::eq(s, n)).unwrap();
+        assert!(position(restore) < position(package));
+        assert!(position(package) < position(save));
+        assert!(position(save) < position(named(j, "Upload native runtime")));
+        // No always()/failure() override: a failed package must never publish a cache.
+        assert!(!text(save, "if").unwrap().contains("always()"));
+    }
+}

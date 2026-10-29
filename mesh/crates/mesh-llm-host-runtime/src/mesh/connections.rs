@@ -1322,6 +1322,11 @@ impl Node {
         if peer_id == self.endpoint.id() {
             return Ok(true);
         }
+        anyhow::ensure!(
+            !self.local_endpoints.contains(peer_id),
+            "not connecting to {}: another mesh this node serves",
+            peer_id.fmt_short()
+        );
 
         if self.use_cached_connection_if_ready(peer_id).await? {
             return Ok(true);

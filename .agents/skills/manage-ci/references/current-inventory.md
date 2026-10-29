@@ -28,6 +28,11 @@ uses the operator configuration types. It also publishes
 `mesh-llm-host-runtime`.
 The local `just test-all` author exemplar gate includes the packaged OpenAI
 exchange conformance suite.
+Its Rust gate runs the full `xtask` package separately with `--test-threads=1`
+to serialize process-global signal owners; the workspace coverage preflight
+checks that every excluded package has a separate test invocation.
+The portable gate finishes SDK checks before the website build, because both
+invoke Cargo; JavaScript-only UI checks remain parallel.
 Its source remains the `mesh-llm-plugin` Cargo example at
 `mesh/crates/mesh-llm-plugin/examples/openai-exchange-observer.rs`; the recipes
 build `target/debug/examples/openai-exchange-observer` and package it as
@@ -137,7 +142,9 @@ its existing-pin contract; publication requires explicit `mesh_action=certify-an
 upgrade certification or independent verification. All
 candidate builds compile native tests with `--build-only`, then the generated
 patch checker owns one full native CTest pass after patch equality and
-idempotence checks. The generator's own unit suite remains separate.
+idempotence checks. The generator's own unit suite remains separate. The
+native test build also includes `skippy-selected-logits`, which checks bounded
+causal decision scores, stable normalization, and rejection of invalid evidence.
 Unchanged scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
 preflight. Changed pins use up to three distributed repair attempts. Each
@@ -326,6 +333,12 @@ authorization and pinned revision/size/SHA-256 are enforced before load; a
 mismatch is a hard failure, never a skip. Reports for both models are included
 in the uploaded `llama-canary-system-one-*` artifact. These smokes add no family
 roster rows and claim no split or profile support.
+
+The causal contract retains thirteen request/method refusals and requires a
+successful mixed single-token/multi-token read with complete ordered scores,
+token lengths, relative-probability semantics and zero generated tokens.
+It no longer expects causal Qwen3 to reject System One execution. The typed
+driver's corruption fixtures reject missing or inconsistent readout evidence.
 
 Each named family job runs `--skip-build --shard-index` on the matching
 `family-certify` pool, with max-parallel 8 and fail-fast disabled. Workers
@@ -790,6 +803,16 @@ stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
 Persistent macOS canary preflight, build, family and infrastructure-retry jobs
+require `self-hosted`, `macOS`, `ARM64`, `jy-managed` and `family-certify`.
+Preflight/build require `accelerator-memory-128plus`; workers retain the
+controller's `matrix.memory_tier`. JY attribute policies select macOS Apple M1
+Ultra 128 GiB and Apple M3 Ultra 256 GiB with mounted model storage; both carry
+128-plus, and only the M3 carries 256-plus. Runner groups allow only the two
+canary workflows at protected `main` references. The
+[companion JY/Fleet change](https://github.com/general-inference/monorepo/pull/244)
+must deploy, provision and register matching runners before this switch merges.
+Jobs queue if managed capacity is absent.
+These jobs
 run `setup-canary-runner` before `prepare-automation` with
 `runner-profile: preinstalled-macos`. Missing tools fail with their names and a
 runner-provisioning instruction. This profile skips Rust and Just installers,
@@ -873,6 +896,15 @@ changed paths require the documented CI-control or runner-infrastructure
 fail-open policy.
 
 ## Artifact and cache owners
+
+After successful runtime package verification, Windows release CPU/GPU jobs
+publish and verify an exact-key ABI cache miss under the current ref. These
+two jobs grant only `actions: read` for the publication probe; cache writes use
+the scoped runtime cache token. Failed/cancelled packaging never saves a
+partial ABI build. Hosted placement, architecture matrices, and PR cache policy
+are unchanged. Windows release jobs enable GitHub-backed compiler caching during
+native runtime preparation. Hosted CUDA 13 evidence and exact ABI-cache reuse
+are recorded in PR #2662; cache compatibility remains tied to the runner image.
 
 Release/package L5 adapters use xtask native selection/import/closure checks,
 product composition and release manifests, artifact extraction/checksums,
@@ -1637,7 +1669,10 @@ Laya parity and packaged-product smoke now use Rust `automation laya parity`
 and `automation laya product` through the shared automation adapter. Their
 Python drivers and direct tests are removed; Rust golden and retained-process
 fixtures cover the replaced behavior. This source cutover does not establish
-live hardware qualification. `run-family` now supervises Rust `execute-run`
+live hardware qualification. Failed product smokes include bounded tails of
+the instance's `skippy-native.log` before private-state cleanup, so native
+allocation errors survive a process abort; unrelated logs and symlinks are
+excluded. `run-family` now supervises Rust `execute-run`
 with a verified local GGUF path and retained immutable matrix URI. Manual
 comparative caller migration remains open. The native Parquet reader replaces the former local DuckDB reader; upstream
 research SDK execution retains its separate source and environment admission.
@@ -1820,3 +1855,13 @@ The protected ownership catalog retains its historical `skippy-bench` domain
 entries: PR admission requires byte-for-byte equality with main. Removing a
 workspace member does not require changing these domain mappings; catalog
 cleanup must follow the separate protected-catalog rollout procedure.
+
+## Rolling preview distribution
+
+`rolling-preview.yml` is a main-only scheduled (Tuesday/Friday 03:23 UTC) and
+manual dispatcher of `release.yml` with `preview=true`, the full GPU matrix and
+hosted runners. Unique run/attempt preview versions leave main unchanged. Release
+producers check out the metadata source SHA; publication stages a draft before
+exposing the complete immutable prerelease, never marking it latest. Stable
+package channels are untouched; retention is currently indefinite and unchanged
+source is not skipped. No runner settings or secrets are added.

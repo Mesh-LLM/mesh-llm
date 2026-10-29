@@ -292,6 +292,55 @@ fn patch_queue_changes_select_the_windows_probe_row() -> TestResult {
     assert!(rows[0]["ctest_parallel"].is_u64() && rows[0]["timeout_minutes"].is_u64());
     Ok(())
 }
+#[test]
+fn llama_pin_changes_plan_windows_runtimes_the_windows_smoke_can_run() -> TestResult {
+    let stage = Stage::new("windows-runtimes")?;
+    let path = stage.search_path()?;
+    let case: Value =
+        serde_json::from_slice(&fs::read(fixture_root().join("cases/runtime.json"))?)?;
+    for changed in [
+        "skippy/llama_cpp/upstream.txt",
+        "skippy/llama_cpp/patches/0010-fix-models-include-algorithm-in-clef.cpp-for-GCC-14.patch",
+    ] {
+        let mut input = case["input"].clone();
+        input["changed_files"] = serde_json::json!([changed]);
+        input["workspace_packages"] =
+            serde_json::json!([{"name": "skippy-ffi", "path": "skippy/crates/skippy-ffi"}]);
+        input["affected_crates"] = serde_json::json!(["skippy-ffi"]);
+        let bytes = serde_json::to_vec(&input)?;
+        let output = Run {
+            args: &[],
+            stdin: &bytes,
+            path: &path,
+        }
+        .ported()?;
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let plan: Value = serde_json::from_slice(&output.stdout)?;
+        let ids = |matrix: &str| -> Vec<String> {
+            plan["matrices"][matrix]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|row| row["id"].as_str().map(str::to_owned))
+                .collect()
+        };
+        let runtimes = ids("runtime_products");
+        // The one runtime CI builds with GCC 14 (MinGW), which the v0.7.0 pin
+        // broke while the Linux rows' GCC 13 accepted it (#2495).
+        assert!(
+            runtimes.iter().any(|id| id == "windows-vulkan"),
+            "{changed}: {runtimes:?}"
+        );
+        // A Windows runtime row brings the `core` smoke into the Windows
+        // projection, and its only job (`laya_cpu`) needs the CPU runtime.
+        assert!(
+            runtimes.iter().any(|id| id == "windows-cpu"),
+            "{changed}: {runtimes:?}"
+        );
+        assert!(ids("smoke").iter().any(|id| id == "core"), "{changed}");
+    }
+    Ok(())
+}
 frozen_case!(migration_ci_plan_rejects_unknown_path, "fail-unknown-path");
 frozen_case!(
     migration_ci_plan_rejects_unknown_input_field,

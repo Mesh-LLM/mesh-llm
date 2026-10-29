@@ -1,0 +1,251 @@
+From 5fb5632cf2145daeb536a2eb7f25ab29746af66b Mon Sep 17 00:00:00 2001
+From: IvGolovach <20299097+IvGolovach@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 12:00:00 -0700
+Subject: [PATCH] feat(skippy): read selected token scores in causal batches
+
+Keep full vocabulary logits on the terminal worker and read bounded
+conditional log probabilities before another iteration can replace them.
+Readouts do not invoke samplers or advance generation history.
+---
+ include/skippy/execution.h           | 19 ++++++++++
+ src/CMakeLists.txt                   |  4 +++
+ src/skippy/execution-batch.cpp       | 52 +++++++++++++++++++++++++++-
+ src/skippy/selected_logits.h         | 43 +++++++++++++++++++++++
+ src/skippy/tests/selected_logits.cpp | 25 +++++++++++++
+ 5 files changed, 142 insertions(+), 1 deletion(-)
+ create mode 100644 src/skippy/selected_logits.h
+ create mode 100644 src/skippy/tests/selected_logits.cpp
+
+diff --git a/include/skippy/execution.h b/include/skippy/execution.h
+index 7098677d8..bf9fb497c 100644
+--- a/include/skippy/execution.h
++++ b/include/skippy/execution.h
+@@ -15,6 +15,23 @@
+ extern "C" {
+ #endif
+ 
++/** @brief Whether the loaded graph supports causal next-token score reads. */
++LLAMA_API bool skippy_model_supports_causal_readout(const struct skippy_model * model);
++
++/**
++ * @brief A bounded, unsampled read of selected final-row token log probabilities.
++ *
++ * Values use the full, unmodified vocabulary distribution, before temperature,
++ * penalties or grammar. The caller owns both arrays for the entire iteration.
++ * Only terminal stages write scores; intermediate stages forward activations.
++ * This read never samples a token or changes sampler history.
++ */
++struct skippy_token_score_request {
++        const llama_token * token_ids;
++        size_t token_count;
++        float * out_log_probabilities;
++};
++
+ /** @brief Prefills tokens and emits a raw activation payload for the next stage. */
+ LLAMA_API enum skippy_status skippy_prefill_chunk(
+         struct skippy_session * session,
+@@ -79,6 +96,8 @@ struct skippy_iteration_request {
+         const struct skippy_activation_desc * input_desc;
+         const void * input_payload;
+         bool sample_last;
++        /** Optional final-row readout; mutually exclusive with sample_last. */
++        const struct skippy_token_score_request * readout;
+ };
+ 
+ /**
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 5e02baa49..48f8964a9 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -167,6 +167,10 @@ endif()
+ if (LLAMA_STAGE_BUILD_TESTS)
+     target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
+ 
++    add_executable(skippy-selected-logits skippy/tests/selected_logits.cpp)
++    target_compile_features(skippy-selected-logits PRIVATE cxx_std_17)
++    add_test(NAME skippy_selected_logits COMMAND skippy-selected-logits)
++
+     add_executable(skippy-hardware-application-probe
+         skippy/tests/hardware_application_probe.cpp)
+     target_include_directories(skippy-hardware-application-probe PRIVATE .)
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index 901095cab..bcc996bb1 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -5,6 +5,7 @@
+ #include "skippy/runtime_support.h"
+ #include "skippy/runtime_types.h"
+ #include "skippy/sampling_internal.h"
++#include "skippy/selected_logits.h"
+ 
+ #include "llama-arch.h"
+ #include "llama-context.h"
+@@ -190,6 +191,12 @@ static enum skippy_status skippy_copy_batched_exports(
+ 
+ extern "C" {
+ 
++bool skippy_model_supports_causal_readout(const struct skippy_model * model) {
++    return model != nullptr && model->model != nullptr &&
++            llama_model_has_decoder(model->model) && !llama_model_has_encoder(model->model) &&
++            model->model->hparams.causal_attn && !llama_model_is_diffusion(model->model);
++}
++
+ enum skippy_status skippy_iteration_batch_sampled(
+         const struct skippy_iteration_request * requests,
+         size_t request_count,
+@@ -225,6 +232,26 @@ enum skippy_status skippy_iteration_batch_sampled(
+     size_t sampled_count = 0;
+     for (size_t index = 0; index < request_count; ++index) {
+         const auto & request = requests[index];
++        if (request.readout != nullptr) {
++            const auto & readout = *request.readout;
++            if (!skippy_model_supports_causal_readout(first->stage_model)) {
++                skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "model does not support causal readouts");
++                return SKIPPY_STATUS_UNSUPPORTED;
++            }
++            if (request.sample_last || readout.token_ids == nullptr ||
++                    readout.out_log_probabilities == nullptr || readout.token_count == 0 ||
++                    readout.token_count > SKIPPY_MAX_SELECTED_TOKENS) {
++                skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid selected-token readout");
++                return SKIPPY_STATUS_INVALID_ARGUMENT;
++            }
++            const int32_t vocabulary_size = llama_vocab_n_tokens(llama_model_get_vocab(first->stage_model->model));
++            for (size_t token = 0; token < readout.token_count; ++token) {
++                if (readout.token_ids[token] < 0 || readout.token_ids[token] >= vocabulary_size) {
++                    skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "readout token is outside the vocabulary");
++                    return SKIPPY_STATUS_INVALID_ARGUMENT;
++                }
++            }
++        }
+         if (request.session == nullptr || request.session->ctx != first->ctx ||
+                 request.session->stage_model != first->stage_model || request.token_ids == nullptr ||
+                 request.token_count == 0 || !unique_sessions.insert(request.session).second) {
+@@ -309,6 +336,18 @@ enum skippy_status skippy_iteration_batch_sampled(
+     }
+     *out_sampled_output_count = sampled_count;
+ 
++    // A reused lane may still have an in-graph sampler. Readouts need the
++    // unmodified vocabulary row, without executing that sampler. Detaching
++    // preserves sampler history and does not accept or generate a token.
++    for (size_t index = 0; index < request_count; ++index) {
++        auto * session = requests[index].session;
++        if (requests[index].readout != nullptr && session->sampling_backend_enabled) {
++            if (!skippy_retire_backend_sampling(session, out_error)) {
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++        }
++    }
++
+     skippy_graph_build_inputs graph_inputs = skippy_graph_build_inputs_from_config(
+             &first->stage_model->config, SKIPPY_GLM_DSA_PHASE_HINT_AUTO);
+     std::vector<std::vector<uint8_t>> frontier_storage;
+@@ -332,7 +371,8 @@ enum skippy_status skippy_iteration_batch_sampled(
+             seq_values[flat] = request.session->seq_id;
+             seq_ids[flat] = &seq_values[flat];
+             logits[flat] = request_exports ||
+-                    (request_logits && request.sample_last && token + 1 == request.token_count);
++                    (request_logits && (request.sample_last || request.readout != nullptr) &&
++                     token + 1 == request.token_count);
+             for (int32_t axis = 0; axis < n_pos_per_embd; ++axis) {
+                 const size_t destination = static_cast<size_t>(axis)*total_tokens + flat;
+                 if (request.positions != nullptr) {
+@@ -384,6 +424,16 @@ enum skippy_status skippy_iteration_batch_sampled(
+         request.session->sampling_backend_row_invalid = false;
+         request.session->n_past += static_cast<int32_t>(request.token_count);
+         skippy_record_tokens(request.session, request.token_ids, request.token_count);
++        if (request.readout != nullptr && request_logits) {
++            const auto & readout = *request.readout;
++            const int32_t row = static_cast<int32_t>(offsets[request_index + 1] - 1);
++            const size_t vocabulary_size = llama_vocab_n_tokens(llama_model_get_vocab(first->stage_model->model));
++            if (!skippy_selected_log_probabilities(first->ctx->get_logits_ith(row), vocabulary_size,
++                        readout.token_ids, readout.token_count, readout.out_log_probabilities)) {
++                skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "causal readout produced invalid logits");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++        }
+         if (request.sample_last && request_logits) {
+             // Logits are indexed by the original batch row; llama.cpp handles
+             // sparse output-row translation internally.
+diff --git a/src/skippy/selected_logits.h b/src/skippy/selected_logits.h
+new file mode 100644
+index 000000000..0fa526e5d
+--- /dev/null
++++ b/src/skippy/selected_logits.h
+@@ -0,0 +1,43 @@
++#ifndef SKIPPY_SELECTED_LOGITS_H
++#define SKIPPY_SELECTED_LOGITS_H
++
++#include <cmath>
++#include <cstddef>
++#include <cstdint>
++#include <limits>
++
++// Selected output stays bounded even when the vocabulary is very large.
++constexpr size_t SKIPPY_MAX_SELECTED_TOKENS = 256;
++
++// Calculate in double precision. Masked (-infinity) logits are valid, but a
++// selected masked token, a NaN, +infinity or an entirely masked vocabulary is
++// not usable decision evidence. Never publish a partially filled result.
++inline bool skippy_selected_log_probabilities(
++        const float * logits, size_t vocabulary_size,
++        const int32_t * selected, size_t selected_count, float * output) {
++    if (!logits || !selected || !output || vocabulary_size == 0 ||
++            selected_count == 0 || selected_count > SKIPPY_MAX_SELECTED_TOKENS) return false;
++    double maximum = -std::numeric_limits<double>::infinity();
++    for (size_t index = 0; index < vocabulary_size; ++index) {
++        const double value = logits[index];
++        if (std::isnan(value) || value == std::numeric_limits<double>::infinity()) return false;
++        if (value > maximum) maximum = value;
++    }
++    if (!std::isfinite(maximum)) return false;
++    double sum = 0;
++    for (size_t index = 0; index < vocabulary_size; ++index) {
++        sum += std::exp(static_cast<double>(logits[index]) - maximum);
++    }
++    const double normalizer = std::log(sum);
++    float scores[SKIPPY_MAX_SELECTED_TOKENS];
++    for (size_t index = 0; index < selected_count; ++index) {
++        if (selected[index] < 0 || static_cast<size_t>(selected[index]) >= vocabulary_size) return false;
++        const double value = (static_cast<double>(logits[selected[index]]) - maximum) - normalizer;
++        scores[index] = static_cast<float>(value);
++        if (!std::isfinite(scores[index])) return false;
++    }
++    for (size_t index = 0; index < selected_count; ++index) output[index] = scores[index];
++    return true;
++}
++
++#endif
+diff --git a/src/skippy/tests/selected_logits.cpp b/src/skippy/tests/selected_logits.cpp
+new file mode 100644
+index 000000000..d33237d1a
+--- /dev/null
++++ b/src/skippy/tests/selected_logits.cpp
+@@ -0,0 +1,25 @@
++#include "../selected_logits.h"
++
++#include <array>
++#include <cmath>
++#include <limits>
++
++int main() {
++    const std::array<float, 4> logits = {1000, 999, 998, -std::numeric_limits<float>::infinity()};
++    const std::array<int32_t, 3> selected = {2, 0, 1};
++    std::array<float, 3> result = {7, 7, 7};
++    if (!skippy_selected_log_probabilities(logits.data(), logits.size(), selected.data(), selected.size(), result.data())) return 1;
++    if (!(result[1] > result[2] && result[2] > result[0])) return 2;
++    if (std::abs(std::exp(result[0]) + std::exp(result[1]) + std::exp(result[2]) - 1) > 1e-6) return 3;
++    const std::array<int32_t, 2> invalid = {0, 4};
++    result.fill(7);
++    if (skippy_selected_log_probabilities(logits.data(), logits.size(), invalid.data(), invalid.size(), result.data())) return 4;
++    if (result[0] != 7 || result[1] != 7) return 5;
++    const std::array<float, 2> masked = {-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()};
++    if (skippy_selected_log_probabilities(masked.data(), masked.size(), selected.data(), 1, result.data())) return 6;
++    const std::array<float, 2> nan = {0, std::numeric_limits<float>::quiet_NaN()};
++    if (skippy_selected_log_probabilities(nan.data(), nan.size(), selected.data() + 1, 1, result.data())) return 7;
++    const std::array<float, 2> inf = {0, std::numeric_limits<float>::infinity()};
++    if (skippy_selected_log_probabilities(inf.data(), inf.size(), selected.data() + 1, 1, result.data())) return 8;
++    return 0;
++}
+-- 
+2.56.0
+

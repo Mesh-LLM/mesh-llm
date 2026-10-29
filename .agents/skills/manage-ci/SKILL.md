@@ -44,6 +44,15 @@ measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
 Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
+Preflight and build require `[self-hosted, macOS, ARM64, jy-managed,
+family-certify, accelerator-memory-128plus]`; family and infrastructure-retry
+jobs replace the final label with the controller's `matrix.memory_tier`.
+JY owns machine eligibility through attribute selectors: macOS Apple M1 Ultra
+with exactly 128 GiB or Apple M3 Ultra with exactly 256 GiB, with mounted model
+storage. Never select a node name. The JY runner groups must allow only these
+two canary workflows at their protected `main` references. Provision through
+MDM and register the labeled runners before merging the workflow switch;
+unavailable managed capacity queues rather than falling back to another pool.
 They check runner prerequisites before compiling automation or preparing SDK
 dependencies and fail if any are absent. Tool installation and upgrades belong
 to runner provisioning: never invoke Rust, Just, or Homebrew installers from
@@ -298,6 +307,13 @@ retired parser behavior, and source review still owns semantic emulation.
 - Use measured workload data to rebalance deterministic shards, but keep the
   checked-in algorithm reproducible. Use one Cargo invocation per shard unless
   a documented package-isolation check requires otherwise.
+- The local `just test-all` gate runs all `xtask` tests in a separate Cargo
+  invocation with `--test-threads=1`, because their signal scopes are
+  process-global. Pass the harness argument to that package only; a global
+  `RUST_TEST_THREADS` override also changes child-process output fixtures.
+- The portable local gate may parallelize JavaScript checks, but must finish
+  SDK checks before building the website: both stages invoke Cargo (the website
+  generates CLI documentation). Preserve every stage and aggregate failures.
 
 ### Dependencies, summaries, and cancellation
 
@@ -607,6 +623,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+The System One contract fixture must exercise both single-token causal
+readouts and multi-token likelihoods as supported execution paths, retaining
+all malformed/unsupported request refusals. Verify ordered finite scores,
+tokenizer lengths, probability semantics and zero generated tokens. Keep
+DiffusionGemma and Laya qualification separate; causal mechanics do not certify
+their behavior or classification quality.
+
 The final publisher must use an explicit `!cancelled()` status condition,
 require successful source resolution and final selection, and require
 `publish=true`. Optional repair and retry jobs may be skipped after a green
@@ -771,3 +794,13 @@ Also run what applies:
 Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
+
+## Rolling previews
+
+The main-only rolling-preview dispatcher reuses the canonical release pipeline,
+never a parallel packaging implementation. Preview versions must contain
+`-preview.` and leave main unchanged; all producer checkouts use metadata's
+frozen source SHA. Publish verified assets as a draft before exposing the
+complete prerelease, without marking it latest or invoking stable registries.
+Keep immutable preview tags and previous downloads; no automated deletion is
+part of the initial rollout. The schedule is Tuesday/Friday 03:23 UTC.

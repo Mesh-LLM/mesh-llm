@@ -10,6 +10,11 @@ on:
         description: Release version/tag to build, for example v0.31.0
         required: true
         type: string
+      preview:
+        description: Publish a rolling preview snapshot without changing main or stable package channels (version must contain -preview.)
+        required: true
+        default: false
+        type: boolean
       skip_gpu_bundles:
         description: Skip CUDA, CUDA Blackwell, ROCm, and Vulkan release bundles
         required: true
@@ -126,6 +131,7 @@ jobs:
       source_sha: ${{ steps.source.outputs.sha }}
       release_notes_base: ${{ steps.source.outputs.release_notes_base }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      preview: ${{ inputs.preview || false }}
       skip_gpu_bundles: ${{ steps.meta.outputs.skip_gpu_bundles }}
       canary: ${{ steps.meta.outputs.canary }}
       force_hosted_runners: ${{ steps.meta.outputs.force_hosted_runners }}
@@ -166,6 +172,7 @@ jobs:
       - id: meta
         shell: bash
         env:
+          INPUT_PREVIEW: ${{ inputs.preview || 'false' }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_SKIP_GPU_BUNDLES: ${{ inputs.skip_gpu_bundles || 'false' }}
           INPUT_CANARY: ${{ inputs.canary || 'false' }}
@@ -180,6 +187,10 @@ jobs:
           version="${tag#v}"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid release version: $tag" >&2
+            exit 1
+          fi
+          if [[ "$INPUT_PREVIEW" == "true" && "$version" != *-preview.* ]]; then
+            echo 'Preview releases require a unique -preview. version suffix.' >&2
             exit 1
           fi
           prerelease=false
@@ -230,6 +241,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
           CANARY: ${{ steps.meta.outputs.canary }}
+          PREVIEW: ${{ inputs.preview || 'false' }}
         run: |
           set -euo pipefail
           source_sha="$GITHUB_SHA"
@@ -242,8 +254,8 @@ jobs:
               git status --short >&2
               exit 1
             fi
-          elif [[ "$CANARY" == "true" ]]; then
-            echo "Canary release: leaving main unchanged."
+          elif [[ "$CANARY" == "true" || "$PREVIEW" == "true" ]]; then
+            echo "Canary/preview release: leaving main unchanged."
           else
             scripts/release-version.sh "$RELEASE_TAG"
             cargo fmt --all -- --check
@@ -289,7 +301,9 @@ jobs:
           head_repository: ${{ github.event.pull_request.head.repo.full_name }}
           head_sha: ${{ github.sha }}
           ref: ${{ github.ref }}
-          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          # force_hosted_runners (set by rolling previews) keeps every Linux leg on
+          # GitHub-hosted runners, matching how tagged releases from release/* run.
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' && inputs.force_hosted_runners != true }}
           depot_pr_enabled: 'false'
           manual_use_depot: ${{ inputs.use_depot == true }}
 
@@ -442,6 +456,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/restore-automation
         with:
@@ -616,9 +631,19 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+
+      # Package verification runs through scripts/lib/automation.sh; the shared
+      # automation setup exports MESH_LLM_AUTOMATION_BIN so just is never needed.
+      # Depot Linux legs (DEPOT_RUNNERS_ENABLED main dispatch) have no supported
+      # profile, so dispatch with force_hosted_runners=true for full releases.
+      - name: Prepare automation
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: ${{ runner.os == 'Linux' && 'hosted-bare' || 'image' }}
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - uses: ./.github/actions/configure-sccache-gha
@@ -696,6 +721,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -766,6 +792,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -840,6 +867,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -898,6 +926,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - name: Trust checkout directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -1048,6 +1077,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/restore-automation
         with:
@@ -1106,6 +1136,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -1161,6 +1192,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/restore-automation
         with:
@@ -1240,6 +1272,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/restore-automation
         with:
@@ -1311,6 +1344,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/restore-automation
         with:
@@ -1380,6 +1414,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/restore-automation
         with:
@@ -1486,6 +1521,11 @@ jobs:
         uses: ./.github/actions/prepare-skippy-cli-input
         with:
           profile: release
+      # package-cli-release.sh runs mesh_automation; the just automation-run recipe is [unix]-only,
+      # so Windows needs the prebuilt automation binary.
+      - name: Prepare automation
+        if: env.MESH_LLM_AUTOMATION_BIN == ''
+        uses: ./.github/actions/prepare-automation
       - name: Package standalone Windows Skippy CLI
         shell: bash
         env:
@@ -1544,6 +1584,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/restore-automation
         with:
@@ -1601,6 +1642,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/restore-automation
         with:
@@ -1650,6 +1692,9 @@ jobs:
   build_native_runtime_windows_cpu:
     name: Build native runtime Windows x86_64 CPU
     needs: metadata
+    permissions:
+      contents: read
+      actions: read
     runs-on: windows-2022
     env:
       LLAMA_STAGE_BACKEND: cpu
@@ -1658,6 +1703,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup-windows-short-paths
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
@@ -1666,6 +1712,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows CPU ABI cache
+        id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: cpu
@@ -1688,6 +1735,15 @@ jobs:
           backend: cpu
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
+      - name: Save and verify Windows release ABI cache
+        if: steps.llama_cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/save-and-verify-actions-cache
+        with:
+          path: ${{ steps.llama_cache.outputs.cache-path }}
+          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-ref: ${{ github.ref }}
+          cache-label: Windows release ABI
       - name: Upload native runtime
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -1701,6 +1757,9 @@ jobs:
     name: Build native runtime Windows x86_64 ${{ matrix.name }}
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    permissions:
+      contents: read
+      actions: read
     runs-on: windows-2022
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
@@ -1740,6 +1799,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup-windows-short-paths
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
@@ -1748,6 +1808,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows GPU ABI cache
+        id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: ${{ matrix.backend }}
@@ -1833,6 +1894,15 @@ jobs:
           backend: ${{ matrix.backend }}
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
+      - name: Save and verify Windows release ABI cache
+        if: steps.llama_cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/save-and-verify-actions-cache
+        with:
+          path: ${{ steps.llama_cache.outputs.cache-path }}
+          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-ref: ${{ github.ref }}
+          cache-label: Windows release ABI
       - name: Upload native runtime
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -2071,11 +2141,23 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ needs.metadata.outputs.tag }}
+          draft: ${{ inputs.preview == true }}
           prerelease: ${{ needs.metadata.outputs.prerelease }}
           generate_release_notes: true
           previous_tag: ${{ needs.metadata.outputs.release_notes_base }}
           overwrite_files: false
           files: release-artifacts/*
+
+      - name: Make complete preview downloadable
+        if: ${{ inputs.preview == true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false \
+            --title "Rolling preview $RELEASE_TAG (source $SOURCE_SHA)"
 
   release_notes:
     name: Regroup release notes

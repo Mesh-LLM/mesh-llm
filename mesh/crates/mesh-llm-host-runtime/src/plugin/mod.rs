@@ -15,6 +15,7 @@ mod inference_routing;
 pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
 pub(crate) mod identity_services;
 mod in_process;
+pub(crate) mod inference_observation;
 mod installed;
 pub(crate) mod mcp;
 pub mod openai_exchange;
@@ -1712,5 +1713,9 @@ pub async fn run_plugin_process(name: String, args: Vec<String>) -> Result<()> {
     }
 }
 
+#[cfg(test)]
+mod inference_observation_e2e_tests;
+#[cfg(test)]
+mod status_contribution_tests;
 #[cfg(test)]
 mod tests;

@@ -1129,7 +1129,7 @@ pub(crate) struct CapsuleMarkerExtension(pub(crate) CapsuleMarker);
 /// `mesh/docs/plugins/openai-exchange-lifecycle-design-note.md`.
 static X_CAPSULE_ID_HEADER: HeaderName = HeaderName::from_static("x-capsule-id");
 
-/// Threads [`ChatCompletionResponse::exchange_id`] from the handler to
+/// Threads [`crate::chat::ChatCompletionResponse::exchange_id`] from the handler to
 /// `frontend_lifecycle_middleware`, mirroring [`CapsuleMarkerExtension`] —
 /// the same relay, for the exchange id rather than the response
 /// marker.

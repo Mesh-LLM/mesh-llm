@@ -103,6 +103,9 @@ fn startup_virtual_model_lookup_rejects_concrete_collisions() {
     );
 }
 
+// The tests that check everything `resolve_plugins` returns are serial: it
+// also lists the store `MESH_LLM_PLUGIN_DIR` names, and the serial plugin
+// store tests point that variable at stores of their own while they run.
 #[test]
 #[serial_test::serial]
 fn resolves_default_builtin_plugins() {
@@ -121,6 +124,7 @@ fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         allow_peer_blocks: None,
+        allow_inference_observation: None,
         openai_exchange_grant: None,
         command: None,
         args: Vec::new(),
@@ -227,6 +231,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("/opt/wallets/lexe-wallet".into()),
             args: Vec::new(),
@@ -253,6 +258,7 @@ fn external_plugin_can_be_configured() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("mesh-llm-plugin-demo".into()),
             args: vec!["--stdio".into()],
@@ -311,6 +317,7 @@ fn blobstore_can_be_disabled() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -336,6 +343,7 @@ fn external_plugin_can_be_enabled_with_url() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
@@ -366,6 +374,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
@@ -392,6 +401,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -423,6 +433,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("/opt/plugins/endpoint-plugin".into()),
             args: vec!["--verbose".into()],
@@ -452,6 +463,7 @@ fn external_plugin_ignores_disabled_entry_without_install() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -492,6 +504,7 @@ fn resolves_external_plugin() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("/tmp/demo".into()),
             args: vec!["--flag".into()],
