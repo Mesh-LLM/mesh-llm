@@ -74,11 +74,24 @@ pub struct RuntimeState {
     /// Sessions discarded by panic recovery whose requests have not cleaned
     /// up yet; see `panic_recovery`.
     sessions_reset_by_panic: BTreeSet<String>,
+    /// Split DFlash drafts a final stage owes stage 0 after an early verdict,
+    /// by session.
+    dflash_deferred_drafts: BTreeMap<String, DeferredDFlashDraft>,
     #[cfg(test)]
     modelless_for_test: bool,
     /// Lets modelless tests exercise a split DFlash final stage.
     #[cfg(test)]
     pub(crate) dflash_drafts_for_test: bool,
+}
+
+/// What a split DFlash final stage needs to draft the block after a verify
+/// window it already answered: the window and the target's predictions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeferredDFlashDraft {
+    pub(crate) window: Vec<i32>,
+    pub(crate) predicted_tokens: Vec<i32>,
+    pub(crate) max_tokens: usize,
+    pub(crate) accepts_after_correction: bool,
 }
 
 struct RuntimeLaneSession {
@@ -218,6 +231,21 @@ impl RuntimeState {
     /// status/observability behaviour can be tested without loading a GGUF.
     /// Any call that reaches [`Self::model`] will dereference a null handle, so
     /// this must not be used to drive inference.
+    /// A modelless split DFlash final stage with one idle lane whose draft
+    /// is already gone, for tests of draft bookkeeping above the runtime.
+    #[cfg(test)]
+    pub(crate) fn split_dflash_final_stage_for_test() -> Self {
+        let mut runtime = Self::new_modelless_for_test(1);
+        runtime.dflash_drafts_for_test = true;
+        runtime.idle_sessions.push(RuntimeLaneSession {
+            index: 0,
+            session: skippy_runtime::StageSession::detached_dflash_for_test(),
+            resident_prefix: None,
+        });
+        runtime.next_lane_index = 1;
+        runtime
+    }
+
     #[cfg(test)]
     pub(crate) fn new_modelless_for_test(lane_count: u32) -> Self {
         Self::new_modelless_with_capacity_for_test(lane_count, 0)
@@ -238,6 +266,7 @@ impl RuntimeState {
             max_idle_sessions: None,
             session_token_counts: BTreeMap::new(),
             sessions_reset_by_panic: BTreeSet::new(),
+            dflash_deferred_drafts: BTreeMap::new(),
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
@@ -393,6 +422,7 @@ fn runtime_from_loaded_model(
         max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
         sessions_reset_by_panic: BTreeSet::new(),
+        dflash_deferred_drafts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),
@@ -705,15 +735,7 @@ mod tests {
 
     /// A modelless split DFlash final stage with one idle lane.
     fn split_dflash_final_stage() -> RuntimeState {
-        let mut runtime = RuntimeState::new_modelless_for_test(1);
-        runtime.dflash_drafts_for_test = true;
-        runtime.idle_sessions.push(super::RuntimeLaneSession {
-            index: 0,
-            session: skippy_runtime::StageSession::detached_dflash_for_test(),
-            resident_prefix: None,
-        });
-        runtime.next_lane_index = 1;
-        runtime
+        RuntimeState::split_dflash_final_stage_for_test()
     }
 
     fn frame_with_dflash_rows(rows: &skippy_runtime::DFlashFeatureRows) -> ActivationFrame {

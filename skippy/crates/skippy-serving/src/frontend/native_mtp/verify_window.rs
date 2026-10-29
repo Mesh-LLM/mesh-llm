@@ -3,7 +3,7 @@ use std::net::TcpStream;
 use skippy_inference_api::{InferenceError, InferenceResult};
 use skippy_protocol::binary::{StageNativeMtpDraft, WireReplyKind};
 
-use crate::frontend::embedded_execution::VerifyRetirement;
+use crate::frontend::embedded_execution::{VerifyRetirement, receive_embedded_stage_reply};
 
 use super::super::{
     AdaptiveVerifyWindow, BufferedCompositeProposal, CompositeProposalProvider,
@@ -115,11 +115,11 @@ impl StageOpenAiBackend {
             .map(BufferedCompositeProposal::remaining_native_mtp_tokens)
             .unwrap_or_default();
         let verify_width = ngram_sidecar_controller.verify_width(requested_verify_width);
-        let proposal_tokens = {
+        let (proposal_tokens, draft_position_offset) = {
             let buffer = proposal_buffer
                 .as_ref()
                 .expect("proposal buffer initialized");
-            buffer.verify_tokens(verify_width)
+            (buffer.verify_tokens(verify_width), buffer.accepted_tokens())
         };
         if proposal_tokens.is_empty() {
             return Ok(NativeMtpVerifyWindowControl::NoProposal);
@@ -142,7 +142,10 @@ impl StageOpenAiBackend {
             native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
         })?;
         message.state.set_split_dflash(request.split_dflash());
-        let verify = self.execute_embedded_stage_message(
+        message
+            .state
+            .set_split_dflash_early_verdict(request.split_dflash() && early_verdict_enabled());
+        let mut verify = self.execute_embedded_stage_message(
             request,
             downstream,
             session_key,
@@ -168,14 +171,10 @@ impl StageOpenAiBackend {
             |token| token_is_eog_with_runtime(&self.runtime, token),
         )?;
         let target_token = verify.reply.predicted_tokens[0];
-        let verify_next_draft_follows_correction = verify
-            .reply
-            .native_mtp_draft
-            .as_ref()
-            .is_some_and(|draft| draft.follows_correction);
-        let verify_next_mtp_draft = next_native_mtp_draft(
-            request.native_mtp_enabled,
-            verify.reply.native_mtp_draft.clone(),
+        native_mtp_counters.observe_draft_positions(
+            draft_position_offset,
+            proposal_tokens.len(),
+            native_mtp_verify_decision.accepted_proposal_tokens,
         );
         let native_mtp_decision = (!native_mtp_draft_tokens.is_empty()).then(|| {
             let span = native_mtp.observe_taken_draft_span(
@@ -196,6 +195,11 @@ impl StageOpenAiBackend {
         let consumed_positions = verify_inputs.len();
         let mut committed_positions = 0usize;
         let mut reached_stop = false;
+        // With an early verdict the final stage is drafting the next block
+        // now. Its draft reply is read below, after this window's tokens are
+        // committed and streamed, and before any error returns, so that the
+        // reply never lingers on the connection.
+        let mut token_error = None;
         for token in verify
             .reply
             .predicted_tokens
@@ -208,9 +212,16 @@ impl StageOpenAiBackend {
             committed_positions += 1;
             exact_replay_tokens.push(*current);
             context_tokens.push(*current);
-            if on_token(*current)? == TokenControl::Stop {
-                reached_stop = true;
-                break;
+            match on_token(*current) {
+                Ok(TokenControl::Stop) => {
+                    reached_stop = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    token_error = Some(error);
+                    break;
+                }
             }
             if *decoded_tokens >= request.max_tokens as usize {
                 break;
@@ -222,7 +233,7 @@ impl StageOpenAiBackend {
             && !reached_stop;
         let checkpoint_no_longer_needed =
             verify_checkpoint_no_longer_needed(committed_positions, consumed_positions);
-        if checkpoint_no_longer_needed {
+        let retired = if checkpoint_no_longer_needed && token_error.is_none() {
             self.retire_verify_window(
                 request,
                 downstream,
@@ -234,8 +245,34 @@ impl StageOpenAiBackend {
                     token_start: window.base_position,
                     token_count: verify_inputs.len(),
                 },
+            )
+        } else {
+            Ok(())
+        };
+        if verify.reply.window.draft_follows {
+            let draft_wait = PhaseTimer::start();
+            let draft_reply = receive_embedded_stage_reply(
+                downstream,
+                request.prediction_return.as_ref(),
+                WireReplyKind::PredictedTokens,
             )?;
+            native_mtp_counters.observe_early_verdict_draft_wait(draft_wait.elapsed_ms());
+            request.observe_reply_stats(&draft_reply.stats);
+            verify.reply.native_mtp_draft = draft_reply.native_mtp_draft;
         }
+        if let Some(error) = token_error {
+            return Err(error);
+        }
+        retired?;
+        let verify_next_draft_follows_correction = verify
+            .reply
+            .native_mtp_draft
+            .as_ref()
+            .is_some_and(|draft| draft.follows_correction);
+        let verify_next_mtp_draft = next_native_mtp_draft(
+            request.native_mtp_enabled,
+            verify.reply.native_mtp_draft.clone(),
+        );
         let decision_rejected_native_mtp_prefix = proposal_buffer.as_ref().is_some_and(|buffer| {
             buffer.native_mtp_prefix_rejected_after(
                 native_mtp_verify_decision.accepted_proposal_tokens,
@@ -472,6 +509,16 @@ impl StageOpenAiBackend {
     }
 }
 
+/// Whether stage 0 asks a split DFlash final stage for an early verdict.
+/// On unless `SKIPPY_DFLASH_EARLY_VERDICT=0`.
+fn early_verdict_enabled() -> bool {
+    early_verdict_enabled_from(std::env::var("SKIPPY_DFLASH_EARLY_VERDICT").ok().as_deref())
+}
+
+fn early_verdict_enabled_from(value: Option<&str>) -> bool {
+    !matches!(value.map(str::trim), Some("0" | "false" | "off" | "no"))
+}
+
 /// What a verify reply's draft can be checked against before it becomes the
 /// next proposal.
 #[derive(Clone, Copy)]
@@ -534,6 +581,15 @@ mod tests {
             commit_count: 2,
             reached_stop: false,
             cooldown_armed: false,
+        }
+    }
+
+    #[test]
+    fn early_verdicts_are_on_unless_turned_off() {
+        assert!(super::early_verdict_enabled_from(None));
+        assert!(super::early_verdict_enabled_from(Some("1")));
+        for off in ["0", "false", "off", " no "] {
+            assert!(!super::early_verdict_enabled_from(Some(off)), "{off}");
         }
     }
 

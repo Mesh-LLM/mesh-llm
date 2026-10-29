@@ -206,6 +206,9 @@ pub(in crate::frontend) struct SplitDFlashHealth {
     draft_context_resets: std::sync::atomic::AtomicI64,
     verify_rollbacks_in_place: std::sync::atomic::AtomicI64,
     verify_rollbacks_checkpointed: std::sync::atomic::AtomicI64,
+    draft_us: std::sync::atomic::AtomicI64,
+    drafts: std::sync::atomic::AtomicI64,
+    ingest_us: std::sync::atomic::AtomicI64,
 }
 
 /// Split DFlash counters for a generation's response timings.
@@ -219,6 +222,11 @@ pub(in crate::frontend) struct SplitDFlashCounts {
     /// is the latest count.
     pub(in crate::frontend) downstream_rollbacks_in_place: i64,
     pub(in crate::frontend) downstream_rollbacks_checkpointed: i64,
+    /// The final stage's draft time, block drafts, and the part of that time
+    /// spent injecting feature rows.
+    pub(in crate::frontend) draft_us: i64,
+    pub(in crate::frontend) drafts: i64,
+    pub(in crate::frontend) ingest_us: i64,
     /// The same on stage 0, when it could be read.
     pub(in crate::frontend) stage0_rollbacks: Option<skippy_runtime::VerifyRollbackCounts>,
 }
@@ -234,6 +242,12 @@ impl SplitDFlashHealth {
             .fetch_max(stats.verify_rollbacks_in_place, Ordering::Relaxed);
         self.verify_rollbacks_checkpointed
             .fetch_max(stats.verify_rollbacks_checkpointed, Ordering::Relaxed);
+        self.draft_us
+            .fetch_max(stats.dflash_draft_us, Ordering::Relaxed);
+        self.drafts
+            .fetch_max(stats.dflash_drafts, Ordering::Relaxed);
+        self.ingest_us
+            .fetch_max(stats.dflash_ingest_us, Ordering::Relaxed);
     }
 
     pub(in crate::frontend) fn counts(
@@ -248,6 +262,9 @@ impl SplitDFlashHealth {
             downstream_rollbacks_checkpointed: self
                 .verify_rollbacks_checkpointed
                 .load(Ordering::Relaxed),
+            draft_us: self.draft_us.load(Ordering::Relaxed),
+            drafts: self.drafts.load(Ordering::Relaxed),
+            ingest_us: self.ingest_us.load(Ordering::Relaxed),
             stage0_rollbacks,
         }
     }
