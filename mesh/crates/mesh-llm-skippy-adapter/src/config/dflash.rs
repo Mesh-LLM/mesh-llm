@@ -5,8 +5,9 @@
 //! explicitly with `speculative.strategy = "dflash"` and a draft, or by default
 //! under `auto` when the target is one of the known pairings in
 //! [`super::dflash_catalog`] and nothing else in the configuration speaks for
-//! speculation. A DFlash draft named as an ordinary draft under `auto` still
-//! fails pairing.
+//! speculation. Native MTP that is on only because the target carries NextN
+//! layers yields to a known pairing, and serves if the draft is dropped. A
+//! DFlash draft named as an ordinary draft under `auto` still fails pairing.
 
 use std::path::{Path, PathBuf};
 
@@ -50,7 +51,8 @@ pub(super) fn select_dflash_draft<'a>(selection: &DFlashSelection<'a>) -> Result
 /// being the default.
 pub(super) struct DFlashDefaultSelection<'a> {
     pub(super) auto_defaults_enabled: bool,
-    pub(super) native_mtp_enabled: bool,
+    /// Native MTP is on and was configured, declared, or cannot yield.
+    pub(super) native_mtp_decides: bool,
     pub(super) has_ngram_settings: bool,
     pub(super) package_declares_speculation: bool,
     pub(super) target_meta: Option<&'a GgufCompactMeta>,
@@ -72,7 +74,7 @@ pub(super) fn choose_dflash_draft(
         || explicit.mode != "auto"
         || explicit.draft_model_path.is_some()
         || !default.auto_defaults_enabled
-        || default.native_mtp_enabled
+        || default.native_mtp_decides
         || default.has_ngram_settings
         || default.package_declares_speculation
     {
@@ -109,11 +111,16 @@ impl ResolvedSpeculativeConfig {
         }
     }
 
-    /// Serves without speculation when the default DFlash draft cannot be
-    /// fetched or does not fit the target. An explicitly configured DFlash
-    /// draft is not a default and is left in place.
+    /// Serves without the default DFlash draft when it cannot be fetched,
+    /// does not fit, or the target is split: native MTP if the draft replaced
+    /// it, else no speculation. An explicitly configured DFlash draft is not a
+    /// default and is left in place.
     pub fn drop_default_dflash(&mut self) {
         if self.default_dflash.take().is_none() {
+            return;
+        }
+        if let Some(fallback) = self.native_mtp_fallback.take() {
+            *self = *fallback;
             return;
         }
         self.decode.dflash = None;
