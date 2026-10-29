@@ -1,0 +1,873 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Thu, 29 Oct 2026 21:32:31 +1100
+Subject: [PATCH] skippy: roll back staged verify windows in place
+
+A recurrent verify window of up to n_rs_seq rows rolls back through the
+rollback snapshots instead of a host checkpoint and replay, but staged
+sessions were excluded on the grounds that they roll back across hosts.
+They do not: each stage trims its own layers' recurrent state and
+attention KV in its own context, to the same position as every other
+stage. Split speculation therefore paid a full sequence-state copy, a
+GPU sync and, on rejection, a second stage forward on every window.
+
+What the snapshots cannot cover is a window that is no longer the last
+decode of its sequence. Pipelined verification decodes the next window
+before the previous one is resolved, and a trim may then land in the
+earlier window or at the first, still speculative, row of the later
+one. So a window rolls back in place only when it opens with nothing
+else outstanding. If another decode lands on a window held in place,
+its state after the first row is read from the snapshot that rolls back
+to it and kept as a host checkpoint; the window's replay inputs are
+recorded for that. The later window takes an ordinary checkpoint.
+
+Retired checkpoints keep their buffers for the next one, so the
+fallback path no longer allocates a full sequence state per window.
+
+skippy_session_verify_rollback_counts reports how many of a session's
+windows were held in place and how many in a host checkpoint since it was
+reset, so a split can show which path each stage took. ABI 0.1.68.
+---
+ include/skippy/common.h                       |   2 +-
+ include/skippy/state.h                        |  13 ++
+ src/CMakeLists.txt                            |   1 +
+ src/skippy-verify-checkpoint.h                |   9 +-
+ src/skippy/activation.cpp                     | 126 +++++-----
+ src/skippy/execution-batch.cpp                |   7 +
+ src/skippy/execution-single.cpp               |   5 +
+ src/skippy/runtime_support.h                  |   7 +
+ src/skippy/runtime_types.h                    |  17 ++
+ src/skippy/session.cpp                        |   6 +-
+ src/skippy/state.cpp                          |  51 +++--
+ src/skippy/verify_window.cpp                  | 216 ++++++++++++++++++
+ src/skippy/verify_window.h                    |  38 +++
+ ...st-skippy-verify-checkpoint-retirement.cpp |   9 +
+ 14 files changed, 434 insertions(+), 73 deletions(-)
+ create mode 100644 src/skippy/verify_window.cpp
+ create mode 100644 src/skippy/verify_window.h
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 3f6aab137..b9b5259af 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 67
++#define SKIPPY_ABI_VERSION_PATCH 68
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index 1cfaaa5c6..2d929741d 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -173,6 +173,19 @@ LLAMA_API enum skippy_status skippy_retire_verify_checkpoint(
+         uint64_t token_count,
+         struct skippy_error ** out_error);
+ 
++/**
++ * @brief Reports how this session's verify windows were held for rollback
++ * since it was created or last reset: in place through the recurrent
++ * rollback snapshots, or in a host checkpoint. A window first held in place
++ * and later checkpointed because another decode landed on it counts as
++ * checkpointed.
++ */
++LLAMA_API enum skippy_status skippy_session_verify_rollback_counts(
++        const struct skippy_session * session,
++        uint64_t * out_in_place,
++        uint64_t * out_checkpointed,
++        struct skippy_error ** out_error);
++
+ /** @brief Exports a token/layer KV page with an explicit layout descriptor. */
+ LLAMA_API enum skippy_status skippy_export_kv_page(
+         struct skippy_session * session,
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 48f8964a9..73808a679 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -58,6 +58,7 @@ add_library(llama
+             skippy/model_source.cpp
+             skippy/session.cpp
+             skippy/verification.cpp
++            skippy/verify_window.cpp
+             skippy/workloads.cpp
+             skippy/abi.cpp
+             skippy/block_boundaries.cpp
+diff --git a/src/skippy-verify-checkpoint.h b/src/skippy-verify-checkpoint.h
+index 8793000c1..f6ce0295e 100644
+--- a/src/skippy-verify-checkpoint.h
++++ b/src/skippy-verify-checkpoint.h
+@@ -2,13 +2,17 @@
+ 
+ #include <algorithm>
+ #include <cstdint>
++#include <utility>
+ #include <vector>
+ 
++// Removes the checkpoint of exactly this window. When `retired` is given, it
++// receives the removed checkpoint so its buffers can be reused.
+ template<typename T>
+ bool skippy_retire_verify_checkpoint_exact(
+         std::vector<T> & checkpoints,
+         uint64_t token_start,
+-        uint64_t token_count) {
++        uint64_t token_count,
++        T * retired = nullptr) {
+     const auto it = std::find_if(
+             checkpoints.begin(), checkpoints.end(),
+             [token_start, token_count](const T & checkpoint) {
+@@ -19,6 +23,9 @@ bool skippy_retire_verify_checkpoint_exact(
+     if (it == checkpoints.end()) {
+         return false;
+     }
++    if (retired != nullptr) {
++        *retired = std::move(*it);
++    }
+     checkpoints.erase(it);
+     return true;
+ }
+diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
+index e2ce28d12..6d83461bc 100644
+--- a/src/skippy/activation.cpp
++++ b/src/skippy/activation.cpp
+@@ -6,6 +6,7 @@
+ #include "skippy/glm_dsa.h"
+ #include "skippy-verify-checkpoint.h"
+ #include "skippy/devices.h"
++#include "skippy/verify_window.h"
+ 
+ #include <mutex>
+ #include "gguf.h"
+@@ -71,12 +72,21 @@ bool skippy_memory_needs_verify_checkpoint(llama_memory_t memory) {
+ // skippy_trim_session restores the accepted prefix exactly - without the
+ // serial replay of accepted tokens that the checkpoint restore path performs.
+ //
+-// Staged sessions are excluded: they roll back across hosts, where an
+-// in-process RS index is not a usable restore point.
++// This holds for staged sessions too. Every stage owns the recurrent state and
++// attention KV of its own layers in its own context, receives the same trim
++// position as every other stage, and rolls back only what it decoded itself;
++// nothing is restored across hosts. Stages may size their snapshot depth
++// differently and still decide independently: each one's trim and retirement
++// agree with how that stage held its window.
++//
++// The snapshots only describe the last decode of the sequence, so the window
++// must still be the last thing decoded when it is trimmed. That is not true
++// of pipelined verification, where the next window decodes before this one is
++// resolved; see skippy_checkpoint_verify_window.
+ bool skippy_verify_window_can_roll_back_in_place(
+         const skippy_session * session,
+         size_t token_count) {
+-    if (session == nullptr || session->ctx == nullptr || skippy_is_filtered(session)) {
++    if (session == nullptr || session->ctx == nullptr) {
+         return false;
+     }
+     const uint32_t n_rs_seq = session->ctx->get_cparams().n_rs_seq;
+@@ -101,55 +111,52 @@ enum skippy_status skippy_checkpoint_verify_window(
+     if (!skippy_memory_needs_verify_checkpoint(memory)) {
+         return skippy_success(out_error);
+     }
+-    if (skippy_verify_window_can_roll_back_in_place(session, token_count)) {
+-        return skippy_success(out_error);
+-    }
+ 
+-    session->ctx->synchronize();
+-    const size_t state_size = llama_state_seq_get_size_ext(
+-            session->ctx,
+-            session->seq_id,
+-            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+-    if (state_size == 0) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to size verify-window state checkpoint");
+-        return SKIPPY_STATUS_RUNTIME_ERROR;
++    // A recorded window that never decoded is gone; one that did must stop
++    // depending on snapshots this window is about to overwrite.
++    if (session->inplace_verify_window.valid && session->n_past == session->inplace_verify_window.token_start) {
++        session->inplace_verify_window.valid = false;
++    }
++    // Only a window opened with nothing else outstanding may roll back in
++    // place. Otherwise windows are pipelined: a trim may land in an earlier
++    // window or at this window's first row, and neither is in the snapshots
++    // this window's decode leaves behind.
++    const bool quiescent = !session->inplace_verify_window.valid && session->verify_checkpoints.empty();
++    enum skippy_status status = skippy_settle_inplace_verify_window(session, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
+     }
+-
+-    skippy_verify_checkpoint checkpoint;
+-    checkpoint.state.resize(state_size);
+-    const size_t written = llama_state_seq_get_data_ext(
+-            session->ctx,
+-            checkpoint.state.data(),
+-            checkpoint.state.size(),
+-            session->seq_id,
+-            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+-    if (written != checkpoint.state.size()) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to checkpoint verify-window sequence state");
+-        return SKIPPY_STATUS_RUNTIME_ERROR;
++    if (quiescent && skippy_verify_window_can_roll_back_in_place(session, token_count)) {
++        skippy_record_verify_window_inputs(
++                session->inplace_verify_window,
++                session->n_past,
++                token_ids,
++                token_count,
++                input_desc,
++                input_payload);
++        ++session->verify_windows_in_place;
++        return skippy_success(out_error);
+     }
+ 
+-    checkpoint.valid = true;
+-    checkpoint.token_start = session->n_past;
+-    checkpoint.token_count = token_count;
+-    if (token_ids != nullptr) {
+-        checkpoint.token_ids.assign(token_ids, token_ids + token_count);
+-    }
+-    checkpoint.has_activation_input = skippy_has_activation_payload(input_desc, input_payload);
+-    if (checkpoint.has_activation_input) {
+-        checkpoint.input_desc = *input_desc;
+-        const uint8_t * bytes = static_cast<const uint8_t *>(input_payload);
+-        checkpoint.input_payload.assign(bytes, bytes + input_desc->payload_bytes);
++    if (session->verify_checkpoints.size() >= skippy_max_verify_checkpoints) {
++        return skippy_reject_verify_checkpoint_depth(out_error);
+     }
+-
+-    constexpr size_t max_verify_checkpoints = 64;
+-    if (session->verify_checkpoints.size() >= max_verify_checkpoints) {
+-        skippy_set_error(
+-                out_error,
+-                SKIPPY_STATUS_UNSUPPORTED,
+-                "verify-window pipeline depth exceeds supported checkpoint retention");
+-        return SKIPPY_STATUS_UNSUPPORTED;
++    session->ctx->synchronize();
++    skippy_verify_checkpoint checkpoint = skippy_acquire_verify_checkpoint(session);
++    status = skippy_copy_verify_state(session, checkpoint.state, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        skippy_recycle_verify_checkpoint(session, std::move(checkpoint));
++        return status;
+     }
++    skippy_record_verify_window_inputs(
++            checkpoint,
++            session->n_past,
++            token_ids,
++            token_count,
++            input_desc,
++            input_payload);
+     session->verify_checkpoints.push_back(std::move(checkpoint));
++    ++session->verify_windows_checkpointed;
+     return skippy_success(out_error);
+ }
+ 
+@@ -457,6 +464,10 @@ enum skippy_status skippy_decode_batch(
+     if (usable_status != SKIPPY_STATUS_OK) {
+         return usable_status;
+     }
++    usable_status = skippy_settle_inplace_verify_window(session, out_error);
++    if (usable_status != SKIPPY_STATUS_OK) {
++        return usable_status;
++    }
+     skippy_graph_build_inputs inputs = graph_build_inputs != nullptr ? *graph_build_inputs : skippy_graph_build_inputs{};
+     const skippy_graph_build_inputs configured_inputs = skippy_graph_build_inputs_from_config(
+             &session->stage_model->config, glm_dsa_phase_hint);
+@@ -850,6 +861,7 @@ enum skippy_status skippy_verify_activation_frame(
+ 
+ static std::vector<uint8_t> skippy_verify_prefix_activation_payload(
+         const skippy_verify_checkpoint & checkpoint,
++        size_t row_start,
+         size_t token_count,
+         skippy_activation_desc & prefix_desc) {
+     prefix_desc = checkpoint.input_desc;
+@@ -874,7 +886,7 @@ static std::vector<uint8_t> skippy_verify_prefix_activation_payload(
+         for (int64_t i3 = 0; i3 < part.dimensions[3]; ++i3) {
+             for (int64_t i2 = 0; i2 < part.dimensions[2]; ++i2) {
+                 for (int64_t i1 = 0; i1 < part.dimensions[1]; ++i1) {
+-                    const size_t source_offset = static_cast<size_t>(i1) * source_part.byte_strides[1] +
++                    const size_t source_offset = (row_start + static_cast<size_t>(i1)) * source_part.byte_strides[1] +
+                             static_cast<size_t>(i2) * source_part.byte_strides[2] + static_cast<size_t>(i3) * source_part.byte_strides[3];
+                     payload.insert(payload.end(), source + source_offset, source + source_offset + row_bytes);
+                 }
+@@ -905,7 +917,7 @@ static bool skippy_trim_verify_attention(
+ 
+ static void skippy_mark_verify_restore_failed(skippy_session * session) {
+     session->reset_required = true;
+-    session->verify_checkpoints.clear();
++    skippy_clear_verify_windows(session);
+     skippy_mtp_clear_session_state(session);
+ }
+ 
+@@ -927,8 +939,8 @@ enum skippy_status skippy_restore_verify_prefix(
+     *out_restored = false;
+     const skippy_verify_checkpoint * checkpoint = nullptr;
+     for (auto it = session->verify_checkpoints.rbegin(); it != session->verify_checkpoints.rend(); ++it) {
+-        const uint64_t token_start = static_cast<uint64_t>(it->token_start);
+-        const uint64_t token_end = token_start + it->token_count;
++        const uint64_t token_start = static_cast<uint64_t>(it->token_start) + it->state_offset;
++        const uint64_t token_end = static_cast<uint64_t>(it->token_start) + it->token_count;
+         if (it->valid && token_count >= token_start && token_count < token_end) {
+             checkpoint = &*it;
+             break;
+@@ -952,8 +964,10 @@ enum skippy_status skippy_restore_verify_prefix(
+                 out_error);
+     }
+ 
++    const size_t state_offset = checkpoint->state_offset;
++    const llama_pos state_start = checkpoint->token_start + static_cast<llama_pos>(state_offset);
+     llama_memory_t memory = session->ctx->get_memory();
+-    if (!skippy_trim_verify_attention(memory, session->seq_id, checkpoint->token_start)) {
++    if (!skippy_trim_verify_attention(memory, session->seq_id, state_start)) {
+         return skippy_fail_verify_restore(
+                 session,
+                 SKIPPY_STATUS_RUNTIME_ERROR,
+@@ -961,10 +975,9 @@ enum skippy_status skippy_restore_verify_prefix(
+                 out_error);
+     }
+ 
+-    const uint64_t token_start = static_cast<uint64_t>(checkpoint->token_start);
+-    session->n_past = checkpoint->token_start;
+-    const size_t accepted_count = static_cast<size_t>(token_count - token_start);
+-    if (accepted_count > 0 && checkpoint->token_ids.empty()) {
++    session->n_past = state_start;
++    const size_t accepted_count = static_cast<size_t>(token_count - static_cast<uint64_t>(state_start));
++    if (accepted_count > 0 && checkpoint->token_ids.size() < state_offset + accepted_count) {
+         return skippy_fail_verify_restore(
+                 session,
+                 SKIPPY_STATUS_RUNTIME_ERROR,
+@@ -977,6 +990,7 @@ enum skippy_status skippy_restore_verify_prefix(
+         skippy_activation_desc input_desc = {};
+         std::vector<uint8_t> input_payload = skippy_verify_prefix_activation_payload(
+                 *checkpoint,
++                state_offset,
+                 accepted_count,
+                 input_desc);
+         if (input_payload.empty()) {
+@@ -990,7 +1004,7 @@ enum skippy_status skippy_restore_verify_prefix(
+                 session,
+                 &input_desc,
+                 input_payload.data(),
+-                checkpoint->token_ids.data(),
++                checkpoint->token_ids.data() + state_offset,
+                 nullptr,
+                 0,
+                 accepted_count,
+@@ -1000,7 +1014,7 @@ enum skippy_status skippy_restore_verify_prefix(
+     } else if (accepted_count > 0) {
+         status = skippy_decode_tokens(
+                 session,
+-                checkpoint->token_ids.data(),
++                checkpoint->token_ids.data() + state_offset,
+                 accepted_count,
+                 false,
+                 SKIPPY_GLM_DSA_PHASE_HINT_VERIFY,
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index bcc996bb1..22269c506 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -348,6 +348,13 @@ enum skippy_status skippy_iteration_batch_sampled(
+         }
+     }
+ 
++    // This decode overwrites any pending verify window's rollback snapshots.
++    for (size_t index = 0; index < request_count; ++index) {
++        const enum skippy_status settle_status =
++                skippy_settle_inplace_verify_window(requests[index].session, out_error);
++        if (settle_status != SKIPPY_STATUS_OK) return settle_status;
++    }
++
+     skippy_graph_build_inputs graph_inputs = skippy_graph_build_inputs_from_config(
+             &first->stage_model->config, SKIPPY_GLM_DSA_PHASE_HINT_AUTO);
+     std::vector<std::vector<uint8_t>> frontier_storage;
+diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
+index 4ce3d4ba9..8a1b320ff 100644
+--- a/src/skippy/execution-single.cpp
++++ b/src/skippy/execution-single.cpp
+@@ -210,6 +210,11 @@ enum skippy_status skippy_decode_batch_sampled(
+             skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched token decode requires the first runtime slice or a full model");
+             return SKIPPY_STATUS_UNSUPPORTED;
+         }
++        const enum skippy_status settle_status = skippy_settle_inplace_verify_window(session, out_error);
++        if (settle_status != SKIPPY_STATUS_OK) {
++            llama_batch_free(batch);
++            return settle_status;
++        }
+         batch.token[i] = token_ids[i];
+         batch.pos[i] = session->n_past;
+         batch.n_seq_id[i] = 1;
+diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
+index 8ba595623..bbba808a3 100644
+--- a/src/skippy/runtime_support.h
++++ b/src/skippy/runtime_support.h
+@@ -41,6 +41,13 @@ void skippy_clear_chat_sampling(skippy_session * session);
+ bool skippy_verify_window_can_roll_back_in_place(
+         const skippy_session * session,
+         size_t token_count);
++// Drops every outstanding verify window, recycling checkpoint buffers.
++void skippy_clear_verify_windows(skippy_session * session);
++// Turns a decoded in-place verify window into a host checkpoint before
++// another decode overwrites its rollback snapshots. A no-op otherwise.
++enum skippy_status skippy_settle_inplace_verify_window(
++        skippy_session * session,
++        skippy_error ** out_error);
+ enum skippy_status skippy_restore_verify_prefix(
+         skippy_session * session,
+         uint64_t token_count,
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index f44e874d9..68c75fa9c 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -120,6 +120,11 @@ struct skippy_verify_checkpoint {
+     bool valid = false;
+     int32_t token_start = 0;
+     size_t token_count = 0;
++    // Leading window rows already folded into `state`. A checkpoint taken
++    // before the window holds 0; one recovered from a decoded window's
++    // rollback snapshots holds 1, so it restores to token_start + 1 and
++    // replays only the accepted rows after that.
++    size_t state_offset = 0;
+     std::vector<uint8_t> state;
+     std::vector<llama_token> token_ids;
+     bool has_activation_input = false;
+@@ -190,4 +195,16 @@ struct skippy_session {
+     std::vector<skippy_pending_activation_part> pending_activation_exports;
+     bool reset_required = false;
+     std::vector<skippy_verify_checkpoint> verify_checkpoints;
++    // The verify window that rolls back in place through the recurrent
++    // rollback snapshots instead of a host checkpoint. Only its replay inputs
++    // are kept (`state` stays empty): if another decode lands before the
++    // window is trimmed or retired, they become a host checkpoint.
++    skippy_verify_checkpoint inplace_verify_window;
++    // Retired checkpoints whose buffers the next checkpoint reuses, so the
++    // fallback path does not allocate a full sequence state every window.
++    std::vector<skippy_verify_checkpoint> verify_checkpoint_pool;
++    // Verify windows held in place, and held in a host checkpoint, since the
++    // session was created or reset.
++    uint64_t verify_windows_in_place = 0;
++    uint64_t verify_windows_checkpointed = 0;
+ };
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 4741f55cb..a9251d2c9 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -241,7 +241,7 @@ enum skippy_status skippy_session_set_position(
+         session->signal_history.resize(static_cast<size_t>(n_past));
+     }
+     skippy_mtp_clear_session_state(session);
+-    session->verify_checkpoints.clear();
++    skippy_clear_verify_windows(session);
+     return skippy_success(out_error);
+ }
+ 
+@@ -396,7 +396,9 @@ enum skippy_status skippy_session_reset(
+     session->sampling_backend_verifying = false;
+     session->sampling_backend_row_invalid = true;
+     session->reset_required = false;
+-    session->verify_checkpoints.clear();
++    skippy_clear_verify_windows(session);
++    session->verify_windows_in_place = 0;
++    session->verify_windows_checkpointed = 0;
+     skippy_emit_kv_event(
+             SKIPPY_RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED,
+             static_cast<uint64_t>(session->seq_id),
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index 0f9b3a27c..f1ae5bf2b 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -74,7 +74,7 @@ static void skippy_update_session_state_after_import(
+         session->signal_history.resize(static_cast<size_t>(session->n_past));
+     }
+     skippy_mtp_clear_session_state(session);
+-    session->verify_checkpoints.clear();
++    skippy_clear_verify_windows(session);
+ }
+ 
+ static enum skippy_status skippy_imported_session_position(
+@@ -646,7 +646,7 @@ enum skippy_status skippy_import_kv_page(
+     }
+     session->n_past = std::max<int32_t>(session->n_past, static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count, std::numeric_limits<int32_t>::max())));
+     skippy_mtp_clear_session_state(session);
+-    session->verify_checkpoints.clear();
++    skippy_clear_verify_windows(session);
+     session->ctx->synchronize();
+     return skippy_success(out_error);
+ }
+@@ -742,7 +742,7 @@ enum skippy_status skippy_import_cachegen_kv_page_v1(struct skippy_session *
+                                         static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count,
+                                                                                 std::numeric_limits<int32_t>::max())));
+     skippy_mtp_clear_session_state(session);
+-    session->verify_checkpoints.clear();
++    skippy_clear_verify_windows(session);
+     session->ctx->synchronize();
+     return skippy_success(out_error);
+ }
+@@ -759,17 +759,27 @@ enum skippy_status skippy_retire_verify_checkpoint(
+     if (!skippy_memory_needs_verify_checkpoint(session->ctx->get_memory())) {
+         return skippy_success(out_error);
+     }
+-    // No checkpoint is taken when the span rolls back in place, so there is
+-    // nothing to retire.
+-    if (skippy_verify_window_can_roll_back_in_place(session, static_cast<size_t>(token_count))) {
++    skippy_verify_checkpoint & inplace = session->inplace_verify_window;
++    if (inplace.valid && static_cast<uint64_t>(inplace.token_start) == token_start &&
++            inplace.token_count == token_count) {
++        inplace.valid = false;
+         return skippy_success(out_error);
+     }
+-    if (!skippy_retire_verify_checkpoint_exact(
+-                session->verify_checkpoints, token_start, token_count)) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "verify-window checkpoint was not found");
+-        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    skippy_verify_checkpoint retired;
++    if (skippy_retire_verify_checkpoint_exact(
++                session->verify_checkpoints, token_start, token_count, &retired)) {
++        if (session->verify_checkpoint_pool.size() < 2) {
++            session->verify_checkpoint_pool.push_back(std::move(retired));
++        }
++        return skippy_success(out_error);
+     }
+-    return skippy_success(out_error);
++    // A window that could roll back in place may have taken no checkpoint
++    // at all, so there is nothing to retire.
++    if (skippy_verify_window_can_roll_back_in_place(session, static_cast<size_t>(token_count))) {
++        return skippy_success(out_error);
++    }
++    skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "verify-window checkpoint was not found");
++    return SKIPPY_STATUS_INVALID_ARGUMENT;
+ }
+ 
+ enum skippy_status skippy_trim_session(
+@@ -799,6 +809,21 @@ enum skippy_status skippy_trim_session(
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
++    // A window held in place rewinds through seq_rm below, to any row after
++    // its first. Its first row is the committed token the window started
++    // from; the snapshots cannot return to before it.
++    const skippy_verify_checkpoint & inplace = session->inplace_verify_window;
++    if (inplace.valid &&
++            session->n_past == inplace.token_start + static_cast<int32_t>(inplace.token_count) &&
++            token_count <= static_cast<uint64_t>(inplace.token_start) &&
++            static_cast<uint64_t>(session->n_past) > token_count) {
++        skippy_set_error(
++                out_error,
++                SKIPPY_STATUS_UNSUPPORTED,
++                "an in-place verify window cannot roll back past its first row");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    session->inplace_verify_window.valid = false;
+     bool restored_verify_prefix = false;
+     enum skippy_status status = skippy_restore_verify_prefix(
+             session,
+@@ -849,7 +874,7 @@ enum skippy_status skippy_trim_session(
+         session->signal_history.resize(static_cast<size_t>(token_count));
+     }
+     skippy_mtp_trim_session_state(session, static_cast<llama_pos>(token_count));
+-    session->verify_checkpoints.clear();
++    skippy_clear_verify_windows(session);
+     session->ctx->synchronize();
+ 
+     return skippy_success(out_error);
+@@ -1004,7 +1029,7 @@ enum skippy_status skippy_session_restore_prefix(
+     }
+     session->signal_history.clear();
+     skippy_mtp_clear_session_state(session);
+-    session->verify_checkpoints.clear();
++    skippy_clear_verify_windows(session);
+     return skippy_success(out_error);
+ }
+ 
+diff --git a/src/skippy/verify_window.cpp b/src/skippy/verify_window.cpp
+new file mode 100644
+index 000000000..18393e3c4
+--- /dev/null
++++ b/src/skippy/verify_window.cpp
+@@ -0,0 +1,216 @@
++// Verify-window bookkeeping: the window that rolls back in place, the host
++// checkpoints that replace it when it cannot, and the buffers they reuse.
++#include "skippy.h"
++#include "skippy/verify_window.h"
++
++#include "skippy/activation_internal.h"
++#include "skippy/errors.h"
++#include "skippy/runtime_support.h"
++#include "skippy/runtime_types.h"
++#include "skippy/state_memory.h"
++
++#include "llama-context.h"
++#include "llama-memory-recurrent.h"
++
++#include <exception>
++#include <utility>
++
++void skippy_recycle_verify_checkpoint(
++        skippy_session * session,
++        skippy_verify_checkpoint && checkpoint) {
++    // A full sequence state can be tens of MiB; keep the few a pipelined
++    // window depth needs rather than every one ever taken.
++    constexpr size_t max_pooled_checkpoints = 2;
++    if (session->verify_checkpoint_pool.size() >= max_pooled_checkpoints) {
++        return;
++    }
++    checkpoint.valid = false;
++    session->verify_checkpoint_pool.push_back(std::move(checkpoint));
++}
++
++skippy_verify_checkpoint skippy_acquire_verify_checkpoint(skippy_session * session) {
++    if (session->verify_checkpoint_pool.empty()) {
++        return {};
++    }
++    skippy_verify_checkpoint checkpoint = std::move(session->verify_checkpoint_pool.back());
++    session->verify_checkpoint_pool.pop_back();
++    return checkpoint;
++}
++
++void skippy_clear_verify_windows(skippy_session * session) {
++    if (session == nullptr) {
++        return;
++    }
++    for (auto & checkpoint : session->verify_checkpoints) {
++        skippy_recycle_verify_checkpoint(session, std::move(checkpoint));
++    }
++    session->verify_checkpoints.clear();
++    session->inplace_verify_window.valid = false;
++}
++
++// Records the replay inputs of a window. The vectors keep their capacity, so a
++// recycled checkpoint copies into memory it already owns.
++void skippy_record_verify_window_inputs(
++        skippy_verify_checkpoint & window,
++        int32_t token_start,
++        const llama_token * token_ids,
++        size_t token_count,
++        const skippy_activation_desc * input_desc,
++        const void * input_payload) {
++    window.valid = true;
++    window.token_start = token_start;
++    window.token_count = token_count;
++    window.state_offset = 0;
++    if (token_ids != nullptr) {
++        window.token_ids.assign(token_ids, token_ids + token_count);
++    } else {
++        window.token_ids.clear();
++    }
++    window.has_activation_input = skippy_has_activation_payload(input_desc, input_payload);
++    if (window.has_activation_input) {
++        window.input_desc = *input_desc;
++        const uint8_t * bytes = static_cast<const uint8_t *>(input_payload);
++        window.input_payload.assign(bytes, bytes + input_desc->payload_bytes);
++    } else {
++        window.input_desc = {};
++        window.input_payload.clear();
++    }
++}
++
++enum skippy_status skippy_copy_verify_state(
++        skippy_session * session,
++        std::vector<uint8_t> & state,
++        skippy_error ** out_error) {
++    const size_t state_size = llama_state_seq_get_size_ext(
++            session->ctx,
++            session->seq_id,
++            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++    if (state_size == 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to size verify-window state checkpoint");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    // Same-sized recurrent state every window: resizing a recycled buffer
++    // neither reallocates nor clears it.
++    state.resize(state_size);
++    const size_t written = llama_state_seq_get_data_ext(
++            session->ctx,
++            state.data(),
++            state.size(),
++            session->seq_id,
++            LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++    if (written != state.size()) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to checkpoint verify-window sequence state");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    return SKIPPY_STATUS_OK;
++}
++
++enum skippy_status skippy_reject_verify_checkpoint_depth(skippy_error ** out_error) {
++    skippy_set_error(
++            out_error,
++            SKIPPY_STATUS_UNSUPPORTED,
++            "verify-window pipeline depth exceeds supported checkpoint retention");
++    return SKIPPY_STATUS_UNSUPPORTED;
++}
++
++enum skippy_status skippy_settle_inplace_verify_window(
++        skippy_session * session,
++        skippy_error ** out_error) {
++    if (session == nullptr || !session->inplace_verify_window.valid) {
++        return SKIPPY_STATUS_OK;
++    }
++    skippy_verify_checkpoint & window = session->inplace_verify_window;
++    const int64_t window_end = static_cast<int64_t>(window.token_start) + static_cast<int64_t>(window.token_count);
++    if (session->n_past == window.token_start) {
++        // The window itself has not been decoded yet.
++        return SKIPPY_STATUS_OK;
++    }
++    window.valid = false;
++    if (session->n_past != window_end || window.token_count < 2) {
++        // Either the window no longer ends the sequence, or it holds no row
++        // that a trim could return to.
++        return SKIPPY_STATUS_OK;
++    }
++    if (session->verify_checkpoints.size() >= skippy_max_verify_checkpoints) {
++        return skippy_reject_verify_checkpoint_depth(out_error);
++    }
++
++    // The next decode overwrites the snapshots. Keep the state after the
++    // window's first row, read from the snapshot that rolls back to it. The
++    // first row is the committed token the window started from, so every
++    // trim inside the window lands at or after it.
++    llama_memory_recurrent * recurrent = skippy_memory_recurrent_adapter(session->ctx->get_memory());
++    const uint32_t rollback = static_cast<uint32_t>(window.token_count - 1);
++    llama_memory_recurrent::mem_cell * tail = nullptr;
++    if (recurrent != nullptr) {
++        const auto seq = static_cast<size_t>(session->seq_id);
++        if (seq >= recurrent->cells.size() || seq >= recurrent->rs_idx.size()) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "verify-window sequence has no recurrent cell");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        const int32_t tail_id = recurrent->cells[seq].tail;
++        if (tail_id < 0 || recurrent->rs_idx[seq] != 0 ||
++                (recurrent->n_rs_seq != 0 && rollback > recurrent->n_rs_seq)) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "verify-window rollback snapshot is unavailable");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        tail = &recurrent->cells[static_cast<size_t>(tail_id)];
++    }
++
++    skippy_verify_checkpoint checkpoint = skippy_acquire_verify_checkpoint(session);
++    std::swap(checkpoint.token_ids, window.token_ids);
++    std::swap(checkpoint.input_payload, window.input_payload);
++    checkpoint.has_activation_input = window.has_activation_input;
++    checkpoint.input_desc = window.input_desc;
++    checkpoint.token_start = window.token_start;
++    checkpoint.token_count = window.token_count;
++    checkpoint.state_offset = 1;
++
++    session->ctx->synchronize();
++    llama_pos tail_pos = 0;
++    if (tail != nullptr) {
++        // Serialize the sequence as if it had rolled back: the state writer
++        // reads the snapshot group named by rs_idx and the tail position.
++        tail_pos = tail->pos;
++        tail->pos = window.token_start;
++        if (recurrent->n_rs_seq != 0) {
++            recurrent->rs_idx[static_cast<size_t>(session->seq_id)] = rollback;
++        }
++    }
++    enum skippy_status status = SKIPPY_STATUS_OK;
++    try {
++        status = skippy_copy_verify_state(session, checkpoint.state, out_error);
++    } catch (const std::exception & error) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, error.what());
++        status = SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    if (tail != nullptr) {
++        tail->pos = tail_pos;
++        recurrent->rs_idx[static_cast<size_t>(session->seq_id)] = 0;
++    }
++    if (status != SKIPPY_STATUS_OK) {
++        skippy_recycle_verify_checkpoint(session, std::move(checkpoint));
++        return status;
++    }
++    checkpoint.valid = true;
++    session->verify_checkpoints.push_back(std::move(checkpoint));
++    if (session->verify_windows_in_place > 0) {
++        --session->verify_windows_in_place;
++    }
++    ++session->verify_windows_checkpointed;
++    return SKIPPY_STATUS_OK;
++}
++
++enum skippy_status skippy_session_verify_rollback_counts(
++        const skippy_session * session,
++        uint64_t * out_in_place,
++        uint64_t * out_checkpointed,
++        skippy_error ** out_error) {
++    if (session == nullptr || out_in_place == nullptr || out_checkpointed == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and outputs are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *out_in_place = session->verify_windows_in_place;
++    *out_checkpointed = session->verify_windows_checkpointed;
++    return skippy_success(out_error);
++}
+diff --git a/src/skippy/verify_window.h b/src/skippy/verify_window.h
+new file mode 100644
+index 000000000..45bb92cba
+--- /dev/null
++++ b/src/skippy/verify_window.h
+@@ -0,0 +1,38 @@
++#pragma once
++
++#include "skippy/common.h"
++
++#include "llama.h"
++
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++struct skippy_session;
++struct skippy_verify_checkpoint;
++struct skippy_activation_desc;
++
++// Most verify windows a session may hold checkpoints for at once.
++constexpr size_t skippy_max_verify_checkpoints = 64;
++
++enum skippy_status skippy_reject_verify_checkpoint_depth(skippy_error ** out_error);
++
++// Returns a retired checkpoint's buffers to the session for the next one.
++void skippy_recycle_verify_checkpoint(skippy_session * session, skippy_verify_checkpoint && checkpoint);
++// Takes a recycled checkpoint, or an empty one when none is left.
++skippy_verify_checkpoint skippy_acquire_verify_checkpoint(skippy_session * session);
++
++// Copies what replaying the window's accepted rows needs.
++void skippy_record_verify_window_inputs(
++        skippy_verify_checkpoint & window,
++        int32_t token_start,
++        const llama_token * token_ids,
++        size_t token_count,
++        const skippy_activation_desc * input_desc,
++        const void * input_payload);
++
++// Serializes the sequence's partial (recurrent) state into `state`.
++enum skippy_status skippy_copy_verify_state(
++        skippy_session * session,
++        std::vector<uint8_t> & state,
++        skippy_error ** out_error);
+diff --git a/tests/test-skippy-verify-checkpoint-retirement.cpp b/tests/test-skippy-verify-checkpoint-retirement.cpp
+index d09acccb4..8d68604c3 100644
+--- a/tests/test-skippy-verify-checkpoint-retirement.cpp
++++ b/tests/test-skippy-verify-checkpoint-retirement.cpp
+@@ -7,6 +7,7 @@ struct checkpoint {
+     bool valid;
+     int token_start;
+     size_t token_count;
++    std::vector<unsigned char> state = {};
+ };
+ 
+ int main() {
+@@ -22,5 +23,13 @@ int main() {
+     if (checkpoints.size() != 2 || checkpoints[0].token_start != 10 || checkpoints[1].token_start != 18) return 4;
+     if (skippy_retire_verify_checkpoint_exact(checkpoints, 14, 4)) return 5;
+     if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
++
++    // A retired checkpoint hands its buffers back for the next window to reuse.
++    checkpoints = {{true, 30, 4, std::vector<unsigned char>(64, 7)}, {true, 34, 4}};
++    checkpoint retired = {false, 0, 0};
++    if (!skippy_retire_verify_checkpoint_exact(checkpoints, 30, 4, &retired)) return 7;
++    if (retired.token_start != 30 || retired.state.size() != 64 || retired.state[0] != 7) return 8;
++    if (checkpoints.size() != 1 || checkpoints[0].token_start != 34) return 9;
++    if (skippy_retire_verify_checkpoint_exact(checkpoints, 30, 4, &retired)) return 10;
+     return 0;
+ }
+-- 
+2.54.0 (Apple Git-157)
+

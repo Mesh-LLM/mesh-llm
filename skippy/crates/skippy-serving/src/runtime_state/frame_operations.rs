@@ -626,6 +626,13 @@ impl RuntimeState {
             stats.dflash_draft_context_resets =
                 i64::try_from(health.draft_context_resets).unwrap_or(i64::MAX);
         }
+        if state.split_dflash()
+            && let Ok(counts) = lane.session.verify_rollback_counts()
+        {
+            stats.verify_rollbacks_in_place = i64::try_from(counts.in_place).unwrap_or(i64::MAX);
+            stats.verify_rollbacks_checkpointed =
+                i64::try_from(counts.checkpointed).unwrap_or(i64::MAX);
+        }
         stats
     }
 
@@ -658,6 +665,18 @@ impl RuntimeState {
             session.verify_tokens_sampled_mtp(token_ids, sampling, max_draft_tokens)?;
         self.add_session_tokens(session_id, token_count);
         Ok((predicted, draft))
+    }
+
+    /// How this session's verify windows were held for rollback on this stage.
+    pub(crate) fn verify_rollback_counts(
+        &self,
+        session_id: &str,
+    ) -> Option<skippy_runtime::VerifyRollbackCounts> {
+        self.sessions
+            .get(session_id)?
+            .session
+            .verify_rollback_counts()
+            .ok()
     }
 
     pub(crate) fn session_token_count(&self, session_id: &str) -> Option<u64> {

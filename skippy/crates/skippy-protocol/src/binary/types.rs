@@ -28,7 +28,7 @@ pub const STAGE_STATE_HEADER_BYTES: usize = 10 * 4;
 pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 28 * 4;
 pub const STAGE_LOGIT_BIAS_WIRE_BYTES: usize = 4 + 4;
 /// Number of `i64` statistics every stage reply carries.
-pub const STAGE_REPLY_STATS_FIELD_COUNT: usize = 29;
+pub const STAGE_REPLY_STATS_FIELD_COUNT: usize = 31;
 /// Wire bytes of the statistics block every stage reply carries.
 pub const STAGE_REPLY_STATS_WIRE_BYTES: usize =
     STAGE_REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
@@ -748,12 +748,21 @@ pub struct StageReplyStats {
     pub dflash_feature_rows_missing: i64,
     /// Times that draft's context was cleared or left with a gap.
     pub dflash_draft_context_resets: i64,
+    /// Verify windows a downstream stage rolled back in place, and held in a
+    /// host checkpoint, for this session. Cumulative per stage, so merging
+    /// keeps the largest stage's count. Filled with the DFlash counters.
+    pub verify_rollbacks_in_place: i64,
+    pub verify_rollbacks_checkpointed: i64,
 }
 
 impl StageReplyStats {
-    /// Whether a final stage reported any DFlash draft-context loss.
+    /// Whether a final stage reported any split DFlash draft-context loss or
+    /// verify rollback.
     pub fn has_dflash_health(self) -> bool {
-        self.dflash_feature_rows_missing != 0 || self.dflash_draft_context_resets != 0
+        self.dflash_feature_rows_missing != 0
+            || self.dflash_draft_context_resets != 0
+            || self.verify_rollbacks_in_place != 0
+            || self.verify_rollbacks_checkpointed != 0
     }
 
     pub fn merge(&mut self, other: Self) {
@@ -806,6 +815,12 @@ impl StageReplyStats {
         self.dflash_draft_context_resets = self
             .dflash_draft_context_resets
             .max(other.dflash_draft_context_resets);
+        self.verify_rollbacks_in_place = self
+            .verify_rollbacks_in_place
+            .max(other.verify_rollbacks_in_place);
+        self.verify_rollbacks_checkpointed = self
+            .verify_rollbacks_checkpointed
+            .max(other.verify_rollbacks_checkpointed);
     }
 
     pub fn observe_prefill_edge_transport(
