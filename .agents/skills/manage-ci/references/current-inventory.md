@@ -1817,6 +1817,12 @@ applies to a PR until it is merged. No hosted execution is recorded here.
 
 ## External Python SDK source preparation
 
+The current checkpoint includes typed Mesh model discovery, OCR uploads,
+membership/live-session controls, full node configuration and native-runtime
+management. Its generated bindings were produced from the coordinated Mesh
+implementation recorded in the SDK's `sdk-inputs.json`; keep that source
+checkpoint synchronized with native API changes.
+
 The Python SDK package, generated Python bindings and four genuine compatibility
 and embedding clients are owned by `Mesh-LLM/mesh-llm-python-sdk`. Mesh admits the
 fixed commit and manifest in `ci/required-sdk-python/sdk-source.json`; source
