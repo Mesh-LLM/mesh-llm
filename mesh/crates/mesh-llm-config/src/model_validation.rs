@@ -481,6 +481,11 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
         &["auto", "fixed", "schedule", "adaptive-ramp"],
         &format!("{base_path}.prefill_chunking"),
     )?;
+    validate_optional_enum(
+        config.activation_codec.as_deref(),
+        &["lossless", "f16", "bf16", "s8-row", "f32"],
+        &format!("{base_path}.activation_codec"),
+    )?;
     if let Some(schedule) = &config.prefill_chunk_schedule {
         validate_non_empty(schedule, &format!("{base_path}.prefill_chunk_schedule"))?;
         for item in schedule.split(',') {

@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
+mod activation_codec;
 mod capacity_budget;
 mod content_attestation;
 mod coordinator_takeover;

@@ -532,6 +532,7 @@ where
             text_emit_ms: self.metrics.text_emit_ms,
             eog_check_ms: self.metrics.eog_check_ms,
             token_logprobs,
+            activation_wire: cache_stats.activation_wire,
         })
     }
 

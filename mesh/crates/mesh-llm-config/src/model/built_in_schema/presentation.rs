@@ -786,6 +786,13 @@ fn skippy_multimodal_presentation(rendered: &str) -> Option<SettingPresentation>
         )
         .placeholder("e.g. 512,1024,2048")
         .hint("text")),
+        "defaults.skippy.activation_codec" => Some(sp(
+            "Split activation codec",
+            "Choose how activations travel between split stages. lossless sends exact values; f16 and bf16 halve the bytes; s8-row quarters them at some cost in accuracy.",
+            SKIPPY_CATEGORY,
+            75,
+        )
+        .hint("select")),
         "defaults.skippy.binary_stage_transport" => Some(sp(
             "Binary stage transport",
             "Choose whether the binary stage transport is enabled or left to auto selection.",

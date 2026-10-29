@@ -175,6 +175,7 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
     let parsed = ParsedChatMessage {
         content: Some("Final answer.".to_string()),
@@ -230,6 +231,7 @@ fn generated_text_timings_are_present_without_native_mtp() {
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
 
     let timings = output.timings().expect("standard timings");
@@ -269,6 +271,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
 
     let timings = output.timings().expect("standalone speculative timings");
@@ -324,6 +327,7 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -743,7 +747,37 @@ fn generated_text_with_logprobs() -> GeneratedText {
                 top: Vec::new(),
             },
         ]),
+        activation_wire: None,
     }
+}
+
+#[test]
+fn timings_report_activation_wire_bytes_per_token() {
+    let mut output = generated_text_with_logprobs();
+    assert!(
+        !output
+            .timings()
+            .expect("timings")
+            .contains_key("activation_codec")
+    );
+    output.prompt_tokens = 100;
+    output.completion_tokens = 4;
+    output.activation_wire = Some(ActivationWireStats {
+        codec: "s8-row-f32-rne-v1",
+        prefill_bytes: 100 * 2564,
+        decode_bytes: 4 * 2564,
+    });
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings["activation_codec"], json!("s8-row-f32-rne-v1"));
+    assert_eq!(timings["activation_prefill_bytes"], json!(256_400));
+    assert_eq!(timings["activation_prefill_bytes_per_token"], json!(2564.0));
+    assert_eq!(timings["activation_decode_bytes"], json!(10_256));
+    assert_eq!(timings["activation_decode_bytes_per_token"], json!(2564.0));
+
+    // A prefix-cache hit forwards only the suffix.
+    output.suffix_prefill_tokens = 50;
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings["activation_prefill_bytes_per_token"], json!(5128.0));
 }
 
 #[test]

@@ -46,8 +46,8 @@ const SPLIT_INITIAL_SHUTDOWN_GENERATION: u64 = 1;
 const SPLIT_COORDINATOR_LEASE_SECS: u64 = 4 * 60 * 60;
 
 use coordinator::{
-    SplitTopologyCoordinator, SplitTopologyGeneration, spawn_split_topology_coordinator,
-    stop_split_generation,
+    SplitActivationCodec, SplitTopologyCoordinator, SplitTopologyGeneration,
+    spawn_split_topology_coordinator, stop_split_generation,
 };
 use recovery::split_stages_meet_minimum;
 
@@ -273,6 +273,10 @@ pub(super) async fn start_runtime_split_model(
         planned_participants,
         stages,
     )
+    .with_activation_codec(loading::configured_split_activation_codec(
+        spec.mesh_config,
+        spec.config_model_id,
+    ))
     .with_admissions(stage_admissions)?;
     let mut loaded = load_split_runtime_generation(SplitGenerationLoadSpec {
         node: spec.node,

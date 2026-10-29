@@ -1127,6 +1127,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "skippy.activation_codec",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "speculative.strategy",
         status: WiringStatus::Wired,
         owner: "n/a",

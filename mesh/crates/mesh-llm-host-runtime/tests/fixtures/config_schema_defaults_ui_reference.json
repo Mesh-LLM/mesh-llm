@@ -561,6 +561,13 @@
       }
     },
     {
+      "canonical_path": "defaults.skippy.activation_codec",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.skippy.lifecycle_health_interval_ms",
       "support": "supported",
       "source": {
