@@ -862,7 +862,7 @@ pub(super) async fn split_generation_load_settings<'a>(
     // without the default draft, falling back to native MTP when it has it.
     resolved.speculative.drop_default_dflash();
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
-    let default_dflash = materialize_split_default_dflash(&mut resolved).await;
+    materialize_split_default_dflash(&mut resolved).await;
     resolved.model_fit.ctx_size = spec.ctx_size;
     resolved.throughput.parallel = spec.slots;
     if let Some(cache_type_k) = spec.cache_type_k_override {
@@ -895,7 +895,7 @@ pub(super) async fn split_generation_load_settings<'a>(
     let split_dflash = split_dflash_plan(
         &mut embedded_openai,
         resolved.speculative.draft_n_gpu_layers,
-        default_dflash,
+        resolved.speculative.draft_max_tokens_configured,
     );
     let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
     let mut runtime_options = resolved.to_embedded_runtime_options(
@@ -924,44 +924,51 @@ pub(super) async fn split_generation_load_settings<'a>(
     })
 }
 
-/// Draft tokens per block for a default DFlash draft on a split. Every
-/// drafted token costs a verify row on every stage, and a block that misses
-/// early wastes the rest of it, so a split drafts short blocks unless the
-/// configuration asks for more.
-const SPLIT_DEFAULT_DFLASH_MAX_DRAFT_TOKENS: usize = 4;
+/// Draft tokens per block on a split unless `draft_max_tokens` is set.
+/// Every drafted token is a verify row on every stage, and a block that
+/// misses early wastes the rows after the miss on all of them, while the hop
+/// a window pays does not grow with its length. Four drafts keep a rejected
+/// window to five rows per stage, and at a per-token acceptance of 0.7–0.8
+/// still commit 2.8–3.4 tokens a window, 70–85% of an uncapped block. Stage 0
+/// sizes each block within the cap from measured costs, down to a serial step.
+const SPLIT_DFLASH_MAX_DRAFT_TOKENS: usize = 4;
 
 /// A default DFlash draft serves a split once it is cached, as it does on one
-/// node; until then it downloads in the background. Returns whether the
-/// split's DFlash plan is that default.
-async fn materialize_split_default_dflash(resolved: &mut skippy::ResolvedSkippyConfig) -> bool {
+/// node; until then it downloads in the background.
+async fn materialize_split_default_dflash(resolved: &mut skippy::ResolvedSkippyConfig) {
     let Some(pairing) = resolved.speculative.default_dflash else {
-        return false;
+        return;
     };
     if crate::inference::skippy::default_dflash_draft_cached(pairing) {
         crate::inference::skippy::materialize_default_dflash_draft(resolved).await;
     } else {
         resolved.speculative.drop_default_dflash();
     }
-    resolved.speculative.default_dflash.is_some()
+}
+
+/// The DFlash block cap on a split: a configured cap as set, otherwise the
+/// shorter split default.
+pub(super) fn split_dflash_max_draft_tokens(cap: Option<usize>, configured: bool) -> Option<usize> {
+    if configured {
+        return cap;
+    }
+    Some(cap.map_or(SPLIT_DFLASH_MAX_DRAFT_TOKENS, |cap| {
+        cap.min(SPLIT_DFLASH_MAX_DRAFT_TOKENS)
+    }))
 }
 
 /// The split DFlash plan for stage 0's DFlash decode plan, or `None` when it
-/// has none. A default draft drafts short blocks. A draft whose target layers
-/// cannot be read leaves the split serving without speculation.
+/// has none. Without a configured cap the split drafts short blocks. A draft
+/// whose target layers cannot be read leaves the split serving without
+/// speculation.
 fn split_dflash_plan(
     embedded_openai: &mut skippy::ResolvedEmbeddedOpenAiArgs,
     draft_n_gpu_layers: Option<i32>,
-    default_dflash: bool,
+    cap_configured: bool,
 ) -> Option<skippy_serving::split_dflash::SplitDFlashStage> {
     let dflash = embedded_openai.speculative.dflash.as_mut()?;
-    if default_dflash {
-        let cap = dflash
-            .max_draft_tokens
-            .map_or(SPLIT_DEFAULT_DFLASH_MAX_DRAFT_TOKENS, |cap| {
-                cap.min(SPLIT_DEFAULT_DFLASH_MAX_DRAFT_TOKENS)
-            });
-        dflash.max_draft_tokens = Some(cap);
-    }
+    dflash.max_draft_tokens =
+        split_dflash_max_draft_tokens(dflash.max_draft_tokens, cap_configured);
     let dflash = &*dflash;
     match skippy_serving::split_dflash::SplitDFlashStage::from_draft(
         dflash,

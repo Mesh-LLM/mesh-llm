@@ -141,6 +141,9 @@ pub struct ResolvedSpeculativeConfig {
     pub draft_model_path: Option<PathBuf>,
     pub pairing_fault: String,
     pub draft_max_tokens: u32,
+    /// Whether the configuration set `draft_max_tokens`. An unset cap takes
+    /// the placement's default, which is shorter on a split.
+    pub draft_max_tokens_configured: bool,
     pub draft_min_tokens: u32,
     pub explicit: bool,
     pub draft_n_gpu_layers: Option<i32>,
