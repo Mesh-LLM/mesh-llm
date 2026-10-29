@@ -1412,6 +1412,14 @@ The implemented policy uses that isolation selectively:
 | SDK Rust Cargo registry/target | `Swatinem/rust-cache` restores the exact `mesh-llm-sdk-rust-cargo-v1` identity (OS/arch, target, pinned image and toolchain epochs, debug/LLD recipe, Cargo/manifest/script inputs, and cache-version) and only saves on `main` | PRs restore the trusted main seed without publishing; a miss still rebuilds the SDK test graph |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
+On a restore-key (partial) hit, `Swatinem/rust-cache` cleans the restored
+target profile and deletes top-level binaries such as `target/debug/xtask`.
+A job that combines `prepare-automation` with rust-cache must therefore run
+every rust-cache restore before every automation preparation; the
+`artifact_automation_is_prepared_after_rust_cache_restore` contract enforces
+this for all occurrences (release run 40804094970 lost
+`MESH_LLM_AUTOMATION_BIN` in `Swift target` through the reverse order).
+
 Outside the bounded exception, a Depot-selected run emits
 `allow_native_github_cache=false` and `allow_depot_remote_cache=false`. Every
 native GitHub cache consumer in the
