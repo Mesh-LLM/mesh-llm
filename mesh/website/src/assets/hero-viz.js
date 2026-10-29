@@ -15,6 +15,11 @@
   var RIM_TRACE_DURATION = 640;
   var TITLE_FINAL_PREFIX = 'Run any model across nodes ';
   var TITLE_PHRASES = ['in your business', 'in your homelab', 'on the internet'];
+  // Full subtitle lines, used by the rotating loop. Lines share TITLE_FINAL_PREFIX
+  // unless they set their own; a prefix change rewrites the whole line.
+  var TITLE_LINES = TITLE_PHRASES.map(function (text) { return { prefix: TITLE_FINAL_PREFIX, text: text }; }).concat([
+    { prefix: '', text: 'Share compute with friends, family, coworkers or the world to get AI for free' },
+  ]);
   var SUBTITLE_DOT_REST = 'rgba(212,212,216,0.88)';
   var SUBTITLE_DOT_HOT = '#ff4b4b';
   var SUBTITLE_CHAR_STAGGER = 25;
@@ -1435,16 +1440,26 @@
 
     if (!subtitleLoopBaseActive(scene)) return;
 
-    nextIndex = ((scene.subtitleLoopIndex || 0) + 1) % TITLE_PHRASES.length;
+    var current = TITLE_LINES[scene.subtitleLoopIndex || 0];
+    nextIndex = ((scene.subtitleLoopIndex || 0) + 1) % TITLE_LINES.length;
+    var next = TITLE_LINES[nextIndex];
     scene.subtitleLoopAnimating = true;
 
-    eraseSubtitleDynamic(scene, animate, function () {
-      revealSubtitleDynamic(scene, animate, TITLE_PHRASES[nextIndex], function () {
-        scene.subtitleLoopIndex = nextIndex;
-        scene.subtitleLoopAnimating = false;
-        syncSubtitleLoop(scene, animate, SUBTITLE_LOOP_DELAY);
+    var done = function () {
+      scene.subtitleLoopIndex = nextIndex;
+      scene.subtitleLoopAnimating = false;
+      syncSubtitleLoop(scene, animate, SUBTITLE_LOOP_DELAY);
+    };
+
+    if (current.prefix === next.prefix) {
+      eraseSubtitleDynamic(scene, animate, function () {
+        revealSubtitleDynamic(scene, animate, next.text, done);
       });
-    });
+    } else {
+      eraseSubtitleLine(scene, animate, function () {
+        revealSubtitleLine(scene, animate, next.prefix, next.text, done);
+      });
+    }
   }
 
   function advanceSubtitleLoop(scene, animate) {
