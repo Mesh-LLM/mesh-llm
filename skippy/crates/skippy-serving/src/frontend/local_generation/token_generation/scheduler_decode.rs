@@ -21,13 +21,18 @@ impl StageOpenAiBackend {
             .kv
             .as_ref()
             .is_some_and(|kv| kv.records_lane_owned_recurrent());
+        let recurrent_state_cache = self
+            .kv
+            .as_ref()
+            .is_some_and(|kv| kv.records_lane_owned_recurrent() || kv.resident_recurrent_snapshots);
+        // The direct iteration channel still batches decode across lanes.
+        // Handing a recurrent-state continuation to the planned scheduler
+        // changes c=4 output after the first token on CUDA.
         let resume_scheduler_decode = self.linear_proposal_ingress.is_none()
             && self.draft.is_none()
             && !request.native_mtp_enabled
-            && !state.generation_hooks_active;
-        #[cfg(test)]
-        let resume_scheduler_decode = resume_scheduler_decode
-            && std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_NO_HANDOFF").is_none();
+            && !state.generation_hooks_active
+            && !recurrent_state_cache;
         if scheduler_resume_ready(
             resume_scheduler_decode,
             !recurrent_checkpoint_required,
