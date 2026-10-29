@@ -543,6 +543,9 @@ async fn virtual_model_candidates(
     let descriptors = node.all_served_model_descriptors().await;
     let local_descriptors = node.served_model_descriptors().await;
     let local_models = node.hosted_models().await;
+    // Serving assignments are set when a local load starts; a model only joins
+    // `hosted_models` once it can answer.
+    let local_assignments = node.serving_models().await;
     let deprioritized_peers = node
         .peers()
         .await
@@ -645,8 +648,10 @@ async fn virtual_model_candidates(
         // untargeted candidate when discovery found no host instance at all —
         // never when instances exist but every one was filtered out, or the
         // plugin's nested call would re-enter the ingress filter that just
-        // excluded them.
-        if !has_local_instance && !has_discovered_remote_host {
+        // excluded them. A local model still loading is not plugin-backed:
+        // its nested call would get 404 until the load finishes.
+        let loading_locally = local_assignments.iter().any(|local| local == &model_id);
+        if !has_local_instance && !has_discovered_remote_host && !loading_locally {
             candidates.push(candidate_from(None, None));
         }
     }
@@ -773,6 +778,65 @@ mod tests {
         assert!(context_can_satisfy(Some(16_384), Some(32_768)));
         assert!(context_can_satisfy(Some(16_384), None));
         assert!(context_can_satisfy(None, Some(4_096)));
+    }
+
+    /// A local model is assigned when its load starts and hosted once it can
+    /// answer. In between it must not fall back to an untargeted candidate:
+    /// the committee's nested call would get 404 for the whole load.
+    #[tokio::test]
+    async fn a_local_model_still_loading_is_not_a_candidate() {
+        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .expect("test node must start");
+        node.set_serving_models(vec!["local-model".into()]).await;
+
+        let loading =
+            virtual_model_candidates(&node, vec!["local-model".into()], &Default::default(), None)
+                .await;
+        assert!(
+            loading.is_empty(),
+            "a loading model must yield no candidate: {loading:?}"
+        );
+
+        node.set_hosted_models(vec!["local-model".into()]).await;
+        let hosted =
+            virtual_model_candidates(&node, vec!["local-model".into()], &Default::default(), None)
+                .await;
+        let targets = hosted
+            .iter()
+            .map(|candidate| candidate.target_node_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(targets, vec![Some(hex::encode(node.id().as_bytes()))]);
+        node.endpoint.close().await;
+    }
+
+    /// Plugin-backed inference models have no mesh endpoint and are never a
+    /// local serving assignment, so they keep their untargeted candidate.
+    #[tokio::test]
+    async fn a_plugin_backed_model_keeps_its_untargeted_candidate() {
+        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .expect("test node must start");
+        node.set_serving_models(vec!["local-model".into()]).await;
+
+        let candidates = virtual_model_candidates(
+            &node,
+            vec!["plugin-model".into()],
+            &Default::default(),
+            None,
+        )
+        .await;
+        let found = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.model_id.as_str(),
+                    candidate.target_node_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(found, vec![("plugin-model", None)]);
+        node.endpoint.close().await;
     }
 
     /// The candidate path's half of #2097: a replica that charges for the

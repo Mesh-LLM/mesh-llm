@@ -180,6 +180,7 @@ async fn run_local_model_only_inner(
         );
     }
     super::node_lifecycle_events::emit_node_starting();
+    crate::system::native_runtime_requirement::emit_unused_gpu_warnings();
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
     // Composed first, so it only fills gaps: the explicit CLI overrides below

@@ -902,6 +902,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
     if !options.headless && owner_config.keypair.is_none() {
         emit_configuration_ui_read_only_hint();
     }
+    crate::system::native_runtime_requirement::emit_unused_gpu_warnings();
     let max_vram = if options.client || !skippy_runtime::native_runtime_loaded() {
         Some(0.0)
     } else {

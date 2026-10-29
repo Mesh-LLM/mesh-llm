@@ -353,13 +353,17 @@ pub fn ratio_complete_u64(current: u64, total: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        available_inline_gauge_width, fit_inline_gauge_label, ratio_complete_u64,
-        render_inline_gauge, render_inline_gauge_in_width, render_inline_progress_bar,
+        INLINE_GAUGE_WIDTH, available_inline_gauge_width, fit_inline_gauge_label,
+        ratio_complete_u64, render_inline_gauge_in_width, render_inline_progress_bar,
     };
 
+    // The gauge tests render at a fixed width: `render_inline_gauge` sizes the
+    // bar to the terminal, which is narrow or zero-width under some test
+    // runners' pseudo-terminals (Nix builds), and then no bar is drawn.
     #[test]
     fn inline_gauge_renders_styled_progress_label_and_bar() {
-        let line = render_inline_gauge(0.5, "downloaded 50MB / 100MB (50%)");
+        let line =
+            render_inline_gauge_in_width(0.5, "downloaded 50MB / 100MB (50%)", INLINE_GAUGE_WIDTH);
         let visible = strip_ansi(&line);
 
         assert!(line.contains("\x1b["));
@@ -370,9 +374,10 @@ mod tests {
 
     #[test]
     fn inline_gauge_keeps_bar_visible_for_long_labels() {
-        let line = render_inline_gauge(
+        let line = render_inline_gauge_in_width(
             0.25,
             "download very-long-model-name-with-many-segments-and-a-large-quantized-artifact.gguf 25%",
+            INLINE_GAUGE_WIDTH,
         );
         let visible = strip_ansi(&line);
 
