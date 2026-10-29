@@ -18,24 +18,32 @@ read, and the indexer cache's key write, pooled-key scatter and read,
 as kv_key effects, so the trunk and the NextN head carry explicit
 ownership. The k-pool inputs are bound as request inputs.
 
+Record each trunk layer's input for speculative drafters the way
+deepseek4 does: when a context enables a layer input, publish the mean
+of the hyper-connection streams entering that layer. Without it DFlash
+aborted the target on its first decode with "layer input tensor is
+null".
+
 Tests: a synthetic graph contract at the production trunk depth (45),
 width (4096) and one NextN head checks every two-stage cut, a
 three-stage chain and the terminal-stage MTP contract. A dense NextN
 fixture runs live MTP sync and drafting against an independently
-loaded reference; the fixture generator now writes glm5-next's
+loaded reference, and the same fixture checks that every trunk layer
+publishes a finite, distinct input row per token; the fixture generator now writes glm5-next's
 per-layer KV head counts over the NextN block.
 ---
- src/CMakeLists.txt                          |  8 ++++
- src/models/glm5-next.cpp                    | 50 ++++++++++++++-------
- src/skippy/tests/graph_contract_cases.cmake | 13 ++++++
- tests/test-llama-archs.cpp                  |  9 +++-
- 4 files changed, 63 insertions(+), 17 deletions(-)
+ src/CMakeLists.txt                          | 11 ++++
+ src/models/glm5-next.cpp                    | 63 +++++++++++++++------
+ src/skippy/tests/graph_build_inputs.cpp     | 63 +++++++++++++++++++++
+ src/skippy/tests/graph_contract_cases.cmake | 13 +++++
+ tests/test-llama-archs.cpp                  |  9 ++-
+ 5 files changed, 142 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 417be82de..46f4bbb41 100644
+index 417be82de..dcc1693bc 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -248,6 +248,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -248,6 +248,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_qwen3moe_mtp COMMAND skippy-profile-residency
          "${QWEN3MOE_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_qwen3moe_mtp PROPERTIES FIXTURES_REQUIRED qwen3moe-mtp-model)
@@ -47,11 +55,14 @@ index 417be82de..46f4bbb41 100644
 +    add_test(NAME skippy_glm5_next_mtp COMMAND skippy-profile-residency
 +        "${GLM5_NEXT_MTP_FIXTURE_DIR}/dense-mtp.gguf")
 +    set_tests_properties(skippy_glm5_next_mtp PROPERTIES FIXTURES_REQUIRED glm5-next-mtp-model)
++    add_test(NAME skippy_glm5_next_layer_inputs COMMAND skippy-graph-build-inputs --layer-inputs
++        "${GLM5_NEXT_MTP_FIXTURE_DIR}/dense-mtp.gguf")
++    set_tests_properties(skippy_glm5_next_layer_inputs PROPERTIES FIXTURES_REQUIRED glm5-next-mtp-model)
      set(MULTIDEPTH_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/multidepth-mtp-models")
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
 diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
-index a1b722950..d1e5f66a0 100644
+index a1b722950..fd2e5d8dd 100644
 --- a/src/models/glm5-next.cpp
 +++ b/src/models/glm5-next.cpp
 @@ -191,12 +191,12 @@ std::unique_ptr<llm_graph_context> llama_model_glm5_next::build_arch_graph(const
@@ -105,7 +116,34 @@ index a1b722950..d1e5f66a0 100644
      return (llm_graph_input_kpool *) res->add_input(std::move(inp));
  }
  
-@@ -812,14 +822,14 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
+@@ -706,6 +716,13 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
+     ggml_tensor * prev_sel = nullptr;
+ 
+     for (int il = 0; il < n_layer; ++il) {
++        // Speculative drafters (DFlash, EAGLE3) read the stream-mean residual entering each layer.
++        if ((size_t) il < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[il]) {
++            res->t_layer_inp[il] = build_hc_mean(inpL);
++            cb(res->t_layer_inp[il], "layer_inp", il);
++            ggml_build_forward_expand(gf, res->t_layer_inp[il]);
++        }
++
+         const auto & layer = model.layers[il];
+ 
+         ggml_tensor * residual = inpL;
+@@ -773,6 +790,12 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
+         cb(inpL, "l_out", il);
+     }
+ 
++    if ((size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer]) {
++        res->t_layer_inp[n_layer] = build_hc_mean(inpL);
++        cb(res->t_layer_inp[n_layer], "layer_inp", n_layer);
++        ggml_build_forward_expand(gf, res->t_layer_inp[n_layer]);
++    }
++
+     // narrow to the output tokens, then collapse the streams
+     // Unmasked nextn embeddings need all rows.
+     if (crop_before_nextn(inp_out_ids)) {
+@@ -812,14 +835,14 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
      const auto   kv_head  = mctx_cur->get_head();
  
      ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
@@ -124,7 +162,7 @@ index a1b722950..d1e5f66a0 100644
      cb(Qcur, "kda_q_conv", il);
      cb(Kcur, "kda_k_conv", il);
      cb(Vcur, "kda_v_conv", il);
-@@ -851,7 +861,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
+@@ -851,7 +874,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
      cb(beta, "kda_beta", il);
  
      ggml_tensor * ssm_states_all = mctx_cur->get_s_l(il);
@@ -133,7 +171,7 @@ index a1b722950..d1e5f66a0 100644
      state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head_kda, n_seqs);
  
      // Match FLA l2 norm
-@@ -911,7 +921,10 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
+@@ -911,7 +934,10 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
      ggml_tensor * pzero = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_indexer, n_tokens), 0.0f);
      ggml_tensor * packed = ggml_concat(ctx0, ggml_concat(ctx0, ik, ig, 0), pzero, 0);
      packed = ggml_reshape_3d(ctx0, packed, 3*n_embd_indexer, 1, n_tokens);
@@ -145,7 +183,7 @@ index a1b722950..d1e5f66a0 100644
  
      auto kpool_cache = mctx_hyb->get_kpool_access(ctx0, il, n_embd_indexer);
      const int64_t n_kv = mctx_lid->get_n_kv();
-@@ -936,7 +949,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
+@@ -936,7 +962,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
  
      // scatter the fresh pooled keys into their rep rows, then gather all n_pool of them by cell:
      // the older pools come from the rows earlier ubatches wrote
@@ -156,7 +194,7 @@ index a1b722950..d1e5f66a0 100644
      ggml_tensor * pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
      pooled = ggml_reshape_3d(ctx0, pooled, n_embd_indexer, 1, n_pool);
      cb(pooled, "indexer_pool_k", il);
-@@ -1071,7 +1086,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
+@@ -1071,7 +1099,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
  
      ggml_build_forward_expand(gf, q_absorbed);
      ggml_build_forward_expand(gf, kv_cmpr);
@@ -167,7 +205,7 @@ index a1b722950..d1e5f66a0 100644
  
      // The scatter selection already includes the causal mask, and it comes in the mask layout
      GGML_ASSERT(ggml_are_same_shape(sel, kq_mask));
-@@ -1079,6 +1096,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
+@@ -1079,6 +1109,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
  
      ggml_tensor * k = mctx_mla->get_k(ctx0, il);
      ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
@@ -175,6 +213,99 @@ index a1b722950..d1e5f66a0 100644
  
      ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
      cb(out, "kqv_out", il);
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index f02490889..7411a1c8b 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-context.h"
++#include "llama-ext.h"
+ #include "llama-graph.h"
+ #include "llama-kv-cache-msa.h"
+ #include "ggml-cpu.h"
+@@ -11,6 +12,7 @@
+ #include "skippy/stage_realization.h"
+ 
+ #include <atomic>
++#include <cmath>
+ #include <cstdint>
+ #include <cstdio>
+ #include <cstring>
+@@ -897,6 +899,61 @@ static int check_execution_profile_residency() {
+     return 0;
+ }
+ 
++// Speculative drafters capture the residual entering each trunk layer. Every
++// layer must publish a finite input row per token, and distinct layers must
++// not alias one tensor.
++static int check_layer_inputs(const char * model_path) {
++    llama_model_params model_params = llama_model_default_params();
++    model_params.n_gpu_layers = 0;
++    model_params.load_mtp = true; // the fixture carries a NextN block beside the trunk
++    llama_model * model = llama_model_load_from_file(model_path, model_params);
++    if (model == nullptr) return 120;
++    llama_context * ctx = llama_init_from_model(model, make_context_params(1));
++    if (ctx == nullptr) {
++        llama_model_free(model);
++        return 121;
++    }
++    const int32_t n_layer = llama_model_n_layer(model);
++    const int32_t n_embd = llama_model_n_embd(model);
++    for (int32_t il = 0; il < n_layer; ++il) {
++        llama_set_embeddings_layer_inp(ctx, il, true);
++    }
++    llama_token tokens[] = {1, 2, 3, 4};
++    const int32_t n_tokens = 4;
++    int rc = llama_decode(ctx, llama_batch_get_one(tokens, n_tokens)) == 0 ? 0 : 122;
++    std::vector<std::vector<float>> rows;
++    for (int32_t il = 0; rc == 0 && il < n_layer; ++il) {
++        const float * data = llama_get_embeddings_layer_inp(ctx, il);
++        if (data == nullptr) {
++            std::fprintf(stderr, "layer %d input was not captured\n", il);
++            rc = 123;
++            break;
++        }
++        std::vector<float> row(data, data + (size_t) n_embd * n_tokens);
++        bool nonzero = false;
++        for (float value : row) {
++            if (!std::isfinite(value)) {
++                std::fprintf(stderr, "layer %d input is not finite\n", il);
++                rc = 124;
++                break;
++            }
++            nonzero = nonzero || value != 0.0f;
++        }
++        if (rc == 0 && !nonzero) {
++            std::fprintf(stderr, "layer %d input is all zero\n", il);
++            rc = 125;
++        }
++        if (rc == 0 && !rows.empty() && rows.back() == row) {
++            std::fprintf(stderr, "layers %d and %d captured the same input\n", il - 1, il);
++            rc = 126;
++        }
++        rows.push_back(std::move(row));
++    }
++    llama_free(ctx);
++    llama_model_free(model);
++    return rc;
++}
++
+ int main(int argc, char ** argv) {
+     if (const int rc = check_embedding_scale_predicate()) return rc;
+     if (const int rc = check_prepared_export_token_axis()) return rc;
+@@ -907,6 +964,12 @@ int main(int argc, char ** argv) {
+     if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
+         return check_decode_input_width();
+     }
++    if (argc == 3 && std::strcmp(argv[1], "--layer-inputs") == 0) {
++        llama_backend_init();
++        const int rc = check_layer_inputs(argv[2]);
++        llama_backend_free();
++        return rc;
++    }
+     if (argc == 3 && std::strcmp(argv[1], "--stage-fused-ops") == 0) {
+         llama_backend_init();
+         const int rc = check_stage_fused_ops_auto(argv[2]);
 diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
 index 4ee862411..75e66e2c3 100644
 --- a/src/skippy/tests/graph_contract_cases.cmake
