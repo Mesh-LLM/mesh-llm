@@ -25,6 +25,66 @@ pub(super) fn prefill_without_intermediate_sampling(
 }
 
 #[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_hybrid_iteration_batch_shape_parity() -> Result<()> {
+    let (wide, _) =
+        recurrent_test_backend("iteration-wide", "iteration-wide", 512, (128, 32), 8, 256)?;
+    let (narrow, _) = recurrent_test_backend(
+        "iteration-narrow",
+        "iteration-narrow",
+        512,
+        (32, 32),
+        8,
+        256,
+    )?;
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let mut wide_runtime = wide.runtime.lock().unwrap();
+    let mut narrow_runtime = narrow.runtime.lock().unwrap();
+    let mut wide_token = None;
+    let mut narrow_token = None;
+    for (index, chunk) in prompt.chunks(32).enumerate() {
+        let sample_last = index == 3;
+        wide_token = prefill_without_intermediate_sampling(
+            &mut wide_runtime,
+            "native-parity",
+            chunk,
+            sample_last,
+        )?;
+        narrow_token = prefill_without_intermediate_sampling(
+            &mut narrow_runtime,
+            "native-parity",
+            chunk,
+            sample_last,
+        )?;
+    }
+    let mut wide_token = wide_token.context("wide prefill produced no sample")?;
+    let mut narrow_token = narrow_token.context("narrow prefill produced no sample")?;
+    assert_eq!(
+        wide_token, narrow_token,
+        "native prefill sample differs across batch sizes"
+    );
+    for index in 1..8 {
+        wide_token = iterate(
+            &mut wide_runtime,
+            &["native-parity"],
+            &[&[wide_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        narrow_token = iterate(
+            &mut narrow_runtime,
+            &["native-parity"],
+            &[&[narrow_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        assert_eq!(
+            wide_token, narrow_token,
+            "native decode token {index} differs across batch sizes"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
 fn native_interleaved_prefills_preserve_concurrent_decode() -> Result<()> {
     let serial = interleaved_prefill_continuation(false, false, None)?;
