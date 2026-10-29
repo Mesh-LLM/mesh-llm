@@ -25,3 +25,24 @@ old `Client` and owner keypair hex constructor are removed.
 
 Stream with `node.inference.streamChatCompletions(body)` or
 `streamResponses(body)`. See [runtime artifacts](../SDK.md#native-runtime-artifacts).
+
+## Thinking effort levels
+
+`listModels()` returns the provider's `/v1/models` metadata, including the
+effort strings observed in the loaded chat template:
+
+```js
+const models = await node.inference.listModels()
+const chosen = models.find((model) => model.metadata?.thinking_efforts?.includes('high'))
+if (chosen) {
+  const response = await node.inference.chatCompletions({
+    model: chosen.id,
+    messages: [{ role: 'user', content: 'Explain lock ordering.' }],
+    reasoning_effort: 'high'
+  })
+}
+```
+
+`metadata.thinking_efforts` is absent when the provider is older or has not
+probed the model, and `[]` when the template exposes no effort levels. The list
+is an observation of the template, not a guarantee that generation obeys it.

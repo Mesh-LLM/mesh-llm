@@ -18,6 +18,10 @@ public struct Model: Sendable {
     public let id: String
     public let name: String
     public let contextLength: UInt32?
+    /// Ordered effort strings the serving provider observed in the loaded chat
+    /// template. `nil` means unknown (an older provider or an unprobed model);
+    /// an empty array means the template exposes no effort levels.
+    public let thinkingEfforts: [String]?
 }
 
 public struct OpenAIResponse: Sendable {
@@ -134,7 +138,14 @@ public final class Node: @unchecked Sendable {
         public func listModels() async throws -> [Model] {
             let handle = self.handle
             return try await runBlocking { try handle.inferenceListModels() }
-                .map { Model(id: $0.id, name: $0.name, contextLength: $0.contextLength) }
+                .map {
+                    Model(
+                        id: $0.id,
+                        name: $0.name,
+                        contextLength: $0.contextLength,
+                        thinkingEfforts: $0.thinkingEfforts
+                    )
+                }
         }
 
         public func request(path: String, body: [String: Any]) async throws -> OpenAIResponse {
