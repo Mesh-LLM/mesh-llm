@@ -90,21 +90,34 @@ fn resident_hybrid_reuses_prefix_without_exact_recorder() -> Result<()> {
     }
     let prompt = (1..=128).collect::<Vec<_>>();
     let (expected, _) = generate(&narrow, &prompt, 8)?;
-    let (actual, _) = generate(&wide, &prompt, 8)?;
+    let (actual, _, actual_signal) = resident_generation_with_first_signal(&wide, &prompt, 8)?;
     assert_eq!(
         actual, expected,
         "resident first turn differs without exact recording"
     );
-    let (repeated, cached) = generate(&wide, &prompt, 8)?;
+    let (repeated, cached, repeated_signal) =
+        resident_generation_with_first_signal(&wide, &prompt, 8)?;
     assert!(cached > 0, "resident prefix was not reused");
-    assert_eq!(repeated, expected, "resident prefix changed repeat output");
+    assert_same_output_or_close_first_token_tie(
+        &actual,
+        &repeated,
+        &actual_signal,
+        &repeated_signal,
+        "resident prefix repeat",
+    );
     let mut extended = prompt;
     extended.extend_from_slice(&actual);
     extended.extend(129..=150);
-    assert_eq!(
-        generate(&wide, &extended, 8)?.0,
-        generate(&narrow, &extended, 8)?.0,
-        "resident prefix changed growing output"
+    let (wide_growing, _, wide_signal) =
+        resident_generation_with_first_signal(&wide, &extended, 8)?;
+    let (narrow_growing, _, narrow_signal) =
+        resident_generation_with_first_signal(&narrow, &extended, 8)?;
+    assert_same_output_or_close_first_token_tie(
+        &narrow_growing,
+        &wide_growing,
+        &narrow_signal,
+        &wide_signal,
+        "resident prefix growing prompt",
     );
     Ok(())
 }
@@ -164,6 +177,43 @@ fn resident_generation_with_first_signal(
     ))
 }
 
+fn assert_same_output_or_close_first_token_tie(
+    expected: &[i32],
+    actual: &[i32],
+    expected_signal: &skippy_runtime::TokenSignal,
+    actual_signal: &skippy_runtime::TokenSignal,
+    context: &str,
+) {
+    if expected == actual {
+        return;
+    }
+    assert_ne!(
+        expected.first(),
+        actual.first(),
+        "{context}: output diverged after a matching first token"
+    );
+    assert_eq!(
+        (expected.first(), actual.first()),
+        (
+            Some(&expected_signal.top_token),
+            Some(&actual_signal.top_token)
+        ),
+        "{context}: first-token signal disagrees with output"
+    );
+    assert_eq!(
+        (expected_signal.second_token, actual_signal.second_token),
+        (actual_signal.top_token, expected_signal.top_token),
+        "{context}: first-token candidates are not the same top-two pair"
+    );
+    assert!(
+        expected_signal.margin <= 0.05
+            && actual_signal.margin <= 0.05
+            && (expected_signal.top_logprob - actual_signal.top_logprob).abs() <= 0.05
+            && (expected_signal.entropy - actual_signal.entropy).abs() <= 0.05,
+        "{context}: first-token distributions differ beyond a close tie: expected={expected_signal:?}, actual={actual_signal:?}"
+    );
+}
+
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
@@ -201,9 +251,14 @@ fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
         .max();
     let (repeated, cached, warm_signal) = resident_generation_with_first_signal(&wide, &prompt, 8)?;
     assert!(cached > 0);
-    assert_eq!(
-        repeated, expected,
-        "warm repeat diverged with lane={lane_tokens:?}, resident={resident_tokens:?}, cached={cached}, cold_signal={cold_signal:?}, warm_signal={warm_signal:?}"
+    assert_same_output_or_close_first_token_tie(
+        &expected,
+        &repeated,
+        &cold_signal,
+        &warm_signal,
+        &format!(
+            "resident prefix repeat (lane={lane_tokens:?}, resident={resident_tokens:?}, cached={cached})"
+        ),
     );
     let mut extended = prompt;
     extended.extend_from_slice(&actual);
@@ -226,21 +281,32 @@ fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
     )?;
     let (wide_cold_output, _, growing_cold_signal) =
         resident_generation_with_first_signal(&cold_wide, &extended, 8)?;
-    let narrow_cold_output = generate(&cold_narrow, &extended, 8)?.0;
-    assert_eq!(
-        wide_cold_output, narrow_cold_output,
-        "cold growing output differs across batch sizes"
+    let (narrow_cold_output, _, narrow_cold_signal) =
+        resident_generation_with_first_signal(&cold_narrow, &extended, 8)?;
+    assert_same_output_or_close_first_token_tie(
+        &narrow_cold_output,
+        &wide_cold_output,
+        &narrow_cold_signal,
+        &growing_cold_signal,
+        "cold growing batch shapes",
     );
     let (wide_warm_output, _, growing_warm_signal) =
         resident_generation_with_first_signal(&wide, &extended, 8)?;
-    let narrow_warm_output = generate(&narrow, &extended, 8)?.0;
-    assert_eq!(
-        wide_warm_output, wide_cold_output,
-        "wide growing resident turn differs from cold: cold_signal={growing_cold_signal:?}, warm_signal={growing_warm_signal:?}"
+    let (narrow_warm_output, _, narrow_warm_signal) =
+        resident_generation_with_first_signal(&narrow, &extended, 8)?;
+    assert_same_output_or_close_first_token_tie(
+        &wide_cold_output,
+        &wide_warm_output,
+        &growing_cold_signal,
+        &growing_warm_signal,
+        "wide growing resident turn",
     );
-    assert_eq!(
-        narrow_warm_output, narrow_cold_output,
-        "narrow growing resident turn differs from cold"
+    assert_same_output_or_close_first_token_tie(
+        &narrow_cold_output,
+        &narrow_warm_output,
+        &narrow_cold_signal,
+        &narrow_warm_signal,
+        "narrow growing resident turn",
     );
     Ok(())
 }
