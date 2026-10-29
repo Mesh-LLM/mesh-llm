@@ -224,6 +224,7 @@ For the protocol and host/plugin boundary, read [Plugin Architecture](/docs/page
 | [Plugin Architecture](/docs/pages/plugin-architecture/) | Control sessions, side streams, host projections, and ownership boundaries |
 | [Developing Plugins](/docs/pages/developing-plugins/) | Rust author API, manifests, packaging, skills, and testing |
 | [Plugin Reference](/docs/pages/plugin-reference/) | MCP, HTTP, inference, capabilities, mesh channels, and control messages |
+| [Paid inference over Lightning](/docs/pages/lightning-payments/) | Wallet plugins (Lexe, LDK Server, NWC), provider pricing, client spending, and limitations |
 | [Plugin Web UI exemplar](https://github.com/Mesh-LLM/mesh-llm/tree/main/docs/plugins/exemplars/web-ui) | A maintained manifest, package, config, bundle, and lifecycle reference |
 
 Useful next topics for this section are a plugin compatibility matrix by mesh-llm release, a configuration-schema guide with examples, a security and permissions guide for third-party binaries, and a release checklist for plugin authors.

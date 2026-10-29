@@ -373,6 +373,19 @@ mesh-llm --llama-flavor cuda serve \
   --auto
 ```
 
+<details>
+<summary><b>Paid inference over Lightning (experimental)</b></summary>
+
+Providers can set per-model prices and clients can pay automatically through a
+Lightning wallet plugin (Lexe, LDK Server, or NWC). Payments use Bitcoin
+mainnet, so start with small balances.
+
+Full setup (install a wallet, set prices, fund a client, how payments and
+deposits work, limitations):
+[docs/pages/lightning-payments](https://meshllm.cloud/docs/pages/lightning-payments/).
+
+</details>
+
 ## Documentation hub
 
 | Doc | Use it for |
