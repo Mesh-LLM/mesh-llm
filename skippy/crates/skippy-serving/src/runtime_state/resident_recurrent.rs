@@ -175,26 +175,7 @@ impl RuntimeState {
         }
         self.ensure_not_reset_by_panic(session_id)?;
         let started = Instant::now();
-        let selected = self
-            .idle_sessions
-            .iter()
-            .enumerate()
-            .flat_map(|(lane_index, lane)| {
-                lane.recurrent_prefixes.iter().enumerate().filter_map(
-                    move |(checkpoint_index, entry)| {
-                        let count = entry.identity.token_ids.len();
-                        // Restoring trims to `count`; a recorder reader still
-                        // copying a longer page must not be cut underneath.
-                        (identities.iter().any(|query| {
-                            query.namespace == entry.identity.namespace
-                                && query.token_ids.starts_with(&entry.identity.token_ids)
-                        }) && lane.session.has_resident_recurrent_prefix(count as u64)
-                            && !lane.leases.blocks_trim_to(count as u64))
-                        .then_some((count, lane_index, checkpoint_index))
-                    },
-                )
-            })
-            .max();
+        let selected = self.select_resident_recurrent(identities);
         let Some((count, lane_index, checkpoint_index)) = selected else {
             return Ok(None);
         };
@@ -238,5 +219,44 @@ impl RuntimeState {
             fill_ms: 0.0,
             rewarm_enqueued: false,
         }))
+    }
+
+    pub(crate) fn resident_recurrent_prefix_tokens(
+        &self,
+        session_id: &str,
+        identities: &[PrefillKvIdentity],
+    ) -> Option<usize> {
+        if self.sessions.contains_key(session_id)
+            || !self.resident_recurrent_requests.contains(session_id)
+        {
+            return None;
+        }
+        self.select_resident_recurrent(identities)
+            .map(|(count, _, _)| count)
+    }
+
+    fn select_resident_recurrent(
+        &self,
+        identities: &[PrefillKvIdentity],
+    ) -> Option<(usize, usize, usize)> {
+        self.idle_sessions
+            .iter()
+            .enumerate()
+            .flat_map(|(lane_index, lane)| {
+                lane.recurrent_prefixes.iter().enumerate().filter_map(
+                    move |(checkpoint_index, entry)| {
+                        let count = entry.identity.token_ids.len();
+                        // Restoring trims to `count`; a recorder reader still
+                        // copying a longer page must not be cut underneath.
+                        (identities.iter().any(|query| {
+                            query.namespace == entry.identity.namespace
+                                && query.token_ids.starts_with(&entry.identity.token_ids)
+                        }) && lane.session.has_resident_recurrent_prefix(count as u64)
+                            && !lane.leases.blocks_trim_to(count as u64))
+                        .then_some((count, lane_index, checkpoint_index))
+                    },
+                )
+            })
+            .max()
     }
 }

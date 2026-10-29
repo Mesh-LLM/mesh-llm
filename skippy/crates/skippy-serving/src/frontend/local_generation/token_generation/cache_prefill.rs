@@ -22,7 +22,7 @@ impl StageOpenAiBackend {
         if self
             .kv
             .as_ref()
-            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent)
+            .is_some_and(|kv| kv.records_lane_owned_recurrent())
         {
             runtime.enable_resident_recurrent_request(session_id);
         }

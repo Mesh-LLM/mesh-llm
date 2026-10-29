@@ -1007,7 +1007,12 @@ impl StageOpenAiBackend {
             runtime_lock_acquires =
                 runtime_lock_acquires.saturating_add(suffix_outcome.chunk_count);
 
-            if exact_state {
+            if exact_state
+                && !self
+                    .kv
+                    .as_ref()
+                    .is_some_and(|kv| kv.resident_recurrent_snapshots)
+            {
                 // The final chunk samples the prompt's next token but leaves
                 // the native session at the full-prompt boundary. Exporting
                 // that state is useful for growing prompts, but is strictly
@@ -1027,6 +1032,8 @@ impl StageOpenAiBackend {
                         record.resident_enqueued_checkpoints.saturating_add(1);
                 }
             } else {
+                // Resident hybrids need the full-prompt native prefix and
+                // decode headroom alongside the lane-owned exact fallback.
                 let scheduler_backend = self.clone();
                 let scheduler_session_id = session_id.to_string();
                 let scheduler_ids = request.ids.clone();

@@ -20,8 +20,16 @@ fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Locat
     format!("{}:{}", l3.state_identity(), location.manifest_key)
 }
 
-fn resident_prefix_is_preferred(matched_tokens: usize, exact_tokens: Option<usize>) -> bool {
-    exact_tokens.is_none_or(|exact_tokens| matched_tokens > exact_tokens)
+fn resident_prefix_is_preferred(
+    matched_tokens: usize,
+    exact_tokens: Option<usize>,
+    lane_tokens: Option<usize>,
+    native_ties_win: bool,
+) -> bool {
+    matched_tokens > lane_tokens.unwrap_or(0)
+        && exact_tokens.is_none_or(|exact| {
+            matched_tokens > exact || (native_ties_win && matched_tokens == exact)
+        })
 }
 
 fn preflight_l3_kv_location(
@@ -105,28 +113,38 @@ impl KvStageIntegration {
         if !self.should_lookup() || self.exact_state_payload().is_none() {
             return Ok(None);
         }
-        if self.payload == StagePrefixCachePayload::KvRecurrent
-            && let Some(restored) = runtime.restore_resident_recurrent(session_id, identities)?
+        // Compare every available path before any of them mutates the lane.
+        // A parked lane wins ties. A hybrid's live native prefix wins a tie
+        // with serialized state; dense L3 keeps its existing exact-state tie.
+        let resident_tokens = (self.payload == StagePrefixCachePayload::ResidentKv)
+            .then(|| {
+                identities
+                    .iter()
+                    .filter_map(|identity| self.probe_resident_prefix(identity))
+                    .map(|resident| resident.token_count)
+                    .max()
+            })
+            .flatten();
+        let exact_tokens = self.available_exact_prefix_tokens(identities, shared_durable_fallback);
+        let lane_tokens = self
+            .records_lane_owned_recurrent()
+            .then(|| runtime.resident_recurrent_prefix_tokens(session_id, identities))
+            .flatten();
+        if resident_tokens.is_some_and(|tokens| {
+            resident_prefix_is_preferred(
+                tokens,
+                exact_tokens,
+                lane_tokens,
+                self.resident_recurrent_snapshots,
+            )
+        }) {
+            return Ok(None);
+        }
+        if lane_tokens.is_some_and(|tokens| {
+            tokens >= exact_tokens.unwrap_or(0) && tokens >= resident_tokens.unwrap_or(0)
+        }) && let Some(restored) = runtime.restore_resident_recurrent(session_id, identities)?
         {
             return Ok(Some(restored));
-        }
-        // Dense L3 uses serialized exact state only as the durable floor.
-        // Compare the available serving paths before either mutates the lane:
-        // prefer warm native resident KV only when it restores a longer prefix,
-        // while an equal-length warm or durable exact checkpoint retains priority.
-        if self.payload == StagePrefixCachePayload::ResidentKv {
-            let resident_tokens = identities
-                .iter()
-                .filter_map(|identity| self.probe_resident_prefix(identity))
-                .map(|resident| resident.token_count)
-                .max();
-            if let Some(resident_tokens) = resident_tokens {
-                let exact_tokens =
-                    self.available_exact_prefix_tokens(identities, shared_durable_fallback);
-                if resident_prefix_is_preferred(resident_tokens, exact_tokens) {
-                    return Ok(None);
-                }
-            }
         }
         for identity in identities {
             let lookup_started = Instant::now();
@@ -440,7 +458,7 @@ impl KvStageIntegration {
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             return Ok(None);
         }
-        if self.payload == StagePrefixCachePayload::KvRecurrent
+        if self.records_lane_owned_recurrent()
             && let Some((bytes, retained_bytes, retained_checkpoints)) = runtime
                 .record_resident_recurrent(
                     session_id,
@@ -464,6 +482,12 @@ impl KvStageIntegration {
                 evicted_logical_bytes: 0,
                 dedupe: Default::default(),
             }));
+        }
+        // A resident hybrid is also capturing a cheap native L1 prefix. If
+        // the lane cannot retain a checkpoint, do not export its full KV on
+        // the scheduler thread as a fallback; that can be several GiB.
+        if self.resident_recurrent_snapshots {
+            return Ok(None);
         }
         // Admission: one credit per payload across its whole lifetime —
         // exporting, queued in the recorder channel, or held by the recorder
@@ -1054,10 +1078,27 @@ mod tests {
 
     #[test]
     fn longer_resident_prefixes_skip_exact_restore() {
-        assert!(resident_prefix_is_preferred(4_000, None));
-        assert!(resident_prefix_is_preferred(4_001, Some(4_000)));
-        assert!(!resident_prefix_is_preferred(4_000, Some(4_000)));
-        assert!(!resident_prefix_is_preferred(200, Some(4_000)));
+        assert!(resident_prefix_is_preferred(4_000, None, None, false));
+        assert!(resident_prefix_is_preferred(
+            4_001,
+            Some(4_000),
+            None,
+            false
+        ));
+        assert!(!resident_prefix_is_preferred(
+            4_000,
+            Some(4_000),
+            None,
+            false
+        ));
+        assert!(!resident_prefix_is_preferred(200, Some(4_000), None, false));
+        assert!(resident_prefix_is_preferred(4_000, Some(4_000), None, true));
+        assert!(!resident_prefix_is_preferred(
+            4_000,
+            Some(4_000),
+            Some(4_000),
+            true
+        ));
     }
 
     #[test]

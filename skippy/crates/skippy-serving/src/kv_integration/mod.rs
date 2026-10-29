@@ -172,9 +172,9 @@ pub struct KvStageIntegration {
     pub(crate) payload_selection_reason: &'static str,
     pub(crate) loaded_state_kind: Option<ModelStateKind>,
     pub(crate) loaded_memory_cache: Option<MemoryCacheCapabilities>,
-    /// Exportable representation written to and restored from L3. This is
-    /// separate from `payload` because resident KV is native and borrow-only.
-    pub(crate) durable_payload: Option<StagePrefixCachePayload>,
+    /// Exportable exact-state representation retained in L1 and optionally
+    /// written to L3. Resident KV remains the native serving representation.
+    pub(crate) serialized_payload: Option<StagePrefixCachePayload>,
     pub(crate) correctness_mode: bool,
     pub(crate) trust_local_writes: bool,
     pub(crate) checkpoint_policy: SparseCheckpointPolicy,
@@ -800,6 +800,15 @@ impl KvStageIntegration {
         self.exact_state_payload().is_some()
     }
 
+    /// Whether a recurrent exact checkpoint belongs to the active native
+    /// lane and can be recorded without exporting its KV under the scheduler
+    /// lock. Resident hybrids use this path for their serialized fallback.
+    pub(crate) fn records_lane_owned_recurrent(&self) -> bool {
+        self.exact_state_payload() == Some(StagePrefixCachePayload::KvRecurrent)
+            && (self.payload == StagePrefixCachePayload::KvRecurrent
+                || self.resident_recurrent_snapshots)
+    }
+
     /// Whether a shared boundary must be captured while prefilling, because
     /// the state at the end of the request cannot stand in for it: exact
     /// state payloads, and resident entries that carry a recurrent snapshot.
@@ -808,7 +817,7 @@ impl KvStageIntegration {
     }
 
     /// Whether the serving tier retains native resident prefixes independently
-    /// of any serialized exact-state payload used by durable tiers.
+    /// of any serialized exact-state payload retained alongside it.
     pub(crate) fn records_resident_prefixes(&self) -> bool {
         self.payload == StagePrefixCachePayload::ResidentKv
     }
@@ -818,7 +827,7 @@ impl KvStageIntegration {
             .is_exact_state()
             .then_some(self.payload)
             .or(self
-                .durable_payload
+                .serialized_payload
                 .filter(|payload| payload.is_exact_state()))
     }
 

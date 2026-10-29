@@ -151,17 +151,25 @@ impl KvStageIntegration {
                 },
             );
         }
-        let durable_payload = l3_manager
-            .as_ref()
-            .and_then(|_| durable_cache_payload(admitted));
+        // A resident hybrid also needs an L1 exact-state fallback when its
+        // attention cells are reclaimed. The lane recorder supplies that
+        // representation even when disk caching is disabled.
+        let serialized_payload = resident_recurrent_snapshots
+            .then(|| durable_cache_payload(admitted))
+            .flatten()
+            .or_else(|| {
+                l3_manager
+                    .as_ref()
+                    .and_then(|_| durable_cache_payload(admitted))
+            });
         let l3 = l3_manager
-            .zip(durable_payload)
+            .zip(serialized_payload)
             .map(|(manager, payload)| l3_tier_for_manager(config, payload, manager))
             .transpose()?;
         let l2 = l3
             .as_ref()
             .filter(|_| cache_config.l2_max_bytes > 0)
-            .and(durable_payload)
+            .and(serialized_payload)
             .map(|payload| {
                 super::l2_serving::StageL2::new(
                     cache_config.l2_max_bytes,
@@ -197,8 +205,13 @@ impl KvStageIntegration {
             cache_config.exact_max_bytes,
             std::env::var(EXACT_STATE_MAX_BYTES_ENV).ok().as_deref(),
         );
+        let recorder_payload = if resident_recurrent_snapshots {
+            serialized_payload.unwrap_or(payload)
+        } else {
+            payload
+        };
         let exact_state_record_queue_limit =
-            exact_state_record_queue_limit(exact_byte_limits.soft_bytes, payload);
+            exact_state_record_queue_limit(exact_byte_limits.soft_bytes, recorder_payload);
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
         let (exact_state_record_tx, exact_state_record_rx) =
@@ -343,7 +356,7 @@ impl KvStageIntegration {
             payload_selection_reason,
             loaded_state_kind: model_state_kind,
             loaded_memory_cache: memory_cache,
-            durable_payload,
+            serialized_payload,
             correctness_mode: false,
             trust_local_writes: true,
             checkpoint_policy,
@@ -1691,7 +1704,7 @@ mod tests {
 
         assert_eq!(kv.payload, StagePrefixCachePayload::ResidentKv);
         assert_eq!(
-            kv.durable_payload,
+            kv.serialized_payload,
             Some(StagePrefixCachePayload::KvRecurrent)
         );
         assert_eq!(
@@ -1702,8 +1715,38 @@ mod tests {
 
         let mut invalid = kv;
         invalid.payload = StagePrefixCachePayload::Disabled;
-        invalid.durable_payload = Some(StagePrefixCachePayload::ResidentKv);
+        invalid.serialized_payload = Some(StagePrefixCachePayload::ResidentKv);
         assert_eq!(invalid.exact_state_payload(), None);
+    }
+
+    #[test]
+    fn resident_hybrid_keeps_lane_recorded_exact_fallback_without_disk() {
+        let mut config = enabled_auto_config("future/hybrid");
+        config.kv_cache.as_mut().unwrap().max_bytes = 8 * 1024 * 1024 * 1024;
+        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &config,
+            Some(ModelStateKind::Hybrid),
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: false,
+                kv_recurrent: true,
+                full_state: true,
+                resident_kv_recurrent: true,
+                kv_cell_access: Default::default(),
+            }),
+            None,
+            None,
+        )
+        .unwrap()
+        .expect("resident hybrid cache should remain enabled");
+
+        assert_eq!(kv.payload, StagePrefixCachePayload::ResidentKv);
+        assert_eq!(
+            kv.exact_state_payload(),
+            Some(StagePrefixCachePayload::KvRecurrent)
+        );
+        assert!(kv.records_lane_owned_recurrent());
+        assert!(kv.l3.is_none());
+        assert_eq!(kv.exact_state_record_queue_limit, 8 * 1024 * 1024 * 1024);
     }
 
     #[test]

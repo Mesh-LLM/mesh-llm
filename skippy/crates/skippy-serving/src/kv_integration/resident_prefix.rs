@@ -981,8 +981,8 @@ mod hybrid_resident_tests {
             "a shared boundary must be snapshotted while prefilling"
         );
         assert!(
-            !kv.payload_is_exact_state(),
-            "no durable tier, so no page export anywhere"
+            kv.payload_is_exact_state() && kv.records_lane_owned_recurrent(),
+            "resident hybrids keep a lane-recorded L1 fallback without disk"
         );
     }
 

@@ -196,11 +196,6 @@ fn resident_hybrid_retains_lane_and_demotes_on_unrelated_prompt() -> Result<()> 
     let (first, _) = generate(&backend, &prompt, 8)?;
     drain(&backend)?;
     let kv = backend.kv.as_ref().unwrap();
-    assert_eq!(
-        kv.exact_state_records_queued.load(Ordering::Relaxed),
-        0,
-        "hot captures must not serialize attention KV"
-    );
     let runtime = backend.runtime.as_ref();
     assert_eq!(
         runtime
@@ -228,11 +223,6 @@ fn resident_hybrid_retains_lane_and_demotes_on_unrelated_prompt() -> Result<()> 
     );
     assert_eq!(warm, control);
     drain(&backend)?;
-    assert_eq!(
-        kv.exact_state_records_queued.load(Ordering::Relaxed),
-        0,
-        "growing resident turns must not export attention merely to replace old checkpoints"
-    );
 
     let unrelated = (100..164).collect::<Vec<_>>();
     generate(&backend, &unrelated, 8)?;
@@ -246,6 +236,48 @@ fn resident_hybrid_retains_lane_and_demotes_on_unrelated_prompt() -> Result<()> 
         reused > 0,
         "evicted prefix must remain recoverable from snapshots"
     );
+    assert_eq!(first, restored);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_reopens_evicted_prefix_from_lane_recorded_fallback() -> Result<()> {
+    let (backend, _) = recurrent_test_backend("fallback", "fallback", 256, (32, 32), 8, 256)?;
+    let prompt = (1..=64).collect::<Vec<_>>();
+    let (first, _) = generate(&backend, &prompt, 8)?;
+    drain(&backend)?;
+    let kv = backend.kv.as_ref().unwrap();
+    assert!(kv.l3.is_none(), "the fallback must work without disk");
+    assert!(kv.records_lane_owned_recurrent());
+
+    let unrelated = (100..164).collect::<Vec<_>>();
+    recurrent_early_stop::generate_after_first_token(
+        &backend,
+        &unrelated,
+        8,
+        "eviction-control",
+        || {
+            let mut runtime = backend.runtime.lock().unwrap();
+            let evicted = kv
+                .evict_resident_prefix_for_tokens(&mut runtime, "eviction-control", u64::MAX)
+                .map_err(crate::frontend::util::openai_backend_error)?;
+            assert!(evicted.evicted_entries > 0);
+            Ok(())
+        },
+    )?;
+    drain(&backend)?;
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("recurrent-resume"),
+        true,
+        None,
+    );
+    let base = backend.local_kv_message_base("recurrent-resume", &ids);
+    let identity = kv.prefill_identity(&backend.config, &base, 0, &prompt);
+    assert!(kv.probe_resident_prefix(&identity).is_none());
+    let (restored, reused) = generate(&backend, &prompt, 8)?;
+    assert!(reused > 0, "eviction lost the exact-state fallback");
     assert_eq!(first, restored);
     Ok(())
 }

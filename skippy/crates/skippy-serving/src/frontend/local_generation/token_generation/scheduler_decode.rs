@@ -20,7 +20,7 @@ impl StageOpenAiBackend {
         let recurrent_checkpoint_required = self
             .kv
             .as_ref()
-            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent);
+            .is_some_and(|kv| kv.records_lane_owned_recurrent());
         let resume_scheduler_decode = self.linear_proposal_ingress.is_none()
             && self.draft.is_none()
             && !request.native_mtp_enabled
