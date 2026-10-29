@@ -560,6 +560,10 @@ async fn virtual_model_candidates(
     model_ids.sort();
     model_ids.dedup();
 
+    // Plugin-served models are advertised by name and dispatched by endpoint
+    // protocol, so they are the only local evidence for an id `hosted_models`
+    // does not list.
+    let plugin_descriptors = node.plugin_inference_descriptors().await;
     let mut candidates = Vec::new();
     for model_id in model_ids {
         if !super::workload_routing::model_satisfies_request(&model_id, CHAT_PATH, &descriptors) {
@@ -641,12 +645,27 @@ async fn virtual_model_candidates(
             }
         }
 
-        // Plugin-backed inference models have no mesh endpoint. Keep one
-        // untargeted candidate when discovery found no host instance at all —
-        // never when instances exist but every one was filtered out, or the
-        // plugin's nested call would re-enter the ingress filter that just
-        // excluded them.
-        if !has_local_instance && !has_discovered_remote_host {
+        // Plugin-backed inference models have no mesh endpoint, and
+        // `hosted_models` lists native instances only, so a plugin-served id
+        // never has a local instance to match. Keep one untargeted candidate
+        // when discovery found no host at all -- never when instances exist but
+        // every one was filtered out, or the plugin's nested call would
+        // re-enter the ingress filter that just excluded them.
+        //
+        // The exception is a host filtered out on *workload class*: it cannot
+        // serve this request at all, so it must not hide the local plugin that
+        // serves the requested class (ndizazzo [P2], PR #2560). Requiring a
+        // matching plugin descriptor -- rather than model-level admission,
+        // which treats an absent descriptor as a legacy name-only chat
+        // advertisement -- keeps a name no plugin serves, such as a paid-only
+        // replica, out of the committee entirely.
+        let plugin_serves_model = super::workload_routing::descriptor_for_request(
+            &model_id,
+            CHAT_PATH,
+            &plugin_descriptors,
+        )
+        .is_some();
+        if !has_local_instance && (!has_discovered_remote_host || plugin_serves_model) {
             candidates.push(candidate_from(None, None));
         }
     }

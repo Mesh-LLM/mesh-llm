@@ -615,13 +615,20 @@ fn warn_pipeline_fallback(strong_name: &str) {
 /// eligible, so it turns a failure into a dispatch and never re-orders a
 /// request the mesh could already serve.
 ///
+/// Only a route this request could actually take may suppress the plugin. Peer
+/// inference executes here, so a remote candidate is not a route for it, and an
+/// `x-mesh-exclude`d peer is not a route for any request.
+///
 /// Returns the untouched stream when the caller should keep routing through the
 /// mesh.
+#[allow(clippy::too_many_arguments)]
 async fn try_plugin_when_no_mesh_candidate_serves(
+    local_execution_only: bool,
     tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     model_name: &str,
+    excluded: &[iroh::EndpointId],
     route_observer: OpenAiRouteObserver<'_>,
 ) -> Result<proxy::RouteDispatchOutcome, ClientStream> {
     // Tokenize is not an inference endpoint a plugin serves.
@@ -645,7 +652,20 @@ async fn try_plugin_when_no_mesh_candidate_serves(
         ctx.targets,
     )
     .await;
-    if contains_routable_candidate(&eligible) {
+    // `ingress_candidates` falls back to `hosts_for_model`, which reads mesh
+    // state rather than `ctx.targets`, so it still lists peers that peer
+    // ingress cannot forward to and peers this request excluded. Neither is a
+    // route for this request, so neither may suppress the plugin.
+    let routable = eligible
+        .into_iter()
+        .filter(|target| match target {
+            election::InferenceTarget::Remote(peer) => {
+                !local_execution_only && !excluded.contains(peer)
+            }
+            election::InferenceTarget::Local(_) | election::InferenceTarget::None => true,
+        })
+        .collect::<Vec<_>>();
+    if contains_routable_candidate(&routable) {
         return Err(tcp_stream);
     }
     Ok(try_route_plugin_model(ctx, tcp_stream, request, model_name, route_observer).await)
@@ -697,12 +717,18 @@ async fn route_missing_local_model(
     // header never reaches this point, so a forced remote stays forced, and an
     // `x-mesh-exclude` naming this node still fails closed below rather than
     // serving the request here.
+    // `local_execution_only` is false here by construction: peer inference sets
+    // it, and `route_request` answers a forced remote with 409 and a missing
+    // candidate with `local_model_unavailable` before it calls this function,
+    // so peer ingress never reaches this fallback.
     if target.is_none() && !excluded.contains(&ctx.node.id()) {
         match try_plugin_when_no_mesh_candidate_serves(
+            false,
             tcp_stream,
             request,
             ctx,
             model_name,
+            excluded,
             route_observer,
         )
         .await
@@ -1384,10 +1410,12 @@ async fn route_request(
         // endpoint serves it. The client did not force a peer, so the plugin is
         // this node's own execution path.
         let tcp_stream = match try_plugin_when_no_mesh_candidate_serves(
+            local_execution_only,
             tcp_stream,
             request,
             ctx,
             model_name,
+            &excluded,
             route_observer,
         )
         .await

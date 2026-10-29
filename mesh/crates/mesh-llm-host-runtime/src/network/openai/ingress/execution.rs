@@ -59,15 +59,21 @@ pub(super) async fn local_model_unavailable(
     model: &str,
     observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
-    if !has_local_unavailable_candidates(ctx.targets, model)
-        && let Some(manager) = ctx.plugin_manager
-        && !matches!(
+    // A plugin endpoint that serves this request's class is an execution path
+    // independent of native availability: an id whose native target is still
+    // loading or draining (all-`None` candidates) can share that id with a
+    // plugin that serves a different class, and a peer request assigned here
+    // must not 503 while the plugin could answer it. ndizazzo [P2], PR #2560.
+    let plugin_serves_request = match ctx.plugin_manager {
+        Some(manager) => matches!(
             manager
                 .inference_endpoint_for_request(model, &request.client_path)
                 .await,
-            Ok(None)
-        )
-    {
+            Ok(Some(_))
+        ),
+        None => false,
+    };
+    if plugin_serves_request {
         return try_route_plugin_model(ctx, stream, request, model, observer).await;
     }
     response_outcome(
