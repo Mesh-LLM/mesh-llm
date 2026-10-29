@@ -103,10 +103,12 @@ once that node runs 0.1.5, and a request pinned to an old anchor is refused
 `coverage_unsatisfiable`. mesh-llm itself stores no pins.
 
 Whoever kept a pin, a peer's page or an outside verifier, replaces it after the
-answering node upgrades: ask that node for its checkpoint list, which every
-requester gets. Before pinning the new anchor, check that the list still holds
-the checkpoint you pinned (same log id, tree size and root) and that its
-consistency proofs extend it; otherwise you would accept a log rewritten at the
+answering node upgrades: ask that node for `history_card/1`, which every
+requester gets and which carries each checkpoint with its
+`consistency_from_previous` proof. Before pinning the new anchor, check that
+the history still holds the checkpoint you pinned (same log id, tree size and
+root) and that every consistency proof from it to the newest checkpoint
+verifies; otherwise you would accept a log rewritten at the
 upgrade. If the old checkpoint is missing, treat it as a broken history, not
 as a migration.
 
@@ -137,7 +139,7 @@ that 0.1.5 wrote has not been tested.
 - **Turning `capsules` off.** Run `mesh-llm plugins disable capsules`, then
   restart the node: the command changes the plugin store, not the running
   process. A disabled plugin stays installed, and later starts neither run nor
-  reinstall it. A `[[plugin]]` entry that sets `command` runs regardless of the
+  reinstall it. A `[[plugin]]` entry that sets `command` or `url` runs regardless of the
   store, so set `enabled = false` on that entry instead. Neither deletes the
   data directory.
 - **mesh-llm back to 0.78.1.** 0.78.1 has no default plugins and does not
