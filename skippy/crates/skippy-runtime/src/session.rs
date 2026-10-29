@@ -58,6 +58,8 @@ pub struct StageSession {
     pub(crate) batched_activation_exports: bool,
     /// Attached DFlash draft that mirrors this session's target positions.
     pub(crate) dflash: Option<crate::dflash::DFlashSessionLink>,
+    /// Split-DFlash feature capture and the rows an earlier stage sent.
+    pub(crate) dflash_split: Option<Box<crate::dflash::DFlashSplitSession>>,
 }
 
 pub struct DecodeBatchRequest<'a> {
