@@ -602,6 +602,55 @@ fn warn_pipeline_fallback(strong_name: &str) {
     tracing::warn!("pipeline: falling back to direct proxy for {strong_name}");
 }
 
+/// Dispatch to a local plugin endpoint when it is the only route for this
+/// request: candidates for the model exist, but none of them advertises the
+/// workload class the request's endpoint needs, so `execution_candidates`
+/// would filter every one of them out and the request would fail as having no
+/// eligible target.
+///
+/// A name can be shared across workload classes — a plugin advertises models by
+/// name and selects an endpoint by protocol — so a peer or local target that
+/// serves the same id for a different class must not shadow a plugin that can
+/// serve this request. The branch only fires when mesh routing has nothing
+/// eligible, so it turns a failure into a dispatch and never re-orders a
+/// request the mesh could already serve.
+///
+/// Returns the untouched stream when the caller should keep routing through the
+/// mesh.
+async fn try_plugin_when_no_mesh_candidate_serves(
+    tcp_stream: ClientStream,
+    request: &proxy::BufferedHttpRequest,
+    ctx: &IngressRouteContext<'_>,
+    model_name: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> Result<proxy::RouteDispatchOutcome, ClientStream> {
+    // Tokenize is not an inference endpoint a plugin serves.
+    if request.is_tokenize_request() {
+        return Err(tcp_stream);
+    }
+    let Some(plugin_manager) = ctx.plugin_manager else {
+        return Err(tcp_stream);
+    };
+    match plugin_manager
+        .inference_endpoint_for_request(model_name, &request.client_path)
+        .await
+    {
+        Ok(Some(_)) => {}
+        _ => return Err(tcp_stream),
+    }
+    let eligible = workload_routing::ingress_candidates(
+        ctx.node,
+        model_name,
+        &request.client_path,
+        ctx.targets,
+    )
+    .await;
+    if contains_routable_candidate(&eligible) {
+        return Err(tcp_stream);
+    }
+    Ok(try_route_plugin_model(ctx, tcp_stream, request, model_name, route_observer).await)
+}
+
 /// Route a request whose model is not being served from local candidates
 /// (either genuinely absent locally, or forced away from local by
 /// `x-mesh-target`/`x-mesh-exclude` -- see `route_request`), trying remote
@@ -1301,6 +1350,24 @@ async fn route_request(
             )
             .await;
         }
+
+        // Candidates exist by name, but none of them may advertise this
+        // request's workload class -- then mesh dispatch would reject the
+        // request as having no eligible target even though a local plugin
+        // endpoint serves it. The client did not force a peer, so the plugin is
+        // this node's own execution path.
+        let tcp_stream = match try_plugin_when_no_mesh_candidate_serves(
+            tcp_stream,
+            request,
+            ctx,
+            model_name,
+            route_observer,
+        )
+        .await
+        {
+            Ok(outcome) => return outcome,
+            Err(stream) => stream,
+        };
 
         // Local candidates available — route normally.
         //
