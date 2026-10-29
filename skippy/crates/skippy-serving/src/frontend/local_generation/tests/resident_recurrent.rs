@@ -129,6 +129,15 @@ fn resident_first_token_with_signal(
     backend: &StageOpenAiBackend,
     prompt: &[i32],
 ) -> Result<(i32, skippy_runtime::TokenSignal)> {
+    let (tokens, _, signal) = resident_generation_with_first_signal(backend, prompt, 1)?;
+    Ok((tokens[0], signal))
+}
+
+fn resident_generation_with_first_signal(
+    backend: &StageOpenAiBackend,
+    prompt: &[i32],
+    stop_after: usize,
+) -> Result<(Vec<i32>, u32, skippy_runtime::TokenSignal)> {
     let ids = InferenceGenerationIds::new_with_trust(
         InferenceCacheHints::default(),
         Some("recurrent-resume"),
@@ -136,19 +145,21 @@ fn resident_first_token_with_signal(
         None,
     );
     let mut first_signal = None;
-    let (tokens, _) = generate_after_first_token(backend, prompt, 1, "recurrent-resume", || {
-        first_signal = Some(
-            backend
-                .runtime
-                .lock()
-                .unwrap()
-                .last_token_signal(&ids.session_label)
-                .map_err(crate::frontend::util::openai_backend_error)?,
-        );
-        Ok(())
-    })?;
+    let (tokens, cached) =
+        generate_after_first_token(backend, prompt, stop_after, "recurrent-resume", || {
+            first_signal = Some(
+                backend
+                    .runtime
+                    .lock()
+                    .unwrap()
+                    .last_token_signal(&ids.session_label)
+                    .map_err(crate::frontend::util::openai_backend_error)?,
+            );
+            Ok(())
+        })?;
     Ok((
-        tokens[0],
+        tokens,
+        cached,
         first_signal.ok_or_else(|| anyhow::anyhow!("first-token signal was not recorded"))?,
     ))
 }
@@ -162,7 +173,7 @@ fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
     let (narrow, _) = recurrent_test_backend("narrow", "narrow", 512, (32, 32), 8, 256)?;
     let prompt = (1..=128).collect::<Vec<_>>();
     let (expected, _) = generate(&narrow, &prompt, 8)?;
-    let (actual, _) = generate(&wide, &prompt, 8)?;
+    let (actual, _, cold_signal) = resident_generation_with_first_signal(&wide, &prompt, 8)?;
     assert_eq!(
         actual, expected,
         "native microbatch splitting changes output"
@@ -188,11 +199,11 @@ fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
                 .map(|hit| hit.token_count)
         })
         .max();
-    let (repeated, cached) = generate(&wide, &prompt, 8)?;
+    let (repeated, cached, warm_signal) = resident_generation_with_first_signal(&wide, &prompt, 8)?;
     assert!(cached > 0);
     assert_eq!(
         repeated, expected,
-        "warm repeat diverged with lane={lane_tokens:?}, resident={resident_tokens:?}, cached={cached}"
+        "warm repeat diverged with lane={lane_tokens:?}, resident={resident_tokens:?}, cached={cached}, cold_signal={cold_signal:?}, warm_signal={warm_signal:?}"
     );
     let mut extended = prompt;
     extended.extend_from_slice(&actual);
@@ -213,17 +224,19 @@ fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
         8,
         256,
     )?;
-    let wide_cold_output = generate(&cold_wide, &extended, 8)?.0;
+    let (wide_cold_output, _, growing_cold_signal) =
+        resident_generation_with_first_signal(&cold_wide, &extended, 8)?;
     let narrow_cold_output = generate(&cold_narrow, &extended, 8)?.0;
     assert_eq!(
         wide_cold_output, narrow_cold_output,
         "cold growing output differs across batch sizes"
     );
-    let wide_warm_output = generate(&wide, &extended, 8)?.0;
+    let (wide_warm_output, _, growing_warm_signal) =
+        resident_generation_with_first_signal(&wide, &extended, 8)?;
     let narrow_warm_output = generate(&narrow, &extended, 8)?.0;
     assert_eq!(
         wide_warm_output, wide_cold_output,
-        "wide growing resident turn differs from cold"
+        "wide growing resident turn differs from cold: cold_signal={growing_cold_signal:?}, warm_signal={growing_warm_signal:?}"
     );
     assert_eq!(
         narrow_warm_output, narrow_cold_output,
