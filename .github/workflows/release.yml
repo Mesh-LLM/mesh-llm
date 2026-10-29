@@ -1692,6 +1692,9 @@ jobs:
   build_native_runtime_windows_cpu:
     name: Build native runtime Windows x86_64 CPU
     needs: metadata
+    permissions:
+      contents: read
+      actions: read
     runs-on: windows-2022
     env:
       LLAMA_STAGE_BACKEND: cpu
@@ -1709,6 +1712,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows CPU ABI cache
+        id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: cpu
@@ -1731,6 +1735,15 @@ jobs:
           backend: cpu
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
+      - name: Save and verify Windows release ABI cache
+        if: steps.llama_cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/save-and-verify-actions-cache
+        with:
+          path: ${{ steps.llama_cache.outputs.cache-path }}
+          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-ref: ${{ github.ref }}
+          cache-label: Windows release ABI
       - name: Upload native runtime
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -1744,6 +1757,9 @@ jobs:
     name: Build native runtime Windows x86_64 ${{ matrix.name }}
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    permissions:
+      contents: read
+      actions: read
     runs-on: windows-2022
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
@@ -1792,6 +1808,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows GPU ABI cache
+        id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: ${{ matrix.backend }}
@@ -1877,6 +1894,15 @@ jobs:
           backend: ${{ matrix.backend }}
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
+      - name: Save and verify Windows release ABI cache
+        if: steps.llama_cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/save-and-verify-actions-cache
+        with:
+          path: ${{ steps.llama_cache.outputs.cache-path }}
+          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-ref: ${{ github.ref }}
+          cache-label: Windows release ABI
       - name: Upload native runtime
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

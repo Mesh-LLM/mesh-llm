@@ -1,4 +1,4 @@
-From 0c00238fea1bbd7f27fb14f9e98c5d9f5f45d6f3 Mon Sep 17 00:00:00 2001
+From 2791bcb2a18231a52fd23d05150663ebba1f70d8 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -17,8 +17,8 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/profile_residency.cpp        |  258 +++
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
- src/skippy/tests/runtime_events.cpp           |  624 +++++++
- src/skippy/tests/sampling_history.cpp         |  400 ++++
+ src/skippy/tests/runtime_events.cpp           |  695 +++++++
+ src/skippy/tests/sampling_history.cpp         |  459 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9778 insertions(+), 32 deletions(-)
+ 34 files changed, 9908 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5138,22 +5138,24 @@ index 000000000..31734bf56
 +}
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
 new file mode 100644
-index 000000000..8c9e3288b
+index 000000000..cb420a561
 --- /dev/null
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -0,0 +1,624 @@
+@@ -0,0 +1,695 @@
 +#include "skippy.h"
 +
 +#include "../events_internal.h"
 +#include "../runtime_support.h"
 +#include "../runtime_types.h"
 +#include "../workloads_internal.h"
++#include "../../../common/sampling.h"
 +
 +#include <atomic>
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
 +#include <chrono>
++#include <cmath>
 +#include <string>
 +#include <thread>
 +#include <vector>
@@ -5471,6 +5473,70 @@ index 000000000..8c9e3288b
 +    return 0;
 +}
 +
++void test_sampler_row_transitions(skippy_model * model) {
++    skippy_session * session = nullptr;
++    skippy_error * error = nullptr;
++    CHECK(skippy_session_create(model, &session, &error) == SKIPPY_STATUS_OK);
++    skippy_sampling_config config{};
++    config.version = 1;
++    config.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    config.repeat_penalty = 1.0f;
++    config.reasoning_budget_tokens = -1;
++    CHECK(skippy_session_configure_chat_sampling(session, &config, "{}", 0, &error) == SKIPPY_STATUS_OK);
++    size_t bytes = 0;
++    llama_token predicted = LLAMA_TOKEN_NULL;
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
++    CHECK(skippy_session_configure_chat_sampling(session, &config,
++            "{\"grammar\":\"root ::= \\\"2a\\\"\"}", 1, &error) == SKIPPY_STATUS_OK);
++    predicted = LLAMA_TOKEN_NULL;
++    CHECK(skippy_session_sample_current(session, &config, &predicted, &error) == SKIPPY_STATUS_RUNTIME_ERROR);
++    CHECK(predicted == LLAMA_TOKEN_NULL && session->sampling_accepted_token_count == 0);
++    skippy_error_free(error); error = nullptr;
++    CHECK(skippy_session_configure_chat_sampling(session, &config, "{}", 1, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
++    predicted = LLAMA_TOKEN_NULL;
++    CHECK(skippy_session_sample_current(session, &config, &predicted, &error) == SKIPPY_STATUS_RUNTIME_ERROR);
++    CHECK(predicted == LLAMA_TOKEN_NULL && session->sampling_accepted_token_count == 0);
++    skippy_error_free(error); error = nullptr;
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++
++    config.flags = 0;
++    config.logit_bias_count = 1;
++    config.logit_bias[0] = {42, 100000.0f};
++    CHECK(skippy_session_configure_chat_sampling(session, &config, "{}", 1, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++    CHECK(predicted == 42);
++    config.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    config.logit_bias_count = 0;
++    CHECK(skippy_session_configure_chat_sampling(session, &config, "{}", 1, &error) == SKIPPY_STATUS_OK);
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++    CHECK(session->sampling_backend_enabled);
++
++    const llama_token token = 2;
++    float score = 0;
++    skippy_token_score_request readout{&token, 1, &score};
++    skippy_iteration_request request{};
++    request.session = session;
++    request.token_ids = &token;
++    request.token_count = 1;
++    request.sampling = &config;
++    request.readout = &readout;
++    size_t sampled = 0;
++    CHECK(skippy_iteration_batch_sampled(&request, 1, nullptr, nullptr, nullptr, nullptr,
++            nullptr, nullptr, 0, &sampled, &error) == SKIPPY_STATUS_OK);
++    CHECK(sampled == 0 && std::isfinite(score) && !session->sampling_backend_enabled);
++    CHECK(skippy_decode_step_sampled(session, 2, &config, nullptr, 0, nullptr, 0,
++            &bytes, &predicted, &error) == SKIPPY_STATUS_OK);
++    CHECK(predicted >= 0 && !session->sampling_backend_enabled);
++
++    CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
++}
++
 +int test_native_model_load_production(const char * fixture_path) {
 +    const char * old_detach_setting = std::getenv("SKIPPY_DETACH_SAMPLER_ON_RESET");
 +    const bool had_detach_setting = old_detach_setting != nullptr;
@@ -5517,6 +5583,9 @@ index 000000000..8c9e3288b
 +            session, &sampling, "{\"grammar\":\"\"}", 0, &error) == SKIPPY_STATUS_OK);
 +    CHECK(session->sampling_backend_enabled);
 +    llama_sampler * sampling_chain = session->sampling_chain;
++    common_sampler * owned_sampler = session->sampler;
++    CHECK(owned_sampler != nullptr);
++    CHECK(common_sampler_get(owned_sampler) == sampling_chain);
 +    CHECK(session->sampling_rebuild_count == 2);
 +    llama_token predicted = -1;
 +    CHECK(skippy_decode_step_sampled(
@@ -5529,6 +5598,7 @@ index 000000000..8c9e3288b
 +    CHECK(session->sampling_backend_enabled);
 +    CHECK(session->sampling_chain == sampling_chain);
 +    CHECK(session->sampling_reuse_hit_count == 1);
++    CHECK(session->sampler == owned_sampler);
 +    CHECK(session->n_past == 0);
 +    CHECK(skippy_prefill_chunk(
 +            session, prompt, 2, nullptr, 0, nullptr, 0,
@@ -5610,6 +5680,7 @@ index 000000000..8c9e3288b
 +    CHECK(!session->sampling_backend_retired);
 +    CHECK(global.kv_cleared_events.load() > 0);
 +    CHECK(skippy_session_free(session, &error) == SKIPPY_STATUS_OK);
++    test_sampler_row_transitions(model);
 +    CHECK(skippy_model_free(model, &error) == SKIPPY_STATUS_OK);
 +    CHECK(global.unload_started_events.load() == 1);
 +    CHECK(global.unload_completed_events.load() == 1);
@@ -5768,19 +5839,22 @@ index 000000000..8c9e3288b
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..abd61f505
+index 000000000..932b031a9
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,459 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
++#include "../runtime_support.h"
 +#include "llama-model.h"
++#include "../../../common/sampling.h"
 +
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cmath>
 +#include <cstring>
 +#include <vector>
++#include <limits>
 +
 +#define CHECK(condition) do { if (!(condition)) { \
 +    std::fprintf(stderr, "CHECK failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
@@ -5826,7 +5900,7 @@ index 000000000..abd61f505
 +    const auto status = skippy_session_configure_chat_sampling(
 +            session, &sampling, metadata, prompt_count, &error);
 +    ok(status, error);
-+    CHECK(session->grammar_sampler != nullptr);
++    CHECK(session->sampler != nullptr && session->sampling_has_grammar);
 +}
 +
 +llama_token decode(skippy_session * session, const skippy_sampling_config & sampling, llama_token token) {
@@ -6132,6 +6206,61 @@ index 000000000..abd61f505
 +    CHECK(max_delta == 0.0f);
 +}
 +
++void adapter_contracts(skippy_model * model) {
++    auto * session = create(model);
++    prefill(session, {1, 2});
++    auto config = sampling_config();
++    config.temperature = 0.8f;
++    config.sampler_count = 1;
++    config.samplers[0] = UINT32_MAX;
++    skippy_error * error = nullptr;
++    auto status = skippy_session_configure_chat_sampling(session, &config, "{}", 2, &error);
++    CHECK(status == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    error = nullptr;
++    config.sampler_count = 0;
++    status = skippy_session_configure_chat_sampling(session, &config,
++            "{\"grammar_triggers\":[{\"type\":99}]}", 2, &error);
++    CHECK(status == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    error = nullptr;
++    config.reasoning_budget_tokens = 0;
++    status = skippy_session_configure_chat_sampling(session, &config,
++            "{\"supports_thinking\":true}", 2, &error);
++    CHECK(status == SKIPPY_STATUS_INVALID_ARGUMENT);
++    skippy_error_free(error);
++    error = nullptr;
++
++    config = sampling_config();
++    config.ignore_eos = 1;
++    config.logit_bias_count = 3;
++    const auto * vocab = llama_model_get_vocab(model->model);
++    const auto eos = llama_vocab_eos(vocab);
++    config.logit_bias[1] = {eos, std::numeric_limits<float>::infinity()};
++    config.logit_bias[2] = config.logit_bias[1];
++    status = skippy_session_configure_chat_sampling(session, &config, "{}", 2, &error);
++    ok(status, error);
++    llama_token token = LLAMA_TOKEN_NULL;
++    error = nullptr;
++    size_t output_bytes = 0;
++    status = skippy_decode_step_sampled(session, 3, &config,
++            nullptr, 0, nullptr, 0, &output_bytes, &token, &error);
++    ok(status, error);
++    CHECK(token == 42 && !llama_vocab_is_eog(vocab, token));
++
++    const auto * original = common_sampler_get_candidates(session->sampler, false);
++    const auto selected = original->selected;
++    const auto size = original->size;
++    auto * clone = common_sampler_clone(session->sampler);
++    const auto * copied = common_sampler_get_candidates(clone, false);
++    CHECK(copied->size == size && copied->selected == selected);
++    CHECK(copied->data != original->data);
++    skippy_clear_chat_sampling(session);
++    CHECK(copied->data[selected].id == token);
++    common_sampler_free(clone);
++    release(session);
++}
++
 +} // namespace
 +
 +int main(int argc, char ** argv) {
@@ -6165,6 +6294,7 @@ index 000000000..abd61f505
 +        }
 +        if (grammar) {
 +            generated_prefix_restore(model);
++            adapter_contracts(model);
 +        }
 +    }
 +    error = nullptr;
@@ -10379,5 +10509,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

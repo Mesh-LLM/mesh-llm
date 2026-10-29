@@ -41,6 +41,7 @@ fn current_cache_capture_callers_and_compatibility_identities_are_owned() {
     let documents = workflows();
     cache_evidence::capture_action(&action("capture-sccache-stats")).unwrap();
     cache_evidence::configure_action(&action("configure-sccache-gha")).unwrap();
+    cache_evidence::runtime_input_action(&action("prepare-native-runtime-input")).unwrap();
     cache_evidence::check(&documents).unwrap();
     cache_identity::check(&documents).unwrap();
 }
@@ -87,6 +88,68 @@ fn evidence_upload_binding_retention_and_enforcement_mutations_are_rejected() {
     };
     steps.swap(0, 1);
     assert!(cache_evidence::capture_action(&reordered).is_err());
+}
+#[test]
+fn windows_runtime_producer_cannot_drop_its_callers_cache_policy() {
+    let source =
+        fs::read_to_string(root().join(".github/actions/prepare-native-runtime-input/action.yml"))
+            .unwrap();
+    for (old, new) in [
+        (
+            "allow_native_github_cache: ${{ inputs.allow_native_github_cache }}",
+            "allow_native_github_cache: \"false\"",
+        ),
+        (
+            "allow_depot_remote_cache: ${{ inputs.allow_depot_remote_cache }}",
+            "allow_depot_remote_cache: \"false\"",
+        ),
+        (
+            "      with:\n        allow_depot_remote_cache: ${{ inputs.allow_depot_remote_cache }}\n        allow_native_github_cache: ${{ inputs.allow_native_github_cache }}\n",
+            "",
+        ),
+        (
+            "    default: \"false\"\n  allow_native_github_cache:",
+            "    default: \"true\"\n  allow_native_github_cache:",
+        ),
+        (
+            "    default: \"false\"\n\noutputs:",
+            "    default: \"true\"\n\noutputs:",
+        ),
+    ] {
+        assert!(source.contains(old), "mutation preimage missing: {old}");
+        let mutated = workflow_yaml::parse(&source.replacen(old, new, 1)).unwrap();
+        assert!(
+            cache_evidence::runtime_input_action(&mutated).is_err(),
+            "accepted mutation {old}"
+        );
+    }
+    for (name, old, new) in [
+        (
+            "release.yml",
+            "backend: cpu\n          target: x86_64-pc-windows-msvc\n          output_dir: dist/native-runtimes\n          allow_native_github_cache: \"true\"",
+            "backend: cpu\n          target: x86_64-pc-windows-msvc\n          output_dir: dist/native-runtimes",
+        ),
+        (
+            "release.yml",
+            "backend: ${{ matrix.backend }}\n          target: x86_64-pc-windows-msvc\n          output_dir: dist/native-runtimes\n          allow_native_github_cache: \"true\"",
+            "backend: ${{ matrix.backend }}\n          target: x86_64-pc-windows-msvc\n          output_dir: dist/native-runtimes\n          allow_native_github_cache: \"false\"",
+        ),
+        (
+            "ci-windows-runtime-slice.yml",
+            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
+            "          allow_native_github_cache: \"true\"\n      - name: Save exact PR-scoped Windows ABI build",
+        ),
+        (
+            "ci-windows-runtime-slice.yml",
+            "          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}\n          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
+            "          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}\n      - name: Save exact PR-scoped Windows ABI build",
+        ),
+    ] {
+        assert!(
+            cache_evidence::check(&changed(name, old, new)).is_err(),
+            "accepted mutation in {name}"
+        );
+    }
 }
 #[test]
 fn evidence_attempt_identity_and_safetensors_order_cannot_be_lost() {
