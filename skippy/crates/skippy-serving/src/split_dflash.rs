@@ -7,7 +7,9 @@
 //! drives the decode loop as it does for split native MTP: it sends drafted
 //! blocks as verify windows, commits through the first mismatch, and rolls
 //! every stage back to the committed position. The final stage drafts the next
-//! block right after each decode or verify and returns it on the reply.
+//! block right after each decode or verify and returns it on the reply. Unless
+//! `SKIPPY_DFLASH_ADAPTIVE=0`, stage 0 verifies as much of each block as its
+//! measured window and serial-step times favour, down to a serial step.
 
 use std::path::{Path, PathBuf};
 

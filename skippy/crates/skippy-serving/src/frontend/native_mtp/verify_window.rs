@@ -149,6 +149,10 @@ impl StageOpenAiBackend {
             &verify_inputs,
             WireReplyKind::PredictedTokens,
         )?;
+        native_mtp_counters.observe_verify_window_downstream_compute(
+            verify.reply.stats.verify_window_compute_us
+                - crate::frontend::util::ms_to_us(verify.stats.stage0_compute_ms),
+        );
         let completed = verify_window_scheduler.complete_next(verify.reply.window.window_id)?;
         if completed != window {
             return Err(InferenceError::backend(
