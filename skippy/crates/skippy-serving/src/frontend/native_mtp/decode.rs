@@ -139,11 +139,18 @@ pub(in crate::frontend) struct NativeMtpDecodeCounters {
     adaptive_verify_window_width_max: usize,
     adaptive_verify_window_grow_count: usize,
     adaptive_verify_window_shrink_count: usize,
+    /// Compute on the stages after stage 0 across verify windows, including
+    /// any draft the final stage runs before it replies.
+    verify_window_downstream_compute_us: i64,
 }
 
 impl NativeMtpDecodeCounters {
     pub(in crate::frontend) fn verify_window_verification_count(&self) -> usize {
         self.verify_window_verification_count
+    }
+
+    pub(in crate::frontend) fn observe_verify_window_downstream_compute(&mut self, micros: i64) {
+        self.verify_window_downstream_compute_us += micros.max(0);
     }
 
     pub(in crate::frontend) fn observe_suppressed_cooldown_draft(&mut self) {
@@ -456,6 +463,10 @@ impl NativeMtpDecodeCounters {
         timings.insert(
             "native_mtp_verify_window_verifications".to_string(),
             json!(self.verify_window_verification_count),
+        );
+        timings.insert(
+            "native_mtp_verify_window_downstream_compute_us".to_string(),
+            json!(self.verify_window_downstream_compute_us),
         );
         timings.insert(
             "native_mtp_hybrid_native_prefix_available".to_string(),

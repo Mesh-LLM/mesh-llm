@@ -181,6 +181,9 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) ngram_max: usize,
     pub(in crate::frontend) speculative: &'a SpeculativeDecodeConfig,
     pub(in crate::frontend) native_mtp_enabled: bool,
+    /// The final stage's DFlash draft when this split speculates with one;
+    /// stage 0 then sizes each block from measured cost and acceptance.
+    pub(in crate::frontend) split_dflash_draft: Option<&'a std::path::Path>,
     pub(in crate::frontend) prompt_token_ids: &'a [i32],
     pub(in crate::frontend) recurrent_cache_prefix_token_ids: Option<&'a [i32]>,
     pub(in crate::frontend) max_tokens: u32,
