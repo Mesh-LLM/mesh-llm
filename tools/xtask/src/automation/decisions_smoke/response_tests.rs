@@ -55,14 +55,15 @@ fn response_refuses_typed_value_identity_and_order_corruption() {
 #[test]
 fn discovery_excludes_aliases_and_requires_advertised_exact_capability() {
     let models = serde_json::json!({"data":[
-        {"id":"mesh","capabilities":["system_one"]},
-        {"id":"auto","capabilities":["system_one"]},
-        {"id":"ordinary","capabilities":[]},
-        {"id":"first","capabilities":["system_one"]},
-        {"id":"second","capabilities":["system_one"]}]});
+        {"id":"mesh","providers":[{"workload_class":"decision","available":true}]},
+        {"id":"auto","providers":[{"workload_class":"decision","available":true}]},
+        {"id":"ordinary","providers":[{"workload_class":"causal_generation","available":true}]},
+        {"id":"offline","providers":[{"workload_class":"decision","available":false}]},
+        {"id":"first","providers":[{"workload_class":"decision","available":true}]},
+        {"id":"second","providers":[{"workload_class":"decision","available":true}]}]});
     assert_eq!(select_model(&models, None).unwrap(), "first");
     assert_eq!(select_model(&models, Some("second")).unwrap(), "second");
-    for requested in ["mesh", "auto", "ordinary", "absent"] {
+    for requested in ["mesh", "auto", "ordinary", "offline", "absent"] {
         assert!(select_model(&models, Some(requested)).is_err());
     }
     assert!(select_model(&serde_json::json!({"data":[]}), None).is_err());

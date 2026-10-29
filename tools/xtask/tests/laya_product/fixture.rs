@@ -93,20 +93,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             stream.write_all(body)?;
             continue;
         }
-        let response = if bytes.starts_with(b"GET /v1/models ") {
-            serde_json::json!({"data":[{"id":"laya-fixture"}]})
-        } else {
-            let request: serde_json::Value = serde_json::from_slice(&bytes[header_end..])?;
-            let fixture = fixtures
-                .iter()
-                .flatten()
-                .find(|fixture| {
-                    fixture["state"] == request["state"]
-                        && fixture["questions"] == request["questions"]
-                })
-                .ok_or("unknown fixture request")?;
-            serde_json::json!({"answers":fixture["answers"]})
-        };
+        let response =
+            if bytes.starts_with(b"GET /mesh/v1/models?workload_class=decision&available=true ") {
+                serde_json::json!({"data":[{"id":"laya-fixture"}]})
+            } else {
+                let request: serde_json::Value = serde_json::from_slice(&bytes[header_end..])?;
+                let fixture = fixtures
+                    .iter()
+                    .flatten()
+                    .find(|fixture| {
+                        fixture["state"] == request["state"]
+                            && fixture["questions"] == request["questions"]
+                    })
+                    .ok_or("unknown fixture request")?;
+                serde_json::json!({"answers":fixture["answers"]})
+            };
         let body = serde_json::to_vec(&response)?;
         write!(
             stream,

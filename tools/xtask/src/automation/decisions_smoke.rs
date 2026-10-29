@@ -57,7 +57,14 @@ async fn smoke(
     deadline: Instant,
     token: &Cancellation,
 ) -> DynResult<String> {
-    let models = exchange(&options.base, "v1/models", None, deadline, token).await?;
+    let models = exchange(
+        &options.base,
+        "mesh/v1/models?workload_class=decision&available=true",
+        None,
+        deadline,
+        token,
+    )
+    .await?;
     let model = response::select_model(&models, options.model.as_deref())?;
     let body = request::questions(&model);
     let answers = exchange(&options.base, "v1/decisions", Some(&body), deadline, token).await?;

@@ -11,8 +11,10 @@ pub(super) fn select_model(models: &Value, requested: Option<&str>) -> DynResult
             let id = row["id"].as_str()?;
             (valid_id(id)
                 && !matches!(id, "mesh" | "auto")
-                && row["capabilities"].as_array().is_some_and(|items| {
-                    items.iter().any(|item| item.as_str() == Some("system_one"))
+                && row["providers"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["workload_class"] == "decision" && item["available"] == true
+                    })
                 }))
             .then_some(id)
         })

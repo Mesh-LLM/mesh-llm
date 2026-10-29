@@ -66,9 +66,13 @@ fn request(socket: &mut TcpStream) -> Option<(String, Value)> {
     Some((path, body))
 }
 fn models() -> Value {
-    json!({"data":[{"id":"mesh","capabilities":["system_one"]},{"id":"auto","capabilities":["system_one"]},
-        {"id":"ordinary","capabilities":[]},{"id":"actual","capabilities":["system_one"]},
-        {"id":"second","capabilities":["system_one"]}]})
+    json!({"data":[
+        {"id":"mesh","providers":[{"workload_class":"decision","available":true}]},
+        {"id":"auto","providers":[{"workload_class":"decision","available":true}]},
+        {"id":"ordinary","providers":[{"workload_class":"causal_generation","available":true}]},
+        {"id":"offline","providers":[{"workload_class":"decision","available":false}]},
+        {"id":"actual","providers":[{"workload_class":"decision","available":true}]},
+        {"id":"second","providers":[{"workload_class":"decision","available":true}]}]})
 }
 fn answers(model: &str) -> Value {
     json!({"model":model,"answers":[
@@ -150,7 +154,7 @@ fn reply(mode: &str, path: &str, input: &Value) -> (u16, Vec<u8>) {
     if mode == "oversize" {
         return (200, vec![b' '; 1024 * 1024 + 1]);
     }
-    let mut body = if path == "/v1/models" {
+    let mut body = if path == "/mesh/v1/models?workload_class=decision&available=true" {
         models()
     } else if input["input"].is_array() {
         boolean_choice()
@@ -225,7 +229,13 @@ fn decisions_cli_discovers_real_capability_and_sends_all_three_questions() {
         let calls = peer.calls.lock().unwrap();
         assert_eq!(calls.len(), 3);
         assert_eq!(calls[2].1["questions"][0]["choices"][0]["value"], true);
-        assert_eq!(calls[0], ("/v1/models".into(), Value::Null));
+        assert_eq!(
+            calls[0],
+            (
+                "/mesh/v1/models?workload_class=decision&available=true".into(),
+                Value::Null
+            )
+        );
         assert_eq!(calls[1].0, "/v1/decisions");
         let selected = if extra.is_empty() { "actual" } else { "second" };
         assert_eq!(calls[1].1["model"], selected);

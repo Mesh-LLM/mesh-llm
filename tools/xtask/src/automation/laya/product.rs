@@ -215,7 +215,7 @@ pub(super) fn worker(root: &Path, args: &[String]) -> DynResult<()> {
             return Err("model startup deadline exceeded".into());
         }
         if let Ok(bytes) = http::request(
-            &format!("{base_url}/v1/models"),
+            &format!("{base_url}/mesh/v1/models?workload_class=decision&available=true"),
             None,
             Duration::from_secs(2),
         ) && let Ok(models) = serde_json::from_slice::<Models>(&bytes)
