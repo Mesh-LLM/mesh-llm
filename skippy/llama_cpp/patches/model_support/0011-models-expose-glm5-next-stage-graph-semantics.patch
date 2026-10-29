@@ -1,0 +1,228 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Thu, 29 Oct 2026 16:20:16 +1100
+Subject: [PATCH] models: expose glm5-next stage graph semantics
+
+The stage planner rejected every GLM-5.3-Flash range: the glm5-next
+builder read and wrote its recurrent, MLA and indexer caches without
+declaring them, so the delta-net SSM write registered by
+build_recurrent_attn landed after unregistered build_rs copies of the
+same storage, and the NextN graph left the indexer cache as an
+unresolved structural leaf.
+
+Declare the graph semantics the way kimi-linear, qwen3next and
+qwen4exp do. The KDA layer reads conv and SSM state through the typed
+build_rs, and each rollback slot of the conv window is a registered
+recurrent_conv write. The DSA layer registers its MLA latent write and
+read, and the indexer cache's key write, pooled-key scatter and read,
+as kv_key effects, so the trunk and the NextN head carry explicit
+ownership. The k-pool inputs are bound as request inputs.
+
+Tests: a synthetic graph contract at the production trunk depth (45),
+width (4096) and one NextN head checks every two-stage cut, a
+three-stage chain and the terminal-stage MTP contract. A dense NextN
+fixture runs live MTP sync and drafting against an independently
+loaded reference; the fixture generator now writes glm5-next's
+per-layer KV head counts over the NextN block.
+---
+ src/CMakeLists.txt                          |  8 ++++
+ src/models/glm5-next.cpp                    | 50 ++++++++++++++-------
+ src/skippy/tests/graph_contract_cases.cmake | 13 ++++++
+ tests/test-llama-archs.cpp                  |  9 +++-
+ 4 files changed, 63 insertions(+), 17 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 417be82de..46f4bbb41 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -248,6 +248,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     add_test(NAME skippy_qwen3moe_mtp COMMAND skippy-profile-residency
+         "${QWEN3MOE_MTP_FIXTURE_DIR}/dense-mtp.gguf")
+     set_tests_properties(skippy_qwen3moe_mtp PROPERTIES FIXTURES_REQUIRED qwen3moe-mtp-model)
++    set(GLM5_NEXT_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/glm5-next-mtp-models")
++    file(MAKE_DIRECTORY "${GLM5_NEXT_MTP_FIXTURE_DIR}")
++    add_test(NAME skippy_generate_glm5_next_mtp COMMAND skippy-model-fixture-generator
++        --arch glm5-next --seed 42 --dense-mtp --out "${GLM5_NEXT_MTP_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_glm5_next_mtp PROPERTIES FIXTURES_SETUP glm5-next-mtp-model)
++    add_test(NAME skippy_glm5_next_mtp COMMAND skippy-profile-residency
++        "${GLM5_NEXT_MTP_FIXTURE_DIR}/dense-mtp.gguf")
++    set_tests_properties(skippy_glm5_next_mtp PROPERTIES FIXTURES_REQUIRED glm5-next-mtp-model)
+     set(MULTIDEPTH_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/multidepth-mtp-models")
+     file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
+     add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
+diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
+index a1b722950..d1e5f66a0 100644
+--- a/src/models/glm5-next.cpp
++++ b/src/models/glm5-next.cpp
+@@ -191,12 +191,12 @@ std::unique_ptr<llm_graph_context> llama_model_glm5_next::build_arch_graph(const
+ }
+ 
+ // Causal conv1d over one of Q/K/V
+-static ggml_tensor * glm5_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
++static ggml_tensor * glm5_conv1d(const llm_graph_context & graph, ggml_cgraph * gf, ggml_context * ctx0,
+                                  ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
+                                  int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
+                                  int64_t d_conv, int64_t head_dim, int64_t n_head,
+                                  int64_t n_seq_tokens, int64_t n_seqs, int64_t n_tokens, int64_t kv_head,
+-                                 int64_t mem_size, int64_t K_rs) {
++                                 int64_t mem_size, int64_t K_rs, int il) {
+     const int64_t d_inner         = head_dim * n_head;
+     const int64_t conv_state_size = (d_conv - 1) * d_inner;
+     const int64_t n_embd_r_total  = 3 * conv_state_size;
+@@ -216,12 +216,13 @@ static ggml_tensor * glm5_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
+         const int64_t s_idx = std::max<int64_t>(0, n_seq_tokens - s);
+         ggml_tensor * conv_x_s = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
+             conv_x->nb[1], conv_x->nb[2], s_idx * conv_x->nb[0]);
+-        ggml_build_forward_expand(gf,
+-            ggml_cpy(ctx0, conv_x_s,
+-                ggml_view_3d(ctx0, conv_states_all, d_conv - 1, d_inner, n_seqs,
+-                    (d_conv - 1)   * ggml_element_size(conv_states_all),
+-                    n_embd_r_total * ggml_element_size(conv_states_all),
+-                    ((s * mem_size + kv_head) * n_embd_r_total + qkv * conv_state_size) * ggml_element_size(conv_states_all))));
++        ggml_tensor * conv_state_update = ggml_view_3d(ctx0, conv_states_all, d_conv - 1, d_inner, n_seqs,
++            (d_conv - 1)   * ggml_element_size(conv_states_all),
++            n_embd_r_total * ggml_element_size(conv_states_all),
++            ((s * mem_size + kv_head) * n_embd_r_total + qkv * conv_state_size) * ggml_element_size(conv_states_all));
++        ggml_tensor * conv_write = ggml_cpy(ctx0, conv_x_s, conv_state_update);
++        ggml_build_forward_expand(gf, conv_write);
++        graph.state_write(skippy_state_kind::recurrent_conv, conv_states_all, conv_write, il);
+     }
+ 
+     ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
+@@ -336,6 +337,15 @@ llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::bui
+     inp->new_pool_rep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_new);
+     ggml_set_input(inp->new_pool_rep);
+ 
++    request_input(inp->k_idxs,        "glm5-next.kpool.key_indices");
++    request_input(inp->pool_cells,    "glm5-next.kpool.cells");
++    request_input(inp->pool_idxs,     "glm5-next.kpool.idxs");
++    request_input(inp->pool_mask,     "glm5-next.kpool.mask");
++    request_input(inp->tail_idxs,     "glm5-next.kpool.tail_idxs");
++    request_input(inp->sel_mask,      "glm5-next.kpool.sel_mask");
++    request_input(inp->new_pool_idxs, "glm5-next.kpool.new_idxs");
++    request_input(inp->new_pool_rep,  "glm5-next.kpool.new_rep");
++
+     return (llm_graph_input_kpool *) res->add_input(std::move(inp));
+ }
+ 
+@@ -812,14 +822,14 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
+     const auto   kv_head  = mctx_cur->get_head();
+ 
+     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
+-    ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
++    ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs, skippy_state_kind::recurrent_conv, il);
+ 
+     const int64_t mem_size = mctx_cur->get_size();
+     const int64_t K_rs     = (int64_t) cparams.n_rs_seq + 1;
+ 
+-    ggml_tensor * Qcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs);
+-    ggml_tensor * Kcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs);
+-    ggml_tensor * Vcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs);
++    ggml_tensor * Qcur = glm5_conv1d(*this, gf, ctx0, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs, il);
++    ggml_tensor * Kcur = glm5_conv1d(*this, gf, ctx0, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs, il);
++    ggml_tensor * Vcur = glm5_conv1d(*this, gf, ctx0, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs, il);
+     cb(Qcur, "kda_q_conv", il);
+     cb(Kcur, "kda_k_conv", il);
+     cb(Vcur, "kda_v_conv", il);
+@@ -851,7 +861,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
+     cb(beta, "kda_beta", il);
+ 
+     ggml_tensor * ssm_states_all = mctx_cur->get_s_l(il);
+-    ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs);
++    ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs, skippy_state_kind::recurrent_ssm, il);
+     state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head_kda, n_seqs);
+ 
+     // Match FLA l2 norm
+@@ -911,7 +921,10 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
+     ggml_tensor * pzero = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_indexer, n_tokens), 0.0f);
+     ggml_tensor * packed = ggml_concat(ctx0, ggml_concat(ctx0, ik, ig, 0), pzero, 0);
+     packed = ggml_reshape_3d(ctx0, packed, 3*n_embd_indexer, 1, n_tokens);
+-    ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, packed, inp_kpool->k_idxs, il));
++    ggml_tensor * idx_write = mctx_lid->cpy_k(ctx0, packed, inp_kpool->k_idxs, il);
++    ggml_build_forward_expand(gf, idx_write);
++    state_write(skippy_state_kind::kv_key, idx_write, idx_write, il);
++    state_read(skippy_state_kind::kv_key, idx_write, il);
+ 
+     auto kpool_cache = mctx_hyb->get_kpool_access(ctx0, il, n_embd_indexer);
+     const int64_t n_kv = mctx_lid->get_n_kv();
+@@ -936,7 +949,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
+ 
+     // scatter the fresh pooled keys into their rep rows, then gather all n_pool of them by cell:
+     // the older pools come from the rows earlier ubatches wrote
+-    ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
++    ggml_tensor * pool_write = kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep);
++    ggml_build_forward_expand(gf, pool_write);
++    state_write(skippy_state_kind::kv_key, pool_write, pool_write, il);
+     ggml_tensor * pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
+     pooled = ggml_reshape_3d(ctx0, pooled, n_embd_indexer, 1, n_pool);
+     cb(pooled, "indexer_pool_k", il);
+@@ -1071,7 +1086,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
+ 
+     ggml_build_forward_expand(gf, q_absorbed);
+     ggml_build_forward_expand(gf, kv_cmpr);
+-    ggml_build_forward_expand(gf, mctx_mla->cpy_k(ctx0, kv_cmpr, inp_attn->get_k_idxs(), il));
++    ggml_tensor * k_write = mctx_mla->cpy_k(ctx0, kv_cmpr, inp_attn->get_k_idxs(), il);
++    ggml_build_forward_expand(gf, k_write);
++    state_write(skippy_state_kind::kv_key, k_write, k_write, il);
+ 
+     // The scatter selection already includes the causal mask, and it comes in the mask layout
+     GGML_ASSERT(ggml_are_same_shape(sel, kq_mask));
+@@ -1079,6 +1096,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
+ 
+     ggml_tensor * k = mctx_mla->get_k(ctx0, il);
+     ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
++    state_read(skippy_state_kind::kv_key, k, il);
+ 
+     ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
+     cb(out, "kqv_out", il);
+diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
+index 4ee862411..75e66e2c3 100644
+--- a/src/skippy/tests/graph_contract_cases.cmake
++++ b/src/skippy/tests/graph_contract_cases.cmake
+@@ -118,3 +118,16 @@ add_test(NAME skippy_graph_contract_glm53_synthetic COMMAND skippy-graph-contrac
+     "${glm53_contract_dir}/graph-contract.gguf" causal)
+ set_tests_properties(skippy_graph_contract_glm53_synthetic PROPERTIES
+     FIXTURES_REQUIRED contract-glm53-synthetic TIMEOUT 900)
++
++# GLM-5.3-Flash (glm5-next) has no registry-backed family row yet. Keep its
++# production trunk depth, width and NextN head in a separate synthetic lane so
++# it cannot be mistaken for a real-artifact certification.
++set(glm5_next_contract_dir "${SKIPPY_MODEL_FIXTURE_DIR}/contract-glm5-next-synthetic")
++file(MAKE_DIRECTORY "${glm5_next_contract_dir}")
++add_test(NAME skippy_generate_contract_glm5_next_synthetic COMMAND skippy-model-fixture-generator
++    --arch glm5-next --graph-contract 45 4096 --contract-mtp 1 --out "${glm5_next_contract_dir}")
++set_tests_properties(skippy_generate_contract_glm5_next_synthetic PROPERTIES FIXTURES_SETUP contract-glm5-next-synthetic)
++add_test(NAME skippy_graph_contract_glm5_next_synthetic COMMAND skippy-graph-contract-models
++    "${glm5_next_contract_dir}/graph-contract.gguf" causal)
++set_tests_properties(skippy_graph_contract_glm5_next_synthetic PROPERTIES
++    FIXTURES_REQUIRED contract-glm5-next-synthetic TIMEOUT 900)
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index 4f7ea31ac..939cd2241 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -1486,7 +1486,7 @@ int main(int argc, char ** argv) {
+             if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
+             auto gguf = get_gguf_ctx(arch,
+                     arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3 ||
+-                            arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_QWEN3MOE,
++                            arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_GLM5_NEXT,
+                     glm_dsa_indexshare_fixture::DEFAULT,
+                     256, 8, false, 2 + dense_mtp_depth, 256);
+             llama_model_saver metadata(arch, gguf.get());
+@@ -1516,6 +1516,13 @@ int main(int argc, char ** argv) {
+             const std::array<bool, 3> recurrent = {model->hparams.is_recr(0), model->hparams.is_recr(1), false};
+             gguf_set_arr_data(saver.gguf_ctx, saver.llm_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str(),
+                     GGUF_TYPE_BOOL, recurrent.data(), recurrent.size());
++            if (arch == LLM_ARCH_GLM5_NEXT) {
++                // GLM5-Next reads its per-layer KV head counts over the NextN block too.
++                const std::vector<uint32_t> head_count_kv(model->hparams.n_head_kv_arr.begin(),
++                        model->hparams.n_head_kv_arr.begin() + model->hparams.n_layer_all);
++                gguf_set_arr_data(saver.gguf_ctx, saver.llm_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV).c_str(),
++                        GGUF_TYPE_UINT32, head_count_kv.data(), head_count_kv.size());
++            }
+             saver.add_tensors_from_model();
+             saver.save(path);
+             require_fixture_written(path);
+-- 
+2.54.0 (Apple Git-157)
+
