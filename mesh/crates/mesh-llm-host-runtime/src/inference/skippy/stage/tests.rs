@@ -419,10 +419,12 @@ async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
     let bind_addr = listener.local_addr().unwrap();
     let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
+    // The silent stage keeps the connection open until the test lets it go,
+    // so only the cancel can end the probe before its deadline.
     let server = std::thread::spawn(move || {
         let (_stream, _) = listener.accept().unwrap();
         accepted_tx.send(()).unwrap();
-        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+        let _ = release_rx.recv();
     });
 
     let state = StageControlState {
@@ -434,10 +436,12 @@ async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
     };
     let handle = spawn_stage_control_loop_with_state(state);
     accepted_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(Duration::from_secs(30))
         .expect("readiness probe connected to silent stage");
 
-    tokio::time::timeout(Duration::from_secs(3), handle.shutdown())
+    // Generous for a busy machine, and far below the probe's 900 s deadline:
+    // a shutdown that waited for it still fails.
+    tokio::time::timeout(Duration::from_secs(30), handle.shutdown())
         .await
         .expect("shutdown must not wait for the readiness deadline")
         .expect("stage control shutdown should succeed");
