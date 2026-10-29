@@ -562,14 +562,10 @@ impl RuntimeState {
     /// Appends the DFlash feature rows this stage captured for the message
     /// that produced `output`, for the final stage's draft.
     pub(crate) fn dflash_split_output(&mut self, session_id: &str, output: &mut ActivationFrame) {
-        let Some(rows) = self
-            .sessions
-            .get_mut(session_id)
-            .and_then(|lane| lane.session.dflash_take_captured_features())
-        else {
+        let Some(lane) = self.sessions.get_mut(session_id) else {
             return;
         };
-        if let Err(error) = rows.append_to_frame(output) {
+        if let Err(error) = lane.session.dflash_forward_captured(output) {
             tracing::debug!("not forwarding DFlash feature rows: {error:#}");
         }
     }
