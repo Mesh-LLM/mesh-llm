@@ -78,13 +78,17 @@ The adjudicator publishes, per model:
   count mismatch, `x-mesh-served-by` naming another peer, an answer too short
   for its threshold.
 - A contradiction counts only when adjudicators run by at least two different
-  operators agree. An operator is an owner identity
-  ([NODE_OWNER_IDENTITY.md](../design/NODE_OWNER_IDENTITY.md)), and each
-  adjudication record is signed with that owner key. Two records score the same
-  audit when they cite the same sender record (its request digest, response
-  digest and nonce together, keyed while the version is live) and the same
-  corpus version; they agree when they give the same verdict and, for
-  `contradicted`, name the same `contradicted_party`. Operators differ when their owner identities differ.
+  operators agree. Distinct owner keys alone do not show distinct operators,
+  since one party can hold several. An operator is a party named on the
+  adjudicator roster published with each corpus version before it is used,
+  listed with the one owner identity
+  ([NODE_OWNER_IDENTITY.md](../design/NODE_OWNER_IDENTITY.md)) that signs its
+  adjudication records. How a party gets on the roster is left to the
+  maintainers. Two records score the same audit when they cite the same sender
+  record (its request digest, response digest and nonce together, keyed while
+  the version is live) and the same corpus version; they agree when they give
+  the same verdict and, for `contradicted`, name the same `contradicted_party`.
+  Operators differ when they are different parties on the roster.
 
 ## Audit corpus
 
