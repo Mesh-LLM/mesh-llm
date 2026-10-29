@@ -3094,3 +3094,83 @@ async fn mesh_candidate_that_admits_the_request_still_wins_over_the_plugin() {
         "an eligible mesh candidate must keep the request; got: {response}"
     );
 }
+
+/// The shape a live two-node mesh produced: this node serves `model` from a
+/// chat plugin, a peer advertises the same id as `DocumentOcr` only, and the
+/// election snapshot carries no candidate for the name at all. The remote half
+/// of `route_missing_local_model` finds that peer, filters it out on workload
+/// class, and answered `503 no context-compatible target` even though the local
+/// plugin endpoint serves this exact request.
+#[tokio::test]
+async fn local_plugin_serves_a_name_whose_only_peer_candidate_is_ocr_only() {
+    use tokio::io::AsyncReadExt;
+
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    let mut peer = test_remote_peer(9, model);
+    peer.served_model_descriptors = vec![descriptor_with_workload_class(
+        model,
+        mesh::ModelWorkloadClass::DocumentOcr,
+    )];
+    node.insert_test_peer(peer).await;
+    assert!(
+        !node.hosts_for_model(model).await.is_empty(),
+        "the peer must be discoverable by name so routing reaches the remote half"
+    );
+
+    // No elected candidate for the name: the peer advertises it, the local
+    // plugin serves it, and the mesh snapshot lists nothing.
+    let targets = election::ModelTargets::default();
+
+    let plugin_port = spawn_answering_chat_backend("from-plugin").await;
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "chat-plugin".to_string(),
+            endpoint_id: "chat".to_string(),
+            protocol: Some("openai_compatible".to_string()),
+            address: format!("http://127.0.0.1:{plugin_port}"),
+            models: vec![model.to_string()],
+        }])
+        .await;
+
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+    let mut request = ingress_chat_request(model).await;
+    let (server_side, mut client_side) = ingress_client_socket_pair().await;
+    let outcome = route_request(
+        false,
+        server_side.into(),
+        &mut request,
+        &ctx,
+        Some(model),
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+    let mut response = String::new();
+    client_side
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "an OCR-only peer must not shadow the local plugin that serves this \
+         request: {outcome:?}: {response}"
+    );
+    assert!(
+        response.contains("from-plugin"),
+        "expected the local plugin's answer, got: {response}"
+    );
+}

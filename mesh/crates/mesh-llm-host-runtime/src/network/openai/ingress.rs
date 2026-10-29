@@ -657,7 +657,7 @@ async fn try_plugin_when_no_mesh_candidate_serves(
 /// mesh peers, then local-unavailable/plugin fallbacks, then 404.
 #[allow(clippy::too_many_arguments)]
 async fn route_missing_local_model(
-    tcp_stream: ClientStream,
+    mut tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     model_name: &str,
@@ -683,6 +683,33 @@ async fn route_missing_local_model(
             route_observer,
         )
         .await;
+    }
+
+    // No candidate at all for this name (the model has no local target and the
+    // election snapshot carries none) is also the shape a plugin-served name
+    // takes when a peer advertises the same id for a workload class this
+    // request does not want. The remote half below would then find that peer,
+    // filter it out on class, and fail the request as having no eligible target
+    // even though a local plugin endpoint serves this model for this endpoint.
+    // The fallback keeps every routable peer first: it dispatches only when a
+    // plugin endpoint matches the model and the request path and no mesh
+    // candidate admits the workload. A caller that forced a peer traffic
+    // header never reaches this point, so a forced remote stays forced, and an
+    // `x-mesh-exclude` naming this node still fails closed below rather than
+    // serving the request here.
+    if target.is_none() && !excluded.contains(&ctx.node.id()) {
+        match try_plugin_when_no_mesh_candidate_serves(
+            tcp_stream,
+            request,
+            ctx,
+            model_name,
+            route_observer,
+        )
+        .await
+        {
+            Ok(outcome) => return outcome,
+            Err(stream) => tcp_stream = stream,
+        }
     }
 
     // Try remote mesh first.
