@@ -179,7 +179,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
 
 fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
     plugin::PluginHostMode {
-        mesh_visibility: if cli.publish || cli.nostr_discovery {
+        mesh_visibility: if cli.mesh_policy.publish || cli.nostr_discovery {
             mesh_llm_plugin::MeshVisibility::Public
         } else {
             mesh_llm_plugin::MeshVisibility::Private
@@ -190,7 +190,7 @@ fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
 fn plugin_runtime_options_from_cli(cli: &Cli) -> mesh_llm_host_runtime::RuntimeOptions {
     mesh_llm_host_runtime::RuntimeOptions {
         config: cli.config.clone(),
-        publish: cli.publish,
+        publish: cli.mesh_policy.publish,
         nostr_discovery: cli.nostr_discovery,
         ..mesh_llm_host_runtime::RuntimeOptions::default()
     }
