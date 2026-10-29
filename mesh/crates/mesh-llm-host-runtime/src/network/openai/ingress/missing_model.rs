@@ -184,17 +184,9 @@ pub(super) async fn route_missing_local_model(
         RemoteMeshRoute::NoRemoteHost => {}
     }
 
-    // Check if the model is known locally but unavailable
-    // (e.g., loading/draining/failed with all-None candidates). Return 503 for these cases so
-    // clients can retry; return 404 only when the model truly doesn't exist anywhere.
-    // A first load has no target yet, only its serving assignment. A client
-    // that excluded this node gets the exclusion 409 below instead: retrying
-    // here would never help it. A plugin serving the same name keeps the
-    // plugin route it had before.
-    let loading_locally = !excluded.contains(&ctx.node.id())
-        && assigned_here(ctx, model_name).await
-        && !plugin_serves_model(ctx, model_name).await;
-    if loading_locally || has_local_unavailable_candidates(ctx.targets, model_name) {
+    // Return 503 while the model loads or drains here so clients can retry;
+    // return 404 only when the model truly doesn't exist anywhere.
+    if unavailable_locally(ctx, model_name, excluded).await {
         record_pre_routing_rejection(ctx, Some(model_name), 503).await;
         return response_outcome(
             503,
@@ -357,6 +349,25 @@ pub(super) async fn route_self_targeted_model(
         )
         .await,
     )
+}
+
+/// Whether the model is known locally but unavailable, which earns an
+/// untargeted request a retryable 503: loading, draining or failed with
+/// all-None candidates, or a first load, which has no target yet, only its
+/// serving assignment. A client that excluded this node gets the exclusion 409
+/// instead, since retrying here would never help it, and a plugin serving the
+/// same name keeps the plugin route it had before.
+async fn unavailable_locally(
+    ctx: &IngressRouteContext<'_>,
+    model_name: &str,
+    excluded: &[iroh::EndpointId],
+) -> bool {
+    if has_local_unavailable_candidates(ctx.targets, model_name) {
+        return true;
+    }
+    !excluded.contains(&ctx.node.id())
+        && assigned_here(ctx, model_name).await
+        && !plugin_serves_model(ctx, model_name).await
 }
 
 /// Whether this node's serving assignment names `model_name`. A first load has
