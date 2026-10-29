@@ -988,6 +988,33 @@ async fn materialize_split_default_dflash(resolved: &mut skippy::ResolvedSkippyC
     }
 }
 
+/// Weight a split's final stage loads beyond its layers when it will draft
+/// with DFlash: the target tensors the draft borrows, which a stage slice
+/// would otherwise leave on stage 0. `0` when the load resolves no draft.
+pub(super) fn split_dflash_final_stage_reserve_bytes(
+    request: skippy::SkippyConfigResolveRequest<'_>,
+    config_model_id: Option<&str>,
+    package: &skippy::SkippyPackageIdentity,
+) -> u64 {
+    let resolved = match skippy::resolve_skippy_config_for_selector_with_publisher_defaults(
+        request,
+        config_model_id,
+        package.publisher_defaults.as_ref(),
+    ) {
+        Ok(resolved) => resolved,
+        Err(_) => return 0,
+    };
+    let drafts = resolved.speculative.decode.dflash.is_some()
+        && resolved
+            .speculative
+            .default_dflash
+            .is_none_or(crate::inference::skippy::default_dflash_draft_cached);
+    if !drafts {
+        return 0;
+    }
+    skippy_api::package::split_dflash_borrowed_tensor_bytes(package)
+}
+
 /// The DFlash block cap on a split: a configured cap as set, otherwise the
 /// shorter split default.
 pub(super) fn split_dflash_max_draft_tokens(cap: Option<usize>, configured: bool) -> Option<usize> {

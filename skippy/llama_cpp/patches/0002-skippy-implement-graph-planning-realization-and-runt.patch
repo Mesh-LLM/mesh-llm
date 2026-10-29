@@ -61,7 +61,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/session.cpp                  |  521 ++++++++++
  src/skippy/speculative_decoding.cpp     |  568 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
- src/skippy/stage_execution_contract.cpp |   72 ++
+ src/skippy/stage_execution_contract.cpp |   78 ++
  src/skippy/stage_execution_contract.h   |   15 +
  src/skippy/stage_plan.cpp               |  709 ++++++++++++++
  src/skippy/stage_realization.cpp        |  293 ++++++
@@ -77,7 +77,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 73 files changed, 16241 insertions(+), 395 deletions(-)
+ 73 files changed, 16247 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -12719,7 +12719,7 @@ new file mode 100644
 index 000000000..3f707a93f
 --- /dev/null
 +++ b/src/skippy/stage_execution_contract.cpp
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,78 @@
 +#include "stage_execution_contract.h"
 +#include "llama-graph.h"
 +#include "../vendor/nlohmann/json.hpp"
@@ -12783,6 +12783,12 @@ index 000000000..3f707a93f
 +        const auto required = read_parameters(profile.at("parameters"));
 +        union_parameters.insert(required.begin(), required.end());
 +        if (auxiliary && profile.at("offset") == offset) expected = required;
++    }
++    // Tensors a model beside the stage reads through it, such as the token
++    // embeddings a DFlash draft borrows: resident, though no stage graph reads them.
++    if (contract.contains("borrowed")) {
++        const auto borrowed = read_parameters(contract.at("borrowed"));
++        union_parameters.insert(borrowed.begin(), borrowed.end());
 +    }
 +    if (residents != std::vector<std::string>(union_parameters.begin(), union_parameters.end())) {
 +        throw std::runtime_error("admitted stage residents do not match the execution profile union");

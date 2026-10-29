@@ -224,6 +224,7 @@ layer_end = 40
             ctx_size_override: Some(1024),
             parallel_override: Some(1),
             placement: Default::default(),
+            final_stage_reserve_bytes: 0,
         },
         &assignments,
     )
@@ -458,6 +459,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
             ctx_size_override: Some(65_536),
             parallel_override: Some(1),
             placement: Default::default(),
+            final_stage_reserve_bytes: 0,
         },
         Some(canonical.node_id),
     )
