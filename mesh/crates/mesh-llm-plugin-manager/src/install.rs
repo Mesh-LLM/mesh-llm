@@ -71,6 +71,12 @@ pub enum PluginProgressEvent {
         name: String,
         version: String,
     },
+    /// `plugin` requires `required`, which is not installed; it is installed
+    /// next from the catalog.
+    InstallingRequirement {
+        plugin: String,
+        required: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +118,60 @@ pub async fn install_plugin(
 ) -> Result<InstallOutcome> {
     let parsed = parse_install_ref(reference)?;
     let resolved = resolve_install_source(parsed, options, progress).await?;
-    install_resolved_plugin(resolved, options, progress, None).await
+    let outcome = install_resolved_plugin(resolved, options, progress, None).await?;
+    install_requirements(&outcome.metadata, options, progress).await?;
+    Ok(outcome)
+}
+
+/// Install, from the catalog, every plugin `plugin` requires that is not
+/// installed, and theirs in turn. A requirement that is already installed is
+/// left as it is, enabled or not, so this terminates on a cycle. The first
+/// failure stops the chain; `plugin` itself stays installed, and a node
+/// start reports what is still missing.
+async fn install_requirements(
+    plugin: &InstalledPluginMetadata,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<()> {
+    let store = PluginStore::new(&options.store_root);
+    let mut pending: Vec<(String, String)> =
+        crate::requirements::uninstalled_requirements(&store, plugin)?
+            .into_iter()
+            .map(|required| (plugin.name.clone(), required))
+            .collect();
+    while let Some((dependent, required)) = pending.pop() {
+        if store.load_optional(&required)?.is_some() {
+            continue;
+        }
+        progress.report(PluginProgressEvent::InstallingRequirement {
+            plugin: dependent.clone(),
+            required: required.clone(),
+        });
+        let parsed = PluginInstallRef::Catalog {
+            name: required.clone(),
+            version: None,
+        };
+        let resolved = resolve_install_source(parsed, options, progress)
+            .await
+            .with_context(|| format!("install {required}, required by {dependent}"))?;
+        let installed = install_resolved_plugin(resolved, options, progress, None)
+            .await
+            .with_context(|| format!("install {required}, required by {dependent}"))?;
+        for next in crate::requirements::uninstalled_requirements(&store, &installed.metadata)? {
+            pending.push((installed.metadata.name.clone(), next));
+        }
+    }
+    Ok(())
+}
+
+/// Install, from the catalog, the requirements of an already installed
+/// plugin (for example one installed from a local archive).
+pub async fn install_plugin_requirements(
+    plugin: &InstalledPluginMetadata,
+    options: &PluginInstallOptions,
+    progress: &mut impl PluginProgressReporter,
+) -> Result<()> {
+    install_requirements(plugin, options, progress).await
 }
 
 pub fn install_plugin_archive(
@@ -155,6 +214,7 @@ pub fn install_plugin_archive(
         install_path: extracted.install_path,
         enabled: current.as_ref().map(|item| item.enabled).unwrap_or(true),
         default_managed: false,
+        requires: extracted.requires,
         manifest: extracted.manifest,
         last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
         last_status: current.as_ref().and_then(|item| item.last_status.clone()),
@@ -239,7 +299,9 @@ pub async fn update_plugin(
         source,
         version: None,
     };
-    install_resolved_plugin(resolved, options, progress, Some(current)).await
+    let outcome = install_resolved_plugin(resolved, options, progress, Some(current)).await?;
+    install_requirements(&outcome.metadata, options, progress).await?;
+    Ok(outcome)
 }
 
 struct ResolvedInstallSource {
@@ -375,6 +437,7 @@ fn build_installed_metadata(
         install_path: extracted.install_path,
         enabled: current.map(|metadata| metadata.enabled).unwrap_or(true),
         default_managed: current.is_some_and(|metadata| metadata.default_managed),
+        requires: extracted.requires,
         manifest: extracted.manifest,
         last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
         last_status: current.and_then(|metadata| metadata.last_status.clone()),
@@ -921,5 +984,81 @@ mod tests {
             );
             assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
         }
+    }
+
+    #[test]
+    fn a_local_archive_records_what_its_plugin_toml_requires() {
+        let temp = tempfile::tempdir().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp
+            .path()
+            .join("lexe-wallet-0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+        write_tar_gz(
+            &archive_path,
+            "lexe-wallet",
+            &[
+                (
+                    "plugin.toml",
+                    b"name = \"lexe-wallet\"\nversion = \"0.1.0\"\nrequires = [\"pay-lightning\"]\n",
+                ),
+                ("lexe-wallet", b""),
+            ],
+        )
+        .unwrap();
+
+        let outcome = install_plugin_archive(
+            "lexe-wallet",
+            "0.1.0",
+            &archive_path,
+            &options,
+            &mut |_event: PluginProgressEvent| {},
+        )
+        .unwrap();
+        assert_eq!(outcome.metadata.requires, vec!["pay-lightning".to_string()]);
+
+        let store = PluginStore::new(&options.store_root);
+        let reloaded = store.load("lexe-wallet").unwrap();
+        assert_eq!(reloaded.requires, vec!["pay-lightning".to_string()]);
+        assert_eq!(
+            crate::requirements::uninstalled_requirements(&store, &reloaded).unwrap(),
+            vec!["pay-lightning".to_string()]
+        );
+        assert_eq!(
+            crate::requirements::missing_requirements(std::slice::from_ref(&reloaded))
+                .into_iter()
+                .map(|missing| missing.required)
+                .collect::<Vec<_>>(),
+            vec!["pay-lightning".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_plugin_toml_that_names_another_plugin_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp
+            .path()
+            .join("demo-0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+        write_tar_gz(
+            &archive_path,
+            "demo",
+            &[("plugin.toml", b"name = \"other\""), ("demo", b"")],
+        )
+        .unwrap();
+        let error = install_plugin_archive(
+            "demo",
+            "0.1.0",
+            &archive_path,
+            &options,
+            &mut |_event: PluginProgressEvent| {},
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("names 'other'"), "{error:#}");
+        assert!(
+            PluginStore::new(&options.store_root)
+                .load_optional("demo")
+                .unwrap()
+                .is_none()
+        );
     }
 }

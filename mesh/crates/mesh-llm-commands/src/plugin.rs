@@ -6,7 +6,8 @@ use mesh_llm_plugin_manager::defaults::{
     DEFAULT_PLUGINS, DefaultPluginOutcome, NO_DEFAULT_PLUGINS_ENV, default_plugin,
     default_plugins_opted_out, provision_bundled_defaults, turn_off_defaults,
 };
-use mesh_llm_plugin_manager::install::install_plugin_archive;
+use mesh_llm_plugin_manager::install::{install_plugin_archive, install_plugin_requirements};
+use mesh_llm_plugin_manager::requirements::{ensure_not_required, missing_requirements};
 use mesh_llm_plugin_manager::{
     PluginCatalog, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
     PluginTarget, default_store_root, install_plugin, update_plugin,
@@ -179,7 +180,9 @@ async fn install(
     let outcome = match (reference, archive, name) {
         (Some(reference), None, None) => install_plugin(reference, &options, &mut progress).await?,
         (None, Some(archive), Some(name)) => {
-            install_plugin_archive(name, version, archive, &options, &mut progress)?
+            let outcome = install_plugin_archive(name, version, archive, &options, &mut progress)?;
+            install_plugin_requirements(&outcome.metadata, &options, &mut progress).await?;
+            outcome
         }
         _ => bail!("provide either a plugin reference or --archive with --name"),
     };
@@ -298,6 +301,7 @@ fn delete(name: &str) -> Result<()> {
 }
 
 fn delete_in(store: &PluginStore, name: &str, err: &mut impl Write) -> Result<()> {
+    ensure_not_required(store, name, "delete")?;
     store.delete(name)?;
     writeln!(err, "🗑️  Deleted {name}")?;
     // A deleted default stays removed: delete leaves the record that `plugins
@@ -432,17 +436,27 @@ async fn search(query: Option<&str>) -> Result<()> {
 fn list(runtime_rows: &PluginListRows) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
     let mut out = mesh_llm_events::console_out();
-    for metadata in store.list()? {
+    let installed = store.list()?;
+    for metadata in &installed {
         let state = if metadata.enabled {
             "enabled"
         } else {
             "disabled"
         };
+        let requires = if metadata.requires.is_empty() {
+            String::new()
+        } else {
+            format!("\trequires={}", metadata.requires.join(","))
+        };
         writeln!(
             out,
-            "{}\tversion={}\tstate={}\tsource={}",
+            "{}\tversion={}\tstate={}\tsource={}{requires}",
             metadata.name, metadata.installed_version, state, metadata.source_repository
         )?;
+    }
+    let mut err = mesh_llm_events::console_err();
+    for missing in missing_requirements(&installed) {
+        writeln!(err, "⚠️  {}", missing.describe())?;
     }
 
     for spec in &runtime_rows.externals {
@@ -568,6 +582,11 @@ impl PluginProgressReporter for CliPluginProgress {
                 self.finish();
                 let mut err = mesh_llm_events::console_err();
                 let _ = writeln!(err, "✅ {name} is up to date ({version})");
+            }
+            PluginProgressEvent::InstallingRequirement { plugin, required } => {
+                self.finish();
+                let mut err = mesh_llm_events::console_err();
+                let _ = writeln!(err, "🔗 {plugin} requires {required}; installing it");
             }
         }
     }
@@ -695,6 +714,7 @@ url = "unix:///run/remote.sock"
                 install_path: store.root().join("installed").join("capsules"),
                 enabled,
                 default_managed: false,
+                requires: Vec::new(),
                 manifest: None,
                 last_protocol_version: None,
                 last_status: None,
@@ -818,6 +838,52 @@ url = "unix:///run/remote.sock"
         delete_in(&store, "mine", &mut err).unwrap();
         assert!(!store.default_turned_off("mine"));
         assert!(!String::from_utf8(err).unwrap().contains("default plugin"));
+    }
+
+    fn installed_plugin(
+        store: &PluginStore,
+        name: &str,
+        requires: &[&str],
+    ) -> mesh_llm_plugin_manager::InstalledPluginMetadata {
+        let metadata = mesh_llm_plugin_manager::InstalledPluginMetadata {
+            name: name.into(),
+            source_repository: format!("https://github.com/Mesh-LLM/{name}"),
+            installed_version: "v0.1.0".into(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            downloaded_asset_name: format!("{name}-0.1.0-x86_64-unknown-linux-gnu.tar.gz"),
+            install_path: store.root().join("installed").join(name),
+            enabled: true,
+            default_managed: false,
+            requires: requires.iter().map(|value| value.to_string()).collect(),
+            manifest: None,
+            last_protocol_version: None,
+            last_status: None,
+            last_error: None,
+        };
+        store.save(&metadata).unwrap();
+        metadata
+    }
+
+    #[test]
+    fn deleting_a_plugin_another_one_requires_is_refused_and_keeps_it_installed() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        installed_plugin(&store, "lexe-wallet", &["pay-lightning"]);
+        installed_plugin(&store, "pay-lightning", &[]);
+        let mut err = Vec::new();
+
+        let error = delete_in(&store, "pay-lightning", &mut err).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "cannot delete pay-lightning: required by lexe-wallet; delete it first"
+        );
+        assert!(store.load_optional("pay-lightning").unwrap().is_some());
+        assert!(err.is_empty());
+
+        delete_in(&store, "lexe-wallet", &mut err).unwrap();
+        delete_in(&store, "pay-lightning", &mut err).unwrap();
+        assert!(store.list().unwrap().is_empty());
     }
 
     #[test]

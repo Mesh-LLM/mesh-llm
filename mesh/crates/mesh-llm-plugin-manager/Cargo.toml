@@ -24,4 +24,5 @@ serde_json.workspace = true
 sha2.workspace = true
 tar = "0.4"
 tempfile = "3"
+toml = "1.1"
 zip = { version = "9", default-features = false, features = ["deflate"] }

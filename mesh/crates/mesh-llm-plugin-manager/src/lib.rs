@@ -5,6 +5,8 @@ pub mod catalog;
 pub mod defaults;
 pub mod github;
 pub mod install;
+pub mod plugin_toml;
+pub mod requirements;
 pub mod skills;
 pub mod source_ref;
 pub mod store;
@@ -16,11 +18,14 @@ pub use catalog::{CatalogEntry, PinnedRelease, PluginCatalog};
 pub use github::{GitHubRelease, GitHubReleaseAsset, GitHubReleaseClient};
 pub use install::{
     InstallOutcome, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter,
-    install_plugin, update_plugin,
+    install_plugin, install_plugin_requirements, update_plugin,
 };
 pub use mesh_llm_skills::{
     SkillAgent, SkillInstallAction, SkillInstallReport, SkillInstallStatus, SkillPackage,
     SkillTarget,
+};
+pub use requirements::{
+    MissingRequirement, MissingRequirementReason, missing_requirements, required_by,
 };
 pub use skills::{PluginSkillInstallOptions, discover_plugin_skills, install_available_skills};
 pub use source_ref::{GitHubPluginSource, PluginInstallRef, PluginVersion, parse_install_ref};

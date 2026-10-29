@@ -5181,6 +5181,7 @@ dependencies = [
  "sha2 0.11.0",
  "tar",
  "tempfile",
+ "toml 1.1.6+spec-1.1.0",
  "zip",
 ]
 
