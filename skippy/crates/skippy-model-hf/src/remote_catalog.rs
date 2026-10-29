@@ -370,11 +370,18 @@ pub fn find_huggingface_layer_package(model_query: &str) -> Option<String> {
 }
 
 /// Probe a Hugging Face repo directly and treat it as a layer package only
-/// when the manifest exists at the requested revision.
+/// when the manifest exists at the requested revision. A pinned revision whose
+/// package snapshot is already cached resolves without asking the Hub.
 pub fn find_huggingface_layer_package_at_revision(
     repo: &str,
     revision: Option<&str>,
 ) -> Option<String> {
+    if let Some(revision) = revision
+        && cached_layer_package_snapshot(&crate::huggingface_hub_cache_dir(), repo, revision)
+            .is_some()
+    {
+        return Some(format_hf_package_ref(repo, Some(revision)));
+    }
     let revision_ref = revision.unwrap_or("main");
     match hf_model_repo_has_file(repo, revision_ref, "model-package.json") {
         Ok(true) => Some(format_hf_package_ref(repo, revision)),
@@ -411,6 +418,25 @@ fn parse_exact_huggingface_repo(input: &str) -> Option<(String, Option<String>)>
     let (repo, revision, selector) = skippy_model_resolver::parse_huggingface_repo_ref(input)
         .or_else(|| skippy_model_resolver::parse_huggingface_repo_url(input))?;
     selector.is_none().then_some((repo, revision))
+}
+
+/// A pinned revision whose snapshot is already in the local Hugging Face cache
+/// with a package manifest is a layer package without asking the Hub. Revisions
+/// that exist only locally, or offline nodes, would otherwise fall through to
+/// GGUF file resolution and serve one package artifact as a whole model.
+fn cached_layer_package_snapshot(hub_cache: &Path, repo: &str, revision: &str) -> Option<PathBuf> {
+    let mut components = Path::new(revision).components();
+    let (Some(Component::Normal(_)), None) = (components.next(), components.next()) else {
+        return None;
+    };
+    let snapshot = hub_cache
+        .join(format!("models--{}", repo.replace('/', "--")))
+        .join("snapshots")
+        .join(revision);
+    snapshot
+        .join("model-package.json")
+        .is_file()
+        .then_some(snapshot)
 }
 
 fn format_hf_package_ref(repo: &str, revision: Option<&str>) -> String {
