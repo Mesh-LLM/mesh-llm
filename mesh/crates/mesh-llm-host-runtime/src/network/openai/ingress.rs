@@ -251,6 +251,36 @@ async fn collect_available_models_for_auto_route(
     available_models
 }
 
+/// A plugin advertises its models by name and selects a serving endpoint by
+/// request protocol, so one model id may be served by both a chat endpoint and
+/// an OCR endpoint. `plugin_ocr_descriptors` turns only the OCR side into a
+/// `DocumentOcr` descriptor, so descriptor-only admission would reject chat for
+/// that shared name before `try_route_plugin_model` — which does select on
+/// protocol — is ever reached. Ask the plugin router before declaring the
+/// workload unsupported.
+///
+/// Only workloads with a typed endpoint class consult plugins. System One is a
+/// runtime capability of a model descriptor, not a plugin endpoint contract, so
+/// it stays gated on descriptors alone.
+async fn plugin_endpoint_admits(
+    plugin_manager: Option<&crate::plugin::PluginManager>,
+    model: &str,
+    path: &str,
+) -> bool {
+    let Some(plugin_manager) = plugin_manager else {
+        return false;
+    };
+    if request_workload_class(path).is_none() {
+        return false;
+    }
+    matches!(
+        plugin_manager
+            .inference_endpoint_for_request(model, path)
+            .await,
+        Ok(Some(_))
+    )
+}
+
 /// Admit explicit workloads or select a compatible automatic route, preserving committee mode.
 // Keep this payment fix localized; the new rejection branch puts this existing flow at 21/20.
 #[allow(clippy::cognitive_complexity)]
@@ -276,6 +306,7 @@ async fn resolve_auto_routed_model(
     {
         if let Some(workload) = required_request_workload(&request.client_path)
             && !model_satisfies_request(model, &request.client_path, descriptors)
+            && !plugin_endpoint_admits(plugin_manager, model, &request.client_path).await
         {
             return AutoRouteResolution::WorkloadUnsupported(workload);
         }

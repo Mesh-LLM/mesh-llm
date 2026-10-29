@@ -2735,3 +2735,127 @@ async fn local_route_terminal_stays_host_served_when_this_node_served() {
         Some(node.id().to_string())
     );
 }
+
+/// A plugin advertises its models by name and selects a serving endpoint by
+/// request protocol, so one model id may be served by a chat endpoint and an
+/// OCR endpoint at once. `plugin_ocr_descriptors` adds a `DocumentOcr`
+/// descriptor for that shared name, but a plugin-served chat endpoint has no
+/// descriptor of its own. Descriptor-only admission then rejects chat for the
+/// name as an unsupported workload before `try_route_plugin_model` -- which
+/// selects on protocol -- is ever reached.
+#[tokio::test]
+async fn chat_admitted_for_plugin_model_sharing_a_name_with_an_ocr_endpoint() {
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    let targets = election::ModelTargets::default();
+    let affinity = affinity::AffinityRouter::new();
+
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![
+            crate::plugin::InferenceEndpointRoute {
+                plugin_name: "chat-plugin".to_string(),
+                endpoint_id: "chat".to_string(),
+                protocol: Some("openai_compatible".to_string()),
+                address: "http://127.0.0.1:1".to_string(),
+                models: vec![model.to_string()],
+            },
+            crate::plugin::InferenceEndpointRoute {
+                plugin_name: "ocr-plugin".to_string(),
+                endpoint_id: "ocr".to_string(),
+                protocol: Some("document_ocr_v1".to_string()),
+                address: "http://127.0.0.1:2".to_string(),
+                models: vec![model.to_string()],
+            },
+        ])
+        .await;
+
+    // What `all_served_model_descriptors` holds when only the OCR side is a
+    // plugin: the OCR descriptor for the shared name, and no chat descriptor.
+    let ocr_descriptor = mesh::ServedModelDescriptor {
+        identity: mesh::ServedModelIdentity {
+            model_name: model.to_string(),
+            ..Default::default()
+        },
+        metadata: Some(mesh::ServedModelMetadata {
+            workload_class: Some(mesh::ModelWorkloadClass::DocumentOcr),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+
+    let mut request = plugin_only_request(model);
+    let decision =
+        prepare_auto_route_decision(&mut request, &ctx, std::slice::from_ref(&ocr_descriptor))
+            .await
+            .expect("a protocol-matched chat plugin endpoint must keep the model admitted");
+    assert_eq!(decision.effective_model.as_deref(), Some(model));
+}
+
+/// The fix must not widen admission for a model that only an OCR endpoint
+/// serves: chat for an OCR-only name stays rejected.
+#[tokio::test]
+async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
+    let model = "acme/ocr-only-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    let targets = election::ModelTargets::default();
+    let affinity = affinity::AffinityRouter::new();
+
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "ocr-plugin".to_string(),
+            endpoint_id: "ocr".to_string(),
+            protocol: Some("document_ocr_v1".to_string()),
+            address: "http://127.0.0.1:2".to_string(),
+            models: vec![model.to_string()],
+        }])
+        .await;
+
+    let ocr_descriptor = mesh::ServedModelDescriptor {
+        identity: mesh::ServedModelIdentity {
+            model_name: model.to_string(),
+            ..Default::default()
+        },
+        metadata: Some(mesh::ServedModelMetadata {
+            workload_class: Some(mesh::ModelWorkloadClass::DocumentOcr),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+
+    let mut request = plugin_only_request(model);
+    match prepare_auto_route_decision(&mut request, &ctx, std::slice::from_ref(&ocr_descriptor))
+        .await
+    {
+        Err(AutoRouteRejection::WorkloadUnsupported(
+            mesh::ModelWorkloadClass::CausalGeneration,
+        )) => {}
+        Err(other) => panic!("expected a causal-generation workload rejection, got {other:?}"),
+        Ok(_) => panic!("an OCR-only model must not be admitted for chat"),
+    }
+}
