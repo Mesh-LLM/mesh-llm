@@ -1101,6 +1101,8 @@ fn auto_does_not_select_a_dflash_draft() {
 fn split_targets_keep_an_explicit_dflash_plan() {
     for pairing_fault in ["warn_disable", "fail_closed"] {
         let resolved = resolve_with_dflash_draft("dflash", pairing_fault);
+        // The configured cap holds on a split too.
+        assert!(resolved.speculative.draft_max_tokens_configured);
         let staged = resolved
             .to_embedded_openai_args(4096, true)
             .expect("staged translation keeps DFlash");
@@ -1241,6 +1243,8 @@ fn a_default_dflash_draft_is_served_only_once_fetched() {
         &model_path,
         &target_meta("qwen35", 32, 4096, 0),
     );
+    // A default draft's cap is a default, so a split may shorten it.
+    assert!(!resolved.speculative.draft_max_tokens_configured);
 
     resolved
         .speculative
