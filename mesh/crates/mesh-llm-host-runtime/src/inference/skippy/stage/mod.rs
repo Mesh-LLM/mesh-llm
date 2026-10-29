@@ -411,6 +411,7 @@ impl StageControlState {
             openai: None,
             l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
             compute_meter: Some(compute_meter.clone()),
+            split_dflash: effective_load.dflash.clone(),
         });
         self.stages.insert(
             key.clone(),

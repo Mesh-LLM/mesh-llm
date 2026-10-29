@@ -281,6 +281,7 @@ pub(super) fn stage_load_to_proto(
         flash_attn_type: stage_flash_attn_type_to_proto(load.flash_attn_type) as i32,
         runtime_settings: Some(stage_runtime_settings_to_proto(load.runtime_settings)),
         native_mtp_enabled: Some(load.native_mtp_enabled),
+        dflash: load.dflash.as_ref().map(stage_dflash_to_proto),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id.map(|id| id.to_string()),
@@ -559,6 +560,7 @@ pub(super) fn stage_load_from_proto(
         flash_attn_type: stage_flash_attn_type_from_proto(load.flash_attn_type),
         runtime_settings: stage_runtime_settings_from_proto(load.runtime_settings)?,
         native_mtp_enabled: load.native_mtp_enabled.unwrap_or(true),
+        dflash: load.dflash.map(stage_dflash_from_proto),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
         coordinator_id: load
@@ -1438,6 +1440,33 @@ pub(super) fn stage_runtime_state_to_proto(
         crate::inference::skippy::StageRuntimeState::Failed => {
             skippy_stage_proto::StageRuntimeState::Failed
         }
+    }
+}
+
+fn stage_dflash_to_proto(
+    plan: &skippy_serving::split_dflash::SplitDFlashStage,
+) -> skippy_stage_proto::StageDFlashPlan {
+    skippy_stage_proto::StageDFlashPlan {
+        target_layers: plan.target_layers.clone(),
+        draft_model_path: plan
+            .draft_model_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        max_draft_tokens: plan
+            .max_draft_tokens
+            .map(|tokens| u32::try_from(tokens).unwrap_or(u32::MAX)),
+        draft_n_gpu_layers: plan.draft_n_gpu_layers,
+    }
+}
+
+fn stage_dflash_from_proto(
+    plan: skippy_stage_proto::StageDFlashPlan,
+) -> skippy_serving::split_dflash::SplitDFlashStage {
+    skippy_serving::split_dflash::SplitDFlashStage {
+        target_layers: plan.target_layers,
+        draft_model_path: plan.draft_model_path.map(std::path::PathBuf::from),
+        max_draft_tokens: plan.max_draft_tokens.map(|tokens| tokens as usize),
+        draft_n_gpu_layers: plan.draft_n_gpu_layers,
     }
 }
 
