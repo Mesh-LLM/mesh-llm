@@ -75,6 +75,7 @@ async fn non_wallet_provider_uses_fixed_setup_allowlist_generation_and_revocatio
             grant,
             handle: None,
             capacity: Arc::new(Semaphore::new(8)),
+            installed_grant: false,
         },
     );
     let request = |handle, operation: &str, input: &str| BoundOperationRequest {
@@ -268,5 +269,89 @@ fn setup_directory_payload_scopes_the_caller_base_to_the_provider() {
             "../x"
         )
         .is_err()
+    );
+}
+
+/// A binding granted by an installed package has no config entry; applying
+/// config must keep it until an entry replaces it or disables the plugin.
+#[test]
+fn installed_package_grant_survives_config_apply_until_replaced() {
+    fn grant(name: &str) -> PluginOperationBinding {
+        PluginOperationBinding {
+            capability: Some("wallet.v1".into()),
+            setup_directory: true,
+            name: name.into(),
+            provider: String::new(),
+            profile: "default".into(),
+            setup_operation: "wallet_open".into(),
+            setup_input_json: "{}".into(),
+            operations: vec!["wallet_balance".into()],
+        }
+    }
+    fn manager_with(installed_grant: bool) -> PluginManager {
+        let manager = PluginManager::for_test_summaries(Vec::new());
+        manager.inner.operation_bindings.0.lock().unwrap().insert(
+            ("pay".into(), "wallet".into()),
+            Binding {
+                grant: grant("wallet"),
+                handle: None,
+                capacity: Arc::new(Semaphore::new(8)),
+                installed_grant,
+            },
+        );
+        manager
+    }
+    fn entry(bindings: Vec<PluginOperationBinding>, enabled: Option<bool>) -> MeshConfig {
+        let mut config = MeshConfig::default();
+        config.plugins.push(crate::plugin::PluginConfigEntry {
+            operation_bindings: bindings,
+            name: "pay".into(),
+            enabled,
+            web_ui_enabled: None,
+            web_ui_primary_tab: None,
+            allow_peer_blocks: None,
+            allow_inference_observation: None,
+            openai_exchange_grant: None,
+            command: None,
+            args: Vec::new(),
+            url: None,
+            settings: std::collections::BTreeMap::new(),
+            startup: crate::plugin::PluginStartupConfig::default(),
+        });
+        config
+    }
+    let kept = |manager: &PluginManager| {
+        manager
+            .inner
+            .operation_bindings
+            .0
+            .lock()
+            .unwrap()
+            .contains_key(&("pay".to_owned(), "wallet".to_owned()))
+    };
+
+    let manager = manager_with(true);
+    manager.revoke_changed_operation_bindings(&MeshConfig::default());
+    assert!(kept(&manager), "no config entry: the package grant stands");
+    manager.revoke_changed_operation_bindings(&entry(Vec::new(), None));
+    assert!(
+        kept(&manager),
+        "an entry without bindings does not replace the grant"
+    );
+    manager.revoke_changed_operation_bindings(&entry(vec![grant("other")], None));
+    assert!(
+        !kept(&manager),
+        "an entry naming its own bindings replaces the grant"
+    );
+
+    let manager = manager_with(true);
+    manager.revoke_changed_operation_bindings(&entry(Vec::new(), Some(false)));
+    assert!(!kept(&manager), "a disabled plugin keeps no grant");
+
+    let manager = manager_with(false);
+    manager.revoke_changed_operation_bindings(&MeshConfig::default());
+    assert!(
+        !kept(&manager),
+        "a config grant whose entry is gone is revoked"
     );
 }

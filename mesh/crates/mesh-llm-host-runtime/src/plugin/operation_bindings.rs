@@ -13,6 +13,8 @@ struct Binding {
     grant: PluginOperationBinding,
     handle: Option<(String, u64, u64)>,
     capacity: Arc<Semaphore>,
+    /// Granted by the installed package's manifest rather than a config entry.
+    installed_grant: bool,
 }
 
 #[derive(Default)]
@@ -23,6 +25,11 @@ impl BindingRegistry {
         let mut bindings = BTreeMap::new();
         let mut providers = std::collections::BTreeSet::new();
         for spec in specs {
+            let installed_grants = spec
+                .installed_metadata
+                .as_ref()
+                .map(super::installed::installed_operation_bindings)
+                .unwrap_or_default();
             for grant in &spec.operation_bindings {
                 grant.validate(&spec.name).map_err(anyhow::Error::msg)?;
                 if grant.capability.is_none() {
@@ -42,6 +49,7 @@ impl BindingRegistry {
                                 grant: grant.clone(),
                                 handle: None,
                                 capacity: Arc::new(Semaphore::new(8)),
+                                installed_grant: installed_grants.contains(grant),
                             }
                         )
                         .is_none(),
@@ -55,6 +63,8 @@ impl BindingRegistry {
 
 impl PluginManager {
     /// Changed grants are revoked immediately. New grants take effect on restart.
+    /// A grant from an installed package stands until a config entry for the
+    /// caller names its own bindings (which replace it) or disables the plugin.
     pub(crate) fn revoke_changed_operation_bindings(&self, config: &MeshConfig) {
         self.inner
             .operation_bindings
@@ -62,13 +72,18 @@ impl PluginManager {
             .lock()
             .unwrap()
             .retain(|(caller, _), binding| {
-                config.plugins.iter().any(|entry| {
-                    entry.name == *caller
-                        && entry.enabled != Some(false)
-                        && entry.operation_bindings.contains(&binding.grant)
-                }) && !config.plugins.iter().any(|entry| {
-                    entry.name == binding.grant.provider && entry.enabled == Some(false)
-                })
+                let caller_entry = config.plugins.iter().find(|entry| entry.name == *caller);
+                let granted = match caller_entry {
+                    Some(entry) if entry.enabled == Some(false) => false,
+                    Some(entry) if !entry.operation_bindings.is_empty() => {
+                        entry.operation_bindings.contains(&binding.grant)
+                    }
+                    Some(_) | None => binding.installed_grant,
+                };
+                granted
+                    && !config.plugins.iter().any(|entry| {
+                        entry.name == binding.grant.provider && entry.enabled == Some(false)
+                    })
             });
     }
 
@@ -279,6 +294,9 @@ fn setup_directory_payload(caller_payload: &str, provider: &str) -> anyhow::Resu
 }
 
 fn denied(reason: &str) -> Response {
+    // Callers retry refused setups silently for a while; the reason must be
+    // visible to an operator running with debug logging.
+    tracing::debug!(reason, "Bound operation refused before dispatch");
     Response::NotDispatched {
         reason: reason.into(),
     }
