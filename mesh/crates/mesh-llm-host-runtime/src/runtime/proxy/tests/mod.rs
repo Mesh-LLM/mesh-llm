@@ -330,6 +330,7 @@ async fn start_inference_endpoint_plugin_manager(
         .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
             plugin_name: "endpoint-plugin".into(),
             endpoint_id: "endpoint-plugin".into(),
+            protocol: None,
             address,
             models,
         }])
