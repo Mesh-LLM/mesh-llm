@@ -456,6 +456,22 @@ fn run_binary_stage(
         shutdown_requested.clone()
     };
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
+    // The final stage's split DFlash draft needs the target tensors it
+    // borrows loaded; the stage keeps its plain config to fall back on.
+    let plain_config = config.clone();
+    let mut config = config;
+    let borrowing = match split_dflash.as_ref() {
+        Some(plan) => crate::split_dflash::load_borrowed_target_tensors(&mut config, plan)
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    stage = config.stage_id,
+                    error = format!("{error:#}"),
+                    "cannot load the tensors the split DFlash draft borrows"
+                );
+                false
+            }),
+        None => false,
+    };
     validate_config(&config, topology.as_ref())?;
     let telemetry = Telemetry::new(
         metrics_otlp_grpc,
@@ -474,8 +490,21 @@ fn run_binary_stage(
             crate::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
         ),
     };
-    let runtime = load_runtime_with_overrides(&config, &overrides, None)?
-        .context("binary stage server requires model_path")?;
+    let runtime = match load_runtime_with_overrides(&config, &overrides, None) {
+        // A native runtime that predates borrowed tensors refuses them; the
+        // stage then serves without the draft rather than not at all.
+        Err(error) if borrowing => {
+            tracing::warn!(
+                stage = config.stage_id,
+                error = format!("{error:#}"),
+                "the stage did not load the tensors its split DFlash draft borrows; loading without them"
+            );
+            config = plain_config;
+            load_runtime_with_overrides(&config, &overrides, None)?
+        }
+        loaded => loaded?,
+    }
+    .context("binary stage server requires model_path")?;
     if let Some(plan) = split_dflash.as_ref()
         && let Err(error) = crate::split_dflash::attach_split_dflash(
             &mut lock_runtime(&runtime),

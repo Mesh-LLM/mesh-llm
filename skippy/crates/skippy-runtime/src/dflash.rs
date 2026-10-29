@@ -141,7 +141,14 @@ impl DFlashDraft {
     ) -> Result<Self> {
         let api = skippy_ffi::llama_draft::llama_draft_api()
             .ok_or_else(|| anyhow!("native runtime does not export the draft-context API"))?;
-        reject_dspark(path)?;
+        let draft_embeds = reject_dspark(path)?;
+        if !draft_embeds
+            && let Some(tensor) = missing_borrowed_tensor(&config.resident_tensor_names)
+        {
+            bail!(
+                "the target stage does not load {tensor}, which the DFlash draft embeds its block with"
+            );
+        }
         validate_default_params(api)?;
         let target_model = unsafe { (api.get_model)(target_ctx) };
         if target_model.is_null() {
@@ -474,7 +481,25 @@ impl Drop for DFlashDraft {
     }
 }
 
-fn reject_dspark(path: &Path) -> Result<()> {
+/// The target tensor a DFlash draft without its own token embeddings reads
+/// through `ctx_other`. A stage slice holds only the tensors its own layers
+/// read, and keeps just the metadata of the rest: the draft would embed its
+/// block from memory nothing loaded.
+pub const DFLASH_BORROWED_TARGET_TENSOR: &str = "token_embd.weight";
+
+/// The borrowed tensor a target filtered to `resident` tensors lacks. A
+/// target without a resident list loads every tensor.
+fn missing_borrowed_tensor(resident: &[String]) -> Option<&'static str> {
+    (!resident.is_empty()
+        && !resident
+            .iter()
+            .any(|name| name == DFLASH_BORROWED_TARGET_TENSOR))
+    .then_some(DFLASH_BORROWED_TARGET_TENSOR)
+}
+
+/// Refuses a DSpark draft, and returns whether the draft carries its own
+/// token embeddings.
+fn reject_dspark(path: &Path) -> Result<bool> {
     let catalog = skippy_model::gguf_catalog::read_gguf_tensor_catalog(path)
         .with_context(|| format!("read draft GGUF {}", path.display()))?;
     if catalog
@@ -487,7 +512,10 @@ fn reject_dspark(path: &Path) -> Result<()> {
             path.display()
         );
     }
-    Ok(())
+    Ok(catalog
+        .tensors
+        .iter()
+        .any(|tensor| tensor.name == DFLASH_BORROWED_TARGET_TENSOR))
 }
 
 /// Refuses a runtime whose upstream parameter defaults do not match the
@@ -1161,6 +1189,26 @@ mod tests {
         );
         session.dflash_reset_health();
         assert_eq!(session.dflash_health(), Some(DFlashHealth::default()));
+    }
+
+    #[test]
+    fn a_stage_slice_must_hold_the_embeddings_the_draft_borrows() {
+        // A whole model loads every tensor.
+        assert_eq!(missing_borrowed_tensor(&[]), None);
+        // The final stage of an untied target: its layers and output head.
+        let final_stage = [
+            "blk.47.attn_norm.weight",
+            "output.weight",
+            "output_norm.weight",
+        ]
+        .map(String::from);
+        assert_eq!(
+            missing_borrowed_tensor(&final_stage),
+            Some("token_embd.weight")
+        );
+        let mut with_embeddings = final_stage.to_vec();
+        with_embeddings.push("token_embd.weight".to_string());
+        assert_eq!(missing_borrowed_tensor(&with_embeddings), None);
     }
 
     #[test]

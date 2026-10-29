@@ -87,6 +87,51 @@ pub fn draft_target_layers(path: &Path) -> Result<Vec<u32>> {
     Ok(layers)
 }
 
+/// Adds the target tensors the final stage's draft borrows to the tensors the
+/// stage loads, and declares them in its execution contract as borrowed:
+/// resident, though no stage graph reads them. A stage slice loads only what
+/// its own layers read, and the token embeddings of an untied target live
+/// with stage 0: without this the draft embeds every block from memory
+/// nothing loaded and drafts noise. Other stages, and stages that load every
+/// tensor, are left alone. Returns whether the config changed.
+pub(crate) fn load_borrowed_target_tensors(
+    config: &mut StageConfig,
+    plan: &SplitDFlashStage,
+) -> Result<bool> {
+    if config.downstream.is_some()
+        || plan.draft_model_path.is_none()
+        || config.resident_tensor_names.is_empty()
+    {
+        return Ok(false);
+    }
+    let tensor = skippy_runtime::DFLASH_BORROWED_TARGET_TENSOR;
+    let Err(index) = config
+        .resident_tensor_names
+        .binary_search_by(|name| name.as_str().cmp(tensor))
+    else {
+        // A tied target's final stage already loads it for its output head.
+        return Ok(false);
+    };
+    let mut contract: serde_json::Value = serde_json::from_str(&config.execution_contract)
+        .context("parse the stage execution contract")?;
+    let borrowed = contract
+        .as_object_mut()
+        .context("the stage execution contract is not an object")?
+        .entry("borrowed")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let names = borrowed
+        .as_array_mut()
+        .context("the contract's borrowed tensors are not an array")?;
+    names.push(serde_json::Value::String(tensor.to_string()));
+    names.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+    names.dedup();
+    config.execution_contract = contract.to_string();
+    config
+        .resident_tensor_names
+        .insert(index, tensor.to_string());
+    Ok(true)
+}
+
 /// Attaches this stage's part of a split DFlash plan before any serving
 /// session exists: the draft on the final stage, target-layer capture on the
 /// others. A final stage without a usable draft serves without one; stage 0
@@ -205,6 +250,86 @@ mod tests {
     #[test]
     fn a_plan_without_dflash_is_left_alone() {
         assert!(split_stage0_plan(&SpeculativeDecodeConfig::default()).is_none());
+    }
+
+    fn stage_config(final_stage: bool, resident: &[&str]) -> StageConfig {
+        StageConfig {
+            layer_start: 32,
+            layer_end: 64,
+            resident_tensor_names: resident.iter().map(|name| name.to_string()).collect(),
+            execution_contract: serde_json::json!({
+                "version": 1,
+                "layer_start": 32,
+                "layer_end": 64,
+                "decoder": resident.iter().filter(|name| name.starts_with("blk.")).collect::<Vec<_>>(),
+                "mtp": [],
+            })
+            .to_string(),
+            downstream: (!final_stage).then(|| skippy_protocol::PeerConfig {
+                stage_id: "stage-2".to_string(),
+                stage_index: 2,
+                endpoint: "tcp://127.0.0.1:1".to_string(),
+            }),
+            ..StageConfig::default()
+        }
+    }
+
+    fn draft_plan() -> SplitDFlashStage {
+        SplitDFlashStage {
+            target_layers: vec![2, 17, 32, 47, 62],
+            draft_model_path: Some(PathBuf::from("/models/draft-dflash.gguf")),
+            ..SplitDFlashStage::default()
+        }
+    }
+
+    #[test]
+    fn a_drafting_final_stage_loads_the_token_embeddings() {
+        // The final stage of an untied target, cut at 32, as the stage
+        // planner admits it: its layers and the output head only.
+        let mut config = stage_config(true, &["blk.32.attn_norm.weight", "output.weight"]);
+        assert!(load_borrowed_target_tensors(&mut config, &draft_plan()).unwrap());
+        assert_eq!(
+            config.resident_tensor_names,
+            [
+                "blk.32.attn_norm.weight",
+                "output.weight",
+                "token_embd.weight"
+            ]
+        );
+        // The native loader admits a resident no stage graph reads only when
+        // the contract declares it borrowed.
+        let contract: serde_json::Value = serde_json::from_str(&config.execution_contract).unwrap();
+        assert_eq!(
+            contract["borrowed"],
+            serde_json::json!(["token_embd.weight"])
+        );
+        assert_eq!(
+            contract["decoder"],
+            serde_json::json!(["blk.32.attn_norm.weight"])
+        );
+        // A tied target's final stage already holds it.
+        assert!(!load_borrowed_target_tensors(&mut config, &draft_plan()).unwrap());
+        assert_eq!(config.resident_tensor_names.len(), 3);
+    }
+
+    #[test]
+    fn stages_without_a_draft_load_only_their_own_tensors() {
+        let mut middle = stage_config(false, &["blk.32.attn_norm.weight"]);
+        assert!(!load_borrowed_target_tensors(&mut middle, &draft_plan()).unwrap());
+        assert_eq!(middle.resident_tensor_names, ["blk.32.attn_norm.weight"]);
+
+        let mut no_draft = stage_config(true, &["output.weight"]);
+        let plan = SplitDFlashStage {
+            draft_model_path: None,
+            ..draft_plan()
+        };
+        assert!(!load_borrowed_target_tensors(&mut no_draft, &plan).unwrap());
+        assert_eq!(no_draft.resident_tensor_names, ["output.weight"]);
+
+        // An unfiltered stage already loads everything.
+        let mut whole = stage_config(true, &[]);
+        assert!(!load_borrowed_target_tensors(&mut whole, &draft_plan()).unwrap());
+        assert!(whole.resident_tensor_names.is_empty());
     }
 
     #[test]
