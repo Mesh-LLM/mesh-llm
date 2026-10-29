@@ -18,9 +18,9 @@ which evidence requests one node answers for another.
 
 | Before the upgrade | After the first 0.79 start |
 | --- | --- |
-| No `capsules` installed | `capsules` 0.1.5, installed from the release's bundled copy. `--no-default-plugins` or `MESH_LLM_NO_DEFAULT_PLUGINS=1` skips it. |
+| No `capsules` installed | `capsules` 0.1.5, installed from the release's bundled copy on Apple Silicon macOS and on x86_64 or arm64 Linux, the platforms it is pinned for. `--no-default-plugins`, `MESH_LLM_NO_DEFAULT_PLUGINS=1`, or a default turned off earlier (`plugins install-defaults --off`, or a deleted default) skips it. |
 | `capsules` installed by the operator (`mesh-llm plugins install`, or a `[[plugin]]` entry with `command` or `url`) | Left at the installed version. A node start says nothing about it; `mesh-llm plugins install-defaults` reports that it leaves it alone. |
-| A default-managed `capsules` 0.1.4, which only a build from `main` with a bundled copy has (no release does) | Replaced by 0.1.5 at the next start. |
+| A default-managed `capsules` 0.1.4, which only a build from `main` with a bundled copy has (no release does) | Replaced by 0.1.5 at the next start if it is enabled; a disabled one stays at 0.1.4. |
 
 A 0.79 host announces plugin keys (`plugin_keys.v1`, Mesh-LLM/mesh-llm#2299),
 so `capsules` 0.1.5 on it signs its evidence requests. On 0.78.1 or older
