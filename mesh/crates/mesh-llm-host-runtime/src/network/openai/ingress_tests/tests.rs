@@ -1962,6 +1962,15 @@ fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
     }
 }
 
+/// The same request on another endpoint path. Admission reads `client_path`, so
+/// this changes the endpoint under test without rebuilding the fixture.
+fn plugin_only_request_for(model: &str, path: &str) -> proxy::BufferedHttpRequest {
+    let mut request = plugin_only_request(model);
+    request.path = path.to_owned();
+    request.client_path = path.to_owned();
+    request
+}
+
 fn empty_test_plugin_manager() -> crate::plugin::PluginManager {
     crate::plugin::PluginManager::for_test_summaries(Vec::new())
 }
@@ -2738,13 +2747,14 @@ async fn local_route_terminal_stays_host_served_when_this_node_served() {
 
 /// A plugin advertises its models by name and selects a serving endpoint by
 /// request protocol, so one model id may be served by a chat endpoint and an
-/// OCR endpoint at once. `plugin_ocr_descriptors` adds a `DocumentOcr`
-/// descriptor for that shared name, but a plugin-served chat endpoint has no
-/// descriptor of its own. Descriptor-only admission then rejects chat for the
-/// name as an unsupported workload before `try_route_plugin_model` -- which
-/// selects on protocol -- is ever reached.
+/// OCR endpoint at once. Admission is descriptor-based while dispatch selects
+/// on protocol, so the advertisement has to carry the chat class for the shared
+/// name; otherwise chat is rejected as an unsupported workload before
+/// `try_route_plugin_model`, which does select on protocol, is ever reached.
+/// This assertion runs against the same descriptor set a peer receives in
+/// gossip, so it covers remote ingress as well as this node.
 #[tokio::test]
-async fn chat_admitted_for_plugin_model_sharing_a_name_with_an_ocr_endpoint() {
+async fn shared_plugin_model_name_stays_admitted_for_chat_and_ocr() {
     let model = "acme/shared-model";
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
         .await
@@ -2771,20 +2781,15 @@ async fn chat_admitted_for_plugin_model_sharing_a_name_with_an_ocr_endpoint() {
             },
         ])
         .await;
+    node.set_plugin_manager(plugin_manager.clone()).await;
 
-    // What `all_served_model_descriptors` holds when only the OCR side is a
-    // plugin: the OCR descriptor for the shared name, and no chat descriptor.
-    let ocr_descriptor = mesh::ServedModelDescriptor {
-        identity: mesh::ServedModelIdentity {
-            model_name: model.to_string(),
-            ..Default::default()
-        },
-        metadata: Some(mesh::ServedModelMetadata {
-            workload_class: Some(mesh::ModelWorkloadClass::DocumentOcr),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let descriptors = node.all_served_model_descriptors().await;
+    for path in ["/v1/chat/completions", "/v1/documents/ocr"] {
+        assert!(
+            workload_routing::model_satisfies_request(model, path, &descriptors),
+            "{model} must be advertised as servable for {path}"
+        );
+    }
 
     let ctx = IngressRouteContext {
         node: &node,
@@ -2796,16 +2801,23 @@ async fn chat_admitted_for_plugin_model_sharing_a_name_with_an_ocr_endpoint() {
         exchange_channel: None,
     };
 
-    let mut request = plugin_only_request(model);
-    let decision =
-        prepare_auto_route_decision(&mut request, &ctx, std::slice::from_ref(&ocr_descriptor))
-            .await
-            .expect("a protocol-matched chat plugin endpoint must keep the model admitted");
+    let mut chat = plugin_only_request(model);
+    let decision = prepare_auto_route_decision(&mut chat, &ctx, &descriptors)
+        .await
+        .expect("a chat endpoint serving the shared name must keep it admitted for chat");
     assert_eq!(decision.effective_model.as_deref(), Some(model));
+
+    let mut ocr = plugin_only_request_for(model, "/v1/documents/ocr");
+    match prepare_auto_route_decision(&mut ocr, &ctx, &descriptors).await {
+        Ok(decision) => assert_eq!(decision.effective_model.as_deref(), Some(model)),
+        Err(other) => {
+            panic!("the OCR endpoint serves this name, so OCR must be admitted: {other:?}")
+        }
+    }
 }
 
-/// The fix must not widen admission for a model that only an OCR endpoint
-/// serves: chat for an OCR-only name stays rejected.
+/// Widening the advertisement must not widen admission for a name only an OCR
+/// endpoint serves: chat for an OCR-only model stays rejected.
 #[tokio::test]
 async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
     let model = "acme/ocr-only-model";
@@ -2825,18 +2837,13 @@ async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
             models: vec![model.to_string()],
         }])
         .await;
+    node.set_plugin_manager(plugin_manager.clone()).await;
 
-    let ocr_descriptor = mesh::ServedModelDescriptor {
-        identity: mesh::ServedModelIdentity {
-            model_name: model.to_string(),
-            ..Default::default()
-        },
-        metadata: Some(mesh::ServedModelMetadata {
-            workload_class: Some(mesh::ModelWorkloadClass::DocumentOcr),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let descriptors = node.all_served_model_descriptors().await;
+    assert!(
+        !workload_routing::model_satisfies_request(model, "/v1/chat/completions", &descriptors),
+        "an OCR-only endpoint must not advertise the chat class"
+    );
 
     let ctx = IngressRouteContext {
         node: &node,
@@ -2849,9 +2856,7 @@ async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
     };
 
     let mut request = plugin_only_request(model);
-    match prepare_auto_route_decision(&mut request, &ctx, std::slice::from_ref(&ocr_descriptor))
-        .await
-    {
+    match prepare_auto_route_decision(&mut request, &ctx, &descriptors).await {
         Err(AutoRouteRejection::WorkloadUnsupported(
             mesh::ModelWorkloadClass::CausalGeneration,
         )) => {}

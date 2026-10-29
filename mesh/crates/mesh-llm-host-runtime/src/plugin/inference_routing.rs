@@ -1,7 +1,31 @@
 //! Model discovery and protocol-aware selection of plugin inference endpoints.
 
 use super::{InferenceEndpointRoute, PluginManager};
+use crate::mesh::ModelWorkloadClass;
 use anyhow::Result;
+
+/// The one plugin protocol that serves document OCR. Every other protocol is a
+/// chat-compatible endpoint, and this is exactly how
+/// [`PluginManager::inference_endpoint_for_request`] splits dispatch.
+pub(crate) fn is_document_ocr_protocol(protocol: Option<&str>) -> bool {
+    protocol == Some("document_ocr_v1")
+}
+
+/// Workload class a plugin endpoint serves, derived from the protocol it
+/// declares.
+///
+/// A model is admitted on descriptor evidence, while dispatch selects an
+/// endpoint by protocol, so the advertisement has to describe every endpoint
+/// the dispatcher is willing to use. Anything the OCR check does not claim is
+/// offered chat traffic by [`PluginManager::inference_endpoint_for_request`],
+/// so it advertises the chat class.
+pub(crate) fn endpoint_workload_class(protocol: Option<&str>) -> ModelWorkloadClass {
+    if is_document_ocr_protocol(protocol) {
+        ModelWorkloadClass::DocumentOcr
+    } else {
+        ModelWorkloadClass::CausalGeneration
+    }
+}
 
 impl PluginManager {
     pub async fn inference_models(&self) -> Result<Vec<String>> {
@@ -18,7 +42,7 @@ impl PluginManager {
     pub async fn chat_inference_models(&self) -> Result<Vec<String>> {
         let mut models = Vec::new();
         for endpoint in self.inference_endpoints().await? {
-            if endpoint.protocol.as_deref() != Some("document_ocr_v1") {
+            if !is_document_ocr_protocol(endpoint.protocol.as_deref()) {
                 models.extend(endpoint.models);
             }
         }
@@ -34,7 +58,7 @@ impl PluginManager {
         let mut endpoints = self.inference_endpoints().await?;
         sort_endpoints(&mut endpoints);
         Ok(endpoints.into_iter().find(|endpoint| {
-            endpoint.protocol.as_deref() != Some("document_ocr_v1")
+            !is_document_ocr_protocol(endpoint.protocol.as_deref())
                 && endpoint.models.iter().any(|candidate| candidate == model)
         }))
     }
@@ -49,7 +73,7 @@ impl PluginManager {
         sort_endpoints(&mut endpoints);
         Ok(endpoints.into_iter().find(|endpoint| {
             let serves_model = endpoint.models.iter().any(|candidate| candidate == model);
-            let is_ocr_provider = endpoint.protocol.as_deref() == Some("document_ocr_v1");
+            let is_ocr_provider = is_document_ocr_protocol(endpoint.protocol.as_deref());
             serves_model && is_document_ocr == is_ocr_provider
         }))
     }
@@ -135,5 +159,25 @@ mod tests {
             .expect("lookup")
             .expect("chat backend");
         assert_eq!(payment_backend.plugin_name, "chat");
+    }
+
+    /// Admission is descriptor-based and dispatch is protocol-based, so the
+    /// class the advertisement carries has to match what dispatch offers the
+    /// endpoint for.
+    #[test]
+    fn endpoint_workload_class_matches_dispatch_protocols() {
+        assert_eq!(
+            endpoint_workload_class(Some("document_ocr_v1")),
+            ModelWorkloadClass::DocumentOcr
+        );
+        assert_eq!(
+            endpoint_workload_class(Some("openai_compatible")),
+            ModelWorkloadClass::CausalGeneration
+        );
+        assert_eq!(
+            endpoint_workload_class(None),
+            ModelWorkloadClass::CausalGeneration,
+            "a protocol-less endpoint is a chat-compatible endpoint to the dispatcher"
+        );
     }
 }

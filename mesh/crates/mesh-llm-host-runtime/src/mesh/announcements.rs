@@ -4,9 +4,8 @@
 //! selection are owned by `mesh_llm_membership::announcements`.
 
 use super::{
-    ModelDemand, ModelRuntimeDescriptor, ModelWorkloadClass, Node, NodeRole, PeerAnnouncement,
-    ServedModelDescriptor, ServedModelIdentity, ServedModelMetadata, SignedNodeOwnership,
-    infer_remote_served_descriptors,
+    ModelDemand, ModelRuntimeDescriptor, Node, NodeRole, PeerAnnouncement, ServedModelDescriptor,
+    ServedModelIdentity, ServedModelMetadata, SignedNodeOwnership, infer_remote_served_descriptors,
 };
 use crate::mesh::requirements::current_time_unix_ms;
 use crate::models::append_external_inference_models;
@@ -181,7 +180,15 @@ impl Node {
             })
     }
 
-    pub(crate) async fn plugin_ocr_descriptors(&self) -> Vec<ServedModelDescriptor> {
+    /// One descriptor per plugin inference endpoint and model, tagged with the
+    /// workload class that endpoint serves.
+    ///
+    /// A plugin advertises models by *name* and selects a serving endpoint by
+    /// *protocol*, so one name can be served by several endpoints of different
+    /// classes. Advertising only the OCR class made a shared name look
+    /// OCR-only to every descriptor-based admission check — chat on this node
+    /// and, because this is the gossip payload, chat on every peer too.
+    pub(crate) async fn plugin_inference_descriptors(&self) -> Vec<ServedModelDescriptor> {
         let plugin_manager = self.plugin_manager.lock().await.clone();
         let Some(plugin_manager) = plugin_manager else {
             return Vec::new();
@@ -191,25 +198,31 @@ impl Node {
         };
         endpoints
             .into_iter()
-            .filter(|endpoint| endpoint.protocol.as_deref() == Some("document_ocr_v1"))
-            .flat_map(|endpoint| endpoint.models)
-            .map(|model_name| ServedModelDescriptor {
-                identity: ServedModelIdentity {
-                    model_name,
-                    ..Default::default()
-                },
-                metadata: Some(ServedModelMetadata {
-                    workload_class: Some(ModelWorkloadClass::DocumentOcr),
-                    ..Default::default()
-                }),
-                ..Default::default()
+            .flat_map(|endpoint| {
+                let workload_class = crate::plugin::inference_routing::endpoint_workload_class(
+                    endpoint.protocol.as_deref(),
+                );
+                endpoint
+                    .models
+                    .into_iter()
+                    .map(move |model_name| ServedModelDescriptor {
+                        identity: ServedModelIdentity {
+                            model_name,
+                            ..Default::default()
+                        },
+                        metadata: Some(ServedModelMetadata {
+                            workload_class: Some(workload_class),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
             })
             .collect()
     }
 
     pub(crate) async fn local_descriptors_with_plugins(&self) -> Vec<ServedModelDescriptor> {
         let mut descriptors = self.served_model_descriptors.lock().await.clone();
-        descriptors.extend(self.plugin_ocr_descriptors().await);
+        descriptors.extend(self.plugin_inference_descriptors().await);
         descriptors
     }
 
@@ -289,41 +302,106 @@ impl Node {
 }
 
 #[cfg(test)]
-mod ocr_tests {
+mod plugin_descriptor_tests {
     use super::*;
+    use crate::mesh::ModelWorkloadClass;
     use crate::plugin::{InferenceEndpointRoute, PluginManager};
 
+    fn endpoint(
+        plugin_name: &str,
+        protocol: Option<&str>,
+        models: &[&str],
+    ) -> InferenceEndpointRoute {
+        InferenceEndpointRoute {
+            plugin_name: plugin_name.into(),
+            endpoint_id: plugin_name.into(),
+            protocol: protocol.map(str::to_string),
+            address: "http://127.0.0.1:1".into(),
+            models: models.iter().map(|model| (*model).to_string()).collect(),
+        }
+    }
+
+    fn workload_classes(
+        descriptors: &[ServedModelDescriptor],
+        model: &str,
+    ) -> Vec<ModelWorkloadClass> {
+        descriptors
+            .iter()
+            .filter(|descriptor| descriptor.identity.model_name == model)
+            .filter_map(|descriptor| {
+                descriptor
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.workload_class)
+            })
+            .collect()
+    }
+
     #[tokio::test]
-    async fn healthy_ocr_plugin_is_advertised_with_workload_metadata() {
+    async fn plugin_endpoints_are_advertised_with_their_own_workload_class() {
         let node = Node::new_for_tests(NodeRole::Worker).await.expect("node");
         let manager = PluginManager::for_test_summaries(Vec::new());
         manager
-            .set_test_inference_endpoints(vec![InferenceEndpointRoute {
-                plugin_name: "onnx-ocr".into(),
-                endpoint_id: "indra".into(),
-                protocol: Some("document_ocr_v1".into()),
-                address: "http://127.0.0.1:1".into(),
-                models: vec!["datalab/indra-ocr".into()],
-            }])
+            .set_test_inference_endpoints(vec![
+                endpoint("onnx-ocr", Some("document_ocr_v1"), &["datalab/indra-ocr"]),
+                endpoint("chat", Some("openai_compatible"), &["acme/chat"]),
+                endpoint("legacy", None, &["acme/legacy"]),
+            ])
             .await;
         node.set_plugin_manager(manager).await;
+
         let descriptors = node.local_descriptors_with_plugins().await;
-        assert!(descriptors.iter().any(|descriptor| {
-            descriptor.identity.model_name == "datalab/indra-ocr"
-                && descriptor
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.workload_class)
-                    == Some(ModelWorkloadClass::DocumentOcr)
-        }));
+        for (model, class) in [
+            ("datalab/indra-ocr", ModelWorkloadClass::DocumentOcr),
+            ("acme/chat", ModelWorkloadClass::CausalGeneration),
+            ("acme/legacy", ModelWorkloadClass::CausalGeneration),
+        ] {
+            assert_eq!(
+                workload_classes(&descriptors, model),
+                vec![class],
+                "{model} should advertise the class its endpoint serves"
+            );
+        }
+
         let data = node.snapshot_local_announcement_data().await;
-        assert!(data.served_model_descriptors.iter().any(|descriptor| {
-            descriptor.identity.model_name == "datalab/indra-ocr"
-                && descriptor
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.workload_class)
-                    == Some(ModelWorkloadClass::DocumentOcr)
-        }));
+        assert_eq!(
+            workload_classes(&data.served_model_descriptors, "acme/chat"),
+            vec![ModelWorkloadClass::CausalGeneration]
+        );
+        assert_eq!(
+            workload_classes(&data.served_model_descriptors, "datalab/indra-ocr"),
+            vec![ModelWorkloadClass::DocumentOcr]
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_model_name_advertises_every_class_its_endpoints_serve() {
+        let node = Node::new_for_tests(NodeRole::Worker).await.expect("node");
+        let manager = PluginManager::for_test_summaries(Vec::new());
+        manager
+            .set_test_inference_endpoints(vec![
+                endpoint("onnx-ocr", Some("document_ocr_v1"), &["acme/shared"]),
+                endpoint("chat", Some("openai_compatible"), &["acme/shared"]),
+            ])
+            .await;
+        node.set_plugin_manager(manager).await;
+
+        let mut classes = workload_classes(
+            &node
+                .snapshot_local_announcement_data()
+                .await
+                .served_model_descriptors,
+            "acme/shared",
+        );
+        classes.sort_by_key(|class| format!("{class:?}"));
+        assert_eq!(
+            classes,
+            vec![
+                ModelWorkloadClass::CausalGeneration,
+                ModelWorkloadClass::DocumentOcr
+            ],
+            "a name served by both endpoints must advertise both classes, or \
+             descriptor-based admission on this node and its peers sees an OCR-only model"
+        );
     }
 }

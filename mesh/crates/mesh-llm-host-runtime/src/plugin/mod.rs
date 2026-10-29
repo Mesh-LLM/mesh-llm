@@ -11,7 +11,7 @@ mod health;
 mod identity_registration;
 mod identity_registry;
 mod identity_transport;
-mod inference_routing;
+pub(crate) mod inference_routing;
 pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
 pub(crate) mod identity_services;
 mod in_process;

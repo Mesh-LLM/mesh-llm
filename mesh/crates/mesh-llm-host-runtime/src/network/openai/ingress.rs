@@ -197,6 +197,7 @@ async fn handle_models_list_request(
     targets: &election::ModelTargets,
     plugin_manager: Option<&crate::plugin::PluginManager>,
 ) -> proxy::RouteDispatchOutcome {
+    let descriptors = node.all_served_model_descriptors().await;
     let mut models = callable_models(targets);
     models.extend(node.models_being_served().await);
     if let Some(plugin_manager) = plugin_manager
@@ -204,6 +205,9 @@ async fn handle_models_list_request(
     {
         models.append(&mut external_models);
     }
+    // Keep the chat-compatible listing free of models the mesh only advertises
+    // for document OCR, whichever node hosts them.
+    models.retain(|model| !workload_routing::serves_only_document_ocr(model, &descriptors));
     let virtual_models = match plugin_manager {
         Some(plugin_manager) => plugin_manager.virtual_models().await.unwrap_or_default(),
         None => Vec::new(),
@@ -212,7 +216,6 @@ async fn handle_models_list_request(
     models.extend(virtual_models.iter().map(|route| route.model_id.clone()));
     models.sort();
     models.dedup();
-    let descriptors = node.all_served_model_descriptors().await;
     let runtimes = node.all_model_runtime_descriptors().await;
     response_outcome(
         200,
@@ -251,39 +254,25 @@ async fn collect_available_models_for_auto_route(
     available_models
 }
 
-/// A plugin advertises its models by name and selects a serving endpoint by
-/// request protocol, so one model id may be served by both a chat endpoint and
-/// an OCR endpoint. `plugin_ocr_descriptors` turns only the OCR side into a
-/// `DocumentOcr` descriptor, so descriptor-only admission would reject chat for
-/// that shared name before `try_route_plugin_model` — which does select on
-/// protocol — is ever reached. Ask the plugin router before declaring the
-/// workload unsupported.
-///
-/// Only workloads with a typed endpoint class consult plugins. System One is a
-/// runtime capability of a model descriptor, not a plugin endpoint contract, so
-/// it stays gated on descriptors alone.
-async fn plugin_endpoint_admits(
-    plugin_manager: Option<&crate::plugin::PluginManager>,
+/// Route an explicitly named model to itself, rejecting the request only when
+/// no advertisement admits its workload class.
+fn explicit_model_route(
+    request: &proxy::BufferedHttpRequest,
     model: &str,
-    path: &str,
-) -> bool {
-    let Some(plugin_manager) = plugin_manager else {
-        return false;
-    };
-    if request_workload_class(path).is_none() {
-        return false;
+    descriptors: &[crate::mesh::ServedModelDescriptor],
+) -> AutoRouteResolution {
+    if let Some(workload) = required_request_workload(&request.client_path)
+        && !model_satisfies_request(model, &request.client_path, descriptors)
+    {
+        return AutoRouteResolution::WorkloadUnsupported(workload);
     }
-    matches!(
-        plugin_manager
-            .inference_endpoint_for_request(model, path)
-            .await,
-        Ok(Some(_))
-    )
+    AutoRouteResolution::Continue {
+        effective_model: Some(model.to_owned()),
+        classification: None,
+    }
 }
 
 /// Admit explicit workloads or select a compatible automatic route, preserving committee mode.
-// Keep this payment fix localized; the new rejection branch puts this existing flow at 21/20.
-#[allow(clippy::cognitive_complexity)]
 #[allow(clippy::too_many_arguments)]
 async fn resolve_auto_routed_model(
     node: &mesh::Node,
@@ -304,16 +293,7 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
-        if let Some(workload) = required_request_workload(&request.client_path)
-            && !model_satisfies_request(model, &request.client_path, descriptors)
-            && !plugin_endpoint_admits(plugin_manager, model, &request.client_path).await
-        {
-            return AutoRouteResolution::WorkloadUnsupported(workload);
-        }
-        return AutoRouteResolution::Continue {
-            effective_model: request.model_name.clone(),
-            classification: None,
-        };
+        return explicit_model_route(request, model, descriptors);
     }
 
     request.ensure_body_json();

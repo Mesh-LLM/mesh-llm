@@ -254,6 +254,29 @@ pub(super) fn request_media(
     }
 }
 
+/// Whether every advertisement of this model name serves document OCR.
+///
+/// `/v1/models` is the chat-compatible listing, so a local OCR-only plugin
+/// endpoint is deliberately absent from it. A peer advertises its plugin models
+/// by name, which would otherwise put an OCR-only model back on the list just
+/// because a different node hosts it. A name no descriptor claims stays listed:
+/// name-only advertisement is admitted for chat by default, exactly as
+/// `model_satisfies_workload_class` treats it.
+pub(crate) fn serves_only_document_ocr(model: &str, descriptors: &[ServedModelDescriptor]) -> bool {
+    let mut matching = descriptors
+        .iter()
+        .filter(|descriptor| descriptor_matches_routable_name(descriptor, model))
+        .peekable();
+    matching.peek().is_some()
+        && matching.all(|descriptor| {
+            descriptor
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.workload_class)
+                == Some(ModelWorkloadClass::DocumentOcr)
+        })
+}
+
 /// Pick metadata from a descriptor that supports this request, not whichever
 /// peer happened to gossip the model name first.
 pub(super) fn routing_candidates<'a>(
