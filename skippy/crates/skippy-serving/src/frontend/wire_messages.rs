@@ -55,6 +55,7 @@ pub(super) struct ReusableDecodeMessage {
 }
 
 impl ReusableDecodeMessage {
+    /// Bind wire-message construction to one topology, stage and inference session.
     pub(super) fn new(args: ReusableDecodeMessageArgs) -> InferenceResult<Self> {
         let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
         state.seq_id = 0;
@@ -76,6 +77,7 @@ impl ReusableDecodeMessage {
                 tokens: Vec::with_capacity(args.sideband_capacity.max(1)),
                 positions: Vec::new(),
                 activation: Vec::new(),
+                readout_tokens: Vec::new(),
                 raw_bytes: Vec::new(),
             },
             base_pos_start: args.base_pos_start,
@@ -137,6 +139,7 @@ pub(super) struct VerifyWindowMessageArgs<'a> {
     pub(super) native_mtp_draft_tokens: usize,
 }
 
+/// Construct a verification-window request with coordinator-owned identity.
 pub(super) fn embedded_verify_window_message(
     args: VerifyWindowMessageArgs<'_>,
 ) -> InferenceResult<StageWireMessage> {
@@ -171,6 +174,7 @@ pub(super) fn embedded_verify_window_message(
         tokens: args.tokens.to_vec(),
         positions: Vec::new(),
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     })
 }
@@ -203,10 +207,12 @@ pub(super) fn discard_stale_windows_message(
         tokens: vec![min_window_id, max_window_id],
         positions: Vec::new(),
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     })
 }
 
+/// Construct retirement of one exact speculative verification window.
 pub(super) fn retire_verify_window_message(
     request_id: u64,
     session_id: u64,
@@ -228,6 +234,7 @@ pub(super) fn retire_verify_window_message(
         tokens: Vec::new(),
         positions: Vec::new(),
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     })
 }
@@ -259,6 +266,7 @@ pub(super) struct OpenAiPrefillChunk<'a> {
     pub(super) session_id: u64,
 }
 
+/// Construct a prefill request with its prompt, activation and sampling metadata.
 pub(super) fn embedded_prefill_message(
     chunk: OpenAiPrefillChunk<'_>,
 ) -> InferenceResult<StageWireMessage> {
@@ -286,10 +294,12 @@ pub(super) fn embedded_prefill_message(
         tokens: chunk.tokens.to_vec(),
         positions: Vec::new(),
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     })
 }
 
+/// Construct a prefix-cache control message for this inference session.
 pub(super) fn embedded_prefix_cache_message(
     kind: WireMessageKind,
     tokens: &[i32],
@@ -314,6 +324,7 @@ pub(super) fn embedded_prefix_cache_message(
         tokens: tokens.to_vec(),
         positions: Vec::new(),
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     })
 }
@@ -331,6 +342,7 @@ pub(super) struct RestorePrefillDecodeMessageArgs<'a> {
     pub(super) native_mtp_draft_tokens: usize,
 }
 
+/// Construct a fused restore/prefill/decode request preserving generation metadata.
 pub(super) fn embedded_restore_prefill_decode_message(
     args: RestorePrefillDecodeMessageArgs<'_>,
 ) -> InferenceResult<StageWireMessage> {
@@ -359,6 +371,7 @@ pub(super) fn embedded_restore_prefill_decode_message(
         tokens,
         positions: Vec::new(),
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     })
 }
@@ -383,6 +396,7 @@ pub(super) struct MultimodalPrefillArgs {
     pub(super) final_chunk: bool,
 }
 
+/// Construct a prefill request carrying multimodal positions and activation data.
 pub(super) fn multimodal_prefill_message(
     args: MultimodalPrefillArgs,
 ) -> InferenceResult<StageWireMessage> {
@@ -411,6 +425,7 @@ pub(super) fn multimodal_prefill_message(
         tokens: args.tokens,
         positions: args.positions,
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     })
 }

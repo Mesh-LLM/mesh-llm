@@ -72,6 +72,12 @@ pub(super) fn restrict_default_plugin(
         if !may(Surface::OpenAiExchangeHook) && manifest.openai_exchange_hook.take().is_some() {
             removed.push(Surface::OpenAiExchangeHook.name());
         }
+        if !may(Surface::StatusContributions) && manifest.plugin_status.take().is_some() {
+            removed.push(Surface::StatusContributions.name());
+        }
+        if !may(Surface::InferenceObservation) && manifest.inference_observation.take().is_some() {
+            removed.push(Surface::InferenceObservation.name());
+        }
     }
     if capabilities_removed {
         removed.push("capabilities");
@@ -161,6 +167,64 @@ mod tests {
         let mut init = with_hook();
         let removed = restrict_default_plugin(&mut init, UNLISTED_DEFAULT_ALLOWS, &[]);
         assert_eq!(removed, ["OpenAI exchange hook"]);
+    }
+
+    #[test]
+    fn a_default_keeps_its_status_contribution_only_when_its_entry_allows_it() {
+        let with_status = || proto::InitializeResponse {
+            manifest: Some(proto::PluginManifest {
+                plugin_status: Some(proto::PluginStatusManifest {
+                    schema_version: 1,
+                    required: false,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut init = with_status();
+        let removed = restrict_default_plugin(&mut init, &[Surface::WebUi], &[]);
+        assert_eq!(removed, ["status contributions"]);
+        assert!(init.manifest.unwrap().plugin_status.is_none());
+
+        let mut init = with_status();
+        let removed = restrict_default_plugin(&mut init, &[Surface::StatusContributions], &[]);
+        assert!(removed.is_empty());
+        assert!(init.manifest.unwrap().plugin_status.is_some());
+
+        // Unlike the exchange hook, it shows only the plugin's own data, so an
+        // unlisted default keeps it.
+        let mut init = with_status();
+        assert!(restrict_default_plugin(&mut init, UNLISTED_DEFAULT_ALLOWS, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_default_observes_local_inference_only_when_its_entry_allows_it() {
+        let with_observation = || proto::InferenceObservationManifest {
+            contract_version: 1,
+            required: false,
+        };
+        let init = |observation| proto::InitializeResponse {
+            manifest: Some(proto::PluginManifest {
+                inference_observation: Some(observation),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut allowed = init(with_observation());
+        assert!(
+            restrict_default_plugin(&mut allowed, &[Surface::InferenceObservation], &[]).is_empty()
+        );
+        assert!(allowed.manifest.unwrap().inference_observation.is_some());
+
+        // Not even an unlisted default keeps it: it sees every execution here.
+        let mut unlisted = init(with_observation());
+        assert_eq!(
+            restrict_default_plugin(&mut unlisted, UNLISTED_DEFAULT_ALLOWS, &[]),
+            ["local inference observation"]
+        );
+        assert!(unlisted.manifest.unwrap().inference_observation.is_none());
     }
 
     #[test]

@@ -1,7 +1,9 @@
 mod cache_runtime;
 mod detached_runtime;
 mod direct_batch;
+mod direct_execution;
 mod direct_reply;
+pub(crate) mod readout;
 
 use self::cache_runtime::{
     CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
@@ -79,6 +81,7 @@ pub(super) struct ScheduledResumeRequest<'a> {
 #[derive(Debug, Clone)]
 pub(crate) struct SchedulerIterationOutcome {
     pub(crate) predicted: i32,
+    pub(crate) log_probabilities: Vec<f32>,
     pub(crate) output: ActivationFrame,
     pub(crate) batch_size: usize,
     pub(crate) batch_wait_ms: f64,
@@ -137,6 +140,7 @@ struct DirectIteration {
     sampling: Option<SamplingConfig>,
     input: Option<ActivationFrame>,
     sample_last: bool,
+    selected_tokens: Option<Vec<i32>>,
     phase: IterationBatchPhase,
     deadline: Option<Instant>,
     cancellation: Option<skippy_inference_api::CancellationToken>,
@@ -719,6 +723,7 @@ impl IterationScheduler {
         )
     }
 
+    /// Submit one direct iteration with its admission, cancellation and runtime metadata.
     #[allow(clippy::too_many_arguments)]
     fn execute_direct_iteration(
         &self,
@@ -749,6 +754,7 @@ impl IterationScheduler {
                 sampling: sampling.cloned(),
                 input,
                 sample_last,
+                selected_tokens: None,
                 phase,
                 deadline,
                 cancellation: cancellation.cloned(),
@@ -1346,179 +1352,6 @@ impl SchedulerWorker {
         let step = self.scheduler.complete_iteration(&plan, &predicted);
         self.finish_iteration(&plan, &predicted);
         self.emit_step_telemetry(&step, iteration_started.elapsed(), execution_elapsed);
-    }
-
-    fn run_direct_iteration_batch(&mut self) {
-        let batch = take_direct_iteration_batch(
-            &mut self.direct_iterations,
-            self.direct_group_batch_size,
-            self.max_direct_iteration_tokens,
-        );
-        debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
-
-        let mut active = Vec::with_capacity(batch.len());
-        for request in batch {
-            match request.ensure_active() {
-                Ok(()) => active.push(request),
-                Err(error) => {
-                    request.reply.send(Err(error));
-                }
-            }
-        }
-        if active.is_empty() {
-            return;
-        }
-
-        let lock_started = Instant::now();
-        let mut runtime = lock_runtime(&self.runtime);
-        let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
-        let hold_started = Instant::now();
-        let mut runnable = Vec::with_capacity(active.len());
-        for request in active {
-            if let Err(error) = request.ensure_active() {
-                request.reply.send(Err(error));
-                continue;
-            }
-            let alignment = match request.target_token_count {
-                Some(target_token_count) => runtime
-                    .align_session_to_token_count_if_ahead(&request.session_id, target_token_count),
-                None => Ok(None),
-            };
-            match alignment {
-                Ok(alignment) => runnable.push((request, alignment)),
-                Err(error) => {
-                    request.reply.send(Err(openai_backend_error(error)));
-                }
-            }
-        }
-        if runnable.is_empty() {
-            return;
-        }
-        let batch_size = runnable.len();
-        let decode_steps = runnable
-            .iter()
-            .filter(|(request, _)| request.phase == IterationBatchPhase::Decode)
-            .count();
-        let token_count = runnable
-            .iter()
-            .map(|(request, _)| request.token_ids.len())
-            .sum::<usize>();
-        let batch_wait_ms = runnable
-            .iter()
-            .map(|(request, _)| request.enqueued_at.elapsed().as_secs_f64() * 1_000.0)
-            .collect::<Vec<_>>();
-        let requests = runnable
-            .iter()
-            .map(|(request, _)| RuntimeIterationBatchRequest {
-                session_id: &request.session_id,
-                token_ids: &request.token_ids,
-                positions: &request.positions,
-                sampling: request.sampling.as_ref(),
-                input: request.input.as_ref(),
-                sample_last: request.sample_last,
-                phase: request.phase,
-            })
-            .collect::<Vec<_>>();
-        #[cfg(test)]
-        if requests
-            .iter()
-            .any(|request| request.session_id == tests::PANICKING_DIRECT_SESSION)
-        {
-            panic!("direct iteration batch panicked");
-        }
-        let result = runtime
-            .iteration_batch_sampled(&requests)
-            .map_err(openai_backend_error);
-        let hold = hold_started.elapsed();
-        let runtime_lock_hold_ms = hold.as_secs_f64() * 1_000.0;
-        drop(runtime);
-        self.record_compute(hold);
-        self.compute_meter.record_decode_tokens(decode_steps as u64);
-        if let Some(telemetry) = self.telemetry.as_ref() {
-            telemetry.emit_debug(
-                "stage.scheduler_feature_iteration",
-                BTreeMap::from([
-                    ("skippy.scheduler.batch_size".to_string(), json!(batch_size)),
-                    (
-                        "skippy.scheduler.token_count".to_string(),
-                        json!(token_count),
-                    ),
-                    (
-                        "skippy.scheduler.batch_wait_max_ms".to_string(),
-                        json!(batch_wait_ms.iter().copied().fold(0.0_f64, f64::max)),
-                    ),
-                    (
-                        "skippy.scheduler.runtime_lock_wait_ms".to_string(),
-                        json!(runtime_lock_wait_ms),
-                    ),
-                    (
-                        "skippy.scheduler.runtime_lock_hold_ms".to_string(),
-                        json!(runtime_lock_hold_ms),
-                    ),
-                ]),
-            );
-        }
-
-        match result {
-            Ok(outputs) => {
-                if outputs.request_outputs.len() != runnable.len() {
-                    let error = InferenceError::backend(format!(
-                        "scheduler iteration returned {} outputs for {} requests",
-                        outputs.request_outputs.len(),
-                        runnable.len()
-                    ));
-                    for (request, _) in runnable {
-                        request.reply.send(Err(error.clone()));
-                    }
-                    return;
-                }
-                let mut predicted = vec![None; runnable.len()];
-                for sample in outputs.samples {
-                    let Some(slot) = predicted.get_mut(sample.request_index) else {
-                        let error = InferenceError::backend(format!(
-                            "scheduler iteration sample references request {}, but only {} requests ran",
-                            sample.request_index,
-                            runnable.len()
-                        ));
-                        for (request, _) in runnable {
-                            request.reply.send(Err(error.clone()));
-                        }
-                        return;
-                    };
-                    if slot.replace(sample.predicted_token).is_some() {
-                        let error = InferenceError::backend(format!(
-                            "scheduler iteration returned duplicate sample for request {}",
-                            sample.request_index
-                        ));
-                        for (request, _) in runnable {
-                            request.reply.send(Err(error.clone()));
-                        }
-                        return;
-                    }
-                }
-                for ((((request, session_alignment), output), predicted), batch_wait_ms) in runnable
-                    .into_iter()
-                    .zip(outputs.request_outputs)
-                    .zip(predicted)
-                    .zip(batch_wait_ms)
-                {
-                    request.reply.send(Ok(SchedulerIterationOutcome {
-                        predicted: predicted.unwrap_or(-1),
-                        output,
-                        batch_size,
-                        batch_wait_ms,
-                        runtime_lock_wait_ms,
-                        runtime_lock_hold_ms,
-                        session_alignment,
-                    }));
-                }
-            }
-            Err(error) => {
-                for (request, _) in runnable {
-                    request.reply.send(Err(error.clone()));
-                }
-            }
-        }
     }
 
     fn finish_iteration(

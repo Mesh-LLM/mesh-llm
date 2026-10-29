@@ -31,6 +31,23 @@ const fn version(major: u32, minor: u32, patch: u32) -> AbiVersion {
     }
 }
 
+/// The selected-token ABI matches the C request's size and field offsets.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn selected_token_readout_matches_c_iteration_layout() {
+    assert_eq!(size_of::<crate::TokenScoreRequest>(), 24);
+    assert_eq!(align_of::<crate::TokenScoreRequest>(), 8);
+    assert_eq!(offset_of!(crate::TokenScoreRequest, token_count), 8);
+    assert_eq!(
+        offset_of!(crate::TokenScoreRequest, out_log_probabilities),
+        16
+    );
+    assert_eq!(size_of::<crate::IterationRequest>(), 80);
+    assert_eq!(offset_of!(crate::IterationRequest, sample_last), 64);
+    assert_eq!(offset_of!(crate::IterationRequest, readout), 72);
+    assert!(!runtime_abi_supported(version(0, 1, 73)));
+}
+
 #[test]
 /// Runtime-event families must never masquerade as full-model workload support.
 fn workload_feature_is_distinct_from_runtime_event_features() {

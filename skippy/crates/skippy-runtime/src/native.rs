@@ -202,6 +202,12 @@ impl StageModel {
         raw.try_into()
     }
 
+    /// A loaded causal graph can read next-token scores without sampling.
+    /// This is independent of whether this worker owns the terminal head.
+    pub fn supports_causal_readout(&self) -> bool {
+        unsafe { skippy_ffi::skippy_model_supports_causal_readout(self.inner.raw) }
+    }
+
     fn from_opened_raw(
         raw: *mut RawModel,
         config: &RuntimeConfig,
@@ -871,6 +877,11 @@ fn chat_template_json_result(prompt: Vec<u8>, metadata: Vec<u8>) -> Result<ChatT
 }
 
 impl StageModelReader {
+    /// Whether the immutable loaded model supports causal selected-token scores.
+    pub fn supports_causal_readout(&self) -> bool {
+        unsafe { skippy_ffi::skippy_model_supports_causal_readout(self.inner.raw) }
+    }
+
     pub fn tokenize(&self, text: &str, add_special: bool) -> Result<Vec<i32>> {
         tokenize(self.inner.raw, text, add_special)
     }

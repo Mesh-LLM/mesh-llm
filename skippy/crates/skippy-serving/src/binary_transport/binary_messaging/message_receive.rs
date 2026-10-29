@@ -290,6 +290,7 @@ mod tests {
         )
     }
 
+    /// Construct a control-message fixture for bounded receive tests.
     fn control_message(kind: WireMessageKind, tokens: Vec<i32>) -> StageWireMessage {
         StageWireMessage {
             kind,
@@ -303,6 +304,7 @@ mod tests {
             tokens,
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }

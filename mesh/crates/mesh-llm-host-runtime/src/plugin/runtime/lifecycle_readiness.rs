@@ -34,6 +34,12 @@ impl ExternalPlugin {
         *self.server_info.lock().await = Some(server_info);
         *self.manifest.lock().await = init.manifest.clone();
         runtime.initialized_lifecycle = declaration;
+        runtime.declares_inference_observation = init
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.inference_observation.is_some());
+        runtime.status_declaration =
+            super::StatusDeclaration::from_manifest(init.manifest.as_ref());
         Ok(())
     }
 

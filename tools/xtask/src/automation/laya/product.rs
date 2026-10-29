@@ -1,4 +1,4 @@
-use super::{Source, battery, budget, http, limits};
+use super::{Source, battery, budget, failure_diagnostics, http, limits};
 use crate::automation::{private_state::PrivateState, retained_session};
 use crate::command::DynResult;
 use crate::process::retained::{
@@ -7,7 +7,6 @@ use crate::process::retained::{
 use crate::process::{ObservedLine, ProbeDecision, ProcessSpec, Value};
 use crate::repository::check_args::Grammar;
 use crate::repository::check_report::CheckReport;
-use std::io::{Read, Seek, SeekFrom};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -141,18 +140,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> DynResult<()> {
         };
         let report = retained_session::run(&mut owner, &limits(execution))?;
         if !report.recovery_success() {
-            let mut diagnostics = String::new();
-            for path in [log_files.stdout.as_ref(), log_files.stderr.as_ref()]
-                .into_iter()
-                .flatten()
-            {
-                let mut log = std::fs::File::open(path)?;
-                let length = log.metadata()?.len();
-                log.seek(SeekFrom::Start(length.saturating_sub(12_000)))?;
-                let mut bytes = Vec::new();
-                log.take(12_000).read_to_end(&mut bytes)?;
-                diagnostics.push_str(&String::from_utf8_lossy(&bytes));
-            }
+            let diagnostics = failure_diagnostics::collect(state.root(), &log_files);
             return Err(format!(
                 "Laya product smoke failed: {:?}; failure={:?}; members={:?}\n{diagnostics}",
                 report.outcome, report.failure, report.members

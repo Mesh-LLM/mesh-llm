@@ -20,10 +20,16 @@ Start with one of these backends:
 | --- | --- | --- | --- |
 | Laya | `meshllm/laya-multilingual-F16-GGUF` | A small first test, multilingual classification, CPU or GPU | One automatically downloaded GGUF; about 829 MB including the worst-case read reserve |
 | OpenJEV / DiffusionGemma | `unsloth/diffusiongemma-26B-A4B-it-GGUF:Q4_K_M` | Testing the DiffusionGemma System One implementation | CUDA, one complete-model worker, `parallel = 1`, and a micro-batch large enough for the model's answer canvas |
+| Causal GGUF readout | A loaded causal decoder advertising `system_one` | Independent questions over shared text | Loaded-runtime capability; full model or compatible split chain |
 
 Laya is the simplest functional test. DiffusionGemma exercises the OpenJEV
 path and is the qualified large-model configuration. Both implement the same
-HTTP request and response contract.
+HTTP request and response contract. Causal decoders can also score questions
+using last-prefill reads or explicit teacher-forced candidate likelihoods.
+They add per-question `readouts` and physical `readout_usage`; confidence is
+relative to the offered candidates, not calibrated probability of truth.
+See the [causal decision guide](https://github.com/Mesh-LLM/mesh-llm/blob/main/skippy/docs/CAUSAL_DECISIONS.md)
+for examples, tokenizer validation, caching, limits and split compatibility.
 
 ## Run Laya
 
@@ -223,11 +229,13 @@ response examples, and adapter limits.
 
 ## Backend differences
 
-Two model families answer System One reads with the same request and response
-shape:
+These execution paths share the request and typed-answer contract:
 
 - **DiffusionGemma** reads label probabilities from one diffusion canvas step,
   as described above.
+- **Causal decoders** read selected final-prefill scores or teacher-forced
+  candidate likelihoods, with independent scheduler sequences and compatible
+  split execution. They add evidence fields; they do not generate answer text.
 - **Laya** (`general.architecture = "laya"`, for example a converted
   `convaiinnovations/laya-multilingual`) is a small encoder with a typed
   decision head that scores every option in one forward pass. It serves only

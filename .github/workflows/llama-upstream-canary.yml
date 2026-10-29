@@ -118,7 +118,7 @@ jobs:
   preflight:
     needs: [resolve]
     if: ${{ needs.resolve.outputs.certify == 'true' }}
-    runs-on: [self-hosted, family-certify]
+    runs-on: [self-hosted, macOS, ARM64, jy-managed, family-certify, accelerator-memory-128plus]
     timeout-minutes: 30
     env:
       CANARY_SOURCE_ROOT: ${{ github.workspace }}${{ needs.resolve.outputs.mesh_source != '' && '/canary-source' || '' }}

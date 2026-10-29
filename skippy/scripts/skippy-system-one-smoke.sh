@@ -8,9 +8,9 @@ set -euo pipefail
 # (docs/design/OPENJEV_SKIPPY_POC.md). It runs in two independent parts because
 # they have different preconditions:
 #
-# * contract  - the request/response contract and every fail-closed boundary
-#               decided by the Rust frontend. Driven through a pinned
-#               non-DiffusionGemma fixture, so it needs no diffusion model and
+# * contract  - request/method refusals plus single-token and multi-token
+#               causal reads with ordered evidence and zero generated tokens.
+#               Driven through a pinned causal fixture, so it needs no diffusion model and
 #               is backend independent: it runs on any host with a patched
 #               native build, including the Metal family-certify runner.
 # * full-read - one real DiffusionGemma read, repeated and interleaved. Needs
