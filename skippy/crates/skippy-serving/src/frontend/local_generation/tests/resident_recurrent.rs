@@ -64,7 +64,7 @@ fn resident_hybrid_native_batch_shape_parity() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
-fn resident_hybrid_first_turn_without_exact_recorder() -> Result<()> {
+fn resident_hybrid_reuses_prefix_without_exact_recorder() -> Result<()> {
     let (mut wide, _) = recurrent_test_backend(
         "wide-no-recorder",
         "wide-no-recorder",
@@ -94,6 +94,17 @@ fn resident_hybrid_first_turn_without_exact_recorder() -> Result<()> {
     assert_eq!(
         actual, expected,
         "resident first turn differs without exact recording"
+    );
+    let (repeated, cached) = generate(&wide, &prompt, 8)?;
+    assert!(cached > 0, "resident prefix was not reused");
+    assert_eq!(repeated, expected, "resident prefix changed repeat output");
+    let mut extended = prompt;
+    extended.extend_from_slice(&actual);
+    extended.extend(129..=150);
+    assert_eq!(
+        generate(&wide, &extended, 8)?.0,
+        generate(&narrow, &extended, 8)?.0,
+        "resident prefix changed growing output"
     );
     Ok(())
 }
@@ -156,9 +167,33 @@ fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
         actual, expected,
         "native microbatch splitting changes output"
     );
+    let kv = wide.kv.as_ref().unwrap();
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("recurrent-resume"),
+        true,
+        None,
+    );
+    let base = wide.local_kv_message_base("recurrent-resume", &ids);
+    let identities = kv.lookup_identities(&wide.config, &base, 0, &prompt[..prompt.len() - 1]);
+    let lane_tokens = wide
+        .runtime
+        .lock()
+        .unwrap()
+        .resident_recurrent_prefix_tokens("recurrent-resume", &identities);
+    let resident_tokens = identities
+        .iter()
+        .filter_map(|identity| {
+            kv.probe_resident_prefix(identity)
+                .map(|hit| hit.token_count)
+        })
+        .max();
     let (repeated, cached) = generate(&wide, &prompt, 8)?;
     assert!(cached > 0);
-    assert_eq!(repeated, expected);
+    assert_eq!(
+        repeated, expected,
+        "warm repeat diverged with lane={lane_tokens:?}, resident={resident_tokens:?}, cached={cached}"
+    );
     let mut extended = prompt;
     extended.extend_from_slice(&actual);
     extended.extend(129..=150);
