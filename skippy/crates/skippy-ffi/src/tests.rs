@@ -53,6 +53,7 @@ fn feature_bits_match_the_generated_header_values() {
     );
     assert_eq!(crate::FEATURE_STAGE_PLAN, 1 << 17);
     assert_eq!(crate::FEATURE_SPEECH_RECOGNITION, 1 << 41);
+    assert_eq!(crate::FEATURE_CLEF_DECISIONS, 1 << 42);
 }
 
 #[test]
@@ -70,6 +71,14 @@ fn versioned_descriptors_advertise_their_native_abi_size() {
     assert_eq!(
         crate::LayaInfoV1::default().struct_size as usize,
         std::mem::size_of::<crate::LayaInfoV1>()
+    );
+    assert_eq!(
+        crate::CLEF_INFO_V1_ABI_VERSION,
+        crate::bindings::skippy::SKIPPY_CLEF_INFO_V1_ABI_VERSION
+    );
+    assert_eq!(
+        crate::ClefInfoV1::default().struct_size as usize,
+        std::mem::size_of::<crate::ClefInfoV1>()
     );
 }
 

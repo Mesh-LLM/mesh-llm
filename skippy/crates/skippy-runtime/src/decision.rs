@@ -9,6 +9,7 @@
 use serde_json::{Map, Number, Value};
 
 pub mod causal;
+mod clef;
 mod diffusion;
 mod laya;
 

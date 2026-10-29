@@ -40,6 +40,8 @@ pub const FEATURE_CACHEGEN_KV_PAGE: u64 =
 pub const FEATURE_LAYA_DECISIONS: u64 = bindings::skippy::skippy_ffi_bridge_feature_laya_decisions;
 pub const FEATURE_SPEECH_RECOGNITION: u64 =
     bindings::skippy::skippy_ffi_bridge_feature_speech_recognition;
+/// Joint Clef decision reads (`skippy/clef.h`).
+pub const FEATURE_CLEF_DECISIONS: u64 = bindings::skippy::skippy_ffi_bridge_feature_clef_decisions;
 
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 =
     bindings::skippy::SKIPPY_MODEL_TENSOR_SOURCE_V1_ABI_VERSION;
@@ -53,6 +55,16 @@ pub const ASR_SEGMENT_V1_ABI_VERSION: u32 = bindings::skippy::SKIPPY_ASR_SEGMENT
 pub const ASR_SAMPLE_RATE: u32 = bindings::skippy::SKIPPY_ASR_SAMPLE_RATE;
 pub const ASR_MAX_SAMPLES: usize = bindings::skippy::SKIPPY_ASR_MAX_SAMPLES as usize;
 pub const LAYA_QTYPE_COUNT: usize = bindings::skippy::SKIPPY_LAYA_QTYPE_COUNT as usize;
+pub const CLEF_INFO_V1_ABI_VERSION: u32 = bindings::skippy::SKIPPY_CLEF_INFO_V1_ABI_VERSION;
+
+/// Decision-order marks of Clef prompt tokens (`enum skippy_clef_order`).
+pub const CLEF_ORDER_NONE: i32 = bindings::skippy::skippy_clef_order::None as i32;
+pub const CLEF_ORDER_QUESTION_NOUL: i32 = bindings::skippy::skippy_clef_order::QuestionNoul as i32;
+pub const CLEF_ORDER_QUESTION_CHOICE: i32 =
+    bindings::skippy::skippy_clef_order::QuestionChoice as i32;
+pub const CLEF_ORDER_QUESTION_SCORE: i32 =
+    bindings::skippy::skippy_clef_order::QuestionScore as i32;
+pub const CLEF_ORDER_OPTION: i32 = bindings::skippy::skippy_clef_order::Option as i32;
 
 pub type WorkloadKind = bindings::skippy::skippy_workload_kind;
 pub type WorkloadPooling = bindings::skippy::skippy_workload_pooling;
@@ -118,6 +130,27 @@ impl Default for LayaMemoryV1 {
             compute_bytes: 0,
             host_scratch_bytes: 0,
             on_accelerator: false,
+        }
+    }
+}
+
+/// Sizes and budgets of an opened Clef model.
+pub type ClefInfoV1 = bindings::skippy::skippy_clef_info_v1;
+
+impl Default for ClefInfoV1 {
+    /// Initialize the Clef descriptor with its ABI size and version.
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            abi_version: CLEF_INFO_V1_ABI_VERSION,
+            n_ctx: 0,
+            n_embd: 0,
+            n_layer: 0,
+            n_vocab: 0,
+            parameter_count: 0,
+            model_bytes: 0,
+            decision_metadata_count: 0,
+            decision_type: [0; 32],
         }
     }
 }
@@ -329,6 +362,7 @@ pub type BackendDevice = bindings::skippy::skippy_backend_device;
 
 pub type Model = bindings::skippy::skippy_model;
 pub type LayaModel = bindings::skippy::skippy_laya_model;
+pub type ClefModel = bindings::skippy::skippy_clef_model;
 pub type AsrModel = bindings::skippy::skippy_asr_model;
 pub type AsrResult = bindings::skippy::skippy_asr_result;
 pub type NgramCache = bindings::skippy::skippy_ngram_cache;
