@@ -429,3 +429,115 @@ async fn a_start_cancelled_during_initialize_is_not_served() {
     assert!(started_events(&mut mesh_rx).is_empty(), "one announcement");
     plugin.shutdown().await;
 }
+
+/// Answers `initialize` with a manifest subscribing to `LocalStandby`, and
+/// counts the mesh events it receives.
+fn counting_runner(received: Arc<AtomicU64>) -> crate::plugin::InProcessPluginRunner {
+    Arc::new(move |mut stream| {
+        let received = received.clone();
+        Box::pin(async move {
+            loop {
+                let incoming = mesh_llm_plugin::read_envelope(&mut stream).await?;
+                match incoming.payload {
+                    Some(proto::envelope::Payload::InitializeRequest(_)) => {
+                        let manifest = proto::PluginManifest {
+                            mesh_event_subscriptions: vec![proto::MeshEventSubscriptionManifest {
+                                kind: proto::mesh_event::Kind::LocalStandby as i32,
+                            }],
+                            ..Default::default()
+                        };
+                        mesh_llm_plugin::write_envelope(
+                            &mut stream,
+                            &proto::Envelope {
+                                protocol_version: PROTOCOL_VERSION,
+                                plugin_id: incoming.plugin_id.clone(),
+                                request_id: incoming.request_id,
+                                payload: Some(proto::envelope::Payload::InitializeResponse(
+                                    proto::InitializeResponse {
+                                        plugin_id: incoming.plugin_id,
+                                        plugin_protocol_version: PROTOCOL_VERSION,
+                                        plugin_version: "0.0.0".into(),
+                                        server_info_json: serde_json::to_string(
+                                            &ServerConfig::default(),
+                                        )?,
+                                        manifest: Some(manifest),
+                                        ..Default::default()
+                                    },
+                                )),
+                            },
+                        )
+                        .await?;
+                    }
+                    Some(proto::envelope::Payload::MeshEvent(_)) => {
+                        received.fetch_add(1, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+            }
+        })
+    })
+}
+
+/// The node sends the manager its mesh snapshot when it takes it, before it
+/// reads the manager's channel. A plugin that the broadcast starts again
+/// then cannot get its start answered, and fails it. That failure does not
+/// keep the event from the plugins after it.
+#[tokio::test]
+async fn a_plugin_that_fails_to_take_a_broadcast_does_not_keep_it_from_the_rest() {
+    let (mesh_tx, mut mesh_rx) = mpsc::channel(8);
+    let steady = Arc::new(AtomicU64::new(0));
+    let specs = crate::plugin::ResolvedPlugins {
+        externals: vec![
+            crate::plugin::in_process_builtin_spec("failing"),
+            crate::plugin::in_process_builtin_spec("steady"),
+        ],
+        inactive: Vec::new(),
+    };
+    let in_process = crate::plugin::InProcessPlugins::default()
+        .with("failing", counting_runner(Arc::default()))
+        .with("steady", counting_runner(steady.clone()));
+    let manager = crate::plugin::PluginManager::start_with_in_process(
+        &specs,
+        test_host_mode(),
+        mesh_tx,
+        in_process,
+    )
+    .await
+    .expect("the plugins start");
+    manager.expect_mesh_snapshots();
+
+    // Leave "failing" with a process whose start was cancelled before its
+    // snapshot, so the next event sent to it starts it again. "failing"
+    // comes first in the broadcast.
+    let failing = &manager.inner.plugins["failing"];
+    failing
+        .handle_runtime_failure(None, "plugin exited".into())
+        .await;
+    let mut start = Box::pin(failing.ensure_running());
+    let (_, _, _delivered) = tokio::select! {
+        started = &mut start => panic!("started before the node was told: {started:?}"),
+        event = next_started(&mut mesh_rx) => event,
+    };
+    drop(start);
+    assert_eq!(failing.runtime_started().await, Some(false));
+
+    let error = manager
+        .broadcast_mesh_event(proto::MeshEvent {
+            kind: proto::mesh_event::Kind::LocalStandby as i32,
+            ..Default::default()
+        })
+        .await
+        .expect_err("no node answers the restart");
+    assert!(
+        error.to_string().contains("did not get the mesh snapshot"),
+        "{error:#}"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while steady.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the plugin after the failed one gets the event");
+    manager.shutdown().await;
+}

@@ -1463,14 +1463,22 @@ impl PluginManager {
         plugin.send_bulk_transfer_message(message).await
     }
 
+    /// Sends `event` to every running plugin that subscribes to its kind.
+    /// A plugin that does not take it, such as one whose restart fails,
+    /// does not keep it from the plugins after it; the first error is
+    /// returned once all were tried.
     pub async fn broadcast_mesh_event(&self, event: proto::MeshEvent) -> Result<()> {
+        let mut result = Ok(());
         for (name, plugin) in &self.inner.plugins {
             if !self.plugin_subscribes_mesh_event(name, event.kind).await {
                 continue;
             }
-            plugin.send_mesh_event(event.clone()).await?;
+            if let Err(error) = plugin.send_mesh_event(event.clone()).await {
+                tracing::debug!(plugin = %name, "Plugin did not take a mesh event: {error:#}");
+                result = result.and(Err(error));
+            }
         }
-        Ok(())
+        result
     }
 
     /// [`Self::broadcast_mesh_event`] to the process of `generation` of
