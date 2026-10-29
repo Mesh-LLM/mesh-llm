@@ -981,8 +981,8 @@ mod hybrid_resident_tests {
             "a shared boundary must be snapshotted while prefilling"
         );
         assert!(
-            !kv.payload_is_exact_state(),
-            "no durable tier, so no page export anywhere"
+            kv.payload_is_exact_state(),
+            "resident eviction must leave an exact host fallback without disk"
         );
     }
 

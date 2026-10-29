@@ -151,9 +151,12 @@ impl KvStageIntegration {
                 },
             );
         }
-        let durable_payload = l3_manager
-            .as_ref()
-            .and_then(|_| durable_cache_payload(admitted));
+        // A resident hybrid still needs a complete host checkpoint when its
+        // attention cells leave the unified KV pool. Disk is optional: the
+        // in-memory exact-state radix is the fallback after resident eviction.
+        let durable_payload = (resident_recurrent_snapshots || l3_manager.is_some())
+            .then(|| durable_cache_payload(admitted))
+            .flatten();
         let l3 = l3_manager
             .zip(durable_payload)
             .map(|(manager, payload)| l3_tier_for_manager(config, payload, manager))
@@ -197,8 +200,13 @@ impl KvStageIntegration {
             cache_config.exact_max_bytes,
             std::env::var(EXACT_STATE_MAX_BYTES_ENV).ok().as_deref(),
         );
+        let recorder_payload = if resident_recurrent_snapshots {
+            durable_payload.unwrap_or(payload)
+        } else {
+            payload
+        };
         let exact_state_record_queue_limit =
-            exact_state_record_queue_limit(exact_byte_limits.soft_bytes, payload);
+            exact_state_record_queue_limit(exact_byte_limits.soft_bytes, recorder_payload);
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
         let (exact_state_record_tx, exact_state_record_rx) =
