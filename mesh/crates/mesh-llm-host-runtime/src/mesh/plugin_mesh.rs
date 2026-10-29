@@ -304,11 +304,14 @@ impl Node {
             } => {
                 // Before the manager is installed, installing it sends the
                 // snapshot to every plugin.
-                if let Some(plugin_manager) = self.plugin_manager().await {
-                    self.send_mesh_snapshot_to(&plugin_manager, &plugin_id, generation)
-                        .await;
-                }
-                let _ = delivered.send(());
+                let sent = match self.plugin_manager().await {
+                    Some(plugin_manager) => self
+                        .send_mesh_snapshot_to(&plugin_manager, &plugin_id, generation)
+                        .await
+                        .is_ok(),
+                    None => true,
+                };
+                let _ = delivered.send(sent);
                 Ok(())
             }
         }
@@ -319,24 +322,27 @@ impl Node {
         plugin_manager: &crate::plugin::PluginManager,
         peers: Vec<PeerInfo>,
     ) {
-        self.send_mesh_snapshot(plugin_manager, None, peers).await;
+        // A plugin that misses part of the broadcast gets it again when it
+        // next starts, or with the next mesh change.
+        let _ = self.send_mesh_snapshot(plugin_manager, None, peers).await;
     }
 
     /// The mesh snapshot [`Self::broadcast_existing_mesh_snapshot`] sends,
     /// with the peers known now, to the process of `generation` of
-    /// `plugin_id` alone, without starting it.
+    /// `plugin_id` alone, without starting it. Fails when that process did
+    /// not take every event of it.
     pub(crate) async fn send_mesh_snapshot_to(
         &self,
         plugin_manager: &crate::plugin::PluginManager,
         plugin_id: &str,
         generation: u64,
-    ) {
+    ) -> anyhow::Result<()> {
         let peers = {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect::<Vec<_>>()
         };
         self.send_mesh_snapshot(plugin_manager, Some((plugin_id, generation)), peers)
-            .await;
+            .await
     }
 
     async fn send_mesh_snapshot(
@@ -344,7 +350,7 @@ impl Node {
         plugin_manager: &crate::plugin::PluginManager,
         target: Option<(&str, u64)>,
         peers: Vec<PeerInfo>,
-    ) {
+    ) -> anyhow::Result<()> {
         let send = |event| async move {
             match target {
                 Some((plugin_id, generation)) => {
@@ -355,21 +361,23 @@ impl Node {
                 None => plugin_manager.broadcast_mesh_event(event).await,
             }
         };
-        let _ = send(
+        let mut result = send(
             self.build_mesh_event(self.plugin_manager_local_kind(), None, String::new())
                 .await,
         )
         .await;
         if self.mesh_id().await.is_some() {
-            let _ = send(
-                self.build_mesh_event(
-                    crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
-                    None,
-                    String::new(),
+            result = result.and(
+                send(
+                    self.build_mesh_event(
+                        crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
+                        None,
+                        String::new(),
+                    )
+                    .await,
                 )
                 .await,
-            )
-            .await;
+            );
         }
         for peer in peers {
             if let Err(err) = send(
@@ -386,8 +394,10 @@ impl Node {
                     "Failed to send existing peer snapshot to plugins for {}: {err}",
                     peer.id.fmt_short()
                 );
+                result = result.and(Err(err));
             }
         }
+        result
     }
 
     /// Announce (or withdraw) `plugin_id`'s public key, bound to this node.

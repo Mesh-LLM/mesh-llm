@@ -62,10 +62,12 @@ pub(crate) struct ExternalPlugin {
     runtime_data_producer: RuntimeDataProducer,
     restart_lock: Arc<Mutex<()>>,
     stopping: AtomicBool,
-    /// Set once [`Self::spawn`] returns. The node sends every plugin its mesh
-    /// snapshot when the manager is installed, which covers the start inside
-    /// `spawn`; any later start (a restart, or a lazy plugin's first start)
-    /// tells the node, which sends that plugin the snapshot again.
+    /// Set when a node takes this plugin's manager
+    /// ([`Self::expect_mesh_snapshots`]). The node sends every plugin its
+    /// mesh snapshot then, which covers the starts before it; any later start
+    /// (a restart, or a lazy plugin's first start) tells the node, which
+    /// sends that plugin the snapshot again. Without a node (the plugin CLI)
+    /// there is no snapshot to wait for.
     announce_starts: AtomicBool,
     next_request_id: AtomicU64,
     next_generation: AtomicU64,
@@ -174,7 +176,6 @@ impl ExternalPlugin {
         {
             return Err(err);
         }
-        plugin.announce_starts.store(true, Ordering::Release);
         Ok(plugin)
     }
 
@@ -610,13 +611,21 @@ impl ExternalPlugin {
             .finish_initialize(generation, outbound_tx, pending)
             .await
         {
-            Ok(()) => {
-                if self.announce_starts.load(Ordering::Acquire) {
-                    self.announce_started(generation).await;
-                }
+            Ok(()) if !self.announce_starts.load(Ordering::Acquire) => {
                 self.mark_started(generation).await;
                 Ok(())
             }
+            Ok(()) => match self.announce_started(generation).await {
+                Ok(()) => {
+                    self.mark_started(generation).await;
+                    Ok(())
+                }
+                Err(error) => {
+                    self.handle_runtime_failure(Some(generation), error.to_string())
+                        .await;
+                    Err(error)
+                }
+            },
             Err(error) => {
                 if self.is_disabled().await {
                     return Ok(());
@@ -1298,7 +1307,7 @@ pub(crate) mod tests {
             }),
             restart_lock: Arc::new(Mutex::new(())),
             stopping: AtomicBool::new(false),
-            announce_starts: AtomicBool::new(true),
+            announce_starts: AtomicBool::new(false),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process: None,

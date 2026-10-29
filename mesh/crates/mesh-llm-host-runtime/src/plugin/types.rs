@@ -71,11 +71,11 @@ pub enum PluginMeshEvent {
     /// start: a restart after it exited or failed, or a lazy plugin's first
     /// start. The node sends that process alone the mesh snapshot it would
     /// otherwise only get from the next mesh change, then answers
-    /// `delivered`.
+    /// `delivered`: `true` when the process took the whole snapshot.
     PluginStarted {
         plugin_id: String,
         generation: u64,
-        delivered: oneshot::Sender<()>,
+        delivered: oneshot::Sender<bool>,
     },
 }
 

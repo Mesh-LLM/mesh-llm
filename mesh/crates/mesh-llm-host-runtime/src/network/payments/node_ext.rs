@@ -219,7 +219,7 @@ pub(crate) async fn attach_payments_plugin_with(
         externals,
         inactive: Vec::new(),
     };
-    let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(8);
+    let (mesh_tx, mesh_rx) = tokio::sync::mpsc::channel(8);
     let manager = crate::plugin::PluginManager::start_with_in_process(
         &specs,
         crate::plugin::PluginHostMode {
@@ -230,6 +230,9 @@ pub(crate) async fn attach_payments_plugin_with(
     )
     .await?;
     node.set_plugin_manager(manager.clone()).await;
+    // As `run_auto` does: the node answers the plugins' mesh events, among
+    // them a restarted plugin's request for the mesh snapshot.
+    node.start_plugin_channel_forwarder(mesh_rx);
     Ok(manager)
 }
 

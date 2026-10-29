@@ -1629,6 +1629,7 @@ impl Node {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect::<Vec<_>>()
         };
+        plugin_manager.expect_mesh_snapshots();
         *self.plugin_manager.lock().await = Some(plugin_manager.clone());
         self.broadcast_existing_mesh_snapshot(&plugin_manager, peers)
             .await;

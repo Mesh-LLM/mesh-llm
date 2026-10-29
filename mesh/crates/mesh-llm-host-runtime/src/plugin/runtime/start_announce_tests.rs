@@ -72,7 +72,7 @@ async fn spawn_with_runner(
     runner: crate::plugin::InProcessPluginRunner,
 ) -> ExternalPlugin {
     let runtime_data = RuntimeDataCollector::new();
-    ExternalPlugin::spawn(
+    let plugin = ExternalPlugin::spawn(
         &ExternalPluginSpec {
             openai_exchange_grant: None,
             name: name.into(),
@@ -100,12 +100,15 @@ async fn spawn_with_runner(
         Some(runner),
     )
     .await
-    .expect("the plugin starts")
+    .expect("the plugin starts");
+    // As when a node takes the manager.
+    plugin.expect_mesh_snapshots();
+    plugin
 }
 
 async fn next_started(
     rx: &mut mpsc::Receiver<PluginMeshEvent>,
-) -> (String, u64, oneshot::Sender<()>) {
+) -> (String, u64, oneshot::Sender<bool>) {
     loop {
         let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
             .await
@@ -152,7 +155,7 @@ async fn start_as_the_node_answers(
             .is_err(),
         "a concurrent request waits for the snapshot as well"
     );
-    delivered.send(()).expect("the start is waiting");
+    delivered.send(true).expect("the start is waiting");
     for (caller, started) in [
         ("the start", start.await),
         ("the second request", second.await),
@@ -229,33 +232,142 @@ async fn a_snapshot_for_a_process_that_exited_starts_nothing() {
 }
 
 /// A node whose queue stays full past the bound does not hold the start
-/// up, and does not lose the event: it is queued as soon as there is room,
-/// and still names the process that started.
+/// up, and does not let it serve without the snapshot: the start fails, so
+/// the request can be retried, and the next one starts a new process that
+/// asks again.
 #[tokio::test]
-async fn a_start_event_the_node_cannot_take_yet_is_queued_later() {
+async fn a_start_the_node_cannot_take_in_time_fails_and_the_next_one_starts() {
     let (mesh_tx, mut mesh_rx) = mpsc::channel(1);
     let plugin = spawn_in_process("eager", false, mesh_tx.clone()).await;
+    let (first, _, _) = plugin.runtime_handles().await.expect("the process runs");
     plugin
         .handle_runtime_failure(None, "plugin exited".into())
         .await;
+    // The failure announces the disconnect from a task; take it before
+    // filling the queue, so the filler cannot wait behind it.
+    let disconnected = tokio::time::timeout(std::time::Duration::from_secs(5), mesh_rx.recv())
+        .await
+        .expect("the disconnect is announced in time");
+    assert!(matches!(
+        disconnected,
+        Some(PluginMeshEvent::PluginDisconnected { .. })
+    ));
     mesh_tx
-        .send(PluginMeshEvent::PluginStopped {
+        .try_send(PluginMeshEvent::PluginStopped {
             plugin_id: "filler".into(),
         })
-        .await
         .expect("the queue takes one event");
 
     tokio::time::timeout(std::time::Duration::from_secs(3), plugin.ensure_running())
         .await
         .expect("the start does not wait on a full queue past the bound")
-        .expect("the plugin starts");
-    let (current, _, _) = plugin.runtime_handles().await.expect("the process runs");
+        .expect_err("a start the node never heard of does not serve");
+    assert!(plugin.runtime_handles().await.is_err(), "no process serves");
+
     assert!(matches!(
         mesh_rx.recv().await,
         Some(PluginMeshEvent::PluginStopped { .. })
     ));
-    let (plugin_id, generation, _) = next_started(&mut mesh_rx).await;
-    assert_eq!((plugin_id.as_str(), generation), ("eager", current));
+    let (_, generation) = start_as_the_node_answers(&plugin, &mut mesh_rx).await;
+    assert_ne!(generation, first);
+    plugin.shutdown().await;
+}
+
+/// A start whose snapshot the node could not send whole, or did not send
+/// in time, fails the same way.
+#[tokio::test]
+async fn a_start_without_the_whole_snapshot_fails() {
+    let (mesh_tx, mut mesh_rx) = mpsc::channel(8);
+    let plugin = spawn_in_process("eager", false, mesh_tx).await;
+    for answer in [Some(false), None] {
+        plugin
+            .handle_runtime_failure(None, "plugin exited".into())
+            .await;
+        let mut start = Box::pin(plugin.ensure_running());
+        let (_, _, delivered) = tokio::select! {
+            started = &mut start => panic!("started before the node was told: {started:?}"),
+            event = next_started(&mut mesh_rx) => event,
+        };
+        match answer {
+            Some(sent) => delivered.send(sent).expect("the start is waiting"),
+            None => drop(delivered),
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(3), start)
+            .await
+            .expect("the start does not wait past the bound")
+            .expect_err("a process without the snapshot does not serve");
+        assert!(plugin.runtime_handles().await.is_err(), "no process serves");
+    }
+    start_as_the_node_answers(&plugin, &mut mesh_rx).await;
+    plugin.shutdown().await;
+}
+
+/// Answers `initialize`, then stops reading while it keeps the stream open.
+fn stalled_runner() -> crate::plugin::InProcessPluginRunner {
+    Arc::new(move |mut stream| {
+        Box::pin(async move {
+            loop {
+                let incoming = mesh_llm_plugin::read_envelope(&mut stream).await?;
+                if let Some(proto::envelope::Payload::InitializeRequest(_)) = incoming.payload {
+                    mesh_llm_plugin::write_envelope(
+                        &mut stream,
+                        &proto::Envelope {
+                            protocol_version: PROTOCOL_VERSION,
+                            plugin_id: incoming.plugin_id.clone(),
+                            request_id: incoming.request_id,
+                            payload: Some(proto::envelope::Payload::InitializeResponse(
+                                proto::InitializeResponse {
+                                    plugin_id: incoming.plugin_id,
+                                    plugin_protocol_version: PROTOCOL_VERSION,
+                                    plugin_version: "0.0.0".into(),
+                                    server_info_json: serde_json::to_string(
+                                        &ServerConfig::default(),
+                                    )?,
+                                    manifest: Some(proto::PluginManifest::default()),
+                                    ..Default::default()
+                                },
+                            )),
+                        },
+                    )
+                    .await?;
+                    std::future::pending::<()>().await;
+                }
+            }
+        })
+    })
+}
+
+/// The node sends mesh events to every plugin from one task. A process
+/// whose queue stays full does not hold that task: the send gives up after
+/// its bound and fails the process, so the next request starts a new one.
+#[tokio::test]
+async fn a_process_that_stops_reading_mesh_events_is_failed() {
+    let (mesh_tx, _mesh_rx) = mpsc::channel(8);
+    let plugin = spawn_with_runner("eager", false, mesh_tx, stalled_runner()).await;
+    let (generation, _, _) = plugin.runtime_handles().await.expect("the process runs");
+
+    let filled = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if let Err(error) = plugin
+                .send_mesh_event_to_generation(generation, proto::MeshEvent::default())
+                .await
+            {
+                return error;
+            }
+        }
+    })
+    .await
+    .expect("a full queue fails the send within its bound");
+    assert!(
+        filled
+            .to_string()
+            .contains("did not take a mesh event in time"),
+        "{filled:#}"
+    );
+    assert!(
+        plugin.runtime_handles().await.is_err(),
+        "the process is failed"
+    );
     plugin.shutdown().await;
 }
 

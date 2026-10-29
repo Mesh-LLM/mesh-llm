@@ -703,6 +703,14 @@ impl PluginManager {
             .with_context(|| format!("Unknown plugin '{name}'"))
     }
 
+    /// A node serves these plugins from now on: see
+    /// [`ExternalPlugin::expect_mesh_snapshots`].
+    pub(crate) fn expect_mesh_snapshots(&self) {
+        for plugin in self.inner.plugins.values() {
+            plugin.expect_mesh_snapshots();
+        }
+    }
+
     pub async fn shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         for plugin in self.inner.plugins.values() {
