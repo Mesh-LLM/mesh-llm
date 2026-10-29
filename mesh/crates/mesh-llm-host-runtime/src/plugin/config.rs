@@ -293,6 +293,7 @@ pub struct PluginHostMode {
 }
 
 pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Result<ResolvedPlugins> {
+    warn_once_about_retired_payment_config(config);
     let mut externals = Vec::new();
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
@@ -408,3 +409,36 @@ pub fn bundled_cli_plugin_spec(_name: &str) -> Result<Option<ExternalPluginSpec>
 
 #[cfg(test)]
 mod tests;
+
+/// Paid inference left the node: a `[payments]` table or a `[[plugin]]`
+/// entry for the retired built-in `wallet-lexe` is parsed as unknown config
+/// (`extra`) or an ordinary missing plugin and does nothing. Say so once at
+/// start, as an output event (the default log filter drops host-runtime
+/// warnings), so the operator moves the settings to the payments plugin
+/// instead of discovering a silently unpaid node.
+fn warn_once_about_retired_payment_config(config: &MeshConfig) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    let mut retired = Vec::new();
+    if config.extra.contains_key("payments") {
+        retired.push("the [payments] table".to_string());
+    }
+    if config
+        .plugins
+        .iter()
+        .any(|entry| entry.name == "wallet-lexe")
+    {
+        retired.push("the [[plugin]] entry name = \"wallet-lexe\"".to_string());
+    }
+    if retired.is_empty() {
+        return;
+    }
+    WARNED.call_once(|| {
+        let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+            message: format!(
+                "config.toml still has {}: paid inference is no longer part of mesh-llm and these settings do nothing. Install a payments plugin and configure it there, then remove them.",
+                retired.join(" and ")
+            ),
+            context: None,
+        });
+    });
+}
