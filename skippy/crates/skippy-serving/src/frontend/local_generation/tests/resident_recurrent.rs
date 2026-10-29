@@ -34,6 +34,36 @@ fn resident_hybrid_records_full_prompt_after_deferred_prefill() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_native_batch_shape_parity() -> Result<()> {
+    let (wide, _) = recurrent_test_backend("native-wide", "native-wide", 512, (128, 32), 8, 256)?;
+    let (narrow, _) =
+        recurrent_test_backend("native-narrow", "native-narrow", 512, (32, 32), 8, 256)?;
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let mut wide_session = wide.runtime.lock().unwrap().model.create_session()?;
+    let mut narrow_session = narrow.runtime.lock().unwrap().model.create_session()?;
+    for chunk in prompt[..127].chunks(32) {
+        wide_session.prefill_chunk(chunk)?;
+        narrow_session.prefill_chunk(chunk)?;
+    }
+    let mut wide_token = wide_session.decode_step(prompt[127])?;
+    let mut narrow_token = narrow_session.decode_step(prompt[127])?;
+    assert_eq!(
+        wide_token, narrow_token,
+        "native first token differs across batch sizes"
+    );
+    for index in 1..8 {
+        wide_token = wide_session.decode_step(wide_token)?;
+        narrow_token = narrow_session.decode_step(narrow_token)?;
+        assert_eq!(
+            wide_token, narrow_token,
+            "native generated token {index} differs across batch sizes"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
     // The extended prompt reaches 150 tokens. Leave the 128-token decode
     // headroom requirement outside this microbatch-shape comparison.
