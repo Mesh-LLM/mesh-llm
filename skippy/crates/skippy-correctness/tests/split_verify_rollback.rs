@@ -9,7 +9,9 @@
 //! decodes the same continuation one token at a time; every stage's output
 //! activations must agree between the in-place and checkpoint runs, which
 //! holds only if each stage's recurrent state and attention KV rolled back to
-//! the same position.
+//! the same position. A last run changes the window width from step to
+//! step, with single-token decodes between windows, so every stage rebuilds
+//! and re-realizes its graph slice on each step.
 //!
 //! Needs `SKIPPY_CORRECTNESS_MODEL` set to a GGUF of a model with recurrent
 //! layers that support rollback (for example Qwen3.5-4B); skipped otherwise.
@@ -35,6 +37,9 @@ const DEEP_ROLLBACK: u32 = 8;
 const SHALLOW_ROLLBACK: u32 = 2;
 /// Proposal index rejected in successive windows; `None` accepts every row.
 const REJECTIONS: [Option<usize>; 7] = [None, Some(0), Some(3), Some(1), None, Some(4), Some(2)];
+/// Rows per step of a run whose window width keeps changing; 1 decodes the
+/// committed token alone. Each change rebuilds every stage's graph.
+const CHANGING_WIDTHS: [usize; 9] = [6, 2, 1, 4, 3, 1, 1, 5, 2];
 /// For pipelined pairs: the rejected index in the first and second window.
 /// Index 0 of the second window rejects its first, still speculative, row.
 const PIPELINED_REJECTIONS: [(Option<usize>, Option<usize>); 5] = [
@@ -292,6 +297,54 @@ fn run_serial(mut target: Target, prompt: &[i32], reference: &[i32], label: &str
     finish(target, committed, current, reference, label)
 }
 
+/// Serial windows whose width changes from one step to the next, with
+/// single-token decodes between them.
+fn run_changing_widths(
+    mut target: Target,
+    prompt: &[i32],
+    reference: &[i32],
+    label: &str,
+) -> Result<Run> {
+    target.prefill(&prompt[..prompt.len() - 1])?;
+    let prompt_prefix = (prompt.len() - 1) as u64;
+    let mut committed = Vec::new();
+    let mut current = *prompt.last().context("empty prompt")?;
+    let mut step = 0;
+    while committed.len() < GENERATED_TOKENS {
+        let base = prompt_prefix + committed.len() as u64;
+        let width = CHANGING_WIDTHS[step % CHANGING_WIDTHS.len()];
+        let reject = REJECTIONS[step % REJECTIONS.len()].filter(|index| index + 1 < width);
+        step += 1;
+        if width == 1 {
+            let (predicted, _) = target
+                .probe(&[current])?
+                .pop()
+                .context("decode returned no row")?;
+            commit(&mut committed, reference, &[predicted], 0, label)?;
+            current = predicted;
+        } else {
+            let mut window = vec![current];
+            window.extend(proposals(reference, committed.len(), width - 1, reject));
+            let predicted = target.verify(&window)?;
+            ensure!(
+                predicted.len() == window.len(),
+                "{label}: verify returned {} rows",
+                predicted.len()
+            );
+            let accepted = accepted_rows(&window, &predicted);
+            commit(&mut committed, reference, &predicted, accepted, label)?;
+            if accepted + 1 == window.len() {
+                target.retire(base, window.len() as u64)?;
+            } else {
+                target.trim(base + 1 + accepted as u64)?;
+            }
+            current = predicted[accepted];
+        }
+        target.check_position(prompt_prefix + committed.len() as u64, label)?;
+    }
+    finish(target, committed, current, reference, label)
+}
+
 /// Two windows in flight: the second is verified before the first resolves,
 /// drafted on the assumption that the first is accepted in full.
 fn run_pipelined(
@@ -463,8 +516,22 @@ fn split_verify_rollback_matches_full_model_and_checkpoint_path() -> Result<()> 
         "single node pipelined",
     )?;
 
+    // Every width change re-realizes each stage's slice of a freshly built
+    // graph; the split must still commit what the full model decodes.
+    let changing = run_changing_widths(
+        Target::Split(deep_first.create_session()?, deep_last.create_session()?),
+        &prompt,
+        &reference,
+        "split changing widths",
+    )?;
+
     let expected = &reference[..single.committed.len()];
     assert_eq!(single.committed, expected);
+    assert_eq!(
+        changing.committed,
+        &reference[..changing.committed.len()],
+        "split changing widths"
+    );
     assert_eq!(in_place.committed, checkpointed.committed);
     assert_eq!(in_place.committed, single.committed);
     for run in [&pipelined, &single_pipelined] {
