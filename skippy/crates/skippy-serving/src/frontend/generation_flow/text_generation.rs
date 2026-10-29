@@ -297,6 +297,7 @@ impl StageOpenAiBackend {
                             .then(|| gated_speculative.dflash.as_ref())
                             .flatten()
                             .map(|dflash| dflash.draft_model_path.as_path()),
+                        split_dflash_health: Default::default(),
                         prompt_token_ids: &prompt_token_ids,
                         recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids
                             .as_deref(),

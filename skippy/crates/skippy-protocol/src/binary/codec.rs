@@ -112,7 +112,7 @@ pub fn send_reply_predicted_with_tokens_window_and_stats(
         predicted_tokens,
         window,
     )?;
-    write_native_mtp_draft(&mut writer, None)?;
+    write_native_mtp_draft(&mut writer, None, stats.has_dflash_health())?;
     write_reply_stats(&mut writer, stats)
 }
 
@@ -146,7 +146,7 @@ pub fn send_reply_predicted_tokens_with_window_and_stats(
         predicted_tokens,
         window,
     )?;
-    write_native_mtp_draft(&mut writer, None)?;
+    write_native_mtp_draft(&mut writer, None, stats.has_dflash_health())?;
     write_reply_stats(&mut writer, stats)
 }
 
@@ -174,7 +174,11 @@ pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Res
         &reply.predicted_tokens,
         reply.window,
     )?;
-    write_native_mtp_draft(&mut writer, reply.native_mtp_draft.as_ref())?;
+    write_native_mtp_draft(
+        &mut writer,
+        reply.native_mtp_draft.as_ref(),
+        reply.stats.has_dflash_health(),
+    )?;
     write_reply_stats(&mut writer, reply.stats)?;
     if reply.kind == WireReplyKind::TokenScores {
         super::readout::write_scores(&mut writer, &reply.log_probabilities)?;
@@ -197,8 +201,12 @@ pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
         predicted_tokens.push(read_i32(&mut reader)?);
     }
     let window = read_reply_window(&mut reader)?;
-    let native_mtp_draft = read_native_mtp_draft(&mut reader)?;
-    let stats = read_reply_stats(&mut reader)?;
+    let (native_mtp_draft, dflash_health) = read_native_mtp_draft(&mut reader)?;
+    let mut stats = read_reply_stats(&mut reader)?;
+    if dflash_health {
+        stats.dflash_feature_rows_missing = read_i64(&mut reader)?;
+        stats.dflash_draft_context_resets = read_i64(&mut reader)?;
+    }
     let log_probabilities = if kind == WireReplyKind::TokenScores {
         if !predicted_tokens.is_empty() || native_mtp_draft.is_some() || predicted != -1 {
             return Err(invalid_data("readout reply contains generated tokens"));
@@ -238,19 +246,33 @@ fn write_reply_header(
     write_reply_window(&mut writer, window)
 }
 
+/// Reply marker bit: DFlash draft-context counters follow the reply stats.
+/// Only sent to a sender that set `state_flags::SPLIT_DFLASH`; older
+/// readers reject the marker.
+const REPLY_DFLASH_HEALTH: i32 = 1 << 8;
+
 fn write_native_mtp_draft(
     mut writer: impl Write,
     draft: Option<&StageNativeMtpDraft>,
+    dflash_health: bool,
 ) -> io::Result<()> {
+    let health_bit = if dflash_health {
+        REPLY_DFLASH_HEALTH
+    } else {
+        0
+    };
     let Some(draft) = draft else {
-        return write_i32(&mut writer, 0);
+        return write_i32(&mut writer, health_bit);
     };
     if draft.token_ids.len() > MAX_STAGE_PREDICTED_TOKENS {
         return Err(invalid_input("too many native MTP draft tokens"));
     }
     // Marker 2 is only sent to a stage 0 that set
     // NATIVE_MTP_DRAFT_AFTER_CORRECTION; older readers reject it.
-    write_i32(&mut writer, if draft.follows_correction { 2 } else { 1 })?;
+    write_i32(
+        &mut writer,
+        health_bit | if draft.follows_correction { 2 } else { 1 },
+    )?;
     write_i32(
         &mut writer,
         i32::try_from(draft.token_ids.len())
@@ -262,9 +284,13 @@ fn write_native_mtp_draft(
     write_i64(&mut writer, draft.proposal_compute_us)
 }
 
-fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNativeMtpDraft>> {
-    match read_i32(&mut reader)? {
-        0 => Ok(None),
+/// Reads a reply's native MTP draft and whether DFlash draft-context
+/// counters follow its stats.
+fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<(Option<StageNativeMtpDraft>, bool)> {
+    let marker = read_i32(&mut reader)?;
+    let dflash_health = marker & REPLY_DFLASH_HEALTH != 0;
+    let draft = match marker & !REPLY_DFLASH_HEALTH {
+        0 => None,
         marker @ (1 | 2) => {
             let token_count = checked_i32_len(
                 read_i32(&mut reader)?,
@@ -276,14 +302,15 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNative
             for _ in 0..token_count {
                 token_ids.push(read_i32(&mut reader)?);
             }
-            Ok(Some(StageNativeMtpDraft {
+            Some(StageNativeMtpDraft {
                 token_ids,
                 proposal_compute_us: read_i64(&mut reader)?,
                 follows_correction: marker == 2,
-            }))
+            })
         }
-        _ => Err(invalid_data("unknown native MTP draft reply marker")),
-    }
+        _ => return Err(invalid_data("unknown native MTP draft reply marker")),
+    };
+    Ok((draft, dflash_health))
 }
 
 /// Serialize a validated current-generation stage message and its sidebands.
@@ -902,7 +929,13 @@ fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Resu
     {
         chunk.copy_from_slice(&value.to_le_bytes());
     }
-    writer.write_all(&bytes)
+    writer.write_all(&bytes)?;
+    // The reply marker announced these; see `REPLY_DFLASH_HEALTH`.
+    if stats.has_dflash_health() {
+        write_i64(&mut writer, stats.dflash_feature_rows_missing)?;
+        write_i64(&mut writer, stats.dflash_draft_context_resets)?;
+    }
+    Ok(())
 }
 
 fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
@@ -989,6 +1022,9 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         prefill_compute_stage_index: fields[24],
         prefill_compute_token_count_at_slowest_rate: fields[25],
         prefill_compute_observation_count: fields[26],
+        // Read after the fixed fields when the reply marker says so.
+        dflash_feature_rows_missing: 0,
+        dflash_draft_context_resets: 0,
     }
 }
 

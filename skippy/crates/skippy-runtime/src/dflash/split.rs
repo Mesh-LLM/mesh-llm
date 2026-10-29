@@ -400,19 +400,27 @@ pub(crate) struct DFlashSplitSession {
     captured: Option<DFlashFeatureRows>,
     /// The layer, and its width, whose input this stage's output frames carry.
     output_layer: Option<(u32, usize)>,
+    /// Whether this stage's graph captures any target layer itself.
+    captures_layers: bool,
     /// Rows from earlier stages, and how many of them decodes have consumed.
     pub(crate) remote: Option<(DFlashFeatureRows, usize)>,
+    /// Token rows whose captured features this stage could not forward.
+    pub(crate) rows_dropped: u64,
 }
 
 impl DFlashSplitSession {
     pub(crate) fn capturing(capture: &SharedDFlashCapture) -> Self {
-        let output_layer = {
+        let (output_layer, captures_layers) = {
             let capture = lock_recovering(capture, |_| {});
-            capture.output_layer.map(|layer| (layer, capture.n_embd))
+            (
+                capture.output_layer.map(|layer| (layer, capture.n_embd)),
+                !capture.layers.is_empty(),
+            )
         };
         Self {
             capture: Some(Arc::downgrade(capture)),
             output_layer,
+            captures_layers,
             ..Self::default()
         }
     }
@@ -438,7 +446,10 @@ impl DFlashSplitSession {
                 None => self.captured = Some(read),
             },
             Err(error) => {
-                crate::write_native_log_note(format!("dflash feature capture failed: {error:#}"));
+                crate::write_native_log_note(format!(
+                    "dflash feature capture failed, {rows} rows not forwarded: {error:#}"
+                ));
+                self.rows_dropped += u64::try_from(rows).unwrap_or(u64::MAX);
                 self.captured = None;
             }
         }
@@ -476,6 +487,14 @@ impl StageSession {
         if let Some(rows) = rows.as_mut() {
             rows.keep_trailing(tokens);
         }
+        // Rows a failed capture never recorded leave without this stage's
+        // layers; the final stage's draft finds them missing.
+        if split.captures_layers {
+            let carried = rows
+                .as_ref()
+                .map_or(0, |rows| if rows.is_empty() { 0 } else { rows.rows() });
+            split.rows_dropped += u64::try_from(tokens.saturating_sub(carried)).unwrap_or(0);
+        }
         let mut output_error = None;
         if let Some((layer, n_embd)) = split.output_layer {
             let inserted = frame_hidden_rows(frame, n_embd).and_then(|values| {
@@ -490,6 +509,14 @@ impl StageSession {
             rows.append_to_frame(frame)?;
         }
         output_error.map_or(Ok(()), Err)
+    }
+
+    /// Token rows whose captured DFlash features this stage could not forward
+    /// since the session was last activated.
+    pub fn dflash_rows_dropped(&self) -> u64 {
+        self.dflash_split
+            .as_ref()
+            .map_or(0, |split| split.rows_dropped)
     }
 
     /// Whether this session feeds a split DFlash pipeline, as a draft or as a

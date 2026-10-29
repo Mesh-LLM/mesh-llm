@@ -540,17 +540,20 @@ fn handle_binary_connection_messages(
                 };
                 compute_start_unix_nanos = now_unix_nanos() as u64;
                 let compute_started = Instant::now();
-                // DFlash feature rows ride the activations and are moved along
-                // only on the unbatched path.
+                // DFlash feature rows ride the activations and are moved along,
+                // and a final stage's draft-context counters reported, on the
+                // unbatched path. A split DFlash decode takes it even when its
+                // frame lost its rows, so the loss is counted and reported.
                 let use_decode_frame_batch = is_decode_frame_batch_candidate(
                     config,
                     &message,
                     executable_token_ids,
                     native_mtp_enabled,
                     last_stage_batching,
-                ) && !input
-                    .as_ref()
-                    .is_some_and(skippy_runtime::frame_has_dflash_features);
+                ) && !message.state.split_dflash()
+                    && !input
+                        .as_ref()
+                        .is_some_and(skippy_runtime::frame_has_dflash_features);
                 let result = if use_decode_frame_batch {
                     let token_id = executable_token_ids
                         .first()
@@ -687,6 +690,10 @@ fn handle_binary_connection_messages(
                             .map_err(|error| {
                                 skippy_inference_api::InferenceError::backend(format!("{error:#}"))
                             })?;
+                            let dflash_stats = runtime.dflash_reply_stats(
+                                &scheduler_session_key,
+                                scheduler_message.state,
+                            );
                             let sessions_after =
                                 collect_session_stats.then(|| runtime.session_stats());
                             Ok((
@@ -695,7 +702,7 @@ fn handle_binary_connection_messages(
                                 sessions_before,
                                 sessions_after,
                                 eviction,
-                                result,
+                                (result, dflash_stats),
                             ))
                         })
                         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
@@ -709,8 +716,9 @@ fn handle_binary_connection_messages(
                         sessions_before,
                         sessions_after,
                         eviction,
-                        result,
+                        (result, dflash_stats),
                     ) = outcome.value;
+                    message_reply_stats.merge(dflash_stats);
                     message = returned_message;
                     if align_in_compute {
                         session_auto_align_count = auto_align.count;

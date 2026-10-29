@@ -537,11 +537,16 @@ impl RuntimeState {
 
     /// Whether this stage drafts DFlash blocks for a split target.
     pub(crate) fn dflash_drafts(&self) -> bool {
+        #[cfg(test)]
+        if self.dflash_drafts_for_test {
+            return true;
+        }
         self.model.dflash_info().is_some()
     }
 
     /// Hands a split final stage's draft the feature rows that earlier stages
-    /// sent with `input`. A no-op on stages without a draft.
+    /// sent with `input`. A no-op on stages without a draft. The first message
+    /// of a session arrives before anything has created it, so this does.
     pub(crate) fn dflash_split_input(&mut self, session_id: &str, input: Option<&ActivationFrame>) {
         if !self.dflash_drafts() {
             return;
@@ -549,13 +554,22 @@ impl RuntimeState {
         let rows = match input.map(skippy_runtime::DFlashFeatureRows::from_frame) {
             Some(Ok(rows)) => rows,
             Some(Err(error)) => {
-                tracing::debug!("ignoring malformed DFlash feature parts: {error:#}");
+                tracing::warn!(
+                    session_id,
+                    error = format!("{error:#}"),
+                    "dropping malformed split DFlash feature rows"
+                );
                 None
             }
             None => None,
         };
-        if let Some(lane) = self.sessions.get_mut(session_id) {
-            lane.session.dflash_set_remote_features(rows);
+        match self.session(session_id) {
+            Ok(session) => session.dflash_set_remote_features(rows),
+            Err(error) => tracing::warn!(
+                session_id,
+                error = format!("{error:#}"),
+                "dropping split DFlash feature rows: no session to hand them to"
+            ),
         }
     }
 
@@ -565,9 +579,54 @@ impl RuntimeState {
         let Some(lane) = self.sessions.get_mut(session_id) else {
             return;
         };
+        let dropped_before = lane.session.dflash_rows_dropped();
         if let Err(error) = lane.session.dflash_forward_captured(output) {
-            tracing::debug!("not forwarding DFlash feature rows: {error:#}");
+            tracing::warn!(
+                session_id,
+                error = format!("{error:#}"),
+                "not forwarding split DFlash feature rows"
+            );
         }
+        let dropped = lane.session.dflash_rows_dropped();
+        if dropped > dropped_before {
+            tracing::warn!(
+                session_id,
+                rows = dropped - dropped_before,
+                session_rows_dropped = dropped,
+                "split DFlash feature rows left this stage without their features"
+            );
+        }
+    }
+
+    /// This session's split DFlash draft-context counters for a reply to a
+    /// sender that reads them, logging any loss since the last report. Empty
+    /// stats on stages without a draft.
+    pub(crate) fn dflash_reply_stats(
+        &mut self,
+        session_id: &str,
+        state: skippy_protocol::binary::StageStateHeader,
+    ) -> skippy_protocol::binary::StageReplyStats {
+        let mut stats = skippy_protocol::binary::StageReplyStats::default();
+        let Some(lane) = self.sessions.get_mut(session_id) else {
+            return stats;
+        };
+        if let Some(health) = lane.session.dflash_take_new_losses() {
+            tracing::warn!(
+                session_id,
+                feature_rows_missing = health.feature_rows_missing,
+                draft_context_resets = health.draft_context_resets,
+                "split DFlash draft lost target rows"
+            );
+        }
+        if state.split_dflash()
+            && let Some(health) = lane.session.dflash_health()
+        {
+            stats.dflash_feature_rows_missing =
+                i64::try_from(health.feature_rows_missing).unwrap_or(i64::MAX);
+            stats.dflash_draft_context_resets =
+                i64::try_from(health.draft_context_resets).unwrap_or(i64::MAX);
+        }
+        stats
     }
 
     /// Drafts a DFlash block after `anchor` at `anchor_position` on a split
@@ -706,12 +765,14 @@ impl RuntimeState {
     pub(super) fn session(&mut self, session_id: &str) -> Result<&mut StageSession> {
         if !self.sessions.contains_key(session_id) {
             self.ensure_not_reset_by_panic(session_id)?;
-            let lane_session = self.take_idle_session().map(Ok).unwrap_or_else(|| {
+            let mut lane_session = self.take_idle_session().map(Ok).unwrap_or_else(|| {
                 if self.sessions.len() >= self.lane_count as usize {
                     bail!("all execution lanes are busy");
                 }
                 self.create_lane_session()
             })?;
+            // A reused lane starts this session's DFlash counters over.
+            lane_session.session.dflash_reset_health();
             self.sessions.insert(session_id.to_string(), lane_session);
             // Every active session must have a tracked position from the
             // moment it activates (both a fresh and a reused idle lane start

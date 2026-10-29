@@ -122,6 +122,12 @@ impl ReusableDecodeMessage {
         Ok(&self.message)
     }
 
+    /// Marks the decodes of a split DFlash generation; see
+    /// `state_flags::SPLIT_DFLASH`.
+    pub(super) fn set_split_dflash(&mut self, split_dflash: bool) {
+        self.message.state.set_split_dflash(split_dflash);
+    }
+
     fn into_message(self) -> StageWireMessage {
         self.message
     }
