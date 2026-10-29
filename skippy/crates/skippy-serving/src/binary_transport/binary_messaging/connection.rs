@@ -540,13 +540,17 @@ fn handle_binary_connection_messages(
                 };
                 compute_start_unix_nanos = now_unix_nanos() as u64;
                 let compute_started = Instant::now();
+                // DFlash feature rows ride the activations and are moved along
+                // only on the unbatched path.
                 let use_decode_frame_batch = is_decode_frame_batch_candidate(
                     config,
                     &message,
                     executable_token_ids,
                     native_mtp_enabled,
                     last_stage_batching,
-                );
+                ) && !input
+                    .as_ref()
+                    .is_some_and(skippy_runtime::frame_has_dflash_features);
                 let result = if use_decode_frame_batch {
                     let token_id = executable_token_ids
                         .first()

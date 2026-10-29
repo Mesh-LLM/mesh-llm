@@ -27,7 +27,7 @@ use skippy_protocol::{
     },
 };
 use skippy_runtime::{
-    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame,
+    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame, NativeMtpDraft,
 };
 
 use super::native_mtp_reply::{
@@ -584,6 +584,12 @@ impl BinaryStageExecutionOptions {
 }
 
 /// Dispatch a validated stage request to its owning execution path.
+///
+/// On a split DFlash target this also moves target features along: an earlier
+/// stage appends the rows of its DFlash target layers to its output frame, and
+/// the final stage hands the rows it received to its draft. When stage 0 asks
+/// for a draft, the final stage drafts the next block with DFlash and returns
+/// it where a native MTP draft would go.
 pub(crate) fn run_binary_stage_message(
     runtime: &mut RuntimeState,
     session_id: &str,
@@ -591,6 +597,113 @@ pub(crate) fn run_binary_stage_message(
     token_ids: &[i32],
     input: Option<&ActivationFrame>,
     options: BinaryStageExecutionOptions,
+) -> Result<(i32, Vec<i32>, ActivationFrame, Option<StageNativeMtpDraft>)> {
+    runtime.dflash_split_input(session_id, input);
+    let dflash_tokens = dflash_draft_tokens(runtime, message);
+    let (predicted, mut predicted_tokens, mut output, mut draft) = execute_binary_stage_message(
+        runtime,
+        session_id,
+        message,
+        token_ids,
+        input,
+        options,
+        dflash_tokens > 0,
+    )?;
+    runtime.dflash_split_output(session_id, &mut output);
+    if dflash_tokens > 0 {
+        let window = (message.kind == WireMessageKind::VerifyWindow).then_some(token_ids);
+        if let Some(proposal) = propose_dflash_after(
+            runtime,
+            session_id,
+            window,
+            &predicted_tokens,
+            dflash_tokens,
+        )? {
+            let proposal = NativeMtpDraft {
+                token_ids: proposal.tokens,
+                proposal_compute_us: i64::try_from(proposal.proposal_compute_us)
+                    .unwrap_or(i64::MAX),
+            };
+            match window {
+                Some(window) => {
+                    draft = verify_reply_native_mtp_draft(
+                        Some(stage_native_mtp_draft(proposal)),
+                        window,
+                        &predicted_tokens,
+                        message.state.accepts_native_mtp_draft_after_correction(),
+                    );
+                }
+                None => {
+                    predicted_tokens = native_mtp_prediction_tokens(predicted, Some(proposal));
+                }
+            }
+        }
+    }
+    Ok((predicted, predicted_tokens, output, draft))
+}
+
+/// Draft tokens stage 0 asked a DFlash final stage to propose with this
+/// message; 0 when this stage has no draft or the sender asked for none.
+fn dflash_draft_tokens(runtime: &RuntimeState, message: &StageWireMessage) -> usize {
+    let drafting_kind = matches!(
+        message.kind,
+        WireMessageKind::DecodeEmbd
+            | WireMessageKind::DecodeReadout
+            | WireMessageKind::DecodeLightCtx
+            | WireMessageKind::VerifyWindow
+    );
+    if !drafting_kind || !runtime.dflash_drafts() {
+        return 0;
+    }
+    message.state.native_mtp_draft_tokens().unwrap_or(0)
+}
+
+/// Accepted proposal tokens of a verify window: proposals that match the
+/// target's prediction for the row before them.
+fn verify_accepted_prefix(window: &[i32], predicted: &[i32]) -> usize {
+    window
+        .iter()
+        .skip(1)
+        .zip(predicted)
+        .take_while(|(proposed, target)| proposed == target)
+        .count()
+}
+
+/// Drafts the block after the last token this message commits: the decoded
+/// token's prediction, or a verify window's bonus or correction token.
+fn propose_dflash_after(
+    runtime: &mut RuntimeState,
+    session_id: &str,
+    window: Option<&[i32]>,
+    predicted_tokens: &[i32],
+    max_tokens: usize,
+) -> Result<Option<skippy_runtime::DFlashProposal>> {
+    let Some(decoded_end) = runtime.session_token_count(session_id) else {
+        return Ok(None);
+    };
+    let (accepted, window_len) = match window {
+        Some(window) => (
+            verify_accepted_prefix(window, predicted_tokens),
+            window.len(),
+        ),
+        None => (0, 1),
+    };
+    let Some(&anchor) = predicted_tokens.get(accepted) else {
+        return Ok(None);
+    };
+    let window_start = decoded_end.saturating_sub(window_len as u64);
+    let anchor_position = window_start + accepted as u64 + 1;
+    runtime.dflash_propose_at(session_id, anchor, anchor_position, max_tokens)
+}
+
+fn execute_binary_stage_message(
+    runtime: &mut RuntimeState,
+    session_id: &str,
+    message: &StageWireMessage,
+    token_ids: &[i32],
+    input: Option<&ActivationFrame>,
+    options: BinaryStageExecutionOptions,
+    dflash_drafts: bool,
 ) -> Result<(i32, Vec<i32>, ActivationFrame, Option<StageNativeMtpDraft>)> {
     match message.kind {
         WireMessageKind::PrefillEmbd => {
@@ -635,7 +748,7 @@ pub(crate) fn run_binary_stage_message(
             let sampling =
                 runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
             let draft_tokens = native_mtp_draft_tokens(message, options);
-            if !options.native_mtp_enabled || draft_tokens == 0 {
+            if !options.native_mtp_enabled || draft_tokens == 0 || dflash_drafts {
                 let (predicted, output) = runtime.decode_frame_sampled(
                     session_id,
                     token_id,
@@ -663,13 +776,18 @@ pub(crate) fn run_binary_stage_message(
         WireMessageKind::VerifyWindow => {
             let sampling =
                 runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
+            let native_mtp_tokens = if dflash_drafts {
+                0
+            } else {
+                native_mtp_draft_tokens(message, options)
+            };
             let (predicted_tokens, native_mtp, output) = runtime.verify_frame_sampled(
                 session_id,
                 token_ids,
                 sampling.as_ref(),
                 input,
                 options.output_capacity,
-                native_mtp_draft_tokens(message, options),
+                native_mtp_tokens,
             )?;
             let predicted = predicted_tokens.first().copied().unwrap_or(0);
             let draft = verify_reply_native_mtp_draft(
@@ -1240,6 +1358,17 @@ mod tests {
         // A topology that does not list the sender rejects the frame.
         message.state.source_stage_index = 99;
         assert!(check_upstream_layer_range(&config, Some(&topology), &message, (11, 23)).is_err());
+    }
+
+    #[test]
+    fn verify_accepted_prefix_stops_at_the_first_rejected_proposal() {
+        use super::verify_accepted_prefix;
+        // Window [current, p1, p2, p3]; prediction i is the target's token
+        // after window row i.
+        assert_eq!(verify_accepted_prefix(&[1, 2, 3, 4], &[2, 3, 4, 5]), 3);
+        assert_eq!(verify_accepted_prefix(&[1, 2, 3, 4], &[2, 9, 4, 5]), 1);
+        assert_eq!(verify_accepted_prefix(&[1, 2, 3, 4], &[7]), 0);
+        assert_eq!(verify_accepted_prefix(&[1], &[2]), 0);
     }
 
     #[test]
