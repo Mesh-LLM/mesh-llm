@@ -70,6 +70,9 @@ pub enum PluginProgressEvent {
     Updated {
         installed: Box<InstalledPluginMetadata>,
         from: String,
+        /// The metadata the replaced version was installed with, so the
+        /// access the operator accepted then can be compared with now.
+        previous: Box<InstalledPluginMetadata>,
     },
     AlreadyCurrent {
         name: String,
@@ -423,7 +426,8 @@ async fn install_resolved_plugin(
     if let Some(current) = current {
         progress.report(PluginProgressEvent::Updated {
             installed: Box::new(metadata.clone()),
-            from: current.installed_version,
+            from: current.installed_version.clone(),
+            previous: Box::new(current),
         });
     } else {
         progress.report(PluginProgressEvent::Installed {

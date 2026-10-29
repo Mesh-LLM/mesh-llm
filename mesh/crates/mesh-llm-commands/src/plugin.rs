@@ -431,6 +431,65 @@ fn exchange_access_summary(
         .map(|access| access.access_summary())
 }
 
+/// What an update asks for that the version it replaces did not. The store
+/// keeps the manifest each version was installed with, which is the record
+/// of what the operator accepted; an update that widens it is called out,
+/// including for a dependency pulled in by `requires`, instead of being
+/// granted quietly because the earlier install was.
+fn access_increase_lines(
+    previous: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+    installed: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let hook = |metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata| {
+        metadata
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.openai_exchange_hook.clone())
+    };
+    let increases = match (hook(previous), hook(installed)) {
+        (Some(before), Some(now)) => now.increases_over(&before),
+        (None, Some(now)) => now.increases_over(
+            &mesh_llm_plugin_manager::store::InstalledOpenAiExchangeAccess::default(),
+        ),
+        _ => Vec::new(),
+    };
+    if !increases.is_empty() {
+        lines.push(format!(
+            "⚠️  {} now asks for OpenAI lifecycle access it did not have at version {}: {}. Narrow or replace it with a [[plugin]] entry if that is not wanted.",
+            installed.name,
+            previous.installed_version,
+            increases.join(", ")
+        ));
+    }
+    let bindings = |metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata| {
+        metadata
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.operation_bindings.clone())
+            .unwrap_or_default()
+    };
+    let before = bindings(previous);
+    let new_bindings: Vec<String> = bindings(installed)
+        .into_iter()
+        .filter(|binding| {
+            !before
+                .iter()
+                .any(|b| b.capability == binding.capability && b.operations == binding.operations)
+        })
+        .map(|binding| format!("{} ({})", binding.capability, binding.operations.join(", ")))
+        .collect();
+    if !new_bindings.is_empty() {
+        lines.push(format!(
+            "⚠️  {} now asks for provider bindings it did not have at version {}: {}.",
+            installed.name,
+            previous.installed_version,
+            new_bindings.join("; ")
+        ));
+    }
+    lines
+}
+
 /// What is said when a package lands (`PluginProgressEvent::Installed` /
 /// `Updated`): the landing line, then the disclosure of what it was granted.
 /// Printed as each package lands, so a plugin that stays installed when a
@@ -742,7 +801,11 @@ impl PluginProgressReporter for CliPluginProgress {
                     &installed,
                 );
             }
-            PluginProgressEvent::Updated { installed, from } => {
+            PluginProgressEvent::Updated {
+                installed,
+                from,
+                previous,
+            } => {
                 self.landed(
                     format!(
                         "⬆️  Updated {} {from} -> {}",
@@ -750,6 +813,10 @@ impl PluginProgressReporter for CliPluginProgress {
                     ),
                     &installed,
                 );
+                let mut err = mesh_llm_events::console_err();
+                for line in access_increase_lines(&previous, &installed) {
+                    let _ = writeln!(err, "{line}");
+                }
             }
             PluginProgressEvent::AlreadyCurrent { name, version } => {
                 self.finish();
