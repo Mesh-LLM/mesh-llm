@@ -17,6 +17,7 @@
 //! validate` agrees with real runtime support instead of drifting from it.
 
 mod checkpoint;
+mod lifecycle;
 mod runtime;
 mod topology;
 
@@ -1036,6 +1037,9 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    lifecycle::LOAD,
+    lifecycle::IDLE,
+    lifecycle::PREFETCH,
     topology::MODE,
     topology::MANIFEST_SHA256,
     topology::STAGES,

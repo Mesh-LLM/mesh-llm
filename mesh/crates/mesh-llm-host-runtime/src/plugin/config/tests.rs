@@ -308,6 +308,7 @@ fn documented_matrix_key_paths() -> BTreeSet<String> {
 fn test_model(name: &str) -> ModelConfigEntry {
     ModelConfigEntry {
         model: name.into(),
+        lifecycle: Default::default(),
         mmproj: None,
         ctx_size: None,
         gpu_id: None,

@@ -940,6 +940,9 @@ pub(super) fn build_startup_model_specs(
     }
 
     for model in &config.models {
+        if model.lifecycle.load == mesh_llm_config::managed_models::ModelLoadPolicy::OnDemand {
+            continue;
+        }
         let effective =
             effective_startup_model_config(&model.model, Some(model), config.defaults.as_ref());
         let local_source_required =

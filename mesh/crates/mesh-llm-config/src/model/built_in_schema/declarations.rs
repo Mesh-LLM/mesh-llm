@@ -210,6 +210,20 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
         &format!("{model_prefix}.model"),
         ConfigValueSchema::String,
     )];
+    settings.extend([
+        top_level_setting(
+            &format!("{model_prefix}.lifecycle.load"),
+            string_enum(["startup", "on_demand"]),
+        ),
+        top_level_setting(
+            &format!("{model_prefix}.lifecycle.idle_timeout_secs"),
+            ConfigValueSchema::Integer,
+        ),
+        top_level_setting(
+            &format!("{model_prefix}.lifecycle.prefetch"),
+            ConfigValueSchema::Boolean,
+        ),
+    ]);
     settings.extend(model_fit_settings(
         &format!("{model_prefix}.model_fit"),
         &[
@@ -542,11 +556,42 @@ fn hardware_settings(
         experimental_setting(
             &format!("{prefix}.checkpoint_quantization"),
             string_enum([
-                "preserve", "F32", "F16", "BF16", "Q1_0", "Q2_0", "Q4_0", "Q4_1", "Q5_0",
-                "Q5_1", "IQ2_XXS", "IQ2_XS", "IQ2_S", "IQ2_M", "IQ1_S", "IQ1_M", "TQ1_0",
-                "TQ2_0", "Q2_K", "Q2_K_S", "IQ3_XS", "IQ3_XXS", "IQ3_S", "IQ3_M", "Q3_K_S",
-                "Q3_K_M", "Q3_K_L", "IQ4_NL", "IQ4_XS", "Q4_K_S", "Q4_K_M", "Q5_K_S",
-                "Q5_K_M", "Q6_K", "Q8_0", "MXFP4_MOE",
+                "preserve",
+                "F32",
+                "F16",
+                "BF16",
+                "Q1_0",
+                "Q2_0",
+                "Q4_0",
+                "Q4_1",
+                "Q5_0",
+                "Q5_1",
+                "IQ2_XXS",
+                "IQ2_XS",
+                "IQ2_S",
+                "IQ2_M",
+                "IQ1_S",
+                "IQ1_M",
+                "TQ1_0",
+                "TQ2_0",
+                "Q2_K",
+                "Q2_K_S",
+                "IQ3_XS",
+                "IQ3_XXS",
+                "IQ3_S",
+                "IQ3_M",
+                "Q3_K_S",
+                "Q3_K_M",
+                "Q3_K_L",
+                "IQ4_NL",
+                "IQ4_XS",
+                "Q4_K_S",
+                "Q4_K_M",
+                "Q5_K_S",
+                "Q5_K_M",
+                "Q6_K",
+                "Q8_0",
+                "MXFP4_MOE",
             ]),
         ),
         experimental_setting(
@@ -818,7 +863,10 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             &format!("{prefix}.verify_window_runahead_tokens"),
             integer_or_auto_schema(),
         ),
-        basic_setting(&format!("{prefix}.ngram_fallback"), ConfigValueSchema::String),
+        basic_setting(
+            &format!("{prefix}.ngram_fallback"),
+            ConfigValueSchema::String,
+        ),
         basic_setting(&format!("{prefix}.gate"), bool_or_auto_schema()),
         basic_setting(
             &format!("{prefix}.gate_min_window_s"),

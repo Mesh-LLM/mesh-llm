@@ -182,6 +182,9 @@ normal warnings in every mode.
 
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
+| `lifecycle.load` | enum | `startup` (default), `on_demand` | `[[models]]` only | process restart | wired | none |
+| `lifecycle.idle_timeout_secs` | integer | `0` disables idle eviction; applies to on-demand native instances | `[[models]]` only | process restart | wired | none |
+| `lifecycle.prefetch` | boolean | `true` caches model assets on disk at startup | `[[models]]` only | process restart | wired | none |
 | `model` | string | required; catalog id, Hugging Face reference, URL, or local path | `[[models]]` only | model reload | wired | positional `--model` / `--gguf` on the ad-hoc single-model path |
 | `hardware.model_path` | path | unset | both | model reload | wired | `--gguf` sets it for the ad-hoc single-model path |
 | `hardware.hf_repo`<br>`hardware.hf_file` | string | unset | both | model reload | wired | none |

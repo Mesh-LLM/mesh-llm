@@ -218,8 +218,11 @@ pub struct Node {
         >,
     >,
     pub(crate) owner_lifecycle_response_cache: OwnerLifecycleResponseCache,
-    /// Channel to send model lifecycle intents from owner-control commands to the reconciler.
-    /// Set during runtime initialization; None when running outside the control loop.
+    /// Shared request leases and residency policy across host memberships.
+    pub(crate) native_model_lifecycle:
+        Arc<std::sync::OnceLock<Arc<crate::runtime::native_model_lifecycle::NativeModelLifecycle>>>,
+    /// Channel to send model lifecycle intents to the reconciler.
+    /// Set during runtime initialization; None outside the control loop.
     pub(crate) model_intent_tx:
         Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<crate::runtime::ModelIntent>>>>,
     /// Further meshes this node serves its models into (`node::membership`).
@@ -932,6 +935,7 @@ impl Node {
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
             owner_attestation_path: saved_owner_attestation_path(),
@@ -1123,6 +1127,7 @@ impl Node {
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
             owner_attestation_path: None,

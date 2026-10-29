@@ -349,6 +349,7 @@ pub struct ModelConfigDefaults {
 #[derive(Clone, Debug, Default)]
 pub struct ModelConfigEntry {
     pub model: String,
+    pub lifecycle: crate::managed_models::ModelLifecycle,
     pub mmproj: Option<String>,
     pub ctx_size: Option<u32>,
     pub gpu_id: Option<String>,
@@ -377,6 +378,9 @@ impl Serialize for ModelConfigEntry {
     {
         let mut state = serializer.serialize_struct("ModelConfigEntry", 19)?;
         state.serialize_field("model", &self.model)?;
+        if self.lifecycle != crate::managed_models::ModelLifecycle::default() {
+            state.serialize_field("lifecycle", &self.lifecycle)?;
+        }
         if let Some(value) = &self.mmproj {
             state.serialize_field("mmproj", value)?;
         }
@@ -1276,6 +1280,8 @@ struct RawModelConfigDefaults {
 struct RawModelConfigEntry {
     model: String,
     #[serde(default)]
+    lifecycle: crate::managed_models::ModelLifecycle,
+    #[serde(default)]
     mmproj: Option<String>,
     #[serde(default)]
     ctx_size: Option<u32>,
@@ -1409,6 +1415,7 @@ impl ModelConfigEntry {
 
         Self {
             model: raw.model,
+            lifecycle: raw.lifecycle,
             mmproj: multimodal
                 .as_ref()
                 .and_then(|config| config.mmproj.clone())

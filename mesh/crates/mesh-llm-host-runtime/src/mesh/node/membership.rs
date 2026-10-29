@@ -367,6 +367,7 @@ impl Node {
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
             control_listener: Arc::new(Mutex::new(None)),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            native_model_lifecycle: self.native_model_lifecycle.clone(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(feature = "payments")]
             payment_recovery: Arc::new(Mutex::new(None)),
