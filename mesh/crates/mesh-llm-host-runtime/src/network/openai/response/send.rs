@@ -103,9 +103,6 @@ pub async fn send_400(stream: ClientStream, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, 400, msg, None).await
 }
 
-// Currently reached only by the paid-ingress rejection path; compiled out with
-// wallets. Ungate if a wallet-free caller needs a bare error response.
-
 /// Write a locally generated bounded OpenAI JSON error and record the exact
 /// body only after the client write succeeds. The observer remains the narrow
 /// logging boundary: it receives no request headers or arbitrary media type.

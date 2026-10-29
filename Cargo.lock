@@ -4423,26 +4423,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lightning-invoice"
-version = "0.35.0-rc1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91904130b6a2f76655b96d827c817fd6f16e2fed3adfc23a91973f5c37a0f482"
-dependencies = [
- "bech32 0.11.1",
- "bitcoin",
- "lightning-types",
-]
-
-[[package]]
-name = "lightning-types"
-version = "0.4.0-rc1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c1be11e911ca70c5205e934c9371226a99c37b8c8d29c2be646accbfa70ac09"
-dependencies = [
- "bitcoin",
-]
-
-[[package]]
 name = "line-clipping"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4912,7 +4892,6 @@ dependencies = [
  "iroh",
  "iroh-relay",
  "libc",
- "lightning-invoice",
  "mdns-sd",
  "mesh-llm-analytics",
  "mesh-llm-build-info",

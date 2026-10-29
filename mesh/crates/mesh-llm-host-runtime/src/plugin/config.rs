@@ -3,9 +3,7 @@ use super::installed::{
     configured_disabled_installed_plugin_summary, configured_external_plugin_spec,
 };
 use super::schema_validation::strict_plugin_schema_availability;
-use super::{
-    BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary, RETIRED_WALLET_LEXE_PLUGIN_ID,
-};
+use super::{BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary};
 use crate::{
     MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
     ReleaseAttestationRequirement,
@@ -307,24 +305,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         if entry.name == BLOBSTORE_PLUGIN_ID {
             ensure_builtin_entry_only_toggles_enabled(entry)?;
             blobstore_enabled = enabled;
-            continue;
-        }
-        if entry.name == RETIRED_WALLET_LEXE_PLUGIN_ID {
-            // The built-in Lexe wallet was removed; keep old configs loading.
-            // An output event, not `tracing::warn!`: the runtime's default
-            // log filter drops host-runtime warnings, so users never saw it.
-            // Plugins are resolved more than once at startup; warn once.
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| {
-                let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
-                    message: format!(
-                        "Ignoring [[plugin]] '{RETIRED_WALLET_LEXE_PLUGIN_ID}': the built-in \
-                         Lexe wallet was removed; install the external `lexe-wallet` plugin \
-                         instead"
-                    ),
-                    context: None,
-                });
-            });
             continue;
         }
         if !enabled {

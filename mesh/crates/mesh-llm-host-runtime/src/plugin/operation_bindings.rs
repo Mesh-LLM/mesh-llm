@@ -303,11 +303,14 @@ fn reserve_resolved_provider(
     }
 }
 
-/// Setup payload for a `setup_directory` binding. The caller names a base
-/// directory it owns (`{"directory": <absolute base>}`); the host scopes it to
-/// the resolved provider (`<base>/<provider>`) and creates it owner-only, so
-/// the caller never learns or chooses which provider it was bound to, and each
-/// provider keeps its own state (e.g. `payments/wallets/lexe-wallet`).
+/// Setup payload for a `setup_directory` binding. The caller supplies the base
+/// directory (`{"directory": <absolute base>}`); the host only checks that it
+/// is absolute, then scopes it to the resolved provider (`<base>/<provider>`)
+/// and creates that directory owner-only. So in this mode the caller does
+/// choose where the provider keeps its state, while the provider's identity
+/// stays hidden from it (the provider name is the one host-controlled
+/// component). Bindings with an operator-fixed `setup_payload` give the
+/// caller no such choice.
 fn setup_directory_payload(caller_payload: &str, provider: &str) -> anyhow::Result<String> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]

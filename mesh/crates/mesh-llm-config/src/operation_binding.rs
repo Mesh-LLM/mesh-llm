@@ -9,7 +9,7 @@ pub struct PluginOperationBinding {
     /// host then resolves the single running plugin serving that capability.
     #[serde(default)]
     pub provider: String,
-    /// Capability the provider must serve (for example `wallet.v1`), used
+    /// Capability the provider must serve (for example `storage.v1`), used
     /// when `provider` is empty. Comes from an installed package's manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability: Option<String>,

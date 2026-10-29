@@ -24,9 +24,9 @@ pub(crate) fn snapshot_validated_config(config_path: Option<&Path>) -> Result<Na
     crate::plugin::parse_config_toml(raw_text)
         .with_context(|| format!("Invalid config {}", resolved_path.display()))?;
 
-    // ConfigState resolves durable payment state relative to the config's
+    // ConfigState resolves durable plugin state relative to the config's
     // parent. A snapshot in the global temporary directory would redirect all
-    // embedded profiles to the same wallet/ledger instead of their own.
+    // embedded profiles to the same state directory instead of their own.
     let directory = resolved_path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())

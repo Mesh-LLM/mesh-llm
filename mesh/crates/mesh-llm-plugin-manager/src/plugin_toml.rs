@@ -79,11 +79,11 @@ mod tests {
     #[test]
     fn requirements_are_read_in_order() {
         let parsed = parse_plugin_toml(
-            "name = \"lexe-wallet\"\nrequires = [\"pay-lightning\", \"capsules\"]\n",
-            "lexe-wallet",
+            "name = \"demo-app\"\nrequires = [\"toolkit\", \"capsules\"]\n",
+            "demo-app",
         )
         .unwrap();
-        assert_eq!(parsed.requires, vec!["pay-lightning", "capsules"]);
+        assert_eq!(parsed.requires, vec!["toolkit", "capsules"]);
     }
 
     #[test]
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn invalid_self_and_duplicate_requirements_are_refused() {
-        let invalid = parse_plugin_toml("requires = [\"Pay Lightning\"]\n", "demo").unwrap_err();
+        let invalid = parse_plugin_toml("requires = [\"Tool Kit\"]\n", "demo").unwrap_err();
         assert!(
             invalid.to_string().contains("not a plugin name"),
             "{invalid}"

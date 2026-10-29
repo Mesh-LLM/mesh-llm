@@ -147,7 +147,7 @@ async fn installed_lifecycle_quic_ingress_delivers_real_stream_and_denies_before
 #[tokio::test]
 #[ignore = "requires just package-openai-exchange-exemplar"]
 async fn installed_lifecycle_quic_gate_deny_answers_402_before_backend_and_in_the_terminal() {
-    // A gate plugin (the shape a payment plugin takes) denies with 402: the
+    // A gate plugin denies with 402: the
     // peer sees "Payment Required" on the wire, the backend never runs, and
     // the serving host's own terminal event records 402 — not the 403 a
     // plain policy deny carries — so an observer plugin and the ops log tell

@@ -342,8 +342,8 @@ async fn handle_call(
         let payload = if body.trim().is_empty() { "{}" } else { body };
         let plugin_manager = state.inner.lock().await.plugin_manager.clone();
         // Only operations the plugin publishes in its manifest are callable here,
-        // matching MCP discovery. Capability-only plugins (wallet, blobstore) are
-        // host-internal: e.g. `wallet_pay` must go through the /api/wallet ledger.
+        // matching MCP discovery. Capability-only operations (blobstore, bound
+        // providers) stay host-internal and are reached through bindings.
         let published = published_operations(&plugin_manager, plugin_name)
             .await
             .unwrap_or_default();

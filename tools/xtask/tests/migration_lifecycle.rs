@@ -302,9 +302,6 @@ mod cache_family_plan_cli;
 #[path = "migration_lifecycle/cache_family_measure_cli.rs"]
 mod cache_family_measure_cli;
 
-#[path = "migration_lifecycle/lightning_compatibility_cli.rs"]
-mod lightning_compatibility_cli;
-
 #[path = "migration_lifecycle/cache_family_cell_cli.rs"]
 mod cache_family_cell_cli;
 

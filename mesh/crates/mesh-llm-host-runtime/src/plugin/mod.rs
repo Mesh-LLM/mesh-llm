@@ -123,10 +123,6 @@ use mesh_llm_plugin::MeshVisibility;
 use mesh_llm_plugin_manager::store::InstalledPluginWebUiValidationStatus;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
-/// Name of the removed built-in Lexe wallet. A leftover `[[plugin]]` stanza
-/// with this name is ignored with a warning; Lexe now ships as the external
-/// `lexe-wallet` plugin.
-pub const RETIRED_WALLET_LEXE_PLUGIN_ID: &str = "wallet-lexe";
 pub const MOA_PLUGIN_ID: &str = mesh_llm_moa_plugin::PLUGIN_ID;
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const REQUEST_TIMEOUT_SECS: u64 = 30;

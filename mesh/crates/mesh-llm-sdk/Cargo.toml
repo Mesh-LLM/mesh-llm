@@ -30,7 +30,7 @@ serving = [
 ]
 # Node identity keys on disk (default key path, keystore read/write).
 identity = ["dep:mesh-llm-identity"]
-# Install plugin archives (e.g. a wallet) into the local plugin store.
+# Install plugin archives into the local plugin store.
 plugin-install = ["dep:mesh-llm-plugin-manager"]
 
 [lints]

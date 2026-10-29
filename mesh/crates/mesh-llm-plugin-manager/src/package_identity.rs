@@ -29,14 +29,14 @@ mod tests {
     #[test]
     fn suggests_declared_identity_without_changing_install() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("plugin.toml"), "name = 'pay-lightning'\n").unwrap();
-        fs::write(root.path().join("pay-lightning"), "fixture").unwrap();
+        fs::write(root.path().join("plugin.toml"), "name = 'toolkit'\n").unwrap();
+        fs::write(root.path().join("toolkit"), "fixture").unwrap();
         assert_eq!(
-            mismatch_hint(root.path(), "lexe-wallet", "").as_deref(),
-            Some("this package installs as 'pay-lightning'; use `plugins install pay-lightning`")
+            mismatch_hint(root.path(), "demo-app", "").as_deref(),
+            Some("this package installs as 'toolkit'; use `plugins install toolkit`")
         );
-        assert!(mismatch_hint(root.path(), "pay-lightning", "").is_none());
-        assert!(mismatch_hint(root.path(), "lexe-wallet", ".exe").is_none());
+        assert!(mismatch_hint(root.path(), "toolkit", "").is_none());
+        assert!(mismatch_hint(root.path(), "demo-app", ".exe").is_none());
     }
 
     #[test]

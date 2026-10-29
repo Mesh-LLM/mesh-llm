@@ -17,17 +17,14 @@ fn cargo_features(fixture: &Fixture, release: bool) -> BTreeSet<String> {
 }
 
 #[test]
-fn neutral_release_host_features_are_backend_independent_of_legacy_wallet_selection() {
+fn neutral_release_host_features_are_backend_independent() {
     for backend in ["cpu", "cuda", "rocm"] {
-        for wallet in [false, true] {
+        {
             let fixture = Fixture::new();
             let result = fixture.invoke(
                 "scripts/build-release.sh",
                 &[],
-                &[
-                    ("LLAMA_STAGE_BACKEND", backend),
-                    ("MESH_LLM_WALLET_LEXE", if wallet { "1" } else { "0" }),
-                ],
+                &[("LLAMA_STAGE_BACKEND", backend)],
             );
             assert!(result.process.success(), "{backend}: {result:?}");
             let expected: BTreeSet<_> = ["web-ui", "dynamic-native-runtime"]

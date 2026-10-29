@@ -411,8 +411,8 @@ mod tests {
     #[test]
     fn a_met_requirement_is_not_reported() {
         let installed = [
-            plugin("lexe-wallet", true, &["pay-lightning"]),
-            plugin("pay-lightning", true, &[]),
+            plugin("demo-app", true, &["toolkit"]),
+            plugin("toolkit", true, &[]),
         ];
         assert!(missing_requirements(&installed).is_empty());
     }
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn missing_and_disabled_requirements_are_reported_with_their_reason() {
         let installed = [
-            plugin("lexe-wallet", true, &["pay-lightning", "capsules"]),
+            plugin("demo-app", true, &["toolkit", "capsules"]),
             plugin("capsules", false, &[]),
         ];
         let missing = missing_requirements(&installed);
@@ -428,63 +428,57 @@ mod tests {
             missing,
             vec![
                 MissingRequirement {
-                    plugin: "lexe-wallet".into(),
-                    required: "pay-lightning".into(),
+                    plugin: "demo-app".into(),
+                    required: "toolkit".into(),
                     reason: MissingRequirementReason::NotInstalled,
                 },
                 MissingRequirement {
-                    plugin: "lexe-wallet".into(),
+                    plugin: "demo-app".into(),
                     required: "capsules".into(),
                     reason: MissingRequirementReason::Disabled,
                 },
             ]
         );
-        assert!(
-            missing[0]
-                .describe()
-                .contains("plugins install pay-lightning")
-        );
+        assert!(missing[0].describe().contains("plugins install toolkit"));
         assert!(missing[1].describe().contains("plugins enable capsules"));
     }
 
     #[test]
     fn a_disabled_plugin_does_not_report_its_own_requirements() {
-        let installed = [plugin("lexe-wallet", false, &["pay-lightning"])];
+        let installed = [plugin("demo-app", false, &["toolkit"])];
         assert!(missing_requirements(&installed).is_empty());
     }
 
     #[test]
     fn required_by_lists_dependents_whether_or_not_they_are_enabled() {
         let installed = [
-            plugin("lexe-wallet", true, &["pay-lightning"]),
-            plugin("nwc-wallet", false, &["pay-lightning"]),
-            plugin("pay-lightning", true, &[]),
+            plugin("demo-app", true, &["toolkit"]),
+            plugin("other-app", false, &["toolkit"]),
+            plugin("toolkit", true, &[]),
         ];
         assert_eq!(
-            required_by(&installed, "pay-lightning"),
-            vec!["lexe-wallet".to_string(), "nwc-wallet".to_string()]
+            required_by(&installed, "toolkit"),
+            vec!["demo-app".to_string(), "other-app".to_string()]
         );
-        assert!(required_by(&installed, "lexe-wallet").is_empty());
+        assert!(required_by(&installed, "demo-app").is_empty());
     }
 
     #[test]
     fn deleting_a_required_plugin_is_refused_until_its_dependents_go() {
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
-        store
-            .save(&plugin("lexe-wallet", true, &["pay-lightning"]))
-            .unwrap();
-        store.save(&plugin("pay-lightning", true, &[])).unwrap();
+        store.save(&plugin("demo-app", true, &["toolkit"])).unwrap();
+        store.save(&plugin("toolkit", true, &[])).unwrap();
 
-        let error = ensure_not_required(&store, "pay-lightning", "delete").unwrap_err();
+        let error = ensure_not_required(&store, "toolkit", "delete").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "cannot delete pay-lightning: required by lexe-wallet; delete it first"
+            "cannot delete toolkit: required by demo-app; delete it first"
         );
-        assert!(ensure_not_required(&store, "lexe-wallet", "delete").is_ok());
+        assert!(ensure_not_required(&store, "demo-app", "delete").is_ok());
 
-        store.delete("lexe-wallet").unwrap();
-        assert!(ensure_not_required(&store, "pay-lightning", "delete").is_ok());
+        store.delete("demo-app").unwrap();
+        assert!(ensure_not_required(&store, "toolkit", "delete").is_ok());
     }
 
     #[test]
@@ -492,10 +486,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
         store.save(&plugin("capsules", false, &[])).unwrap();
-        let wallet = plugin("lexe-wallet", true, &["pay-lightning", "capsules"]);
+        let app = plugin("demo-app", true, &["toolkit", "capsules"]);
         assert_eq!(
-            uninstalled_requirements(&store, &wallet).unwrap(),
-            vec!["pay-lightning".to_string()]
+            uninstalled_requirements(&store, &app).unwrap(),
+            vec!["toolkit".to_string()]
         );
     }
 }

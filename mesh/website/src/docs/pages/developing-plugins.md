@@ -370,13 +370,13 @@ A plugin that needs another installed plugin alongside it names it in
 `requires`, by catalog name:
 
 ```toml
-name = "lexe-wallet"
-requires = ["pay-lightning"]
+name = "demo-app"
+requires = ["toolkit"]
 ```
 
-`mesh-llm plugins install lexe-wallet` then also installs `pay-lightning` from
+`mesh-llm plugins install demo-app` then also installs `toolkit` from
 the catalog when it is not installed (and whatever that requires in turn);
-`mesh-llm plugins delete pay-lightning` is refused while `lexe-wallet` is
+`mesh-llm plugins delete toolkit` is refused while `demo-app` is
 installed; `mesh-llm plugins list` and a node start report a requirement that
 is missing or disabled. A requirement is a packaging fact only: the host does
 not start, order, or connect the two plugins. How they talk is still declared

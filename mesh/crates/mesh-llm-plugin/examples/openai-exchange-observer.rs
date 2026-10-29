@@ -137,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
                         .as_deref()
                         .is_some_and(|model| event["model"].as_str() == Some(model));
                 // `MESH_LLM_EXEMPLAR_DENY_STATUS=402` turns the deny into a
-                // satisfiable gate verdict (the shape a payment plugin gives).
+                // satisfiable gate verdict.
                 let deny_status = std::env::var("MESH_LLM_EXEMPLAR_DENY_STATUS")
                     .ok()
                     .and_then(|status| status.parse::<u16>().ok());

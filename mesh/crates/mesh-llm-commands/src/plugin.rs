@@ -41,6 +41,50 @@ pub struct InactivePluginRow {
     pub error: Option<String>,
 }
 
+/// Forward one published operation call to the running node, which dispatches
+/// it to the plugin and returns the plugin's answer unchanged. The node links
+/// nothing plugin-specific: the operation name and input are the plugin's own.
+async fn call(plugin: &str, operation: &str, input: &str, port: u16) -> Result<()> {
+    let input = if input.trim() == "-" {
+        let mut buffer = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)?;
+        buffer
+    } else {
+        input.to_owned()
+    };
+    let input: serde_json::Value = serde_json::from_str(&input)
+        .map_err(|error| anyhow::anyhow!("--input is not JSON: {error}"))?;
+    let client = Client::builder().no_proxy().build()?;
+    let url = format!("http://127.0.0.1:{port}/api/plugins/{plugin}/tools/{operation}");
+    let response = match client.post(&url).json(&input).send().await {
+        Ok(response) => response,
+        // Never repeat a request after it may have reached the node.
+        Err(error) if error.is_connect() => bail!(
+            "mesh-llm is not running on port {port}; plugin operations are served by the              running node. Start `mesh-llm` and retry."
+        ),
+        Err(error) => return Err(error.into()),
+    };
+    let status = response.status();
+    let body = response.text().await?;
+    if status.as_u16() == 404 {
+        bail!(
+            "the node on port {port} has no running plugin '{plugin}' publishing '{operation}': {}",
+            body.trim()
+        );
+    }
+    if !status.is_success() {
+        bail!("plugin '{plugin}' rejected '{operation}': {}", body.trim());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
+    writeln!(
+        mesh_llm_events::machine_out(),
+        "{}",
+        serde_json::to_string_pretty(&value)?
+    )?;
+    Ok(())
+}
+
 pub async fn run_plugin_command(
     command: &PluginCommand,
     runtime_rows: Option<&PluginListRows>,
@@ -69,6 +113,12 @@ pub async fn run_plugin_command(
         PluginCommand::Delete { name } => delete(name)?,
         PluginCommand::Info { name } => return info(name, runtime_rows),
         PluginCommand::Search { query } => search(query.as_deref()).await?,
+        PluginCommand::Call {
+            plugin,
+            operation,
+            input,
+            port,
+        } => call(plugin, operation, input, *port).await?,
         PluginCommand::List => {
             let Some(runtime_rows) = runtime_rows else {
                 return Ok(false);
@@ -950,21 +1000,21 @@ url = "unix:///run/remote.sock"
     fn deleting_a_plugin_another_one_requires_is_refused_and_keeps_it_installed() {
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
-        installed_plugin(&store, "lexe-wallet", &["pay-lightning"]);
-        installed_plugin(&store, "pay-lightning", &[]);
+        installed_plugin(&store, "demo-app", &["toolkit"]);
+        installed_plugin(&store, "toolkit", &[]);
         let mut err = Vec::new();
 
-        let error = delete_in(&store, "pay-lightning", &mut err).unwrap_err();
+        let error = delete_in(&store, "toolkit", &mut err).unwrap_err();
 
         assert_eq!(
             error.to_string(),
-            "cannot delete pay-lightning: required by lexe-wallet; delete it first"
+            "cannot delete toolkit: required by demo-app; delete it first"
         );
-        assert!(store.load_optional("pay-lightning").unwrap().is_some());
+        assert!(store.load_optional("toolkit").unwrap().is_some());
         assert!(err.is_empty());
 
-        delete_in(&store, "lexe-wallet", &mut err).unwrap();
-        delete_in(&store, "pay-lightning", &mut err).unwrap();
+        delete_in(&store, "demo-app", &mut err).unwrap();
+        delete_in(&store, "toolkit", &mut err).unwrap();
         assert!(store.list().unwrap().is_empty());
     }
 

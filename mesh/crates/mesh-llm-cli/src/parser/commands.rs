@@ -914,13 +914,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Manage the local mainnet Lightning wallet.
-    Wallet {
-        #[arg(long, default_value_t = 3131)]
-        port: u16,
-        #[command(subcommand)]
-        command: crate::wallet::WalletCommand,
-    },
     /// Serve local models and join or publish a mesh.
     Serve,
     /// Run as a client-only mesh node with no local model required.
@@ -1399,6 +1392,20 @@ pub enum PluginCommand {
     },
     /// List installed, auto-registered, and configured plugins.
     List,
+    /// Call an operation a running plugin publishes, through the local node
+    /// (`POST /api/plugins/<plugin>/tools/<operation>`), and print its answer.
+    Call {
+        /// Installed plugin name.
+        plugin: String,
+        /// Operation name from the plugin's manifest.
+        operation: String,
+        /// JSON input for the operation; `-` reads it from stdin. Defaults to `{}`.
+        #[arg(long, default_value = "{}")]
+        input: String,
+        /// Local node API port.
+        #[arg(long, default_value_t = 3131)]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand, Debug)]

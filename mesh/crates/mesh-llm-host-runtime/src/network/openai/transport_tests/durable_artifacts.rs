@@ -32,7 +32,7 @@ async fn start_http_tunnel_test_node() -> (mesh::Node, mesh::TunnelChannels, tem
     .expect("start HTTP tunnel test node");
     // These are free-routing fixtures, not the operator's configured wallet.
     // Keep the directory alive for every clone used by tunnel tasks.
-    let directory = tempfile::tempdir().expect("isolated payment config");
+    let directory = tempfile::tempdir().expect("isolated config");
     *node.config_state.lock().await =
         crate::runtime::config_state::ConfigState::load(&directory.path().join("config.toml"))
             .expect("isolated config state");

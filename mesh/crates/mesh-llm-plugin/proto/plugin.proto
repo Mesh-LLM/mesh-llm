@@ -840,7 +840,7 @@ message PluginGrantRequests {
   bool peer_blocks = 2;
 }
 
-// A provider connection requested by capability (for example `wallet.v1`).
+// A provider connection requested by capability (for example `storage.v1`).
 // The host resolves it to the single running plugin serving that capability.
 message OperationBindingManifest {
   string name = 1;

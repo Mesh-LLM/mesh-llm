@@ -13,7 +13,6 @@ As implementation lands, this document should be updated to match the intended e
 
 Plugin-specific documentation:
 
-- [Wallet engineering notes](wallet/README.md) - wallet boundaries, evidence provenance, and fixture expectations
 
 - [DwarfStar (ds4)](dwarfstar.md) - run ds4 models (DeepSeek V4 Flash and others) on Apple Silicon with a bundled alternative engine
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
@@ -1597,7 +1596,7 @@ inspection grants no authority. Authority comes from one of two grants:
 
 - **Installed package.** `mesh-llm plugins install` grants a package the
   bindings its manifest declares (`operation_bindings`, naming a capability
-  such as `wallet.v1` rather than a provider) and the OpenAI-exchange hook it
+  such as `storage.v1` rather than a provider) and the OpenAI-exchange hook it
   declares, after showing them in the install text. A capability binding
   resolves, on first use, to the single running plugin serving that
   capability; two candidates are refused until the operator names one. The
@@ -1630,6 +1629,7 @@ An absent provider does not prevent startup. Explicit provider disable revokes
 the binding; removing a provider entry takes effect on restart. Revocation and
 enqueue are synchronized: revocation before enqueue is `not_dispatched`;
 revocation after enqueue may be `uncertain`. Changed owner grants revoke old handles;
-new grants require a process restart. Installed `pay-lightning` + a `wallet.v1`
-plugin (e.g. `lexe-wallet`) is the composition this describes; it is not a
-production-readiness claim.
+new grants require a process restart. A consumer plugin bound to a capability
+provider is the composition this describes; it is not a production-readiness
+claim. Exclusive provider ownership is the v1 binding behaviour; shared or
+read-only providers are not part of this contract.

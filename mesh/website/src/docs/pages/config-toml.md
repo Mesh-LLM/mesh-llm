@@ -45,65 +45,11 @@ bind           = "[::]:7447"   # Mesh owner-control listen address
 
 ## Payments
 
-Paid inference is not built into the node. It is provided by the `pay-lightning`
-plugin together with a separately installed `wallet.v1` plugin (for example the
-external `lexe-wallet`). The node only supplies the generic pieces: an
-operation binding that lets the payments plugin reach the wallet, and an
-exchange grant that lets it admit or refuse requests. `mesh-llm plugins install`
-grants both from the package manifest, so installing the two plugins is the
-whole setup; prices and spending policy are then set with `mesh-llm wallet
-pricing …` / `mesh-llm wallet policy …` and live in the payments plugin's own
-JSON file under `~/.mesh-llm/payments/`, not in `config.toml`.
-
-The `[[plugin]]` entry below is the optional operator override: it replaces the
-installed grants with explicit ones (a named wallet provider and open payload, a
-separate payment JSON file).
-
-```toml
-[[plugin]]
-name = "pay-lightning"
-settings = { config_path = "/absolute/payment/config.json", wallet_binding = "wallet", allow_wallet_provisioning = false }
-allow_peer_blocks = true
-
-[plugin.openai_exchange_grant]
-endpoints = ["chat_completions", "completions", "responses"]
-phases = ["request_received", "backend_selected", "exchange_finished"]
-headers = ["x-plugin-7061792d6c696768746e696e67-pay-terms"]
-admission = true
-metadata = true
-deadline_ms = 30000
-failure_policy = "required"
-
-[[plugin.operation_bindings]]
-name = "wallet"
-provider = "lexe-wallet"
-profile = "default"
-setup_operation = "wallet_open"
-setup_input_json = '{"directory":"/absolute/existing/wallet-state"}'
-operations = ["wallet_balance", "wallet_transactions", "wallet_create_invoice", "wallet_pay", "wallet_lookup", "wallet_wait_for_payment", "wallet_wait_for_arrival"]
-
-[[plugin]]
-name = "lexe-wallet"
-```
-
-- `settings.config_path` — the payments plugin's JSON file (ledger directory,
-  prices, buy ceilings, policy). Defaults never authorize spending.
-- `settings.wallet_binding` — the `operation_bindings` entry the plugin may use.
-  The binding fixes the wallet provider, its open payload and the allowed
-  operations; the plugin cannot choose a wallet or open directory itself.
-- `settings.allow_wallet_provisioning` — required once, to adopt a wallet into a
-  fresh ledger. Afterwards the ledger pins the wallet identity, and a changed
-  identity is refused.
-- `openai_exchange_grant` — when present, replaces the hook grant made at
-  install; it must still grant the phases, header and admission access the
-  plugin's manifest requires, or the plugin cannot gate requests.
-
-A node without the payments plugin serves free inference only; with it
-installed and nothing configured, the defaults are non-spending (no prices,
-`free_only` policy). See the
-[plugin README](https://github.com/Mesh-LLM/ln-payments-plugin/blob/main/crates/mesh-llm-pay-lightning/README.md)
-for the payment JSON and the [exchange contract](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/plugins/openai-exchange-lifecycle.md)
-for the grant fields.
+Paid inference is not part of the node and has no `config.toml` section. Payment
+rails are ordinary plugins that use the generic seams described above (operation
+bindings, the OpenAI-exchange hook, model `requires`). The Lightning rail lives in
+[Mesh-LLM/ln-payments-plugin](https://github.com/Mesh-LLM/ln-payments-plugin);
+its README covers installation, pricing and spending policy.
 
 ## Telemetry
 

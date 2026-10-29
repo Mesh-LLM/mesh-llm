@@ -29,7 +29,7 @@ impl Drop for UntrustedManagementRequest {
 
 #[cfg(test)]
 pub(crate) fn is_untrusted_management_request(address: SocketAddr) -> bool {
-    // Poisoned origin tracking fails closed for wallet spending.
+    // Poisoned origin tracking fails closed: nothing is treated as trusted-local.
     connections()
         .lock()
         .map_or(true, |connections| connections.contains(&address))

@@ -153,12 +153,12 @@ mod tests {
             .expect("lookup")
             .expect("chat endpoint");
         assert_eq!(chat.plugin_name, "chat");
-        let payment_backend = manager
+        let named_backend = manager
             .inference_endpoint_for_model("same-model")
             .await
             .expect("lookup")
             .expect("chat backend");
-        assert_eq!(payment_backend.plugin_name, "chat");
+        assert_eq!(named_backend.plugin_name, "chat");
     }
 
     /// Admission is descriptor-based and dispatch is protocol-based, so the

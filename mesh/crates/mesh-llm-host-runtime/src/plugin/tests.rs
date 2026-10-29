@@ -116,25 +116,6 @@ fn resolves_default_builtin_plugins() {
     assert!(resolved.inactive.is_empty());
 }
 
-/// A stanza for the removed built-in Lexe wallet.
-fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
-    PluginConfigEntry {
-        operation_bindings: Vec::new(),
-        name: RETIRED_WALLET_LEXE_PLUGIN_ID.into(),
-        enabled,
-        web_ui_enabled: None,
-        web_ui_primary_tab: None,
-        allow_peer_blocks: None,
-        allow_inference_observation: None,
-        openai_exchange_grant: None,
-        command: None,
-        args: Vec::new(),
-        url: None,
-        settings: Default::default(),
-        startup: Default::default(),
-    }
-}
-
 #[test]
 fn builtin_plugin_arguments_follow_the_plugin_flag() {
     let spec = super::config::builtin_plugin_spec(
@@ -166,44 +147,18 @@ async fn builtin_plugin_without_arguments_refuses_them() {
 
 #[test]
 #[serial_test::serial]
-fn retired_builtin_wallet_stanza_is_ignored() {
-    // The built-in Lexe wallet was removed; an old stanza must not break
-    // startup, whatever it sets, and registers nothing.
-    let mut with_command = wallet_entry(Some(true));
-    with_command.command = Some("/opt/wallets/my-wallet".into());
-    for entry in [
-        wallet_entry(Some(true)),
-        wallet_entry(Some(false)),
-        wallet_entry(None),
-        with_command,
-    ] {
-        let config = MeshConfig {
-            plugins: vec![entry],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-        let resolved = resolve_plugins(&config, private_host_mode())
-            .expect("a retired stanza must not break startup");
-        assert_eq!(resolved.externals.len(), 1);
-        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
-        assert!(resolved.inactive.is_empty());
-    }
-}
-
-#[test]
-#[serial_test::serial]
-fn external_wallet_plugin_is_an_ordinary_plugin() {
+fn external_capability_plugin_is_an_ordinary_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
             operation_bindings: Vec::new(),
-            name: "lexe-wallet".into(),
+            name: "vault-provider".into(),
             enabled: Some(true),
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
             allow_inference_observation: None,
             openai_exchange_grant: None,
-            command: Some("/opt/wallets/lexe-wallet".into()),
+            command: Some("/opt/plugins/vault-provider".into()),
             args: Vec::new(),
             url: None,
             settings: Default::default(),
@@ -214,7 +169,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
     };
     let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
     let names: Vec<_> = resolved.externals.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["lexe-wallet", BLOBSTORE_PLUGIN_ID]);
+    assert_eq!(names, ["vault-provider", BLOBSTORE_PLUGIN_ID]);
     assert!(!resolved.externals[0].startup.optional);
 }
 

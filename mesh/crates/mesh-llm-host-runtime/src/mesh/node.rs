@@ -206,7 +206,6 @@ pub struct Node {
     pub(crate) unmatched_model_requirements:
         Arc<tokio::sync::Mutex<std::collections::HashSet<(String, String)>>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
-    /// Stops the payment-recovery loop, which holds a `Node` clone.
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.

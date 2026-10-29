@@ -43,7 +43,7 @@ async fn serve(mut stream: LocalStream, writes: Arc<AtomicUsize>) -> anyhow::Res
 }
 
 #[tokio::test]
-async fn non_wallet_provider_uses_fixed_setup_allowlist_generation_and_revocation() {
+async fn fixed_payload_provider_uses_fixed_setup_allowlist_generation_and_revocation() {
     let writes = Arc::new(AtomicUsize::new(0));
     let runner: InProcessPluginRunner = {
         let writes = writes.clone();
@@ -231,23 +231,23 @@ async fn non_wallet_provider_uses_fixed_setup_allowlist_generation_and_revocatio
 #[test]
 fn setup_directory_payload_scopes_the_caller_base_to_the_provider() {
     let base = tempfile::tempdir().unwrap();
-    let wallets = base.path().join("wallets");
+    let vaults = base.path().join("vaults");
     let payload = super::setup_directory_payload(
-        &serde_json::json!({ "directory": wallets }).to_string(),
-        "lexe-wallet",
+        &serde_json::json!({ "directory": vaults }).to_string(),
+        "vault-a",
     )
     .unwrap();
     let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
     assert_eq!(
         value["directory"].as_str().unwrap(),
-        wallets.join("lexe-wallet").display().to_string(),
-        "main's layout: <payments>/wallets/<wallet plugin>"
+        vaults.join("vault-a").display().to_string(),
+        "main's layout: <state>/vaults/<provider>"
     );
-    assert!(wallets.join("lexe-wallet").is_dir());
+    assert!(vaults.join("vault-a").is_dir());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(wallets.join("lexe-wallet"))
+        let mode = std::fs::metadata(vaults.join("vault-a"))
             .unwrap()
             .permissions()
             .mode()
@@ -257,16 +257,15 @@ fn setup_directory_payload_scopes_the_caller_base_to_the_provider() {
     // The caller cannot pick the provider segment or leave the base: a relative
     // base, an empty payload and a provider that is not a plain name are refused.
     assert!(
-        super::setup_directory_payload(r#"{"directory":"relative/wallets"}"#, "lexe-wallet")
-            .is_err()
+        super::setup_directory_payload(r#"{"directory":"relative/vaults"}"#, "vault-a").is_err()
     );
-    assert!(super::setup_directory_payload("", "lexe-wallet").is_err());
+    assert!(super::setup_directory_payload("", "vault-a").is_err());
     assert!(
-        super::setup_directory_payload(r#"{"directory":"/tmp","extra":1}"#, "lexe-wallet").is_err()
+        super::setup_directory_payload(r#"{"directory":"/tmp","extra":1}"#, "vault-a").is_err()
     );
     assert!(
         super::setup_directory_payload(
-            &serde_json::json!({ "directory": wallets }).to_string(),
+            &serde_json::json!({ "directory": vaults }).to_string(),
             "../x"
         )
         .is_err()
@@ -279,22 +278,22 @@ fn setup_directory_payload_scopes_the_caller_base_to_the_provider() {
 fn installed_package_grant_survives_config_apply_until_replaced() {
     fn grant(name: &str) -> PluginOperationBinding {
         PluginOperationBinding {
-            capability: Some("wallet.v1".into()),
+            capability: Some("vault.v1".into()),
             setup_directory: true,
             name: name.into(),
             provider: String::new(),
             profile: "default".into(),
-            setup_operation: "wallet_open".into(),
+            setup_operation: "vault_open".into(),
             setup_input_json: "{}".into(),
-            operations: vec!["wallet_balance".into()],
+            operations: vec!["vault_read".into()],
         }
     }
     fn manager_with(installed_grant: bool) -> PluginManager {
         let manager = PluginManager::for_test_summaries(Vec::new());
         manager.inner.operation_bindings.0.lock().unwrap().insert(
-            ("pay".into(), "wallet".into()),
+            ("pay".into(), "vault".into()),
             Binding {
-                grant: grant("wallet"),
+                grant: grant("vault"),
                 handle: None,
                 capacity: Arc::new(Semaphore::new(8)),
                 installed_grant,
@@ -329,7 +328,7 @@ fn installed_package_grant_survives_config_apply_until_replaced() {
             .0
             .lock()
             .unwrap()
-            .contains_key(&("pay".to_owned(), "wallet".to_owned()))
+            .contains_key(&("pay".to_owned(), "vault".to_owned()))
     };
 
     let manager = manager_with(true);
@@ -366,14 +365,14 @@ fn installed_package_grant_survives_config_apply_until_replaced() {
 fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
     fn capability_grant(name: &str) -> PluginOperationBinding {
         PluginOperationBinding {
-            capability: Some("wallet.v1".into()),
+            capability: Some("vault.v1".into()),
             setup_directory: true,
             name: name.into(),
             provider: String::new(),
             profile: "default".into(),
-            setup_operation: "wallet_open".into(),
+            setup_operation: "vault_open".into(),
             setup_input_json: "{}".into(),
-            operations: vec!["wallet_balance".into()],
+            operations: vec!["vault_read".into()],
         }
     }
     fn binding(grant: PluginOperationBinding) -> Binding {
@@ -385,20 +384,20 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
             resolved: None,
         }
     }
-    let pay = ("pay".to_owned(), "wallet".to_owned());
-    let other = ("other".to_owned(), "wallet".to_owned());
-    let named = ("named".to_owned(), "wallet".to_owned());
+    let pay = ("pay".to_owned(), "vault".to_owned());
+    let other = ("other".to_owned(), "vault".to_owned());
+    let named = ("named".to_owned(), "vault".to_owned());
     let mut registry = BTreeMap::new();
-    registry.insert(pay.clone(), binding(capability_grant("wallet")));
-    registry.insert(other.clone(), binding(capability_grant("wallet")));
-    let mut fixed = capability_grant("wallet");
+    registry.insert(pay.clone(), binding(capability_grant("vault")));
+    registry.insert(other.clone(), binding(capability_grant("vault")));
+    let mut fixed = capability_grant("vault");
     fixed.capability = None;
-    fixed.provider = "ledger-wallet".into();
+    fixed.provider = "vault-b".into();
     registry.insert(named.clone(), binding(fixed));
 
     let capacity = registry[&pay].capacity.clone();
-    reserve_resolved_provider(&mut registry, &pay, &capacity, "lexe-wallet").unwrap();
-    assert_eq!(registry[&pay].provider(), Some("lexe-wallet"));
+    reserve_resolved_provider(&mut registry, &pay, &capacity, "vault-a").unwrap();
+    assert_eq!(registry[&pay].provider(), Some("vault-a"));
     assert!(
         registry[&pay].grant.provider.is_empty(),
         "resolution must not rewrite the grant"
@@ -406,27 +405,22 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
 
     let capacity = registry[&other].capacity.clone();
     assert_eq!(
-        reserve_resolved_provider(&mut registry, &other, &capacity, "lexe-wallet"),
-        Err("lexe-wallet is already bound exclusively by pay/wallet".into())
+        reserve_resolved_provider(&mut registry, &other, &capacity, "vault-a"),
+        Err("vault-a is already bound exclusively by consumer/vault".into())
     );
     assert_eq!(
-        reserve_resolved_provider(&mut registry, &other, &capacity, "ledger-wallet"),
-        Err("ledger-wallet is already bound exclusively by named/wallet".into())
+        reserve_resolved_provider(&mut registry, &other, &capacity, "vault-b"),
+        Err("vault-b is already bound exclusively by named/vault".into())
     );
     assert_eq!(registry[&other].provider(), None);
 
     // Re-resolving the owner to the same provider is idempotent; a stale
     // registration (different capacity) is refused.
     let capacity = registry[&pay].capacity.clone();
-    reserve_resolved_provider(&mut registry, &pay, &capacity, "lexe-wallet").unwrap();
+    reserve_resolved_provider(&mut registry, &pay, &capacity, "vault-a").unwrap();
     assert!(
-        reserve_resolved_provider(
-            &mut registry,
-            &pay,
-            &Arc::new(Semaphore::new(8)),
-            "lexe-wallet"
-        )
-        .is_err()
+        reserve_resolved_provider(&mut registry, &pay, &Arc::new(Semaphore::new(8)), "vault-a")
+            .is_err()
     );
 
     // The owner config entry still carries the grant as written (no provider);
@@ -435,7 +429,7 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
     *manager.inner.operation_bindings.0.lock().unwrap() = registry;
     let mut config = MeshConfig::default();
     config.plugins.push(crate::plugin::PluginConfigEntry {
-        operation_bindings: vec![capability_grant("wallet")],
+        operation_bindings: vec![capability_grant("vault")],
         name: "pay".into(),
         enabled: None,
         web_ui_enabled: None,
@@ -451,12 +445,12 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
     });
     manager.revoke_changed_operation_bindings(&config);
     let registry = manager.inner.operation_bindings.0.lock().unwrap();
-    assert_eq!(registry[&pay].provider(), Some("lexe-wallet"));
+    assert_eq!(registry[&pay].provider(), Some("vault-a"));
     // Disabling the resolved provider's plugin revokes the binding bound to it.
     drop(registry);
     config.plugins.push(crate::plugin::PluginConfigEntry {
         operation_bindings: Vec::new(),
-        name: "lexe-wallet".into(),
+        name: "vault-a".into(),
         enabled: Some(false),
         web_ui_enabled: None,
         web_ui_primary_tab: None,

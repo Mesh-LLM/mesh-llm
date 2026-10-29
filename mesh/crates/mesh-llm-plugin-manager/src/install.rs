@@ -1012,43 +1012,43 @@ mod tests {
         let options = options_for(temp.path(), "linux", "x86_64");
         let archive_path = temp
             .path()
-            .join("lexe-wallet-0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+            .join("demo-app-0.1.0-x86_64-unknown-linux-gnu.tar.gz");
         write_tar_gz(
             &archive_path,
-            "lexe-wallet",
+            "demo-app",
             &[
                 (
                     "plugin.toml",
-                    b"name = \"lexe-wallet\"\nversion = \"0.1.0\"\nrequires = [\"pay-lightning\"]\n",
+                    b"name = \"demo-app\"\nversion = \"0.1.0\"\nrequires = [\"toolkit\"]\n",
                 ),
-                ("lexe-wallet", b""),
+                ("demo-app", b""),
             ],
         )
         .unwrap();
 
         let outcome = install_plugin_archive(
-            "lexe-wallet",
+            "demo-app",
             "0.1.0",
             &archive_path,
             &options,
             &mut |_event: PluginProgressEvent| {},
         )
         .unwrap();
-        assert_eq!(outcome.metadata.requires, vec!["pay-lightning".to_string()]);
+        assert_eq!(outcome.metadata.requires, vec!["toolkit".to_string()]);
 
         let store = PluginStore::new(&options.store_root);
-        let reloaded = store.load("lexe-wallet").unwrap();
-        assert_eq!(reloaded.requires, vec!["pay-lightning".to_string()]);
+        let reloaded = store.load("demo-app").unwrap();
+        assert_eq!(reloaded.requires, vec!["toolkit".to_string()]);
         assert_eq!(
             crate::requirements::uninstalled_requirements(&store, &reloaded).unwrap(),
-            vec!["pay-lightning".to_string()]
+            vec!["toolkit".to_string()]
         );
         assert_eq!(
             crate::requirements::missing_requirements(std::slice::from_ref(&reloaded))
                 .into_iter()
                 .map(|missing| missing.required)
                 .collect::<Vec<_>>(),
-            vec!["pay-lightning".to_string()]
+            vec!["toolkit".to_string()]
         );
     }
 
