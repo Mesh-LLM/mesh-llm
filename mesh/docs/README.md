@@ -56,7 +56,7 @@ Use [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) for Skippy split-serv
 | [plugins/](plugins/) | Plugin architecture, web UI projection contract, exemplars, and implementation planning |
 | [plans/](plans/) | Narrow implementation plans that are not yet general design docs |
 | [specs/](specs/) | Focused behavior specs for individual features |
-| [specs/lightning-payments.md](specs/lightning-payments.md) | Planned Lightning payments PoC, wallet boundary, approvals, and settlement policy |
+| [specs/lightning-payments.md](specs/lightning-payments.md) | Lightning payments protocol (now implemented by the external `pay-lightning` plugin), wallet boundary, approvals, and settlement policy |
 | [design/OPENAI_GUARDRAILS.md](../../skippy/docs/design/OPENAI_GUARDRAILS.md) | OpenAI guardrail rollout defaults, v1 limits, telemetry privacy, and evidence scaffolding |
 
 Per-crate docs stay with their crates. The main binary crate overview lives at

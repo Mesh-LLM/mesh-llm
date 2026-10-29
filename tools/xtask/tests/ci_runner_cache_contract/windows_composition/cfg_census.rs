@@ -744,11 +744,11 @@ fn every_current_windows_catalog_unit_owner_selects_the_native_planner_row() {
     }
 }
 #[test]
-fn wallet_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence() {
-    let plan = plan_for_workflow_owner("mesh-llm-wallet", "pr-ready");
+fn plugin_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence() {
+    let plan = plan_for_workflow_owner("mesh-llm-plugin", "pr-ready");
     assert_eq!(
         plan["direct_crates"],
-        serde_json::json!(["mesh-llm-wallet"])
+        serde_json::json!(["mesh-llm-plugin"])
     );
     assert!(
         plan["affected_crates"]
@@ -777,12 +777,12 @@ fn wallet_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence
             .unwrap()
             .iter()
             .flat_map(|row| row["crates"].as_array().unwrap())
-            .any(|name| name == "mesh-llm-wallet")
+            .any(|name| name == "mesh-llm-plugin")
     );
-    assert!(unit_owners("windows").contains("mesh-llm-wallet"));
+    assert!(unit_owners("windows").contains("mesh-llm-plugin"));
     for profile in ["main", "manual-full"] {
         assert!(
-            plan_for_workflow_owner("mesh-llm-wallet", profile)["matrices"]["platform_checks"]
+            plan_for_workflow_owner("mesh-llm-plugin", profile)["matrices"]["platform_checks"]
                 .as_array()
                 .unwrap()
                 .iter()

@@ -1,5 +1,21 @@
 # Lightning payments PoC
 
+> [!IMPORTANT]
+> **Status (2026-10-29): payments are no longer built into the node.** The
+> protocol below (`pay.ln.v1`: deposit, metered settlement, the 1-sat floor,
+> the three-unpaid-finals limit, recovery by request ID) is now implemented by
+> the `pay-lightning` plugin in
+> [`Mesh-LLM/ln-payments-plugin`](https://github.com/Mesh-LLM/ln-payments-plugin),
+> which reaches the user's wallet plugin through the host's operation-binding
+> seam. mesh-llm keeps no payment, ledger or wallet code: the `payments.wallet`
+> config key, the node-served `/mesh/payment/v3` frames and the host-side
+> `mesh-llm wallet` implementation described here are gone, and
+> `mesh-llm wallet …` now forwards to the plugin. See
+> [`docs/plugins/README.md`](../plugins/README.md) (operator-bound operations,
+> install-time grants) and the plugin repository's README for the current
+> operator surface. The protocol rules and wallet findings in this document
+> still apply to the plugin; the host-integration sections are historical.
+
 > [!WARNING]
 > Wallet implementations, including the Lexe wallet, are currently for example
 > purposes only and are still being explored.

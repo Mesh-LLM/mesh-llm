@@ -1,14 +1,10 @@
 [workspace]
 members = [
-    "mesh/crates/mesh-llm-pay-lightning",
     "mesh/crates/mesh-llm",
     "mesh/crates/mesh-llm-analytics",
     "mesh/crates/mesh-llm-cli",
     "mesh/crates/mesh-llm-commands",
     "mesh/crates/mesh-llm-config",
-    "mesh/crates/mesh-llm-payments",
-    "mesh/crates/mesh-llm-payments-types",
-    "mesh/crates/mesh-llm-wallet",
     "mesh/crates/mesh-llm-events",
     "mesh/crates/mesh-llm-build-info",
     "skippy/crates/skippy-gpu-bench",

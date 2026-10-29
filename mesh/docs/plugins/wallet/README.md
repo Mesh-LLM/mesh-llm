@@ -10,4 +10,4 @@ not a wallet setup guide or a record of private test systems.
 - [Lightning payments specification](../../specs/lightning-payments.md) — payment
   behavior and current limitations, including
   [evidence expectations](../../specs/lightning-payments.md#evidence-interpretation-and-acceptance-expectations).
-- [Wallet crate](../../../crates/mesh-llm-wallet/README.md) — provider-neutral API.
+- [Wallet crate](https://github.com/Mesh-LLM/ln-payments-plugin/tree/main/crates/mesh-llm-wallet) (`mesh-llm-wallet`, in `Mesh-LLM/ln-payments-plugin`) — provider-neutral API.

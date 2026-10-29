@@ -586,13 +586,11 @@
         "mesh-llm-events",
         "mesh-llm-host-runtime",
         "mesh-llm-identity",
-        "mesh-llm-payments",
         "mesh-llm-plugin",
         "mesh-llm-plugin-manager",
         "mesh-llm-system",
         "mesh-llm-tui",
         "mesh-llm-ui",
-        "mesh-llm-wallet",
         "skippy-cache"
       ]
     },
