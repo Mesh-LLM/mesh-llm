@@ -126,6 +126,7 @@ pub(crate) fn configured_external_plugin_spec(
         startup,
         web_ui_enabled: entry.web_ui_enabled,
         web_ui_primary_tab: entry.web_ui_primary_tab,
+        endpoint_models: entry.models.clone(),
         installed_metadata,
     }))
 }
@@ -210,6 +211,7 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         },
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: Some(metadata.clone()),
     }
 }

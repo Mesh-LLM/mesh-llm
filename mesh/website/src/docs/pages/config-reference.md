@@ -429,6 +429,7 @@ sampling at the backend when it selects mode `1` or `2`.
 | `plugin.<name>.command` | string | required unless `url` is set | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.args` | array of string | `[]` | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.url` | URL | unset | plugin entry | plugin process restart | wired for HTTP(S) adapter URLs; `tcp://` control is rejected because no authenticated capability handshake exists | none |
+| `plugin.<name>.models` | array of string | unset (every model the plugin's inference endpoints list is shared) | plugin entry | Mesh node restart | wired | none |
 | `plugin.<name>.startup.connect_timeout_secs` | integer | host default | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.startup.init_timeout_secs` | integer | host default | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.startup.optional` | boolean | `false` | plugin entry | plugin process restart | wired; command resolution, spawn, connect, and initialize failures become inactive error summaries instead of stopping host startup | none |

@@ -1811,6 +1811,11 @@ pub struct PluginConfigEntry {
     /// Optional URL passed to the plugin as `MESH_LLM_PLUGIN_URL`.
     #[serde(default)]
     pub url: Option<String>,
+    /// Upstream models this plugin's inference endpoints may expose. Unset
+    /// exposes every model the endpoint lists; models left out are neither
+    /// advertised nor routed to the endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub settings: BTreeMap<String, toml::Value>,
     #[serde(default, skip_serializing_if = "PluginStartupConfig::is_default")]

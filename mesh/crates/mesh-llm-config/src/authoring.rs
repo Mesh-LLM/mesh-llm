@@ -501,6 +501,7 @@ impl ConfigEditor {
                     command: None,
                     args: Vec::new(),
                     url: None,
+                    models: None,
                     settings: Default::default(),
                     startup: Default::default(),
                 });
@@ -737,6 +738,11 @@ impl PluginConfigEditor<'_> {
 
     pub fn url(&mut self, url: impl Into<String>) -> &mut Self {
         self.plugin.url = Some(url.into());
+        self
+    }
+
+    pub fn models(&mut self, models: Option<Vec<String>>) -> &mut Self {
+        self.plugin.models = models;
         self
     }
 
@@ -1380,5 +1386,38 @@ ctx_size = 8192
         let deserialized = parse_config_toml(&serialized).expect("should deserialize");
         assert!(!deserialized.plugins[0].peer_blocks_allowed());
         assert!(deserialized.plugins[1].peer_blocks_allowed());
+    }
+
+    #[test]
+    fn plugin_models_round_trip_keeps_empty_distinct_from_unset() {
+        let mut editor = ConfigEditor::new(MeshConfig::default());
+        editor.upsert_plugin("share-all").unwrap();
+        editor
+            .upsert_plugin("share-none")
+            .unwrap()
+            .models(Some(Vec::new()));
+        editor
+            .upsert_plugin("share-some")
+            .unwrap()
+            .models(Some(vec!["sold".into()]));
+
+        let serialized = config_to_toml(&editor.into_config()).expect("should serialize");
+        let toml_str = serialized.to_string();
+        let plugin_tables = toml_str.split("[[plugin]]").skip(1).collect::<Vec<_>>();
+        assert_eq!(plugin_tables.len(), 3, "{toml_str}");
+        assert!(!plugin_tables[0].contains("models ="), "{toml_str}");
+        assert!(plugin_tables[1].contains("models = []"), "{toml_str}");
+        assert!(
+            plugin_tables[2].contains("models = [\"sold\"]"),
+            "{toml_str}"
+        );
+
+        let deserialized = parse_config_toml(&serialized).expect("should deserialize");
+        assert_eq!(deserialized.plugins[0].models, None);
+        assert_eq!(deserialized.plugins[1].models, Some(Vec::new()));
+        assert_eq!(
+            deserialized.plugins[2].models,
+            Some(vec!["sold".to_string()])
+        );
     }
 }

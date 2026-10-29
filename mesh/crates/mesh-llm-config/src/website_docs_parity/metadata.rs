@@ -134,6 +134,11 @@ fn expected_restart(
     if path.starts_with("request_defaults.") && scope == ConfigRestartScope::None {
         return "request-time";
     }
+    // The host copies the allowlist into the plugin's launch spec when the
+    // node starts, so restarting only the plugin process keeps the old list.
+    if path == "plugin.<name>.models" && scope == ConfigRestartScope::ProcessRestart {
+        return "Mesh node restart";
+    }
     if path.starts_with("plugin.") && scope == ConfigRestartScope::ProcessRestart {
         return "plugin process restart";
     }

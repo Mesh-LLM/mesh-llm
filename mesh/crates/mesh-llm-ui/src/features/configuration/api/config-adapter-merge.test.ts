@@ -120,6 +120,89 @@ describe('runtime-control configuration merges', () => {
     expect(values['telemetry.headers']).toBe('')
   })
 
+  it('keeps an empty plugin model allowlist distinct from an absent one across a save', () => {
+    const schema: RuntimeConfigSchemaReference = {
+      ...SCHEMA_REFERENCE,
+      settings: [
+        ...SCHEMA_REFERENCE.settings,
+        {
+          canonical_path: 'plugin.<plugin-name>.models',
+          owner: 'built_in',
+          source: { kind: 'built_in' },
+          value_schema: { kind: 'array', items: { kind: 'string' } },
+          support: 'supported',
+          control_surfaces: ['config_file', 'plugin_manifest'],
+          apply_mode: 'static_on_load',
+          restart_scope: 'process_restart',
+          visibility: 'user',
+          presentation: {
+            label: 'Shared endpoint models',
+            help: 'Model IDs the plugin may share.',
+            category_id: 'plugin-host',
+            category_label: 'Plugin Host',
+            category_summary: 'Plugin host settings',
+            category_order: 10,
+            setting_order: 25,
+            placeholder: 'one model ID per line; [] alone shares none',
+            control_hint: 'text'
+          }
+        }
+      ]
+    }
+    const modelsSetting = schema.settings.at(-1)!
+    schema.settings.push({
+      ...modelsSetting,
+      canonical_path: 'plugin.<plugin-name>.args',
+      presentation: { ...modelsSetting.presentation, label: 'Args', setting_order: 40 }
+    })
+    // Save an unrelated change: the allowlist itself is left as loaded.
+    const save = (plugin: RuntimeControlMeshConfig['plugin']) => {
+      const config: RuntimeControlMeshConfig = { version: 1, plugin }
+      const values = createConfigurationDefaultsValuesFromMeshConfig(config, schema)
+      const merged = mergeConfigurationDefaultsIntoMeshConfig(
+        config,
+        { ...values, 'plugin.blackboard.settings.retention_days': '45' },
+        schema
+      )
+      return { values, plugin: merged.plugin?.[0] }
+    }
+
+    const shareNothing = save([{ name: 'blackboard', models: [] }])
+    expect(shareNothing.values['plugin.blackboard.models']).toBe('[]')
+    expect(shareNothing.plugin).toMatchObject({ models: [], settings: { retention_days: 45 } })
+
+    // Other list settings, where empty and unset mean the same, are unchanged.
+    expect(save([{ name: 'blackboard', args: [] }]).values['plugin.blackboard.args']).toBe('')
+
+    const shareAll = save([{ name: 'blackboard' }])
+    expect(shareAll.values['plugin.blackboard.models']).toBeUndefined()
+    expect(shareAll.plugin).not.toHaveProperty('models')
+
+    const shareSome = save([{ name: 'blackboard', models: ['sold', 'also-sold'] }])
+    expect(shareSome.values['plugin.blackboard.models']).toBe('sold,also-sold')
+    expect(shareSome.plugin?.models).toEqual(['sold', 'also-sold'])
+
+    // IDs the comma-separated form cannot carry are kept exactly, as JSON.
+    for (const models of [['a,b', 'c'], ['[]'], [' padded '], ['["x"]'], ['[open']]) {
+      const saved = save([{ name: 'blackboard', models }])
+      expect(saved.plugin?.models, JSON.stringify(models)).toEqual(models)
+    }
+    expect(save([{ name: 'blackboard', models: ['a,b'] }]).values['plugin.blackboard.models']).toBe('["a,b"]')
+
+    // Only the allowlist reads `[]` as an empty list: an argument stays as is.
+    expect(save([{ name: 'blackboard', args: ['[]'] }]).plugin?.args).toEqual(['[]'])
+    expect(save([{ name: 'blackboard', args: ['--a', '--b'] }]).plugin?.args).toEqual(['--a', '--b'])
+
+    // Typing the empty-list spelling sets it, and clearing the field unsets it.
+    const config: RuntimeControlMeshConfig = { version: 1, plugin: [{ name: 'blackboard', models: ['sold'] }] }
+    expect(
+      mergeConfigurationDefaultsIntoMeshConfig(config, { 'plugin.blackboard.models': '[]' }, schema).plugin?.[0]
+    ).toMatchObject({ models: [] })
+    expect(
+      mergeConfigurationDefaultsIntoMeshConfig(config, { 'plugin.blackboard.models': '' }, schema).plugin
+    ).toBeUndefined()
+  })
+
   it('hydrates and merges typed topology stage arrays as JSON', () => {
     const topologyStageSchema = {
       kind: 'array' as const,

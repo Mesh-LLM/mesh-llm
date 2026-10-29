@@ -1738,6 +1738,8 @@ pub async fn run_plugin_process(name: String, args: Vec<String>) -> Result<()> {
 }
 
 #[cfg(test)]
+mod endpoint_models_e2e_tests;
+#[cfg(test)]
 mod inference_observation_e2e_tests;
 #[cfg(test)]
 mod status_contribution_tests;

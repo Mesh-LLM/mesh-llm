@@ -341,6 +341,14 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             },
         ),
         plugin_setting(&format!("{plugin_prefix}.url"), ConfigValueSchema::Url),
+        // Resolved into the plugin launch spec, so a change applies when the
+        // node restarts.
+        plugin_setting(
+            &format!("{plugin_prefix}.models"),
+            ConfigValueSchema::Array {
+                items: Box::new(ConfigValueSchema::String),
+            },
+        ),
         plugin_setting(
             &format!("{plugin_prefix}.startup.connect_timeout_secs"),
             ConfigValueSchema::Integer,

@@ -91,6 +91,7 @@ pub enum PluginSettingConstraint {
 pub(crate) fn validate_plugin_entries(entries: &[PluginConfigEntry]) -> DiagnosticResult {
     for (index, entry) in entries.iter().enumerate() {
         validate_plugin_startup(entry, index)?;
+        validate_plugin_models(entry, index)?;
         if let Some(grant) = &entry.openai_exchange_grant {
             grant.validate().map_err(|message| {
                 validation_diagnostic(
@@ -221,6 +222,17 @@ fn validate_plugin_startup(entry: &PluginConfigEntry, index: usize) -> Diagnosti
         return Err(validation_diagnostic(
             &format!("plugin[{index}].startup.init_timeout_secs"),
             format!("plugin[{index}].startup.init_timeout_secs must be at least 1 when set"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_plugin_models(entry: &PluginConfigEntry, index: usize) -> DiagnosticResult {
+    let models = entry.models.as_deref().unwrap_or_default();
+    if let Some(position) = models.iter().position(|model| model.trim().is_empty()) {
+        return Err(validation_diagnostic(
+            &format!("plugin[{index}].models[{position}]"),
+            format!("plugin[{index}].models[{position}] must be a non-empty model id"),
         ));
     }
     Ok(())
@@ -520,6 +532,7 @@ fn plugin_misplaced_key_diagnostics(raw_toml: Option<&str>) -> Vec<ConfigDiagnos
         "command",
         "args",
         "url",
+        "models",
         "startup",
         "settings",
     ]);
@@ -819,6 +832,52 @@ url = "udp://127.0.0.1:9000"
     }
 
     #[test]
+    fn plugin_models_allowlist_parses_and_rejects_blank_ids() {
+        let config: crate::MeshConfig = toml::from_str(
+            r#"
+[[plugin]]
+name = "openai-endpoint"
+url = "http://127.0.0.1:8888/v1"
+models = ["deepseek-v4-1-flash"]
+
+[[plugin]]
+name = "other-endpoint"
+"#,
+        )
+        .expect("config should parse");
+        validate_plugin_entries(&config.plugins).expect("allowlist should validate");
+        assert_eq!(
+            config.plugins[0].models.as_deref(),
+            Some(&["deepseek-v4-1-flash".to_string()][..])
+        );
+        assert_eq!(config.plugins[1].models, None);
+
+        let config: crate::MeshConfig =
+            toml::from_str("[[plugin]]\nname = \"demo\"\nmodels = [\"kept\", \" \"]\n")
+                .expect("config should parse before validation");
+        let diagnostic = validate_plugin_entries(&config.plugins)
+            .expect_err("a blank model id must fail static validation");
+        assert_eq!(
+            diagnostic
+                .path
+                .as_ref()
+                .map(crate::ConfigPath::render)
+                .as_deref(),
+            Some("plugin[0].models[1]")
+        );
+    }
+
+    #[test]
+    fn strict_plugin_validation_accepts_models_as_host_owned() {
+        let raw = "[[plugin]]\nname = \"demo\"\nmodels = [\"kept\"]\n";
+        let config: crate::MeshConfig = toml::from_str(raw).expect("config should parse");
+        let diagnostics = validate_plugin_entries_strict(&config.plugins, Some(raw), |_| {
+            PluginSchemaAvailability::NotInstalled
+        });
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
     fn tcp_plugin_url_static_validation_rejects_every_form_without_leaking_values() {
         for url in [
             "tcp://127.0.0.1:9000",
@@ -862,6 +921,7 @@ url = "udp://127.0.0.1:9000"
             command: None,
             args: Vec::new(),
             url: None,
+            models: None,
             settings: BTreeMap::new(),
             startup: Default::default(),
         };

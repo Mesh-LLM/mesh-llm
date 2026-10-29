@@ -680,6 +680,7 @@ fn fixture_spec(
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         env: BTreeMap::from([
             (
                 "MESH_LLM_EXEMPLAR_RECEIPT_LOG".into(),

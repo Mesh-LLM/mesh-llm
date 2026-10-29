@@ -40,6 +40,7 @@ impl Node {
                     command: None,
                     args: Vec::new(),
                     url: None,
+                    models: None,
                     settings: BTreeMap::new(),
                     startup: crate::plugin::PluginStartupConfig::default(),
                 }),
@@ -114,6 +115,7 @@ impl Node {
                     command: None,
                     args: Vec::new(),
                     url: None,
+                    models: None,
                     settings: BTreeMap::new(),
                     startup: crate::plugin::PluginStartupConfig::default(),
                 }),
@@ -201,6 +203,7 @@ impl Node {
                         command: None,
                         args: Vec::new(),
                         url: None,
+                        models: None,
                         settings: BTreeMap::new(),
                         startup: crate::plugin::PluginStartupConfig::default(),
                     });

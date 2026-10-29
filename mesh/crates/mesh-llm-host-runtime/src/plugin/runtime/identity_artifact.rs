@@ -60,6 +60,7 @@ mod tests {
             startup: Default::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: Some(metadata),
             openai_exchange_grant: Some(Box::new(mesh_llm_config::OpenAiExchangeGrant {
                 read_identity_bundle: true,

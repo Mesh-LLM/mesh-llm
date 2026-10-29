@@ -1,7 +1,9 @@
 import { cn } from '@/lib/cn'
+import { PluginModelAllowlistControl } from '@/features/configuration/components/settings/PluginModelAllowlistControl'
 import { SchemaObjectArrayControl } from '@/features/configuration/components/settings/SchemaObjectArrayControl'
 import type { SchemaSettingControlProps } from '@/features/configuration/components/settings/schema-control-utils'
 import { objectArrayItemSchema } from '@/features/configuration/lib/schema-object-array'
+import { isPluginModelAllowlist } from '@/features/configuration/lib/plugin-model-allowlist'
 
 function arrayItems(value: string) {
   return value
@@ -13,6 +15,7 @@ function arrayItems(value: string) {
 export function SchemaArrayControl(props: SchemaSettingControlProps) {
   const itemSchema = objectArrayItemSchema(props.setting.valueSchema)
   if (itemSchema) return <SchemaObjectArrayControl {...props} itemSchema={itemSchema} />
+  if (isPluginModelAllowlist(props.setting)) return <PluginModelAllowlistControl {...props} />
 
   const { ariaDescribedBy, disabled = false, invalid = false, onChange, setting, value } = props
   const items = arrayItems(value)
