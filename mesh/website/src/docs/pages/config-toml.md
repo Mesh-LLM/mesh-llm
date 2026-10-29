@@ -155,6 +155,24 @@ above when deciding whether a higher-quality target is warranted. See
 [Runtime Lifecycle](/docs/pages/runtime-lifecycle/) for the complete behavior,
 security, and status model.
 
+### Peer model downloads
+
+A peer that coordinates a split model can ask this node to run one stage of
+it. By default the node downloads what the stage needs, from Hugging Face or
+from the coordinating peer, even for a model this node never configured. To
+stop peers from filling this node's disk or bandwidth, turn that off:
+
+```toml
+[runtime]
+peer_model_downloads = false   # same as `mesh-llm serve --no-peer-model-downloads`
+```
+
+The node still serves its configured and local models, and its own loads still
+download as usual. A peer's stage request is accepted only when the model
+files are already on local disk. Otherwise the node refuses it, and the error
+names the setting. For a layer package, the node reports nothing to a peer's
+inventory query until the package metadata is in the local cache.
+
 ## Deep Dives
 
 | Page | What it covers |

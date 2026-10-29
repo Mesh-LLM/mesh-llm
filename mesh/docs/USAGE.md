@@ -337,6 +337,33 @@ advertisement = "coarse_state"        # "none" | "availability_only" | "coarse_s
   Per-command overrides are capped by this value.
 - Force drain uses deadline 0 (immediate unload).
 
+### Peer model downloads
+
+A peer that coordinates a split model can ask this node to inventory and load
+one stage of it. By default the node fetches what the stage needs: layer
+packages and GGUFs from Hugging Face, or package artifacts from the
+coordinator. This happens even for a model this node never configured.
+
+```toml
+[runtime]
+peer_model_downloads = false   # or: mesh-llm serve --no-peer-model-downloads
+```
+
+With this setting:
+
+- Configured models, `--model`/`--gguf` models, local API loads, and this
+  node's own split coordination still download and serve as usual.
+- A peer's stage load is accepted only when its model files are already on
+  local disk. Otherwise the node refuses it with an error that names
+  `runtime.peer_model_downloads`, and the coordinator logs that error.
+- A peer's inventory query for a layer package that is not in the local cache
+  gets an empty answer, so the coordinator leaves this node out of the split.
+
+`runtime.mode = "client"` also stops peer stage loads, but it stops all local
+serving too. Owner-control `load` and `ensure` commands are not affected: they
+come from a node with this node's owner key, and they only start models listed
+in this node's config.
+
 ### Host activity policy
 
 Activity adaptation is **opt-in** (`enabled = false` by default). When enabled,

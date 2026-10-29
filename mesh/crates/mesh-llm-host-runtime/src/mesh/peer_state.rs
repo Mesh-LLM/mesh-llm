@@ -121,6 +121,19 @@ pub struct OwnerRuntimeConfig {
     pub drain_timeout_secs: u64,
     pub drain_timeout_max_secs: u64,
     pub public_mesh: bool,
+    /// `runtime.peer_model_downloads`, off when `--no-peer-model-downloads` is set.
+    pub peer_model_downloads: bool,
+}
+
+impl OwnerRuntimeConfig {
+    /// Peers may fetch on a node started without runtime config.
+    pub(crate) fn peer_stage_source_fetch(
+        config: Option<&Self>,
+    ) -> crate::inference::skippy::StageSourceFetch {
+        crate::inference::skippy::StageSourceFetch::for_peers(
+            config.is_none_or(|config| config.peer_model_downloads),
+        )
+    }
 }
 
 pub(crate) struct ControlListenerLifecycle {

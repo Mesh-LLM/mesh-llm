@@ -137,6 +137,7 @@ produces a clear startup error rather than a partial start.
 | `runtime.activity.advertisement` | enum | `none`, `availability_only`, `coarse_state` (default), `private_coarse_state` | node-level | process restart | wired | none |
 | `runtime.reconcile_model_targets` | boolean | `false` | node-level | process restart | wired | none |
 | `runtime.reconcile_model_target_demand_upgrades` | boolean | `false` | node-level | process restart | wired | none |
+| `runtime.peer_model_downloads` | boolean | unset (a peer's split-stage request may download model files this node lacks); `false` limits peer requests to model files already on local disk. Local loads and configured models are unaffected; see [Peer model downloads](/docs/pages/config-toml/#peer-model-downloads) | node-level | process restart | wired | `--no-peer-model-downloads` |
 | `runtime.native_runtime.mesh_version`<br>`runtime.native_runtime.skippy_abi`<br>`runtime.native_runtime.selection` | string | unset (auto-selected) | node-level | process restart | wired | none |
 | `runtime.native_runtime.download` | boolean | unset (startup fetches the release catalog and downloads a missing runtime); `false` uses only bundled and installed runtimes, e.g. when a package manager ships them. `mesh-llm runtime install` ignores it | node-level | process restart | wired | none |
 | `runtime.kv_cache.disk.mode` | enum | `off` (default), `auto`, `fixed` | node-level | process restart | wired | `--kv-cache-disk` |

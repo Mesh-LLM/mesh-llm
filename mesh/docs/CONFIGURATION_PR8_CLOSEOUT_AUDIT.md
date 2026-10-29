@@ -58,7 +58,7 @@ schema row or stale manifest row from passing review:
 `runtime.activity.idle_after_secs`, `runtime.activity.poll_interval_secs`,
 `runtime.activity.resume_debounce_secs`, `runtime.activity.response`,
 `runtime.activity.advertisement`, `runtime.reconcile_model_targets`,
-`runtime.reconcile_model_target_demand_upgrades`,
+`runtime.reconcile_model_target_demand_upgrades`, `runtime.peer_model_downloads`,
 `runtime.native_runtime.mesh_version`, `runtime.native_runtime.skippy_abi`,
 `runtime.native_runtime.selection`, `runtime.native_runtime.download`,
 `runtime.kv_cache.disk.mode`,
