@@ -428,11 +428,25 @@ pub fn run_native_runtime_doctor(
         .count();
     let readiness =
         native_runtime_doctor_readiness(selected.map(|runtime| runtime.native_runtime_id.as_str()));
+    let warnings = selected_candidate
+        .as_ref()
+        .map(|candidate| {
+            unused_gpu_warnings(
+                &installed,
+                &profile,
+                selected_mesh_version,
+                skippy_abi_version,
+                &runtime_selection,
+                &candidate.artifact,
+            )
+        })
+        .unwrap_or_default();
 
     let report = NativeRuntimeDoctorReport {
         healthy: readiness.healthy,
         status: readiness.status,
         blockers: readiness.blockers,
+        warnings,
         recommendations: readiness.recommendations,
         running_mesh_version: CURRENT_MESH_VERSION.to_string(),
         selected_mesh_version: selected_mesh_version.to_string(),
@@ -460,6 +474,46 @@ pub fn run_native_runtime_doctor(
         );
     }
     Ok(())
+}
+
+/// Detected GPU backends that the `selected` runtime leaves unused, naming the
+/// runtimes of the selected version that don't fit and why, including those
+/// startup skips for missing compatibility metadata.
+fn unused_gpu_warnings(
+    installed: &[skippy_native_runtime::InstalledNativeRuntime],
+    profile: &skippy_native_runtime::HostRuntimeProfile,
+    mesh_version: &str,
+    skippy_abi_version: Option<&str>,
+    selection: &RuntimeSelection,
+    selected: &skippy_native_runtime::NativeRuntimeArtifact,
+) -> Vec<String> {
+    let (usable, missing_metadata): (Vec<_>, Vec<_>) = installed
+        .iter()
+        .filter(|runtime| runtime.release_version == mesh_version)
+        .map(|runtime| runtime.manifest.runtime.clone())
+        .partition(|artifact| has_startup_compatibility_metadata(artifact, profile));
+    let evaluated = usable
+        .iter()
+        .map(|artifact| {
+            skippy_native_runtime::evaluate_native_runtime_artifact(
+                artifact,
+                profile,
+                mesh_version,
+                skippy_abi_version,
+                selection,
+            )
+        })
+        .collect::<Vec<_>>();
+    let unused = skippy_native_runtime::unused_gpu_backends(
+        &evaluated,
+        &missing_metadata,
+        profile,
+        selection,
+        selected,
+    );
+    skippy_native_runtime::describe_unused_gpu_backends(&unused)
+        .into_iter()
+        .collect()
 }
 
 pub fn native_runtime_selection(

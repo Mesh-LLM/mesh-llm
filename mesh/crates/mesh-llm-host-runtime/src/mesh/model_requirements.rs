@@ -78,8 +78,9 @@ impl Node {
         &self,
         models: &[String],
     ) -> Vec<ServedModelDescriptor> {
-        let mut descriptors = self.served_model_descriptors.lock().await.clone();
-        // Plugin-serving models may not yet have a native descriptor.
+        let mut descriptors = self.local_descriptors_with_plugins().await;
+        // A served model may not have a descriptor yet (plugin endpoint not
+        // enumerated, or a model only known by name).
         for model in models {
             if !descriptors.iter().any(|d| d.identity.model_name == *model) {
                 descriptors.extend(super::infer_remote_served_descriptors(

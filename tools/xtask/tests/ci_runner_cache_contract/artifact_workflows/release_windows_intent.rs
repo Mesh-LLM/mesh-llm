@@ -174,6 +174,15 @@ fn graph_windows_cuda_labels_are_validated_before_install_and_package() {
             .split(';')
             .any(|a| a == "120")
     );
+    // SM 87 (Jetson Orin) and SM 121 (GB10) only ship in ARM Linux systems.
+    for row in &cuda {
+        assert!(
+            text(row, "cuda_architectures")
+                .unwrap()
+                .split(';')
+                .all(|a| a != "87" && a != "121")
+        );
+    }
     assert_eq!(
         text(
             package.get("env").unwrap(),

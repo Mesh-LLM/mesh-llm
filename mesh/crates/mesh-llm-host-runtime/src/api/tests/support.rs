@@ -271,6 +271,7 @@ async fn build_inference_endpoint_plugin_manager(models: &[&str]) -> plugin::Plu
         .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
             plugin_name: "endpoint-plugin".into(),
             endpoint_id: "endpoint-plugin".into(),
+            protocol: None,
             address: "http://127.0.0.1:8000/v1".into(),
             models: models.iter().map(|model| (*model).to_string()).collect(),
         }])

@@ -1776,17 +1776,20 @@ jobs:
           - name: CUDA 12
             backend: cuda
             cuda_major: '12'
-            cuda_architectures: '61;75;80;86;87;89;90'
+            # The Linux lanes' lists minus SM 87 (Jetson Orin) and SM 121
+            # (GB10), which only ship in ARM Linux systems: no Windows x86_64
+            # host has them, and each architecture lengthens a cold build.
+            cuda_architectures: '61;75;80;86;89;90'
             cuda_sub_packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
             artifact_name: release-native-runtime-windows-x86_64-cuda12
-          # Same toolkit and architecture list as the Linux CUDA 13 lane, so
-          # Blackwell GPUs (SM 100/120) get a Windows runtime too. From CUDA 13
-          # the crt headers and nvvm (cicc) are separate installer packages.
+          # Same toolkit as the Linux CUDA 13 lane, so Blackwell GPUs (SM 100/120)
+          # get a Windows runtime too. From CUDA 13 the crt headers and nvvm
+          # (cicc) are separate installer packages.
           - name: CUDA 13
             backend: cuda
             cuda_major: '13'
             cuda_version: '13.1.2'
-            cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
+            cuda_architectures: '75;80;86;89;90;100;103;120'
             cuda_sub_packages: '["nvcc", "crt", "nvvm", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
             artifact_name: release-native-runtime-windows-x86_64-cuda13
           - name: ROCm

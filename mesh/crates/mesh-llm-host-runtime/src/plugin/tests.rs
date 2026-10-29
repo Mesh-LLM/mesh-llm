@@ -339,6 +339,7 @@ fn external_plugin_can_be_enabled_with_url() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_rejects_url_that_is_empty_after_normalization() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -365,6 +366,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
 }
 
 #[test]
+#[serial_test::serial]
 fn remote_plugin_control_url_is_rejected_without_authentication() {
     let raw_url = "\u{2003}tcp://user:secret@127.0.0.1:19091/control?token=private\u{2003}";
     let config = MeshConfig {

@@ -274,6 +274,7 @@ pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u3
     if request.is_tokenize_request()
         || request.is_anthropic_count_tokens_request()
         || request.is_audio_upload_request()
+        || request.is_document_ocr_request()
         || request.is_system_one_request()
     {
         None
@@ -378,21 +379,25 @@ async fn handle_mesh_control_request(
     }
 
     if is_models_list_request(&request.method, &request.path) {
+        let descriptors = node.all_served_model_descriptors().await;
         let mut served = node.models_being_served().await;
         let virtual_models = match node.plugin_manager().await {
             Some(manager) => {
-                if let Ok(mut inference_models) = manager.inference_models().await {
+                if let Ok(mut inference_models) = manager.chat_inference_models().await {
                     served.append(&mut inference_models);
                 }
                 manager.virtual_models().await.unwrap_or_default()
             }
             None => Vec::new(),
         };
+        // Keep the chat-compatible listing free of models only document OCR serves.
+        served.retain(|model| {
+            !super::workload_routing::serves_only_document_ocr(model, &descriptors)
+        });
         let virtual_models = super::virtual_model::advertisable_routes(virtual_models, &served);
         served.extend(virtual_models.iter().map(|route| route.model_id.clone()));
         served.sort();
         served.dedup();
-        let descriptors = node.all_served_model_descriptors().await;
         let runtimes = node.all_model_runtime_descriptors().await;
         let outcome = response_outcome(
             200,
@@ -1300,7 +1305,9 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
         return AutoModelResolution::Model(None);
     }
     request.ensure_body_json();
-    if request.body_json.is_none() && !workload_routing::is_audio_upload_path(&request.client_path)
+    if request.body_json.is_none()
+        && !workload_routing::is_audio_upload_path(&request.client_path)
+        && !workload_routing::is_document_ocr_path(&request.client_path)
     {
         return AutoModelResolution::Model(None);
     }

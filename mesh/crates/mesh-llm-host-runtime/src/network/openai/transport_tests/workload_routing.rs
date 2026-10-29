@@ -8,6 +8,55 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const MODEL: &str = "shared-workload-model";
 
 #[tokio::test]
+async fn document_ocr_requires_ocr_metadata_on_each_target() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("node");
+    let legacy = peer(&node, None, false).await;
+    let chat = peer(&node, Some(ModelWorkloadClass::CausalGeneration), false).await;
+    let ocr = peer(&node, Some(ModelWorkloadClass::DocumentOcr), false).await;
+    let candidates = vec![
+        election::InferenceTarget::Remote(legacy),
+        election::InferenceTarget::Remote(chat),
+        election::InferenceTarget::Remote(ocr),
+    ];
+    assert_eq!(
+        workload_routing::eligible_targets(&node, MODEL, "/v1/documents/ocr?trace=1", &candidates)
+            .await,
+        vec![election::InferenceTarget::Remote(ocr)]
+    );
+}
+
+#[tokio::test]
+async fn ocr_plugin_does_not_authorize_a_native_port_with_same_model_name() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    node.set_served_model_descriptors(vec![descriptor(
+        Some(ModelWorkloadClass::CausalGeneration),
+        false,
+    )])
+    .await;
+    let manager = crate::plugin::PluginManager::for_test_summaries(Vec::new());
+    manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "onnx-ocr".into(),
+            endpoint_id: "indra".into(),
+            protocol: Some("document_ocr_v1".into()),
+            address: "http://127.0.0.1:1".into(),
+            models: vec![MODEL.into()],
+        }])
+        .await;
+    node.set_plugin_manager(manager).await;
+    let native = vec![election::InferenceTarget::Local(9337)];
+    assert!(
+        workload_routing::eligible_targets(&node, MODEL, "/v1/documents/ocr", &native)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 /// An incompatible local copy must not shadow a valid same-model remote target.
 async fn explicit_ingress_falls_back_to_capable_remote_when_local_workload_is_incompatible() {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
