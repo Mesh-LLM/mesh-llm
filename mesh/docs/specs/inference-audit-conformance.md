@@ -82,9 +82,9 @@ The adjudicator publishes, per model:
   ([NODE_OWNER_IDENTITY.md](../design/NODE_OWNER_IDENTITY.md)), and each
   adjudication record is signed with that owner key. Two records score the same
   audit when they cite the same sender record (its request digest, response
-  digest and nonce together) and the same corpus version; they agree when they
-  give the same verdict and, for `contradicted`, name the same
-  `contradicted_party`. Operators differ when their owner identities differ.
+  digest and nonce together, keyed while the version is live) and the same
+  corpus version; they agree when they give the same verdict and, for
+  `contradicted`, name the same `contradicted_party`. Operators differ when their owner identities differ.
 
 ## Audit corpus
 
@@ -95,25 +95,33 @@ The adjudicator publishes, per model:
 - Prompts stay private while the version is in use. At retirement the prompts
   and the key are published next to the commitment, so anyone can check them
   against it, and every record from that period becomes re-checkable.
-- Records exchanged while a version is live carry a keyed prompt digest
-  (HMAC-SHA-256 with a per-version key revealed at retirement), so a node cannot
-  match its incoming requests against published digests. Provisional until the
-  record mapping below settles how that digest is carried.
+- While a version is live, a record that leaves the sender or an adjudicator
+  carries no value the audited node saw or can recompute, such as the request
+  and response digests or the nonce: each is replaced by its HMAC-SHA-256 under
+  a per-version key, and the prompt is named by its keyed digest under the same
+  key. Otherwise a node could digest a request it served and find it in a
+  published record. The key is revealed at retirement. Provisional until the
+  record mapping below settles how keyed values are carried.
 
 ## Records
 
 - Sender side: the fields `openai.exchange.v1` already carries (served-by, model
   identity hash, weights digest, request and response digests, nonce and its
-  source).
+  source), in keyed form while the version is live (above).
+- Evidence: the sender keeps the exact request and response bodies behind those
+  two digests, the response with its logprobs when the node served them. While
+  the version is live it gives them only to the adjudicators scoring the audit,
+  over an authenticated channel, and each adjudicator checks them against the
+  digests before scoring. At retirement they are published with the corpus.
 - Adjudicator side: the AAC judge record family (adjudication/v1,
   sample-manifest/v1, calibration-summary/v1), as of
   [agent-action-capsule@062e89bd145d](https://github.com/action-state-group/agent-action-capsule/tree/062e89bd145d/schemas/judge).
 - Both sides name the corpus version the prompt came from, which also tells a
   re-checker which retired key applies.
 - Open points for the record mapping:
-  - AAC's `prompt_digest` allows only plain SHA-256 today, so the keyed digest
-    above needs either an allowed `HMAC-SHA-256` algorithm with a key id or a
-    sibling field.
+  - AAC's `prompt_digest` and citation digests allow only plain SHA-256 today,
+    so the keyed values above need either an allowed `HMAC-SHA-256` algorithm
+    with a key id or sibling fields.
   - adjudication/v1 has no citation slot for the calibration-summary/v1 and
     sample-manifest/v1 records behind its threshold, so the mapping needs a
     digest citation or a wrapper.
@@ -121,6 +129,8 @@ The adjudicator publishes, per model:
 
 ## Re-checking a verdict
 
-With the retired corpus and its key, the reference files and the records,
-anyone can match each record to its prompt by recomputing the keyed digest,
-render the same prompt, run the same prefill and recompute the score.
+With the retired corpus and its key, the reference files, the records and the
+published request and response bodies, anyone can match each record to its
+prompt by recomputing the keyed values, check the bodies against the request and
+response digests, render the same prompt, run the same prefill and recompute the
+score.
