@@ -246,6 +246,7 @@ dynamic_symbols! {
     skippy_session_last_token_signal(session: *mut Session, out_signal: *mut TokenSignal, out_error: *mut *mut Error) -> Status;
     skippy_session_take_token_logprobs(session: *mut Session, out_entries: *mut TokenLogprobs, capacity: usize, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_model_set_receipt_recorder(model: *mut Model, on_ubatch: ReceiptUbatchFn, on_memory: ReceiptMemoryFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_model_release_receipt_scratch(model: *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_replay_receipt(model: *mut Model, seq: i32, layer: i32, steps: *const ReceiptReplayStep, n_steps: usize, on_capture: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
     skippy_session_signal_window(session: *mut Session, window_tokens: u32, out_window: *mut GenerationSignalWindow, out_error: *mut *mut Error) -> Status;
     skippy_trim_session(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;

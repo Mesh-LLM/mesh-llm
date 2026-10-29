@@ -609,6 +609,11 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_model_release_receipt_scratch(
+        model: *mut Model,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_session_take_token_logprobs(
         session: *mut Session,
         out_entries: *mut TokenLogprobs,

@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **21 headers** and **126 exported functions**.
+Current generated surface: **21 headers** and **127 exported functions**.
 
 ## Quick navigation
 
@@ -126,10 +126,11 @@ Current generated surface: **21 headers** and **126 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-receipts-h"><code>receipts.h</code><span>2 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-receipts-h"><code>receipts.h</code><span>3 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-model-set-receipt-recorder"><code>skippy_model_set_receipt_recorder</code></a>
         <a href="#skippy-fn-skippy-model-replay-receipt"><code>skippy_model_replay_receipt</code></a>
+        <a href="#skippy-fn-skippy-model-release-receipt-scratch"><code>skippy_model_release_receipt_scratch</code></a>
       </div>
     </section>
     <section class="skippy-api-index__group">
@@ -1131,7 +1132,7 @@ LLAMA_API enum skippy_status skippy_model_set_receipt_recorder(
 <a id="skippy-fn-skippy-model-replay-receipt"></a>
 #### `skippy_model_replay_receipt`
 
-Replays one sequence in the model's scratch context. The scratch context is created on first use with the stage context's parameters and kept. Each replay starts from an empty cache. After every decode step, the columns of sequences other than `seq` are removed. A captured step reports the committed tensors of every layer plus the matmul inputs and outputs of `layer`.
+Replays one sequence in the model's scratch context. The scratch context is created on first use with the stage context's parameters and kept until skippy_model_release_receipt_scratch(). Each replay starts from an empty cache. After every decode step, the columns of sequences other than `seq` are removed. A captured step reports the committed tensors of `layer`, its matmul inputs and outputs, and the residual leaving it. Every step stops computing once those are done, so later layers and the output head are skipped and their values are undefined.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_model_replay_receipt(
@@ -1142,6 +1143,17 @@ LLAMA_API enum skippy_status skippy_model_replay_receipt(
         size_t n_steps,
         skippy_receipt_ubatch_fn on_capture,
         void * user_data,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-model-release-receipt-scratch"></a>
+#### `skippy_model_release_receipt_scratch`
+
+Frees the scratch context that receipt replays run in. The next replay creates it again. When a replay is running, the context is kept and the call still succeeds.
+
+```cpp
+LLAMA_API enum skippy_status skippy_model_release_receipt_scratch(
+         struct skippy_model * model,
         struct skippy_error ** out_error);
 ```
 

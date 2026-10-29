@@ -339,6 +339,15 @@ impl ReceiptReplayer {
         ensure_ok(status, error)?;
         state.error.map_or(Ok(()), Err)
     }
+
+    /// Frees the scratch context; the next replay creates it again. A
+    /// running replay keeps it.
+    pub fn release_scratch(&self) -> Result<()> {
+        let mut error = ptr::null_mut();
+        let status =
+            unsafe { skippy_ffi::skippy_model_release_receipt_scratch(self.inner.raw, &mut error) };
+        ensure_ok(status, error)
+    }
 }
 
 fn raw_step(step: &ReceiptReplayStepRef<'_>) -> Result<ReceiptReplayStep> {

@@ -16,26 +16,32 @@ caller can hash a ubatch while the next one computes.
 
 skippy_model_replay_receipt replays recorded steps in a scratch
 context created with the stage context's parameters, forcing the
-recorded KV cells and n_kv, and also reports the matmul inputs and
-outputs of one challenged layer. Verifiable inference receipts commit
-to the residual stream and open a challenged layer by replay instead
-of storing every matmul column. Replaces skippy_model_set_receipt_tap
-and the eval-callback hooks it needed. ABI 0.1.74 -> 0.1.75.
+recorded KV cells and n_kv, and reports the challenged layer: its
+committed tensors, matmul inputs and outputs, and the residual leaving
+it. Each step stops computing once those are done, so a replay skips
+the later layers and the output head.
+skippy_model_release_receipt_scratch frees the scratch context, which
+holds a second KV cache, between replays.
+
+Verifiable inference receipts commit to the residual stream and open a
+challenged layer by replay instead of storing every matmul column.
+Replaces skippy_model_set_receipt_tap and the serving context's
+eval-callback hooks it needed. ABI 0.1.74 -> 0.1.75.
 ---
  include/skippy.h               |   1 +
  include/skippy/common.h        |   2 +-
- include/skippy/receipts.h      | 194 +++++++++++
+ include/skippy/receipts.h      | 207 ++++++++++
  src/CMakeLists.txt             |   1 +
- src/llama-context.cpp          |  21 ++
+ src/llama-context.cpp          |  25 ++
  src/llama-context.h            |   6 +
  src/llama-kv-cache.cpp         |  45 +++
- src/llama-kv-cache.h           |  20 ++
+ src/llama-kv-cache.h           |  20 +
  src/skippy/model_lifecycle.cpp |   2 +
- src/skippy/model_loading.cpp   |   2 +
- src/skippy/receipts.cpp        | 607 +++++++++++++++++++++++++++++++++
- src/skippy/receipts_internal.h |  71 ++++
+ src/skippy/model_loading.cpp   |   4 +
+ src/skippy/receipts.cpp        | 687 +++++++++++++++++++++++++++++++++
+ src/skippy/receipts_internal.h |  87 +++++
  src/skippy/runtime_types.h     |   5 +
- 13 files changed, 976 insertions(+), 1 deletion(-)
+ 13 files changed, 1091 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/receipts.h
  create mode 100644 src/skippy/receipts.cpp
  create mode 100644 src/skippy/receipts_internal.h
@@ -67,10 +73,10 @@ index 4214d0b89..80710eb3b 100644
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/include/skippy/receipts.h b/include/skippy/receipts.h
 new file mode 100644
-index 000000000..3da3a9ac4
+index 000000000..5f1c28b87
 --- /dev/null
 +++ b/include/skippy/receipts.h
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,207 @@
 +#ifndef SKIPPY_RECEIPTS_H
 +#define SKIPPY_RECEIPTS_H
 +
@@ -245,10 +251,13 @@ index 000000000..3da3a9ac4
 + * @brief Replays one sequence in the model's scratch context.
 + *
 + * The scratch context is created on first use with the stage context's
-+ * parameters and kept. Each replay starts from an empty cache. After every
-+ * decode step, the columns of sequences other than `seq` are removed. A
-+ * captured step reports the committed tensors of every layer plus the matmul
-+ * inputs and outputs of `layer`.
++ * parameters and kept until skippy_model_release_receipt_scratch(). Each
++ * replay starts from an empty cache. After every decode step, the columns of
++ * sequences other than `seq` are removed. A captured step reports the
++ * committed tensors of `layer`, its matmul inputs and outputs, and the
++ * residual leaving it. Every step stops computing once those are done, so
++ * later layers and the output head are skipped and their values are
++ * undefined.
 + */
 +LLAMA_API enum skippy_status skippy_model_replay_receipt(
 +        struct skippy_model * model,
@@ -258,6 +267,16 @@ index 000000000..3da3a9ac4
 +        size_t n_steps,
 +        skippy_receipt_ubatch_fn on_capture,
 +        void * user_data,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Frees the scratch context that receipt replays run in.
++ *
++ * The next replay creates it again. When a replay is running, the context
++ * is kept and the call still succeeds.
++ */
++LLAMA_API enum skippy_status skippy_model_release_receipt_scratch(
++        struct skippy_model * model,
 +        struct skippy_error ** out_error);
 +
 +#ifdef __cplusplus
@@ -278,7 +297,7 @@ index 417be82de..f5f20d470 100644
              skippy/stage_plan.cpp
              skippy/stage_realization.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 2c6149d30..2b3d85d84 100644
+index 2c6149d30..8348abffc 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -17,6 +17,7 @@
@@ -315,7 +334,18 @@ index 2c6149d30..2b3d85d84 100644
          if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
              LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
              ret = GGML_STATUS_ALLOC_FAILED;
-@@ -1701,6 +1714,10 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1694,6 +1707,10 @@ llm_graph_result * llama_context::process_ubatch(
+         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+     }
+ 
++    if (receipt_capture) {
++        skippy_receipt_begin_compute(*receipt_capture);
++    }
++
+     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+     if (status != GGML_STATUS_SUCCESS) {
+         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
+@@ -1701,6 +1718,10 @@ llm_graph_result * llama_context::process_ubatch(
          return nullptr;
      }
  
@@ -326,7 +356,7 @@ index 2c6149d30..2b3d85d84 100644
      ret = GGML_STATUS_SUCCESS;
  
      return res;
-@@ -2892,6 +2909,10 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -2892,6 +2913,10 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
      res->reset();
  
      auto * gf = model.build_graph(gparams);
@@ -547,24 +577,33 @@ index caa9fcd6d..1029871f6 100644
              llama_free(model->ctx);
          }
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 60a27669f..bbaefed74 100644
+index 60a27669f..12f326179 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -750,6 +750,8 @@ enum skippy_status skippy_finish_model_open(
+@@ -22,6 +22,7 @@
+ #include "llama-model-loader.h"
+ #include "model_load_config_internal.h"
+ #include "skippy/graph_identity.h"
++#include "skippy/receipts_internal.h"
+ #include "../vendor/nlohmann/json.hpp"
+ 
+ #include <algorithm>
+@@ -750,6 +751,9 @@ enum skippy_status skippy_finish_model_open(
  
      const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(config);
      stage_model->ctx = llama_init_from_model_with_graph_inputs(model, params, graph_build_inputs);
 +    stage_model->receipt_ctx_params = params;
 +    stage_model->has_receipt_ctx_params = true;
++    stage_model->receipt_scratch = skippy_receipt_new_scratch();
      if (stage_model->ctx == nullptr) {
          const char * message = "failed to create llama context";
          if (event_scope != nullptr) {
 diff --git a/src/skippy/receipts.cpp b/src/skippy/receipts.cpp
 new file mode 100644
-index 000000000..8e0a3a0d4
+index 000000000..ced7196eb
 --- /dev/null
 +++ b/src/skippy/receipts.cpp
-@@ -0,0 +1,607 @@
+@@ -0,0 +1,687 @@
 +#include "skippy/receipts.h"
 +
 +#include "errors.h"
@@ -578,6 +617,7 @@ index 000000000..8e0a3a0d4
 +#include "llama-graph.h"
 +#include "llama-kv-cache.h"
 +
++#include <algorithm>
 +#include <cstdlib>
 +#include <cstring>
 +#include <map>
@@ -587,7 +627,8 @@ index 000000000..8e0a3a0d4
 +#include <string>
 +#include <vector>
 +
-+// The scratch context a model replays receipts in, created on first use.
++// The scratch context a model replays receipts in. Its llama context is
++// created by the first replay and freed when the scratch is released.
 +struct skippy_receipt_scratch {
 +    std::mutex mutex;
 +    llama_context * ctx = nullptr;
@@ -597,6 +638,10 @@ index 000000000..8e0a3a0d4
 +        llama_free(ctx);
 +    }
 +};
++
++std::shared_ptr<skippy_receipt_scratch> skippy_receipt_new_scratch() {
++    return std::make_shared<skippy_receipt_scratch>();
++}
 +
 +namespace {
 +
@@ -763,16 +808,47 @@ index 000000000..8e0a3a0d4
 +    return {};
 +}
 +
++// A replay reports only the challenged layer and the residual leaving it,
++// and stops the graph once the nodes computing them have run.
++void keep_challenged_layer(skippy_receipt_capture & capture, ggml_cgraph * gf) {
++    const int32_t layer = capture.extra_layer;
++    auto & targets = capture.targets;
++    targets.erase(std::remove_if(targets.begin(), targets.end(),
++                          [layer](const skippy_receipt_target & target) {
++                              return target.layer != layer &&
++                                     !(target.layer == layer + 1 && target.kind == SKIPPY_RECEIPT_TENSOR_RESIDUAL);
++                          }),
++            targets.end());
++    std::set<const ggml_tensor *> nodes;
++    for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
++        nodes.insert(ggml_graph_node(gf, i));
++    }
++    for (const auto & target : targets) {
++        const ggml_tensor * root = target.tensor;
++        while (root->view_src != nullptr) {
++            root = root->view_src;
++        }
++        // a root outside the nodes is a graph input, set before compute
++        if (nodes.count(root) != 0) {
++            capture.stop_after.insert(root);
++        }
++    }
++}
++
 +}  // namespace
 +
 +void skippy_receipt_mark_graph(skippy_receipt_capture & capture, llm_graph_result & res) {
 +    capture.targets.clear();
 +    capture.input = nullptr;
++    capture.stop_after.clear();
 +    capture.graph_error = find_targets(capture, res);
 +    if (!capture.graph_error.empty()) {
 +        capture.targets.clear();
 +        capture.input = nullptr;
 +        return;
++    }
++    if (capture.extra_layer >= 0) {
++        keep_challenged_layer(capture, res.get_gf());
 +    }
 +    for (const auto & target : capture.targets) {
 +        keep_alive(target.tensor);
@@ -786,6 +862,28 @@ index 000000000..8e0a3a0d4
 +    skippy_receipt_capture reserve;
 +    reserve.extra_layer = capture.extra_layer;
 +    skippy_receipt_mark_graph(reserve, res);
++}
++
++void skippy_receipt_begin_compute(skippy_receipt_capture & capture) {
++    capture.stop_seen = 0;
++}
++
++bool skippy_receipt_eval(ggml_tensor * t, bool ask, void * user_data) {
++    auto & capture = *static_cast<skippy_receipt_capture *>(user_data);
++    if (capture.stop_after.empty()) {
++        // compute everything: no node is needed, and nothing stops
++        return !ask;
++    }
++    if (!ask) {
++        // called only after a needed node: the reported tensors are computed
++        return false;
++    }
++    if (capture.stop_seen == capture.stop_after.size()) {
++        // a later split: compute one node and stop
++        return true;
++    }
++    capture.stop_seen += capture.stop_after.count(t);
++    return capture.stop_seen == capture.stop_after.size();
 +}
 +
 +namespace {
@@ -1032,9 +1130,10 @@ index 000000000..8e0a3a0d4
 +        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "the stage context parameters were not kept");
 +        return SKIPPY_STATUS_UNSUPPORTED;
 +    }
++    scratch.capture = std::make_shared<skippy_receipt_capture>();
 +    llama_context_params params = model->receipt_ctx_params;
-+    params.cb_eval = nullptr;
-+    params.cb_eval_user_data = nullptr;
++    params.cb_eval = skippy_receipt_eval;
++    params.cb_eval_user_data = scratch.capture.get();
 +    params.samplers = nullptr;
 +    params.n_samplers = 0;
 +    scratch.ctx = llama_init_from_model_with_graph_inputs(
@@ -1047,7 +1146,6 @@ index 000000000..8e0a3a0d4
 +        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "the replay context has no plain KV cache");
 +        return SKIPPY_STATUS_UNSUPPORTED;
 +    }
-+    scratch.capture = std::make_shared<skippy_receipt_capture>();
 +    scratch.ctx->set_receipt_capture(scratch.capture);
 +    return SKIPPY_STATUS_OK;
 +}
@@ -1119,10 +1217,11 @@ index 000000000..8e0a3a0d4
 +        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model, steps and a capture callback are required");
 +        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
-+    if (!model->receipt_scratch) {
-+        model->receipt_scratch = std::make_shared<skippy_receipt_scratch>();
-+    }
 +    auto scratch = model->receipt_scratch;
++    if (!scratch) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "the model cannot replay receipts");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
 +    std::lock_guard<std::mutex> lock(scratch->mutex);
 +    enum skippy_status status = ensure_scratch(model, *scratch, out_error);
 +    if (status != SKIPPY_STATUS_OK) {
@@ -1172,12 +1271,32 @@ index 000000000..8e0a3a0d4
 +    }
 +    return skippy_success(out_error);
 +}
++
++enum skippy_status skippy_model_release_receipt_scratch(struct skippy_model * model, struct skippy_error ** out_error) {
++    if (model == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    auto scratch = model->receipt_scratch;
++    if (!scratch) {
++        return skippy_success(out_error);
++    }
++    std::unique_lock<std::mutex> lock(scratch->mutex, std::try_to_lock);
++    if (!lock.owns_lock()) {
++        // a replay holds the context; it stays until the next release
++        return skippy_success(out_error);
++    }
++    llama_free(scratch->ctx);
++    scratch->ctx = nullptr;
++    scratch->capture.reset();
++    return skippy_success(out_error);
++}
 diff --git a/src/skippy/receipts_internal.h b/src/skippy/receipts_internal.h
 new file mode 100644
-index 000000000..7d75f6051
+index 000000000..3eef4ea2a
 --- /dev/null
 +++ b/src/skippy/receipts_internal.h
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,87 @@
 +#pragma once
 +
 +#include "skippy/receipts.h"
@@ -1186,6 +1305,7 @@ index 000000000..7d75f6051
 +
 +#include <cstdint>
 +#include <memory>
++#include <set>
 +#include <string>
 +#include <vector>
 +
@@ -1193,6 +1313,7 @@ index 000000000..7d75f6051
 +struct llama_ubatch;
 +struct llama_memory_context_i;
 +class llm_graph_result;
++struct skippy_receipt_scratch;
 +
 +struct skippy_receipt_target {
 +    ggml_tensor * tensor = nullptr;
@@ -1214,6 +1335,10 @@ index 000000000..7d75f6051
 +    std::vector<skippy_receipt_target> targets;
 +    ggml_tensor * input = nullptr;
 +    std::string graph_error;
++    // replay: the nodes that compute the reported tensors. The graph stops
++    // once all of them have run, since later layers are not needed.
++    std::set<const ggml_tensor *> stop_after;
++    size_t stop_seen = 0;
 +
 +    // per-ubatch host copies: one block for every tensor and the stage input,
 +    // pinned when the backend has pinned host memory. Ubatches alternate
@@ -1235,12 +1360,22 @@ index 000000000..7d75f6051
 +    std::vector<uint32_t> cell;
 +};
 +
++// The scratch context a model replays receipts in; created empty with the model.
++std::shared_ptr<skippy_receipt_scratch> skippy_receipt_new_scratch();
++
 +// Finds the receipt tensors of a freshly built graph and marks them as outputs.
 +void skippy_receipt_mark_graph(skippy_receipt_capture & capture, llm_graph_result & res);
 +
 +// Marks the receipt tensors of a reserve graph as outputs, so the scheduler's
 +// planned allocation keeps them alive. The capture's current targets are kept.
 +void skippy_receipt_mark_reserve_graph(const skippy_receipt_capture & capture, llm_graph_result & res);
++
++// Resets the early stop of a replay before its graph is computed.
++void skippy_receipt_begin_compute(skippy_receipt_capture & capture);
++
++// The scheduler's eval callback of a replay context: stops the graph once
++// the reported tensors are computed. user_data is the capture.
++bool skippy_receipt_eval(ggml_tensor * t, bool ask, void * user_data);
 +
 +// Reads the receipt tensors of a computed ubatch and reports them.
 +void skippy_receipt_report_ubatch(
