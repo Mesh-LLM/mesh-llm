@@ -1,9 +1,12 @@
 # Receipts without model-specific code
 
-Status: design decided, not built.
+Status: built (receipt wire version 3). The native classifier is in
+`src/skippy/receipts_layers.cpp` of patch 0011, the auditor's checks are in
+`skippy-receipts` (`glue.rs`, `audit.rs`), and the glue evaluator over
+libllama is in `skippy-cli`. Measured costs are at the end.
 
-Receipts ([RECEIPTS.md](RECEIPTS.md)) have model-specific code in two places
-today:
+Receipts ([RECEIPTS.md](RECEIPTS.md)) had model-specific code in two places
+before this design (wire version 2):
 
 1. **Leaf discovery** (native recorder). It finds the receipt tensors by GGUF
    weight names (`blk.N.attn_q.weight`, `ffn_gate`, ...), takes the residual
@@ -138,22 +141,24 @@ which weights are small (no model code).
 
 ### 3. Commit the KV cache rows as stored
 
-Today the attention leaf commits k and v before they are written to the
-cache. Attention reads the stored rows. A node could store them at lower
-precision (`-ctk q4_0`), or store different values, and nothing would catch
-it.
+In wire version 2 the attention leaf committed k and v before they were
+written to the cache. Attention reads the stored rows. A node could store them
+at lower precision (`-ctk q4_0`), or store different values, and nothing would
+catch it.
 
 Rule: when a token-mixing op reads a KV buffer, its committed inputs are the
 rows as stored, in the cache's type, and the receipt names the cache type.
-The client recomputes k and v through the glue, converts them to the named
-type, and requires them to match the opened stored rows to within one
-quantization step. A client decides which cache types it accepts.
+The client recomputes k and v through the glue in f32. It measures how far
+its own values move when they are rounded into the named type, and requires
+the opened stored row to be no further from its values than 1.5 times that
+distance, plus 1e-4 of the row's norm. A client decides which cache types it
+accepts.
 
 *Requirements:* security (closes a cheap, real substitution). Cost: the node
 hashes the stored rows instead of the f32 values, which is the same number of
 bytes or fewer, plus a gather of the ubatch's cells. Honest nodes: the
-one-step tolerance absorbs rounding differences between GPU and CPU
-quantizers.
+bound is the client's own rounding error, so it absorbs a GPU and a CPU
+rounding the same value to neighbouring steps.
 
 ### 4. Recompute matmuls that feed a discrete choice
 
@@ -163,9 +168,16 @@ move near-tied values inside that tolerance and pick a different expert. The
 client's glue evaluation would agree.
 
 Rule: when a weight matmul's output reaches an `argsort` or top-k op before
-any other weight matmul, the client recomputes that matmul in full from the
-GGUF and makes the choice itself. When its own top-k margin is inside the
-tolerance, it accepts either choice.
+any other weight matmul, the matmul is a router. The client recomputes every
+row of it from the GGUF, not a random sample, and every opened column must
+pass, not a majority. The glue then computes the scores from the opened
+router output and checks the opened choice against them: a top-k must hold
+the highest scores, and an argsort must be in order. A pick that loses to an
+unpicked score by more than 1e-4 of the largest score fails.
+
+A node can still move a router output within the row tolerance (1e-3), so it
+can swap experts whose scores are within that distance of each other. Those
+are numeric ties: an honest GPU and CPU can disagree about them too.
 
 *Requirements:* security (routing cannot be steered beyond real numeric
 ties) and honest nodes (genuine ties are accepted). Cost: router matrices are
@@ -174,7 +186,7 @@ opened position is cheap. It is found by graph structure, so no model code.
 
 ## Leaves
 
-| Leaf | Found by | Today |
+| Leaf | Found by | Wire version 2 |
 |---|---|---|
 | Residual entering layer N | Skippy's block boundary records (entry tensor of layer N) | `rms_norm` input in front of `attn_q` |
 | Stage output | Exit tensor of the last stage layer | node named `l_out-N` |
@@ -195,25 +207,25 @@ values. This changes the attention leaf, so the receipt wire version goes to
 ## Auditor
 
 The auditor depends on libllama with the CPU backend. Ben accepted this
-dependency. A new native entry point, roughly:
+dependency. The native entry point is `skippy_model_eval_receipt_glue`:
 
-```c
-skippy_receipt_glue_eval(model_path, layer, position,
-                         residual_in, matmul_outputs[], mixing_values[],
-                         out matmul_inputs[], out mixing_inputs[],
-                         out residual_out)
-```
-
-- Load the claimed GGUF with mmap and the CPU backend, selecting layer N
-  only. Only the tensors the glue reads (norm weights, biases, router
-  matrices) are paged in. Matmul and token-mixing nodes are replaced by
-  inputs, so their weights are never read.
-- Build the layer graph with the normal model builder. Turn each weight-matmul
-  and token-mixing node into an input that holds the opened value.
-- Compute in f32 and return every weight-matmul input, every token-mixing
-  input (converted to the stored type for KV rows), and the exit tensor.
-- The Rust auditor compares them with the opening using the relative-error
-  tolerance `glue.rs` uses now. `glue.rs` and its architecture list go away.
+- `skippy audit-receipt` plans and loads layer N of the claimed GGUF alone,
+  as a one-layer stage on the CPU (`n_gpu_layers 0`, no op or KV offload).
+- It builds the layer graph with the normal model builder, for all opened
+  positions in one ubatch. Each weight-matmul output, token-mixing output and
+  selection becomes an input that holds the opened value, and the residual
+  entering the layer is the opened one. The large weights are never read.
+- It computes in f32 and returns every weight-matmul input, the experts of
+  each `mul_mat_id`, every token-mixing input, every computed stored row,
+  every selection's scores, and the exit tensor.
+- The Rust auditor (`glue.rs`) compares them with the opening, with a
+  relative-error tolerance of 1e-4 (expert ids must match exactly), and
+  checks stored rows and selections by the rules of guards 3 and 4.
+  `skippy_receipt_stored_row_error` gives the rounding distance in the cache
+  type. The old per-architecture glue code is gone.
+- Before comparing, it checks that the opening has the plan of its own
+  graph: the same weights, by index and name, the same routers, and the same
+  number of token-mixing values and selections.
 
 The node never supplies the glue program. A node that could send its own
 program could make any values check out. The client's graph comes from its own
@@ -232,7 +244,10 @@ if it cannot.
   are token-mixing). The KV-cache storage type is now checked.
 - Refused for now: graphs with uncommitted cross-layer inputs (RWKV7, Gemma
   3n) and graphs with large weights inside token-mixing ops. These are refused,
-  not failed.
+  not failed. Two more limits are outside the classifier: quantized KV caches,
+  whose keys llama.cpp rotates with a Hadamard matmul that merges heads and
+  tokens into one axis, and recurrent or hybrid memory, which replay cannot
+  restore yet. Both are refused with a reason.
 - Still unchecked: the arithmetic inside token-mixing ops (attention scores,
   SSM scans), as today. This includes the attention mask: a node could attend
   only to recent tokens and the audit would not notice. The output head and
@@ -247,11 +262,25 @@ if it cannot.
 
 ## Costs
 
-- Node: the commitment stays about the same size per position. Stored KV rows
-  replace f32 k and v, plus a small gather per ubatch. The classification pass
-  runs once per graph build. Replay and openings do not change.
-- Auditor: needs libllama and the GGUF, which `skippy audit-receipt` already
-  has. Per opened position, it computes one layer without its large matmuls,
-  plus any router matrix in full. I estimate a few milliseconds at most on a
-  CPU (not measured). A client that cannot load native code (a browser, a
-  small SDK) would need another path.
+Measured with a release build on two-stage splits. Each stage ran on one
+RTX 5060 Ti, and the auditor ran on the CPU of the same machine.
+
+- Node: Qwen3-4B Q8_0 decodes 3% slower with receipts on (71.7 → 69.5
+  tok/s, median of five runs), as with wire version 2. Prefill is 1.38x
+  slower (2292 → 1661 tok/s; 1.28x with version 2): each ubatch now also
+  reads back the stored KV rows.
+- Auditor, per opening of 16 positions:
+
+  | Model | Layer load | Glue, first evaluation | Glue, per position after | Row checks |
+  |---|---|---|---|---|
+  | Qwen3-4B Q8_0 | 0.5 to 1.3 s | 76 to 117 ms | 0.04 to 0.27 ms | 21 to 461 ms |
+  | granite-3.1-3b-a800m Q8_0 (MoE) | 0.9 s | 99 to 161 ms | 0.03 to 0.27 ms | 0.6 to 1.0 s |
+
+  The first evaluation creates the glue context and builds the graph. Later
+  evaluations of the same layer reuse them, and the per-position figure is
+  the fastest of five. The row checks include a full recomputation of
+  granite's router (40 rows) and reading rows from the GGUF, so they vary
+  with the page cache. Fixed costs dominate: one audit costs about 1 to 2
+  seconds of CPU time, and the glue evaluation is under a tenth of it.
+- A client that cannot load native code (a browser, a small SDK) would need
+  another path.

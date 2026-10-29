@@ -69,16 +69,23 @@ Built:
   ABI 0.1.75). `skippy_model_set_receipt_recorder` reports each computed
   ubatch: its geometry (tokens, sequences, positions, output rows, KV cells,
   n_kv), the stage input rows, the residual stream entering every layer and the
-  stage output, and each layer's attn_q, attn_k and attn_v outputs and
-  attention output. It also reports KV-cache operations.
+  stage output, and each layer's token-mixing inputs, stored KV rows (in the
+  cache's type) and token-mixing outputs. It also reports KV-cache operations.
   `skippy_model_replay_receipt` replays one sequence in a scratch context. It
   forces the recorded KV cells and n_kv and puts dummy columns where other
-  sequences were. It reports the challenged layer's committed tensors,
-  matmul inputs and outputs, and stops each step after that layer.
+  sequences were. It reports the challenged layer's committed tensors, every
+  weight matmul's input and output (with the experts of a `mul_mat_id`), its
+  selections, and stops each step after that layer.
   `skippy_model_release_receipt_scratch` frees the scratch context.
+- **Receipt tensors from graph structure**
+  ([RECEIPTS_GLUE.md](RECEIPTS_GLUE.md)). A classifier with a per-ggml-op
+  table finds each layer's weight matmuls, token-mixing regions, stored rows
+  and routers between Skippy's block boundaries. No code names an
+  architecture, a weight or a node. A graph it cannot classify gets no
+  receipt, with a reason.
 - **Leaves.** Per position, a stage commits `2 · layers + 1` leaves: the
-  residual entering each layer, an attention leaf per layer, and the stage
-  output. Receipt wire version 2.
+  residual entering each layer, a token-mixing leaf per layer, and the stage
+  output. Each value is hashed with its ggml type. Receipt wire version 3.
 - **Recorder.** Keeps leaf hashes and a replay log per native sequence, not
   activations. It refuses a sequence whose cells it cannot reproduce: a copied
   prefix, a position shift, a state load, or compaction.
@@ -87,34 +94,37 @@ Built:
   A repeated challenge is answered from kept openings (128 MiB per stage). A
   receipt is replayed for at most 4 distinct challenges. Serving frees the
   replay context after 60 seconds idle.
-- **Glue checks** in the auditor bind the replayed matmuls to the committed
-  residual stream: both RMS norms, SwiGLU and the residual add. Supported for
-  the `llama`, `qwen2` and `qwen3` architectures.
+- **Glue checks.** The auditor loads the challenged layer of the claimed GGUF
+  on the CPU and computes it on the opened values with libllama
+  (`skippy_model_eval_receipt_glue`). It compares the matmul inputs, expert
+  ids, token-mixing inputs, stored KV rows, selections and the residual out
+  with the opening. Routers are row-checked on every row.
 - **Throughput.** Committed tensors are copied into pinned host memory and
   hashed on up to 8 threads, off the decoding thread, while the next ubatch
-  computes. Two-stage Qwen3-4B Q8_0 on one GPU, release build:
+  computes. Two-stage Qwen3-4B Q8_0 on one RTX 5060 Ti, release build, wire
+  version 3: decode 3% slower, prefill 1.38x slower.
 
-  | GPU | Decode | Prefill |
-  |---|---|---|
-  | RTX 5090 | 3% slower | 1.11x slower |
-  | RTX 5060 Ti | 3% slower | 1.28x slower |
-
-Verified on a two-stage Qwen3-4B split on one RTX 5060 Ti and on one RTX 5090:
+Verified with wire version 3, two-stage splits on one RTX 5060 Ti and on the
+CPU:
 
 | Case | Result |
 |---|---|
-| Serve Q8_0, claim Q8_0 | PASS on stage 0 and stage 1 layers, including the last layer. Row errors 1e-4 to 1e-3, glue errors about 1e-7 |
-| Serve Q6_K on both stages, claim Q8_0 | FAIL on every matrix, error 4e-3 to 4e-2. Merkle paths, replay and glue pass |
+| Qwen3-4B, serve Q8_0, claim Q8_0 | PASS on layers 0, 5, 17, 18, 30 and 35. Row errors 1e-4 to 3e-4; glue errors at most 3e-6 (GPU against the CPU) |
+| Qwen3-4B, serve Q6_K, claim Q8_0 | FAIL on every matrix, error 1e-2 to 1e-1. Merkle paths, replay and glue pass |
+| granite-3.1-3b-a800m (MoE), serve Q8_0 | PASS on layers 0, 5, 20 and 31. Expert ids and selections match the CPU exactly |
+| granite-3.1-3b-a800m, serve Q6_K, claim Q8_0 | FAIL on every quantized matrix; the f32 router passes |
+| Qwen3-4B with a q8_0 KV cache | No receipt: the key rotation llama.cpp applies before a quantized cache is not classified yet |
+| Qwen3.5-9B (hybrid) | No receipt: the recorder needs a plain KV cache |
 
 Left to do:
 
 - Replay on Metal, Vulkan (forced f32 accumulation), ROCm and ARM CPU. Only
   CUDA on Blackwell has been tested.
 - Prefix cache, native MTP and multi-stream KV caches. They are refused now.
+- Recurrent and hybrid memory (Mamba, the gated delta net), so their state
+  can be replayed, and the key rotation of quantized KV caches.
 - Overlap the device-to-host copy with compute, or hash on the device, to
   remove the remaining per-ubatch copy cost.
-- Glue checks for other layer shapes, expressed from the graph or model
-  metadata instead of an architecture list.
 - Done when: replay reproduces committed leaves bit for bit on CUDA, Metal,
   Vulkan and ARM CPU through real `skippy serve`, with prefix cache and native
   MTP on.
