@@ -15,6 +15,7 @@
 
 mod draft_batch;
 mod readout;
+mod split;
 
 use std::ffi::CString;
 use std::path::Path;
@@ -34,6 +35,11 @@ use crate::{RuntimeConfig, StageModel, StageSession, ensure_ok, write_native_log
 
 use draft_batch::{DraftBatch, target_feature_row};
 use readout::{argmax_token, block_draft_capacity, walk_dflash2_lattice};
+
+pub use split::{
+    DFlashFeatureRows, dflash_feature_identity, dflash_feature_layer, frame_has_dflash_features,
+};
+pub(crate) use split::{DFlashSplitSession, SharedDFlashCapture};
 
 const DFLASH_ARCHITECTURE: &str = "dflash";
 const DEFAULT_BLOCK_SIZE: usize = 16;
@@ -98,6 +104,9 @@ pub(crate) struct DFlashDraft {
     model: *mut Opaque,
     ctx: *mut Opaque,
     info: DFlashDraftInfo,
+    /// Per target layer: captured on this stage, or sent by an earlier stage
+    /// of a split target.
+    local_layers: Vec<bool>,
     lanes: i32,
     n_embd_target: usize,
     n_embd_draft: usize,
@@ -149,6 +158,7 @@ impl DFlashDraft {
                 target_layer_ids: Vec::new(),
                 selector_top_k: 0,
             },
+            local_layers: Vec::new(),
             lanes,
             n_embd_target: 0,
             n_embd_draft: 0,
@@ -182,11 +192,22 @@ impl DFlashDraft {
         if meta_usize(self.model, LILICORR_CANDIDATE_TOPK_KEY)?.is_some_and(|top_k| top_k > 0) {
             bail!("LiliCorr drafts are not supported");
         }
-        if !(config.resident_tensor_names.is_empty() && config.layer_start == 0) {
-            bail!("DFlash drafts require the complete target model in one stage");
-        }
         let target_layers = unsafe { (api.model_n_layer)(target_model) };
         self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers)?;
+        // A final stage of a split target captures only the layers it owns;
+        // earlier stages send the rest with their activations.
+        let complete = config.resident_tensor_names.is_empty() && config.layer_start == 0;
+        let local_end = if complete || config.layer_end == 0 {
+            u32::MAX
+        } else {
+            config.layer_end
+        };
+        self.local_layers = self
+            .info
+            .target_layer_ids
+            .iter()
+            .map(|lid| (config.layer_start..local_end).contains(lid))
+            .collect();
         self.n_embd_target =
             positive_usize(unsafe { (api.model_n_embd)(target_model) }, "target n_embd")?;
         self.n_embd_draft =
@@ -247,16 +268,19 @@ impl DFlashDraft {
             // DFlash2 reads its lattice from every row of the nextn output.
             (api.set_embeddings_nextn)(self.ctx, true, !dflash2);
             (api.set_causal_attn)(self.ctx, causal);
-            for &lid in &self.info.target_layer_ids {
-                (api.set_embeddings_layer_inp)(self.target_ctx, lid, true);
+            for (&lid, &local) in self.info.target_layer_ids.iter().zip(&self.local_layers) {
+                if local {
+                    (api.set_embeddings_layer_inp)(self.target_ctx, lid, true);
+                }
             }
         }
         write_native_log_note(format!(
-            "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} mask_token={} causal={causal} mrope={}",
+            "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} local_layers={:?} mask_token={} causal={causal} mrope={}",
             self.info.variant.as_str(),
             self.info.block_size,
             self.info.max_draft_tokens,
             self.info.target_layer_ids,
+            self.local_layers,
             self.mask_token,
             self.mrope,
         ));
@@ -272,12 +296,14 @@ impl DFlashDraft {
     }
 
     /// Injects the target features for `positions.len()` rows of the last
-    /// target decode, starting at batch row `first_row`.
+    /// target decode, starting at batch row `first_row`. Layers an earlier
+    /// stage owns come from the trailing rows of `remote`.
     pub(crate) fn ingest(
         &mut self,
         seq_id: i32,
         first_row: usize,
         positions: &[i32],
+        remote: Option<(&DFlashFeatureRows, usize)>,
     ) -> Result<()> {
         if positions.is_empty() {
             return Ok(());
@@ -295,8 +321,16 @@ impl DFlashDraft {
                 )
             })?;
         let layer_len = rows_needed * self.n_embd_target;
+        let first_value = first_row * self.n_embd_target;
         let mut layers = Vec::with_capacity(self.info.target_layer_ids.len());
-        for &lid in &self.info.target_layer_ids {
+        for (&lid, &local) in self.info.target_layer_ids.iter().zip(&self.local_layers) {
+            if !local {
+                let rows = remote
+                    .and_then(|(remote, start)| remote.rows_of(lid, start, positions.len()))
+                    .ok_or_else(|| anyhow!("target layer {lid} features did not arrive"))?;
+                layers.push(rows);
+                continue;
+            }
             // The native getter aborts unless the buffer is allocated. Capture
             // is enabled for the draft's whole lifetime and nothing else
             // toggles it, and sessions only ingest rows of a target decode
@@ -305,11 +339,12 @@ impl DFlashDraft {
             if data.is_null() {
                 bail!("target layer {lid} input was not captured");
             }
-            layers.push(unsafe { std::slice::from_raw_parts(data.cast_const(), layer_len) });
+            let all = unsafe { std::slice::from_raw_parts(data.cast_const(), layer_len) };
+            layers.push(&all[first_value..]);
         }
         for (chunk_index, chunk) in positions.chunks(self.n_ubatch).enumerate() {
             self.batch.clear();
-            let chunk_row = first_row + chunk_index * self.n_ubatch;
+            let chunk_row = chunk_index * self.n_ubatch;
             for (offset, &position) in chunk.iter().enumerate() {
                 self.batch.push_features(
                     target_feature_row(&layers, self.n_embd_target, chunk_row + offset),
@@ -362,6 +397,8 @@ impl DFlashDraft {
             return Ok(Vec::new());
         }
         let dflash2 = self.info.variant == DFlashVariant::DFlash2;
+        // Rows a split final stage verified past the anchor are still cached.
+        self.truncate(seq_id, anchor_position);
         // Every block row is an output, as upstream requests: marking only the
         // mask rows returns logits shifted by one row. DFlash2 reads its
         // lattice from the nextn output instead and needs no logits.
@@ -418,8 +455,10 @@ impl DFlashDraft {
 impl Drop for DFlashDraft {
     fn drop(&mut self) {
         unsafe {
-            for &lid in &self.info.target_layer_ids {
-                (self.api.set_embeddings_layer_inp)(self.target_ctx, lid, false);
+            for (&lid, &local) in self.info.target_layer_ids.iter().zip(&self.local_layers) {
+                if local {
+                    (self.api.set_embeddings_layer_inp)(self.target_ctx, lid, false);
+                }
             }
             if !self.ctx.is_null() {
                 (self.api.free)(self.ctx);
@@ -690,6 +729,17 @@ impl<'a> DecodedRows<'a> {
         }
     }
 
+    /// The first batch row and the number of rows.
+    fn span(&self) -> (usize, usize) {
+        match self {
+            Self::Trailing { first_row, count } => (*first_row, *count),
+            Self::At {
+                first_row,
+                positions,
+            } => (*first_row, positions.len()),
+        }
+    }
+
     pub(crate) fn offset(self, rows: usize) -> Self {
         match self {
             Self::Trailing { first_row, count } => Self::Trailing {
@@ -749,9 +799,56 @@ impl StageSession {
         }))
     }
 
+    /// Drafts tokens that follow `anchor` at `anchor_position`, for a split
+    /// final stage whose target has already decoded past the anchor: rows the
+    /// target verified beyond it are dropped from the draft first. Returns
+    /// `None` when no draft is attached.
+    pub fn dflash_propose_at(
+        &mut self,
+        anchor: i32,
+        anchor_position: u64,
+        max_tokens: usize,
+    ) -> Result<Option<DFlashProposal>> {
+        let Some(link) = self.dflash.clone() else {
+            return Ok(None);
+        };
+        let anchor_position =
+            i32::try_from(anchor_position).context("anchor position exceeds i32")?;
+        let started = Instant::now();
+        let tokens = link.with_draft(|draft, seq_id| {
+            draft
+                .propose(seq_id, anchor_position, anchor, max_tokens)
+                .unwrap_or_else(|error| {
+                    write_native_log_note(format!("dflash proposal failed: {error:#}"));
+                    draft.clear(seq_id);
+                    Vec::new()
+                })
+        });
+        Ok(tokens.map(|tokens| DFlashProposal {
+            tokens,
+            proposal_compute_us: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+        }))
+    }
+
     /// Feeds the target features of this session's rows in the last decode to
     /// the draft.
     pub(crate) fn dflash_after_decode(&mut self, rows: DecodedRows<'_>) {
+        let (span_row, span_count) = rows.span();
+        let remote = match self.dflash_split.as_mut() {
+            Some(split) => {
+                split.after_decode(span_row, span_count);
+                split.remote.take()
+            }
+            None => None,
+        };
+        // Earlier stages' rows are consumed in decode order; keep the rest
+        // for a decode that continues the same message.
+        if let Some((rows, consumed)) = &remote
+            && consumed + span_count < rows.rows()
+            && let Some(split) = self.dflash_split.as_mut()
+        {
+            split.remote = Some((rows.clone(), consumed + span_count));
+        }
         let Some(link) = self.dflash.clone() else {
             return;
         };
@@ -782,7 +879,8 @@ impl StageSession {
             }
         };
         link.with_draft(|draft, seq_id| {
-            if let Err(error) = draft.ingest(seq_id, first_row, positions) {
+            let remote = remote.as_ref().map(|(rows, consumed)| (rows, *consumed));
+            if let Err(error) = draft.ingest(seq_id, first_row, positions, remote) {
                 write_native_log_note(format!("dflash feature injection failed: {error:#}"));
                 draft.clear(seq_id);
             }
@@ -808,6 +906,9 @@ impl StageSession {
     /// Forgets draft context after the target state was replaced without a
     /// decode (reset, cache restore, or imported state).
     pub(crate) fn dflash_after_replace(&mut self) {
+        if let Some(split) = self.dflash_split.as_mut() {
+            split.clear();
+        }
         if let Some(link) = self.dflash.clone() {
             link.with_draft(|draft, seq_id| draft.clear(seq_id));
         }

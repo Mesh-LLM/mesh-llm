@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::Model as RawModel;
 
-use crate::dflash::SharedDFlashDraft;
+use crate::dflash::{DFlashSplitSession, SharedDFlashCapture, SharedDFlashDraft};
 use crate::error::{ensure_ok, free_error};
 use crate::logging::write_native_log_note;
 use crate::media::MediaProjector;
@@ -105,6 +105,8 @@ struct StageModelInner {
     /// External DFlash draft that borrows this model's context. Freed before
     /// the native model.
     dflash: Option<SharedDFlashDraft>,
+    /// Target-layer capture for a split DFlash draft on a later stage.
+    dflash_capture: Option<SharedDFlashCapture>,
 }
 
 /// A read-only model handle for vocabulary operations that do not touch a
@@ -168,6 +170,7 @@ impl StageModel {
                 terminal_stage: true,
                 capability: None,
                 dflash: None,
+                dflash_capture: None,
             }),
             media: None,
         }
@@ -233,6 +236,7 @@ impl StageModel {
                 terminal_stage: config.is_terminal_stage(),
                 capability,
                 dflash: None,
+                dflash_capture: None,
             }),
             media,
         })
@@ -533,6 +537,7 @@ impl StageModel {
             terminal_stage: self.inner.terminal_stage,
             batched_activation_exports: self.supports_batched_activation_exports(),
             dflash: None,
+            dflash_split: None,
         };
         self.link_session_dflash(&mut session)?;
         Ok(session)
@@ -567,16 +572,32 @@ impl StageModel {
             terminal_stage: self.inner.terminal_stage,
             batched_activation_exports: self.supports_batched_activation_exports(),
             dflash: None,
+            dflash_split: None,
         };
         self.link_session_dflash(&mut session)?;
         Ok(session)
     }
 
     fn link_session_dflash(&self, session: &mut StageSession) -> Result<()> {
+        if let Some(capture) = &self.inner.dflash_capture {
+            session.dflash_split = Some(Box::new(DFlashSplitSession::capturing(capture)));
+        }
         match &self.inner.dflash {
             Some(draft) => session.link_dflash(draft),
             None => Ok(()),
         }
+    }
+
+    pub(crate) fn dflash_capture(&self) -> Option<&SharedDFlashCapture> {
+        self.inner.dflash_capture.as_ref()
+    }
+
+    pub(crate) fn install_dflash_capture(&mut self, capture: SharedDFlashCapture) -> Result<()> {
+        let inner = Arc::get_mut(&mut self.inner).ok_or_else(|| {
+            anyhow!("cannot attach DFlash capture while model readers are active")
+        })?;
+        inner.dflash_capture = Some(capture);
+        Ok(())
     }
 
     pub(crate) fn raw_model(&self) -> *mut RawModel {
@@ -1215,6 +1236,7 @@ impl Drop for StageModelInner {
     fn drop(&mut self) {
         // The draft context borrows tensors from this model's context.
         self.dflash.take();
+        self.dflash_capture.take();
         if !self.raw.is_null() {
             unsafe {
                 let _ = skippy_ffi::skippy_model_free(self.raw, ptr::null_mut());
