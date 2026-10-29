@@ -1,6 +1,7 @@
 //! Hold native residency through the complete response, including SSE forwarding.
 use super::*;
 
+/// Hold a managed request lease through dispatch while preserving membership peer isolation.
 pub(super) async fn route_request(
     local_only: bool,
     stream: ClientStream,
@@ -101,6 +102,7 @@ pub(super) async fn route_request(
     .await
 }
 
+/// Refresh local residency without importing peers from another mesh membership.
 fn refresh_local_targets(
     existing: &election::ModelTargets,
     fresh: &election::ModelTargets,

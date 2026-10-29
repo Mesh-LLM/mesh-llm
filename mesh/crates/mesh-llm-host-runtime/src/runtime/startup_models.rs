@@ -940,7 +940,7 @@ pub(super) fn build_startup_model_specs(
     }
 
     for model in &config.models {
-        if model.lifecycle.load == mesh_llm_config::managed_models::ModelLoadPolicy::OnDemand {
+        if super::native_model_lifecycle::is_on_demand_managed(config, model) {
             continue;
         }
         let effective =

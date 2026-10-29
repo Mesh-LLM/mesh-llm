@@ -44,6 +44,7 @@ impl Drop for RequestLease {
 }
 
 impl NativeModelLifecycle {
+    /// Resolve a configured identifier or loaded runtime alias to shared state.
     fn residency(&self, model: &str) -> Option<(&String, &Arc<Residency>)> {
         self.models.get_key_value(model).or_else(|| {
             self.models.iter().find(|(_, residency)| {
@@ -57,14 +58,17 @@ impl NativeModelLifecycle {
         })
     }
 
+    /// Report whether requests for this name need a residency lease.
     pub(crate) fn manages(&self, model: &str) -> bool {
         self.residency(model).is_some()
     }
 
+    /// List configured on-demand model identifiers, including cold models.
     pub(crate) fn model_names(&self) -> impl Iterator<Item = &String> {
         self.models.keys()
     }
 
+    /// Add configured-name aliases to the current runtime routing snapshot.
     pub(crate) fn targets(&self) -> ModelTargets {
         {
             let mut targets = self.targets.borrow().clone();
@@ -114,6 +118,7 @@ impl NativeModelLifecycle {
             .context("native model residency task failed")?
     }
 
+    /// Use a loaded runtime alias only while its local backend is ready.
     pub(crate) fn execution_model(&self, model: &str) -> String {
         self.residency(model)
             .and_then(|(_, residency)| {
@@ -128,6 +133,7 @@ impl NativeModelLifecycle {
             .unwrap_or_else(|| model.to_owned())
     }
 
+    /// Enqueue a reconciler load and retain its exact instance for idle eviction.
     async fn load(
         &self,
         model: &str,
@@ -152,6 +158,7 @@ impl NativeModelLifecycle {
         Ok(())
     }
 
+    /// Drain idle owned instances without active leases; defer retries by one idle interval.
     async fn evict_idle(&self) {
         for (model, residency) in &self.models {
             let timeout = residency.policy.idle_timeout_secs;
@@ -200,12 +207,20 @@ impl NativeModelLifecycle {
             }
             match result.await {
                 Ok(Ok(_)) => *residency.instance.lock().unwrap_or_else(|e| e.into_inner()) = None,
-                result => tracing::debug!(model, ?result, "native idle unload deferred"),
+                result => {
+                    tracing::debug!(model, ?result, "native idle unload deferred");
+                    // Retry only after another full idle interval.
+                    *residency
+                        .idle_since
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = std::time::Instant::now();
+                }
             }
         }
     }
 }
 
+/// Protect split controllers and higher-priority residency intents from automatic eviction.
 pub(super) fn idle_unload_allowed(
     state: &super::model_reconciliation::ModelTargetReconciliationState,
     candidate: Option<&super::run_auto::RuntimeUnloadCandidate>,
@@ -226,6 +241,7 @@ pub(super) fn idle_unload_allowed(
     })
 }
 
+/// Check for a ready target permitted by the request origin.
 fn ready(targets: &ModelTargets, model: &str, local_only: bool) -> bool {
     targets.candidates(model).iter().any(|target| match target {
         InferenceTarget::Local(_) => true,
@@ -234,19 +250,27 @@ fn ready(targets: &ModelTargets, model: &str, local_only: bool) -> bool {
     })
 }
 
+/// Select only uniquely named models for automatic native residency.
+/// Entries outside this scope retain the normal startup path.
+pub(super) fn is_on_demand_managed(
+    config: &crate::plugin::MeshConfig,
+    model: &crate::plugin::ModelConfigEntry,
+) -> bool {
+    model.lifecycle.load == ModelLoadPolicy::OnDemand
+        && config
+            .models
+            .iter()
+            .filter(|entry| entry.model == model.model)
+            .count()
+            == 1
+}
+
+/// Construct residency state for exactly the entries excluded from startup.
 fn configured_residencies(config: &crate::plugin::MeshConfig) -> BTreeMap<String, Arc<Residency>> {
     config
         .models
         .iter()
-        .filter(|model| model.lifecycle.load == ModelLoadPolicy::OnDemand)
-        .filter(|model| {
-            config
-                .models
-                .iter()
-                .filter(|entry| entry.model == model.model)
-                .count()
-                == 1
-        })
+        .filter(|model| is_on_demand_managed(config, model))
         .map(|model| {
             (
                 model.model.clone(),
@@ -274,6 +298,7 @@ fn configured_residencies(config: &crate::plugin::MeshConfig) -> BTreeMap<String
         .collect()
 }
 
+/// Attach host residency and start disk prefetch plus weakly owned idle maintenance.
 pub(super) async fn install(
     node: &Node,
     config: &crate::plugin::MeshConfig,
@@ -466,6 +491,72 @@ mod tests {
         assert!(request.await.unwrap().is_some());
     }
 
+    /// Rejections and lost completions wait another idle interval before retrying.
+    #[tokio::test]
+    async fn deferred_idle_unloads_back_off_before_retrying() {
+        for error in [
+            Some("maintained owner intent"),
+            Some("instance no longer exists"),
+            None,
+        ] {
+            let (lifecycle, mut intents, _targets) = fixture(30);
+            let residency = &lifecycle.models["test"];
+            *residency.instance.lock().unwrap() = Some(("runtime-1".into(), "loaded-test".into()));
+            let eviction = {
+                let lifecycle = lifecycle.clone();
+                tokio::spawn(async move { lifecycle.evict_idle().await })
+            };
+            let ModelIntent::Unload {
+                completion: Some(completion),
+                ..
+            } = intents.recv().await.unwrap()
+            else {
+                panic!("expected unload")
+            };
+            if let Some(error) = error {
+                completion.send(Err(anyhow::anyhow!(error))).unwrap();
+            } else {
+                drop(completion);
+            }
+            eviction.await.unwrap();
+            assert!(residency.instance.lock().unwrap().is_some());
+            lifecycle.evict_idle().await;
+            assert!(
+                intents.try_recv().is_err(),
+                "must not retry on the next maintenance tick"
+            );
+            *residency.idle_since.lock().unwrap() =
+                std::time::Instant::now() - Duration::from_secs(15);
+            lifecycle.evict_idle().await;
+            assert!(
+                intents.try_recv().is_err(),
+                "must wait the entire idle interval"
+            );
+            *residency.idle_since.lock().unwrap() =
+                std::time::Instant::now() - Duration::from_secs(31);
+            let retry = {
+                let lifecycle = lifecycle.clone();
+                tokio::spawn(async move { lifecycle.evict_idle().await })
+            };
+            let ModelIntent::Unload {
+                completion: Some(completion),
+                ..
+            } = intents.recv().await.unwrap()
+            else {
+                panic!("expected retry")
+            };
+            completion
+                .send(Ok(crate::api::RuntimeUnloadResponse {
+                    model: "loaded-test".into(),
+                    instance_id: "runtime-1".into(),
+                    unloaded: true,
+                }))
+                .unwrap();
+            retry.await.unwrap();
+            assert!(residency.instance.lock().unwrap().is_none());
+        }
+    }
+
     #[tokio::test]
     async fn resident_policy_and_unowned_instances_are_never_evicted() {
         for timeout in [0, 1] {
@@ -558,5 +649,63 @@ mod intent_tests {
             Some("test")
         ));
         assert!(!idle_unload_allowed(&state, None, None));
+    }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::super::{RuntimeOptions, startup_models::build_startup_model_specs};
+    use super::*;
+
+    /// Each uniquely named entry has either a startup spec or a residency.
+    #[test]
+    fn unique_on_demand_entries_are_managed_and_startup_entries_remain_eager() {
+        let config: crate::plugin::MeshConfig = toml::from_str(
+            r#"
+[[models]]
+model = "cold-model"
+[models.lifecycle]
+load = "on_demand"
+[[models]]
+model = "warm-model"
+"#,
+        )
+        .unwrap();
+        let residencies = configured_residencies(&config);
+        let specs = build_startup_model_specs(&RuntimeOptions::default(), &config).unwrap();
+        assert_eq!(
+            residencies.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["cold-model"]
+        );
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].config_model_id.as_deref(), Some("warm-model"));
+    }
+
+    /// Programmatic duplicate profiles must not fall between both launch paths.
+    #[test]
+    fn duplicate_model_profiles_keep_their_startup_specs() {
+        let config: crate::plugin::MeshConfig = toml::from_str(
+            r#"
+[[models]]
+model = "shared-model"
+ctx_size = 1024
+[models.lifecycle]
+load = "on_demand"
+[[models]]
+model = "shared-model"
+ctx_size = 2048
+[models.lifecycle]
+load = "on_demand"
+"#,
+        )
+        .unwrap();
+        assert!(configured_residencies(&config).is_empty());
+        let specs = build_startup_model_specs(&RuntimeOptions::default(), &config).unwrap();
+        assert_eq!(specs.len(), 2);
+        assert_eq!(
+            specs.iter().map(|spec| spec.ctx_size).collect::<Vec<_>>(),
+            [Some(1024), Some(2048)]
+        );
+        assert_ne!(specs[0].profile, specs[1].profile);
     }
 }
