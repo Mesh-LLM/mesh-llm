@@ -134,8 +134,10 @@ that 0.1.5 wrote has not been tested.
 
   and restart the node. The install is now operator-managed, so later starts
   leave it at 0.1.4. Its peers on 0.1.5 can no longer exchange evidence with
-  it. To return to the release's default, run `mesh-llm plugins delete
-  capsules` and `mesh-llm plugins enable capsules`, then restart.
+  it. To return to the release's default, first remove `command` and `url`
+  from any `[[plugin]]` entry for `capsules`, as in step 2 of the
+  [upgrade order](#upgrade-order); then run `mesh-llm plugins delete
+  capsules` and `mesh-llm plugins enable capsules`, and restart.
 - **Turning `capsules` off.** Run `mesh-llm plugins disable capsules`, then
   restart the node: the command changes the plugin store, not the running
   process. A disabled plugin stays installed, and later starts neither run nor
