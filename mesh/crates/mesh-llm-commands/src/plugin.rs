@@ -186,8 +186,9 @@ async fn install(
         }
         _ => bail!("provide either a plugin reference or --archive with --name"),
     };
+    // Each package's granted access was disclosed as it landed
+    // (`CliPluginProgress`), before its requirements were attempted.
     progress.finish();
-    report_exchange_access(&outcome.metadata)?;
     if outcome.changed {
         let mut err = mesh_llm_events::console_err();
         writeln!(
@@ -204,7 +205,6 @@ async fn update(name: &str) -> Result<()> {
     let mut progress = CliPluginProgress::default();
     let outcome = update_plugin(name, &options, &mut progress).await?;
     progress.finish();
-    report_exchange_access(&outcome.metadata)?;
     if outcome.changed {
         let mut err = mesh_llm_events::console_err();
         writeln!(
@@ -212,6 +212,10 @@ async fn update(name: &str) -> Result<()> {
             "✅ Updated {} to {}",
             outcome.metadata.name, outcome.metadata.installed_version
         )?;
+    } else {
+        // Nothing landed, so nothing was disclosed on the way: say what the
+        // installed version has.
+        report_exchange_access(&outcome.metadata)?;
     }
     Ok(())
 }
@@ -281,18 +285,35 @@ fn set_enabled_in(
 fn report_exchange_access(
     metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
 ) -> Result<()> {
-    if let Some(access) = metadata
-        .manifest
-        .as_ref()
-        .and_then(|m| m.openai_exchange_hook.as_ref())
-    {
-        writeln!(
-            mesh_llm_events::console_err(),
-            "{}",
-            access.access_summary()
-        )?;
+    if let Some(summary) = exchange_access_summary(metadata) {
+        writeln!(mesh_llm_events::console_err(), "{summary}")?;
     }
     Ok(())
+}
+
+/// The installation notice for what `metadata`'s package was granted; none
+/// for a package that requests no OpenAI lifecycle access.
+fn exchange_access_summary(
+    metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+) -> Option<String> {
+    metadata
+        .manifest
+        .as_ref()
+        .and_then(|manifest| manifest.openai_exchange_hook.as_ref())
+        .map(|access| access.access_summary())
+}
+
+/// What is said when a package lands (`PluginProgressEvent::Installed` /
+/// `Updated`): the landing line, then the disclosure of what it was granted.
+/// Printed as each package lands, so a plugin that stays installed when a
+/// later requirement fails has still had its access disclosed.
+fn landed_lines(
+    landing: String,
+    metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+) -> Vec<String> {
+    let mut lines = vec![landing];
+    lines.extend(exchange_access_summary(metadata));
+    lines
 }
 
 fn delete(name: &str) -> Result<()> {
@@ -503,6 +524,19 @@ impl CliPluginProgress {
         self.spinner = Some(start_spinner(&message));
     }
 
+    /// A package landed: print `landing` and disclose what it was granted.
+    fn landed(
+        &mut self,
+        landing: String,
+        metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+    ) {
+        self.finish();
+        let mut err = mesh_llm_events::console_err();
+        for line in landed_lines(landing, metadata) {
+            let _ = writeln!(err, "{line}");
+        }
+    }
+
     fn started_download(&mut self, asset: String, total_bytes: Option<u64>) {
         self.finish();
         self.active_download = Some(asset.clone());
@@ -568,15 +602,23 @@ impl PluginProgressReporter for CliPluginProgress {
             PluginProgressEvent::Extracting { asset } => {
                 self.spinner(format!("Installing {asset}"));
             }
-            PluginProgressEvent::Installed { name, version } => {
-                self.finish();
-                let mut err = mesh_llm_events::console_err();
-                let _ = writeln!(err, "📦 Installed {name} {version}");
+            PluginProgressEvent::Installed { installed } => {
+                self.landed(
+                    format!(
+                        "📦 Installed {} {}",
+                        installed.name, installed.installed_version
+                    ),
+                    &installed,
+                );
             }
-            PluginProgressEvent::Updated { name, from, to } => {
-                self.finish();
-                let mut err = mesh_llm_events::console_err();
-                let _ = writeln!(err, "⬆️  Updated {name} {from} -> {to}");
+            PluginProgressEvent::Updated { installed, from } => {
+                self.landed(
+                    format!(
+                        "⬆️  Updated {} {from} -> {}",
+                        installed.name, installed.installed_version
+                    ),
+                    &installed,
+                );
             }
             PluginProgressEvent::AlreadyCurrent { name, version } => {
                 self.finish();
@@ -587,16 +629,6 @@ impl PluginProgressReporter for CliPluginProgress {
                 self.finish();
                 let mut err = mesh_llm_events::console_err();
                 let _ = writeln!(err, "🔗 {plugin} requires {required}; installing it");
-            }
-            PluginProgressEvent::RequirementInstalled { plugin, installed } => {
-                self.finish();
-                let _ = report_exchange_access(&installed);
-                let mut err = mesh_llm_events::console_err();
-                let _ = writeln!(
-                    err,
-                    "✅ Installed {} {} (required by {plugin})",
-                    installed.name, installed.installed_version
-                );
             }
         }
     }
@@ -872,6 +904,46 @@ url = "unix:///run/remote.sock"
         };
         store.save(&metadata).unwrap();
         metadata
+    }
+
+    #[test]
+    fn a_landing_discloses_what_the_package_was_granted() {
+        // The lines printed on `Installed`/`Updated`, i.e. when a package
+        // lands and before its requirements are attempted, carry the access
+        // disclosure, so a root kept after a failed requirement has had its
+        // grants disclosed.
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let mut root = installed_plugin(&store, "root", &["needed"]);
+        root.manifest = Some(mesh_llm_plugin_manager::InstalledPluginManifestMetadata {
+            openai_exchange_hook: Some(
+                mesh_llm_plugin_manager::store::InstalledOpenAiExchangeAccess {
+                    contract_version: 1,
+                    request_body: true,
+                    ..Default::default()
+                },
+            ),
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
+            config_schema: None,
+            web_ui: None,
+        });
+        let lines = landed_lines("📦 Installed root v0.1.0".to_string(), &root);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0], "📦 Installed root v0.1.0");
+        assert!(
+            lines[1].starts_with("OpenAI lifecycle v1 access: original prompts."),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[1].contains("Installing grants these requests"));
+
+        // A package requesting nothing gets the landing line only.
+        let plain = installed_plugin(&store, "needed", &[]);
+        assert_eq!(
+            landed_lines("📦 Installed needed v0.1.0".to_string(), &plain),
+            vec!["📦 Installed needed v0.1.0".to_string()]
+        );
     }
 
     #[test]

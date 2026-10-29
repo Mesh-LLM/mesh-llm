@@ -87,6 +87,59 @@ pub fn ensure_not_required(store: &PluginStore, name: &str, action: &str) -> Res
     )
 }
 
+/// Refuse a package before it is put in place when its `requires` would close
+/// a cycle through the installed plugins: some installed plugin that `name`
+/// would require already requires `name`, directly or through others. Checked
+/// on the staged package, so a refused install or update leaves the installed
+/// executable and metadata as they were.
+pub fn ensure_no_cycle_through_installed(
+    store: &PluginStore,
+    name: &str,
+    requires: &[String],
+) -> Result<()> {
+    let installed: BTreeMap<String, Vec<String>> = store
+        .list()?
+        .into_iter()
+        .map(|plugin| (plugin.name, plugin.requires))
+        .collect();
+    // Each visited plugin's dependent on the path from `name`, so the cycle
+    // can be spelled out.
+    let mut parent: BTreeMap<String, String> = BTreeMap::new();
+    let mut pending: Vec<(String, String)> = requires
+        .iter()
+        .rev()
+        .map(|required| (name.to_string(), required.clone()))
+        .collect();
+    while let Some((dependent, required)) = pending.pop() {
+        if required == name {
+            // `dependent` back to `name` through `parent`, then forward.
+            let mut path = Vec::new();
+            let mut current = Some(dependent.as_str());
+            while let Some(node) = current {
+                path.push(node.to_string());
+                current = parent.get(node).map(String::as_str);
+            }
+            path.reverse();
+            path.push(name.to_string());
+            bail!(
+                "plugin requirements form a cycle: {}; {name} was not installed",
+                path.join(" requires ")
+            );
+        }
+        if parent.contains_key(&required) {
+            continue;
+        }
+        parent.insert(required.clone(), dependent);
+        let Some(next) = installed.get(&required) else {
+            continue;
+        };
+        for next in next.iter().rev() {
+            pending.push((required.clone(), next.clone()));
+        }
+    }
+    Ok(())
+}
+
 /// Installs one missing requirement: `required`, needed by `dependent`.
 /// Returns the metadata the install recorded.
 pub trait RequirementInstaller {
@@ -320,6 +373,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(installer.installed, vec!["a->b", "b->c"]);
+    }
+
+    #[test]
+    fn a_candidate_whose_requirements_lead_back_to_it_is_refused_before_it_lands() {
+        // Installed: b requires c, c requires a (a never landed). A candidate
+        // a requiring b would close a→b→c→a.
+        let temp = tempfile::tempdir().unwrap();
+        let store = store_with(
+            temp.path(),
+            &[plugin("b", true, &["c"]), plugin("c", false, &["a"])],
+        );
+        let error = ensure_no_cycle_through_installed(&store, "a", &["b".to_string()]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "plugin requirements form a cycle: a requires b requires c requires a; a was not installed"
+        );
+        // Requiring c directly closes a→c→a the same way.
+        assert!(ensure_no_cycle_through_installed(&store, "a", &["c".to_string()]).is_err());
+    }
+
+    #[test]
+    fn a_candidate_is_accepted_when_nothing_installed_requires_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store_with(
+            temp.path(),
+            &[plugin("b", true, &["c"]), plugin("c", true, &[])],
+        );
+        ensure_no_cycle_through_installed(&store, "a", &["b".to_string(), "d".to_string()])
+            .unwrap();
+        // An update that keeps a's own old entry in the store is judged on the
+        // candidate's requirements, not the stored ones.
+        store.save(&plugin("a", true, &["c"])).unwrap();
+        ensure_no_cycle_through_installed(&store, "a", &["b".to_string()]).unwrap();
     }
 
     #[test]

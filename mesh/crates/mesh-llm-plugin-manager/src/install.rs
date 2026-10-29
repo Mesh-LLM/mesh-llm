@@ -6,7 +6,7 @@ use reqwest::Client;
 use sha2::Digest;
 
 use crate::{
-    archive::{ExtractedPluginArchive, extract_plugin_archive},
+    archive::{ExtractedPluginArchive, stage_plugin_archive},
     catalog::PluginCatalog,
     github::{GitHubReleaseAsset, GitHubReleaseClient},
     select_plugin_asset,
@@ -58,14 +58,18 @@ pub enum PluginProgressEvent {
     Extracting {
         asset: String,
     },
+    /// A package landed: it is in place and recorded. Emitted for the plugin
+    /// the operator named and for each requirement installed for it, before
+    /// anything else is attempted, so what `installed` was granted (its
+    /// manifest's access requests) can be disclosed even when a later step
+    /// fails.
     Installed {
-        name: String,
-        version: String,
+        installed: Box<InstalledPluginMetadata>,
     },
+    /// Like `Installed`, replacing version `from`.
     Updated {
-        name: String,
+        installed: Box<InstalledPluginMetadata>,
         from: String,
-        to: String,
     },
     AlreadyCurrent {
         name: String,
@@ -76,12 +80,6 @@ pub enum PluginProgressEvent {
     InstallingRequirement {
         plugin: String,
         required: String,
-    },
-    /// A requirement of `plugin` was installed; its granted access is
-    /// reported like a plugin the operator named.
-    RequirementInstalled {
-        plugin: String,
-        installed: Box<InstalledPluginMetadata>,
     },
 }
 
@@ -143,8 +141,8 @@ async fn install_requirements(
     crate::requirements::install_missing(&store, plugin, &mut installer).await
 }
 
-/// Installs a missing requirement from the catalog, reporting the install and
-/// the access it was granted as it lands.
+/// Installs a missing requirement from the catalog; `install_resolved_plugin`
+/// reports it `Installed` as it lands, like the plugin the operator named.
 struct CatalogRequirementInstaller<'a, P: PluginProgressReporter> {
     options: &'a PluginInstallOptions,
     progress: &'a mut P,
@@ -174,11 +172,6 @@ impl<P: PluginProgressReporter> crate::requirements::RequirementInstaller
         let installed = install_resolved_plugin(resolved, self.options, self.progress, None)
             .await
             .with_context(context)?;
-        self.progress
-            .report(PluginProgressEvent::RequirementInstalled {
-                plugin: dependent,
-                installed: Box::new(installed.metadata.clone()),
-            });
         Ok(installed.metadata)
     }
 }
@@ -241,8 +234,7 @@ pub fn install_plugin_archive(
     };
     store.save(&metadata)?;
     progress.report(PluginProgressEvent::Installed {
-        name: metadata.name.clone(),
-        version: metadata.installed_version.clone(),
+        installed: Box::new(metadata.clone()),
     });
     Ok(InstallOutcome {
         metadata,
@@ -252,20 +244,28 @@ pub fn install_plugin_archive(
 
 /// Every install path extracts through here, so the executable it checks is
 /// named for `options.target`, as `InstalledPluginMetadata::executable_path`
-/// names the one the host launches.
+/// names the one the host launches, and so a package whose `requires` would
+/// close a cycle through the installed plugins is refused while still staged:
+/// neither the installed package nor its metadata changes.
 pub(crate) fn extract_for_install(
     archive_path: &std::path::Path,
     archive_ext: ArchiveExt,
     name: &str,
     options: &PluginInstallOptions,
 ) -> Result<ExtractedPluginArchive> {
-    extract_plugin_archive(
+    let staged = stage_plugin_archive(
         archive_path,
         archive_ext,
         options.target.executable_suffix(),
         name,
         &options.install_root,
-    )
+    )?;
+    crate::requirements::ensure_no_cycle_through_installed(
+        &PluginStore::new(&options.store_root),
+        name,
+        &staged.requires,
+    )?;
+    staged.commit()
 }
 
 fn local_archive_ext(path: &std::path::Path) -> Result<ArchiveExt> {
@@ -422,14 +422,12 @@ async fn install_resolved_plugin(
 
     if let Some(current) = current {
         progress.report(PluginProgressEvent::Updated {
-            name: metadata.name.clone(),
+            installed: Box::new(metadata.clone()),
             from: current.installed_version,
-            to: metadata.installed_version.clone(),
         });
     } else {
         progress.report(PluginProgressEvent::Installed {
-            name: metadata.name.clone(),
-            version: metadata.installed_version.clone(),
+            installed: Box::new(metadata.clone()),
         });
     }
 
@@ -547,13 +545,14 @@ fn required_plugin_asset_sha256(asset: &GitHubReleaseAsset) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{collections::BTreeMap, path::Path};
 
     use flate2::{Compression, write::GzEncoder};
     use tempfile::TempDir;
 
     use super::*;
     use crate::ArchiveExt;
+    use crate::archive::extract_plugin_archive;
     use crate::store::{
         InstalledPluginApplyMode, InstalledPluginConditionOperator, InstalledPluginConditionValue,
         InstalledPluginConditionalDisable, InstalledPluginConfigSchema,
@@ -917,8 +916,8 @@ mod tests {
         assert!(PluginStore::new(&options.store_root).load("demo").is_ok());
         assert!(matches!(
             events.last(),
-            Some(PluginProgressEvent::Installed { name, version })
-                if name == "demo" && version == "0.1.0-dev"
+            Some(PluginProgressEvent::Installed { installed })
+                if installed.name == "demo" && installed.installed_version == "0.1.0-dev"
         ));
     }
 
@@ -1050,6 +1049,196 @@ mod tests {
                 .map(|missing| missing.required)
                 .collect::<Vec<_>>(),
             vec!["pay-lightning".to_string()]
+        );
+    }
+
+    /// A linux/x86_64 archive for `name` whose `plugin.toml` requires
+    /// `requires`, with `executable_body` as its executable.
+    fn write_requiring_archive(
+        archive_path: &Path,
+        name: &str,
+        requires: &[&str],
+        executable_body: &[u8],
+    ) {
+        let requires = requires
+            .iter()
+            .map(|required| format!("\"{required}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let plugin_toml = format!("name = \"{name}\"\nrequires = [{requires}]\n");
+        write_tar_gz(
+            archive_path,
+            name,
+            &[
+                ("plugin.toml", plugin_toml.as_bytes()),
+                (name, executable_body),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// Everything on disk under `install_path`, by relative path, with
+    /// contents; what a refused install must leave untouched.
+    fn package_contents(install_path: &Path) -> BTreeMap<String, Vec<u8>> {
+        let mut contents = BTreeMap::new();
+        for entry in fs::read_dir(install_path).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            contents.insert(name, fs::read(entry.path()).unwrap());
+        }
+        contents
+    }
+
+    #[test]
+    fn installing_a_root_that_closes_a_cycle_through_an_installed_plugin_is_refused() {
+        // b is installed and requires a (a retained partial state: a never
+        // landed). Installing a with requires = [b] would close b→a→b.
+        let temp = tempfile::tempdir().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let b_archive = temp.path().join("b.tar.gz");
+        write_requiring_archive(&b_archive, "b", &["a"], b"b-binary");
+        let b = install_plugin_archive("b", "0.1.0", &b_archive, &options, &mut |_| {})
+            .unwrap()
+            .metadata;
+        let b_contents = package_contents(&b.install_path);
+
+        let a_archive = temp.path().join("a.tar.gz");
+        write_requiring_archive(&a_archive, "a", &["b"], b"a-binary");
+        let error =
+            install_plugin_archive("a", "0.1.0", &a_archive, &options, &mut |_| {}).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("cycle: a requires b requires a; a was not installed"),
+            "{error:#}"
+        );
+
+        let store = PluginStore::new(&options.store_root);
+        assert!(store.load_optional("a").unwrap().is_none());
+        assert!(!options.install_root.join("a").exists());
+        assert_eq!(store.load("b").unwrap(), b);
+        assert_eq!(package_contents(&b.install_path), b_contents);
+        // Nothing holds b: it can still be deleted.
+        assert!(crate::requirements::ensure_not_required(&store, "b", "delete").is_ok());
+    }
+
+    #[test]
+    fn updating_a_root_so_that_it_closes_a_cycle_keeps_the_installed_package_and_metadata() {
+        // a 0.1.0 requires nothing; b requires a. An a 0.2.0 that requires b
+        // would close a→b→a, so the update is refused and a 0.1.0 stays:
+        // same executable bytes, same metadata.
+        let temp = tempfile::tempdir().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let a_archive = temp.path().join("a-0.1.0.tar.gz");
+        write_requiring_archive(&a_archive, "a", &[], b"a-0.1.0");
+        let a = install_plugin_archive("a", "0.1.0", &a_archive, &options, &mut |_| {})
+            .unwrap()
+            .metadata;
+        let b_archive = temp.path().join("b.tar.gz");
+        write_requiring_archive(&b_archive, "b", &["a"], b"b-binary");
+        install_plugin_archive("b", "0.1.0", &b_archive, &options, &mut |_| {}).unwrap();
+        let a_contents = package_contents(&a.install_path);
+        assert_eq!(
+            a_contents.get("a").map(Vec::as_slice),
+            Some(&b"a-0.1.0"[..])
+        );
+
+        let a_update = temp.path().join("a-0.2.0.tar.gz");
+        write_requiring_archive(&a_update, "a", &["b"], b"a-0.2.0");
+        let mut events = Vec::new();
+        let error = install_plugin_archive("a", "0.2.0", &a_update, &options, &mut |event| {
+            events.push(event)
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("cycle"), "{error:#}");
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, PluginProgressEvent::Installed { .. })),
+            "{events:?}"
+        );
+
+        let store = PluginStore::new(&options.store_root);
+        assert_eq!(store.load("a").unwrap(), a);
+        assert_eq!(package_contents(&a.install_path), a_contents);
+        assert!(crate::requirements::ensure_not_required(&store, "b", "delete").is_ok());
+    }
+
+    /// A manifest requesting prompt access: what installing the package
+    /// grants, and what the installer must disclose.
+    fn manifest_requesting_prompts() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "openai_exchange_hook": {
+                "contract_version": 1,
+                "request_body": true,
+                "response_body": false,
+                "admission": false
+            }
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_root_is_reported_landed_with_its_grants_before_a_requirement_fails() {
+        // The root requests prompt access and requires a plugin the catalog
+        // cannot be fetched for (nothing listens on the catalog port). The
+        // root stays installed, so its `Installed` event, carrying the
+        // metadata the disclosure is made from, must precede the failure.
+        let temp = tempfile::tempdir().unwrap();
+        let mut options = options_for(temp.path(), "linux", "x86_64");
+        options.catalog_url = "http://127.0.0.1:1/plugins.jsonl".to_string();
+        let archive_path = temp.path().join("root.tar.gz");
+        let manifest = manifest_requesting_prompts();
+        write_tar_gz(
+            &archive_path,
+            "root",
+            &[
+                ("plugin.toml", b"name = \"root\"\nrequires = [\"needed\"]\n"),
+                ("root", b""),
+                ("plugin-manifest.json", manifest.as_slice()),
+            ],
+        )
+        .unwrap();
+
+        let mut events = Vec::new();
+        let outcome =
+            install_plugin_archive("root", "0.1.0", &archive_path, &options, &mut |event| {
+                events.push(event)
+            })
+            .unwrap();
+        let error = install_plugin_requirements(&outcome.metadata, &options, &mut |event| {
+            events.push(event)
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("install needed, required by root"),
+            "{error:#}"
+        );
+
+        let landed = events
+            .iter()
+            .position(|event| matches!(event, PluginProgressEvent::Installed { .. }))
+            .expect("the root's landing is reported");
+        let requirement = events
+            .iter()
+            .position(|event| matches!(event, PluginProgressEvent::InstallingRequirement { .. }))
+            .expect("the requirement install is reported");
+        assert!(landed < requirement, "{events:?}");
+        let PluginProgressEvent::Installed { installed } = &events[landed] else {
+            unreachable!()
+        };
+        let access = installed
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.openai_exchange_hook.as_ref())
+            .expect("the landed metadata carries the access requests to disclose");
+        assert!(access.request_body);
+        assert!(access.access_summary().contains("original prompts"));
+        // Retained, as the operator must be told.
+        assert!(
+            PluginStore::new(&options.store_root)
+                .load_optional("root")
+                .unwrap()
+                .is_some()
         );
     }
 

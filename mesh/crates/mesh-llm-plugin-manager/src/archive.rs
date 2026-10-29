@@ -28,13 +28,45 @@ pub struct ExtractedPluginArchive {
     pub requires: Vec<String>,
 }
 
-pub fn extract_plugin_archive(
+/// A plugin archive extracted and validated in a staging directory, not yet
+/// in place. What the installer must know before it commits (the plugins the
+/// package requires) is readable here; `commit` replaces the installed
+/// directory, and dropping it instead leaves the install as it was.
+pub struct StagedPluginArchive {
+    staging: tempfile::TempDir,
+    extracted_root: PathBuf,
+    install_dir: PathBuf,
+    plugin_name: String,
+    pub manifest: Option<InstalledPluginManifestMetadata>,
+    /// Installed plugins this one requires, from its `plugin.toml`.
+    pub requires: Vec<String>,
+}
+
+impl StagedPluginArchive {
+    /// Put the staged package in place of any installed one.
+    pub fn commit(self) -> Result<ExtractedPluginArchive> {
+        let final_dir = self.install_dir.join(&self.plugin_name);
+        fs::create_dir_all(&self.install_dir)
+            .with_context(|| format!("create plugin install dir {}", self.install_dir.display()))?;
+        replace_plugin_dir(&self.extracted_root, &final_dir, &self.plugin_name)?;
+        drop(self.staging);
+        Ok(ExtractedPluginArchive {
+            install_path: final_dir,
+            manifest: self.manifest,
+            requires: self.requires,
+        })
+    }
+}
+
+/// Extract `archive_path` to staging and validate it as plugin `plugin_name`,
+/// without touching `install_dir`.
+pub fn stage_plugin_archive(
     archive_path: &Path,
     archive_ext: ArchiveExt,
     executable_suffix: &str,
     plugin_name: &str,
     install_dir: &Path,
-) -> Result<ExtractedPluginArchive> {
+) -> Result<StagedPluginArchive> {
     let staging = tempfile::Builder::new()
         .prefix("mesh-plugin-extract-")
         .tempdir()
@@ -49,15 +81,35 @@ pub fn extract_plugin_archive(
     validate_plugin_root(&extracted_root, plugin_name, executable_suffix)?;
     let manifest = load_packaged_manifest(&extracted_root, plugin_name)?;
     let requires = read_plugin_toml(&extracted_root, plugin_name)?.requires;
-    let final_dir = install_dir.join(plugin_name);
-    fs::create_dir_all(install_dir)
-        .with_context(|| format!("create plugin install dir {}", install_dir.display()))?;
-    replace_plugin_dir(&extracted_root, &final_dir, plugin_name)?;
-    Ok(ExtractedPluginArchive {
-        install_path: final_dir,
+    Ok(StagedPluginArchive {
+        staging,
+        extracted_root,
+        install_dir: install_dir.to_path_buf(),
+        plugin_name: plugin_name.to_string(),
         manifest,
         requires,
     })
+}
+
+/// Stage and commit in one step: extract, validate, and put in place. Product
+/// code goes through `install::extract_for_install`, which checks the staged
+/// package against the installed plugins before committing it.
+#[cfg(test)]
+pub fn extract_plugin_archive(
+    archive_path: &Path,
+    archive_ext: ArchiveExt,
+    executable_suffix: &str,
+    plugin_name: &str,
+    install_dir: &Path,
+) -> Result<ExtractedPluginArchive> {
+    stage_plugin_archive(
+        archive_path,
+        archive_ext,
+        executable_suffix,
+        plugin_name,
+        install_dir,
+    )?
+    .commit()
 }
 
 fn load_packaged_manifest(
