@@ -9,6 +9,10 @@
 //! the first. A KV-cache change the replay cannot reproduce (a shared
 //! prefix, a position shift, a state load, compaction) makes the sequence
 //! unreceiptable until it is cleared.
+//!
+//! A replay costs about what serving the turn did, so a receipt is replayed
+//! for at most [`MAX_REPLAYS_PER_RECEIPT`] distinct challenges, and a
+//! repeated challenge is answered from the openings already made.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ops::Range;
@@ -24,12 +28,17 @@ use crate::wire::{Challenge, LeafOpening, MatrixOpening, Opening, StageCommitmen
 
 /// Committed turns are dropped, oldest first, past this many bytes.
 pub const DEFAULT_WINDOW_BYTES: usize = 1 << 30;
+/// Distinct challenges a committed turn is replayed for, at most.
+pub const MAX_REPLAYS_PER_RECEIPT: u32 = 4;
 /// Logs of a sequence reset before their turn was committed, kept per sequence.
 const RETIRED_LOGS: usize = 4;
 /// Token id of the dummy columns that stand in for other sequences in a replay.
 const DUMMY_TOKEN: i32 = 0;
 
 mod leaves;
+mod openings;
+
+use openings::OpeningCache;
 
 /// A per-layer tensor the native recorder reports (`skippy_receipt_tensor_kind`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -256,6 +265,8 @@ struct CommittedTurn {
     events: Vec<Event>,
     tree: MerkleTree,
     bytes: usize,
+    /// Replays started for this turn.
+    replays: u32,
 }
 
 #[derive(Default)]
@@ -263,6 +274,7 @@ struct RecorderState {
     seqs: HashMap<i32, SeqState>,
     committed: VecDeque<CommittedTurn>,
     committed_bytes: usize,
+    openings: OpeningCache,
     last_error: Option<String>,
 }
 
@@ -480,6 +492,8 @@ impl Recorder {
                 })
                 .sum::<usize>();
         state.committed_bytes += bytes;
+        // a reused id names a new turn; its old openings no longer apply
+        state.openings.forget(receipt_id);
         state.committed.push_back(CommittedTurn {
             receipt_id: receipt_id.to_owned(),
             seq,
@@ -488,21 +502,46 @@ impl Recorder {
             events,
             tree,
             bytes,
+            replays: 0,
         });
         while state.committed_bytes > self.window_bytes && state.committed.len() > 1 {
             if let Some(old) = state.committed.pop_front() {
                 state.committed_bytes -= old.bytes;
+                state.openings.forget(&old.receipt_id);
             }
         }
         Ok(commitment)
     }
 
-    /// Opens the challenged leaves of a committed turn by replaying it.
+    /// Opens the challenged leaves of a committed turn, by replaying it
+    /// unless the same challenge was opened before.
     pub fn open(&self, challenge: &Challenge, replayer: &dyn Replayer) -> Result<Opening> {
-        let layer = challenge.layer;
-        if !self.layers.contains(&layer) {
-            bail!("stage {} does not hold layer {layer}", self.stage_index);
+        if !self.layers.contains(&challenge.layer) {
+            bail!(
+                "stage {} does not hold layer {}",
+                self.stage_index,
+                challenge.layer
+            );
         }
+        let cached = self.lock().openings.get(challenge);
+        if let Some(opening) = cached {
+            return Ok(Opening::clone(&opening));
+        }
+        let opening = Arc::new(self.replay_opening(challenge, replayer)?);
+        let mut state = self.lock();
+        if state
+            .committed
+            .iter()
+            .any(|turn| turn.receipt_id == challenge.receipt_id)
+        {
+            state.openings.insert(challenge.clone(), opening.clone());
+        }
+        drop(state);
+        Ok(Arc::unwrap_or_clone(opening))
+    }
+
+    fn replay_opening(&self, challenge: &Challenge, replayer: &dyn Replayer) -> Result<Opening> {
+        let layer = challenge.layer;
         let plan = self.plan_replay(challenge)?;
         let replayed: BTreeMap<u32, ReplayedLayer> = replayer
             .replay(plan.seq, layer, &plan.steps)?
@@ -559,10 +598,10 @@ impl Recorder {
     fn plan_replay(&self, challenge: &Challenge) -> Result<ReplayPlan> {
         let layer = challenge.layer;
         let slots = self.slots();
-        let state = self.lock();
+        let mut state = self.lock();
         let turn = state
             .committed
-            .iter()
+            .iter_mut()
             .rev()
             .find(|t| t.receipt_id == challenge.receipt_id)
             .with_context(|| {
@@ -571,6 +610,14 @@ impl Recorder {
                     challenge.receipt_id
                 )
             })?;
+        if turn.replays >= MAX_REPLAYS_PER_RECEIPT {
+            bail!(
+                "receipt {} was already replayed for {MAX_REPLAYS_PER_RECEIPT} challenges",
+                challenge.receipt_id
+            );
+        }
+        turn.replays += 1;
+        let turn = &*turn;
         let mut expected = Vec::with_capacity(challenge.positions.len());
         let mut capture: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
         for &position in &challenge.positions {

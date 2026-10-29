@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use super::*;
@@ -94,6 +94,7 @@ fn record(recorder: &Recorder, record: UbatchRecord) {
 #[derive(Default)]
 struct FakeReplayer {
     steps: RefCell<Vec<ReplayStep>>,
+    replays: Cell<u32>,
     corrupt: bool,
 }
 
@@ -105,6 +106,7 @@ impl Replayer for FakeReplayer {
         steps: &[ReplayStep],
     ) -> Result<Vec<(u32, ReplayedLayer)>> {
         *self.steps.borrow_mut() = steps.to_vec();
+        self.replays.set(self.replays.get() + 1);
         let mut out = Vec::new();
         for step in steps {
             let ReplayStep::Decode { record, capture } = step else {
@@ -271,4 +273,75 @@ fn a_gap_in_the_turn_is_refused() {
     record(&recorder, ubatch(&[(1, 0)], &[0], true));
     record(&recorder, ubatch(&[(1, 2)], &[2], true));
     assert!(recorder.commit("r", 1, 0..3).is_err());
+}
+
+#[test]
+fn a_repeated_challenge_is_answered_without_a_replay() {
+    let recorder = two_lane_turn();
+    let stage = recorder.commit("r1", 7, 0..4).unwrap();
+    let challenge = Challenge {
+        receipt_id: "r1".into(),
+        layer: 3,
+        positions: vec![1, 3],
+    };
+    let replayer = FakeReplayer::default();
+    let first = recorder.open(&challenge, &replayer).unwrap();
+    let again = recorder.open(&challenge, &replayer).unwrap();
+    assert_eq!(replayer.replays.get(), 1);
+    assert_eq!(first, again);
+    verify_paths(&receipt(stage, 0..4), &challenge, &again).unwrap();
+}
+
+#[test]
+fn a_new_turn_under_the_same_id_drops_its_old_openings() {
+    let recorder = two_lane_turn();
+    recorder.commit("r1", 7, 0..4).unwrap();
+    let challenge = Challenge {
+        receipt_id: "r1".into(),
+        layer: 2,
+        positions: vec![3],
+    };
+    let replayer = FakeReplayer::default();
+    recorder.open(&challenge, &replayer).unwrap();
+    record(&recorder, ubatch(&[(7, 4)], &[4], true));
+    recorder.commit("r1", 7, 4..5).unwrap();
+    let error = recorder.open(&challenge, &replayer).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("outside the receipt"),
+        "{error:#}"
+    );
+    assert_eq!(replayer.replays.get(), 1);
+}
+
+#[test]
+fn a_receipt_is_replayed_for_a_bounded_number_of_challenges() {
+    let recorder = two_lane_turn();
+    recorder.commit("r1", 7, 0..4).unwrap();
+    let replayer = FakeReplayer::default();
+    let positions = [vec![0], vec![1], vec![2], vec![3], vec![0, 1]];
+    for (i, positions) in positions.into_iter().enumerate() {
+        let challenge = Challenge {
+            receipt_id: "r1".into(),
+            layer: 2,
+            positions,
+        };
+        let opened = recorder.open(&challenge, &replayer);
+        if i < MAX_REPLAYS_PER_RECEIPT as usize {
+            opened.unwrap();
+        } else {
+            let error = opened.unwrap_err();
+            assert!(
+                format!("{error:#}").contains("already replayed"),
+                "{error:#}"
+            );
+        }
+    }
+    // an opening already made is still answered
+    let challenge = Challenge {
+        receipt_id: "r1".into(),
+        layer: 2,
+        positions: vec![0],
+    };
+    recorder.open(&challenge, &replayer).unwrap();
+    assert_eq!(replayer.replays.get(), MAX_REPLAYS_PER_RECEIPT);
 }

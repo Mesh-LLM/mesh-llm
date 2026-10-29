@@ -8,8 +8,8 @@ The crate owns:
 - the wire shapes of a receipt, a challenge, and an opening (`wire`);
 - leaf hashing and the BLAKE3 Merkle tree over a stage's turn (`commitment`);
 - the node-side recorder that hashes each ubatch's leaves, keeps a replay log
-  per sequence, commits a turn, and opens challenged leaves by replay
-  (`recorder`);
+  per sequence, commits a turn, opens challenged leaves by replay, and keeps
+  the openings it made for repeated challenges (`recorder`);
 - the client side: drawing a challenge (`challenge`), reading rows and norms of
   the claimed GGUF (`weights`), checking an opening (`audit`), and checking the
   operations that join its matmuls to the residual stream (`glue`).
