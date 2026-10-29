@@ -11,6 +11,7 @@ mod tests;
 mod token_generation;
 // Test-only: re-export of the outstanding-capture guard used by
 // iteration_scheduler tests (see token_generation::exact_state_recording).
+pub(in crate::frontend) use dflash_decode::AdaptiveBlocks;
 #[cfg(test)]
 pub(crate) use token_generation::CaptureTaskOutstandingGuard;
 #[cfg(test)]

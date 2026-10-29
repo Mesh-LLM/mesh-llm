@@ -292,6 +292,11 @@ impl StageOpenAiBackend {
                         ngram_max: self.ngram_max,
                         native_mtp_enabled: split_dflash.is_some()
                             || (config.native_mtp_enabled && gated_speculative.native_mtp.enabled),
+                        split_dflash_draft: split_dflash
+                            .is_some()
+                            .then(|| gated_speculative.dflash.as_ref())
+                            .flatten()
+                            .map(|dflash| dflash.draft_model_path.as_path()),
                         prompt_token_ids: &prompt_token_ids,
                         recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids
                             .as_deref(),

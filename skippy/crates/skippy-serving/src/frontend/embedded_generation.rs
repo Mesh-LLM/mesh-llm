@@ -945,6 +945,14 @@ impl StageOpenAiBackend {
             let mut pipeline_epoch = 0u64;
             let mut composite_proposal_buffer = None;
             let mut adaptive_verify_window = AdaptiveVerifyWindow::new(native_mtp_options);
+            // A split DFlash target sizes each block, down to a serial step,
+            // from the window and serial-step times stage 0 measures.
+            let mut split_dflash_blocks = request
+                .split_dflash_draft
+                .and_then(crate::frontend::local_generation::AdaptiveBlocks::for_split);
+            // A block length chosen while no draft was in hand, applied to the
+            // draft the next reply brings.
+            let mut split_dflash_owed_drafts = None;
             while decoded_tokens < request.max_tokens as usize {
                 let decode_step = saturating_u32(decoded_tokens);
                 if fused_reached_stop {
@@ -964,6 +972,18 @@ impl StageOpenAiBackend {
                 let effective_native_mtp_options = native_mtp_options;
                 let native_mtp_remaining =
                     (request.max_tokens as usize).saturating_sub(decoded_tokens);
+                // Drafts to verify this step on a split DFlash target; 0 is a
+                // serial step.
+                let split_dflash_drafts = split_dflash_blocks.as_mut().map(|blocks| {
+                    blocks.finish_serial_step();
+                    split_dflash_owed_drafts.take().unwrap_or_else(|| {
+                        blocks.next_drafts(
+                            native_mtp_options
+                                .max_draft_tokens
+                                .min(native_mtp_remaining.saturating_sub(1)),
+                        )
+                    })
+                });
                 let mut pipeline_seed = None;
                 if pipelined_decode_enabled
                     && pipelined.is_none()
@@ -1079,11 +1099,32 @@ impl StageOpenAiBackend {
                     && native_mtp_reject_cooldown_remaining == 0
                     && native_mtp_remaining >= 2
                 {
-                    let pending_native_mtp_draft = (request.native_mtp_enabled
+                    let mut pending_native_mtp_draft = (request.native_mtp_enabled
                         && composite_proposal_buffer.is_none())
                     .then(|| native_mtp.take_pending_draft())
                     .flatten();
-                    match self.execute_native_mtp_verify_window(
+                    let mut split_dflash_window = None;
+                    match (split_dflash_drafts, pending_native_mtp_draft.as_mut()) {
+                        (Some(0), _) => pending_native_mtp_draft = None,
+                        (Some(drafts), None) => split_dflash_owed_drafts = Some(drafts),
+                        (drafts, Some(pending)) if request.split_dflash_draft.is_some() => {
+                            if let Some(drafts) = drafts {
+                                pending.tokens.truncate(drafts);
+                            }
+                            split_dflash_window = Some((
+                                pending.tokens.len(),
+                                decoded_tokens,
+                                std::time::Instant::now(),
+                                [
+                                    decode_stage0_compute_ms,
+                                    decode_forward_write_ms,
+                                    decode_downstream_wait_ms,
+                                ],
+                            ));
+                        }
+                        _ => {}
+                    }
+                    let window_control = self.execute_native_mtp_verify_window(
                         &request,
                         downstream,
                         &session_key,
@@ -1119,7 +1160,46 @@ impl StageOpenAiBackend {
                         &mut decode_forward_write_ms,
                         &mut decode_downstream_wait_ms,
                         &mut on_token,
-                    )? {
+                    )?;
+                    if let Some((drafts, decoded_before, started, before)) = split_dflash_window
+                        && !matches!(window_control, NativeMtpVerifyWindowControl::NoProposal)
+                    {
+                        // A window commits its accepted drafts plus the
+                        // target's own token.
+                        let accepted = decoded_tokens
+                            .saturating_sub(decoded_before)
+                            .saturating_sub(1)
+                            .min(drafts);
+                        let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
+                        if let Some(blocks) = split_dflash_blocks.as_mut() {
+                            blocks.record(
+                                drafts + 1,
+                                elapsed_ms * 1_000.0,
+                                // The final stage drafts inside the window's reply.
+                                0.0,
+                                drafts,
+                                accepted,
+                            );
+                        }
+                        // Per-window costs for the response timings: stage 0's
+                        // verify, its write, and the wait for the rest of the
+                        // split (hops, later stages' verify, the next draft).
+                        let stats = &mut speculative_stats;
+                        stats.windows += 1;
+                        stats.draft_tokens += drafts;
+                        stats.accepted_tokens += accepted;
+                        stats.rejected_tokens += drafts - accepted;
+                        stats.primary_verify_requests += 1;
+                        stats.primary_verify_tokens += drafts + 1;
+                        stats.primary_verify_elapsed_ms += elapsed_ms;
+                        stats.primary_verify_stage0_compute_ms +=
+                            decode_stage0_compute_ms - before[0];
+                        stats.primary_verify_forward_write_ms +=
+                            decode_forward_write_ms - before[1];
+                        stats.primary_verify_downstream_wait_ms +=
+                            decode_downstream_wait_ms - before[2];
+                    }
+                    match window_control {
                         NativeMtpVerifyWindowControl::ReachedStop => break,
                         NativeMtpVerifyWindowControl::Continue => continue,
                         NativeMtpVerifyWindowControl::NoProposal => {}
@@ -1868,6 +1948,20 @@ impl StageOpenAiBackend {
                     )?
                 } else {
                     decode_message.update(decode_step_index, current)?
+                };
+                // While a split DFlash target decodes serially, its final
+                // stage need not draft blocks nobody will verify.
+                let undrafted_message;
+                let message = if split_dflash_blocks
+                    .as_ref()
+                    .is_some_and(|blocks| blocks.drafting_paused())
+                {
+                    let mut undrafted = message.clone();
+                    undrafted.state.set_native_mtp_draft_tokens(0);
+                    undrafted_message = undrafted;
+                    &undrafted_message
+                } else {
+                    message
                 };
                 let stage0_timer = PhaseTimer::start();
                 let batch_outcome = self.iteration_scheduler.execute_frame_iteration(
