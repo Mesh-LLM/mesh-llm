@@ -1,17 +1,12 @@
 //! Installation diagnostics only: package declarations never rename an install.
 use std::{fs, path::Path};
 
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-struct Declaration {
-    name: String,
-}
+use crate::plugin_toml::{PLUGIN_TOML_FILE, PluginToml};
 
 pub(crate) fn mismatch_hint(directory: &Path, requested: &str, suffix: &str) -> Option<String> {
-    let text = fs::read_to_string(directory.join("plugin.toml")).ok()?;
-    let declaration: Declaration = toml::from_str(&text).ok()?;
-    let name = declaration.name;
+    let text = fs::read_to_string(directory.join(PLUGIN_TOML_FILE)).ok()?;
+    let declaration: PluginToml = toml::from_str(&text).ok()?;
+    let name = declaration.name?;
     // Do not echo untrusted shell syntax or suggest an absent executable.
     if name == requested
         || name.is_empty()

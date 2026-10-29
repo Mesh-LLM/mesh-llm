@@ -297,6 +297,9 @@ pub struct InstalledPluginMetadata {
     pub enabled: bool,
     #[serde(default)]
     pub default_managed: bool,
+    /// Installed plugins this one requires, from its `plugin.toml`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub manifest: Option<InstalledPluginManifestMetadata>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -527,6 +530,7 @@ mod tests {
             install_path: PathBuf::from("/tmp/plugins/blackboard"),
             enabled: true,
             default_managed: false,
+            requires: Vec::new(),
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
                 operation_bindings: Vec::new(),
