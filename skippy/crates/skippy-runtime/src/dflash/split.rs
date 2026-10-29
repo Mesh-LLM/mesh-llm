@@ -10,6 +10,11 @@
 //! reads them from its input frame and injects them beside the rows it
 //! captured itself.
 //!
+//! The input of a stage's first layer is the activation it receives, which
+//! its own graph never produces, so no stage captures it there. The stage that
+//! ends on that layer forwards its own output hidden states as that layer's
+//! rows instead; they are the same values.
+//!
 //! Rows travel as BF16: hidden states keep their range, and the draft only
 //! proposes tokens the target then verifies, so feature precision can change
 //! acceptance but never output.
@@ -53,6 +58,89 @@ pub fn dflash_feature_layer(identity: &[u8; ACTIVATION_IDENTITY_BYTES]) -> Optio
         return None;
     }
     std::str::from_utf8(&suffix[..end]).ok()?.parse().ok()
+}
+
+/// Whether a stage over `layer_start..layer_end` produces the input of
+/// `layer` inside its own graph. A stage's first layer reads the activation it
+/// received, except on stage 0, whose graph computes the token embeddings.
+pub(crate) fn stage_captures_layer_input(layer: u32, layer_start: u32, layer_end: u32) -> bool {
+    (layer_start..layer_end).contains(&layer) && (layer != layer_start || layer_start == 0)
+}
+
+/// The target layer whose input a stage over `layer_start..layer_end` sends
+/// as its own output: the next stage's first layer, when the draft reads it.
+pub(crate) fn stage_forwards_output_as(
+    target_layers: &[u32],
+    layer_start: u32,
+    layer_end: u32,
+) -> Option<u32> {
+    (layer_end > layer_start && target_layers.contains(&layer_end)).then_some(layer_end)
+}
+
+/// The hidden-state rows of `frame`'s primary part, which are the input of
+/// the layer after the producing stage's range.
+fn frame_hidden_rows(frame: &ActivationFrame, n_embd: usize) -> Result<Vec<f32>> {
+    let part = frame
+        .desc
+        .parts()?
+        .first()
+        .copied()
+        .context("activation frame has no primary part")?;
+    let tokens = usize::try_from(frame.desc.token_count).context("frame tokens")?;
+    let element = match part.ggml_type {
+        crate::GGML_TYPE_F32 => 4,
+        crate::GGML_TYPE_F16 | GGML_TYPE_BF16 => 2,
+        other => bail!("primary activation part has ggml type {other}"),
+    };
+    let contiguous = part.byte_strides[..2] == [0, 0]
+        || part.byte_strides[..2] == [element as u64, (n_embd * element) as u64];
+    ensure!(
+        dflash_feature_layer(&part.identity).is_none()
+            && part.rank == 2
+            && part.token_axis == 1
+            && usize::try_from(part.dimensions[0]).ok() == Some(n_embd)
+            && contiguous,
+        "primary activation part is not {n_embd}-wide contiguous hidden-state rows"
+    );
+    let start = usize::try_from(part.payload_offset).context("primary offset")?;
+    let bytes = tokens * n_embd * element;
+    let payload = frame
+        .payload
+        .get(start..start.saturating_add(bytes))
+        .filter(|payload| payload.len() == bytes)
+        .ok_or_else(|| anyhow!("primary activation part is truncated"))?;
+    Ok(match part.ggml_type {
+        crate::GGML_TYPE_F32 => payload
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect(),
+        GGML_TYPE_BF16 => decode_bf16(payload),
+        _ => payload
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| f16_to_f32(u16::from_le_bytes(*pair)))
+            .collect(),
+    })
+}
+
+fn f16_to_f32(bits: u16) -> f32 {
+    let sign = u32::from(bits >> 15) << 31;
+    let exponent = u32::from((bits >> 10) & 0x1f);
+    let mantissa = u32::from(bits & 0x3ff);
+    let magnitude = match (exponent, mantissa) {
+        (0, 0) => 0,
+        // Subnormal: value is mantissa * 2^-24.
+        (0, _) => {
+            let value = mantissa as f32 * f32::powi(2.0, -24);
+            return if sign == 0 { value } else { -value };
+        }
+        (0x1f, _) => 0x7f80_0000 | (mantissa << 13),
+        _ => ((exponent + 112) << 23) | (mantissa << 13),
+    };
+    f32::from_bits(sign | magnitude)
 }
 
 /// Whether `frame` carries DFlash feature rows for a later stage.
@@ -257,7 +345,10 @@ fn decode_bf16(bytes: &[u8]) -> Vec<f32> {
 pub(crate) struct DFlashCapture {
     api: &'static LlamaDraftApi,
     target_ctx: *mut Opaque,
+    /// Layers whose input this stage's graph produces.
     layers: Vec<u32>,
+    /// The layer whose input is this stage's output, when the draft reads it.
+    output_layer: Option<u32>,
     n_embd: usize,
     n_batch: usize,
 }
@@ -268,6 +359,9 @@ unsafe impl Send for DFlashCapture {}
 
 impl DFlashCapture {
     fn read(&self, first_row: usize, rows: usize) -> Result<DFlashFeatureRows> {
+        if self.layers.is_empty() {
+            return Ok(DFlashFeatureRows::new(self.n_embd, rows));
+        }
         ensure!(
             first_row + rows <= self.n_batch,
             "{rows} rows from row {first_row} exceed the capture buffer of {} rows",
@@ -304,14 +398,21 @@ pub(crate) type SharedDFlashCapture = Arc<Mutex<DFlashCapture>>;
 pub(crate) struct DFlashSplitSession {
     capture: Option<Weak<Mutex<DFlashCapture>>>,
     captured: Option<DFlashFeatureRows>,
+    /// The layer, and its width, whose input this stage's output frames carry.
+    output_layer: Option<(u32, usize)>,
     /// Rows from earlier stages, and how many of them decodes have consumed.
     pub(crate) remote: Option<(DFlashFeatureRows, usize)>,
 }
 
 impl DFlashSplitSession {
     pub(crate) fn capturing(capture: &SharedDFlashCapture) -> Self {
+        let output_layer = {
+            let capture = lock_recovering(capture, |_| {});
+            capture.output_layer.map(|layer| (layer, capture.n_embd))
+        };
         Self {
             capture: Some(Arc::downgrade(capture)),
+            output_layer,
             ..Self::default()
         }
     }
@@ -364,16 +465,31 @@ impl StageSession {
     /// produced `frame` to it, for the final stage's draft. Rows captured by
     /// an earlier decode whose frame left without them are dropped: the frame
     /// carries the rows of its own tokens, which are the last ones captured.
+    /// When the next stage starts on a target layer, the frame's own hidden
+    /// states go along as that layer's rows.
     pub fn dflash_forward_captured(&mut self, frame: &mut ActivationFrame) -> Result<()> {
-        let Some(mut rows) = self
-            .dflash_split
-            .as_mut()
-            .and_then(|split| split.captured.take())
-        else {
+        let Some(split) = self.dflash_split.as_mut() else {
             return Ok(());
         };
-        rows.keep_trailing(usize::try_from(frame.desc.token_count).context("frame tokens")?);
-        rows.append_to_frame(frame)
+        let tokens = usize::try_from(frame.desc.token_count).context("frame tokens")?;
+        let mut rows = split.captured.take();
+        if let Some(rows) = rows.as_mut() {
+            rows.keep_trailing(tokens);
+        }
+        let mut output_error = None;
+        if let Some((layer, n_embd)) = split.output_layer {
+            let inserted = frame_hidden_rows(frame, n_embd).and_then(|values| {
+                rows.get_or_insert_with(|| DFlashFeatureRows::new(n_embd, tokens))
+                    .insert(layer, values)
+            });
+            if let Err(error) = inserted {
+                output_error = Some(error.context(format!("forward layer {layer} input")));
+            }
+        }
+        if let Some(rows) = rows {
+            rows.append_to_frame(frame)?;
+        }
+        output_error.map_or(Ok(()), Err)
     }
 
     /// Whether this session feeds a split DFlash pipeline, as a draft or as a
@@ -385,8 +501,9 @@ impl StageSession {
 
 impl StageModel {
     /// Captures the inputs of the DFlash target layers this stage owns so its
-    /// sessions can forward them to the final stage's draft. Returns the
-    /// captured layers. Attach before creating serving sessions.
+    /// sessions can forward them to the final stage's draft, plus its output
+    /// when the next stage starts on a target layer. Returns the forwarded
+    /// layers. Attach before creating serving sessions.
     pub fn attach_dflash_capture(
         &mut self,
         target_layers: &[u32],
@@ -399,9 +516,10 @@ impl StageModel {
         let layers = target_layers
             .iter()
             .copied()
-            .filter(|layer| (layer_start..layer_end).contains(layer))
+            .filter(|&layer| stage_captures_layer_input(layer, layer_start, layer_end))
             .collect::<Vec<_>>();
-        if layers.is_empty() {
+        let output_layer = stage_forwards_output_as(target_layers, layer_start, layer_end);
+        if layers.is_empty() && output_layer.is_none() {
             return Ok(layers);
         }
         let api = skippy_ffi::llama_draft::llama_draft_api()
@@ -417,6 +535,10 @@ impl StageModel {
             .filter(|n| *n > 0)
             .context("target n_embd")?;
         let n_batch = usize::try_from(unsafe { (api.n_batch)(target_ctx) }).context("n_batch")?;
+        let n_layer = u32::try_from(unsafe { (api.model_n_layer)(target_model) }).unwrap_or(0);
+        if let Some(&layer) = layers.iter().find(|&&layer| layer >= n_layer) {
+            bail!("DFlash target layer {layer} is outside the target's {n_layer} layers");
+        }
         for &layer in &layers {
             unsafe { (api.set_embeddings_layer_inp)(target_ctx, layer, true) };
         }
@@ -424,14 +546,19 @@ impl StageModel {
             api,
             target_ctx,
             layers: layers.clone(),
+            output_layer,
             n_embd,
             n_batch,
         };
-        super::refresh_target_program(&probe)?;
+        if !layers.is_empty() {
+            super::refresh_target_program(&probe)?;
+        }
         drop(probe);
         self.install_dflash_capture(Arc::new(Mutex::new(capture)))?;
-        crate::write_native_log_note(format!("dflash split capture attached layers={layers:?}"));
-        Ok(layers)
+        crate::write_native_log_note(format!(
+            "dflash split capture attached layers={layers:?} output_layer={output_layer:?}"
+        ));
+        Ok(layers.into_iter().chain(output_layer).collect())
     }
 }
 
@@ -596,5 +723,154 @@ mod tests {
         assert_eq!(rows.layer_ids().collect::<Vec<_>>(), vec![2]);
         assert_eq!(rows.rows_of(2, 1, 2), Some(&[3.0, 5.0][..]));
         assert_eq!(rows.rows_of(2, 2, 2), None);
+    }
+
+    /// The Qwen3.6-27B DFlash draft's target layers.
+    const TARGETS: [u32; 5] = [2, 17, 32, 47, 62];
+
+    fn captured_by(layer_start: u32, layer_end: u32) -> Vec<u32> {
+        TARGETS
+            .iter()
+            .copied()
+            .filter(|&layer| stage_captures_layer_input(layer, layer_start, layer_end))
+            .collect()
+    }
+
+    #[test]
+    fn a_cut_on_a_target_layer_moves_it_to_the_stage_before() {
+        // 64 layers cut at 32: the final stage's first layer is a target, so
+        // stage 0 sends its output as that layer's input.
+        assert_eq!(captured_by(0, 32), vec![2, 17]);
+        assert_eq!(stage_forwards_output_as(&TARGETS, 0, 32), Some(32));
+        assert_eq!(captured_by(32, 64), vec![47, 62]);
+        assert_eq!(stage_forwards_output_as(&TARGETS, 32, 64), None);
+    }
+
+    #[test]
+    fn a_middle_stage_starting_on_a_target_layer_leaves_it_to_its_upstream() {
+        assert_eq!(captured_by(0, 17), vec![2]);
+        assert_eq!(stage_forwards_output_as(&TARGETS, 0, 17), Some(17));
+        assert_eq!(captured_by(17, 40), vec![32]);
+        assert_eq!(stage_forwards_output_as(&TARGETS, 17, 40), None);
+        assert_eq!(captured_by(40, 64), vec![47, 62]);
+    }
+
+    #[test]
+    fn every_target_layer_has_exactly_one_source_for_any_cut() {
+        for cut in 1..64 {
+            for layer in TARGETS {
+                let sources = [
+                    stage_captures_layer_input(layer, 0, cut),
+                    stage_forwards_output_as(&TARGETS, 0, cut) == Some(layer),
+                    stage_captures_layer_input(layer, cut, 64),
+                ];
+                assert_eq!(
+                    sources.iter().filter(|&&source| source).count(),
+                    1,
+                    "layer {layer} at cut {cut}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stage_zero_captures_the_embedding_input_of_layer_zero() {
+        assert!(stage_captures_layer_input(0, 0, 8));
+        assert!(!stage_captures_layer_input(8, 8, 16));
+    }
+
+    fn hidden_frame(ggml_type: u32, rows: &[f32]) -> ActivationFrame {
+        let mut frame = frame(2);
+        let part = &mut frame.desc.parts[0];
+        part.ggml_type = ggml_type;
+        let element = if ggml_type == crate::GGML_TYPE_F32 {
+            4
+        } else {
+            2
+        };
+        part.byte_strides = [element, 2 * element, 0, 0];
+        frame.payload = match ggml_type {
+            crate::GGML_TYPE_F32 => rows.iter().flat_map(|value| value.to_le_bytes()).collect(),
+            GGML_TYPE_BF16 => {
+                let mut bytes = Vec::new();
+                encode_bf16(rows, &mut bytes);
+                bytes
+            }
+            // 1.0, -2.0, 0.5, 65504.0 in F16.
+            _ => [0x3c00_u16, 0xc000, 0x3800, 0x7bff]
+                .iter()
+                .flat_map(|bits| bits.to_le_bytes())
+                .collect(),
+        };
+        frame.desc.parts[0].payload_bytes = frame.payload.len() as u64;
+        frame.desc.payload_bytes = frame.payload.len() as u64;
+        frame
+    }
+
+    #[test]
+    fn a_stage_ending_on_a_target_layer_forwards_its_output_rows() {
+        let hidden = [1.0, -2.0, 0.5, 65504.0];
+        for ggml_type in [crate::GGML_TYPE_F32, crate::GGML_TYPE_F16, GGML_TYPE_BF16] {
+            let mut captured = DFlashFeatureRows::new(2, 2);
+            captured.insert(17, vec![3.0; 4]).unwrap();
+            let mut split = DFlashSplitSession::with_captured(captured);
+            split.output_layer = Some((32, 2));
+            let mut session = session_with_captured(DFlashFeatureRows::default());
+            session.dflash_split = Some(Box::new(split));
+            let mut output = hidden_frame(ggml_type, &hidden);
+
+            session.dflash_forward_captured(&mut output).unwrap();
+
+            let forwarded = DFlashFeatureRows::from_frame(&output).unwrap().unwrap();
+            assert_eq!(forwarded.layer_ids().collect::<Vec<_>>(), vec![17, 32]);
+            let layer = forwarded.rows_of(32, 0, 2).unwrap();
+            for (got, want) in layer.iter().zip(hidden) {
+                assert!(
+                    (got - want).abs() <= want.abs() / 128.0,
+                    "{ggml_type}: {got} vs {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_stage_without_native_captures_still_forwards_its_output() {
+        let split = DFlashSplitSession {
+            output_layer: Some((32, 2)),
+            ..DFlashSplitSession::default()
+        };
+        let mut session = session_with_captured(DFlashFeatureRows::default());
+        session.dflash_split = Some(Box::new(split));
+        let mut output = hidden_frame(crate::GGML_TYPE_F32, &[1.0, 2.0, 3.0, 4.0]);
+
+        session.dflash_forward_captured(&mut output).unwrap();
+
+        let forwarded = DFlashFeatureRows::from_frame(&output).unwrap().unwrap();
+        assert_eq!(forwarded.rows_of(32, 0, 2), Some(&[1.0, 2.0, 3.0, 4.0][..]));
+    }
+
+    #[test]
+    fn a_malformed_output_is_an_error_not_a_panic() {
+        let split = DFlashSplitSession {
+            output_layer: Some((32, 3)),
+            ..DFlashSplitSession::default()
+        };
+        let mut session = session_with_captured(DFlashFeatureRows::default());
+        session.dflash_split = Some(Box::new(split));
+        let mut output = hidden_frame(crate::GGML_TYPE_F32, &[1.0, 2.0, 3.0, 4.0]);
+
+        assert!(session.dflash_forward_captured(&mut output).is_err());
+        assert_eq!(DFlashFeatureRows::from_frame(&output).unwrap(), None);
+    }
+
+    #[test]
+    fn f16_decodes_normals_subnormals_and_specials() {
+        assert_eq!(f16_to_f32(0x0000), 0.0);
+        assert_eq!(f16_to_f32(0x3c00), 1.0);
+        assert_eq!(f16_to_f32(0xc000), -2.0);
+        assert_eq!(f16_to_f32(0x0001), f32::powi(2.0, -24));
+        assert_eq!(f16_to_f32(0x8001), -f32::powi(2.0, -24));
+        assert_eq!(f16_to_f32(0x7c00), f32::INFINITY);
+        assert!(f16_to_f32(0x7e00).is_nan());
     }
 }

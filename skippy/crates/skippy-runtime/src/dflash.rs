@@ -194,8 +194,9 @@ impl DFlashDraft {
         }
         let target_layers = unsafe { (api.model_n_layer)(target_model) };
         self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers)?;
-        // A final stage of a split target captures only the layers it owns;
-        // earlier stages send the rest with their activations.
+        // A final stage of a split target captures only the layers whose
+        // input its graph produces; earlier stages send the rest with their
+        // activations, including the input of this stage's first layer.
         let complete = config.resident_tensor_names.is_empty() && config.layer_start == 0;
         let local_end = if complete || config.layer_end == 0 {
             u32::MAX
@@ -206,7 +207,7 @@ impl DFlashDraft {
             .info
             .target_layer_ids
             .iter()
-            .map(|lid| (config.layer_start..local_end).contains(lid))
+            .map(|&lid| split::stage_captures_layer_input(lid, config.layer_start, local_end))
             .collect();
         self.n_embd_target =
             positive_usize(unsafe { (api.model_n_embd)(target_model) }, "target n_embd")?;
