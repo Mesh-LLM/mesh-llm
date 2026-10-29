@@ -36,7 +36,7 @@
 //!
 //! Secondary (PID validation before stopping an instance):
 //! - `/proc/{pid}/comm` on Linux (no shell spawn)
-//! - `proc_pidpath` on macOS (no shell spawn)
+//! - `proc_pidinfo` short BSD info on macOS (no shell spawn)
 //! - `start_time` tolerance ±2 seconds
 //!
 //! # Known limitations
@@ -283,11 +283,11 @@ pub fn is_locked(lock_path: &Path) -> bool {
 ///
 /// # Platform support
 ///
-/// | Platform | `process_comm`           | `process_started_at_unix`              |
-/// |----------|--------------------------|----------------------------------------|
-/// | Linux    | `/proc/{pid}/comm`       | `/proc/{pid}/stat` field 22 + btime    |
-/// | macOS    | `proc_pidpath` basename  | `proc_pidinfo` `pbi_start_tvsec`       |
-/// | Other    | `Ok(None)`               | `Ok(None)`                             |
+/// | Platform | `process_comm`             | `process_started_at_unix`           |
+/// |----------|----------------------------|-------------------------------------|
+/// | Linux    | `/proc/{pid}/comm`         | `/proc/{pid}/stat` field 22 + btime |
+/// | macOS    | `proc_pidinfo` `pbsi_comm` | `proc_pidinfo` `pbi_start_tvsec`    |
+/// | Other    | `Ok(None)`                 | `Ok(None)`                          |
 pub mod validate {
     pub use mesh_llm_system::process::*;
 }

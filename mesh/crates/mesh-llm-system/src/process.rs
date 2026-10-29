@@ -107,37 +107,48 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 mod platform {
+    //! Process facts from the kernel's process table, without spawning `ps`.
+    //! Both names are the ones the process was started under, so renaming or
+    //! deleting its executable while it runs doesn't change them, as it didn't
+    //! for `ps`.
+
     use std::io;
 
-    /// The process's executable path, as `ps -o comm=` reports it, from
-    /// `proc_pidpath`; `None` once no process has the id.
-    fn executable_path(pid: u32) -> anyhow::Result<Option<String>> {
+    /// The name the kernel recorded at exec, cut to 16 bytes like Linux's
+    /// `/proc/{pid}/comm`; `None` once no process has the id. Any account
+    /// may read it.
+    pub fn process_comm(pid: u32) -> anyhow::Result<Option<String>> {
         let Ok(pid) = libc::pid_t::try_from(pid) else {
             return Ok(None);
         };
-        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-        let size = u32::try_from(buffer.len())?;
-        // SAFETY: the buffer is writable for `size` bytes, and proc_pidpath
-        // writes at most that many.
-        let length = unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), size) };
-        if length <= 0 {
+        // SAFETY: proc_bsdshortinfo is a C POD whose integer/byte fields admit zero.
+        let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+        let size = i32::try_from(std::mem::size_of_val(&info))?;
+        // SAFETY: the short BSD-info flavor matches the aligned, writable info buffer.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDT_SHORTBSDINFO,
+                0,
+                (&mut info as *mut libc::proc_bsdshortinfo).cast(),
+                size,
+            )
+        };
+        if read != size {
             let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ESRCH) {
+            if read == 0 && error.raw_os_error() == Some(libc::ESRCH) {
                 return Ok(None);
             }
-            anyhow::bail!("proc_pidpath({pid}) failed: {error}");
+            anyhow::bail!("proc_pidinfo({pid}) failed: {error}");
         }
-        buffer.truncate(usize::try_from(length)?);
-        Ok(Some(String::from_utf8_lossy(&buffer).into_owned()))
-    }
-
-    pub fn process_comm(pid: u32) -> anyhow::Result<Option<String>> {
-        Ok(executable_path(pid)?.map(|path| {
-            std::path::Path::new(&path)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or(path)
-        }))
+        // The field is not terminated when the name fills it.
+        let bytes: Vec<u8> = info
+            .pbsi_comm
+            .iter()
+            .take_while(|&&byte| byte != 0)
+            .map(|&byte| byte as u8)
+            .collect();
+        Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
     }
 
     pub fn process_started_at_unix(pid: u32) -> anyhow::Result<Option<i64>> {
@@ -167,9 +178,77 @@ mod platform {
         Ok(Some(i64::try_from(info.pbi_start_tvsec)?))
     }
 
+    /// The basename of the path the process was executed through, the name
+    /// `ps -o comm=` showed, from `KERN_PROCARGS2`. The kernel keeps that
+    /// path from exec, unlike `proc_pidpath`, which follows the file. Only
+    /// the process's own account may read it; elsewhere, and once no process
+    /// has the id, the kernel answers `EINVAL`, and this is `None`.
     pub fn process_executable_name(pid: u32) -> anyhow::Result<Option<String>> {
-        process_comm(pid)
+        let Ok(pid) = libc::c_int::try_from(pid) else {
+            return Ok(None);
+        };
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+        let mut buffer = vec![0u8; arguments_size()?];
+        let mut length = buffer.len();
+        // SAFETY: the buffer is writable for `length` bytes, and sysctl
+        // writes at most that many and stores the count back in `length`.
+        let status = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                u32::try_from(mib.len())?,
+                buffer.as_mut_ptr().cast(),
+                &mut length,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if status != 0 {
+            let error = io::Error::last_os_error();
+            if matches!(
+                error.raw_os_error(),
+                Some(libc::EINVAL | libc::ESRCH | libc::EPERM)
+            ) {
+                return Ok(None);
+            }
+            anyhow::bail!("sysctl KERN_PROCARGS2 for {pid} failed: {error}");
+        }
+        buffer.truncate(length);
+        Ok(super::exec_path_name(&buffer))
     }
+
+    /// The largest argument area the kernel hands out, `KERN_ARGMAX`.
+    fn arguments_size() -> anyhow::Result<usize> {
+        let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
+        let mut size: libc::c_int = 0;
+        let mut length = std::mem::size_of_val(&size);
+        // SAFETY: `size` is writable for `length` bytes.
+        let status = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                u32::try_from(mib.len())?,
+                (&mut size as *mut libc::c_int).cast(),
+                &mut length,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if status != 0 {
+            anyhow::bail!("sysctl KERN_ARGMAX failed: {}", io::Error::last_os_error());
+        }
+        Ok(usize::try_from(size)?)
+    }
+}
+
+/// The executable's basename from a `KERN_PROCARGS2` record: the argument
+/// count as a native `int`, then the path the process was executed through,
+/// NUL-terminated. Kept outside the macOS module so the parsing runs on every
+/// CI runner.
+#[cfg(any(test, target_os = "macos"))]
+fn exec_path_name(record: &[u8]) -> Option<String> {
+    let path = record.get(std::mem::size_of::<std::ffi::c_int>()..)?;
+    let path = &path[..path.iter().position(|&byte| byte == 0)?];
+    let name = std::path::Path::new(std::str::from_utf8(path).ok()?).file_name()?;
+    Some(name.to_string_lossy().into_owned())
 }
 
 #[cfg(windows)]
@@ -530,6 +609,23 @@ pub fn current_process_start_time_unix() -> anyhow::Result<i64> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn exec_path_name_reads_the_path_after_the_argument_count() {
+        let mut record = 2i32.to_ne_bytes().to_vec();
+        record.extend_from_slice(b"/opt/mesh/bin/mesh-llm\0\0\0mesh-llm\0serve\0");
+        assert_eq!(super::exec_path_name(&record).as_deref(), Some("mesh-llm"));
+
+        let mut relative = 1i32.to_ne_bytes().to_vec();
+        relative.extend_from_slice(b"./llama-server\0");
+        assert_eq!(
+            super::exec_path_name(&relative).as_deref(),
+            Some("llama-server")
+        );
+
+        assert_eq!(super::exec_path_name(&[0, 0]), None);
+        assert_eq!(super::exec_path_name(&1i32.to_ne_bytes()), None);
+    }
+
+    #[test]
     fn filetime_ticks_at_the_unix_epoch_convert_to_zero() {
         // 1970-01-01T00:00:00Z is 116_444_736_000_000_000 ticks after
         // 1601-01-01, which is 0x019DB1DE_D53E8000 split into its two halves.
@@ -549,9 +645,15 @@ mod tests {
             .unwrap()
             .expect("the current process must be visible to itself");
         let exe = std::env::current_exe().unwrap();
+        let exe_name = exe.file_name().and_then(|n| n.to_str()).unwrap();
         assert_eq!(
-            Some(comm.as_str()),
-            exe.file_name().and_then(|n| n.to_str())
+            super::process_executable_name(pid).unwrap().as_deref(),
+            Some(exe_name)
+        );
+        // The kernel keeps the first 16 bytes; a test binary's name is longer.
+        assert!(
+            !comm.is_empty() && comm.len() <= 16 && exe_name.starts_with(&comm),
+            "comm {comm:?} for {exe_name:?}"
         );
         let started = super::process_started_at_unix(pid)
             .unwrap()
@@ -566,7 +668,7 @@ mod tests {
         );
     }
 
-    // launchd runs as root. Its path is readable from any account, so
+    // launchd runs as root. Its name is readable from any account, so
     // liveness and the name check work; its start time is not, and an error
     // keeps an identity check from taking it for one of ours.
     #[cfg(target_os = "macos")]
@@ -690,6 +792,51 @@ mod pid_identity_tests {
         drop(child);
 
         assert_eq!(pid_identity(pid, "anything", None), PidIdentity::Gone);
+    }
+
+    const SLEEPER_ENV: &str = "MESH_LLM_SYSTEM_TEST_SLEEPER";
+
+    /// Holds the copy started by the next test running; returns at once
+    /// otherwise.
+    #[test]
+    fn sleeper() {
+        if std::env::var_os(SLEEPER_ENV).is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+    }
+
+    // The kernel names a process after the file it was started from, and
+    // that name has to survive the file being renamed or deleted while the
+    // process runs, as when a release replaces the binary under a node.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_running_process_keeps_its_identity_when_its_executable_is_renamed_or_deleted() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let executable = dir.path().join("mesh-sleeper");
+        std::fs::copy(std::env::current_exe().unwrap(), &executable).expect("copy the test binary");
+        let mut child = std::process::Command::new(&executable)
+            .args(["--exact", "pid_identity_tests::sleeper", "--nocapture"])
+            .env(SLEEPER_ENV, "1")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("start the copy");
+        let pid = child.id();
+        let started = process_started_at_unix(pid)
+            .expect("read the start time")
+            .expect("the child is running");
+
+        let mut identities = vec![pid_identity(pid, "mesh-sleeper", Some(started))];
+        let renamed = dir.path().join("renamed");
+        std::fs::rename(&executable, &renamed).expect("rename the executable");
+        identities.push(pid_identity(pid, "mesh-sleeper", Some(started)));
+        std::fs::remove_file(&renamed).expect("delete the executable");
+        identities.push(pid_identity(pid, "mesh-sleeper", Some(started)));
+        let liveness = process_liveness(pid);
+
+        child.kill().expect("stop the child");
+        child.wait().expect("reap the child");
+        assert_eq!(identities, [PidIdentity::Recorded; 3]);
+        assert_eq!(liveness, Liveness::Alive);
     }
 
     #[cfg(windows)]
