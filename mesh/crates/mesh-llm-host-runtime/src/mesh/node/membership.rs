@@ -358,6 +358,7 @@ impl Node {
             tunnel_http_tx,
             stage_transport_tx,
             // No split stages, plugins, or owner control through a membership.
+            native_inference: self.native_inference.clone(),
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_control_lifecycle: Arc::new(Mutex::new(None)),
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),

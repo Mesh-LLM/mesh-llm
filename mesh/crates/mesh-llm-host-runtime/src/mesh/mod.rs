@@ -88,6 +88,7 @@ mod gossip;
 mod heartbeat;
 mod host_role_claims;
 pub(crate) mod model_identity;
+mod native_inference;
 mod node;
 mod node_identity;
 mod node_requirements;

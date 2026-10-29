@@ -1098,6 +1098,7 @@ impl Node {
         slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         match stream_type {
+            STREAM_NATIVE_CHAT => self.spawn_native_chat_stream(remote, send, recv),
             STREAM_GOSSIP => self.spawn_gossip_stream(remote, protocol, send, recv, slot),
             STREAM_TUNNEL_MAP => self.spawn_tunnel_map_stream(remote, protocol, recv),
             STREAM_ROUTE_REQUEST => {

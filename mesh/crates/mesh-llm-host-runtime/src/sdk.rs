@@ -27,6 +27,7 @@ mod embedded_memberships;
 mod embedded_openai;
 pub(crate) mod embedded_shutdown;
 mod embedded_startup;
+pub mod native;
 
 pub use crate::runtime::{MeshMembershipConfig, MeshMembershipStatus};
 pub use embedded_config::*;
@@ -69,6 +70,7 @@ pub struct EmbeddedServeHandle {
     control_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::api::RuntimeControlRequest>>,
     task: Option<std::thread::JoinHandle<Result<()>>>,
     shutdown: tokio::sync::watch::Sender<bool>,
+    native_node: Option<crate::mesh::Node>,
 }
 
 pub type EmbeddedMeshNodeHandle = EmbeddedServeHandle;
@@ -86,6 +88,8 @@ impl EmbeddedServeHandle {
         self.invite_token.as_deref()
     }
 
+    /// Read the legacy management status over the local HTTP console.
+    /// Native discovery and inference do not call this method.
     pub async fn status(&self) -> Result<EmbeddedServeStatus> {
         let payload = fetch_json(&format!("{}/api/status", self.console_url)).await?;
         Ok(EmbeddedServeStatus {
@@ -184,15 +188,10 @@ pub async fn start_embedded_node(
         control_tx: Some(control_tx),
         task: Some(task),
         shutdown,
+        native_node: None,
     };
-    let status = match wait_for_embedded_status(
-        &handle.console_url,
-        startup_timeout,
-        handle.task.as_ref().expect("runtime task"),
-    )
-    .await
-    {
-        Ok(status) => status,
+    let node = match native::wait_for_embedded_node(&handle, startup_timeout).await {
+        Ok(node) => node,
         Err(error) => {
             handle.request_shutdown("sdk-startup-error");
             if let Err(shutdown_error) = join_embedded_runtime_thread_with_timeout(
@@ -210,7 +209,8 @@ pub async fn start_embedded_node(
             return Err(error);
         }
     };
-    handle.invite_token = token_from_status(&status);
+    handle.invite_token = Some(node.invite_token().await);
+    handle.native_node = Some(node);
     Ok(handle)
 }
 
@@ -328,26 +328,6 @@ async fn join_embedded_runtime_thread_with_timeout(
 fn join_embedded_runtime_thread_blocking(task: std::thread::JoinHandle<Result<()>>) -> Result<()> {
     task.join()
         .map_err(|_| anyhow::anyhow!("embedded mesh runtime thread panicked"))?
-}
-
-async fn wait_for_embedded_status(
-    console_url: &str,
-    timeout: Duration,
-    task: &std::thread::JoinHandle<Result<()>>,
-) -> Result<serde_json::Value> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if task.is_finished() {
-            anyhow::bail!("embedded mesh runtime exited before the console became ready");
-        }
-        if let Ok(status) = fetch_json(&format!("{console_url}/api/status")).await {
-            return Ok(status);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for embedded mesh console at {console_url}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
 
 async fn fetch_json(url: &str) -> Result<serde_json::Value> {
