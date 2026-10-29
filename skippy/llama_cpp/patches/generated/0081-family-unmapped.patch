@@ -458,7 +458,7 @@ index 2c7fa6750941582a9c7974a19c38e6cb6648e821..fa33ef779c0d103b3d061f515a4375fa
  
      cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);
 diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
-index d1e5f66a062817e00c189e4f64d50457c256fffd..64a0e276cd7f8982dc876ac9bf61fa53895c7510 100644
+index fd2e5d8dd87dd28fbe5eb15668999dd06690bd20..f0e07a441ae4fecd93905e1c50d4eb81254621fc 100644
 --- a/src/models/glm5-next.cpp
 +++ b/src/models/glm5-next.cpp
 @@ -716,6 +716,8 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
@@ -467,17 +467,17 @@ index d1e5f66a062817e00c189e4f64d50457c256fffd..64a0e276cd7f8982dc876ac9bf61fa53
      for (int il = 0; il < n_layer; ++il) {
 +        begin_block(inpL, il);
 +
-         const auto & layer = model.layers[il];
- 
-         ggml_tensor * residual = inpL;
-@@ -781,6 +783,7 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
+         // Speculative drafters (DFlash, EAGLE3) read the stream-mean residual entering each layer.
+         if ((size_t) il < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[il]) {
+             res->t_layer_inp[il] = build_hc_mean(inpL);
+@@ -788,6 +790,7 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
          inpL = build_hc_post(cur, residual, post, comb, il);
          inpL = build_cvec(inpL, il);
          cb(inpL, "l_out", il);
 +        end_block(inpL, il);
      }
  
-     // narrow to the output tokens, then collapse the streams
+     if ((size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer]) {
 diff --git a/src/models/gpt2.cpp b/src/models/gpt2.cpp
 index d6ca64744f492733612d3854e869e42ce1d52774..c4eaf3cb1668a397af5ae5b2757426ecc04e9796 100644
 --- a/src/models/gpt2.cpp
