@@ -50,11 +50,11 @@ with `mesh-llm wallet` and stored in the payment ledger, not here.
 
 ```toml
 [payments]
-wallet = "wallet-nwc" # Plugin name of the wallet to use
+wallet = "nwc-wallet" # Plugin name of the wallet to use
 ```
 
 - `wallet` — plugin name of the `wallet.v1` provider. When unset, mesh-llm uses
-  the only running wallet plugin (for example the external `lexe-wallet`). Once a wallet has been used, the payment ledger is pinned to it;
+  the only running wallet plugin (for example the external `lexe-wallet` or `nwc-wallet`). Once a wallet has been used, the payment ledger is pinned to it;
   switching requires `mesh-llm wallet unpin` while the node is stopped.
 
 ## Telemetry
