@@ -293,3 +293,15 @@ pub(super) fn load_config_state(
         .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
     crate::runtime::config_state::ConfigState::load(&path)
 }
+
+impl Node {
+    pub async fn set_startup_models_resolving(&self, resolving: bool) {
+        *self.startup_models_resolving.lock().await = resolving;
+    }
+
+    /// True while the startup models are still being resolved (a local GGUF
+    /// is hashed for its id), before any of them is assigned to this node.
+    pub async fn startup_models_resolving(&self) -> bool {
+        *self.startup_models_resolving.lock().await
+    }
+}

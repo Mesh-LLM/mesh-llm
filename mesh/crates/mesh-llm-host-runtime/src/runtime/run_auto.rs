@@ -1801,6 +1801,10 @@ async fn run_auto_inner(
     let initial_requested_models =
         initial_run_auto_requested_models(&startup_specs, &requested_model_names);
     node.set_requested_models(initial_requested_models).await;
+    // Until they resolve, a request naming a model gets a retryable 503
+    // rather than a 404: the name may be one of them.
+    node.set_startup_models_resolving(!startup_specs.is_empty())
+        .await;
 
     // On cancellation, continue to the lifecycle owner below so it can run
     // the existing ordered cleanup for the node we have already created.

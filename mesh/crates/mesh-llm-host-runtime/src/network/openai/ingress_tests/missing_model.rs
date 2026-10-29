@@ -106,6 +106,8 @@ async fn route_missing_local_model_prefers_a_plugin_serving_a_loading_name() {
         .await
         .expect("test node");
     node.set_serving_models(vec![model.into()]).await;
+    // Even while the startup models resolve.
+    node.set_startup_models_resolving(true).await;
     let targets = election::ModelTargets::default();
     let affinity = affinity::AffinityRouter::new();
     let plugin_manager = empty_test_plugin_manager();
@@ -214,6 +216,63 @@ async fn route_self_targeted_model_keeps_the_exclusion_409_while_the_first_load_
 
     assert_eq!(
         missing_local_model_status(&node, "loading-model", Some(node.id()), &[node.id()]).await,
+        "HTTP/1.1 409 Conflict"
+    );
+    node.endpoint.close().await;
+}
+
+/// While the startup models resolve (a local GGUF is hashed for its id), no
+/// name is known yet, so any name may be one of them: retryable, untargeted or
+/// self-targeted. Once they resolve, an unknown name fails as before.
+#[tokio::test]
+async fn route_missing_local_model_answers_503_while_the_startup_models_resolve() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.set_startup_models_resolving(true).await;
+
+    assert_eq!(
+        missing_local_model_status(&node, "local-gguf/sha256-abc", None, &[]).await,
+        "HTTP/1.1 503 Service Unavailable"
+    );
+    assert_eq!(
+        missing_local_model_status(&node, "local-gguf/sha256-abc", Some(node.id()), &[]).await,
+        "HTTP/1.1 503 Service Unavailable"
+    );
+
+    node.set_startup_models_resolving(false).await;
+    assert_eq!(
+        missing_local_model_status(&node, "local-gguf/sha256-abc", None, &[]).await,
+        "HTTP/1.1 404 Not Found"
+    );
+    assert_eq!(
+        missing_local_model_status(&node, "local-gguf/sha256-abc", Some(node.id()), &[]).await,
+        "HTTP/1.1 409 Conflict"
+    );
+    node.endpoint.close().await;
+}
+
+/// A client that excluded this node keeps its 409 while the startup models
+/// resolve: this node can never serve it.
+#[tokio::test]
+async fn route_missing_local_model_keeps_the_exclusion_409_while_the_startup_models_resolve() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.set_startup_models_resolving(true).await;
+
+    assert_eq!(
+        missing_local_model_status(&node, "local-gguf/sha256-abc", None, &[node.id()]).await,
+        "HTTP/1.1 409 Conflict"
+    );
+    assert_eq!(
+        missing_local_model_status(
+            &node,
+            "local-gguf/sha256-abc",
+            Some(node.id()),
+            &[node.id()]
+        )
+        .await,
         "HTTP/1.1 409 Conflict"
     );
     node.endpoint.close().await;

@@ -340,11 +340,12 @@ pub(super) async fn route_self_targeted_model(
         }
     }
     // This node may still be loading the model: a first load has its serving
-    // assignment but no target yet, a reload has all-None candidates. Answer
-    // the same retryable 503 as an untargeted request. A self-exclude keeps
-    // the 409 below, since retrying would never help that client.
+    // assignment but no target yet, a reload has all-None candidates, and
+    // while the startup models resolve no name is known yet. Answer the same
+    // retryable 503 as an untargeted request. A self-exclude keeps the 409
+    // below, since retrying would never help that client.
     if !excluded.contains(&self_id)
-        && (assigned_here(ctx, model_name).await
+        && (may_be_loading_here(ctx, model_name).await
             || has_local_unavailable_candidates(ctx.targets, model_name))
     {
         return response_outcome(
@@ -375,7 +376,8 @@ pub(super) async fn route_self_targeted_model(
 /// Whether the model is known locally but unavailable, which earns an
 /// untargeted request a retryable 503: loading, draining or failed with
 /// all-None candidates, or a first load, which has no target yet, only its
-/// serving assignment. A client that excluded this node gets the exclusion 409
+/// serving assignment, and while the startup models resolve not even that.
+/// A client that excluded this node gets the exclusion 409
 /// instead, since retrying here would never help it, and a plugin serving the
 /// same name keeps the plugin route it had before.
 async fn unavailable_locally(
@@ -387,7 +389,7 @@ async fn unavailable_locally(
         return true;
     }
     !excluded.contains(&ctx.node.id())
-        && assigned_here(ctx, model_name).await
+        && may_be_loading_here(ctx, model_name).await
         && !plugin_serves_model(ctx, model_name).await
 }
 
@@ -399,6 +401,13 @@ async fn assigned_here(ctx: &IngressRouteContext<'_>, model_name: &str) -> bool 
         .await
         .iter()
         .any(|served| served == model_name)
+}
+
+/// Whether this node may still be loading `model_name`: the startup models
+/// are still resolving, so their names are not known yet, or its serving
+/// assignment names it.
+async fn may_be_loading_here(ctx: &IngressRouteContext<'_>, model_name: &str) -> bool {
+    ctx.node.startup_models_resolving().await || assigned_here(ctx, model_name).await
 }
 
 /// Whether a plugin inference endpoint claims `model_name`; a lookup error
