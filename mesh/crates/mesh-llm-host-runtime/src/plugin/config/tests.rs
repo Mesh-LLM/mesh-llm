@@ -1541,6 +1541,23 @@ batch = 0
 }
 
 #[test]
+fn invalid_activation_codec_path_is_stable() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[defaults.skippy]
+activation_codec = "int4"
+"#,
+    )
+    .unwrap();
+
+    let err = validate_config(&config).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "defaults.skippy.activation_codec must be one of: lossless, f16, bf16, s8-row, f32"
+    );
+}
+
+#[test]
 fn invalid_split_mode_path_is_stable() {
     let config: MeshConfig = toml::from_str(
         r#"

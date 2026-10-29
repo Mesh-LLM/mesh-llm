@@ -127,13 +127,17 @@ const BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE
 const BENCH_DOWNSTREAM_WIRE_JITTER_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_JITTER_MS";
 const BENCH_DOWNSTREAM_WIRE_STALL_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_STALL_MS";
 const BENCH_DOWNSTREAM_WIRE_STALL_P_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_STALL_P";
+/// Simulated link bandwidth in megabits per second; unset or `0` is unlimited.
+const BENCH_DOWNSTREAM_WIRE_MBPS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_MBPS";
 
 fn benchmark_downstream_wire_condition() -> Result<WireCondition> {
     let delay_ms = parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV)?;
     let jitter_ms = parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_JITTER_MS_ENV)?;
     let stall_ms = parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_STALL_MS_ENV)?;
     let stall_p = parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_STALL_P_ENV)?;
-    WireCondition::with_jitter(delay_ms, None, jitter_ms, stall_ms, stall_p)
+    let mbps =
+        Some(parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_MBPS_ENV)?).filter(|mbps| *mbps > 0.0);
+    WireCondition::with_jitter(delay_ms, mbps, jitter_ms, stall_ms, stall_p)
 }
 
 fn parse_benchmark_wire_env(name: &'static str) -> Result<f64> {

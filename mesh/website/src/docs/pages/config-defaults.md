@@ -45,6 +45,7 @@ stage_topology        = ""               # Stage topology override
 binary_stage_transport = ""              # Binary stage transport override
 prefill_chunking      = "auto"           # Prefill chunking policy
 prefill_chunk_size    = 0                 # Fixed prefill chunk size (0 = auto)
+activation_codec      = "lossless"       # Split activation codec: lossless, f16, bf16, s8-row, f32
 
 [defaults.speculative]
 mode                 = "auto"            # "auto", "disabled", or "draft"

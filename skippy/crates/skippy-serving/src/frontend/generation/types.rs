@@ -353,6 +353,53 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) eog_check_ms: f64,
     /// One entry per completion token, when the request asked for logprobs.
     pub(in crate::frontend) token_logprobs: Option<Vec<GeneratedTokenLogprob>>,
+    pub(in crate::frontend) activation_wire: Option<ActivationWireStats>,
+}
+
+/// Encoded activation bytes stage 0 wrote to the next stage for one response:
+/// the first hop only, payload bytes without frame headers. Decode includes
+/// speculative verify windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::frontend) struct ActivationWireStats {
+    /// The configured codec, or `auto-lossless-v1` when the producer picks an
+    /// exact encoding per frame.
+    pub(in crate::frontend) codec: &'static str,
+    pub(in crate::frontend) prefill_bytes: usize,
+    pub(in crate::frontend) decode_bytes: usize,
+}
+
+impl ActivationWireStats {
+    fn insert_response_timings(
+        &self,
+        timings: &mut BTreeMap<String, Value>,
+        prefill_tokens: u32,
+        completion_tokens: u32,
+    ) {
+        let per_token = |bytes: usize, tokens: u32| {
+            if tokens == 0 {
+                0.0
+            } else {
+                bytes as f64 / f64::from(tokens)
+            }
+        };
+        timings.insert("activation_codec".to_string(), json!(self.codec));
+        timings.insert(
+            "activation_prefill_bytes".to_string(),
+            json!(self.prefill_bytes),
+        );
+        timings.insert(
+            "activation_prefill_bytes_per_token".to_string(),
+            json!(per_token(self.prefill_bytes, prefill_tokens)),
+        );
+        timings.insert(
+            "activation_decode_bytes".to_string(),
+            json!(self.decode_bytes),
+        );
+        timings.insert(
+            "activation_decode_bytes_per_token".to_string(),
+            json!(per_token(self.decode_bytes, completion_tokens)),
+        );
+    }
 }
 
 /// A completion token's log-probability and its alternatives, with their text.
@@ -438,6 +485,15 @@ impl GeneratedText {
         }
         if let Some(stats) = self.speculative_stats.as_ref() {
             stats.insert_response_timings(&mut timings);
+        }
+        if let Some(wire) = self.activation_wire.as_ref() {
+            // A prefix-cache hit forwards only the suffix.
+            let prefill_tokens = if self.suffix_prefill_tokens > 0 {
+                self.suffix_prefill_tokens
+            } else {
+                self.prompt_tokens
+            };
+            wire.insert_response_timings(&mut timings, prefill_tokens, self.completion_tokens);
         }
         Some(timings)
     }

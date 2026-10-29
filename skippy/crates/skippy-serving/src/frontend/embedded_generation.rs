@@ -34,8 +34,8 @@ use crate::frontend::{
     NativeMtpDecodeCounters, NativeMtpDecodeOptions, NativeMtpDraft, NativeMtpDraftOrigin,
     NativeMtpVerifier,
     generation::{
-        EmbeddedStageZeroGeneration, GenerationCacheStats, PhaseTimer, StageOpenAiBackend,
-        TokenControl, attrs_insert_prefill_chunk_policy, decode_token_phase,
+        ActivationWireStats, EmbeddedStageZeroGeneration, GenerationCacheStats, PhaseTimer,
+        StageOpenAiBackend, TokenControl, attrs_insert_prefill_chunk_policy, decode_token_phase,
     },
     prefill::{
         PrefillChunkObservation, drain_embedded_prefill_replies, drain_one_embedded_prefill_reply,
@@ -690,6 +690,14 @@ impl StageOpenAiBackend {
                 ),
             );
             cache_stats.prompt_ms = prefill_timer.elapsed_ms();
+            cache_stats.activation_wire = Some(ActivationWireStats {
+                codec: request
+                    .config
+                    .activation_codec_policy
+                    .identity(request.config.activation_codec),
+                prefill_bytes: prefill_forward_activation_bytes,
+                decode_bytes: 0,
+            });
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, prefill_attrs);
 
             let message = generation_config_message(

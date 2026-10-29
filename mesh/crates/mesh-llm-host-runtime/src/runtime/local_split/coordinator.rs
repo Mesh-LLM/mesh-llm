@@ -1,4 +1,4 @@
-use super::loading::stage_health_ticks;
+use super::loading::{configured_split_activation_codec, stage_health_ticks};
 use super::recovery::{
     SplitLossRecoveryDecision, SplitWithdrawGraceAction,
     split_active_stage_nodes_pending_eligibility, split_connected_node_ids,
@@ -35,6 +35,43 @@ use std::time::Instant;
 /// forcing a manual restart while still withdrawing a genuinely dead split.
 const SPLIT_STAGE_LOSS_WITHDRAW_GRACE: Duration = Duration::from_secs(75);
 
+/// The operator's `skippy.activation_codec` choice for split activations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct SplitActivationCodec {
+    pub(super) codec: skippy_protocol::StageActivationCodec,
+    pub(super) policy: skippy_protocol::StageActivationCodecPolicy,
+}
+
+impl SplitActivationCodec {
+    /// The default. Frames carry exact values: RawF32, compacted to BF16 or
+    /// F16 only when the whole frame (sidebands included) round-trips
+    /// bit-for-bit, which real activations rarely do.
+    pub(super) const LOSSLESS: Self = Self {
+        codec: skippy_protocol::StageActivationCodec::RawF32V1,
+        policy: skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1,
+    };
+
+    /// Parse a `skippy.activation_codec` value. Every value but `lossless`
+    /// fixes one codec for every frame.
+    pub(super) fn from_setting(value: &str) -> Option<Self> {
+        use skippy_protocol::StageActivationCodec as Codec;
+        let fixed = |codec| {
+            Some(Self {
+                codec,
+                policy: skippy_protocol::StageActivationCodecPolicy::Fixed,
+            })
+        };
+        match value {
+            "lossless" => Some(Self::LOSSLESS),
+            "f32" => fixed(Codec::RawF32V1),
+            "f16" => fixed(Codec::F16RneV1),
+            "bf16" => fixed(Codec::Bf16RneV1),
+            "s8-row" => fixed(Codec::S8RowF32RneV1),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyGeneration {
     pub(super) topology_id: String,
@@ -66,13 +103,18 @@ impl SplitTopologyGeneration {
             participants,
             stages,
             admissions: BTreeMap::new(),
-            activation_codec: skippy_protocol::StageActivationCodec::default(),
-            // New split generations negotiate a lossless codec per realized
-            // activation frame. RawF32 remains the mandatory fallback, so
-            // frames only compact when their complete payload (including
-            // sidebands) round-trips exactly through BF16 or F16.
-            activation_codec_policy: skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1,
+            activation_codec: SplitActivationCodec::LOSSLESS.codec,
+            activation_codec_policy: SplitActivationCodec::LOSSLESS.policy,
         }
+    }
+
+    /// Run this generation with `choice` on every hop. The codec rides each
+    /// stage's load request and the topology hash, so all stages of one
+    /// generation use the coordinator's choice.
+    pub(super) fn with_activation_codec(mut self, choice: SplitActivationCodec) -> Self {
+        self.activation_codec = choice.codec;
+        self.activation_codec_policy = choice.policy;
+        self
     }
 
     pub(super) fn with_admissions(
@@ -710,6 +752,10 @@ impl SplitTopologyCoordinator {
             "split runtime needs at least two stage participants"
         );
         SplitTopologyGeneration::new(topology_id, run_id, generation, participants, stages)
+            .with_activation_codec(configured_split_activation_codec(
+                &self.mesh_config,
+                self.config_model_id.as_deref(),
+            ))
             .with_admissions(admissions)
     }
 
@@ -1209,6 +1255,10 @@ impl SplitTopologyCoordinator {
         let stages = planned.stages;
         let participants = split_participants_for_stages(&self.active.participants, &stages);
         SplitTopologyGeneration::new(topology_id, run_id, generation, participants, stages)
+            .with_activation_codec(configured_split_activation_codec(
+                &self.mesh_config,
+                self.config_model_id.as_deref(),
+            ))
             .with_admissions(admissions)
     }
 }

@@ -706,6 +706,11 @@ pub struct SkippyConfig {
     pub prefill_chunk_size: Option<u32>,
     #[serde(default)]
     pub prefill_chunk_schedule: Option<String>,
+    /// Wire codec for activations between split stages: `lossless` (the
+    /// default), `f16`, `bf16`, `s8-row`, or `f32`. The split's coordinator
+    /// decides; every stage receives its choice in the stage load.
+    #[serde(default)]
+    pub activation_codec: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
