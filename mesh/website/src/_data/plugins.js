@@ -130,6 +130,17 @@ const plugins = [
     platforms: 'macOS, Linux, Windows',
   },
   {
+    name: 'nwc-wallet',
+    icon: 'wallet',
+    repo: 'nwc-wallet-plugin',
+    group: 'payments',
+    tagline: 'Use your own Lightning wallet for paid inference',
+    summary:
+      'Preview. A `wallet.v1` plugin for any Nostr Wallet Connect wallet, such as Alby Hub, Coinos or LNbits. It holds no seed; give the connection a spending budget.',
+    install: 'mesh-llm plugins install Mesh-LLM/nwc-wallet',
+    platforms: 'macOS, Linux, Windows',
+  },
+  {
     name: 'model-prices',
     icon: 'tag',
     repo: 'model-price-plugin',
@@ -161,8 +172,8 @@ const plugins = [
 // Carousel order mixes groups so payments and newer engines show up early.
 // The docs table still groups plugins by `groups` above.
 const carouselOrder = [
-  'ds4', 'lexe-wallet', 'uzu', 'slotstream', 'openai-endpoint', 'eredu',
-  'blackboard', 'flash-moe', 'agents', 'model-prices', 'capsules', 'metrics',
+  'ds4', 'lexe-wallet', 'uzu', 'slotstream', 'nwc-wallet', 'openai-endpoint',
+  'eredu', 'blackboard', 'flash-moe', 'agents', 'model-prices', 'capsules', 'metrics',
 ];
 const rank = (plugin) => {
   const i = carouselOrder.indexOf(plugin.name);
