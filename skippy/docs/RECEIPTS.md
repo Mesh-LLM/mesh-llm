@@ -155,7 +155,9 @@ served values. Attention itself is not checked.
 ## HTTP API
 
 Every stage serves these routes on its receipts address. Errors return HTTP 400
-with `{"error": "..."}`.
+with `{"error": "..."}`, except for a receipt that does not exist (yet), which
+returns HTTP 404. Stage 0 commits a turn just after it sends the response, so
+a client that asks at once can get a 404 and should retry.
 
 | Route | Served by | Purpose |
 |---|---|---|
@@ -180,8 +182,27 @@ in that header, or read the `x-request-id` header of the response.
   | RTX 5060 Ti | 71 → 69 tok/s (3% slower) | 2396 → 1868 tok/s (1.28x) |
 
 - An opening replays the challenged sequence from its first position, so its
-  cost grows with the length of the conversation. Replays run one at a time
-  in a second context of the stage model, which needs its own KV cache.
+  cost grows with the length of the conversation. Each replayed step stops
+  after the challenged layer, so the later layers and the output head are
+  skipped. The same two-stage split on the RTX 5060 Ti, challenging the last
+  16 positions (the worst case):
+
+  | Conversation (prompt + generated) | Serving | Open layer 5 (stage 0) | Open layer 30 (stage 1) |
+  |---|---|---|---|
+  | 82 + 256 | 3.8 s | 0.54 s | 1.10 s |
+  | 85 + 1024 | 14.5 s | 2.00 s | 4.27 s |
+  | 2857 + 32 | 2.0 s | 0.34 s | 0.67 s |
+  | 2860 + 512 | 9.2 s | 1.31 s | 2.76 s |
+
+- A stage keeps the openings it made, up to 128 MiB, and answers a repeated
+  challenge from them in milliseconds. They are removed with their turn.
+- A receipt is replayed for at most 4 distinct challenges. A replay costs
+  about as much as serving the turn did, so this bounds the work that one
+  receipt can ask for.
+- Replays run one at a time in a second context of the stage model, which
+  needs its own KV cache (about 1.2 GB across the two stages above). The
+  context is created by the first replay and freed after 60 seconds without
+  one.
 - Receipts are not signed and turns are not chained. The receipt is fetched
   after the response, not attached to it.
 - The output head, attention scores, and other non-matmul operations are not

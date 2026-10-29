@@ -73,14 +73,20 @@ Built:
   attention output. It also reports KV-cache operations.
   `skippy_model_replay_receipt` replays one sequence in a scratch context. It
   forces the recorded KV cells and n_kv and puts dummy columns where other
-  sequences were. It also reports the matmul inputs and outputs of the
-  challenged layer.
+  sequences were. It reports the challenged layer's committed tensors,
+  matmul inputs and outputs, and stops each step after that layer.
+  `skippy_model_release_receipt_scratch` frees the scratch context.
 - **Leaves.** Per position, a stage commits `2 · layers + 1` leaves: the
   residual entering each layer, an attention leaf per layer, and the stage
   output. Receipt wire version 2.
 - **Recorder.** Keeps leaf hashes and a replay log per native sequence, not
   activations. It refuses a sequence whose cells it cannot reproduce: a copied
   prefix, a position shift, a state load, or compaction.
+- **Opening cost.** A replay stops after the challenged layer, which cuts an
+  opening to between 1/3 and 2/3 of its earlier time on the two-stage split.
+  A repeated challenge is answered from kept openings (128 MiB per stage). A
+  receipt is replayed for at most 4 distinct challenges. Serving frees the
+  replay context after 60 seconds idle.
 - **Glue checks** in the auditor bind the replayed matmuls to the committed
   residual stream: both RMS norms, SwiGLU and the residual add. Supported for
   the `llama`, `qwen2` and `qwen3` architectures.
