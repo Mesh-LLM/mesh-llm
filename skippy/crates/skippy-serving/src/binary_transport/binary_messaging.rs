@@ -476,13 +476,20 @@ fn run_binary_stage(
     };
     let runtime = load_runtime_with_overrides(&config, &overrides, None)?
         .context("binary stage server requires model_path")?;
-    if let Some(plan) = split_dflash.as_ref() {
-        crate::split_dflash::attach_split_dflash(
+    if let Some(plan) = split_dflash.as_ref()
+        && let Err(error) = crate::split_dflash::attach_split_dflash(
             &mut lock_runtime(&runtime),
             &config,
             &overrides,
             plan,
-        )?;
+        )
+    {
+        // Stage 0 receives no drafts and decodes serially.
+        tracing::warn!(
+            stage = config.stage_id,
+            error = format!("{error:#}"),
+            "split DFlash did not attach; serving without speculation"
+        );
     }
     // In-flight admission is bounded by the lanes the runtime actually serves.
     // The native encoder-decoder clamp can hold that below `config.lane_count`
