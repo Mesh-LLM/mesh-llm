@@ -4,15 +4,19 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use reqwest::StatusCode;
 use serde::Serialize;
 use skippy_receipts::audit::{self, AuditReport, MatrixVerdict};
 use skippy_receipts::challenge;
 use skippy_receipts::glue::{self, GlueVerdict};
 use skippy_receipts::weights::{LocalFile, WeightFile};
 use skippy_receipts::wire::{Challenge, Opening, Receipt};
+
+/// How long to wait for a turn's receipt after its response.
+const RECEIPT_WAIT: Duration = Duration::from_secs(10);
 
 pub struct AuditReceiptCommand {
     /// OpenAI base URL of stage 0, for example `http://127.0.0.1:9337`.
@@ -91,7 +95,7 @@ pub fn run(command: AuditReceiptCommand) -> Result<()> {
     let receipt_id = uuid::Uuid::new_v4().hyphenated().to_string();
     let response = chat(&client, &command, &receipt_id)?;
     let receipts = command.receipts.trim_end_matches('/');
-    let receipt: Receipt = get_json(client.get(format!("{receipts}/receipts/{receipt_id}")))?;
+    let receipt = fetch_receipt(&client, receipts, &receipt_id)?;
     let weights = WeightFile::open(Box::new(LocalFile::open(&command.claimed_model)?))?;
     let mut rng = rand::rng();
     let mut challenge = challenge::draw(&receipt, &weights.layer_bytes(), &mut rng)?;
@@ -163,10 +167,32 @@ fn chat(
         .to_string())
 }
 
+/// Stage 0 commits a turn just after its response is sent, so the receipt
+/// can be missing for a moment.
+fn fetch_receipt(
+    client: &reqwest::blocking::Client,
+    receipts: &str,
+    receipt_id: &str,
+) -> Result<Receipt> {
+    let deadline = Instant::now() + RECEIPT_WAIT;
+    loop {
+        let response = client
+            .get(format!("{receipts}/receipts/{receipt_id}"))
+            .send()?;
+        if response.status() != StatusCode::NOT_FOUND || Instant::now() >= deadline {
+            return decode(response);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn get_json<T: serde::de::DeserializeOwned>(
     request: reqwest::blocking::RequestBuilder,
 ) -> Result<T> {
-    let response = request.send()?;
+    decode(request.send()?)
+}
+
+fn decode<T: serde::de::DeserializeOwned>(response: reqwest::blocking::Response) -> Result<T> {
     let status = response.status();
     let body = response.text()?;
     if !status.is_success() {

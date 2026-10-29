@@ -2,7 +2,8 @@
 //! [`Recorder`].
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use skippy_receipts::recorder::Recorder;
@@ -100,8 +101,56 @@ impl ReceiptRecorderSink for RecorderSink {
     }
 }
 
-/// Replays turns in the stage model's scratch context.
-pub(super) struct NativeReplayer(pub(super) ReceiptReplayer);
+/// The scratch context is freed after this long without a replay.
+const SCRATCH_IDLE: Duration = Duration::from_secs(60);
+const IDLE_POLL: Duration = Duration::from_secs(5);
+
+/// Replays turns in the stage model's scratch context, and frees the
+/// context once replays stop, since it holds a second KV cache.
+pub(super) struct NativeReplayer(Arc<Scratch>);
+
+struct Scratch {
+    replayer: ReceiptReplayer,
+    /// When the last replay finished, until the context is freed.
+    last_replay: Mutex<Option<Instant>>,
+}
+
+impl NativeReplayer {
+    pub(super) fn new(replayer: ReceiptReplayer) -> Self {
+        let scratch = Arc::new(Scratch {
+            replayer,
+            last_replay: Mutex::new(None),
+        });
+        let weak = Arc::downgrade(&scratch);
+        let spawned = std::thread::Builder::new()
+            .name("receipt-scratch".into())
+            .spawn(move || release_when_idle(&weak));
+        if let Err(error) = spawned {
+            tracing::warn!("receipts: the replay context will not be freed when idle: {error}");
+        }
+        Self(scratch)
+    }
+}
+
+fn release_when_idle(scratch: &Weak<Scratch>) {
+    loop {
+        std::thread::sleep(IDLE_POLL);
+        let Some(scratch) = scratch.upgrade() else {
+            return;
+        };
+        let mut last = scratch
+            .last_replay
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if last.is_some_and(|at| at.elapsed() >= SCRATCH_IDLE) {
+            // a replay finishing after this sets the time again
+            *last = None;
+            if let Err(error) = scratch.replayer.release_scratch() {
+                tracing::warn!("receipts: cannot free the replay context: {error:#}");
+            }
+        }
+    }
+}
 
 impl Replayer for NativeReplayer {
     fn replay(
@@ -130,7 +179,7 @@ impl Replayer for NativeReplayer {
             })
             .collect();
         let mut out = Vec::new();
-        self.0.replay(seq, layer, &refs, &mut |view| {
+        let replayed = self.0.replayer.replay(seq, layer, &refs, &mut |view| {
             let Some(ReplayStep::Decode { capture, .. }) = view.step.and_then(|i| steps.get(i))
             else {
                 bail!("replay captured an unexpected step");
@@ -145,7 +194,13 @@ impl Replayer for NativeReplayer {
                 }
             }
             Ok(())
-        })?;
+        });
+        *self
+            .0
+            .last_replay
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+        replayed?;
         Ok(out)
     }
 }

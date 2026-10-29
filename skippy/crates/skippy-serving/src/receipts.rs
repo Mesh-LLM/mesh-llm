@@ -109,7 +109,7 @@ pub fn start(
     )?);
     {
         let mut state = lock_runtime(&runtime);
-        let replayer = native::NativeReplayer(state.model.receipt_replayer());
+        let replayer = native::NativeReplayer::new(state.model.receipt_replayer());
         receipts.set_replayer(Box::new(replayer));
         state
             .model
@@ -191,13 +191,19 @@ fn router(state: ApiState) -> Router {
         .with_state(state)
 }
 
-struct ApiError(anyhow::Error);
+struct ApiError(StatusCode, anyhow::Error);
+
+impl From<anyhow::Error> for ApiError {
+    fn from(error: anyhow::Error) -> Self {
+        Self(StatusCode::BAD_REQUEST, error)
+    }
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("{:#}", self.0) })),
+            self.0,
+            Json(serde_json::json!({ "error": format!("{:#}", self.1) })),
         )
             .into_response()
     }
@@ -208,8 +214,8 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, ApiError> {
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|error| ApiError(anyhow!("receipts worker failed: {error}")))?
-        .map_err(ApiError)
+        .map_err(|error| ApiError::from(anyhow!("receipts worker failed: {error}")))?
+        .map_err(ApiError::from)
 }
 
 async fn commit_handler(
@@ -240,7 +246,13 @@ async fn receipt_handler(
     State(state): State<ApiState>,
     Path(id): Path<String>,
 ) -> Result<Json<Receipt>, ApiError> {
-    state.receipts.receipt(&id).map(Json).map_err(ApiError)
+    // stage 0 commits a turn after its response is sent, so a client may
+    // ask before the receipt exists
+    state
+        .receipts
+        .receipt(&id)
+        .map(Json)
+        .map_err(|error| ApiError(StatusCode::NOT_FOUND, error))
 }
 
 impl StageReceipts {
