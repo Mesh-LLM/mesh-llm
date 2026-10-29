@@ -23,6 +23,11 @@ pub struct DFlashTarget {
     pub embedding_length: u32,
     /// Routed experts; `0` for a dense model.
     pub expert_count: u32,
+    /// Model family named in `general.basename` (else `general.name`), for
+    /// targets that share a shape. With a family, the name must carry it.
+    /// Without one, the pairing yields to a same-shape pairing whose family
+    /// the name carries, so a GGUF with no name keeps the older default.
+    pub family: Option<&'static str>,
 }
 
 /// A DFlash draft pinned on Hugging Face.
@@ -63,6 +68,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             layer_count: 32,
             embedding_length: 4096,
             expert_count: 0,
+            family: None,
         },
         draft: DFlashDraftSource {
             repo: "AtomicChat/Qwen3.5-9B-DFlash-GGUF",
@@ -81,6 +87,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             layer_count: 64,
             embedding_length: 5120,
             expert_count: 0,
+            family: None,
         },
         draft: DFlashDraftSource {
             repo: "AtomicChat/Qwen3.6-27B-DFlash-GGUF",
@@ -92,6 +99,27 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
         max_draft_tokens: 15,
         backends: Backends::All,
     },
+    // Qwen3.8-27B has Qwen3.6-27B's shape (its NextN block is not executed), so
+    // only the name tells them apart. A DFlash2 draft reading target layers
+    // 6..=62 at width 5120. Not benchmarked yet.
+    DFlashPairing {
+        target: DFlashTarget {
+            architecture: "qwen35",
+            layer_count: 64,
+            embedding_length: 5120,
+            expert_count: 0,
+            family: Some("Qwen3.8"),
+        },
+        draft: DFlashDraftSource {
+            repo: "z-lab/Qwen3.8-27B-DFlash2-GGUF",
+            revision: "2d9571f8ce46e151f61c6499c99dee6079e1d610",
+            file: "Qwen3.8-27B-DFlash2-Q8_0.gguf",
+            sha256: "c18e800daedc59ca68fd13b6a856d795746af6d399a9279ac6a277d1d422f87e",
+            bytes: 2_056_414_816,
+        },
+        max_draft_tokens: 7,
+        backends: Backends::All,
+    },
     // Qwen3.6-35B-A3B; a DFlash2 draft (8-token blocks with a path selector)
     // reading target layers 2..=38 at width 2048. On a DGX Spark it decodes
     // 107.6 tok/s adaptive against 102.6 for the original DFlash draft.
@@ -101,6 +129,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             layer_count: 40,
             embedding_length: 2048,
             expert_count: 256,
+            family: None,
         },
         draft: DFlashDraftSource {
             repo: "aminya/Qwen3.6-35B-A3B-DFlash2-GGUF",
@@ -120,6 +149,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             layer_count: 40,
             embedding_length: 2048,
             expert_count: 256,
+            family: None,
         },
         draft: DFlashDraftSource {
             repo: "Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp",
@@ -141,6 +171,7 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
             layer_count: 48,
             embedding_length: 2048,
             expert_count: 512,
+            family: None,
         },
         draft: DFlashDraftSource {
             repo: "AtomicChat/Qwen3-Coder-Next-DFlash-GGUF",
@@ -159,9 +190,32 @@ pub(super) fn pairing_for_target(
     meta: &GgufCompactMeta,
     metal: bool,
 ) -> Option<&'static DFlashPairing> {
-    DFLASH_PAIRINGS
-        .iter()
-        .find(|pairing| pairing.target.matches(meta) && pairing.applies_on(metal))
+    let name = meta.model_name().unwrap_or_default();
+    DFLASH_PAIRINGS.iter().find(|pairing| {
+        pairing.target.matches_shape(meta)
+            && pairing.applies_on(metal)
+            && match pairing.target.family {
+                Some(family) => names_family(name, family),
+                None => !DFLASH_PAIRINGS.iter().any(|other| {
+                    other.target.same_shape(&pairing.target)
+                        && other
+                            .target
+                            .family
+                            .is_some_and(|family| names_family(name, family))
+                }),
+            }
+    })
+}
+
+/// Whether `name` carries `family` as a whole token, ignoring case, so
+/// "Huihui-Qwen3.6-27B" names Qwen3.6 but "Qwen3.6x" and "Qwen3.65" do not.
+fn names_family(name: &str, family: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let family = family.to_ascii_lowercase();
+    let continues = |c: char| c.is_ascii_alphanumeric() || c == '.';
+    name.match_indices(&family).any(|(start, _)| {
+        !name[..start].ends_with(continues) && !name[start + family.len()..].starts_with(continues)
+    })
 }
 
 /// The default cap on DFlash draft tokens per block. Adaptive block sizing
@@ -184,11 +238,18 @@ impl DFlashPairing {
 }
 
 impl DFlashTarget {
-    fn matches(&self, meta: &GgufCompactMeta) -> bool {
+    fn matches_shape(&self, meta: &GgufCompactMeta) -> bool {
         meta.architecture == self.architecture
             && meta.executable_layer_count() == Some(self.layer_count)
             && meta.embedding_size == self.embedding_length
             && meta.expert_count == self.expert_count
+    }
+
+    fn same_shape(&self, other: &DFlashTarget) -> bool {
+        self.architecture == other.architecture
+            && self.layer_count == other.layer_count
+            && self.embedding_length == other.embedding_length
+            && self.expert_count == other.expert_count
     }
 }
 
@@ -234,7 +295,9 @@ impl DFlashPairing {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{push_gguf_string, push_string_kv, push_u32_kv, target_meta};
+    use super::super::test_support::{
+        named, push_gguf_string, push_string_kv, push_u32_kv, target_meta,
+    };
     use super::*;
     use std::io::Write;
 
@@ -280,6 +343,64 @@ mod tests {
         let mut with_mtp = target_meta("qwen35", 33, 4096, 0);
         with_mtp.nextn_predict_layers = 1;
         assert!(pairing_for_target(&with_mtp, false).is_some());
+    }
+
+    #[test]
+    fn qwen38_and_qwen36_27b_share_a_shape_and_are_told_apart_by_name() {
+        const QWEN36: &str = "AtomicChat/Qwen3.6-27B-DFlash-GGUF";
+        const QWEN38: &str = "z-lab/Qwen3.8-27B-DFlash2-GGUF";
+        let repo =
+            |meta: &GgufCompactMeta, metal| pairing_for_target(meta, metal).map(|p| p.draft.repo);
+        let with_mtp = |mut meta: GgufCompactMeta| {
+            meta.layer_count += 1;
+            meta.nextn_predict_layers = 1;
+            meta
+        };
+        let dense = target_meta("qwen35", 64, 5120, 0);
+
+        let qwen38 = with_mtp(named(dense.clone(), "Qwen3.8-27B"));
+        for metal in [true, false] {
+            assert_eq!(repo(&qwen38, metal), Some(QWEN38));
+        }
+        let qwen38 = pairing_for_target(&qwen38, false).unwrap();
+        assert_eq!(qwen38.max_draft_tokens, 7);
+
+        for meta in [
+            dense.clone(),
+            named(dense.clone(), "Qwen3.6-27B"),
+            with_mtp(named(dense.clone(), "Qwen3.6-27B")),
+            named(dense.clone(), "Huihui-Qwen3.6-27B-abliterated"),
+            named(dense.clone(), "Qwen3.8x-27B"),
+        ] {
+            assert_eq!(repo(&meta, false), Some(QWEN36), "{meta:?}");
+        }
+
+        // Only `general.name` set: still Qwen3.8, never the Qwen3.6 draft.
+        let mut name_only = dense.clone();
+        name_only.name = Some("qwen3.8 27B Instruct".to_string());
+        assert_eq!(repo(&name_only, false), Some(QWEN38));
+        // `general.basename` wins over `general.name`.
+        let mut basename_first = named(dense, "Qwen3.6-27B");
+        basename_first.name = Some("Qwen3.8-27B".to_string());
+        assert_eq!(repo(&basename_first, false), Some(QWEN36));
+    }
+
+    #[test]
+    fn family_names_match_whole_tokens() {
+        for (name, family, expected) in [
+            ("Qwen3.8-27B", "Qwen3.8", true),
+            ("unsloth/qwen3.8-27b", "Qwen3.8", true),
+            ("Huihui-Qwen3.6-27B-abliterated", "Qwen3.6", true),
+            ("Qwen3.8 27B", "Qwen3.8", true),
+            ("Qwen3.8x-27B", "Qwen3.8", false),
+            ("Qwen3.80-27B", "Qwen3.8", false),
+            ("Qwen3.8.1-27B", "Qwen3.8", false),
+            ("MyQwen3.8-27B", "Qwen3.8", false),
+            ("Qwen3.6-27B", "Qwen3.8", false),
+            ("", "Qwen3.8", false),
+        ] {
+            assert_eq!(names_family(name, family), expected, "{name}");
+        }
     }
 
     #[test]

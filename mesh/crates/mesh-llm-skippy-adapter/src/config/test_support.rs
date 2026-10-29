@@ -87,6 +87,16 @@ pub(super) fn target_meta(
     }
 }
 
+/// `meta` with `general.basename` and `general.name` set to `name`.
+pub(super) fn named(
+    mut meta: skippy_model_artifact::gguf::GgufCompactMeta,
+    name: &str,
+) -> skippy_model_artifact::gguf::GgufCompactMeta {
+    meta.basename = Some(name.to_string());
+    meta.name = Some(name.to_string());
+    meta
+}
+
 pub(super) fn parse_config(toml: &str) -> MeshConfig {
     toml::from_str(toml).expect("config should parse")
 }

@@ -305,6 +305,10 @@ pub const DEFAULT_RECURRENT_STATE_PLANES: u64 = 3;
 pub struct GgufCompactMeta {
     pub architecture: String,
     pub parameter_size: Option<String>,
+    /// `general.basename`, the model family without fine-tune or quant.
+    pub basename: Option<String>,
+    /// `general.name`, the full model name.
+    pub name: Option<String>,
     pub context_length: u32,
     /// Declared per-sequence token budget (`<arch>.max_len`), for models such
     /// as Laya whose reads are bounded by it rather than by a context window.
@@ -352,6 +356,11 @@ pub struct GgufProjectorMeta {
 }
 
 impl GgufCompactMeta {
+    /// The model's name, preferring `general.basename` over `general.name`.
+    pub fn model_name(&self) -> Option<&str> {
+        self.basename.as_deref().or(self.name.as_deref())
+    }
+
     /// Number of decoder layers executed by the primary model graph.
     ///
     /// GGUF `block_count` includes appended NextN/MTP draft blocks, while
@@ -1243,6 +1252,32 @@ mod tests {
 
         let path = write_bytes("skippy-model-artifact-gguf-malicious", &bytes);
         assert!(scan_gguf_compact_meta(&path).is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_compact_meta_reads_the_model_name() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&3i64.to_le_bytes());
+        for (key, value) in [
+            ("general.name", "Qwen3.8-27B-Instruct"),
+            ("general.architecture", "qwen35"),
+            ("general.basename", "Qwen3.8-27B"),
+        ] {
+            push_gguf_string(&mut bytes, key);
+            bytes.extend_from_slice(&(GgufType::String as u32).to_le_bytes());
+            push_gguf_string(&mut bytes, value);
+        }
+
+        let path = write_bytes("skippy-model-artifact-gguf-name", &bytes);
+        let mut meta = scan_gguf_compact_meta(&path).expect("should parse GGUF");
+        assert_eq!(meta.name.as_deref(), Some("Qwen3.8-27B-Instruct"));
+        assert_eq!(meta.model_name(), Some("Qwen3.8-27B"));
+        meta.basename = None;
+        assert_eq!(meta.model_name(), Some("Qwen3.8-27B-Instruct"));
         let _ = std::fs::remove_file(path);
     }
 
