@@ -432,6 +432,7 @@ fn has_local_unavailable_returns_false_when_any_available() {
 async fn missing_local_model_status(
     node: &mesh::Node,
     model: &str,
+    target: Option<iroh::EndpointId>,
     excluded: &[iroh::EndpointId],
 ) -> String {
     use tokio::io::AsyncReadExt;
@@ -478,7 +479,7 @@ async fn missing_local_model_status(
         &mut request,
         &ctx,
         model,
-        None,
+        target,
         excluded,
         None,
         lifecycle.route_observer(),
@@ -507,11 +508,11 @@ async fn route_missing_local_model_answers_503_while_the_first_load_runs() {
     node.set_serving_models(vec!["loading-model".into()]).await;
 
     assert_eq!(
-        missing_local_model_status(&node, "loading-model", &[]).await,
+        missing_local_model_status(&node, "loading-model", None, &[]).await,
         "HTTP/1.1 503 Service Unavailable"
     );
     assert_eq!(
-        missing_local_model_status(&node, "unknown-model", &[]).await,
+        missing_local_model_status(&node, "unknown-model", None, &[]).await,
         "HTTP/1.1 404 Not Found"
     );
     node.endpoint.close().await;
@@ -548,37 +549,41 @@ async fn route_missing_local_model_prefers_a_plugin_serving_a_loading_name() {
         requested_by_node_id: None,
         exchange_channel: None,
     };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    let (client_side, server_side) = tokio::join!(tokio::net::TcpStream::connect(addr), async {
-        listener.accept().await.map(|(stream, _)| stream)
-    });
-    let mut client_side = client_side.expect("connect");
-    let mut request = plugin_only_request(model);
-    route_missing_local_model(
-        server_side.expect("accept").into(),
-        &mut request,
-        &ctx,
-        model,
-        None,
-        &[],
-        None,
-        OpenAiRouteObserver::default(),
-    )
-    .await;
+    // Untargeted, and with `x-mesh-target` naming this node.
+    for target in [None, Some(node.id())] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (client_side, server_side) =
+            tokio::join!(tokio::net::TcpStream::connect(addr), async {
+                listener.accept().await.map(|(stream, _)| stream)
+            });
+        let mut client_side = client_side.expect("connect");
+        let mut request = plugin_only_request(model);
+        route_missing_local_model(
+            server_side.expect("accept").into(),
+            &mut request,
+            &ctx,
+            model,
+            target,
+            &[],
+            None,
+            OpenAiRouteObserver::default(),
+        )
+        .await;
 
-    let mut response = Vec::new();
-    client_side
-        .read_to_end(&mut response)
-        .await
-        .expect("read response");
-    let response_text = String::from_utf8_lossy(&response);
-    assert!(
-        !response_text.contains("loading or draining"),
-        "a plugin-served name must take the plugin route, got: {response_text}"
-    );
+        let mut response = Vec::new();
+        client_side
+            .read_to_end(&mut response)
+            .await
+            .expect("read response");
+        let response_text = String::from_utf8_lossy(&response);
+        assert!(
+            !response_text.contains("loading or draining"),
+            "a plugin-served name must take the plugin route (target {target:?}), got: {response_text}"
+        );
+    }
     node.endpoint.close().await;
 }
 
@@ -592,7 +597,44 @@ async fn route_missing_local_model_keeps_the_exclusion_409_while_the_first_load_
     node.set_serving_models(vec!["loading-model".into()]).await;
 
     assert_eq!(
-        missing_local_model_status(&node, "loading-model", &[node.id()]).await,
+        missing_local_model_status(&node, "loading-model", None, &[node.id()]).await,
+        "HTTP/1.1 409 Conflict"
+    );
+    node.endpoint.close().await;
+}
+
+/// `x-mesh-target` naming this node takes `route_self_targeted_model`, which
+/// must also answer the retryable 503 while the model loads here, and still
+/// fail closed for a model this node doesn't serve at all.
+#[tokio::test]
+async fn route_self_targeted_model_answers_503_while_the_first_load_runs() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.set_serving_models(vec!["loading-model".into()]).await;
+
+    assert_eq!(
+        missing_local_model_status(&node, "loading-model", Some(node.id()), &[]).await,
+        "HTTP/1.1 503 Service Unavailable"
+    );
+    assert_eq!(
+        missing_local_model_status(&node, "unknown-model", Some(node.id()), &[]).await,
+        "HTTP/1.1 409 Conflict"
+    );
+    node.endpoint.close().await;
+}
+
+/// A self-target contradicted by a self-exclude keeps its 409 while the model
+/// loads: this node can never serve that client, so a 503 would loop.
+#[tokio::test]
+async fn route_self_targeted_model_keeps_the_exclusion_409_while_the_first_load_runs() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.set_serving_models(vec!["loading-model".into()]).await;
+
+    assert_eq!(
+        missing_local_model_status(&node, "loading-model", Some(node.id()), &[node.id()]).await,
         "HTTP/1.1 409 Conflict"
     );
     node.endpoint.close().await;

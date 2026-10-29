@@ -990,7 +990,8 @@ fn unavailable_target_message(target_hex: &str, model_name: &str, blocked: bool)
 /// never will (ndizazzo P2a, PR #1671 round 2). The caller guarantees this
 /// node does not currently host-serve `model_name` (see
 /// `route_missing_local_model`), so only plugin-served availability remains
-/// to check. Fails closed with 409 -- the same contract `x-mesh-target` uses
+/// to check. Answers a retryable 503 while this node is still loading the
+/// model. Fails closed with 409 -- the same contract `x-mesh-target` uses
 /// for a peer that turns out not to serve the model -- when this node
 /// doesn't serve it either, or when `x-mesh-exclude` names this node too (a
 /// self-target contradicted by a self-exclude).
@@ -1045,6 +1046,29 @@ async fn route_self_targeted_model(
             }
             Ok(None) => {}
         }
+    }
+    // This node may still be loading the model: a first load has its serving
+    // assignment but no target yet, a reload has all-None candidates. Answer
+    // the same retryable 503 as an untargeted request. A self-exclude keeps
+    // the 409 below, since retrying would never help that client.
+    if !excluded.contains(&self_id)
+        && (ctx
+            .node
+            .serving_models()
+            .await
+            .iter()
+            .any(|served| served == model_name)
+            || has_local_unavailable_candidates(ctx.targets, model_name))
+    {
+        return response_outcome(
+            503,
+            proxy::send_503_observed(
+                tcp_stream,
+                &format!("model '{model_name}' is unavailable locally (loading or draining)"),
+                route_observer,
+            )
+            .await,
+        );
     }
     response_outcome(
         409,
