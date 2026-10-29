@@ -19,7 +19,7 @@ which evidence requests one node answers for another.
 | Before the upgrade | After the first 0.79 start |
 | --- | --- |
 | No `capsules` installed | `capsules` 0.1.5, installed from the release's bundled copy. `--no-default-plugins` or `MESH_LLM_NO_DEFAULT_PLUGINS=1` skips it. |
-| `capsules` installed by the operator (`mesh-llm plugins install`, or a `[[plugin]]` entry with `command` or `url`) | Left at the installed version. The node logs that it leaves the default alone. |
+| `capsules` installed by the operator (`mesh-llm plugins install`, or a `[[plugin]]` entry with `command` or `url`) | Left at the installed version. A node start says nothing about it; `mesh-llm plugins install-defaults` reports that it leaves it alone. |
 | A default-managed `capsules` 0.1.4, which only a build from `main` with a bundled copy has (no release does) | Replaced by 0.1.5 at the next start. |
 
 A 0.79 host announces plugin keys (`plugin_keys.v1`, Mesh-LLM/mesh-llm#2299),
@@ -40,10 +40,11 @@ run 0.1.5. Each node still seals its own records meanwhile. This note does not
 cover the peer features that are off by default (record push, the referee)
 across versions; that has not been checked.
 
-Records answered over signed requests also need the host change in
+Signed requests also depend on the host change in
 Mesh-LLM/mesh-llm#2620: without it, a `capsules` process the host restarts
 does not learn its own node id until the next mesh event, and refuses every
-signed request until then (Mesh-LLM/capsules#48). 0.79 must ship with it.
+signed request until then (Mesh-LLM/capsules#48). This pin is meant to ship
+in the same release as that change.
 
 ## Upgrade order
 
@@ -51,32 +52,44 @@ signed request until then (Mesh-LLM/capsules#48). 0.79 must ship with it.
    keys. Nodes without `capsules` get 0.1.5 now; nodes whose operator
    installed it keep their version.
 2. **Move every operator-installed `capsules` to 0.1.5 in one window.**
-   Either install the 0.1.5 package as its
-   [INSTALL.md](https://github.com/Mesh-LLM/capsules/blob/v0.1.5/INSTALL.md)
-   describes, or hand it to the release's default:
-   `mesh-llm plugins delete capsules`, then `mesh-llm plugins enable capsules`,
-   then restart. Deleting removes only the installed files; the records and
-   key in the plugin's data directory stay. Evidence requests between nodes
-   that have and have not moved fail during this window.
-3. **Take new anchor pins** (next section).
+   Evidence requests between nodes that have and have not moved fail during
+   this window. For each node, either:
+   - install the 0.1.5 package as its
+     [INSTALL.md](https://github.com/Mesh-LLM/capsules/blob/v0.1.5/INSTALL.md)
+     describes, or point the `[[plugin]]` entry's `command` or `url` at 0.1.5;
+     or
+   - hand it to the release's default. If a `[[plugin]]` entry for `capsules`
+     sets `command` or `url`, remove those two fields first (keep its
+     settings): while either is set, the node runs that entry and never the
+     default. Then run `mesh-llm plugins delete capsules` and
+     `mesh-llm plugins enable capsules`, and restart. Deleting removes only
+     the installed files; the records and key in the plugin's data directory
+     stay.
+3. **Take new anchor pins** (see [Pins and digests](#pins-and-digests)).
 
-A mesh that cannot move every node in one window keeps evidence working on the
-old version by holding new nodes at 0.1.4 instead: on each 0.79 node, install
-the 0.1.4 package before or right after its first start (see
-[Rolling back](#rolling-back)), then move the whole mesh to 0.1.5 together.
+A mesh that cannot move every node in one window keeps evidence working on
+0.1.4 instead, and later moves the whole mesh to 0.1.5 together. A node new to
+0.79 then installs the 0.1.4 package (see [Rolling back](#rolling-back))
+**before its first 0.79 start**, so 0.1.5 never writes its log. If the node
+has already started 0.79, follow the rollback steps, backup included.
 
 ## Keeping `served_summary/1` answered during the transition
 
 On 0.1.5, `served_summary/1` goes only to a counterparty proven by a signed
 request. To keep answering it to nodes that cannot sign yet, the 0.1.5 node
-that answers sets `share_standard_history = on` (console: Configuration ›
-Plugins › Sharing policy › Standard history, or
-`CAPSULES_SHARE_STANDARD_HISTORY=on` in its environment). That answers
-`served_summary/1` to any node, signed or not: before 0.1.5 every node could
-read it, so this restores the old exposure, not more. It helps a 0.1.5 node
-on a host older than 0.79, or one whose host refused its key; it does not help
-a 0.1.4 node, which cannot read the answer. Turn it off again once every peer
-runs 0.1.5 on 0.79. No setting answers an unsigned request for a record.
+that answers sets `share_standard_history = on`: in the console under the
+`capsules` sharing policy (Standard history), or with
+`CAPSULES_SHARE_STANDARD_HISTORY=on` in its environment, which wins over the
+console. A node started with `--config <path>` also needs
+`MESH_LLM_CONFIG=<path>` in its environment, or `capsules` reads the default
+config file and the console setting does not reach it.
+
+That answers `served_summary/1` to any node, signed or not: before 0.1.5 every
+node could read it, so this restores the old exposure, not more. It helps a
+0.1.5 node on a host older than 0.79, or one whose host refused its key; it
+does not help a 0.1.4 node, which cannot read the answer. Turn it off again
+once every peer runs 0.1.5 on 0.79. No setting answers an unsigned request for
+a record.
 
 The records status (`evidence_records_status`) shows whether a node's own
 requests are signed (`requests_signed`).
@@ -87,17 +100,30 @@ requests are signed (`requests_signed`).
 digest of its JSON form, and its answers carry different octets. Every
 `artifact_digest` and anchor pin taken from a node on 0.1.4 stops reproducing
 once that node runs 0.1.5, and a request pinned to an old anchor is refused
-`coverage_unsatisfiable`. mesh-llm itself stores no pins. Whoever kept one, a
-peer's page or an outside verifier, takes a new one after the answering node
-upgrades: ask it for its checkpoint list, which every requester gets, and pin
-the anchor it now names.
+`coverage_unsatisfiable`. mesh-llm itself stores no pins.
+
+Whoever kept a pin, a peer's page or an outside verifier, replaces it after the
+answering node upgrades: ask that node for its checkpoint list, which every
+requester gets. Before pinning the new anchor, check that the list still holds
+the checkpoint you pinned (same log id, tree size and root) and that its
+consistency proofs extend it; otherwise you would accept a log rewritten at the
+upgrade. If the old checkpoint is missing, treat it as a broken history, not
+as a migration.
 
 ## Rolling back
 
-- **`capsules` back to 0.1.4 on a 0.79 node.** Download the 0.1.4 package
-  for the node's platform from the
-  [capsules releases](https://github.com/Mesh-LLM/capsules/releases/tag/v0.1.4),
-  check it against that release's `SHA256SUMS`, then run
+Before rolling `capsules` back, copy its data directory. It is
+`CAPSULES_DATA_DIR` if set, else `$XDG_DATA_HOME/capsules`, else
+`~/.local/share/capsules`. A node that started as `capsule-emit-mesh` (before
+0.1.3) keeps using that directory instead: `CAPSULE_EMIT_MESH_DATA_DIR`, or
+`capsule-emit-mesh` under `$XDG_DATA_HOME` or `~/.local/share`. The 0.1.5
+changelog names no change to the on-disk log, but a 0.1.4 node reading a log
+that 0.1.5 wrote has not been tested.
+
+- **`capsules` back to 0.1.4 on a 0.79 node.** Download and check the 0.1.4
+  package for the node's platform as steps 1 and 2 of the
+  [0.1.4 INSTALL.md](https://github.com/Mesh-LLM/capsules/blob/v0.1.4/INSTALL.md#install)
+  describe (they set `TARGET`), then run
 
   ```bash
   mesh-llm plugins install --archive "capsules-0.1.4-$TARGET.tar.gz" \
@@ -108,16 +134,12 @@ the anchor it now names.
   leave it at 0.1.4. Its peers on 0.1.5 can no longer exchange evidence with
   it. To return to the release's default, run `mesh-llm plugins delete
   capsules` and `mesh-llm plugins enable capsules`, then restart.
-- **Turning `capsules` off.** `mesh-llm plugins disable capsules` keeps it
-  installed but not started; `mesh-llm plugins install-defaults --off` also
-  stops later starts from reinstalling the default. Neither deletes its data
-  directory.
+- **Turning `capsules` off.** Run `mesh-llm plugins disable capsules`, then
+  restart the node: the command changes the plugin store, not the running
+  process. A disabled plugin stays installed, and later starts neither run nor
+  reinstall it. A `[[plugin]]` entry that sets `command` runs regardless of the
+  store, so set `enabled = false` on that entry instead. Neither deletes the
+  data directory.
 - **mesh-llm back to 0.78.1.** 0.78.1 has no default plugins and does not
   remove the one 0.79 installed, so `capsules` 0.1.5 stays and runs unsigned.
   Install 0.1.4 as above, or disable it, if the mesh still runs 0.1.4.
-
-Before rolling `capsules` back, copy its data directory
-(`CAPSULES_DATA_DIR`, else `$XDG_DATA_HOME/capsules`, else
-`~/.local/share/capsules`). The 0.1.5 changelog names no change to the
-on-disk log, but a 0.1.4 node reading a log that 0.1.5 wrote has not been
-tested.
