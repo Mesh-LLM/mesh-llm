@@ -24,6 +24,7 @@ mod embedded_config;
 mod embedded_lifecycle_tests;
 pub(crate) mod embedded_logging;
 mod embedded_memberships;
+mod embedded_models;
 mod embedded_openai;
 pub(crate) mod embedded_shutdown;
 mod embedded_startup;

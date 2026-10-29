@@ -1151,11 +1151,6 @@ pub(super) fn parse_json_body_from_http_request(raw: &[u8]) -> Option<serde_json
     serde_json::from_slice(&raw[header_end..]).ok()
 }
 
-pub fn is_models_list_request(method: &str, path: &str) -> bool {
-    let path = path.split('?').next().unwrap_or(path);
-    method == "GET" && (path == "/v1/models" || path == "/models")
-}
-
 /// Legacy lifecycle paths formerly handled by the peer-reachable OpenAI
 /// ingress. They remain recognizable only so callers can return an explicit
 /// compatibility response instead of routing them as inference.

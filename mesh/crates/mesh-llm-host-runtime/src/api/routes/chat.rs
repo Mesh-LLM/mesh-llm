@@ -44,7 +44,10 @@ pub(super) async fn handle(
     req: &str,
     caller: CallerTrust,
 ) -> anyhow::Result<()> {
-    let is_openai_passthrough = path_only.starts_with("/v1/") || path_only == "/models";
+    let is_openai_passthrough = path_only.starts_with("/v1/")
+        || path_only == "/models"
+        || path_only.starts_with("/models/")
+        || path_only.starts_with("/mesh/v1/models");
     if method == "OPTIONS" && is_openai_passthrough {
         stream
             .write_all(
@@ -56,9 +59,9 @@ pub(super) async fn handle(
 
     // A browser navigation is a GET, and the inference port's model-less
     // fallback would route an arbitrary `/v1/*` GET to whichever peer is first
-    // in the target list. Only the model list is a legitimate GET here.
+    // in the target list. Only recognized model discovery routes are legitimate GETs here.
     let allowed_get =
-        method == "GET" && crate::network::proxy::is_models_list_request(method, path_only);
+        method == "GET" && crate::network::openai::model_discovery::is_request(method, path_only);
     if method != "POST" && !allowed_get {
         return respond_error(stream, 405, "Method Not Allowed").await;
     }

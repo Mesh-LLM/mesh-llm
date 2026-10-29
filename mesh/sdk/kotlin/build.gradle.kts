@@ -31,12 +31,13 @@ dependencies {
 val repoRoot = rootProject.projectDir.parentFile.parentFile.parentFile
 
 val generateKotlinBindings by tasks.registering(Exec::class) {
-    description = "Generate Kotlin UniFFI bindings from the mesh-llm FFI UDL"
+    description = "Generate Kotlin UniFFI bindings from the prebuilt mesh-llm FFI library"
     group = "build"
 
     workingDir = repoRoot
     commandLine("bash", "mesh/sdk/kotlin/scripts/generate-kotlin-bindings.sh")
-    inputs.file(repoRoot.resolve("mesh/crates/mesh-llm-ffi/src/mesh_ffi.udl"))
+    inputs.file(providers.environmentVariable("MESH_LLM_FFI_LIBRARY")
+        .orElse(repoRoot.resolve("target/release/libmeshllm_ffi.a").absolutePath))
     outputs.file(projectDir.resolve("src/main/kotlin/uniffi/mesh_ffi/mesh_ffi.kt"))
     outputs.file(projectDir.resolve("example/example-jvm/src/main/kotlin/uniffi/mesh_ffi/mesh_ffi.kt"))
 }

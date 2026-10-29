@@ -296,27 +296,3 @@ fn unknown_class_peers_never_receive_audio() {
         );
     }
 }
-
-#[test]
-/// `/v1/models` is the chat-compatible listing, so a name the mesh only serves
-/// for document OCR stays off it -- including when a peer is what advertises it.
-fn document_ocr_only_names_are_excluded_from_the_chat_listing() {
-    let descriptors = [
-        descriptor_with_workload("ocr-only", mesh::ModelWorkloadClass::DocumentOcr),
-        descriptor_with_workload("shared", mesh::ModelWorkloadClass::DocumentOcr),
-        descriptor_with_workload("shared", mesh::ModelWorkloadClass::CausalGeneration),
-        descriptor_with_workload("chat", mesh::ModelWorkloadClass::CausalGeneration),
-        local_gguf_descriptor("unnamed-legacy"),
-    ];
-    assert!(serves_only_document_ocr("ocr-only", &descriptors));
-    assert!(!serves_only_document_ocr("shared", &descriptors));
-    assert!(!serves_only_document_ocr("chat", &descriptors));
-    assert!(
-        !serves_only_document_ocr("unnamed-legacy", &descriptors),
-        "name-only advertisement is admitted for chat, so it stays listed"
-    );
-    assert!(
-        !serves_only_document_ocr("peer-only", &descriptors),
-        "a model no descriptor claims is not an OCR model"
-    );
-}

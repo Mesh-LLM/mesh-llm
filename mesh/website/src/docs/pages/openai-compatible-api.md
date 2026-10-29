@@ -24,8 +24,44 @@ Use base URL `http://localhost:9337/v1` and any placeholder API key, such as `du
 curl -s http://localhost:9337/v1/models | jq '.data[].id'
 ```
 
-The list reflects usable local models plus models exposed through healthy
-plugin and remote mesh routes:
+The list includes available, confirmed LLMs served locally or through healthy
+plugin and remote mesh routes. Multimodal LLMs remain included. Dedicated speech,
+embedding, reranking, decision, and OCR models appear through
+[Mesh model discovery](/docs/pages/model-discovery/) instead. Missing or unknown
+legacy workload metadata is visible in that catalog but excluded here.
+
+The OpenAI response contains standard model fields:
+
+```json
+{"object":"list","data":[{"id":"llm-model","object":"model","created":0,"owned_by":"mesh-llm"}]}
+```
+
+`created: 0` explicitly represents an unknown release timestamp. Get an exact
+LLM offering with `GET /v1/models/{encoded-id}`. Non-LLM IDs return `404` from
+this compatibility lookup even when Mesh catalog lookup finds them.
+
+The same path with an `anthropic-version` header returns the Anthropic envelope:
+
+```sh
+curl -s http://localhost:9337/v1/models -H 'anthropic-version: 2023-06-01'
+```
+
+```json
+{
+  "data": [{"id":"llm-model","type":"model","display_name":"llm-model","created_at":"1970-01-01T00:00:00Z","lifecycle":"active"}],
+  "has_more": false,
+  "first_id": "llm-model",
+  "last_id": "llm-model"
+}
+```
+
+Anthropic lists accept `limit` (1–1000, default 20), `before_id` or `after_id`.
+Do not combine both cursor directions. Compatibility discovery contains no
+Mesh-specific `metadata`, capability arrays/status fields, `thinking`,
+`virtual_model` or `payment`. Read those facts through `/mesh/v1/models` or the
+native SDK catalog. `display_name` remains standard in the Anthropic projection.
+
+An answering daemon can still have no eligible LLM route:
 
 - `ready_idle` can return an empty `data` array; the daemon is healthy but has
   no route yet.

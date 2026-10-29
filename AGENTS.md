@@ -181,6 +181,31 @@ Do not leave Rust compiler warnings behind in code you touched.
 - Fix or remove unused code, dead code, and other warnings introduced or surfaced by your change before committing.
 - Do not silence warnings with `#[allow(...)]` unless there is a clear reason and the developer has asked for that tradeoff.
 
+## SDK parity invariant
+
+Rust, Node.js, Python, Swift, and Kotlin must support the same public SDK
+capabilities. Language conventions may change names or async syntax, but not
+the supported operations, filters, pagination, metadata, availability semantics,
+or error behavior. A public SDK API change is incomplete until its native bridge,
+all five language surfaces, tests, product docs, and maintained website examples
+are updated together. Do not silently substitute an HTTP compatibility call for
+an API documented as native, or expose fewer model workloads in one binding.
+
+Website SDK examples are part of this invariant: each supported public SDK
+capability must have equivalent, current examples for Rust, Node.js, Python,
+Swift, and Kotlin. Keep constructors, option defaults, request/response shapes,
+pagination, streaming/error handling, and resource cleanup consistent with the
+shipped APIs. An implementation change is not complete with source code alone;
+update and validate the corresponding examples under `mesh/website/src/docs/`
+and the owning SDK guides in the same change or coordinated companion PR.
+
+The Python SDK is maintained in `Mesh-LLM/mesh-llm-python-sdk`; changes that cross
+that boundary require a coordinated companion PR and matching generated native
+bindings. Generate bindings from the exact native library metadata with the
+pinned generator; do not hand-edit generated bindings. Document any unavoidable
+platform restriction explicitly, with its reason and parity follow-up, rather
+than claiming parity based only on a common method name.
+
 ## Pull Requests
 
 Pull request titles and descriptions should be user-focused by default.

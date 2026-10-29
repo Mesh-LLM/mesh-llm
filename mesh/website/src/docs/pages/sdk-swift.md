@@ -4,149 +4,31 @@ title: Swift and Apple SDK
 
 # Swift and Apple SDK
 
-Use the `MeshLLM` SwiftPM product in macOS, Mac Catalyst, and iOS applications. Tagged releases resolve the prebuilt `MeshLLMFFI.xcframework` automatically; local checkout builds use the same UniFFI-backed implementation.
-
-## Install
-
-Add the tagged Mesh-LLM package to `Package.swift`:
+Use the `MeshLLM` SwiftPM product in macOS, Mac Catalyst and iOS applications.
+Tagged packages resolve a prebuilt XCFramework. Add the package dependency:
 
 ```swift
-dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "{{ site.sdkVersion }}"),
-],
-targets: [
-    .target(
-        name: "YourApp",
-        dependencies: [
-            .product(name: "MeshLLM", package: "mesh-llm"),
-        ]
-    ),
-]
+.package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "{{ site.sdkVersion }}")
 ```
 
-For local checkout development, build the XCFramework before building or testing the Swift package:
+Use `.product(name: "MeshLLM", package: "mesh-llm")` in your target dependencies.
+The SDK exposes one embedded `Node` in `.client`, `.serve` or `.combined`
+mode. `.serve` is serve-only.
 
-```bash
-./sdk/swift/scripts/build-xcframework.sh
-```
-
-## Connect as a client
+## Join and infer
 
 ```swift
 import MeshLLM
 
-let client = try await Client.connectPublic(
-    ownerKeypairBytesHex: generateOwnerKeypairHex(),
-    query: PublicMeshQuery(model: "Qwen3")
-)
-
+let node = try Node(mode: .client, autoJoin: true)
+try await node.start()
 do {
-    try await client.start()
-
-    let models = try await client.inference.listModels()
-    let request = ChatRequest(
-        model: models[0].id,
-        messages: [ChatMessage(role: "user", content: "Say hello from Swift.")]
-    )
-
-    for try await event in client.inference.chat(request) {
-        switch event {
-        case .tokenDelta(_, let delta):
-            print(delta, terminator: "")
-        case .completed:
-            print()
-        default:
-            break
-        }
-    }
-} catch {
-    await client.stop()
-    throw error
-}
-
-await client.stop()
-```
-
-For a private mesh, initialize `Client` with `InviteToken(...)` and the app's persisted owner keypair instead of `Client.connectPublic(...)`.
-
-## Stream agent turns
-
-```swift
-try await client.start()
-do {
-    let models = try await client.inference.listModels()
-    let body: [String: Any] = [
-        "model": models[0].id,
-        "messages": [["role": "user", "content": "What is the weather?"]],
-        "tools": [["type": "function", "function": ["name": "get_weather"]]],
-    ]
-
-    for try await event in client.inference.streamChatCompletions(body) {
-        if case .sse(let frame) = event, !frame.isDone {
-            print(frame.event as Any, try frame.jsonObject() as Any)
-        }
-    }
-} catch {
-    await client.stop()
-    throw error
-}
-await client.stop()
-```
-
-The JSON and raw SSE frame remain available, so incremental tool-call arguments,
-reasoning, structured-output fields, usage, and future protocol fields survive.
-Ending iteration early cancels the native request.
-
-## Embed local serving
-
-Resolve a matching native runtime before loading a local model:
-
-```swift
-import MeshLLM
-
-let runtime = try await NativeRuntime.resolve(
-    NativeRuntimeResolveOptions(
-        artifactDirectory: ProcessInfo.processInfo.environment["MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR"]
-            .map(URL.init(fileURLWithPath:)),
-        allowDownload: ProcessInfo.processInfo.environment["MESH_SDK_RUNTIME_ALLOW_DOWNLOAD"] == "1"
-    )
-)
-print("using \(runtime.nativeRuntimeId) from \(runtime.path)")
-```
-
-Create a `Node`, load the model, stream inference, and unload it before stopping:
-
-```swift
-let node = try Node(
-    inviteToken: InviteToken(ProcessInfo.processInfo.environment["MESH_INVITE_TOKEN"]!),
-    ownerKeypairBytesHex: generateOwnerKeypairHex()
-)
-
-do {
-    try await node.start()
-
-    let modelRef = ProcessInfo.processInfo.environment["MESH_SDK_MODEL_REF"]
-        ?? "Qwen2.5-3B-Instruct-Q4_K_M"
-    _ = try await node.models.download(modelRef)
-    let served = try await node.serving.load(
-        modelRef,
-        options: LoadModelOptions(devicePolicy: .auto)
-    )
-
-    let request = ChatRequest(
-        model: served.modelId,
-        messages: [ChatMessage(role: "user", content: "Say hello from local serving.")]
-    )
-    for try await event in node.inference.chat(request) {
-        if case .tokenDelta(_, let delta) = event {
-            print(delta, terminator: "")
-        }
-    }
-
-    try await node.serving.unloadModel(
-        served.modelId,
-        options: UnloadModelOptions(drainTimeoutMs: 1_000, force: false)
-    )
+    let llms = try await node.inference.listModels()
+    let response = try await node.inference.chatCompletions([
+        "model": llms[0].id,
+        "messages": [["role": "user", "content": "Hello from Swift."]],
+    ])
+    print(try response.jsonObject())
     try await node.stop()
 } catch {
     try? await node.stop()
@@ -154,23 +36,127 @@ do {
 }
 ```
 
-Handle `MeshError.ServingUnsupported` for iOS and other targets without validated local serving. The current support line is macOS local serving; Mac Catalyst is under validation and iOS should use `Client` to reach another serving node.
+Use `joinTokens: [token]` for a private mesh and `ownerKeyPath` for an existing
+Mesh LLM owner keystore. Client mode needs no serving runtime.
 
-## Console assets
+## Discover advertised models
 
-Tagged packages can include the console as SwiftPM resources:
+`node.models` queries the embedded mesh directly for all advertised workloads,
+including local and remote OCR, speech, embedding, decision and LLM models.
 
 ```swift
-let console = try await node.startConsole(.packaged(port: 0))
-print(console.url)
+let page = try await node.models.list()
+let query = MeshModelQuery(workloadClass: "document_ocr", available: true, limit: 50)
+let ocr = try await node.models.list(query)
+let model = try await node.models.get("org/model@revision#profile")
+for provider in model.providers {
+    print(provider.providerId, provider.workloadClass as Any, provider.runtime as Any)
+}
+if let cursor = ocr.nextCursor {
+    var nextQuery = query
+    nextQuery.cursor = cursor
+    let next = try await node.models.list(nextQuery)
+}
 ```
 
-Keep the console optional and stop it with the app's lifecycle. For local package development, prepare assets with `scripts/package-sdk-console-assets.sh --sdk swift`.
+The result types are `MeshModelPage`, `MeshModel`, `MeshModelProvider` and
+`MeshModelRuntime`. Optional facts remain absent when unknown; string-valued
+workloads and kinds preserve future peer values. Open-ended metadata uses
+`ModelJSONValue`. Filters combine with AND; preserve them when continuing a page.
 
-## Apple integration notes
+Runtime limits, capability evidence, thinking controls and payment offers apply
+to their provider. A model's operation list means at least one provider offers
+each operation. `node.inference.listModels()` remains the LLM-only compatibility
+view. Full discovery does not make an OpenAI HTTP request.
 
-- Persist the owner keypair in Keychain or another app-owned secure store.
-- Reconnect from `UIApplication.willEnterForegroundNotification` after iOS backgrounding.
-- The SDK uses QUIC/TLS; configure `ITSAppUsesNonExemptEncryption` in `Info.plist` according to the app's export-compliance status.
-- The distributed XCFramework includes a `PrivacyInfo.xcprivacy` manifest; verify it remains inside each framework slice when repackaging.
-- Do not spawn the `mesh-llm` CLI as a sidecar. The Swift SDK uses the native bridge directly.
+## Streaming
+
+Use `node.inference.streamChatCompletions(body)` or `streamResponses(body)`.
+A `.sse(frame)` value exposes the event name, data and raw frame; call
+`frame.jsonObject()` for nonterminal data. Tool calls, reasoning, structured
+outputs, usage and future fields survive the bridge.
+
+## Serving and native runtime
+
+Resolve a compatible runtime explicitly before starting a serving node:
+
+```swift
+let runtime = try await NativeRuntime.resolve(NativeRuntimeResolveOptions(
+    artifactDirectory: URL(fileURLWithPath: "/path/to/bundled/runtime"),
+    allowDownload: false
+))
+let servingNode = try Node(mode: .combined, models: ["<model-reference>"])
+try await servingNode.start()
+```
+
+Node configuration selects loaded models. Discovery does not download or load
+them. Check the release's platform support before enabling local serving.
+
+For local source development, build the matching XCFramework with
+`mesh/sdk/swift/scripts/build-xcframework.sh`. Binding generation reads the
+prebuilt FFI library's actual metadata. A standalone regeneration accepts an
+absolute library path:
+
+```bash
+mesh/sdk/swift/scripts/generate-swift-bindings.sh /absolute/path/libmeshllm_ffi.a
+```
+
+## Document OCR
+
+```swift
+let page = try await node.models.list(
+    MeshModelQuery(workloadClass: "document_ocr", available: true))
+if let model = page.data.first {
+    let response = try await node.inference.documentOcr(
+        Data(contentsOf: URL(fileURLWithPath: "scan.pdf")),
+        options: DocumentOcrOptions(model: model.id, filename: "scan.pdf",
+            contentType: "application/pdf", responseFormat: "json", maxPages: 10))
+    let pages = try response.jsonObject()
+}
+```
+
+OCR uploads PDF/image bytes to `/v1/documents/ocr` and preserves the provider's
+status, content type and body. It raises `OpenAIRequestFailure` for non-2xx by
+default; `raiseForStatus: false` returns the raw response. Generic
+`inference.request` also checks status by default, matching the other SDKs.
+**Migration:** pass `raiseForStatus: false` to retain the previous raw-response
+behavior, then optionally call `response.errorForStatus()` later.
+Plain text/Markdown responses use `response.body`; JSON uses `jsonObject()`.
+
+## Additional mesh memberships
+
+```swift
+let team = try await node.addMembership(MeshMembershipConfig(
+    name: "team", joinTokens: [inviteToken], trustedOwners: [ownerId], apiPort: 9338))
+let memberships = try await node.memberships()
+let removed = try await node.removeMembership("team")
+```
+
+A membership has an independent node identity, owner allowlist and peer set.
+An empty owner allowlist admits nobody. Adding the same name replaces its
+membership under the Rust core's validation/recovery rules. The native model
+catalog queries the primary mesh and does not merge separate memberships.
+
+## Full embedded-node configuration
+
+`Node.fromConfig` passes a `[String: ModelJSONValue]` object through to the
+complete Rust `EmbeddedMeshNodeConfig` schema. It exposes the same relay, bind,
+publication, trust/admission, storage, serving-limit and timeout settings.
+
+```swift
+let node = try Node.fromConfig([
+    "mode": .string("client"),
+    "network": .object([
+        "join_tokens": .array([.string(inviteToken)]),
+        "enumerate_host": .bool(false)
+    ]),
+    "startup_timeout": .object(["secs": .number(30), "nanos": .number(0)])
+])
+try await node.start()
+```
+
+The object preserves snake_case keys and native enum strings. Native defaults
+apply to omitted fields and unknown keys are rejected. Full-config `mode`
+values are `client`, `serve_only` and `serve` (combined); its default is
+combined, matching Rust. The existing `Node(...)` convenience constructor keeps
+its client default and Swift argument names.

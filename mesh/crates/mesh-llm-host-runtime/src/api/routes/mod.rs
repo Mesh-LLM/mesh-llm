@@ -212,7 +212,10 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 }
                 (m, p)
                     if matches!(m, "GET" | "POST" | "OPTIONS")
-                        && (p.starts_with("/v1/") || p == "/models") =>
+                        && (p.starts_with("/v1/")
+                            || p == "/models"
+                            || p.starts_with("/models/")
+                            || crate::network::openai::model_discovery::is_request(m, p)) =>
                 {
                     chat::handle(stream, state, method, path_only, req, caller).await?;
                     Ok(true)

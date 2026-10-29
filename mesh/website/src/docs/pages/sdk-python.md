@@ -4,192 +4,217 @@ title: Python SDK
 
 # Python SDK
 
-Use the `mesh-llm` package to embed a private Mesh client in Python services and agent runtimes. The SDK calls the Rust core through a generated UniFFI binding, so the Mesh transport and identity stay in-process—there is no loopback HTTP sidecar to install or supervise.
-
-## Install
+The `mesh-llm` package embeds a Rust-backed `Node` with async Python APIs.
+Python 3.10 or newer is supported. Select `mode="client"`, `"serve"` (serve-only),
+or `"combined"`. The old `Client` class and in-memory owner-key constructor have
+been removed.
 
 ```bash
 pip install mesh-llm
 ```
 
-Release wheels contain the generated binding and a native library for the wheel's target platform. Python 3.10 or newer is supported.
+Use a release whose Python wrapper, generated bindings and native bridge match.
+Source changes do not themselves publish a new wheel.
 
-The SDK source, Python generators and component tests are owned by
-`Mesh-LLM/mesh-llm-python-sdk`. Mesh records the immutable SDK commit and source
-manifest in `ci/required-sdk-python/sdk-source.json`. The [SDK](https://github.com/Mesh-LLM/mesh-llm-python-sdk) and [research](https://github.com/Mesh-LLM/mesh-llm-research) projects are published.
-Fresh anonymous restore and native source admission passed; hosted and installed SDK/native/model qualification remain separate, and this does not establish a new PyPI release.
-
-For SDK development, use the external checkout with explicit absolute paths to
-the Mesh source, an existing UniFFI 0.32.0 generator and an already built native
-FFI bridge for the target platform:
-
-```bash
-"$SDK_SOURCE/sdk/scripts/generate-python-bindings.sh" "$MESH_SOURCE" "$UNIFFI_BINDGEN"
-"$SDK_SOURCE/sdk/scripts/build-native.sh" "$PREBUILT_MESH_FFI_LIBRARY"
-python3 -I -m pip install -e "$SDK_SOURCE/sdk"
-```
-
-The SDK stager never builds a missing bridge. Generated bindings and bridge
-checksums must match the selected Mesh native artifact before packaging. Changes
-to generated source require a new external source manifest and checkpoint;
-runtime admission must not reuse the prior pin for changed bytes. Required
-OpenAI, LangChain, LiteLLM and embedding client checks retain their existing
-cadence through the admitted external source and locked environments.
-
-## Connect to a mesh
+## Join and run inference
 
 ```python
 import asyncio
-import os
-
-from meshllm import Client, generate_owner_keypair_hex
-
+from meshllm import Node
 
 async def main() -> None:
-    owner = generate_owner_keypair_hex()
-    # Public Mesh: discover and connect to the best published mesh.
-    client = await Client.connect_public(owner_keypair_hex=owner)
-    # Private Mesh instead:
-    # client = Client.create(
-    #     owner_keypair_hex=owner,
-    #     invite_token=os.environ["MESH_INVITE_TOKEN"],
-    # )
-    async with client:
-        models = await client.inference.list_models()
-        if not models:
-            raise RuntimeError("The selected Mesh has no available models")
-        response = await client.inference.chat_completions({
-            "model": models[0].id,
-            "messages": [{"role": "user", "content": "Say hello from Python."}],
+    async with Node.create(mode="client", auto_join=True) as node:
+        llms = await node.inference.list_models()
+        if not llms:
+            raise RuntimeError("No LLM is currently available")
+        response = await node.inference.chat_completions({
+            "model": llms[0].id,
+            "messages": [{"role": "user", "content": "Hello"}],
         })
         print(response["choices"][0]["message"])
-
 
 asyncio.run(main())
 ```
 
-Persist the owner keypair in the host application's secure storage. Generating one during every startup creates a new Mesh identity and is suitable only for examples.
+For a private mesh, use `join_tokens=(token,)` instead of `auto_join=True`.
+Pass `owner_key_path` when an owner keystore is required. To serve local models,
+select `mode="serve"` or `"combined"` and pass
+`models=("publisher/model:quant",)`. Local serving requires a compatible installed
+native runtime. Client mode does not load a model-serving runtime. A serve-only
+node rejects SDK inference calls.
 
-`Client.connect_public()` uses Nostr discovery and selects the best matching
-published Mesh. Pass `model`, `region`, `target_name`, or custom `relays` to
-narrow discovery. `Client.create()` connects directly to a specific public or
-private Mesh using its invite token.
+## Discover every advertised workload
 
-Each model returned by `list_models()` includes `context_length` when the Mesh
-advertises its actual served window. Agent runtimes should budget against that
-value rather than a model architecture's theoretical maximum. Legacy servers
-that omit served-context metadata return `None`.
-
-## Agent requests
-
-`chat_completions()` and `responses()` use the protocol-preserving request path. The SDK sends the complete JSON object through Mesh and returns the complete OpenAI-compatible response, instead of converting it to a text-only SDK model. Their streaming counterparts preserve complete SSE events the same way.
-
-This is the recommended path for Hermes and other agents because it preserves:
-
-- tool definitions, `tool_choice`, assistant tool calls, and tool results;
-- multipart text, image, audio, and file content supported by the selected model;
-- structured-output and JSON-schema settings;
-- finish reasons, usage, log probabilities, reasoning fields, and future JSON additions.
+`node.models` queries the node's primary mesh inventory in process, including
+local and remote non-LLM models. Existing `node.inference.list_models()` remains
+the LLM-only compatibility list.
 
 ```python
-response = await client.inference.chat_completions({
-    "model": "Qwen3-8B",
-    "messages": [{"role": "user", "content": "What is the weather in Sydney?"}],
-    "tools": [{
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Get current weather for a city",
-            "parameters": {
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "required": ["city"],
-            },
-        },
-    }],
-})
-
-message = response["choices"][0]["message"]
-for call in message.get("tool_calls", []):
-    print(call["function"]["name"], call["function"]["arguments"])
+page = await node.models.list()
+ocr = await node.models.list(workload_class="document_ocr", available=True)
+details = await node.models.get("org/model@revision#profile")
+if page.next_cursor is not None:
+    following = await node.models.list(cursor=page.next_cursor)
 ```
 
-For an endpoint not covered by a convenience method, call an OpenAI-compatible path directly:
+Results are `MeshModelPage`, `MeshModel`, and `MeshModelProvider` dataclasses.
+Filters combine with AND. Preserve filters while continuing a cursor; restart
+the list when the snapshot expires. Workload strings preserve future values.
+Provider runtime limits, capabilities and optional thinking/payment observations
+remain separate; absent facts are unknown. See
+[Mesh model discovery](/docs/pages/model-discovery/) for HTTP shapes and migration.
+
+## Protocol-preserving agent requests
+
+`node.inference.chat_completions(body)` and `responses(body)` send the complete
+JSON object and return the complete provider response. Tools, tool results,
+multimodal parts, structured outputs, reasoning, usage and future fields are not
+reduced to a text-only SDK object.
 
 ```python
-raw = await client.inference.request(
+raw = await node.inference.request(
     "/v1/chat/completions",
-    {"model": "Qwen3-8B", "messages": messages, "stream": False},
+    {"model": "llm-model", "messages": messages, "stream": False},
 )
 payload = raw.json()
 ```
 
-## Stream agent events
-
-`stream_chat_completions()` yields complete SSE events, including incremental tool-call arguments, reasoning, text, usage, finish reasons, and provider extensions. The SDK does not flatten the event into a text token, so new OpenAI-compatible fields remain available without an SDK release.
+Streaming methods yield complete SSE events:
 
 ```python
 from meshllm import OpenAIStreamChunk
 
-tools = [{
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "parameters": {
-            "type": "object",
-            "properties": {"city": {"type": "string"}},
-            "required": ["city"],
-        },
-    },
-}]
-arguments = ""
-async for event in client.inference.stream_chat_completions({
-    "model": "Qwen3-8B",
-    "messages": [{"role": "user", "content": "What is the weather in Sydney?"}],
-    "tools": tools,
+async for event in node.inference.stream_chat_completions({
+    "model": "llm-model", "messages": messages, "tools": tools,
 }):
-    if not isinstance(event, OpenAIStreamChunk) or event.done:
-        continue
-
-    chunk = event.json()
-    for choice in chunk.get("choices", []):
-        delta = choice.get("delta", {})
-        if content := delta.get("content"):
-            print(content, end="", flush=True)
-        for call in delta.get("tool_calls", []):
-            arguments += call.get("function", {}).get("arguments", "")
-
-print(arguments)
+    if isinstance(event, OpenAIStreamChunk) and not event.done:
+        payload = event.json()
+        # Inspect text, tool-call deltas, usage and provider extensions.
 ```
 
-For the Responses API, use `stream_responses()`. Its named SSE event is available as `event.event`, its `data:` payload through `event.json()`, and the exact original frame through `event.raw`. A `[DONE]` sentinel has `event.done == True`.
+Use `stream_responses` for the Responses API. Named events, their JSON data,
+and original frames remain available. Closing an iterator early cancels the
+native request. Native bridge work runs off the asyncio event-loop thread.
+Non-success inference responses raise `OpenAIRequestError` with status and
+body; raw request callers can disable automatic status checking.
 
-Closing either iterator early cancels the native request and interrupts a blocked transport read. Network and bridge work runs off the asyncio event-loop thread.
+## Document OCR
 
-## Embed a node
-
-`Node` shares the same lifecycle and inference API:
+Discover an available `document_ocr` model through `node.models`, then send its
+exact ID with the document bytes:
 
 ```python
-from meshllm import Node
+from meshllm import DocumentOcrOptions
 
-node = Node.create(
-    owner_keypair_hex=owner_keypair,
-    invite_token=invite_token,
-    cache_dir=cache_dir,
-    runtime_dir=runtime_dir,
-    serving_enabled=True,
+response = await node.inference.document_ocr(
+    pdf_bytes,
+    DocumentOcrOptions(
+        model="ocr-model", filename="scan.pdf", content_type="application/pdf",
+        response_format="markdown", max_pages=2,
+    ),
 )
-
-async with node:
-    response = await node.inference.responses({
-        "model": "local-model",
-        "input": "Summarize this document.",
-    })
+markdown = response.body
 ```
 
-Local serving requires a Python wheel built with the native bridge's `embedded-runtime` feature plus a compatible native runtime artifact. Client-only wheels are smaller and are the preferred shape for a Hermes private-compute provider.
+Uploads are multipart and preserve binary bytes. Files must be nonempty and
+at most 64 MiB. Optional `max_pages` must be positive; output formats are `json`,
+`text`, and `markdown`. The result preserves `status_code`, `content_type`, and
+`body`, with `.json()` available for JSON. Provider errors raise
+`OpenAIRequestError` by default; `raise_for_status=False` returns their status
+and body for application handling.
 
-## Errors and status
+## Memberships and live transcription
 
-`status()` reports Mesh connection state and peer count. Non-2xx OpenAI-compatible responses raise `OpenAIRequestError`, which includes `status_code` and the original response body. Invalid identities, invite tokens, join failures, and transport failures surface from the native bridge as Python exceptions.
+```python
+from meshllm import MeshMembershipConfig
+
+team = await node.add_membership(MeshMembershipConfig(
+    name="team", api_port=9338,
+    join_tokens=(team_token,), trusted_owners=(team_owner,),
+))
+memberships = await node.memberships()
+removed = await node.remove_membership("team")
+```
+
+Additional memberships share loaded models while retaining their own mesh
+identity, allowlist, peers and API port. Native `node.models` discovery remains
+scoped to the primary mesh.
+
+```python
+from meshllm import LiveTranscriptionOptions
+
+session = await node.start_live_transcription(LiveTranscriptionOptions(
+    model="speech-model", sample_rate=16000, turn_detection=None,
+))
+try:
+    await session.send_audio(pcm16_samples)
+    await session.commit()
+    event = await session.next_event()
+finally:
+    remaining_events = await session.stop()
+```
+
+`send_audio` accepts signed 16-bit mono PCM; `send_audio_f32` accepts floating
+point samples. Defaults use 16 kHz and server-side turn detection. Setting
+`turn_detection=None` makes turns explicit with `commit`. Read individual
+events with `next_event` or iterate `events()`. `stop` returns remaining final
+events; `close` abandons the session.
+
+## Native runtime management
+
+Client mode needs no model-serving runtime. A serving application explicitly
+installs or resolves a matching runtime before starting its node. This offline
+example uses application-owned `app_cache_dir` and bundled `runtime_bundle_dir`:
+
+```python
+from meshllm import (
+    NativeRuntimeInstallOptions,
+    current_mesh_version,
+    current_skippy_abi_version,
+    install_native_runtime,
+    installed_native_runtimes,
+    resolve_native_runtime,
+    validate_native_runtime,
+)
+
+options = NativeRuntimeInstallOptions(
+    mesh_version=current_mesh_version(),
+    skippy_abi_version=current_skippy_abi_version(),
+    cache_dir=str(app_cache_dir),
+    bundle_dirs=(str(runtime_bundle_dir),),
+    allow_download=False,
+)
+outcome = await install_native_runtime(options)
+cached = await installed_native_runtimes(options.cache_dir)
+resolved = await resolve_native_runtime(options)
+validated = await validate_native_runtime(str(runtime_bundle_dir), options)
+```
+
+Installation supports an `on_progress` callback with typed download progress.
+Explicit online installation can opt into `allow_download=True`; node startup
+does not install implicitly. Resolution defaults to downloads disabled, and
+validation always disables downloads. Results are typed runtime/outcome records.
+
+Use `remove_native_runtime(mesh_version, native_runtime_id, cache_dir=...)` to
+remove a selected cached runtime. `prune_native_runtimes(cache_dir=...,
+active_mesh_version=...)` defaults to `keep_active_and_previous`, with
+`active_only` available when requested.
+
+## Source and native bindings
+
+The public Python wrapper, generated UniFFI bindings and component tests are
+maintained in [Mesh-LLM/mesh-llm-python-sdk](https://github.com/Mesh-LLM/mesh-llm-python-sdk).
+Mesh admits an immutable SDK source checkpoint for its compatibility workloads.
+Generation requires explicit absolute paths to Mesh source, the existing
+UniFFI 0.32.0 generator, and an already built native library:
+
+```bash
+"$SDK_SOURCE/sdk/scripts/generate-python-bindings.sh" "$MESH_SOURCE" "$UNIFFI_BINDGEN" "$PREBUILT_MESH_FFI_LIBRARY"
+"$SDK_SOURCE/sdk/scripts/build-native.sh" "$PREBUILT_MESH_FFI_LIBRARY"
+python3 -I -m pip install -e "$SDK_SOURCE/sdk"
+```
+
+The stager never compiles a missing native bridge. Generate from the exact
+library's metadata so the wrapper checksums match the packaged artifact.
+Catalog queries are native; compatibility inference and some lifecycle queries
+still use the embedded listener. See [SDK overview](/docs/pages/sdk/).
