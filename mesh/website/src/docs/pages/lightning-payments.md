@@ -19,6 +19,50 @@ the token-metered `/mesh/payment/v3` flow. Paid inference currently supports
 `POST /v1/chat/completions` and `POST /v1/completions`, with one completion per
 request (`n=1`).
 
+## How it works
+
+Payments are added by a wallet plugin. With one installed, the same node can
+**earn** by serving models to other peers and **pay** for models served by
+others. Inference still travels over Mesh's authenticated QUIC connections;
+only the money moves over Lightning, between the two nodes' wallets.
+
+One paid request goes like this:
+
+1. **Request.** The buyer picks a provider and sends the request with the
+   model and the provider's advertised prices. The buyer's spending policy
+   (for example its daily budget) is checked locally and never leaves the
+   buyer. There is no separate quote round trip.
+2. **Admission and deposit.** The provider replies with fixed terms. A buyer
+   it has not settled with before must first pay a small deposit (1 sat by
+   default). This proves the buyer can pay and is credited toward the bill.
+   The provider waits for the deposit to settle before any work starts.
+3. **Inference.** The provider forwards the request unchanged to its model and
+   streams the response back. Token usage comes from the backend's own usage
+   report, so any OpenAI-compatible engine works.
+4. **Settlement.** When generation finishes, the provider bills prompt tokens
+   at the input rate and completion tokens at the output rate, subtracts the
+   deposit, and sends one final invoice for the remainder. The buyer
+   recomputes the bill from the agreed terms and its wallet pays
+   automatically. No human approval is needed.
+
+What happens in the edge cases:
+
+- **Warm peers skip the deposit.** After one settled request, later requests
+  to the same running provider normally skip it. Restarting the provider
+  clears this.
+- **Failures cost nothing.** If the backend fails, the buyer cancels, or no
+  usage report arrives, the request is abandoned: no bill, no invoice, no debt.
+  A deposit already paid is kept.
+- **Unpaid bills block.** A buyer with three unpaid final invoices is refused
+  until it pays one.
+- **Recovery never reruns.** After a disconnect, the buyer can fetch the
+  outcome of a request by its ID. Inference is never run twice.
+
+Prices and token counts are the provider's claims. Mesh does not prove that
+inference was done correctly, and there are no refunds. See the
+[Lightning payments specification](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/specs/lightning-payments.md)
+for wire frames, timeouts, and wallet persistence.
+
 ## 1. Install a wallet plugin
 
 The published Lexe preview provisions a self-custodial mainnet wallet when the
