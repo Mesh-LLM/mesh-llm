@@ -91,6 +91,7 @@ pub(crate) fn remote_stage_load_request(
         flash_attn_type: context.flash_attn_type,
         runtime_settings: context.runtime_settings,
         native_mtp_enabled: context.native_mtp_enabled,
+        dflash: None,
         shutdown_generation: 1,
         coordinator_term: 0,
         coordinator_id: None,
